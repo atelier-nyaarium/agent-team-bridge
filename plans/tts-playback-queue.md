@@ -1082,6 +1082,33 @@ Kotlin is not covered by `ci.yml`, so `./gradlew :app:testDebugUnitTest` locally
 `assembleEmulator` and a real look on the AVD for anything visual. Cards live in the Designer dock
 (`tts-queue.html`, `tts-play-states.html`).
 
+### Phase 1b as built
+
+In progress. What is landed and green:
+
+- **`PlaybackQueue.kt`** (new, pure, no Android import; `PlaybackQueueTest` covers it). Ordered entries
+  with one head. Advancing is ONE operation keyed on the outcome: `STOPPED` alone holds position, and
+  an outcome naming anything other than the current head is ignored, so a terminal from an
+  already-replaced request cannot walk the queue past a message nobody heard. A failure rotates to the
+  tail once, then drops and is remembered for the alert. `dropTeam` takes queued, playing AND
+  remembered entries, and returns whether it took the head so the caller can stop the player knowing
+  the queue no longer points at it.
+- **`isDuplicatePeerAutoPlay` re-keyed on content** (`from`, `to`, body hash + length, file names and
+  sizes) rather than on the pair alone. The pair key was correct only while a pass could speak one
+  message; queueing every message made it collapse distinct exchanges. Deliberately NOT keyed on `at`,
+  which the two mirror copies do not share.
+
+Still to wire, all in `ChatRepository`:
+
+- Autoplay drain over EVERY agent message in order, replacing `msgs.lastOrNull { !it.fromMe }`.
+- Attribute a peer entry to the RECEIVING session (`to`), since the dedupe's winning thread is
+  drain-order arbitrary and the entry's team is what teardown and tap-to-jump dereference.
+- Repository owns the queue and advances it from playback terminals, under one mutex
+  (`scheduledSendFireMutex` is the precedent). `SttsPlayer` stays a one-shot engine.
+- Teardown split three ways: stop-current / drop-queue-entries / delete-cache. `forget` uses all
+  three, `close_session` uses the first two. Drop BEFORE stop, or the stop's own terminal advances
+  into an entry whose audio the same call is deleting.
+
 ## Painpoints
 
 Not a code audit. What actually hurt while working here.

@@ -1002,6 +1002,14 @@ class ChatRepository(
 	 * init block so the one-shot wipe can purge its cache root. */
 	val stts = SttsPlayer(filesDir)
 
+	/** What autoplay still has to speak. The repository owns it and advances it; [SttsPlayer] stays a
+	 * one-shot engine that knows nothing about what comes next. */
+	private val queue = PlaybackQueue()
+
+	/** Serializes every advance. A player terminal and a user gesture can arrive together, and both
+	 * read the head before mutating it; `scheduledSendFireMutex` guards the same shape for sends. */
+	private val advanceMutex = Mutex()
+
 	// Declared before _state so loadPersistedThreads/Labels/ReadAnchors read them in order. Kotlin
 	// initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
@@ -1138,6 +1146,18 @@ class ChatRepository(
 				_state.update { it.copy(error = "Something went wrong: ${e.javaClass.simpleName}") }
 			},
 	)
+
+	// The queue advances off terminals, so it subscribes for the process's lifetime rather than with a
+	// screen: a backgrounded burst has no UI listening and must still walk forward. Declared after
+	// repoScope because it uses it.
+	init {
+		stts.addListener { event ->
+			if (event is SttsPlayer.Event.Ended) {
+				val entry = QueueEntry(event.team, event.at, event.tier)
+				repoScope.launch { onPlaybackEnded(entry, event.outcome) }
+			}
+		}
+	}
 
 	/**
 	 * Run a repository command on the repository's OWN scope.
@@ -1432,6 +1452,40 @@ class ChatRepository(
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
 
 	fun stopMessage(team: String, at: Long) = stts.stopMessage(team, at)
+
+	/** Queue one message for autoplay, and speak it if nothing is speaking. */
+	suspend fun enqueueAutoPlay(team: String, at: Long, tier: SttsPlayer.Tier) {
+		val entry = QueueEntry(team, at, tier)
+		advanceMutex.withLock {
+			if (!queue.enqueue(entry)) return
+			queue.startNext()?.let { speak(it) }
+		}
+	}
+
+	/** Retire the entry that just ended and speak whatever follows. Every terminal routes here, so the
+	 * outcome alone decides whether the queue moves: a decode failure must not retire an entry as
+	 * though it had been heard, and a user stop must not walk forward. */
+	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
+		advanceMutex.withLock {
+			val step = queue.advance(entry, outcome)
+			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
+			step.next?.let { speak(it) }
+		}
+	}
+
+	/** Drop everything queued for a team and stop it if it was the one speaking. Ordered drop-then-stop
+	 * on purpose: the stop's own terminal would otherwise advance into an entry this same call is
+	 * removing. Cache deletion is a separate step, so closing a tab the user may reopen keeps its
+	 * audio. */
+	suspend fun dropQueuedFor(team: String) {
+		advanceMutex.withLock {
+			if (queue.dropTeam(team)) stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
+		}
+	}
+
+	private fun speak(entry: QueueEntry) {
+		entry.tier?.let { playMessage(entry.team, entry.at, it) }
+	}
 
 	/** When on, an incoming message for a followed (open) thread is
 	 * pre-synthesized before its notification. Persisted in prefs. */
@@ -3895,8 +3949,14 @@ class ChatRepository(
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
+						// EVERY agent message, in arrival order. A peer copy is attributed to the
+						// RECEIVING session rather than to whichever thread the drain reached first,
+						// because the entry's team is what teardown and tap-to-jump dereference.
+						val agentMsgs = msgs.filter { !it.fromMe }
+							.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
+							.map { it to (it.takeIf { m -> m.isPeer }?.to ?: team) }
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
-						val alreadyAutoPlayed = isDuplicatePeerAutoPlay(lastAgent, autoPlayedPeerPairs)
+						val alreadyAutoPlayed = agentMsgs.isEmpty()
 						// Only spend synthesis on followed threads (open tabs); a
 						// never-opened or forgotten session is not in openTabs, so it
 						// notifies without preloading.
@@ -3909,17 +3969,26 @@ class ChatRepository(
 							val t = team
 							val ms = msgs
 							val at = lastAgent.at
+							val queueable = agentMsgs
+							// The message that will speak FIRST, which is the one worth waiting on.
+							// Warming the burst's last message instead would leave the one actually
+							// about to play as a live cache miss.
+							val warm = agentMsgs.firstOrNull()?.let { (m, owner) -> owner to m.at } ?: (t to at)
 							burstJobs += scope.launch(Dispatchers.IO) {
 								// When pre-generate is on, wait fully for synthesis so the
 								// cache is warm when the notification lands. preloadMessage
 								// never throws and is bounded by the STTS client's own
 								// timeouts, so a failed or slow synth still falls through and
-								// the notification fires.
-								if (sttsAutoGen) preloadMessage(t, at)
+								// the notification fires. The rest of the burst warms as the
+								// queue reaches it.
+								if (sttsAutoGen) preloadMessage(warm.first, warm.second)
 								onInbound?.invoke(t, ms)
-								// Hands-free: speak the chosen tier the moment it arrives. A
-								// tier not pre-synthesized is synthesized on demand here.
-								if (autoTier != null) playMessage(t, at, autoTier)
+								// Hands-free: queue every arriving message in order. The queue
+								// speaks the first immediately and the rest as each terminal
+								// lands, so a burst is heard whole instead of only its last.
+								if (autoTier != null) {
+									for ((msg, owner) in queueable) enqueueAutoPlay(owner, msg.at, autoTier)
+								}
 							}
 						} else {
 							onInbound?.invoke(team, msgs)
@@ -4180,6 +4249,9 @@ class ChatRepository(
 		// Muted until reopened: full notification treatment (banner + TTS) downgrades to a
 		// quiet mailbox/unread-count bump for this team.
 		_state.update { it.copy(openTabs = it.openTabs - key, closedTeams = it.closedTeams + key) }
+		// Stop speaking a thread the user just closed, but KEEP its cache: a close is reopenable and
+		// the audio was already paid for. Only `forget` deletes.
+		repoScope.launch { dropQueuedFor(key) }
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
@@ -4593,7 +4665,13 @@ class ChatRepository(
 		persistDrafts(next.drafts)
 		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
 		cancelScheduledSend(key)
-		stts.purge(key)
+		// Queue first, cache second. Dropping under the advance mutex stops the player only once the
+		// queue no longer points at it, so the stop's own terminal cannot advance into an entry whose
+		// audio `purge` is about to delete.
+		repoScope.launch {
+			dropQueuedFor(key)
+			stts.purge(key)
+		}
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
 		// the files are local no matter where the session lives, unlike the gateway RPC.
 		scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
