@@ -1142,6 +1142,25 @@ Video is still absent from `PREVIEWABLE_MIMES`. That set answers for surfaces ho
 and an `img` cannot draw an mp4. The renderer promotes a video to a thumbnail itself, and only once
 its frames exist, so a set that has not landed shows a file row rather than a broken tile.
 
+**Audit, two high survivors. Neither was observable in a single-session emulator run**, which is
+worth remembering the next time an on-device pass feels like proof:
+
+- **The orphan sweep deleted every frame set.** Frame buckets sit under the attachments root as
+  siblings of the message buckets, and `sweepOrphanBuckets` deletes any directory no `src` points at.
+  A frame path is never a `MessageFile.src` (it rides a transient JSON field), so every cold start
+  more than ten minutes after extraction wiped the cache and re-ran the seeks. The fix names frame
+  buckets as REFERENCED rather than exempting the `frames-` family: an exemption would leave a
+  deleted video's set unreclaimable, since this sweep is the only thing that removes a bucket
+  wholesale. Both directions are tested.
+- **A cancelled extraction wrote its frames and never announced them.** `extract` observes no
+  cancellation, so an interrupted pass still writes the full set; the skip was keyed on the files
+  being on disk, so every later pass stepped over it and `versionOf` stayed 0 forever. The row then
+  renders as a plain file for the life of the renderer with a complete set sitting unused, which is
+  precisely what the readiness channel exists to prevent. The skip is keyed on ANNOUNCED now, which
+  also keeps the common case off the disk entirely.
+- A test divider still pointed at "the plan's table" for a table this same change had rewritten
+  away. Dangling at the moment of commit, and the exact pattern the comment rules name.
+
 Scope, stated because it is easy to conflate: this frame set is the THUMBNAIL shown in the message
 row and the draft strip. It is NOT the fullscreen view. Tapping a video plays it (section 6), and
 the frames are never used there.

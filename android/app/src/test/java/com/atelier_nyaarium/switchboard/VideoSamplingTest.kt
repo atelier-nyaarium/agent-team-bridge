@@ -13,7 +13,7 @@ import org.junit.Test
 class VideoSamplingTest {
 	private val second = 1_000L
 
-	// ---- the plan's table, which is the corpus ----
+	// ---- durations that fix the rule's shape ----
 
 	@Test
 	fun aTwelveSecondClipIsTooShortToAnimate() {

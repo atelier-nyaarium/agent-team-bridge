@@ -180,6 +180,41 @@ class AttachmentsTest {
 	}
 
 	@Test
+	fun sweep_keepsABucketNamedInKeepBucketsThoughNoSrcPointsAtIt() {
+		// A video's frame set is reachable only through the file it came from, so nothing in
+		// referencedSrcs ever names it. Without this it is swept on the next cold start and every
+		// seek that produced it runs again.
+		write("frames-abc123", "00.jpg")
+		File(Attachments.root(filesDir), "frames-abc123").setLastModified(1_000L)
+
+		Attachments.sweepOrphanBuckets(
+			filesDir,
+			referencedSrcs = emptyList(),
+			keepBuckets = setOf("frames-abc123"),
+			minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS,
+		)
+
+		assertTrue(File(Attachments.root(filesDir), "frames-abc123").exists())
+	}
+
+	@Test
+	fun sweep_stillReclaimsAFrameBucketNobodyClaims() {
+		// The other half: exempting the whole naming family instead would make a frame set for a
+		// deleted video unreclaimable, since nothing else deletes a bucket wholesale.
+		write("frames-stale", "00.jpg")
+		File(Attachments.root(filesDir), "frames-stale").setLastModified(1_000L)
+
+		Attachments.sweepOrphanBuckets(
+			filesDir,
+			referencedSrcs = emptyList(),
+			keepBuckets = setOf("frames-abc123"),
+			minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS,
+		)
+
+		assertFalse(File(Attachments.root(filesDir), "frames-stale").exists())
+	}
+
+	@Test
 	fun sweep_skipsABucketYoungerThanTheAgeThreshold() {
 		write("5-12", "photo.jpg")
 		File(Attachments.root(filesDir), "5-12").setLastModified(System.currentTimeMillis())
