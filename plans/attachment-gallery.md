@@ -905,11 +905,33 @@ inert, because each runtime strips what it does not know:
   path left to remove it. The original justification (that the delete was a no-op once it had run
   anywhere) was wrong, but the consequence is not worth a migration.
 
-### 6. Viewer (extend `AttachmentViewer`, single attachment)
+### 6. Viewer (extend `AttachmentViewer`, single attachment) - ✅ DONE
 
 Post-intermission note: file access goes through the blob view (`path()` only when complete and
 verified), so a torn download can no longer reach the decoder; everything below is unchanged in
 intent.
+
+**Verified on the emulator at 1080x2400 density 420 (3.5x), by measuring the raw framebuffer rather
+than by eye.** The fixture is a 480x320 PNG, so a Dp round trip would have been off by 3.5x and a
+floor pinned at fit would have made 100% unreachable. Measured widths: 50% -> 240 px, 100% -> 480 px,
+200% -> 960 px, fit -> 1080x720, each centred on 539.5. A hard drag at 200% left the bounding box
+byte-identical, which is the pan clamp holding an image that fits its frame.
+
+Two things the on-device pass did NOT cover, stated rather than implied:
+- **Pan while the image OVERFLOWS the frame.** `adb input` cannot pinch, and no preset takes the
+  fixture past the stage bounds. The arithmetic is unit-tested both ways, and it reads the same
+  `fitFactor` and container pixels the four verified presets do, so the conversion seam is covered
+  even though this branch was not exercised by hand.
+- **A completed SAF folder write.** The picker launches (`documentsui.picker.PickActivity` confirmed
+  resumed), and the first-run MediaStore write is verified end to end (6732 bytes landed in
+  Downloads). Driving the system picker to completion over adb is not reliable, so the tree write and
+  the dead-grant re-pick are verified by construction only.
+
+Two defects the on-device pass caught that no unit test could:
+- The text stage rendered UNDER the status bar. It is the only stage anchored to the top edge, so a
+  centred image never revealed it. Fixed with `statusBarsPadding()` on the text modifier alone.
+- Resolving the save-folder label inline meant a document-provider IPC on every recomposition, which
+  during a zoom gesture is every frame. Moved to `produceState` keyed on the stored Uri.
 
 - **True-pixel scale needs the INTRINSIC size AND the sample factor**, both of which `decodeBounded`
   (`AttachmentViewer.kt:65`) already computes and then discards. Change it to RETURN them alongside
@@ -967,7 +989,8 @@ intent.
 - **Drafts cannot reach this viewer at all today.** A draft chip has no tap target, and the only
   rel-to-`MessageFile` resolution scans `state.threads` alone - a draft file lives under
   `state.drafts`, so the lookup returns null and both the `Modified` and `Location` rows would come
-  back blank. Section 7 must add the tap target and the resolver must consult drafts.
+  back blank. The resolver now consults drafts as well as threads; the TAP TARGET is still section
+  7's, so this half is in place ahead of the surface that will use it.
 - **`Save` is two writers, not one.** "Downloads on first run" cannot be a tree URI, because no
   persisted grant exists until the user picks a folder - so the first-run path stays the existing
   MediaStore-to-Downloads write, and only a user-chosen tree uses SAF

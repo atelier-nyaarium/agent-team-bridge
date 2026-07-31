@@ -1428,6 +1428,14 @@ class ChatRepository(
 			store.autoPlay = value
 		}
 
+	/** The SAF tree the user chose to save attachments into. Raw string: whether the grant behind it
+	 * is still alive is SaveTarget's question, and a caller must ask it rather than trust this. */
+	var saveTreeUri: String
+		get() = store.saveTreeUri
+		set(value) {
+			store.saveTreeUri = value
+		}
+
 	/** TTS playback volume, 0-200% (100 = unchanged). Persisted in prefs. */
 	var sttsVolume: Int
 		get() = store.sttsVolume

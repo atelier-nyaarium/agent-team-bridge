@@ -32,6 +32,42 @@ class AttachmentDisplayTest {
 		assertFalse(isPreviewable(file("logo.svg", "image/svg+xml")))
 	}
 
+	// ---- what the fullscreen stage will open, which is not the same set ----
+
+	@Test
+	fun theViewerOpensEveryFormatAThumbnailAlreadyPromises() {
+		// A thumbnail is a promise that the tap works, so the viewer set must cover the preview set
+		// or a drawn tile could still dead-end.
+		for (mime in listOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/apng", "image/avif")) {
+			assertTrue("$mime is a thumbnail but the viewer refuses it", viewerDecodableImage(mime))
+		}
+	}
+
+	@Test
+	fun theViewerAlsoOpensWhatOnlyBitmapFactoryCanDecode() {
+		// Never thumbnails (the WebView cannot draw them), but tapping the file row must still land
+		// on the image stage rather than the file sheet.
+		assertTrue(viewerDecodableImage("image/heic"))
+		assertTrue(viewerDecodableImage("image/heif"))
+		assertFalse(isPreviewable(file("a.heic", "image/heic")))
+	}
+
+	@Test
+	fun theViewerRefusesWhatBitmapFactoryCannotDecodeSoTheTapLandsOnTheFileSheet() {
+		// The live regression: routing on an `image/` prefix sent both of these to BitmapFactory and
+		// showed "Could not decode image" instead of a readable sheet.
+		assertFalse(viewerDecodableImage("image/svg+xml"))
+		assertFalse(viewerDecodableImage("image/tiff"))
+	}
+
+	@Test
+	fun theViewerNormalizesAMimeTheSameWayTheThumbnailPathDoes() {
+		assertTrue(viewerDecodableImage("IMAGE/PNG"))
+		assertTrue(viewerDecodableImage("image/png; charset=binary"))
+		assertFalse(viewerDecodableImage(""))
+		assertFalse(viewerDecodableImage("video/mp4"))
+	}
+
 	@Test
 	fun listsAnEmptyOrMalformedMimeAsAFile() {
 		assertFalse(isPreviewable(file("mystery", "")))
