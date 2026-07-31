@@ -94,7 +94,9 @@ class AttachmentsTest {
 		// The whole inbound contract in one pass: a wire file names bytes and carries no src; landing
 		// the fetched bytes is what produces the src. Nothing else in the suite covers this seam.
 		val blobId = "sha256-${"a".repeat(64)}"
-		val decoded = Attachments.decode(listOf(ChannelFile("shot.png", "image/png", 5, "shot.png", blobId = blobId)))
+		val decoded = Attachments.decode(
+			listOf(ChannelFile("shot.png", "image/png", 5, "shot.png", role = "attachment", blobId = blobId)),
+		)
 		assertNull(decoded[0].src)
 
 		val fetched = File(filesDir, "blob.bin").apply { writeBytes("shot!".toByteArray()) }
@@ -202,7 +204,7 @@ class AttachmentsTest {
 	@Test
 	fun decode_carriesTheSendersSizeAndDateOnAMetadataOnlyFile() {
 		val files = Attachments.decode(
-			listOf(ChannelFile("doc.pdf", "application/pdf", 4096, "doc.pdf", modifiedAt = 1785179969544L)),
+			listOf(ChannelFile("doc.pdf", "application/pdf", 4096, "doc.pdf", role = "attachment", modifiedAt = 1785179969544L)),
 		)
 		assertEquals(4096L, files[0].size)
 		assertEquals(1785179969544L, files[0].modifiedAt)
@@ -210,7 +212,7 @@ class AttachmentsTest {
 
 	@Test
 	fun decode_leavesAnUnstampedFileWithNoDate() {
-		val files = Attachments.decode(listOf(ChannelFile("doc.pdf", "application/pdf", 4096, "doc.pdf")))
+		val files = Attachments.decode(listOf(ChannelFile("doc.pdf", "application/pdf", 4096, "doc.pdf", role = "attachment")))
 		assertNull(files[0].modifiedAt)
 	}
 
@@ -220,14 +222,18 @@ class AttachmentsTest {
 		// (reference, no src) is exactly the work fetchPendingAttachments looks for, and losing the
 		// reference here would strand the attachment with nothing left to fetch it by.
 		val blobId = "sha256-${"a".repeat(64)}"
-		val files = Attachments.decode(listOf(ChannelFile("shot.png", "image/png", 12, "shot.png", blobId = blobId)))
+		val files = Attachments.decode(
+			listOf(ChannelFile("shot.png", "image/png", 12, "shot.png", role = "attachment", blobId = blobId)),
+		)
 		assertEquals(blobId, files[0].blobId)
 		assertNull(files[0].src)
 	}
 
 	@Test
 	fun decode_leavesAFileNamingNoBytesWithNothingToFetch() {
-		val files = Attachments.decode(listOf(ChannelFile("gone.bin", "application/octet-stream", 3, "gone.bin")))
+		val files = Attachments.decode(
+			listOf(ChannelFile("gone.bin", "application/octet-stream", 3, "gone.bin", role = "attachment")),
+		)
 		assertNull(files[0].blobId)
 		assertNull(files[0].src)
 	}

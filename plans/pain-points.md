@@ -1057,10 +1057,13 @@ lines. The plan is deleted; what follows is what it left behind.
   asked twice for the amber SYMBOL highlight inside the code viewer, which was already built and
   works, and confirmed the chat-body tier is not what was meant. Either wire it or delete the rule,
   but a styled class nothing sets is what made this look like a missing feature for a whole evening.
-- **The reserved manifest name is claimable when a body carries no detected ref.** The refusal lives
-  in the builder, which a ref-less message never reaches, so an attachment literally named
-  `switchboard-references.json` ships and Phase 3's selection rule would adopt it. The fix belongs at
-  the compose boundary.
+- ~~**The reserved manifest name is claimable when a body carries no detected ref.**~~ RESOLVED, and
+  worth reading before anyone reaches for a filename check again. There is no reserved name and no
+  positional selection rule: a snapshot declares `role: "ref-snapshot"` at compose time and a
+  receiver classifies from the entry it already holds. An attachment named
+  `switchboard-references.json` is now an ordinary attachment and must ship, which
+  `evieFiles.test.ts` asserts. Adding a compose-boundary filename check would re-derive role from
+  content, which is the exact defect six commits were spent removing.
 - **No cross-runtime vector pins `safeName`/`uniqueName`.** Its absence is why both filename
   divergences (an astral character splitting into two underscores; dedupe seeded from a set rather
   than the ordered assignment) shipped with a green suite.

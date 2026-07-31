@@ -399,6 +399,7 @@ describe("routes", () => {
 						mime: "application/octet-stream",
 						size: MAX_RESPONSE_FILE_BYTES + 1,
 						descriptiveKey: "b",
+						role: "attachment",
 					},
 				],
 			});
@@ -648,6 +649,7 @@ describe("routes", () => {
 						mime: "application/octet-stream",
 						size: MAX_RESPONSE_FILE_BYTES + 1,
 						descriptiveKey: "b",
+						role: "attachment" as const,
 					},
 				],
 			};
@@ -735,6 +737,7 @@ describe("routes", () => {
 						mime: "application/octet-stream",
 						size: MAX_RESPONSE_FILE_BYTES + 1,
 						descriptiveKey: "big.bin",
+						role: "attachment",
 					},
 				],
 			});
@@ -764,6 +767,7 @@ describe("routes", () => {
 					mime: "image/png",
 					size: 5,
 					descriptiveKey: "shot.png",
+					role: "attachment",
 					base64: Buffer.from("bytes").toString("base64"),
 				},
 			]);
@@ -789,7 +793,16 @@ describe("routes", () => {
 			respond(new Request("http://localhost/respond", { method: "POST" }), {
 				session_id: "sess-files",
 				response: "screenshot attached",
-				files: [{ filename: "shot.png", mime: "image/png", size: 11, descriptiveKey: "shot.png", blobId }],
+				files: [
+					{
+						filename: "shot.png",
+						mime: "image/png",
+						size: 11,
+						descriptiveKey: "shot.png",
+						role: "attachment",
+						blobId,
+					},
+				],
 			});
 
 			const polled = poll(new Request("http://localhost/poll", { method: "POST" }), { session_id: "sess-files" });
@@ -807,33 +820,23 @@ describe("routes", () => {
 			expect(JSON.stringify(body)).not.toContain(blobId);
 		});
 
-		it("classifies a pre-role agent reply at ingest: manifest dropped, snapshots stamped", async () => {
-			// A not-yet-reloaded MCP still composes under the old convention. Ingest must apply the
-			// legacy rule, not blanket-stamp `attachment` - that would relabel the machinery as user
-			// files, hand agents source copies they never asked for, and leave the stored manifest
-			// entry satisfying the strict-flip precondition while lying about it.
+		it("refuses a file that never says what it is, rather than guessing a role for it", async () => {
+			// Absence is not a state anyone interprets. A sender that cannot name a role is malformed,
+			// and refusing it at the edge is what stops a receiver from having to guess - the guessing
+			// is exactly what six commits of re-derivation used to do.
 			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-legacy", "agent", "console");
-			await store.waitForResult("sess-legacy", 1);
+			store.create("sess-roleless", "agent", "console");
+			await store.waitForResult("sess-roleless", 1);
 			const ctx = makeCtx({ store });
-			const { respond, poll } = createRoutes(ctx);
-			const legacy = (filename: string, mime: string) => ({ filename, mime, size: 1, descriptiveKey: filename });
-			respond(new Request("http://localhost/respond", { method: "POST" }), {
-				session_id: "sess-legacy",
-				response: "see the ref",
-				files: [
-					legacy("shot.png", "image/png"),
-					legacy("switchboard-references.json", "application/json"),
-					legacy("cart.ts", "text/plain"),
-				],
+			const { respond } = createRoutes(ctx);
+
+			const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "sess-roleless",
+				response: "no role on this file",
+				files: [{ filename: "shot.png", mime: "image/png", size: 1, descriptiveKey: "shot.png" }],
 			});
 
-			const polled = poll(new Request("http://localhost/poll", { method: "POST" }), {
-				session_id: "sess-legacy",
-			});
-			const body = (await polled.json()) as ResponsePayload;
-			expect(body.files?.map((f) => f.filename)).toEqual(["shot.png", "cart.ts"]);
-			expect(body.files?.map((f) => f.role)).toEqual(["attachment", "ref-snapshot"]);
+			expect(res.status).toBe(400);
 		});
 
 		describe("reply gate (an unconfirmed caller's own bridge handshake)", () => {

@@ -984,33 +984,16 @@ class ChatRepository(
 	// initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
 
-	// One-shot schema latch. MUST run AFTER localGatewayId above (loadPersistedThreads filters every
-	// key through parseTarget, whose non-null parameter check throws on the still-default field - a
-	// too-early call silently loads ZERO rows) and BEFORE the first thread/label load-parse below, so
-	// a stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
-	// blocks and property initializers top-to-bottom.
+	// One-shot grammar-version wipe. MUST run BEFORE the first thread/label load-parse below, so a
+	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
+	// blocks and property initializers top-to-bottom, so this settles before _state's
+	// loadPersistedThreads()/loadPersistedLabels() read anything.
 	init {
-		when (store.migrateSchemaIfNeeded()) {
-			AppStateStore.SchemaMigration.WIPE -> {
-				// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
-				// bytes + TTS audio) would otherwise stay stranded. Purge them on the same one-shot latch.
-				stts.purgeAll()
-				Attachments.purgeAll(filesDir)
-			}
-			AppStateStore.SchemaMigration.STAMP_ROLES -> {
-				// Stamp roles (and reconstruct ref metadata from on-disk manifests) onto pre-role rows,
-				// re-persist, THEN seal the version - a death mid-way re-runs the additive conversion.
-				// The seal is gated on the WRITE having landed, not merely on rows having parsed: a
-				// swallowed serialization failure with an unconditional seal would leave every row
-				// unstamped with no re-run path, which is the exact miss the latch exists to prevent.
-				val converted = loadPersistedThreads().mapValues { (_, rows) ->
-					com.atelier_nyaarium.switchboard.plugins.references.LegacyRefMigration.migrate(rows, filesDir)
-				}
-				val wrote =
-					converted.isNotEmpty() && runCatching { store.saveThreads(threadsJson(converted)) }.isSuccess
-				if (store.loadThreads() == null || wrote) store.markSchemaCurrent()
-			}
-			AppStateStore.SchemaMigration.NONE -> {}
+		if (store.migrateSchemaIfNeeded()) {
+			// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
+			// bytes + TTS audio) would otherwise stay stranded. Purge them on the same one-shot latch.
+			stts.purgeAll()
+			Attachments.purgeAll(filesDir)
 		}
 	}
 

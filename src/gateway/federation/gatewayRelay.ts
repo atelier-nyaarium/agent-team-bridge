@@ -312,15 +312,29 @@ export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayR
 			// without trusting the cleartext frame.
 			let op: FederatedOp;
 			let srcDomainId: string | null;
+			let body: unknown;
 			try {
 				const opened = sealer.openWithSource(frame.srcGateway, frame.payload.sealed, frame.srcDomain);
-				op = FederatedOpSchema.parse(opened.body);
+				body = opened.body;
 				srcDomainId = opened.srcDomainId;
 			} catch (err) {
 				await sendReply({
 					relayId: frame.relayId,
 					ok: false,
 					error: `unseal failed: ${(err as Error).message}`,
+				});
+				return;
+			}
+			// Reported apart from the unseal above: a peer running an older wire shape verifies its
+			// seal perfectly and still lands here, and calling that "unseal failed" sends whoever
+			// debugs it after the crypto instead of the version skew.
+			try {
+				op = FederatedOpSchema.parse(body);
+			} catch (err) {
+				await sendReply({
+					relayId: frame.relayId,
+					ok: false,
+					error: `op rejected: ${(err as Error).message}`,
 				});
 				return;
 			}

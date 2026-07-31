@@ -22,9 +22,6 @@ import com.atelier_nyaarium.switchboard.proto.canonicalizeRefUri
  */
 class ReferencesPlugin : PluginEntry {
 	override fun register(host: PluginHost) {
-		// TODO(2026-09): remove with LegacyRefMigration. The drain-time display index this store
-		// backed is gone; deleting its orphaned prefs file is a no-op once it has run anywhere.
-		host.applicationContext.deleteSharedPreferences("plugin-references-index")
 		// A snapshot is machinery, not something the reader attached, so its chip is hidden. A pure
 		// field read: no bytes, no disk, no index, no dependence on when anything landed.
 		host.attachmentChipDecorators.claim("references:hide-artifacts", AttachmentChipDecorator { _, file ->

@@ -63,7 +63,7 @@ data class ChannelFile(
 	val modifiedAt: Long? = null,
 	val blobId: String? = null,
 	val blobGateway: String? = null,
-	val role: String? = null,
+	val role: String,
 	val ref: RefFileMeta? = null,
 	val cardTitle: String? = null,
 	val cardGroup: String? = null,

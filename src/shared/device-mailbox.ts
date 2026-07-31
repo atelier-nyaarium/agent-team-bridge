@@ -58,6 +58,20 @@ function entryBytes(input: MailboxInput): number {
 	return n;
 }
 
+/**
+ * Whether a stored entry can still be decoded by a consumer.
+ *
+ * Deliberately NOT the ingest schema. That one governs what a SENDER may submit (counts, lengths,
+ * digest shapes); reusing it here would make every future tightening a retroactive, silent deletion
+ * of already-delivered history. This checks only what a consumer's decoder REQUIRES and an older
+ * writer could have omitted: a declared role per file. Everything else a consumer tolerates.
+ */
+function servable(entry: MailboxEntry): boolean {
+	const files = (entry as { files?: unknown }).files;
+	if (!Array.isArray(files)) return true;
+	return files.every((f) => typeof (f as { role?: unknown })?.role === "string");
+}
+
 /** Random positive Int31 (the console parses epoch as a signed 32-bit int). The
  * console only compares epochs for equality, so the invariant is that a restarted
  * gateway's mailbox instance can never re-mint an epoch a console still holds from
@@ -359,7 +373,14 @@ export class DeviceMailbox {
 	}
 
 	/** Rebuild a box from a snapshot, keeping its epoch + seq so the console resumes without
-	 * a spurious epoch flip and without re-seeing acked entries. */
+	 * a spurious epoch flip and without re-seeing acked entries.
+	 *
+	 * Entries are checked on the way OUT, not merely on the way in. A consumer decodes a poll result
+	 * atomically, so one entry it cannot decode fails the whole batch, and a batch that never decodes
+	 * is a cursor that never advances - which keeps the box alive, since draining refreshes the idle
+	 * clock, so the entry is never swept either. Dropping it turns "this device receives nothing,
+	 * ever" into "this device loses one message".
+	 */
 	static fromSnapshot(
 		s: MailboxSnapshotState,
 		maxEntries = DEFAULT_MAX_ENTRIES,
@@ -369,13 +390,26 @@ export class DeviceMailbox {
 		box.nextSeq = s.nextSeq;
 		box.dropped = s.dropped;
 		box.lastActivity = s.lastActivity;
+		const droppedSeqs = new Set<number>();
 		for (const e of s.entries) {
+			if (!servable(e)) {
+				// The count is the ONLY signal a console has: it derives a gap from the dropped delta,
+				// never from a seq jump, so a silent skip here would be an invisible loss.
+				box.dropped++;
+				droppedSeqs.add(e.seq);
+				continue;
+			}
 			box.entries.push(e);
 			const b = entryBytes(e);
 			box.entryBytes.push(b);
 			box.bytesUsed += b;
 		}
-		if (s.seenKeys) for (const [k, v] of s.seenKeys) box.seenKeys.set(k, v);
+		if (droppedSeqs.size > 0) {
+			console.error(`[mailbox] dropped ${droppedSeqs.size} unservable entr(ies) at restore`);
+		}
+		// A dropped entry's dedupe key goes with it, so an at-least-once redelivery can still land.
+		// Keeping it would dedupe away the one retry able to heal the loss.
+		if (s.seenKeys) for (const [k, v] of s.seenKeys) if (!droppedSeqs.has(v)) box.seenKeys.set(k, v);
 		if (s.consumerCursors) for (const [k, v] of s.consumerCursors) box.consumerCursors.set(k, v);
 		if (s.consumerLastSeen) {
 			for (const [k, v] of s.consumerLastSeen) box.consumerLastSeen.set(k, v);

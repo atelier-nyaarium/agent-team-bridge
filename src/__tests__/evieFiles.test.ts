@@ -80,6 +80,7 @@ describe("materializeFiles", () => {
 			mime: "image/png",
 			size: 4,
 			descriptiveKey: "The image named `dog.png`",
+			role: "attachment",
 			blobId: staged(Buffer.from("test")),
 			...overrides,
 		};
@@ -229,6 +230,7 @@ describe("emitResponseNotification", () => {
 					mime: "image/png",
 					size: 5,
 					descriptiveKey: "proof.png",
+					role: "attachment",
 					blobId: staged(Buffer.from("bytes")),
 				},
 			],
@@ -265,12 +267,6 @@ describe("emitChannelNotification", () => {
 		return { server, sent };
 	}
 
-	function refManifest(snapshotName: string): string {
-		return staged(
-			Buffer.from(JSON.stringify({ switchboardReferences: 1, files: [{ filename: snapshotName }], refs: {} })),
-		);
-	}
-
 	it("materializes an inbound send's attachments and points the agent at them", async () => {
 		const { emitChannelNotification } = await import("../mcp/channel/channelNotify.js");
 		const { server, sent } = captureNotification();
@@ -288,6 +284,7 @@ describe("emitChannelNotification", () => {
 					mime: "text/plain",
 					size: 5,
 					descriptiveKey: "repro.log",
+					role: "attachment",
 					blobId: staged(Buffer.from("trace")),
 				},
 			],
@@ -299,7 +296,9 @@ describe("emitChannelNotification", () => {
 		expect(sent[0].params.content).toContain(target);
 	});
 
-	it("writes every file on an inbound send, since only a reply can generate ref artifacts", async () => {
+	it("writes every attachment on a send, including one named like the old reserved manifest", async () => {
+		// Direction decides nothing and names decide nothing: only the declared role does, so a file
+		// the sender called switchboard-references.json is an ordinary attachment and lands.
 		const { emitChannelNotification } = await import("../mcp/channel/channelNotify.js");
 		const { server } = captureNotification();
 		const id = uniqueId();
@@ -316,6 +315,7 @@ describe("emitChannelNotification", () => {
 					mime: "text/plain",
 					size: 3,
 					descriptiveKey: "wanted.txt",
+					role: "attachment",
 					blobId: staged(Buffer.from("yes")),
 				},
 				{
@@ -323,19 +323,22 @@ describe("emitChannelNotification", () => {
 					mime: "application/json",
 					size: 1,
 					descriptiveKey: "switchboard-references.json",
-					blobId: refManifest("routes.ts.txt"),
+					role: "attachment",
+					blobId: staged(Buffer.from("{}")),
 				},
 				{
 					filename: "routes.ts.txt",
 					mime: "text/plain",
 					size: 4,
 					descriptiveKey: "routes.ts.txt",
+					role: "attachment",
 					blobId: staged(Buffer.from("code")),
 				},
 			],
 		});
 
 		expect(readFileSync(join(EVIE_FILES_DIR, id, "wanted.txt"), "utf8")).toBe("yes");
+		expect(existsSync(join(EVIE_FILES_DIR, id, "switchboard-references.json"))).toBe(true);
 		expect(existsSync(join(EVIE_FILES_DIR, id, "routes.ts.txt"))).toBe(true);
 	});
 
@@ -368,8 +371,8 @@ describe("emitChannelNotification", () => {
 });
 
 describe("dropReferenceArtifacts", () => {
-	function file(filename: string, role?: ChannelFile["role"]): ChannelFile {
-		return { filename, mime: "text/plain", size: 1, descriptiveKey: filename, ...(role ? { role } : {}) };
+	function file(filename: string, role: ChannelFile["role"] = "attachment"): ChannelFile {
+		return { filename, mime: "text/plain", size: 1, descriptiveKey: filename, role };
 	}
 
 	it("drops exactly the declared snapshots, wherever they sit in the list", () => {
@@ -416,6 +419,7 @@ describe("modifiedAt round trip", () => {
 					mime: "text/plain",
 					size: 3,
 					descriptiveKey: "aged.txt",
+					role: "attachment",
 					modifiedAt: sent,
 					blobId: staged(Buffer.from("old")),
 				},
@@ -435,6 +439,7 @@ describe("modifiedAt round trip", () => {
 					mime: "text/plain",
 					size: 3,
 					descriptiveKey: "fresh.txt",
+					role: "attachment",
 					blobId: staged(Buffer.from("new")),
 				},
 			],
@@ -455,6 +460,7 @@ describe("modifiedAt round trip", () => {
 					mime: "text/plain",
 					size: 0,
 					descriptiveKey: "empty.log",
+					role: "attachment",
 					blobId: staged(Buffer.alloc(0)),
 				},
 			],

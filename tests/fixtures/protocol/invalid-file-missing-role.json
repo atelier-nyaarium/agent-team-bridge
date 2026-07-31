@@ -1,18 +1,16 @@
 {
-	"seq": 51,
+	"seq": 53,
 	"at": 1785179969544,
 	"kind": "reply",
 	"session_id": "conv.11111111-2222-3333-4444-555555555555.alice.laptop.switchboard.main",
 	"from": "alice.laptop.switchboard.main",
-	"body": "attached by reference",
+	"body": "a file that never says what it is - must fail BOTH sides",
 	"files": [
 		{
-			"filename": "clip.mp4",
-			"mime": "video/mp4",
-			"size": 12500000,
-			"descriptiveKey": "clip.mp4",
-			"role": "attachment",
-			"modifiedAt": 1785179969544,
+			"filename": "shot.png",
+			"mime": "image/png",
+			"size": 4096,
+			"descriptiveKey": "shot.png",
 			"blobId": "sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 		}
 	]

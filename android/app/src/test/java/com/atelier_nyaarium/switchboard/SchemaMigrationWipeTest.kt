@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,5 +28,20 @@ class SchemaMigrationWipeTest {
 			"sync_dropped",
 		)
 		for (k in mustWipe) assertTrue("$k must be wiped by migrateSchemaIfNeeded", k in wiped)
+	}
+
+	@Test
+	fun theGrammarFloorIsPinnedSoOnlyADeliberateEditCanWipeHistory() {
+		// The wipe is gated on GRAMMAR_VERSION, not on equality with CURRENT_SCHEMA_VERSION: raising
+		// the current version for an added field must carry a store forward, never delete the owner's
+		// transcript. A relational assertion cannot tell an accidental bump from a real grammar break
+		// (a genuine break wants floor == current), so the floor is pinned to a literal instead.
+		// Raising it deletes every stored thread on every install below the new floor. If that is the
+		// intent, change the literal here too and say what grammar broke.
+		assertEquals(3, AppStateStore.GRAMMAR_VERSION)
+		assertTrue(
+			"GRAMMAR_VERSION may never exceed CURRENT_SCHEMA_VERSION, or every install wipes forever",
+			AppStateStore.GRAMMAR_VERSION <= AppStateStore.CURRENT_SCHEMA_VERSION,
+		)
 	}
 }

@@ -30,6 +30,7 @@
 		{ "file": "mailbox-peer.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "tolerance-extra-field.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "invalid-missing-required.json", "schema": "MailboxEntry", "expect": "fail" },
+		{ "file": "invalid-file-missing-role.json", "schema": "MailboxEntry", "expect": "fail" },
 		{ "file": "poll-result.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "poll-result-presence.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "poll-result-linked-peers.json", "schema": "ConsolePollResult", "expect": "pass" },

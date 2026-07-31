@@ -746,14 +746,14 @@ describe("modifiedAt on the wire", () => {
 
 		// The reason omission is the only safe fallback: NaN serializes to null, and null is not an
 		// accepted value, so one odd file would sink the entire message rather than just its date.
-		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt" };
+		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt", role: "attachment" };
 		expect(ChannelFilesSchema.safeParse([base]).success).toBe(true);
 		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: null }]).success).toBe(false);
 	});
 
 	it("refuses an epoch beyond what a Date can represent, so the restore side cannot be handed one", async () => {
 		const { ChannelFilesSchema } = await import("../shared/schemas.js");
-		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt" };
+		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt", role: "attachment" };
 		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: 8_640_000_000_000_000 }]).success).toBe(true);
 		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: 9_007_199_254_740_991 }]).success).toBe(false);
 	});
