@@ -1476,7 +1476,14 @@ class ChatRepository(
 		advanceMutex.withLock {
 			val step = queue.advance(entry, outcome)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
-			step.next?.let { speak(it) }
+			if (step.next != null) {
+				speak(step.next)
+				return
+			}
+			// Nothing is speaking and the queue still has a backlog: this terminal was either the
+			// playback that displaced the queue, or the head it stood down for. Either way the sound is
+			// free now, so pick the run back up rather than stalling until the next message arrives.
+			if (queue.playing() == null) queue.startNext()?.let { speak(it) }
 		}
 	}
 

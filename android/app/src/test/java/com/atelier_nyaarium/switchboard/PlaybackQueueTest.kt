@@ -46,27 +46,42 @@ class PlaybackQueueTest {
 	}
 
 	@Test
-	fun `a pause holds its place instead of walking forward`() {
+	fun `stopping one message retires it and carries on`() {
 		val q = queueOf(entry(1), entry(2))
 		val head = q.startNext()!!
 
 		val step = q.advance(head, SttsPlayer.Outcome.STOPPED)
 
-		assertTrue(step.paused)
-		assertNull(step.next)
-		assertEquals(entry(1), q.playing())
-		assertEquals(entry(1), q.resume())
+		// The stop control says "not this one", not "not any more". Holding the head here ended the
+		// run for the life of the process, because nothing resumes it.
+		assertEquals(entry(2), step.next)
 	}
 
 	@Test
-	fun `being replaced advances, because something else is already speaking`() {
+	fun `being displaced retires the head but starts nothing`() {
 		val q = queueOf(entry(1), entry(2))
 		val head = q.startNext()!!
 
 		val step = q.advance(head, SttsPlayer.Outcome.PREEMPTED)
 
-		assertFalse(step.paused)
-		assertEquals(entry(2), step.next)
+		// Something outside the queue took the sound. Starting the next entry now would talk over
+		// whatever the user just asked for; the queue waits for that playback to report its own end.
+		assertNull(step.next)
+		assertNull(q.playing())
+		assertEquals(listOf(entry(2)), q.queued())
+	}
+
+	@Test
+	fun `the run picks up again once the sound is free`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+		q.advance(head, SttsPlayer.Outcome.PREEMPTED)
+
+		// The displacing playback ends. It is not the head, so it moves nothing by itself - the caller
+		// sees an idle queue with a backlog and restarts it.
+		val unrelated = q.advance(QueueEntry("local.gw.manual.main", 99, SttsPlayer.Tier.FULL), SttsPlayer.Outcome.COMPLETED)
+		assertNull(unrelated.next)
+		assertEquals(entry(2), q.startNext())
 	}
 
 	@Test

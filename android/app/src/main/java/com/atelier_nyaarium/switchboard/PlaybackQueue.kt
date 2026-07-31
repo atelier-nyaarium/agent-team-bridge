@@ -4,10 +4,10 @@ package com.atelier_nyaarium.switchboard
 data class QueueEntry(val team: String, val at: Long, val tier: SttsPlayer.Tier?)
 
 /**
- * What an outcome did to the queue. The caller reads [next] to know what to play; a null next with
- * [paused] false means the queue ran dry, and with [paused] true means it is holding position.
+ * What an outcome did to the queue. A null [next] means nothing should start right now - either the
+ * queue is empty, or it stood down because something outside it took the sound.
  */
-data class QueueStep(val next: QueueEntry?, val paused: Boolean, val failed: QueueEntry? = null)
+data class QueueStep(val next: QueueEntry?, val failed: QueueEntry? = null)
 
 /**
  * The autoplay queue with no player in it: enqueue, one head at a time, advance on an outcome.
@@ -64,33 +64,36 @@ class PlaybackQueue {
 	 */
 	@Synchronized
 	fun advance(entry: QueueEntry, outcome: SttsPlayer.Outcome): QueueStep {
-		if (head != entry) return QueueStep(null, paused = false)
+		if (head != entry) return QueueStep(null)
 		return when (outcome) {
-			// The user stopped it. Hold position: this entry is still the head and still theirs to resume.
-			SttsPlayer.Outcome.STOPPED -> QueueStep(null, paused = true)
-
-			SttsPlayer.Outcome.COMPLETED, SttsPlayer.Outcome.PREEMPTED -> {
+			// The user stopped THIS message, which is not the same as stopping the run. It is retired
+			// and the queue carries on; a real pause needs a control that says so, and there is none.
+			SttsPlayer.Outcome.COMPLETED, SttsPlayer.Outcome.STOPPED -> {
 				retired(entry)
-				QueueStep(takeNext(), paused = false)
+				QueueStep(takeNext())
+			}
+
+			// Something outside the queue took the sound. Retire the head but start nothing: speaking
+			// now would talk over whatever the user just asked for. The queue picks up again when that
+			// playback reports its own terminal.
+			SttsPlayer.Outcome.PREEMPTED -> {
+				retired(entry)
+				QueueStep(null)
 			}
 
 			SttsPlayer.Outcome.PLAYBACK_ERROR, SttsPlayer.Outcome.SYNTH_ERROR -> {
 				retired(entry)
 				if (retried.add(entry)) {
 					pending.addLast(entry)
-					QueueStep(takeNext(), paused = false)
+					QueueStep(takeNext())
 				} else {
 					retried.remove(entry)
 					failures.add(entry)
-					QueueStep(takeNext(), paused = false, failed = entry)
+					QueueStep(takeNext(), failed = entry)
 				}
 			}
 		}
 	}
-
-	/** Resume the held head after a pause. Null when nothing is held. */
-	@Synchronized
-	fun resume(): QueueEntry? = head ?: pending.removeFirstOrNull()?.also { head = it }
 
 	/**
 	 * Forget everything belonging to one team: queued, playing, and remembered.
