@@ -8,6 +8,21 @@ import android.provider.DocumentsContract
 import java.io.File
 
 ////////////////////////////////
+//  Interfaces & Types
+
+/** How a write into the chosen folder ended. The two failures are distinct because their recoveries
+ * are: one wants a re-pick, the other must not trigger one. */
+sealed interface SaveOutcome {
+	data object Ok : SaveOutcome
+
+	/** The folder or its grant is gone. */
+	data object FolderGone : SaveOutcome
+
+	/** The folder was reachable and the write itself failed, so the destination is not the problem. */
+	data object WriteFailed : SaveOutcome
+}
+
+////////////////////////////////
 //  Functions & Helpers
 
 /**
@@ -26,6 +41,15 @@ import java.io.File
  * Takes the stored string rather than a store, so nothing here depends on where it is kept.
  */
 object SaveTarget {
+	private const val OPAQUE_MIME = "application/octet-stream"
+
+	/** The type that makes createDocument produce a FOLDER. Spelled out rather than read from
+	 * DocumentsContract so the guard stays a pure function a JVM test can exercise. */
+	private const val DIRECTORY_MIME = "vnd.android.document/directory"
+
+	/** A plain type/subtype, per RFC 6838's restricted-name shape. */
+	private val MIME_SHAPE = Regex("""[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}""")
+
 	/** Ask for a folder. The result Uri must go through [persist] or the grant dies with the process. */
 	fun pickFolderIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
 		addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -66,18 +90,46 @@ object SaveTarget {
 		return id.substringAfterLast(':').substringAfterLast('/').ifBlank { null }
 	}
 
-	/** Write into the chosen folder. False when the grant died between the check and the write, which
-	 * the caller turns into a re-pick rather than a dead end. */
-	fun writeToTree(context: Context, tree: Uri, source: File, name: String, mime: String): Boolean = runCatching {
+	/**
+	 * Write into the chosen folder.
+	 *
+	 * Reports WHICH way it failed, because the two have opposite recoveries. A folder that is gone
+	 * needs a re-pick; a folder that is present but could not be written to does not, and re-picking
+	 * there would cost the user their setting to fix something the setting was not causing.
+	 */
+	fun writeToTree(context: Context, tree: Uri, source: File, name: String, mime: String): SaveOutcome {
 		val resolver = context.contentResolver
-		val dir = directoryUri(resolver, tree) ?: return false
-		val type = mime.ifBlank { "application/octet-stream" }
-		val target = DocumentsContract.createDocument(resolver, dir, type, name) ?: return false
-		resolver.openOutputStream(target)?.use { out -> source.inputStream().use { it.copyTo(out) } } ?: return false
+		val dir = directoryUri(resolver, tree) ?: return SaveOutcome.FolderGone
+		val target = runCatching { DocumentsContract.createDocument(resolver, dir, documentMime(mime), name) }
+			.getOrNull() ?: return SaveOutcome.FolderGone
+		val wrote = runCatching {
+			resolver.openOutputStream(target)?.use { out -> source.inputStream().use { it.copyTo(out) } } != null
+		}.getOrDefault(false)
+		if (!wrote) {
+			// A half-written document carries the real filename with nothing marking it incomplete, so
+			// leaving it behind hands the user a corrupt file that looks like the one they saved. SAF
+			// has no pending flag like MediaStore's, so the only way to not publish a torn write is to
+			// remove it.
+			runCatching { DocumentsContract.deleteDocument(resolver, target) }
+			return SaveOutcome.WriteFailed
+		}
 		// No mtime restore: SAF exposes no setter, and a provider that silently ignored an attempt
 		// would leave the file looking stamped when it is not.
-		true
-	}.getOrDefault(false)
+		return SaveOutcome.Ok
+	}
+
+	/**
+	 * The type handed to createDocument.
+	 *
+	 * The mime here comes off the wire and nothing upstream constrains it, so it cannot be trusted to
+	 * name a file at all: the directory type would make the provider create a FOLDER in the user's
+	 * chosen location. Anything that is not a plain type/subtype is stored as opaque bytes instead.
+	 */
+	internal fun documentMime(mime: String): String {
+		val m = mime.substringBefore(';').trim().lowercase()
+		if (m == DIRECTORY_MIME) return OPAQUE_MIME
+		return if (MIME_SHAPE.matches(m)) m else OPAQUE_MIME
+	}
 
 	private fun directoryUri(resolver: ContentResolver, tree: Uri): Uri? = runCatching {
 		val id = DocumentsContract.getTreeDocumentId(tree)

@@ -917,15 +917,38 @@ floor pinned at fit would have made 100% unreachable. Measured widths: 50% -> 24
 200% -> 960 px, fit -> 1080x720, each centred on 539.5. A hard drag at 200% left the bounding box
 byte-identical, which is the pan clamp holding an image that fits its frame.
 
-Two things the on-device pass did NOT cover, stated rather than implied:
+One thing the on-device pass does NOT cover, stated rather than implied:
 - **Pan while the image OVERFLOWS the frame.** `adb input` cannot pinch, and no preset takes the
   fixture past the stage bounds. The arithmetic is unit-tested both ways, and it reads the same
   `fitFactor` and container pixels the four verified presets do, so the conversion seam is covered
   even though this branch was not exercised by hand.
-- **A completed SAF folder write.** The picker launches (`documentsui.picker.PickActivity` confirmed
-  resumed), and the first-run MediaStore write is verified end to end (6732 bytes landed in
-  Downloads). Driving the system picker to completion over adb is not reliable, so the tree write and
-  the dead-grant re-pick are verified by construction only.
+
+**The SAF path IS verified on-device now**, after the audit below found two defects living in exactly
+the gap that "verified by construction only" was covering. Driving `documentsui` over adb turned out
+to be possible after all (navigate, `USE THIS FOLDER`, `ALLOW`): tapping Change and completing a real
+pick leaves `/sdcard/Documents` empty and only re-labels the row, and a subsequent Save writes 6732
+bytes into it.
+
+**Audit findings, fixed.** 19 claims, 16 refuted. All 3 survivors were in the Save path, and two of
+them were the same defect found independently by two angles, so they are two distinct defects:
+- **The Change button wrote the file.** One `OpenDocumentTree` launcher served two opposite intents,
+  and `OpenDocumentTree` carries no caller state, so choosing a folder to CONFIGURE where saves go
+  also saved. Fixed with an explicit `saveAfterPick` flag that only the dead-grant recovery sets.
+- **`writeToTree` collapsed four outcomes into `false`,** so a failure AFTER `createDocument`
+  succeeded (a mid-copy `ENOSPC`) was reported as a dead grant: it dropped the user's folder setting,
+  told them the folder was gone, and left a truncated file carrying the real filename with nothing
+  marking it incomplete. It now returns `SaveOutcome`, deletes a half-written document (SAF has no
+  `IS_PENDING` equivalent, so removing it is the only way not to publish a torn write), and only
+  re-picks when the folder is genuinely gone.
+- Found while probing rather than as a survivor: the wire-supplied mime reaches `createDocument`
+  unvalidated, where the directory type would make the provider create a FOLDER. `documentMime` now
+  refuses anything that is not a plain type/subtype.
+
+A red-team pass over those fixes returned no survivors. Worth recording, because the tempting next
+change is wrong: an ENOSPC does NOT need `createDocument` reclassified. That call creates a ZERO-byte
+document, so a full volume fails in the copy, which is already `WriteFailed`. Re-querying the
+directory after a failed create to "improve" the split would turn a read-only volume into a bare
+`Save failed` with no recovery, since the read query still resolves there.
 
 Two defects the on-device pass caught that no unit test could:
 - The text stage rendered UNDER the status bar. It is the only stage anchored to the top edge, so a

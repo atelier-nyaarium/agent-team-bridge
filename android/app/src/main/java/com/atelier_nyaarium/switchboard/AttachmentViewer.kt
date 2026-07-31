@@ -202,14 +202,20 @@ private fun FullscreenMedia(
 		value = withContext(Dispatchers.IO) { SaveTarget.label(context, storedTree) }
 	}
 
-	/** Forget the folder and send the user back to the picker. The only recovery from a dead grant,
-	 * and more useful than a failure message they cannot act on. */
-	fun dropFolder() {
+	// Whether the pick now in flight owes a write when it returns. OpenDocumentTree carries no caller
+	// state, and the picker is opened for two opposite reasons: to finish a save whose folder turned
+	// out to be dead, and to change where future saves go. Without this, choosing a folder from the
+	// Change button would write a file the user never asked to save.
+	var saveAfterPick by remember { mutableStateOf(false) }
+
+	fun forgetFolder() {
 		repo.saveTreeUri = ""
 		storedTree = ""
 	}
 
 	val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+		val owesWrite = saveAfterPick
+		saveAfterPick = false
 		if (tree == null) return@rememberLauncherForActivityResult
 		scope.launch {
 			val taken = withContext(Dispatchers.IO) { SaveTarget.persist(context, tree) }
@@ -219,13 +225,22 @@ private fun FullscreenMedia(
 			}
 			repo.saveTreeUri = tree.toString()
 			storedTree = tree.toString()
+			if (!owesWrite) return@launch
 			val result = withContext(Dispatchers.IO) {
 				SaveTarget.writeToTree(context, tree, att.file, att.name, att.mime) to
 					SaveTarget.label(context, tree.toString())
 			}
-			val message = if (result.first) "Saved to ${result.second ?: "folder"}" else "Save failed"
+			val message = if (result.first == SaveOutcome.Ok) "Saved to ${result.second ?: "folder"}" else "Save failed"
 			Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 		}
+	}
+
+	/** Hand the user back to the picker to finish a save whose destination turned out to be dead. */
+	fun repickToFinishSave() {
+		forgetFolder()
+		Toast.makeText(context, "That folder is no longer available", Toast.LENGTH_SHORT).show()
+		saveAfterPick = true
+		pickFolder.launch(null)
 	}
 
 	val save = {
@@ -240,22 +255,19 @@ private fun FullscreenMedia(
 					Toast.makeText(context, if (ok) "Saved to Downloads" else "Save failed", Toast.LENGTH_SHORT)
 						.show()
 				}
-				tree == null -> {
-					dropFolder()
-					Toast.makeText(context, "That folder is no longer available", Toast.LENGTH_SHORT).show()
-					pickFolder.launch(null)
-				}
+				tree == null -> repickToFinishSave()
 				else -> {
-					val ok = withContext(Dispatchers.IO) {
+					val outcome = withContext(Dispatchers.IO) {
 						SaveTarget.writeToTree(context, tree, att.file, att.name, att.mime)
 					}
-					if (ok) {
-						Toast.makeText(context, "Saved to ${folder ?: "folder"}", Toast.LENGTH_SHORT).show()
-					} else {
-						// The grant died between the check and the write. Same recovery.
-						dropFolder()
-						Toast.makeText(context, "That folder is no longer available", Toast.LENGTH_SHORT).show()
-						pickFolder.launch(null)
+					when (outcome) {
+						SaveOutcome.Ok ->
+							Toast.makeText(context, "Saved to ${folder ?: "folder"}", Toast.LENGTH_SHORT).show()
+						SaveOutcome.FolderGone -> repickToFinishSave()
+						// The folder is fine, so re-picking would not help and would only cost the
+						// setting to fix something the setting was not causing.
+						SaveOutcome.WriteFailed ->
+							Toast.makeText(context, "Save failed", Toast.LENGTH_SHORT).show()
 					}
 				}
 			}
