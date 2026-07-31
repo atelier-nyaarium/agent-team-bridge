@@ -1,0 +1,795 @@
+# TTS Playback Queue
+
+## Source idea (owner, verbatim)
+
+> For a spam of TTS messages, I want them to queue back to back instead of cancelling the previous.
+> So we will need some sort of playback queuing. Maybe a sound for the first message in the spam.
+>
+> We also need a UX to control it as well. the tiny play button does not help at all. Perhaps a
+> floating bubble when messages play?
+> - Any play or auto-play will bring up the bubble. Bubble is a speech bubble icon with a number
+>   indicating queue size. Tapping play on another message will queue more. Auto play will queue more.
+> - Swiping to dismiss the bubble will stop the current playback and play the next one. Obviously
+>   decrement number. Bubble cones back for next playback in queue.
+> - Tapping on bubble will show a floating modal of **queued entries** list. First row is a
+>   **pause/play + seek bar + time/time** UX, for the current playback. Second row down is the queue
+>   including current one. Trash icon right of them to unqueue. Trashing the first one obviously stops
+>   playback of the current, and starts playback of the next one. There is no toggling playback
+>   between entries. only plays the top one until it's done and popped off the top of the list.
+>
+> **Queued Entries** UX is a fat tile each:
+> ```
+> Session Name         duration
+> Title tier
+> ```
+>
+> Also we should have a spoken separator sentinel that is the session name that depends on the number
+> of contributors . Multiple teams in the same chat?
+> - Primary Session: "CoolApp Refactor"
+> - Participant Session: "CoolLib Analysis on CoolApp Refactor"
+>
+> Example Auto-play transcript of 2 messages on session named "CoolApp Refactor":
+> ```
+> (sound effect once for auto-play)
+> (silence 0.5s)
+> CoolApp Refactor
+> (silence 0.5s)
+> Diagnosed the issue and already sent the issue to the session CoolLib Analysis. they should have a
+> response any second now.
+> (divider silence 1s)
+> CoolLib Analysis on CoolApp Refactor
+> (silence 0.5s)
+> I've found the issue, and here's what it is.
+> ```
+
+## Existing code, as found
+
+- `SttsPlayer.kt` - one `MediaPlayer`, one `currentKey`. `play()` calls `stop()` first, so a second
+  play cancels the first. Three tiers: `TITLE` / `SUMMARY` / `FULL`. Audio cached per
+  (team, at, tier, provider, voice); `preloadBoth` warms SUMMARY + FULL.
+- `ChatRepository.kt:1284` `playMessage` is the single play entry point; `ttsTextFramed` already
+  frames a peer-mirror row as `"<from> to <to>: <text>"`.
+- Autoplay lives in the poll drain (`ChatRepository.kt` ~3695). Per burst it takes
+  `msgs.lastOrNull { !it.fromMe }` - **only the last agent message per team is ever spoken; earlier
+  ones in the same burst are dropped, not cancelled.** Across teams in one burst, each launches a
+  play that cancels the previous.
+- Gated on `followed = team in openTabs`, `sttsReady()`, and `autoPlayTier(sttsAutoPlay)`
+  (off/title/summary/full). `isDuplicatePeerAutoPlay` already suppresses speaking a peer-mirror row
+  twice when it appears in both participants' threads.
+
+## Questionaire
+
+**1. What enters the queue on auto-play?** -> **Every new agent message, in order.**
+
+A 5-message burst queues 5 entries. Fixes the existing silent-drop (only `msgs.lastOrNull` was ever
+spoken) as a side effect. Ordering is strict: "All, in order."
+
+Recommendation reason (chosen): the transcript example only shows two different sessions, so it does
+not settle the same-session case; keeping the drop would preserve a bug, and same-session grouping
+only pays off if such bursts turn out common. This is also the only option where the bubble's count
+means what a user expects.
+
+**2. Where does the queue live?** -> **`ChatState`, driven by the repository.**
+
+`ttsQueue: List<TtsEntry>` beside `drafts` / `scheduledSends`. `SttsPlayer` stays a one-shot engine
+that plays a file and reports completion.
+
+Recommendation reason (chosen): it is the seam that already exists. `SttsPlayer` takes a text string
+and a cache key and knows nothing of sessions or tiers; `playMessage` / `ttsTextFramed` already do the
+domain framing; and the completion signal already exists as `onPlayingChanged(team, at, false)`.
+
+Consequence to build: the player has one `stop()` today, but the queue needs four outcomes. Finished,
+swipe-skip and trash-current all ADVANCE; pause does NOT. So the player gains a real state transition.
+
+**3. Where do the controls live when the app is not in front?** -> **B and C, with C degrading to B.**
+
+Both surfaces, for both audiences: a `MediaSession` media notification (lockscreen / shade / headphone
+/ watch) AND a true `SYSTEM_ALERT_WINDOW` overlay bubble that floats over other apps. When the overlay
+permission is not granted, the feature falls back to B alone rather than degrading the bubble to
+in-app-only.
+
+Folded in with it: the missing audio-focus request, since it is the same code path.
+
+Recommendation reason (B was recommended, C accepted on top): auto-play already speaks while
+backgrounded with no control surface at all, and only a media notification closes that. C stacks on
+top rather than competing, and B is its prerequisite either way.
+
+**4. When does the spoken sentinel speak?** -> **Before EVERY entry, including same-session repeats.**
+
+> "it also makes it clear that the message is a new transcript even if it's the same one"
+
+So the sentinel is an entry BOUNDARY marker, not only attribution. Repetition is the feature.
+
+Engine consequence: an entry is still a SEGMENT LIST (optional chime, sentinel, gap, body), not one
+file. This answer removes the runtime-order argument for segments, but two reasons stand: a session's
+sentinel is identical across all its messages, so it is synthesized once and cached per
+(label, provider, voice) instead of re-synthesized inside every message; and the 0.5s / 1s silences
+stay real timed gaps rather than punctuation eight different providers each interpret differently.
+The chime is a bundled asset, so multi-segment playback is required regardless.
+
+**5. What does a tile show before its audio exists?** -> **Nothing to estimate. Withhold the message
+notification until TTS is generated, and show a loading spinner in the TTS view.**
+
+> "I figure if the TTS isn't yet generated, we just withhold the message notification and if in the
+> new TTS view, show a loading spinner."
+
+No duration estimate and no dash: a spinner occupies the duration slot until the real value is
+readable off the cached file. Notification timing is tied to synthesis, so a queued entry is normally
+already synthesized by the time it is visible, making the spinner a brief transient.
+
+Already partly shipped: with `sttsAutoGen` on, the drain awaits `preloadMessage` BEFORE calling
+`onInbound` (which fires the notification), and a failed or slow synth falls through and notifies
+anyway. This answer makes that the rule rather than one setting's side effect.
+
+**6. Does withholding gate the queue UI too?** -> **No. Queue UI is immediate; only the Android
+notification waits.**
+
+> "now that we have a GUI, we should let them show immediately on the TTS UI. It shows a loading
+> entry, but you will not receive an Android notification until the message finishes generating audio.
+> And it will attempt to play in order of queue. The bubble will show a loading spinner if the current
+> queued item is generating."
+
+Three separate timings, deliberately decoupled:
+- **Queue entry**: appears the instant it is enqueued, as a loading entry.
+- **Android notification**: fires when THAT message's audio finishes generating. Bounded already by
+  the STTS client's own timeouts, and a failed synth falls through and notifies.
+- **Playback**: strict queue order, even if a later entry finishes synthesizing first. Head-of-line
+  blocking is intentional.
+
+Bubble has two states: queue count, or a spinner while the HEAD entry is still generating.
+
+Consequences worth recording:
+- **My earlier "current + 1 prefetched" policy is superseded.** Every queued entry's notification is
+  gated on its own audio, so every queued entry gets synthesized regardless of whether it is ever
+  heard. Eager whole-queue synthesis is implied, not optional.
+- That cost only lands when auto-play is on (nothing enqueues otherwise), which is when the audio is
+  wanted anyway. The residual is entries synthesized then trashed before playing.
+
+**7. What happens when the HEAD entry never generates?** -> **Shift it to the END of the queue and
+resume. Once everything finishes, the bubble icon shows an alert icon so the error is known.**
+
+Rotate-to-back rather than pop. The rest of the queue doubles as the retry delay, and the
+"top plays and pops" invariant holds because a failed entry is genuinely re-queued rather than parked
+in the list unplayed.
+
+**8. How many attempts before an entry is given up?** -> **Exactly one rotation.**
+
+Fails at head, goes to tail, fails once more, dropped and remembered for the alert. Worst case two
+attempts per entry, so the queue always drains and the alert state is always reachable.
+
+Recommendation reason (chosen): one rotation is the smallest bound that absorbs a transient blip, and
+an expired key or dead endpoint will not fix itself inside one queue cycle, so more rotations delay the
+alert without changing the outcome. Degenerate case is safe: a lone failing entry rotates into a queue
+of one, retries immediately, stops after the second attempt. No tight loop.
+
+**9. Is the sentinel derived from the message or from the thread?** -> **From the message.**
+
+- Non-peer entry: its own session's label. `"CoolApp Refactor"`.
+- Peer entry: `"<from> on <to>"`. `"CoolLib Analysis on CoolApp Refactor"`.
+
+Thread-independent, so `isDuplicatePeerAutoPlay`'s arbitrary "first thread to claim the pair wins"
+(it keys on `"${from}|${to}"` and iteration order over the burst map decides) stops mattering. Also
+resolves the case the owner's two examples did not cover, a peer row whose own thread is the SENDER:
+thread-relative would render `"CoolApp Refactor on CoolApp Refactor"`, message-relative gives
+`"CoolApp Refactor on CoolLib Analysis"`.
+
+Recommendation reason (chosen): removes the nondeterminism rather than working around it, and lands on
+the owner's example string with no special casing.
+
+**Implies a deletion:** the sentinel absorbs `ttsTextFramed`'s inline `"<from> to <to>: "` prefix, so
+that prefix is removed. Otherwise a peer entry states its attribution twice.
+
+**10. What timeline does the seek bar measure?** -> **The whole transcript entry. Reaching the end IS
+the advance signal. Completed entries pop off the queue, for now.**
+
+> "seek bar is per transcript. So when it reaches the end, it ends and plays the next one. For now,
+> pop dones off the queue."
+
+"Per transcript" means ONE BAR PER ENTRY, as opposed to one bar spanning the whole queue. It does NOT
+mean the bar covers the chime and sentinel - see the no-concatenation ruling below, which settles the
+bar as body-only. Consequences:
+
+- End-of-bar is the single advance trigger, which unifies with Q7: natural end pops, skip pops,
+  trash-current pops, pause does not.
+- "For now, pop dones" means no history / replay list in v1. A completed entry is gone from the queue.
+- Tile `duration` measures whatever the bar measures, so it is BODY duration. A ten-entry queue
+  therefore under-reports wall clock by the sentinels and gaps. Accepted.
+
+**11. When does the chime play?** -> **If the queue was empty AND auto-play queued. Once per automatic
+run.**
+
+> "a chime once for the whole automatical auto queue. Unprompted audio yes. but once. Not really a
+> cool down. but exactly like you said: Chime if queue is empty and auto-play queued."
+
+A manual tap never chimes. No cooldown and no threshold constant.
+
+**Engine model, settled (owner):** three SEPARATE playbacks per entry, no concatenation anywhere.
+
+> "the scrub doesn't cross any boundaries. There are no set boundaries. Just 1 seek bar."
+> "ohh no don't concatenate. Different providers different format."
+> "Yeah, chime and sentinel. It's an auto-play boundary marker. no need to seek that."
+
+```
+[chime]      standalone, once per auto-play run, no UI, not seekable
+[0.5s gap]
+[sentinel]   standalone TTS, cached per (label, provider, voice), no UI, not seekable
+[0.5s gap]
+[body]       THE seekable transcript: the bar covers exactly this, and its end advances the queue
+[1s gap]     divider before the next entry
+```
+
+Chime and sentinel are boundary MARKERS, not content, so neither gets a timeline. The bar therefore
+drives a single `MediaPlayer` over one file and `seekTo` is plain. No composite position mapping exists
+anywhere, and nothing has to reconcile provider container mismatches. The silences are timed gaps
+between playbacks rather than authored audio.
+
+### Design rulings (card `tts-queue.html`, pushed to the Designer dock)
+
+Card approved. My five labelled assumptions stood unchallenged except the error state:
+
+- **Error is an ADDITIONAL badge on the normal bubble, not a red bubble replacing the count.** Losing
+  queue depth exactly when something failed is the wrong trade.
+- Standing as drawn: equaliser mark on the playing tile, highlight on that tile, "Now playing" heading,
+  tile order = play order with the current entry first.
+
+**12. What does the in-thread play button mean now?** -> **B, plus a visible non-clickable state.**
+
+> "B. but to make sure it's clear it's not playing, make the play button change to like a
+> non-clickable button of it's state. Loading, playing, queued."
+
+Not queued -> pressable, appends at FULL. Already queued -> NOT pressable, and it renders its state
+(Loading / Playing / Queued) instead of looking like a button. Retraction lives only in the modal's
+trash. Rejected my option C: no in-place tier upgrade, no retract-by-tapping.
+
+Known cost accepted: with auto-play on Title, a message wanted in full shows `Queued` and cannot be
+asked for until it leaves the queue. A delay, not a dead end. No machinery for it until it irritates.
+
+**13. What does the alert bubble do when the queue is empty?** -> **A, and the failed entries are
+LISTED and actionable.**
+
+> "it needs to be listed so we can jump to the session or clear the entries"
+
+Bubble outlives the drained queue carrying the badge. Tapping opens the modal, which LISTS the failed
+entries rather than just naming a count, and each one offers:
+- **Jump to the session**, at that message. Reuses the existing open-and-reveal machinery
+  (`openNonce` / reveal-and-scroll).
+- **Clear the entries.** Dismisses them and the alert with them.
+
+Assumption to confirm: tap-to-jump applies to ORDINARY queue tiles too, not only failed ones. A tile you
+cannot act on is a worse version of one you can.
+
+### Row control styling (owner ruling)
+
+> "if you uplift the style, be sure to give the copy button consistent treatment."
+
+`.play-btn` and `.copy-btn` currently SHARE one rule in `thread.css` (min-width 30px, height 24px,
+1px border, radius 6px, transparent background, opacity .75), differing only in font-size. They are a
+matched pair by construction.
+
+Ruling: keep that shared rule as the base for "pressable control", so idle-play and copy stay
+identical. The three non-pressable states are additive classes on play only. That preserves the
+existing invariant and makes the divergence meaningful, since a filled chip then reads as state rather
+than as a button.
+
+**Correction to `tts-play-states.html`:** it drew idle-play with a purple border and glyph, diverging
+from copy's grey, at 40x34 with an 8px radius. Real base is grey, 30x24, 6px radius. The card is
+schematic; the shipped control follows the existing CSS.
+
+`SttsPlayer.purge(team)` already stops playback when the current key belongs to a purged team, so
+`forget` has a precedent to extend to queue entries.
+
+**14. Does the queue have a cap?** -> **No cap.**
+
+> "C. if it clears out anyways, no need to cap."
+
+The queue drains as it plays and can be trashed or cleared, so unbounded length is accepted rather than
+designed against. This is the one store in the app with no bound; noted deliberately, not overlooked.
+
+Residual the reasoning does not cover (raised once, owner's call taken): draining bounds queue LENGTH,
+not provider SPEND. A 200-message flood still costs 200 synthesis calls, because every entry's
+notification is gated on its own audio. Revisit only if a runaway session actually bites.
+
+**15. Does the queue survive process death?** -> **No. Ephemeral.**
+
+Dies with the process; a cold start means no bubble and silence. Deliberately UNLIKE its `ChatState`
+neighbours `drafts` and `scheduledSends`, which both persist.
+
+Recommendation reason (chosen): the queue is derived state. Every entry is a message still in its thread
+whose notification already fired, so losing it costs an ordering rebuildable with one tap. Persist-and-
+resume was the one to avoid outright: `SwitchboardService` is a foreground service the system restarts
+on its own schedule, so it would start talking in a pocket at a moment nobody chose.
+
+### Deferred details -> all resolved
+
+- **Tier indication on a tile: not needed.** No distinguishing mark.
+- **Tap-to-jump: yes**, on ordinary tiles, to the session.
+- **No clear-all.** "swipe is quick. and there's never an instance of more than 3 talkers." Per-entry
+  trash plus swipe-to-skip covers it; the alert still clears on acknowledgement.
+
+**16. What should "withhold until audio exists" mean, given there is no per-message notification?**
+-> **Split the content from the alert.**
+
+Raised because audit finding L2-6 showed Q5/Q6 assumed an object that does not exist: there is one
+notification per TEAM, rebuilt from the current trailing unread rows.
+
+- Notification CONTENT updates immediately, but SILENTLY, through the path
+  `reconcileTeamNotifications` already uses (`setOnlyAlertOnce(true)`).
+- The RINGING post fires once per run, when the first entry of that run actually has audio.
+
+Recommendation reason (chosen): keeps the intent - a ping means there is something to listen to - while
+dropping the two costs, N rings per burst and delayed awareness of the messages themselves. Also the
+smallest change available, since both the ringing and the silent-refresh paths already exist; this picks
+between them rather than building a mechanism.
+
+Follow-on folded in: the notification's existing Play action (`SwitchboardService.kt:435-436`, "speak the
+burst-last message") becomes "queue this run" now that a queue exists.
+
+### Chime asset and NO CONCATENATION (owner)
+
+> "ohh no don't concatenate. Different providers different format. Just have it play on its own. No UI
+> to support it. then the auto-play transcripts begin."
+
+The chime is a STANDALONE one-off played before a run begins. It is not part of any entry's audio, is
+not covered by the seek bar, and has no UI representing it. Reason: providers disagree on container
+(`stts-providers.json` today: IBM `wav-stream`, OPENAI `wav-stream`, XAI `mp3`), so there is nothing
+reliable to concatenate into.
+
+**Chime source is user-selectable:** either an Android notification sound, or the bundled default.
+
+Supplied asset `2575.wav`: 234 KB, 16-bit stereo 44.1 kHz, 1.329 s, peak 89% (healthy level).
+Measured dual-mono (max L/R difference 11), so a downmix is lossless in practice, and it carried 0.349 s
+of trailing near-silence. Staged at `<scratchpad>/chime.wav` as **1ch 16-bit 44.1 kHz, 0.981 s, 84 KB**.
+
+Trimming the tail is a correctness fix, not only a size one: the spec authors 0.5 s of silence after the
+chime, and 0.349 s of built-in tail would have made the real gap 0.85 s.
+
+No converter is installed on the host (no ffmpeg / oggenc / sox), and none is needed - Android plays PCM
+WAV natively, and the system-notification-sound option means arbitrary formats have to work anyway. OGG
+would reach ~15 KB if the 84 KB ever matters.
+
+### Findings that shape the UX questions
+
+- No `SYSTEM_ALERT_WINDOW` permission, so no system-overlay bubble exists today.
+- No `MediaSession` and no audio-focus request: TTS talks over other audio and does not duck or pause
+  for a call.
+- Playback is gated on `followed = team in openTabs`, which is persisted state, NOT visibility. So
+  auto-play already speaks while the app is backgrounded, with no control surface at all.
+- `SwitchboardService` is already a foreground service (type `remoteMessaging`).
+
+## Plan
+
+Rough shape, derived from the questionaire. Sliced so each phase is verifiable on its own and the engine
+is proven before any new surface is built.
+
+**Creative licence (owner):** the UX carries deliberate latitude - make the call rather than asking, and
+confirm it on the emulator or a debug build afterwards. This applies to presentation, not to anything the
+questionaire already settled.
+
+### Model
+
+`TtsEntry` in `ChatState.ttsQueue: List<TtsEntry>` - ephemeral, never persisted, unbounded.
+
+Per entry: team address, message `at`, tier, source (auto-play vs manual, for the chime rule), state
+(queued / generating / ready / playing / failed), attempt count (0 or 1, per Q8), duration once readable,
+and the display fields the tile needs (session label, title text).
+
+Also **frozen at enqueue: provider and voice** (audit finding 5). The cache key is
+(team, at, tier, provider, voice), so an entry that is queued-but-unsynthesized would otherwise pick up
+whatever provider is current when its turn arrives, giving one run two different voices.
+
+### Phase 1 - Queue and engine, no new UI
+
+Scope corrected by audit finding 4: this phase plays the BODY only. Chime and sentinel move wholly to
+Phase 2, because Phase 1 cannot play audio whose text and asset Phase 2 is what defines.
+
+**Phase 1a - player surface, before anything depends on it.** Lap 2 found the queue cannot be built on
+the player as it stands (L2-1, L2-2, L2-3). These are prerequisites, not refinements:
+
+- **Multi-subscriber callbacks.** `onPlayingChanged` and `onPlaybackError` are single `@Volatile` slots
+  (`SttsPlayer.kt:41`, `:46`) that `MainActivity` claims and NULLS on dispose
+  (`MainActivity.kt:370-373`, `:3481-3482`). Convert both to a subscriber registry owned by the
+  repository, mirroring the existing `inboundSubscribers` pattern, and demote MainActivity's glyph wiring
+  and the settings sample screen to subscribers. Without this a backgrounded queue receives no advance
+  signal at all and stalls after entry one.
+- **Typed, identity-carrying outcomes.** `clearNowPlaying()` emits the same `playing=false` for
+  completion, playback error, `stop()` and replacement (`SttsPlayer.kt:207-214`), and `onPlaybackError`
+  carries no (team, at, tier). Emit a typed outcome per key instead: `completed` / `playback-error` /
+  `synth-error` / `preempted`. Q7's rotation, Q8's attempt count and Q13's failed list all read that
+  identity; a decode failure must not pop as though it were heard.
+- **An abandon path for a generating head.** Synthesis and playback share one daemon thread
+  (`SttsPlayer.kt:29`), `stop()` releases only the MediaPlayer, and the STTS transport is deliberately
+  non-cancellable with an 80s ceiling (`SttsClient.kt:52-62`). Add either a cancellable `Call` or a
+  generation lane separate from the playback lane, make an abandoned key emit `preempted` so
+  `inFlight` (`SttsPlayer.kt:157`) cannot swallow it into no-outcome-at-all, and pick a per-entry
+  generation deadline for UX rather than inheriting the transport's 80s.
+- Also warm TITLE, not just SUMMARY and FULL: with auto-play on Title every entry is otherwise a live
+  cache-miss synth on that single thread, which is precisely the burst this phase claims to verify.
+
+- Autoplay drain: replace `msgs.lastOrNull { !it.fromMe }` with EVERY agent message, in order.
+- **Re-key `isDuplicatePeerAutoPlay` on (from, to, body-content-hash)** - CORRECTED by L3-1; do NOT use
+  `at`. The current `"${from}|${to}"` key was correct when only one message per burst could be spoken;
+  under queue-everything it collapses distinct peer messages between the same two sessions, contradicting
+  "All, in order". But the two mirror copies do NOT share `at`: `device-mailbox.ts:147` re-stamps it after
+  the spread and `routes.ts:1282-1283` lands two independent entries. Body and files ARE shared by both
+  `mirrorPeer` calls, so a content hash is the only usable identity without a wire change. Residue: two
+  IDENTICAL messages between the same pair in one burst collide and one is dropped. Durable alternative is
+  a new shared exchange-id field on the wire - never `dedupeKey`, whose `seenKeys` path would delete one
+  participant's thread row outright.
+- **Attribute a peer entry to the RECEIVING session (`to`)** (L3-3). The dedupe's winning thread is
+  drain-order arbitrary, and the entry's team is what Phase 5's tap-to-jump and this phase's teardown both
+  dereference, so it must be chosen rather than inherited.
+- Repository owns the queue and advances it; `SttsPlayer` stays a one-shot engine.
+- Replace the single `stop()` with distinct outcomes: completed, skipped, trashed, paused. Only pause
+  does NOT advance.
+- **One mutex-guarded advance**, per audit finding 3. Player completion and a user swipe can both advance
+  concurrently, and an advance is read-the-head-then-mutate across calls rather than a single atomic
+  `_state.update`. `scheduledSendFireMutex` is the precedent to copy.
+- Body playback only: one `MediaPlayer`, and it is what feeds the bar, so `seekTo` stays plain.
+- Failure: rotate to tail once, drop on the second failure, remember it for the alert.
+- **Teardown, corrected by L2-4** (lap 1 got this wrong). `SttsPlayer.purge(team)` is called from
+  `forget` ALONE (`ChatRepository.kt:4291`, its only call site); `closeTab` (`:3996-4011`) touches
+  neither player nor cache. And `purge` welds stop to cache deletion (`SttsPlayer.kt:193-196`), right for
+  forget, wrong for a close the user may reopen. Split into three: stop-current, drop-queue-entries,
+  delete-cache. `forget` uses all three, `close_session` uses the first two. Sequence drop BEFORE stop
+  under the advance mutex, or the stop's `playing=false` advances into an entry whose audio that same
+  call is deleting.
+- A remembered FAILURE is no longer a queued entry (L2-5), so teardown scoped to "queued entries" leaves
+  it pointing at a thread `forget` has removed, and Q13's jump-to-session has no target. Drop a team's
+  remembered failures alongside its queued entries.
+- Auto-play enqueue stays gated on `followed = team in openTabs` and `sttsReady()`, exactly as today. No
+  queue and no bubble exist when TTS is unprovisioned.
+- Verifiable without UI: a burst of N messages speaks N times, in order.
+
+### Phase 2 - Spoken form
+
+This phase now owns BOTH boundary markers end to end - their text, their assets, and their playback -
+since Phase 1 deliberately ships body-only.
+
+- Sentinel text: non-peer uses the session label; peer uses `"<from> on <to>"`.
+- DELETE `ttsTextFramed`'s inline `"<from> to <to>: "` prefix, which the sentinel replaces.
+- Sentinel audio synthesized once and cached per (label, provider, voice), reused across that session's
+  messages.
+- Play chime and sentinel as SEPARATE playbacks with timed gaps around the body. No concatenation, so
+  provider container mismatches never matter. Neither marker gets a timeline or a seek bar.
+- Chime once per automatic run: queue was empty AND auto-play queued. Manual taps never chime.
+- **Ship the chime asset.** `res/raw/` is the idiomatic home for a `MediaPlayer`-playable bundled sound.
+  Staged file is mono 16-bit 44.1 kHz, 0.981 s, 84 KB.
+- **Chime source setting**, which the phases previously omitted entirely: choose the bundled default OR
+  an Android notification sound. The system option means the player must accept an arbitrary content URI
+  and whatever format sits behind it, so the bundled asset's own format stops being special.
+
+### Phase 3 - In-thread control
+
+- `thread.css`: keep the shared `.play-btn` / `.copy-btn` rule as the pressable base so idle-play and
+  copy stay identical. Add state classes on play only: queued, loading, playing - filled, captioned,
+  not pressable.
+- Bridge: `setPlaying(at)` becomes per-row state rather than one "which row is playing" pointer.
+- Tap behaviour: append at FULL when not queued; inert (state only) when already queued.
+
+**Take the BRIDGE route, not the row payload** (agreed with the file-gallery team, whose `ThreadRenderer`
+work made this matter). `ThreadRenderer`'s `fingerprint` decides row re-render, so anything riding the row
+PAYLOAD that can change while the row is on screen must be folded into it, or the row keeps stale content
+forever. State pushed over the JS bridge (`window.thread.*` mutating in place) is outside the fingerprint
+by design and needs no fold. Four-state play control over the bridge is on the safe side.
+
+If Phase 3 ever DOES want the payload route, note the trap they hit and paid for: **both halves must be
+wired - a readiness key on the sync effect AND the fold in the fingerprint - because either alone is
+silently inert.** Their video frames landing after a row rendered is what made it visible, since frames
+change nothing a sync otherwise looks at. They offered to fold play state in properly rather than let us
+discover the staleness the hard way, so ask rather than improvising it.
+
+### Phase 4 - Background control surface
+
+- `MediaSession` plus a media-style notification: play / pause / skip, lockscreen, shade, headphone,
+  watch.
+- **The foreground-service change is bigger than "add a type"** (audit finding 2). With `minSdk 33` /
+  `targetSdk 36`, API 34+ per-type enforcement applies, and today the app declares only
+  `FOREGROUND_SERVICE_REMOTE_MESSAGING` (`AndroidManifest.xml:6`) with
+  `foregroundServiceType="remoteMessaging"` (`:48`) and calls
+  `startForeground(..., FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)` (`SwitchboardService.kt:312`). All of
+  these move together:
+  - add `<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />`
+  - declare `foregroundServiceType="remoteMessaging|mediaPlayback"`
+  - pass the combined constant at the SINGLE existing `startForeground` call
+  - **do NOT toggle.** L3-2 and L3-8 independently refuted the toggle: API 34 has no runtime prerequisite
+    for `mediaPlayback`, so there is nothing to dodge; the concern was a Play-review one and this app is
+    sideloaded; and toggling would re-call `startForeground` twice per run on `STATUS_NOTIFICATION_ID`,
+    resurrecting a status notification the user dismissed (violating `SwitchboardService.kt:404-406`) and
+    reverting its text to "Connecting..." with zero unread, since no (health, unread) snapshot is cached.
+- **Publish a `PlaybackState`** (L3-4). At `targetSdk 36` the system IGNORES notification actions for
+  media and derives controls from `PlaybackState`, so the transport is `ACTION_PLAY` / `ACTION_PAUSE` /
+  `ACTION_SKIP_TO_NEXT` (skip = the swipe-advance), never `addAction`. Publish
+  `METADATA_KEY_DURATION` + `ACTION_SEEK_TO` ONLY while a body `MediaPlayer` is live; publish
+  `STATE_BUFFERING` with duration unset during chime, sentinel and the gaps. No duration means no progress
+  bar, which is exactly right for a boundary marker - and it is how a MediaSession can represent
+  body-only seeking honestly.
+- **Pick the MediaStyle route and add a channel** (L3-5). Neither exists today: either platform
+  `Notification.MediaStyle` on a raw `Notification.Builder` (no new dependency, breaks the
+  NotificationCompat-everywhere convention) or a pinned `androidx.media` / `media3-session` through the
+  repo's exact-pin + `check-module-residue` ritual. Plus a FOURTH channel at `IMPORTANCE_LOW`;
+  `CHANNEL_MESSAGES` is `IMPORTANCE_HIGH` with sound and vibration, wrong for a transport.
+- Request audio focus, which the app has never done, so TTS stops talking over music and ducks for calls.
+- **Notification: split content from alert (Q16).** There is no per-message notification to withhold -
+  one per TEAM, rebuilt from the current trailing unread rows. So update the content IMMEDIATELY and
+  SILENTLY via the path `reconcileTeamNotifications` already uses (`setOnlyAlertOnce(true)`,
+  `SwitchboardService.kt:501`), and fire the RINGING post once per run, when that run's first entry has
+  audio. `notifyBurst` deliberately omits `setOnlyAlertOnce` on an `IMPORTANCE_HIGH` channel with sound
+  and vibration, so per-message ringing would have meant N rings while the queue spoke those same N
+  messages.
+- The notification's existing Play action ("speak the burst-last message", `:435-436`) becomes
+  "queue this run".
+- Q16 dissolves two further lap-2 findings rather than leaving them open: L2-7 (no gate for audio that
+  never arrives) stops mattering because content is never withheld, so nothing can be stranded; and the
+  unrecoverable half of L2-8 goes with it, since a lost release can no longer strand a notification that
+  was never held back. What REMAINS of L2-8 is real: the deep-idle tier's budget constants derive from
+  ONE synthesis wait, not N, and eager whole-queue synthesis has to fit inside them.
+- Focus, corrected by L3-6. The plan lumped a call and a navigation prompt together; they raise DIFFERENT
+  callbacks, and with `CONTENT_TYPE_SPEECH` already set the system does NOT auto-duck, so
+  `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` has to be handled explicitly rather than assumed. Settle: gain type
+  `AUDIOFOCUS_GAIN_TRANSIENT` (a burst speaks and ends, so the user's music should resume) rather than
+  `AUDIOFOCUS_GAIN`, which stops it permanently; `LOSS_TRANSIENT` pauses and resumes; `LOSS_TRANSIENT_CAN_DUCK`
+  ducks or pauses by explicit choice; permanent `LOSS` pauses and leaves the queue intact. None of these
+  advance, which is the pause outcome Phase 1 already separates from the three that do.
+- Two existing wrinkles this phase should settle rather than inherit:
+  - `preloadBoth` warms SUMMARY and FULL but NOT TITLE, so with the auto-play tier set to Title,
+    pre-generate does not warm what actually plays.
+  - `sttsAutoGen` may now be redundant. Once every queued entry is synthesized anyway to release its
+    notification, a separate "pre-generate" toggle covers a case that no longer exists. Candidate for
+    retirement, which is a settings change and therefore the owner's call.
+
+### Phase 5 - Bubble and modal
+
+- Overlay bubble via `SYSTEM_ALERT_WINDOW` when granted; degrade to Phase 4's notification alone when
+  not. Count badge, spinner while the HEAD is generating, error as an ADDITIONAL badge that keeps the
+  count. Swipe to dismiss = stop current, advance, bubble returns for the next.
+- **Budget the overlay foundation** (L3-7), which this phase currently implies for free. There is no View
+  layer and no lifecycle host a `ComposeView` can attach to inside a Service: `WindowManager.addView`
+  throws at attach unless the root carries `ViewTreeLifecycleOwner`, `ViewTreeSavedStateRegistryOwner` and
+  `ViewTreeViewModelStoreOwner`, and a Service is none of them. Either hand-roll a `LifecycleRegistry` +
+  `SavedStateRegistryController` + `ViewModelStore` on the overlay root, or build the bubble without
+  Compose. Also name the site that requests the permission - the phase's own premise is that the app is
+  not in front, so it cannot be an Activity-only flow.
+- Modal: transport row (play/pause, one bar over the current entry's BODY, `time/time`), then the list
+  including the current entry. Fat tiles: session label + duration (spinner until known) on line one,
+  title tier on line two, trash on the right.
+- Trash the top entry = stop it and start the next, identical to swipe.
+- Tap a tile = jump to that session at that message, reusing the existing open-and-reveal machinery.
+- **No clear-all.** Per-entry trash plus swipe-to-skip covers it: "swipe is quick. and there's never an
+  instance of more than 3 talkers."
+- Alert bubble outlives a drained queue; tapping LISTS the failed entries, each offering jump-to-session
+  or dismissal. The alert clears on acknowledgement, treated as "seen" rather than "resolved".
+
+### Audit findings (lap 1)
+
+**Provenance caveat: this is a SINGLE-perspective audit.** The `audit-fan-out` step calls for parallel
+auditors; it was attempted twice and all six agents died on `API Error: 529 Overloaded` both times, with
+`agents_done: 0`, `subagent_tokens: 0`, `tool_uses: 0` and zero `"type":"result"` lines in the run journal.
+The empty result was infrastructure failure, NOT a clean bill of health. Re-run the fan-out on a later lap
+when subagent capacity returns; the findings below are one perspective, not several.
+
+Ranked, each verified against the code rather than reasoned from the plan alone.
+
+**1. BLOCKER - `isDuplicatePeerAutoPlay` will silently drop messages under queue-everything.**
+`ChatRepository.kt:359-362` keys the dedupe on `"${it.from}|${it.to}"` and returns
+`!seenPairs.add(pair)`. That was correct when only `msgs.lastOrNull { !it.fromMe }` was ever spoken, so
+one pair per burst was all that could occur. Now that EVERY message is queued, three peer messages
+between the same two sessions in one burst collapse to one, which directly contradicts Q1's "All, in
+order". ~~Fix: key on message IDENTITY (from, to, at)~~ - **THIS REMEDY IS REFUTED, see L3-1.** The
+diagnosis above stands; the fix does not. The two mirror copies do not share `at`. Use
+(from, to, body-content-hash).
+
+**2. BLOCKER - the `mediaPlayback` service type needs a permission and a `startForeground` change the
+plan omits.** The manifest declares only `FOREGROUND_SERVICE_REMOTE_MESSAGING`
+(`AndroidManifest.xml:6`) and `foregroundServiceType="remoteMessaging"` (`:48`), and
+`SwitchboardService.kt:312` calls `startForeground(..., FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)`. With
+`minSdk 33` / `targetSdk 36`, API 34+ per-type foreground-service enforcement applies. Phase 4 says only
+"add the `mediaPlayback` foreground-service type beside `remoteMessaging`". It also needs
+`FOREGROUND_SERVICE_MEDIA_PLAYBACK`, the combined `remoteMessaging|mediaPlayback` declaration, an updated
+`startForeground` type argument, and a decision on whether the media type is declared permanently or
+toggled at playback start and stop. **The toggle half is REFUTED, see L3-2 and L3-8: declare it
+permanently.** The premises below stand; the recommendation does not. A permanently-declared
+`mediaPlayback` with no active session is the
+risky shape under API 34 enforcement.
+
+**3. MAJOR - the queue advance needs a mutex, and there is direct precedent for one.** `_state.update`
+appears 72 times in `ChatRepository.kt`, so per-block atomicity is the house discipline, but an advance is
+read-the-head-then-mutate ACROSS calls. Player completion and a user swipe can both advance concurrently
+and double-pop. `scheduledSendFireMutex` (`ChatRepository.kt:1032`) already exists for exactly this class
+of bug, guarding `fireDueScheduledSends` "so a warm kick can never double-convert the same due record".
+Fix: one mutex-guarded advance, single writer.
+
+**4. MAJOR - Phase 1 depends on Phase 2's deliverables.** Phase 1 says "Play an entry as three SEPARATE
+playbacks ... chime (auto-play runs only), sentinel, body", but Phase 2 is what ships the chime asset and
+defines the sentinel text. Phase 1 cannot play what Phase 2 has not defined, so its "verifiable without
+UI" claim is false as written. Fix: Phase 1 plays BODY only and proves "N messages speak N times, in
+order"; chime and sentinel move wholly into Phase 2.
+
+**5. MINOR - a provider or voice change mid-queue yields mixed voices in one run.** The audio cache key is
+(team, at, tier, provider, voice) and the sentinel cache is per (label, provider, voice), so an entry that
+is queued but not yet synthesized picks up whatever provider is current when its turn arrives. Fix: freeze
+provider and voice onto the `TtsEntry` at enqueue time.
+
+### Audit findings (lap 2) - the fan-out landed, and it is bad news for Phase 1
+
+Two of four dimensions completed (`failure-modes`, `hidden-coupling`), 245k subagent tokens, 35 tool
+calls, 10 findings. The other two (`verify-lap1-findings`, `android-platform`) died on 529 Overloaded and
+are **still unaudited** - a one-shot retry is scheduled. Note the raw output reported them as
+`died:false, findings:[]`, which reads as clean: `agent()` RESOLVES null on a terminal error rather than
+rejecting, so the script's `.catch()` never fired. Cross-checked against the failures list instead.
+
+Two independent agents converged on the same root defect, which is why it leads.
+
+**L2-1. BLOCKER - the completion signal Q2 rests on cannot serve a queue.** Verified directly:
+`SttsPlayer.kt:41` is `@Volatile var onPlayingChanged: (...)? = null`, a SINGLE slot whose own doc says
+"Set by the owner", and `MainActivity.kt:370` claims it inside a `DisposableEffect` that nulls it at
+`:373` on dispose. So:
+- a backgrounded queue gets NO advance signal and stalls after entry one, which is the exact case the
+  plan exists to fix;
+- the repository wiring an advance would steal the thread glyph wiring, or be stolen by it, depending on
+  composition order.
+Fix: turn both player callbacks into a multi-subscriber registry (mirroring `inboundSubscribers`) owned
+by the repository, with MainActivity's glyph wiring becoming one subscriber rather than the owner. This
+is Phase 1 groundwork, before anything depends on it.
+
+**L2-2. BLOCKER - `playing=false` cannot express Phase 1's four outcomes.** `clearNowPlaying()`
+(`SttsPlayer.kt:207-214`) fires the same `onPlayingChanged(team, at, false)` for completion, playback
+error, `stop()`, and replacement - the doc at `:38-40` says so outright. Concrete loss: a cached file that
+fails to DECODE pops the entry as though it were heard, so the user gets silence, Q7/Q8's rotate-to-tail
+never fires, and the entry never reaches Q13's failed list. Separately `onPlaybackError`
+(`SttsPlayer.kt:173`) carries only a `reason: String`, no (team, at, tier), and is wired ONLY in the
+settings sample screen (`MainActivity.kt:3481-3482`). Fix: the player must emit a typed,
+identity-carrying outcome per key (completed / playback-error / synth-error / preempted). Q7, Q8 and Q13
+all read that identity; without it there is nothing to count attempts on or to list in the alert.
+
+**L2-3. BLOCKER - skip and trash cannot preempt a generating head.** Synthesis and playback share ONE
+daemon thread (`SttsPlayer.kt:29`), `stop()` releases only the MediaPlayer (`:180-187`), and the STTS
+transport is deliberately non-cancellable with an 80s per-call ceiling (`SttsClient.kt:52-62`). So
+swiping away a stalled head buys no audible advance for up to 80s per entry, and Q8's "the alert state is
+always reachable" becomes reachable only after roughly 2*N*80s. It compounds with the known
+`preloadBoth`-never-warms-TITLE gap: with auto-play on Title every entry is a live cache-miss synth on
+that one thread, so Phase 1's own burst test is the worst-serialising configuration. Also
+`SttsPlayer.kt:157` `if (!inFlight.add(k)) return` means a rotated retry arriving while the first attempt
+is still in flight returns with no playback AND no callback - no outcome at all, so the queue stalls
+silently. Fix: an explicit abandon path (a cancellable `Call`, or a generation lane separate from the
+playback lane), a rule that an abandoned key emits `preempted` so `inFlight` cannot swallow it, and a
+per-entry generation deadline chosen for UX rather than inheriting the transport's 80s.
+
+**L2-4. MAJOR - my own lap-1 teardown fix was wrong.** Lap 1 said to extend `SttsPlayer.purge(team)`.
+That precedent exists ONLY for `forget` (`ChatRepository.kt:4291`, its sole call site); `closeTab`
+(`:3996-4011`) touches neither player nor cache, so close needs a new path rather than an extended one.
+And `purge` welds stop to cache deletion (`SttsPlayer.kt:193-196`), which is right for forget and wrong
+for a close the user may reopen. Worse ordering hazard: `purge` calls `stop()`, `stop()` emits
+`playing=false`, and under this plan that means ADVANCE - so a forget mid-playback advances into the next
+entry, possibly the same team's, whose audio that very call just deleted. Fix: split into stop-current,
+drop-queue-entries, delete-cache; say which of forget/close uses which; sequence drop-then-stop under the
+advance mutex.
+
+**L2-5. MAJOR - a remembered failure can outlive the thread it points at.** Teardown is scoped to
+"that team's queued entries", but a remembered failure is by construction no longer queued (Q7 drops it
+into the alert list). `forget` then removes the thread, team row and label, so Q13's "jump to the session"
+has no target and the tile has no label to render. Phase 5 also describes the modal as the queue list OR
+the failed list, never both, which is exactly what a refill produces.
+
+**L2-6. BLOCKER (needs the owner) - per-message notification withholding is incoherent with the shipped
+notification model.** The app posts ONE level-based notification per TEAM, rendered from the whole
+trailing unread set, so the first released notification already displays every later, still-unsynthesized
+message in the burst, and `reconcileTeamNotifications` re-renders it. Releasing per message therefore
+cannot mean what Q5/Q6 assumed. It also turns one alert per team per burst into N: `notifyBurst`
+deliberately does not set `setOnlyAlertOnce` and `CHANNEL_MESSAGES` carries sound and vibration, so N
+posts to the same id each ring, while the TTS queue is speaking those same N messages. **This conflicts
+with a settled owner decision (Q5/Q6), so it is raised rather than redesigned in-loop.**
+
+Verified directly while framing Q16:
+- ONE notification per team, id from `teamNotificationId(team)`, built by `teamNotificationBuilder`
+  (`SwitchboardService.kt:414`) from `unreadRows(thread, state.readAnchors[team])` - the team's CURRENT
+  trailing unread rows, InboxStyle over the last 5. Its doc (`:410-413`) says the preview lines "always
+  reflect the team's real trailing unread rows, never a stale burst list". So "a message's notification"
+  does not exist as a thing to withhold.
+- `notifyBurst` (`:448`) RINGS: `CHANNEL_MESSAGES` is `IMPORTANCE_HIGH` with `setSound` and
+  `enableVibration(true)` (`:327-336`), and it deliberately omits `setOnlyAlertOnce`.
+- `reconcileTeamNotifications` already refreshes that SAME notification SILENTLY via
+  `setOnlyAlertOnce(true)` (`:501`).
+- The notification already carries Play actions that "speak the burst-last message" (`:435-436`), whose
+  meaning changes once a queue exists.
+
+So ring and content-refresh are ALREADY separate paths in this code. Any fix picks between existing paths
+rather than inventing a mechanism.
+
+**L2-7. MAJOR - the withhold rule has no never-arrives gate.** Enqueue is gated on
+`sttsReady() && followed && (sttsAutoGen || autoTier != null)`; everything else takes the else-branch and
+notifies immediately today. Nothing enqueues when auto-play is off, the team is not in `openTabs`, or TTS
+is unprovisioned - so "withhold until audio exists" must not apply to those, or their notifications never
+fire at all.
+
+**L2-8. MAJOR - eager whole-queue synthesis versus the deep-idle budget.** The idle-tier budget constants
+derive from ONE synthesis wait, not N. And because the reconciler refuses by design to post for a team
+with no notification currently showing, a release lost to wakelock expiry or doze is unrecoverable rather
+than merely late.
+
+### Audit findings (lap 3) - the retry landed, and it refuted me twice
+
+Both previously-dead dimensions completed (2/2, 0 errors, 245k tokens). They found 8 findings, and two
+of them REFUTE lap-1 conclusions that were already folded into the phases. This is precisely the risk of
+a single-perspective audit, and it materialised.
+
+**L3-1. BLOCKER - lap-1 finding 1's FIX was broken, and it was already in the plan.** The diagnosis was
+right (the `"from|to"` key collapses distinct messages under queue-everything); the remedy was not.
+Verified directly: `device-mailbox.ts:147` is
+`const entry: MailboxEntry = { ...input, seq: this.nextSeq++, at: Date.now() };` - the `at` stamp follows
+the spread, so `append()` ALWAYS overwrites any incoming value. And `routes.ts:1282-1283` makes TWO
+independent `mirrorPeer(...)` calls for one exchange (`fromAddr` then `toAddr`), each landing its own
+entry through its own `append()`, hence its own `Date.now()`. `dedupeKey` also defaults to a fresh
+`crypto.randomUUID()` per call (`:411`). So the two copies share NO identity field. Locally they usually
+land in the same millisecond, but nothing enforces it, and on a relay-landing Gateway they are two
+separate `consolePush` -> `landMailboxEntry` operations re-stamped at land time, where differing `at` is
+near-certain. Keying on (from, to, at) would therefore have caused an INTERMITTENT regression: one
+agent-to-agent exchange queued and spoken twice, the exact thing `isDuplicatePeerAutoPlay` exists to
+prevent.
+
+Corrected fix: key on **(from, to, body-content-hash)**, the only data the two copies genuinely share -
+both `mirrorPeer` calls receive the same `{ body, files }`. Known residue: two IDENTICAL messages between
+the same pair in one burst would collide and one would be dropped. The durable alternative is a shared
+exchange id added at the wire level, which must be a NEW field - reusing `dedupeKey` across both calls
+would make `append`'s `seenKeys` path (`device-mailbox.ts:138-146`) suppress the second copy outright and
+delete one participant's thread row.
+
+**L3-2. MAJOR - lap-1 finding 2's TOGGLE recommendation was unsound.** Found independently by BOTH
+agents. Its premises were all correct; the recommendation was not. Two reasons. First, the rationale
+argued against a permanent DECLARATION, but toggling varies only the runtime `startForeground` argument -
+the manifest bullet mandates `remoteMessaging|mediaPlayback` under either option, so the toggle does not
+change the shape the rationale objected to. That concern is a Play-review one, and this app is sideloaded
+(`AndroidManifest.xml:18-19` reasons explicitly about "a sideloaded non-Play app at minSdk 33", and `:21`
+declares `REQUEST_INSTALL_PACKAGES` for the in-app updater). Second, concrete harm: `startForeground` has
+exactly ONE call site, `startInForeground()` (`SwitchboardService.kt:310-312`, called only from `:216`),
+which hardcodes `buildStatusNotification("Connecting...", 0)`. Toggling would re-call it twice per run,
+resurrecting a status notification the user deliberately dismissed - violating the stated invariant at
+`:404-406`, "once the user clears the status entry, state changes must not resurrect it" - and reverting
+the live status line to "Connecting..." with zero unread, since no (health, unread) snapshot is cached
+anywhere. **Corrected: declare `mediaPlayback` permanently and pass the combined constant at the single
+existing call. Drop the toggle.**
+
+**L3-3. MINOR - Q9's "the arbitrary winner stops mattering" was overstated.** True for the sentinel TEXT
+only. Whichever thread wins still becomes the entry's TEAM, and two Plan items dereference it: Phase 5's
+tap-to-jump and Phase 1's teardown. So a peer entry's tile jumps to an arbitrarily-chosen participant
+thread, and forgetting that arbitrary thread silently drops an entry the user associates with the other.
+Fix: attribute a peer entry explicitly to the RECEIVING session (`to`), matching Q9's own framing, and
+scope teardown to match - or drop a peer entry only when BOTH participant threads are gone.
+
+**L3-4. BLOCKER - Phase 4's "play / pause / skip" cannot work as written.** At `targetSdk 36` the system
+IGNORES notification actions for media and derives controls from `PlaybackState`. The plan has no
+`PlaybackState` model at all. This is also the honest answer to the seek question I raised at Q10: a
+MediaSession CAN represent body-only seeking, but only as a per-segment STATE MACHINE, not one static
+advertisement. Fix: transport becomes `ACTION_PLAY` / `ACTION_PAUSE` / `ACTION_SKIP_TO_NEXT` (skip being
+the swipe-advance), and publish `METADATA_KEY_DURATION` + `ACTION_SEEK_TO` ONLY while a body
+`MediaPlayer` is live, publishing `STATE_BUFFERING` with duration unset during chime, sentinel and the
+gaps - no duration means no progress bar, which is exactly right for a boundary marker.
+
+**L3-5. MAJOR - there is no MediaStyle on the classpath and no channel a media notification can live
+on.** Phase 4 treats both as free. Either use platform `Notification.MediaStyle` on a raw
+`Notification.Builder` (no new dependency, fine at minSdk 33, but breaks the NotificationCompat-everywhere
+convention) or pin `androidx.media` / `media3-session` through the repo's exact-pin +
+`check-module-residue` ritual. Also needs a FOURTH channel at `IMPORTANCE_LOW`: `CHANNEL_MESSAGES` is
+`IMPORTANCE_HIGH` with sound and vibration, which is wrong for a transport.
+
+**L3-6. MAJOR - the audio-focus bullet is inverted for this app's own AudioAttributes.** With
+`CONTENT_TYPE_SPEECH` already set the system does NOT auto-duck, and
+`AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` is the one callback the plan omits - it lumps a navigation prompt in
+with a phone call, which raise different callbacks. Also unsettled: the gain type.
+`AUDIOFOCUS_GAIN` permanently stops the user's music; `AUDIOFOCUS_GAIN_TRANSIENT` lets it resume when the
+queue drains, which is the shape for a burst that speaks and ends.
+
+**L3-7. MAJOR - Phase 5 assumes an overlay foundation the codebase does not have.** No View layer, no
+lifecycle host a `ComposeView` can attach to inside a Service, and no named site for the permission
+request - while the phase's whole premise is that the app is NOT in front. A `ComposeView` added via
+`WindowManager.addView` throws at attach unless its root carries `ViewTreeLifecycleOwner`,
+`ViewTreeSavedStateRegistryOwner` and `ViewTreeViewModelStoreOwner`, and a Service is none of them. Budget
+for hand-rolling those on the overlay root, or for not using Compose in the overlay.
+
+**L3-8. MINOR - the toggle rests on a platform claim that is not true.** API 34 enforcement has no runtime
+prerequisite for `mediaPlayback`, so there was no hostility to dodge. Independent corroboration of L3-2.
+
+### Gates
+
+Kotlin is not covered by `ci.yml`, so `./gradlew :app:testDebugUnitTest` locally is the gate, plus
+`assembleEmulator` and a real look on the AVD for anything visual. Cards live in the Designer dock
+(`tts-queue.html`, `tts-play-states.html`).
