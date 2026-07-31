@@ -301,6 +301,18 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 - **Composer drafts:** one `Draft(text, files)` per team in the store, not composer-local state, so
   picked files cannot follow a tab switch. `takeBackIntoDraft` is the single write path back to the
   composer: files UNION, text lands only on a blank draft.
+  - `DraftStrip.kt` draws them: collapsed to a fixed-height scrolling strip, expandable to the
+    transcript's own layout. Tiles are keyed by FILE, never by position, because a removal shifts
+    every later file down a slot and a positional key would leave the old bitmap on a tile whose
+    remove badge now deletes a different file. The expand state is composer-local and must stay that
+    way; it describes the view, not the draft.
+  - `ThumbCache` is the one bitmap cache both thumbnail producers share, bounded in bytes and keyed
+    per producer so a design card and an image cannot collide. It holds no lock: serializing renders
+    is the WebView producer's problem, and a decode must not queue behind a card capture.
+  - `ImageThumbs.sampleFor` bounds a decode by TWO rules, and both are load-bearing. The short edge
+    decides sharpness (the tile centre-crops), and a ceiling on the long edge is the only thing that
+    binds an extreme aspect ratio. Without the second, a stitched screenshot decodes at full size to
+    fill a 64.dp tile and the OOM is swallowed into a blank tile.
 - **Scheduled send:** client-local, no wire shape. At most one banked `ScheduledSend` per team, one
   shared alarm on the earliest record, all firing funneled through a mutex-guarded path so a warm
   kick cannot double-convert.
