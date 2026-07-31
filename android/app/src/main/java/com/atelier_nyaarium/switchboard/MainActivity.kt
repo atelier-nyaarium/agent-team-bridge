@@ -687,7 +687,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					val rel = Attachments.relOf(file.src)
 					val resolved = Attachments.fileFor(context.filesDir, file.src)
 					if (rel != null && resolved != null) {
-						viewer = OpenAttachment(resolved, file.name, file.mime, rel, file.size, file.modifiedAt)
+						viewer = OpenAttachment(
+							resolved,
+							file.name,
+							file.mime,
+							rel,
+							file.size,
+							file.modifiedAt,
+							// Only reachable from here: a draft is the one place a file has a source
+							// the user might want to check before it goes anywhere.
+							location = state.drafts[openTeam!!]?.locations?.get(file.src),
+						)
 					}
 				},
 				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },

@@ -1073,7 +1073,7 @@ centre-crops), then keep halving while the long edge is over a ceiling (that one
 that binds an extreme aspect ratio). `sampleFor` is pure and its tests assert BYTES against the cache
 budget rather than sample steps, because the failure mode is a heap blow-up, not a wrong number.
 
-### 8. `sourceLocation` - display name, not a path (draft-only)
+### 8. `sourceLocation` - display name, not a path (draft-only) - ✅ DONE
 
 Needs a picked-file type distinct from `MessageFile`, so the "cannot reach the wire" guarantee is
 structural rather than a promise.
@@ -1095,6 +1095,26 @@ SAF exposes no user-visible path, so the Location row shows the provider's own D
 "Downloads"), read at pick time. Weaker than a path and also safer: it cannot leak a username or
 folder layout even by accident. If the provider supplies no usable name, the row is omitted rather
 than guessed at.
+
+**Took the sanctioned downgrade, and it is better than the type it replaces.** The value rides a
+`locations: Map<src, String>` on `Draft` instead of a new picked-file type. That buys the same
+guarantee for less surface: no file-shaped type gains a field at all, so the conversion to
+`OutgoingFile` and then `ChannelFile` has nowhere to put one, rather than there being a fourth gate
+to keep correct across a dozen call sites. `PickedLocation` takes ONE segment out of the SAF document
+id, so a nested pick shows `Taxes`, never the chain above it, and an opaque provider id shows
+nothing. `Attachments.storeOutgoingPaired` exists because a caller holding per-pick side data cannot
+pair by position: a failed write is dropped, not held as a gap.
+
+The invariant is pinned by a residue test in the **TS** suite, deliberately. The Kotlin tests run on
+push to main, so a Kotlin-side assertion could not stop the regression landing in a PR.
+
+**Audit, one survivor.** `mergeTakenBackDraft` rebuilt `Draft` from scratch rather than copying, so
+taking back a failed or scheduled send silently zeroed the map for files still in the draft, and
+`persistDrafts` wrote the loss to disk. Unrecoverable: an origin is read from a content Uri that is
+gone by then. Now a `copy`, with tests for both halves (a pick's origin survives; a taken-back file
+brings none of its own). The audit also caught that the new KDoc was STACKED on the existing one, and
+that a third, older KDoc above it had been orphaned from `Message.id` entirely; that one is now an
+inline doc on the field it describes.
 
 ### 9. Video previewables - the animated THUMB only
 
