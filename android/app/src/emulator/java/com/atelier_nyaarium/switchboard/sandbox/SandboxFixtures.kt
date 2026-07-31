@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import com.atelier_nyaarium.switchboard.Attachments
+import com.atelier_nyaarium.switchboard.Draft
 import com.atelier_nyaarium.switchboard.Message
 import com.atelier_nyaarium.switchboard.MessageFile
 import com.atelier_nyaarium.switchboard.OutgoingFile
@@ -48,6 +49,14 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 	)
 
 	fun threads(): Map<String, List<Message>> = mapOf(SESSION to buildThread())
+
+	/** A draft holding enough images to overflow one row, plus a plain file, so the strip has both
+	 * tile kinds, the expanded view has to wrap, and the tap target has somewhere to go. */
+	fun drafts(): Map<String, Draft> {
+		val picked = (1..7).map { pngFixture("shot-$it.png") } + textFixture()
+		val staged = Attachments.storeOutgoing(filesDir, bucket = "draft-1", files = picked)
+		return mapOf(SESSION to Draft(text = "", files = staged))
+	}
 
 	/** Canned listings for the create dialog's directory picker, keyed by the listed prefix (the
 	 * text up to and including its last "/"). Enough shape to see descent, filtering, and the
@@ -162,12 +171,12 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 
 	/** Drawn rather than bundled: a binary in the tree would need a reason to exist, and any solid
 	 * rectangle proves the thumbnail path just as well. */
-	private fun pngFixture(): OutgoingFile {
+	private fun pngFixture(name: String = "sandbox-image.png"): OutgoingFile {
 		val bitmap = Bitmap.createBitmap(480, 320, Bitmap.Config.ARGB_8888)
 		Canvas(bitmap).apply {
 			drawColor(Color.parseColor("#1f6feb"))
 			drawText(
-				"sandbox",
+				name.substringBefore('.'),
 				24f,
 				170f,
 				Paint().apply {
@@ -180,7 +189,7 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		val out = ByteArrayOutputStream()
 		bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
 		bitmap.recycle()
-		return staged("sandbox-image.png", "image/png", out.toByteArray())
+		return staged(name, "image/png", out.toByteArray())
 	}
 
 	private fun textFixture(): OutgoingFile =

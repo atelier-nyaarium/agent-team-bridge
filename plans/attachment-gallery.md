@@ -1026,7 +1026,7 @@ Two defects the on-device pass caught that no unit test could:
 - The bottom control row gains three presets, a reset icon and the save-location control, and the
   app applies no window insets anywhere - check it clears the gesture-nav pill.
 
-### 7. Draft composer (Compose)
+### 7. Draft composer (Compose) - ✅ DONE
 
 Collapsed by default: fixed-height strip, horizontal drag, labelled tiles for non-images, scroll to
 end on attach. Expanded mirrors the message layout plus remove badges. Ephemeral state.
@@ -1042,6 +1042,36 @@ unreachable.
 
 Accepted limitation: the scheduled-send dock replaces the composer wholesale, so the strip is hidden
 while a send is banked. Consistent with today's behaviour for text and files.
+
+**Correction: keying the cache by `blobId` does NOT make draft, outgoing, and echo share an entry.**
+`blobId` is computed at SEND time (`ConsoleClient` uploads the blob and stamps it), and
+`Attachments.storeOutgoing` builds a draft's `MessageFile` with a `src` and no `blobId` at all. After
+sending, `storeOutgoing` files a fresh bucket, so the echo's `src` differs from the draft's too.
+Nothing is shared under any spelling. Buying it would mean hashing every picked file at pick time,
+which stalls attaching a large video to save one decode of a file the user just chose, so
+`ThumbCache.image` keys on `blobId ?: src`. Content-addressed when that exists, path-addressed
+otherwise.
+
+**Audit findings, fixed.** 7 claims, 4 refuted, and the 3 survivors were 2 distinct defects:
+- **Removing a file ghosted its thumbnail onto its neighbour.** `LazyRow` items were positionally
+  keyed, so a removal shifted every later file down a slot while the slot kept the previous file's
+  decoded bitmap. The user could see one image on a tile whose remove badge deleted a different file,
+  and removal schedules a real delete. Slots are keyed by file identity now.
+- **The expanded view did not wrap,** so past about five images the tiles were laid out beyond the
+  screen edge: invisible, untappable, and unremovable, while the header still counted them. It is a
+  `FlowRow` now, which is what the transcript it claims to mirror has always done.
+
+Both were verified on the emulator with a seeded eight-file draft. The two-file fixture that shipped
+with the first pass could not have surfaced either one.
+
+**Red team, one survivor, high.** Thumbnail decode bounded the SHORT edge and nothing else, so a
+lopsided image was unbounded: a 400x20000 stitched screenshot decoded whole, 32 MB, to fill a 64.dp
+tile, and `runCatching` turned the resulting `OutOfMemoryError` into a silent blank tile. The sibling
+decoder in `AttachmentViewer` had it right with an OR. Sizing is now two rules, both load-bearing:
+halve while the short edge stays at or above the tile (that one decides sharpness, since the tile
+centre-crops), then keep halving while the long edge is over a ceiling (that one is the only rule
+that binds an extreme aspect ratio). `sampleFor` is pure and its tests assert BYTES against the cache
+budget rather than sample steps, because the failure mode is a heap blow-up, not a wrong number.
 
 ### 8. `sourceLocation` - display name, not a path (draft-only)
 

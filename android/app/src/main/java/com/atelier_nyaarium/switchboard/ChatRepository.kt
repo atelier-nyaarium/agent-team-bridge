@@ -4481,7 +4481,12 @@ class ChatRepository(
 	 * refactor away from being set; one that checks its own build type stays inert even if something
 	 * wires it up by mistake.
 	 */
-	fun seedSandbox(teams: List<Team>, threads: Map<String, List<Message>>, dirs: Map<String, List<String>> = emptyMap()) {
+	fun seedSandbox(
+		teams: List<Team>,
+		threads: Map<String, List<Message>>,
+		dirs: Map<String, List<String>> = emptyMap(),
+		drafts: Map<String, Draft> = emptyMap(),
+	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
 		// The Create button and the local/peer board split key off localGatewayId, which a
 		// gatewayless sandbox never learns from a register. Adopt the first fixture's gateway
@@ -4499,6 +4504,7 @@ class ChatRepository(
 				status = "",
 				error = null,
 				localGatewayId = localGatewayId,
+				drafts = drafts,
 			)
 		}
 	}
