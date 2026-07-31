@@ -1168,8 +1168,28 @@ same thread the gate tests, so they cannot disagree. The dedupe half needed a re
 key is claimed only by a thread that is actually eligible to speak, otherwise a muted session silently
 suppressed the followed one showing the same exchange.
 
-**Still open:** cross-team ordering within one burst, `clearAll` leaving the queue populated, and the
-notification's Play action still targeting the burst's last message while the preload warms its first.
+**Re-audit caught A5 still live, plus two defects the fixes themselves introduced.** Worth recording
+because the pattern is the same one Phase 1a's bug classes describe.
+
+- **A5 was not fixed.** `PREEMPTED` returned "start nothing", and the very next line restarted the run
+  anyway, because it asked whether the QUEUE was headless - which it always is the instant it stands
+  down. The stand-down is now an explicit flag rather than something inferred from an empty head, and
+  the resume asks the PLAYER whether anything is audible. My test passed throughout, because it
+  asserted at the queue level on exactly the value the caller overrode.
+- **The A1 fix minted a SECOND terminal.** `play` returned false on the toggle branch, which had
+  already emitted this entry's terminal, so the repository invented another. `play` now returns true
+  there: the question it answers is "will this entry's outcome be reported", and it just was.
+- **Teardown could be undone by a burst job.** A drain coroutine landing after a close or forget put an
+  entry back into a queue the teardown believed it had emptied. Enqueue now re-checks the team under
+  the advance lock rather than trusting the check made back at the drain.
+
+**Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
+notification's Play action targeting the burst's last message while the preload warms its first; two
+rows sharing one `at` collapsing into a single entry; unspeakable rows (status-only, files-only) being
+enqueued and burning both attempts; and `close_session` having no stop-current leg, so a manually
+played message from a closed tab keeps sounding. The peer attribution stays on the drained thread - the
+spec's `to` needs that thread's own copy of the row looked up, and the "Still to wire" list above is
+stale on this point.
 
 Still to wire, all in `ChatRepository`:
 

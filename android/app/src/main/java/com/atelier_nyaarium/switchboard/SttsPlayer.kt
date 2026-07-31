@@ -100,6 +100,9 @@ class SttsPlayer(private val root: File) {
 		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
 	}
 
+	/** Whether anything at all is audible right now, whoever owns it. */
+	fun isSounding(): Boolean = requests.isSounding()
+
 	/** Whether this message is audible, in any tier. What the row shows, and so what its button may
 	 * toggle on; [PlaybackRequests.isSoundingForMessage] says why it is not the claim. */
 	fun isPlayingMessage(team: String, at: Long): Boolean = requests.isSoundingForMessage(team, at)
@@ -127,10 +130,12 @@ class SttsPlayer(private val root: File) {
 		// Toggle on what the user can see. A tap while this is still synthesizing is NOT a cancel: the
 		// row shows nothing yet, so cancelling would read as a dead button, and single-flight already
 		// refuses the duplicate claim below.
-		if (stopSounding(team, at, tier)) return false
+		// True here too: the toggle already REPORTED this entry's outcome, so a caller waiting on one
+		// has had it. Returning false would have it invent a second terminal for the same request.
+		if (stopSounding(team, at, tier)) return true
 		if (text.isBlank()) return false
-		// Whether a request was CLAIMED, which is the same as whether a terminal is now owed. A caller
-		// driving a queue has to know the difference between "playing" and "declined, silently".
+		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
+		// difference from "declined, silently", which is a terminal that never arrives.
 		return synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
 			client.stream(provider, text, voice, dest)
 		}

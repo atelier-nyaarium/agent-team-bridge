@@ -4,10 +4,14 @@ package com.atelier_nyaarium.switchboard
 data class QueueEntry(val team: String, val at: Long, val tier: SttsPlayer.Tier?)
 
 /**
- * What an outcome did to the queue. A null [next] means nothing should start right now - either the
- * queue is empty, or it stood down because something outside it took the sound.
+ * What an outcome did to the queue.
+ *
+ * [standDown] is the difference between "nothing to play" and "do not play". It is set when the head
+ * gave up the sound to something outside the queue, and the caller must not fill the silence: an empty
+ * head reads identical to an idle queue, so without this flag a caller that restarts whenever the
+ * queue looks idle speaks straight over whatever displaced it.
  */
-data class QueueStep(val next: QueueEntry?, val failed: QueueEntry? = null)
+data class QueueStep(val next: QueueEntry?, val failed: QueueEntry? = null, val standDown: Boolean = false)
 
 /**
  * The autoplay queue with no player in it: enqueue, one head at a time, advance on an outcome.
@@ -78,7 +82,7 @@ class PlaybackQueue {
 			// playback reports its own terminal.
 			SttsPlayer.Outcome.PREEMPTED -> {
 				retired(entry)
-				QueueStep(null)
+				QueueStep(null, standDown = true)
 			}
 
 			SttsPlayer.Outcome.PLAYBACK_ERROR, SttsPlayer.Outcome.SYNTH_ERROR -> {

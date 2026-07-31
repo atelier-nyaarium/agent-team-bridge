@@ -1464,8 +1464,12 @@ class ChatRepository(
 	suspend fun enqueueAutoPlay(team: String, at: Long, tier: SttsPlayer.Tier) {
 		val entry = QueueEntry(team, at, tier)
 		advanceMutex.withLock {
+			// Re-checked under the lock, not just at the drain. A burst job runs on its own coroutine
+			// and can land after a close or forget has already swept this team, putting an entry back
+			// into a queue the teardown believed it had emptied.
+			if (team !in _state.value.openTabs) return
 			if (!queue.enqueue(entry)) return
-			queue.startNext()?.let { speak(it) }
+			resumeIfSilent()
 		}
 	}
 
@@ -1480,10 +1484,12 @@ class ChatRepository(
 				speak(step.next)
 				return
 			}
-			// Nothing is speaking and the queue still has a backlog: this terminal was either the
-			// playback that displaced the queue, or the head it stood down for. Either way the sound is
-			// free now, so pick the run back up rather than stalling until the next message arrives.
-			if (queue.playing() == null) queue.startNext()?.let { speak(it) }
+			// The head just gave the sound to something else. An empty head reads exactly like an idle
+			// queue, so without this the resume below would speak straight over what displaced it.
+			if (step.standDown) return
+			// A terminal for something the queue does not own. If that freed the sound, pick the run
+			// back up rather than stalling until the next message arrives.
+			resumeIfSilent()
 		}
 	}
 
@@ -1494,8 +1500,16 @@ class ChatRepository(
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
 			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
-			queue.startNext()?.let { speak(it) }
+			resumeIfSilent()
 		}
+	}
+
+	/** Start the next entry only while nothing is audible. "The queue has no head" is not the same
+	 * question: the queue is headless the instant it stands down, and answering the wrong one is how it
+	 * ends up speaking over the playback it just yielded to. Callers hold [advanceMutex]. */
+	private fun resumeIfSilent() {
+		if (queue.playing() != null || stts.isSounding()) return
+		queue.startNext()?.let { speak(it) }
 	}
 
 	/** Hand an entry to the engine, and synthesise its terminal ourselves if the engine would not take

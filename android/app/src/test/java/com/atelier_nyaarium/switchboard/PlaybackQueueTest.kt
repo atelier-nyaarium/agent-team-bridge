@@ -69,6 +69,21 @@ class PlaybackQueueTest {
 		assertNull(step.next)
 		assertNull(q.playing())
 		assertEquals(listOf(entry(2)), q.queued())
+		// The flag, not the empty head, is what says "do not fill this silence". Asserting only the
+		// two above passed while the caller restarted anyway, because a stood-down queue and an idle
+		// one look identical from here.
+		assertTrue(step.standDown)
+	}
+
+	@Test
+	fun `only a stand-down forbids the caller from starting something`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		// A terminal for something the queue does not own carries no veto: the caller is free to check
+		// whether the sound came free and pick the run back up.
+		assertFalse(q.advance(QueueEntry("local.gw.manual.main", 99, SttsPlayer.Tier.FULL), SttsPlayer.Outcome.COMPLETED).standDown)
+		assertFalse(q.advance(head, SttsPlayer.Outcome.COMPLETED).standDown)
 	}
 
 	@Test

@@ -138,6 +138,10 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	fun isSoundingForMessage(team: String, at: Long): Boolean =
 		sounding?.let { it.team == team && it.at == at } == true
 
+	/** Whether anything at all holds the sound. */
+	@Synchronized
+	fun isSounding(): Boolean = sounding != null
+
 	/** Mark `id` as the one sounding, returning the terminal of whatever it displaced. Null when `id`
 	 * is no longer live, which means it was abandoned before reaching the player. */
 	@Synchronized
