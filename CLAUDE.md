@@ -313,6 +313,13 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
     decides sharpness (the tile centre-crops), and a ceiling on the long edge is the only thing that
     binds an extreme aspect ratio. Without the second, a stitched screenshot decodes at full size to
     fill a 64.dp tile and the OOM is swallowed into a blank tile.
+  - Where a picked file CAME FROM rides `Draft.locations`, keyed by src, and is shown only in a
+    draft-opened viewer. It is on the Draft rather than on any file type so the conversion outward
+    has nowhere to put it: a device path names a user and a folder layout, and these cross a gateway
+    to another machine. `PickedLocation` takes ONE segment from the SAF document id, never a chain.
+    Pinned by `draft-location-residue.test.ts`, which is in the TS suite ON PURPOSE, since the Kotlin
+    tests run after merge and could not block a PR. Every Draft writer must COPY rather than rebuild,
+    or the map is silently dropped.
 - **Scheduled send:** client-local, no wire shape. At most one banked `ScheduledSend` per team, one
   shared alarm on the earliest record, all firing funneled through a mutex-guarded path so a warm
   kick cannot double-convert.
