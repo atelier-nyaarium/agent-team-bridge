@@ -19,6 +19,48 @@ class MessagesToJsonTest {
 
 	private fun msg(files: List<MessageFile>) = Message(fromMe = false, text = "here", at = 1000L, id = 7, files = files)
 
+	private fun video(src: String = "https://x/attachments/1-1/clip.mp4") = MessageFile("clip.mp4", "video/mp4", src)
+
+	private fun filesOf(json: String): JSONArray = JSONArray(json).getJSONObject(0).getJSONArray("files")
+
+	@Test
+	fun aVideoWithNoFramesStaysAFileRow() {
+		// The classifier answers for surfaces holding only the file, and an img tag cannot draw an
+		// mp4. Promoting it before frames exist is what would render an empty tile.
+		val json = messagesToJson(listOf(msg(listOf(video()))), displayFrom, playEnabled = false) { null }
+
+		val file = filesOf(json).getJSONObject(0)
+		assertEquals(false, file.getBoolean("previewable"))
+		assertEquals(false, file.has("frames"))
+	}
+
+	@Test
+	fun aVideoBecomesAThumbnailOnceItsFramesExist() {
+		val extracted = listOf("https://x/attachments/frames-ab/00.jpg", "https://x/attachments/frames-ab/01.jpg")
+
+		val json = messagesToJson(
+			listOf(msg(listOf(video()))),
+			displayFrom,
+			playEnabled = false,
+			frames = { extracted },
+		) { null }
+
+		val file = filesOf(json).getJSONObject(0)
+		assertEquals(true, file.getBoolean("previewable"))
+		assertEquals(2, file.getJSONArray("frames").length())
+	}
+
+	@Test
+	fun anImageIsNeverGivenFramesAndKeepsItsOwnPreviewability() {
+		val png = MessageFile("shot.png", "image/png", "https://x/attachments/1-1/shot.png")
+
+		val json = messagesToJson(listOf(msg(listOf(png))), displayFrom, playEnabled = false) { null }
+
+		val file = filesOf(json).getJSONObject(0)
+		assertEquals(true, file.getBoolean("previewable"))
+		assertEquals(false, file.has("frames"))
+	}
+
 	@Test
 	fun decoratedFileCarriesTitleAndKindUndecoratedStaysPlain() {
 		val json = messagesToJson(

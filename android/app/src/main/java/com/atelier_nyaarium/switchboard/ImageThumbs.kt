@@ -34,8 +34,18 @@ object ImageThumbs {
 	suspend fun of(filesDir: File, file: MessageFile): Bitmap? {
 		if (!isPreviewable(file)) return null
 		val key = ThumbCache.image(file.blobId, file.src) ?: return null
+		return cachedOrDecode(filesDir, key, file.src ?: return null)
+	}
+
+	/** A thumbnail for one attachment src, whatever names it. A video tile uses this to draw the
+	 * frames it cycles, which are ordinary files under the attachments root. */
+	suspend fun ofSrc(filesDir: File, src: String): Bitmap? {
+		val key = ThumbCache.image(null, src) ?: return null
+		return cachedOrDecode(filesDir, key, src)
+	}
+
+	private suspend fun cachedOrDecode(filesDir: File, key: String, src: String): Bitmap? {
 		ThumbCache.get(key)?.let { return it }
-		val src = file.src ?: return null
 		return withContext(Dispatchers.IO) {
 			val onDisk = Attachments.fileFor(filesDir, src) ?: return@withContext null
 			decodeThumb(onDisk)?.also { ThumbCache.put(key, it) }

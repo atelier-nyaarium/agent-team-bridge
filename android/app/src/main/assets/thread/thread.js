@@ -345,6 +345,30 @@
 		}
 	}
 
+	// How long each extracted video frame holds. Slow enough to read, fast enough to look alive.
+	const FRAME_HOLD_MS = 500;
+
+	// Cycle a video's frames in place. The interval is parked ON the element so stopCycling can find
+	// it: a row is REPLACED whenever its frames land, and a timer left running would keep firing
+	// against a node that is no longer in the document, holding it and its frames alive forever.
+	function startCycling(img, frames) {
+		let i = 0;
+		img.src = frames[0];
+		img._cycle = setInterval(() => {
+			i = (i + 1) % frames.length;
+			img.src = frames[i];
+		}, FRAME_HOLD_MS);
+	}
+
+	function stopCycling(root) {
+		for (const img of root.querySelectorAll("img.thumb")) {
+			if (img._cycle) {
+				clearInterval(img._cycle);
+				img._cycle = null;
+			}
+		}
+	}
+
 	// The host decides what is previewable, what each entry is called, and what order they come in.
 	// Hidden entries never arrive. This function only draws.
 	function buildFiles(files) {
@@ -360,11 +384,13 @@
 				const img = document.createElement("img");
 				img.className = "thumb";
 				img.loading = "lazy";
-				img.src = f.src;
+				// A video's tile draws its frames, never the file: an img tag cannot render an mp4.
+				img.src = f.frames && f.frames.length ? f.frames[0] : f.src;
 				// Named for assistive tech only. A thumbnail shows no filename: the picture is the
 				// label, and a wall of names under a wall of images is the noise being removed.
 				img.alt = f.label;
 				img.addEventListener("click", () => openAttachment(f.src));
+				if (f.frames && f.frames.length > 1) startCycling(img, f.frames);
 				thumbs.appendChild(img);
 			} else {
 				rows.appendChild(buildFileRow(f));
@@ -684,6 +710,7 @@
 				for (const block of existing.querySelectorAll(".mermaid-block")) {
 					observer.unobserve(block);
 				}
+				stopCycling(existing);
 				existing.replaceWith(row);
 				// A row can transition to eligible via an id-repeat (a re-render of the same row id
 				// carrying coordinates it did not have before), not just a fresh append. Without
@@ -732,6 +759,7 @@
 		const messages = payload.messages;
 		const firstUnreadId = payload.firstUnreadId;
 		observer.disconnect();
+		stopCycling(container);
 		container.replaceChildren();
 		divider = null;
 		region = [];

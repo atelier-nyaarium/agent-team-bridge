@@ -52,6 +52,9 @@ internal fun messagesToJson(
 	messages: List<Message>,
 	displayFrom: (Message) -> String,
 	playEnabled: Boolean,
+	// Ahead of `decorate` so the trailing-lambda call sites keep binding to the callback they always
+	// did. A defaulted parameter in last position would silently re-point every one of them.
+	frames: (MessageFile) -> List<String> = { emptyList() },
 	decorate: (MessageFile) -> ChipDecoration?,
 ): String {
 	val arr = JSONArray()
@@ -82,14 +85,19 @@ internal fun messagesToJson(
 			val files = JSONArray()
 			for (item in shown) {
 				// Decoration is transcript-only, layered on a shape the persistence writers share.
+				// A video is not previewable by the classifier, which answers for surfaces that only
+				// have the file itself: an img tag cannot draw an mp4. It becomes one HERE, and only
+				// once its frames exist, because those are what the tile actually shows.
+				val frameSet = frames(item.file)
 				val fileObj = fileJson(item.file)
-					.put("previewable", item.previewable)
+					.put("previewable", item.previewable || frameSet.isNotEmpty())
 					.put("label", displayName(item))
 				// Only when the title actually survived displayName's fallback, so the renderer never
 				// has to re-decide whether a title is usable and reach a different answer.
 				item.decoration?.takeIf { it.title.isNotBlank() }?.let { d ->
 					fileObj.put("decoration", JSONObject().put("title", d.title).put("kind", d.kind))
 				}
+				if (frameSet.isNotEmpty()) fileObj.put("frames", JSONArray(frameSet))
 				files.put(fileObj)
 			}
 			obj.put("files", files)
@@ -110,6 +118,8 @@ internal fun messagesToJson(
  * filesystem listing or token surface.
  */
 class ThreadRenderer(context: Context) {
+	private val filesDir = context.filesDir
+
 	val webView: WebView = WebView(context)
 
 	/** A crashed renderer leaves this WebView unusable; the owner must detach,
@@ -375,6 +385,13 @@ class ThreadRenderer(context: Context) {
 		eval("window.thread.revealFirstUnread($idArg, $idsJson)")
 	}
 
+	/** A video's frames, or empty for anything else and for a video whose set has not landed. */
+	private fun framesFor(file: MessageFile): List<String> {
+		if (!file.mime.startsWith("video/")) return emptyList()
+		val key = VideoThumbs.keyFor(file) ?: return emptyList()
+		return VideoThumbs.cached(filesDir, key)
+	}
+
 	private fun fingerprint(m: Message): Int {
 		var h = m.text.hashCode()
 		h = 31 * h + (m.status?.hashCode() ?: 0)
@@ -390,6 +407,15 @@ class ThreadRenderer(context: Context) {
 		for (f in m.files) {
 			val d = decorateFile?.invoke(f)
 			h = 31 * h + (d?.let { (it.title.hashCode() * 31 + it.kind.hashCode()) * 31 + it.hidden.hashCode() } ?: 0)
+			// The file's own fields, not just how many there are. A row whose file changed in place -
+			// bytes landing against a reference, a size or date arriving - would otherwise keep
+			// rendering what it first showed.
+			h = 31 * h + (f.src?.hashCode() ?: 0)
+			h = 31 * h + (f.blobId?.hashCode() ?: 0)
+			h = 31 * h + (f.size?.hashCode() ?: 0)
+			h = 31 * h + (f.modifiedAt?.hashCode() ?: 0)
+			// Frames land long after the row rendered, and they change nothing else a sync looks at.
+			h = 31 * h + (VideoThumbs.keyFor(f)?.let { FrameReadiness.versionOf(it) } ?: 0)
 		}
 		return h
 	}
@@ -438,5 +464,5 @@ class ThreadRenderer(context: Context) {
 	}
 
 	private fun toJson(messages: List<Message>): String =
-		messagesToJson(messages, ::displayFrom, playEnabled) { f -> decorateFile?.invoke(f) }
+		messagesToJson(messages, ::displayFrom, playEnabled, ::framesFor) { f -> decorateFile?.invoke(f) }
 }
