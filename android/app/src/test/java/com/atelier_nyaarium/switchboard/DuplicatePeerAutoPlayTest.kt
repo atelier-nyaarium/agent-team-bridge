@@ -19,6 +19,51 @@ class DuplicatePeerAutoPlayTest {
 	private fun ordinaryMessage(at: Long = 1000L) = Message(fromMe = false, text = "hi", at = at)
 
 	@Test
+	fun mirroredCopiesAreDuplicatesEvenThoughTheirTimestampsDiffer() {
+		val seen = mutableSetOf<String>()
+		val from = "alice.sakura.coolapp.main"
+		val to = "alice.sakura.coollib.main"
+
+		// The two copies are re-stamped independently as they land, so `at` is exactly the field that
+		// cannot identify an exchange. Body and files are what both copies share.
+		assertFalse(isDuplicatePeerAutoPlay(peerMessage(from, to, at = 1000L), seen))
+		assertTrue(isDuplicatePeerAutoPlay(peerMessage(from, to, at = 1007L), seen))
+	}
+
+	@Test
+	fun twoDifferentMessagesBetweenOnePairBothPlay() {
+		val seen = mutableSetOf<String>()
+		val from = "alice.sakura.coolapp.main"
+		val to = "alice.sakura.coollib.main"
+		val first = Message(fromMe = false, text = "first", at = 1000L, from = from, to = to, isPeer = true)
+		val second = Message(fromMe = false, text = "second", at = 1001L, from = from, to = to, isPeer = true)
+
+		// Keyed on the pair alone, the second would be suppressed - which was correct only while a pass
+		// could speak one message, and silently drops messages once every one of them is queued.
+		assertFalse(isDuplicatePeerAutoPlay(first, seen))
+		assertFalse(isDuplicatePeerAutoPlay(second, seen))
+	}
+
+	@Test
+	fun oneExchangeWithFilesIsStillOneExchange() {
+		val seen = mutableSetOf<String>()
+		val from = "alice.sakura.coolapp.main"
+		val to = "alice.sakura.coollib.main"
+		fun copy(at: Long) = Message(
+			fromMe = false,
+			text = "here",
+			at = at,
+			from = from,
+			to = to,
+			isPeer = true,
+			files = listOf(MessageFile(name = "shot.png", mime = "image/png", size = 12L)),
+		)
+
+		assertFalse(isDuplicatePeerAutoPlay(copy(1000L), seen))
+		assertTrue(isDuplicatePeerAutoPlay(copy(1009L), seen))
+	}
+
+	@Test
 	fun firstCopyOfAPeerExchangeIsNotADuplicate() {
 		val seen = mutableSetOf<String>()
 		val a = peerMessage(from = "alice.sakura.coolapp.main", to = "alice.sakura.coollib.main")

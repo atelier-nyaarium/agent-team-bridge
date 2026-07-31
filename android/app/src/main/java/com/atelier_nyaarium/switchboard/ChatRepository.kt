@@ -442,17 +442,25 @@ internal fun threadsAfterForget(threads: Map<String, List<Message>>, key: String
 	return ThreadsAfterForget(next, dropped)
 }
 
-/** Whether a peer-mirrored exchange's auto-play should be suppressed because an identical
- * `(from, to)` pair already claimed this poll pass's one auto-play slot. The gateway mirrors an
- * agent-to-agent exchange into BOTH participants' mailboxes as separate thread keys (see
- * `threadsAfterForget` above), so one exchange otherwise reaches the burst loop twice - once per
- * thread - and gets spoken twice over if both threads are followed at once. `seenPairs`
- * accumulates across one pass over `burst`, so the first thread to claim a pair wins and the
- * second is suppressed. Always false for a non-peer message: an ordinary entry lands in exactly
- * one thread and never duplicates. */
-internal fun isDuplicatePeerAutoPlay(lastAgent: Message?, seenPairs: MutableSet<String>): Boolean {
-	val pair = lastAgent?.takeIf { it.isPeer }?.let { "${it.from}|${it.to}" } ?: return false
-	return !seenPairs.add(pair)
+/** Whether a peer-mirrored message is the SECOND copy of one already claimed this poll pass. The
+ * gateway mirrors an agent-to-agent exchange into BOTH participants' mailboxes as separate thread
+ * keys (see `threadsAfterForget` above), so one exchange otherwise reaches the burst loop twice, once
+ * per thread, and is spoken twice over when both threads are followed.
+ *
+ * Keyed on CONTENT, not on `at`: the two mirror copies do not share a timestamp (the mailbox re-stamps
+ * it, and the two entries land independently), while body and files are shared by both. Keying on
+ * `(from, to)` alone was right only while a pass could speak one message; queueing every message means
+ * distinct exchanges between the same pair would collapse into one.
+ *
+ * `seen` accumulates across one pass over `burst`, so the first thread to claim a message wins.
+ * Always false for a non-peer message: an ordinary entry lands in exactly one thread.
+ *
+ * Residue: two IDENTICAL messages between the same pair in one burst collide and one is dropped.
+ * Closing that needs a shared exchange id on the wire. */
+internal fun isDuplicatePeerAutoPlay(message: Message?, seen: MutableSet<String>): Boolean {
+	val peer = message?.takeIf { it.isPeer } ?: return false
+	val files = peer.files.joinToString(",") { "${it.name}:${it.size}" }
+	return !seen.add("${peer.from}|${peer.to}|${peer.text.hashCode()}|${peer.text.length}|$files")
 }
 
 /** Drops any team whose forget-tombstone (`forgottenUntil`: team name -> expiry epoch-ms) has not
