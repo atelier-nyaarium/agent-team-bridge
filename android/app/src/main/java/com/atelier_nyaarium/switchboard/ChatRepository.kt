@@ -1440,13 +1440,20 @@ class ChatRepository(
 	 * claimed cancels it. No-op when unconfigured or the message is gone.
 	 */
 	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
-		stts.post {
-			val client = sttsClient() ?: return@post
-			val provider = currentProvider() ?: return@post
-			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
-			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.play(client, provider, voice, team, at, tier, ttsTextFramed(_state.value, msg, tier), sttsVolume)
-		}
+		stts.post { startPlayback(team, at, tier) }
+	}
+
+	/** Whether the engine TOOK this message, which is the same as whether a terminal is now owed for
+	 * it. Every reason to give up returns false here rather than returning silently, because a queue
+	 * waiting on a terminal that will never come waits forever. */
+	private fun startPlayback(team: String, at: Long, tier: SttsPlayer.Tier): Boolean {
+		val client = sttsClient() ?: return false
+		val provider = currentProvider() ?: return false
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return false
+		val text = ttsTextFramed(_state.value, msg, tier)
+		if (text.isBlank()) return false
+		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume)
 	}
 
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
@@ -1473,18 +1480,31 @@ class ChatRepository(
 		}
 	}
 
-	/** Drop everything queued for a team and stop it if it was the one speaking. Ordered drop-then-stop
-	 * on purpose: the stop's own terminal would otherwise advance into an entry this same call is
-	 * removing. Cache deletion is a separate step, so closing a tab the user may reopen keeps its
-	 * audio. */
+	/** Drop everything queued for a team and stop it if it was the one speaking, then carry on with
+	 * whatever other teams still have waiting. Ordered drop-then-stop on purpose: the stop's own
+	 * terminal would otherwise advance into an entry this same call is removing. Cache deletion is a
+	 * separate step, so closing a tab the user may reopen keeps its audio. */
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
-			if (queue.dropTeam(team)) stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
+			if (queue.dropTeam(team)) stts.abandonSounding()
+			queue.startNext()?.let { speak(it) }
 		}
 	}
 
+	/** Hand an entry to the engine, and synthesise its terminal ourselves if the engine would not take
+	 * it. Without that, an entry the engine silently declines leaves the head un-retired and every
+	 * message behind it unspoken for the life of the process. */
 	private fun speak(entry: QueueEntry) {
-		entry.tier?.let { playMessage(entry.team, entry.at, it) }
+		val tier = entry.tier
+		if (tier == null) {
+			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			return
+		}
+		stts.post {
+			if (!startPlayback(entry.team, entry.at, tier)) {
+				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			}
+		}
 	}
 
 	/** When on, an incoming message for a followed (open) thread is

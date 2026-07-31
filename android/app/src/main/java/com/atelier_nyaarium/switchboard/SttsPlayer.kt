@@ -123,13 +123,15 @@ class SttsPlayer(private val root: File) {
 		tier: Tier,
 		text: String,
 		volumePct: Int = 100,
-	) {
+	): Boolean {
 		// Toggle on what the user can see. A tap while this is still synthesizing is NOT a cancel: the
 		// row shows nothing yet, so cancelling would read as a dead button, and single-flight already
 		// refuses the duplicate claim below.
-		if (stopSounding(team, at, tier)) return
-		if (text.isBlank()) return
-		synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
+		if (stopSounding(team, at, tier)) return false
+		if (text.isBlank()) return false
+		// Whether a request was CLAIMED, which is the same as whether a terminal is now owed. A caller
+		// driving a queue has to know the difference between "playing" and "declined, silently".
+		return synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -232,13 +234,13 @@ class SttsPlayer(private val root: File) {
 		dest: File,
 		volumePct: Int,
 		fetch: (File) -> Unit,
-	) {
-		val id = requests.claim(team, at, tier) ?: return
+	): Boolean {
+		val id = requests.claim(team, at, tier) ?: return false
 		// A cache hit goes straight to the play lane. Left inside the synth lane it queued behind a
 		// stalled fetch, which is the one thing the lane split exists to prevent.
 		if (dest.isFile && dest.length() > 0L) {
 			playExec.execute { playGuarded(id, dest, volumePct) }
-			return
+			return true
 		}
 		synthExec.execute {
 			try {
@@ -267,7 +269,12 @@ class SttsPlayer(private val root: File) {
 				requests.finish(id, Outcome.SYNTH_ERROR, e.message ?: "synthesis failed")
 			}
 		}
+		return true
 	}
+
+	/** End the sounding request by its own identity rather than by "whatever is audible", so a teardown
+	 * cannot silence a team it was not asked to touch. */
+	fun abandonSounding() = apply(requests.finishSounding(Outcome.PREEMPTED))
 
 	/** Play on its own lane. `prepare` throws on a cached file that will not decode and
 	 * `LoudnessEnhancer` throws on devices without the effect; neither reaches `setOnErrorListener`,

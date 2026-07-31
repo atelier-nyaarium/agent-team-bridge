@@ -1082,6 +1082,12 @@ Kotlin is not covered by `ci.yml`, so `./gradlew :app:testDebugUnitTest` locally
 `assembleEmulator` and a real look on the AVD for anything visual. Cards live in the Designer dock
 (`tts-queue.html`, `tts-play-states.html`).
 
+**Audit fan-outs are capped at 12 agents PER LEVEL** (owner's instruction; the cycle script's "8+ up to
+20" is the looser bound). The shape that fits: 8 explore agents, then rank every finding and send the
+top 6 to adversarial verify at 2 opus skeptics each, which is 12 in the verify level. Anything below
+that line ships UNVERIFIED and must be labelled so - verify kills roughly half of what explore raises,
+so an unverified finding is not the same claim as a survivor.
+
 ### Phase 1b as built
 
 In progress. What is landed and green:
@@ -1097,6 +1103,46 @@ In progress. What is landed and green:
   sizes) rather than on the pair alone. The pair key was correct only while a pass could speak one
   message; queueing every message made it collapse distinct exchanges. Deliberately NOT keyed on `at`,
   which the two mirror copies do not share.
+
+### Alignment audit on Phase 1b
+
+53 findings, 50 surviving, deduping to seven root causes. Five of them leave autoplay permanently
+broken, not degraded. Recorded before fixing because the set is large and the wiring was rushed.
+
+**A1. Nothing guarantees a terminal for an entry the queue starts.** `speak` calls `playMessage`, which
+returns early when the message cannot be resolved or its text is blank. That path mints no claim, so
+no `Ended` is ever emitted, so the head is never retired and every later message piles into `pending`
+forever. Autoplay goes silent for the life of the process with no log line. This is the queue's own
+version of the invariant Phase 1a exists to protect - exactly one terminal per started entry - and the
+repository breaks it from the outside.
+
+**A2. Peer entries carry the wrong `at`.** Attributing to the receiving session was implemented by
+swapping the team while keeping `msg.at`, which belongs to the copy in the OTHER thread. The two mirror
+copies do not share a timestamp (the mailbox re-stamps on append), and the cross-Gateway single-mirror
+cases name a remote address with no local row at all. So the pair resolves to nothing, which triggers
+A1 deterministically.
+
+**A3. `dropQueuedFor` clears the head and never starts the next entry.** Closing a tab or forgetting a
+team halts every OTHER team's queued messages too.
+
+**A4. A user stop parks the queue for good.** `STOPPED` holds position by design, and `resume()` has no
+caller. One tap on the in-thread stop button ends autoplay for the process.
+
+**A5. The queue talks over a manual play.** A tap preempts the sounding head, the queue reads PREEMPTED
+as "advance", and it immediately starts its next entry over the top of what the user just asked for.
+PREEMPTED conflates "the queue replaced this" with "something outside the queue took the sound".
+
+**A6. The followed/`sttsReady` gate is evaluated on the drained thread, not on the team the entry is
+attributed to.** So autoplay can speak for a session that is not followed, and the peer dedupe claims
+its content key BEFORE the gate runs, letting an ineligible thread suppress an eligible one.
+
+**A7. Teardown's stop is untargeted.** It calls `stopWith(PREEMPTED)`, which ends whatever is sounding -
+possibly another team's audio. `SttsPlayer.abandon`, which is identity-scoped and was built for exactly
+this, has no callers.
+
+Lower-ranked and not yet fixed: cross-team order within one burst is synthesis-completion order rather
+than arrival order; `clearAll` leaves the queue populated; and the preload warms the burst's first
+message while the notification's Play action still targets its last.
 
 Still to wire, all in `ChatRepository`:
 
