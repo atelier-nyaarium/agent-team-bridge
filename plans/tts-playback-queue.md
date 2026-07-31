@@ -838,7 +838,8 @@ state testing, and it is the difference between catching the ninth defect and sh
 ### Phase 1a as built
 
 `PlaybackRequests.kt` (new, no Android import) owns the request lifecycle; `SttsPlayer` keeps only the
-playback effects. `PlaybackRequestsTest.kt` covers the contract with 19 tests.
+playback effects. `PlaybackRequestsTest.kt` covers the contract; the count below is what shipped, and
+the sections that follow record what each later round added.
 
 - **One carried identity.** `PlaybackId(team, at, tier, gen)` is minted at `claim` and threaded through
   both lane hand-offs into every event. `gen` separates a re-claim of an entry from the claim it
@@ -848,9 +849,14 @@ playback effects. `PlaybackRequestsTest.kt` covers the contract with 19 tests.
   two monitors agreeing by luck.
 - **One terminal per entry.** `finish` returns the event or null; a second caller gets null. Every
   ending routes through it, so an outcome cannot be reported twice or not at all.
-- **Ordered delivery.** A `Started` is minted under the lock and refused once the request has ended, so
-  it can never trail its own terminal and strand a consumer on a phantom playing entry.
-- **Events emitted outside the monitor**, so a listener cannot re-enter and deadlock.
+- **Ordered delivery.** The registry owns the listeners. Every event is appended to an outbox inside
+  the same critical section that changed the state, so delivery order IS transition order and no
+  consumer has to reconstruct it. A `Started` is refused once the request has ended, so it cannot
+  trail its own terminal and strand a consumer on a phantom playing entry.
+- **Listeners run off the monitor.** A pump hands the drained outbox to a sink: the `stts-events` lane
+  in production, inline by default so a JVM test can assert the delivered transcript.
+- **A preload is silent.** Suppressed at the single publish site rather than per bulk path, so no
+  consumer can be handed a terminal for a warm-up it never saw start.
 - **MediaPlayer built into a local** and released by hand on failure; a field assigned via `apply` is
   never assigned when the block throws, which is exactly when it must be released.
 
@@ -992,6 +998,50 @@ cancelling a synthesizing entry (round 9 regression, MAJOR), and the purge epoch
 sample (round 9 regression). A fix landing in a mechanism that has no owner does not converge - it
 relocates. That is the argument for `framework-fan-out` doing structural work here rather than a
 tenth round of patches.
+
+### Framework-first
+
+29 proposals across 8 design angles, 13 refuted by both skeptics, 16 survived - 15 of them split, so
+nearly every one had a dissent worth reading. Landed one chunk; the rest are ranked below rather than
+dropped.
+
+**Landed: the registry owns delivery.** `PlaybackRequests` now holds the listeners and an outbox, and
+every mint appends inside the same critical section that changed the state. A pump hands the whole
+outbox to a sink; production passes the `stts-events` lane, and the default runs inline, which is what
+makes delivery assertable from a JVM test. `SttsPlayer` no longer has `emit`, a listener list, or any
+way to publish an event at all. Delivery order is now the registry's transition order by construction,
+so the consumer-side ended-guard is deleted and `gen` on the event goes back to being plain identity
+rather than an ordering crutch. Six new tests cover the transcript, including preemption being
+delivered before the start that caused it - a sequence no test could reach an hour ago. 43 tests.
+
+Two smaller things rode along: `installPlayer` is now the only part of `playFile` that takes the
+monitor, so building and preparing a MediaPlayer no longer holds a lock across disk work; and the dead
+`isPlaying(team, at, tier)` is gone, which was a same-stem sibling of `isPlayingMessage` answering the
+opposite question with zero callers.
+
+**Rejected: play-lane confinement.** Deleting `SttsPlayer`'s monitor and confining the player fields to
+the play lane reads like the fix for bug class 1, and it is not. A single-thread executor IS a
+mutual-exclusion domain, so it renames the second lock rather than removing it; the proof is that the
+round-7 `playerOwner` guard would still be load-bearing afterward, and a change that closed the class
+would let that guard be deleted. Dropping `@Volatile` also makes the Phase 4/5 hazard it claimed to fix
+strictly more reachable, since a future `positionMs()` accessor touches the field, not the guarded
+methods.
+
+**Ranked next, not done.** Each is a real chunk, and each closes a recorded class rather than a defect:
+
+1. **Take the preload out of the registry.** It is a cache-write lease, not a playback request: no
+   sound, no terminal anyone observes, only purge reachability. Removing the role removes the rule
+   that every predicate Phase 1b adds must remember to filter on it - which is what RC-B's seven
+   findings were.
+2. **Give the cache directory an owner.** The strongest shape proposed is a generation-stamped
+   directory, so a purge RENAMES and a stale writer's path simply no longer exists. That deletes
+   `purgedAt`, `wipedAt`, `isStale` and `purgeStamp` from the registry outright, and with them the
+   question "which method stamps the epoch" that produced round 9's voice-sample regression. This also
+   fits the repo's documented sole-owner-plus-residue-test idiom.
+3. **An `AudioDevice` port owning opaque handles.** Makes `teardownPlayer` - "release whatever the
+   field holds" - unexpressible, and with it the `playerOwner` guard.
+4. **A `Lanes` port**, so hand-offs are deterministic in a test and lane identity is a type rather than
+   a comment.
 
 ### Gates
 

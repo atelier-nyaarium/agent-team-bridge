@@ -375,24 +375,18 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
 		// Keyed by the REQUEST's generation: a sibling tier reports Ended too, and anything coarser
-		// blanks a row that is still playing. `ended` is what makes this safe against ORDER as well as
-		// identity - a Started can arrive behind its own terminal, and lighting the row on one that has
-		// already finished strands it, because the request has spent its single terminal and nothing
-		// will ever clear it.
+		// blanks a row that is still playing. Order needs no defence here - events arrive in the order
+		// the registry made the transitions.
 		val sounding = java.util.concurrent.ConcurrentHashMap<String, Long>()
-		val ended = java.util.concurrent.ConcurrentHashMap<String, Long>()
 		val glyphs = repo.stts.addListener { event ->
 			when (event) {
-				is SttsPlayer.Event.Started -> if (ended[event.team] != event.gen) {
+				is SttsPlayer.Event.Started -> {
 					sounding[event.team] = event.gen
 					scope.launch { rendererPool.setPlaying(event.team, event.at) }
 				}
-				is SttsPlayer.Event.Ended -> {
-					ended[event.team] = event.gen
-					if (sounding[event.team] == event.gen) {
-						sounding.remove(event.team)
-						scope.launch { rendererPool.setPlaying(event.team, null) }
-					}
+				is SttsPlayer.Event.Ended -> if (sounding[event.team] == event.gen) {
+					sounding.remove(event.team)
+					scope.launch { rendererPool.setPlaying(event.team, null) }
 				}
 			}
 		}

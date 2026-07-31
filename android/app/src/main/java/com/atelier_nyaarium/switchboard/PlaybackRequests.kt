@@ -1,5 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executor
+
 /**
  * Why a request exists. A PLAY is what a consumer sees and what the toggle acts on; a PRELOAD only
  * warms the cache. They are separate entries, so pre-generating a message cannot make it read as
@@ -45,8 +48,16 @@ data class PlaybackDrop(val events: List<SttsPlayer.Event.Ended>, val soundingEn
  *
  * Which request is sounding lives here too. Split across two objects it needed two monitors, so a
  * bulk drop could release a newer generation's player while leaving its claim orphaned.
+ *
+ * Delivery lives here for the same reason. An event minted under this monitor but enqueued after it
+ * was released could be overtaken by one minted later, so a `Started` could arrive behind its own
+ * terminal. Appending inside the monitor makes delivery order the transition order by construction,
+ * which is not something a consumer can be asked to reconstruct.
+ *
+ * `sink` is where delivery runs. The default runs inline, which is what a unit test wants; production
+ * passes a single-thread lane so a listener cannot run under the monitor.
  */
-class PlaybackRequests {
+class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	private data class Entry(val team: String, val at: Long, val tier: SttsPlayer.Tier?, val role: PlaybackRole)
 
 	private val live = mutableMapOf<Entry, PlaybackId>()
@@ -59,6 +70,44 @@ class PlaybackRequests {
 	// work is still wanted; being NEWER than the last purge does.
 	private val purgedAt = mutableMapOf<String, Long>()
 	private var wipedAt = 0L
+
+	private val listeners = CopyOnWriteArrayList<SttsPlayer.Listener>()
+	private val outbox = ArrayDeque<SttsPlayer.Event>()
+
+	/** Add-once per subscriber; a duplicate add would double-deliver. Returns the listener so a caller
+	 * that must later remove it can register a lambda without naming it twice. */
+	fun addListener(listener: SttsPlayer.Listener): SttsPlayer.Listener {
+		listeners.addIfAbsent(listener)
+		return listener
+	}
+
+	fun removeListener(listener: SttsPlayer.Listener) {
+		listeners.remove(listener)
+	}
+
+	/** Queue an event for delivery. Called only from inside the monitor, in the same critical section
+	 * as the state change it reports. A PRELOAD is silent: no consumer saw it start, and its terminal
+	 * would clear a glyph it never lit. */
+	private fun publish(id: PlaybackId, event: SttsPlayer.Event?) {
+		if (event != null && id.role == PlaybackRole.PLAY) outbox.addLast(event)
+	}
+
+	/** Hand the queued events to the sink. The drain takes the monitor again and empties the WHOLE
+	 * outbox, so order comes from append order and not from when a pump happens to run. */
+	private fun pump() {
+		sink.execute {
+			val batch = synchronized(this) {
+				val queued = outbox.toList()
+				outbox.clear()
+				queued
+			}
+			// A throwing listener is isolated rather than logged: this class stays free of Android
+			// imports so its invariants can be unit-tested, and that rules out the platform logger.
+			for (event in batch) {
+				for (listener in listeners) runCatching { listener.onPlaybackEvent(event) }
+			}
+		}
+	}
 
 	private fun entryOf(id: PlaybackId) = Entry(id.team, id.at, id.tier, id.role)
 
@@ -117,8 +166,13 @@ class PlaybackRequests {
 	/** A Started only exists while the request is still live. Once its terminal has gone out, a
 	 * trailing Started would leave the consumer believing an ended entry is still playing. */
 	@Synchronized
-	fun started(id: PlaybackId): SttsPlayer.Event.Started? =
-		if (isLive(id)) SttsPlayer.Event.Started(id.team, id.at, id.tier, id.gen) else null
+	fun started(id: PlaybackId): SttsPlayer.Event.Started? {
+		if (!isLive(id)) return null
+		val event = SttsPlayer.Event.Started(id.team, id.at, id.tier, id.gen)
+		publish(id, event)
+		pump()
+		return event
+	}
 
 	/** The one terminal for `id`. Null when it already ended or a newer claim superseded it, so a
 	 * request can never report twice and a stale hand-off reports nothing. */
@@ -128,7 +182,10 @@ class PlaybackRequests {
 		if (live[entry] != id) return null
 		live.remove(entry)
 		if (sounding == id) sounding = null
-		return SttsPlayer.Event.Ended(id.team, id.at, id.tier, id.gen, outcome, reason)
+		val event = SttsPlayer.Event.Ended(id.team, id.at, id.tier, id.gen, outcome, reason)
+		publish(id, event)
+		pump()
+		return event
 	}
 
 	/** Terminal for exactly this request. Entry-scoped endings are for a user gesture, which means

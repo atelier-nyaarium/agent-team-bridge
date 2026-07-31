@@ -72,8 +72,9 @@ class SttsPlayer(private val root: File) {
 	// should supersede an in-flight preview sat behind the very fetch it was trying to cancel.
 	private val controlExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-ctl").apply { isDaemon = true } }
 	// The request lifecycle lives in its own pure unit so its invariants can be tested without a
-	// MediaPlayer. This class owns only the playback effects.
-	private val requests = PlaybackRequests()
+	// MediaPlayer, and it delivers its own events so their order is its transition order. This class
+	// owns only the playback effects and lends it the lane to deliver on.
+	private val requests = PlaybackRequests(eventExec)
 
 	@Volatile private var player: MediaPlayer? = null
 	@Volatile private var loudness: LoudnessEnhancer? = null
@@ -84,46 +85,18 @@ class SttsPlayer(private val root: File) {
 	private var playerOwner: PlaybackId? = null
 
 
-	/** Every listener sees every event, on whichever thread it occurred. Playback that continues in
-	 * the background keeps its signal even when a UI listener unsubscribes. */
-	private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
+	/** Every listener sees every event, on whichever thread it occurred. Playback that continues in the
+	 * background keeps its signal even when a UI listener unsubscribes. */
+	fun addListener(listener: Listener): Listener = requests.addListener(listener)
 
-	/** Add-once per subscriber; a duplicate add would double-deliver. Returns the listener so a
-	 * caller that must later remove it can register a lambda without naming it twice. */
-	fun addListener(listener: Listener): Listener {
-		listeners.addIfAbsent(listener)
-		return listener
-	}
+	fun removeListener(listener: Listener) = requests.removeListener(listener)
 
-	fun removeListener(listener: Listener) {
-		listeners.remove(listener)
-	}
-
-	/** Publish on one lane, so delivery order is mint order. Emitting from whichever thread minted the
-	 * event let a terminal parked on the monitor overtake a Started that was already minted, leaving a
-	 * consumer holding an entry that had ended. Handing off also means a caller can emit while holding
-	 * the monitor without a listener re-entering it. */
-	private fun emit(event: Event?) {
-		if (event == null) return
-		eventExec.execute {
-			for (l in listeners) {
-				runCatching { l.onPlaybackEvent(event) }
-					.onFailure { Log.w(TAG, "playback listener threw: ${it.message}") }
-			}
-		}
-	}
-
-	/** Publish a drop, then release the player the drop actually took. The registry decides; this only
-	 * runs the effect. Events go first so a terminal minted here cannot arrive behind a Started that
-	 * was minted later on the play lane while this thread waited for the monitor. */
+	/** Run the one effect a drop implies. The registry already published the events under its own
+	 * monitor; this releases the player the drop actually took, on the play lane so a MediaPlayer
+	 * callback arriving on the main Looper never blocks there. */
 	private fun apply(drop: PlaybackDrop) {
-		for (e in drop.events) emit(e)
-		// Released on the play lane rather than here. MediaPlayer's callbacks run on the main Looper,
-		// and this monitor is held across `prepare()`, so doing it inline blocks main on disk I/O.
 		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
 	}
-
-	fun isPlaying(team: String, at: Long, tier: Tier): Boolean = requests.isLive(team, at, tier)
 
 	/** Whether this message is audible, in any tier. What the row shows, and so what its button may
 	 * toggle on; [PlaybackRequests.isSoundingForMessage] says why it is not the claim. */
@@ -281,7 +254,7 @@ class SttsPlayer(private val root: File) {
 					// the write above recreated it. Nothing else collects that, so undo it here.
 					if (requests.isStale(id)) {
 						discardPreload(dest)
-						emit(requests.finish(id, Outcome.PREEMPTED, "purged"))
+						requests.finish(id, Outcome.PREEMPTED, "purged")
 						return@execute
 					}
 				}
@@ -291,7 +264,7 @@ class SttsPlayer(private val root: File) {
 			} catch (e: Exception) {
 				Log.w(TAG, "stts synth failed: ${e.message}")
 				dest.delete()
-				emit(requests.finish(id, Outcome.SYNTH_ERROR, e.message ?: "synthesis failed"))
+				requests.finish(id, Outcome.SYNTH_ERROR, e.message ?: "synthesis failed")
 			}
 		}
 	}
@@ -379,7 +352,6 @@ class SttsPlayer(private val root: File) {
 
 	/** Start `id` playing, or do nothing if it was abandoned before it reached the lane. Throws if
 	 * MediaPlayer setup fails, having assigned nothing for the caller to unpick. */
-	@Synchronized
 	private fun playFile(id: PlaybackId, f: File, volumePct: Int) {
 		if (!requests.isLive(id)) return
 		val (linear, gainMb) = volumeSteps(volumePct)
@@ -429,15 +401,19 @@ class SttsPlayer(private val root: File) {
 			runCatching { mp.release() }
 			return
 		}
+		installPlayer(id, mp, effect)
+		requests.started(id)
+	}
+
+	/** Swap in the player that just took the sound. The only part of playback that needs the monitor,
+	 * so it is the only part that holds it: building and preparing a MediaPlayer is disk work and
+	 * happens outside, where nothing else can be made to wait on it. */
+	@Synchronized
+	private fun installPlayer(id: PlaybackId, mp: MediaPlayer, effect: LoudnessEnhancer?) {
 		teardownPlayer()
 		player = mp
 		loudness = effect
 		playerOwner = id
-		for (e in displaced.events) emit(e)
-		// Minting and publishing are two steps and no terminal path takes this monitor, so a terminal
-		// for THIS request can still reach the lane first. Consumers must therefore treat a Started
-		// they have already seen the terminal for as stale; this cannot be fixed from here.
-		emit(requests.started(id))
 	}
 
 	// The path (not the descriptor id) is the cache component so entries survive
