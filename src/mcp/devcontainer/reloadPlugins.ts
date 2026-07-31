@@ -91,64 +91,10 @@ done
 send_key Enter
 sleep 20
 
-# /reload-plugins
+# /reload-plugins, which reconnects the plugin MCP servers itself. Driving the /mcp menu afterwards
+# only re-does that, and tearing a live connection down mid-call fails whatever was in flight.
 send_text "/reload-plugins"
 sleep 5
-
-# Reconnect an MCP server by name via the /mcp menu.
-# Navigates down until the selection indicator is on a line matching the pattern.
-# Prioritize plugin:*:switchboard over plain switchboard.
-reconnect_mcp() {
-	local PATTERN="$1"
-	send_text "/mcp"
-	sleep 2
-
-	local FOUND=false
-	for _ in $(seq 1 20); do
-		sleep 1
-		SCREEN=$(capture_pane)
-		if echo "$SCREEN" | grep -qE "\u276f.*$PATTERN"; then
-			FOUND=true
-			break
-		fi
-		send_key Down
-	done
-
-	if [ "$FOUND" = true ]; then
-		send_key Enter
-		sleep 1
-
-		# Navigate submenu to find Reconnect or Enable
-		local ACTION_FOUND=false
-		for _ in $(seq 1 5); do
-			sleep 1
-			SCREEN=$(capture_pane)
-			if echo "$SCREEN" | grep -qE '\u276f.*(Reconnect|Enable)'; then
-				ACTION_FOUND=true
-				break
-			fi
-			send_key Down
-		done
-
-		if [ "$ACTION_FOUND" = true ]; then
-			send_key Enter
-			sleep 5
-		else
-			send_key Escape
-			sleep 1
-		fi
-	else
-		send_key Escape
-		sleep 1
-	fi
-}
-
-reconnect_mcp "nyaascripts"
-reconnect_mcp "plugin:.*switchboard"
-# Reconnect the nyaaskills cycle MCP too, so a plugin update flips the
-# switchboard/nyaaskills pair together in one live session (otherwise a
-# renamed cycle tool stays stale until the next manual reconnect).
-reconnect_mcp "plugin:.*nyaaskills"
 
 echo "Reload sequence complete."
 `;
@@ -167,9 +113,9 @@ function writeAndSpawn(script: string): string {
 	return scriptPath;
 }
 
-/** Daemon entry: drive a target session through the plugin update + MCP reconnect sequence. The
- * host daemon runs on the host, so a host target uses bare tmux and a devcontainer target reaches
- * its tmux via docker exec. Returns immediately (the script runs detached). */
+/** Daemon entry: drive a target session through the plugin update sequence. The host daemon runs on
+ * the host, so a host target uses bare tmux and a devcontainer target reaches its tmux via docker
+ * exec. Returns immediately (the script runs detached). */
 export function spawnReloadPlugins(target: TmuxTarget): string {
 	// The session name reaches the script as the PANE token and the container name reaches the docker
 	// exec prefix; both are shell-interpolated, so a non-slug would be an injection vector.
@@ -185,13 +131,10 @@ export function spawnReloadPlugins(target: TmuxTarget): string {
 }
 
 const description = `
-Automate the full plugin update and MCP reconnect sequence for a Claude Code session.
+Automate the plugin update sequence for a Claude Code session.
 Spawns a background script that drives the tmux session through:
 1. /plugin update on the atelier-nyaarium marketplace (covers both switchboard and nyaaskills)
-2. /reload-plugins
-3. /mcp reconnect nyaascripts
-4. /mcp reconnect plugin:switchboard (prioritized over plain switchboard)
-5. /mcp reconnect plugin:nyaaskills (so the switchboard/nyaaskills pair flips together)
+2. /reload-plugins, which reconnects the plugin MCP servers on its own
 
 The tool returns immediately. The script waits for the current tool call to finish before starting.
 On the host, omit 'team' to target the host session, or provide 'team' to target a devcontainer.
