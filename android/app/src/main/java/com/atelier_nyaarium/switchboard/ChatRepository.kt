@@ -4063,7 +4063,10 @@ class ChatRepository(
 		// separately or every restart wipes the sets and re-runs the seeks that filled them.
 		val frameBuckets = (
 			_state.value.threads.values.asSequence().flatMap { it.asSequence() }.flatMap { it.files.asSequence() } +
-				_state.value.drafts.values.asSequence().flatMap { it.files.asSequence() }
+				_state.value.drafts.values.asSequence().flatMap { it.files.asSequence() } +
+				// Every source referencedSrcs draws from, or a banked send keeps its video and loses the
+				// frames for it.
+				_state.value.scheduledSends.values.asSequence().flatMap { it.fileRefs.asSequence() }
 			)
 			.filter { it.mime.startsWith("video/") }
 			.mapNotNull { VideoThumbs.keyFor(it) }
