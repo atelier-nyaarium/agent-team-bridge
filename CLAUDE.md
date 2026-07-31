@@ -283,6 +283,15 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 - **Idle pushback** (`IdlePushbackManager.kt`): background poll cadence backs off the longer it stays
   silent, releasing the wakelock for wall-clock-aligned `AlarmManager` wakeups at the deeper tiers.
   A fresh mailbox entry resets the ladder.
+- **TTS playback** (`PlaybackRequests.kt` / `SttsPlayer.kt`): the request lifecycle is a pure unit -
+  claim, sound, exactly one terminal, nothing after - and `SttsPlayer` owns only the effects. Every
+  event is minted AND queued inside the same locked section as the state change it reports, so
+  delivery order is transition order and no consumer reconstructs it. `PlaybackResidueTest` fails the
+  build if anything else mints a `PlaybackId` or an event, or if the registry grows a platform import
+  (which would end its unit-testability). A cache warm-up deliberately holds NO claim: it is not
+  something a consumer can see or stop, and a purge reaches it through the epoch, which also covers
+  the gaps between its writes where a claim cannot exist. A tap toggles on what is AUDIBLE, never on
+  the claim, because a row cannot show a request that is only synthesizing.
 - **Attachment viewer** (`AttachmentViewer.kt`): one fullscreen sheet for every tapped file. Which
   stage it shows is decided by `viewerDecodableImage` in `AttachmentDisplay.kt`, never by a mime
   prefix, because the two renderers disagree in BOTH directions (the WebView draws SVG that

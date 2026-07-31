@@ -17,11 +17,13 @@ import java.util.concurrent.Executors
  * container varies by provider (MP3 or streaming WAV mislabeled as audio/wav),
  * so files keep a neutral extension and MediaPlayer sniffs.
  *
- * Single-flight per entry, so impatient taps cannot fire a second request; a cache hit plays with no
- * request. A tap on an entry that is already claimed cancels it, whether it is sounding or still
- * synthesizing. [PlaybackRequests] owns which entry is claimed and which is sounding; this class owns
- * only the effects. Synthesis, playback, control and event delivery each get their own lane, so a
- * blocking fetch can never hold up a cancel, a cached playback, or an event.
+ * Single-flight per entry, so impatient taps cannot fire a second request. A tap CANCELS only what is
+ * audible: nothing on screen distinguishes a message that is still synthesizing, so cancelling one
+ * would read as a dead button.
+ *
+ * [PlaybackRequests] owns which entry is claimed, which is sounding, and the delivery of every event;
+ * this class owns only the effects. Synthesis, playback, control and event delivery each get their own
+ * lane, so a blocking fetch can never hold up a cancel, a cached playback, or an event.
  */
 class SttsPlayer(private val root: File) {
 	enum class Tier(val suffix: String) { FULL("full"), SUMMARY("summary"), TITLE("title") }

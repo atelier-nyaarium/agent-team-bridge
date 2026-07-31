@@ -382,8 +382,10 @@ whatever provider is current when its turn arrives, giving one run two different
 Scope corrected by audit finding 4: this phase plays the BODY only. Chime and sentinel move wholly to
 Phase 2, because Phase 1 cannot play audio whose text and asset Phase 2 is what defines.
 
-**Phase 1a - player surface, before anything depends on it.** Lap 2 found the queue cannot be built on
-the player as it stands (L2-1, L2-2, L2-3). These are prerequisites, not refinements:
+**Phase 1a - player surface, before anything depends on it. ✅** Lap 2 found the queue cannot be built
+on the player as it stands (L2-1, L2-2, L2-3). These are prerequisites, not refinements. See
+"Phase 1a as built" and the sections after it for what actually shipped; the generation deadline in the
+third bullet is deliberately NOT delivered and stays open:
 
 - **Multi-subscriber callbacks.** `onPlayingChanged` and `onPlaybackError` are single `@Volatile` slots
   (`SttsPlayer.kt:41`, `:46`) that `MainActivity` claims and NULLS on dispose
@@ -1079,3 +1081,41 @@ Android logger. Verified to fail when violated rather than assumed to.
 Kotlin is not covered by `ci.yml`, so `./gradlew :app:testDebugUnitTest` locally is the gate, plus
 `assembleEmulator` and a real look on the AVD for anything visual. Cards live in the Designer dock
 (`tts-queue.html`, `tts-play-states.html`).
+
+## Painpoints
+
+Not a code audit. What actually hurt while working here.
+
+**No audio was ever heard.** Every change across ten rounds was verified by compile, unit test and
+`assembleEmulator` only. Nothing automated covers the play lane, and I never put the AVD in front of a
+message and listened. The toggle semantics changed three times in this work and all three are unheard.
+That is the single largest gap between "green" and "known good" in this plan, and it is worth an
+emulator pass before Phase 1b builds a queue on top.
+
+**`SttsPlayer` cannot be constructed by a JVM test, and that is where every defect lived.** All ten
+rounds found their defects in the effect layer; the pure registry has 39 tests and produced almost
+none. The asymmetry meant an expensive multi-agent audit was the ONLY detection mechanism available
+for the half of the system that breaks, and each audit cost roughly twenty minutes and several million
+tokens to find things a unit test would have caught in milliseconds. `AudioDevice` and `Lanes` ports
+are ranked in framework-first for exactly this reason.
+
+**Comments here are load-bearing, and nothing gates their accuracy.** In this file a comment is the
+ledger of a paid-for bug, so a reader trusts it. Two comments were actively WRONG in ways that caused
+real harm: one claimed a monitor made mint-and-publish atomic when no terminal path took that monitor,
+and one claimed a staleness check covered a gap it could not see. A wrong comment here is worse than
+no comment, because the next round reads it and reasons from it - an audit agent did exactly that and
+produced a confident, wrong refutation.
+
+**Kotlin's `apply` is a trap that bit twice.** `x = Foo().apply { configure() }` leaves `x` unassigned
+when the block throws, so the catch releases a null and leaks the object. It cost a leak in the
+MediaPlayer path, was documented as a bug class, and then recurred verbatim three lines away for
+`LoudnessEnhancer`. A private method also named `apply` sat next to it, which does not help anyone
+reading quickly.
+
+**`ChatRepository.kt` is too large to read.** It exceeded the context budget to open at all, so every
+question about it had to be answered by grep. A file that cannot be read is a file whose invariants
+are discovered by accident.
+
+**A stale doc count survived nine rounds.** The plan's own as-built preamble claimed 19 tests while the
+suite held 37, and it took an audit agent to notice. Counts in prose go stale the moment they are
+written; the plan now says where to look instead of restating the number.
