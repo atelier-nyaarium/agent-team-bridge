@@ -268,6 +268,10 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
   **A handler gets NO bytes**: a delivered message names its files and the blob plane fetches them
   afterwards, so anything a handler decides must come from wire fields alone. That is also what
   keeps a handler's single write ahead of any user action, so nothing it writes can be resurrected.
+- **Row re-render:** `ThreadRenderer`'s `fingerprint` decides it, so anything that rides the row
+  PAYLOAD and can change while the row is on screen has to be folded in, or the row keeps stale
+  content forever. State pushed over the JS bridge instead (`window.thread.*` mutating in place) is
+  outside it by design and needs no fold.
 - **Designer plugin:** docks a `design-card` file from its declared title/group/dimensions the
   moment the message lands, and resolves the bytes at RENDER from the live row (content-keyed, so an
   older revision cannot lend its bytes). A card therefore exists before its bytes and says whether
