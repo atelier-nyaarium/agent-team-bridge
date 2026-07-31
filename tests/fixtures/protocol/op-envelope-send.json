@@ -13,6 +13,7 @@
 				"mime": "image/png",
 				"size": 4,
 				"descriptiveKey": "shot",
+				"role": "attachment",
 				"base64": "AAAA"
 			}
 		]

@@ -155,6 +155,7 @@ describe("DeviceMailbox", () => {
 					mime: "application/octet-stream",
 					size,
 					descriptiveKey: "a.bin",
+					role: "attachment" as const,
 					blobId: `sha256-${"b".repeat(64)}`,
 				},
 			],
@@ -317,6 +318,70 @@ describe("DeviceMailbox idempotent dedupeKey upsert", () => {
 		expect(retry.seq).toBe(1);
 		expect(restored.size).toBe(1); // still just the one entry
 		expect(restored.highWater).toBe(1);
+	});
+
+	it("drops an entry a consumer could not decode, rather than serving it forever", () => {
+		// A consumer decodes a poll batch atomically, so one unservable entry fails the whole batch,
+		// the cursor never advances, and draining keeps the box alive so nothing ever sweeps it. That
+		// wedge has no escape, so the entry is dropped at restore and counted.
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "before"), "op-1");
+		box.append(message("s1", "after"), "op-2");
+		const snap = box.snapshot();
+		// A file with no role: the shape a pre-strict build could have persisted.
+		(snap.entries[0] as { files?: unknown }).files = [
+			{ filename: "a.png", mime: "image/png", size: 1, descriptiveKey: "a.png" },
+		];
+
+		const restored = DeviceMailbox.fromSnapshot(snap);
+
+		expect(restored.size).toBe(1);
+		expect(restored.drain(0).entries.map((e) => e.body)).toEqual(["after"]);
+		expect(restored.drain(0).dropped).toBeGreaterThan(0);
+	});
+
+	it("keeps an entry whose files are fully declared", () => {
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "hi"), "op-1");
+		const snap = box.snapshot();
+		(snap.entries[0] as { files?: unknown }).files = [
+			{ filename: "a.png", mime: "image/png", size: 1, descriptiveKey: "a.png", role: "attachment" },
+		];
+
+		expect(DeviceMailbox.fromSnapshot(snap).size).toBe(1);
+	});
+
+	it("keeps stored history a tightened INGEST rule would newly reject", () => {
+		// Retention is not submission. An entry accepted when it arrived must stay servable, or every
+		// future bound added to the ingest schema silently deletes already-delivered history.
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "hi"), "op-1");
+		const snap = box.snapshot();
+		(snap.entries[0] as { files?: unknown }).files = Array.from({ length: 30 }, (_, i) => ({
+			filename: `${"x".repeat(400)}-${i}.png`,
+			mime: "image/png",
+			size: -1,
+			descriptiveKey: "over every ingest bound",
+			blobId: "sha256-NOTHEX",
+			role: "attachment",
+		}));
+
+		expect(DeviceMailbox.fromSnapshot(snap).size).toBe(1);
+	});
+
+	it("lets a redelivery heal a dropped entry instead of deduping it away", () => {
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "one"), "dk-1");
+		box.append(message("s1", "two"), "dk-2");
+		const snap = box.snapshot();
+		(snap.entries[0] as { files?: unknown }).files = [
+			{ filename: "a.png", mime: "image/png", size: 1, descriptiveKey: "a.png" },
+		];
+
+		const restored = DeviceMailbox.fromSnapshot(snap);
+		restored.append(message("s1", "one"), "dk-1");
+
+		expect(restored.drain(0).entries.map((e) => e.body)).toEqual(["two", "one"]);
 	});
 });
 

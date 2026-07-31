@@ -105,14 +105,14 @@ export const ChannelFileSchema = z
 		// what a peer predating this field implies.
 		blobGateway: z.string().min(1).max(64).optional(),
 		// What this file IS, declared by the SENDER at compose time and never re-derived by a
-		// receiver from bytes, filename, array position, or message direction. Absent means an
-		// ordinary attachment - also the only thing a stripping middle box or an older sender can
-		// mean, so every degradation collapses toward SHOWING the file, never hiding it. A value a
-		// receiver does not recognize also shows (demoted in sort, never a thumbnail): the sender
-		// said something deliberate, and a wrong show heals at the receiver's next update while a
-		// wrong hide is a file the user cannot reach. z.enum emits an open Kotlin String, so an
-		// unknown future value cannot throw on an old console.
-		role: z.enum(["attachment", "ref-snapshot", "design-card"]).optional(),
+		// receiver from bytes, filename, array position, or message direction. REQUIRED: absence is
+		// not a state anyone interprets, it is a malformed message the edge rejects, so no receiver
+		// can turn "the sender could not say" into a guess. A value a receiver does not RECOGNIZE is
+		// different and stays permissive - it shows, demoted in sort and never a thumbnail, because
+		// the sender said something deliberate and a wrong show heals at the receiver's next update
+		// while a wrong hide is a file the user cannot reach. z.enum emits an open Kotlin String, so
+		// a value newer than a given console still decodes there.
+		role: z.enum(["attachment", "ref-snapshot", "design-card"]),
 		// Ref metadata for a `role: "ref-snapshot"` file. See RefFileMetaSchema.
 		ref: RefFileMetaSchema.optional(),
 		// Designer card facts for a `role: "design-card"` file, lifted from the HTML at compose time

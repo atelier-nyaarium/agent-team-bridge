@@ -11,6 +11,7 @@
 			"mime": "text/plain",
 			"size": 4,
 			"descriptiveKey": "aged",
+			"role": "attachment",
 			"base64": "dGVzdA==",
 			"modifiedAt": 1785179969544
 		}

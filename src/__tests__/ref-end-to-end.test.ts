@@ -94,6 +94,7 @@ describe("a reply that links a symbol", () => {
 			mime: "image/png",
 			size: 3,
 			descriptiveKey: "diagram.png",
+			role: "attachment" as const,
 			blobId: `sha256-${"0".repeat(64)}`,
 		};
 

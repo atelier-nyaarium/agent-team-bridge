@@ -879,14 +879,31 @@ inert, because each runtime strips what it does not know:
 3. `reload_plugins` per container, so each MCP composes with the new producers.
 4. Install the APK last.
 
-**J-R2 - the flip. After the owner confirms Claude plugin and phone are updated.**
+**J-R2 - the flip. ✅ DONE**
 - `role` becomes required on ChannelFile. Codegen makes it a non-default Kotlin param.
 - Delete the `?? "attachment"` normalization lines and `stampLegacyRoles`.
 - Ingest edges now reject absent-role loudly (schema validation at routes/sealer/relay).
 - PRECONDITION, inspected not hoped: zero role-less file entries in `mailboxes.json` and
-  `pending-jobs.json` (R1's restore-stamp + persist tick + soak should have rewritten all; check
-  before shipping). The wedged-console hazard in J-7 is what this precondition exists to prevent.
+  `pending-jobs.json`. Verified at ship time: 5 and 4 file entries respectively, all role-stamped.
+  The wedged-console hazard in J-7 is what this precondition exists to prevent.
 - Wire-identical behavior otherwise; skew during R2 is validation-only.
+- `DeviceMailbox.fromSnapshot` drops a stored entry whose files carry no role, because a Kotlin
+  decode failure is batch-fatal (one bad file fails the whole `ConsolePollResult`, the cursor never
+  advances, and the box never TTL-sweeps because `drain` refreshed it). The guard checks ONLY the
+  field that wedges, deliberately not `ChannelFilesSchema`: an ingest schema governs what a sender
+  may submit, and reusing it as a retention schema turns any future tightening into a retroactive
+  silent deletion of delivered history.
+
+**Accepted, not fixed, with reasons:**
+- **The console's `gap` banner never clears** (`ChatRepository.kt:3760` is its only writer). A drop at
+  restore therefore raises a permanent non-dismissible banner, and since `drain` does not remove
+  entries at read, the dropped entry may be one the console already rendered. Reachable only if the
+  precondition above was wrong, and pre-existing to this phase, so fixing it here would widen the
+  blast radius of a flip that is otherwise validation-only.
+- **`plugin-references-index` prefs are stranded on an install that had References disabled for the
+  whole J-R1 window**, since the delete ran inside `register()`. Cosmetic disk residue with no code
+  path left to remove it. The original justification (that the delete was a no-op once it had run
+  anywhere) was wrong, but the consequence is not worth a migration.
 
 ### 6. Viewer (extend `AttachmentViewer`, single attachment)
 

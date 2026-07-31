@@ -407,6 +407,7 @@ describe("createConsoleDispatcher", () => {
 			mime: "image/png",
 			size: 3,
 			descriptiveKey: "shot.png",
+			role: "attachment" as const,
 			blobId: `sha256-${"a".repeat(64)}`,
 		};
 		await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "see this", files: [file] }, "op2"));
@@ -420,6 +421,7 @@ describe("createConsoleDispatcher", () => {
 			mime: "image/png",
 			size: 3,
 			descriptiveKey: "a.png",
+			role: "attachment" as const,
 			blobId: `sha256-${"b".repeat(64)}`,
 		};
 		const f = frame({ kind: "send", to: "team-a", body: "x", files: [file] }, "dup-op");

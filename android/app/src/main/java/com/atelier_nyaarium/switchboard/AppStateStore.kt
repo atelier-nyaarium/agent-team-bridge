@@ -157,31 +157,28 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			prefs.edit().putString(KEY_STTS_KEY, value).apply()
 		}
 
-	/** What the schema-version latch decided this start. [WIPE] is the grammar clean break (the
-	 * store-key grammar changed, old keys are unparseable and cleared); [STAMP_ROLES] is the
-	 * role-vocabulary conversion (rows are structurally fine, they just predate declared roles and
-	 * get them stamped in place). [NONE] means already current. */
-	enum class SchemaMigration { NONE, WIPE, STAMP_ROLES }
-
-	/** One-shot schema-version latch. Must be called BEFORE the first thread/label load-parse so a
-	 * stale-grammar key never reaches a parser. A WIPE clears the grammar-bearing keys and stamps
-	 * current in one batch (the caller purges the matching filesDir caches on the same latch). A
-	 * STAMP_ROLES stamps NOTHING here: the caller converts the rows and then calls
-	 * [markSchemaCurrent], so a process death mid-conversion re-runs it - the conversion is additive,
-	 * so a re-run converges instead of compounding. */
-	fun migrateSchemaIfNeeded(): SchemaMigration {
+	/** One-shot grammar wipe, for a store whose KEY GRAMMAR this build cannot parse.
+	 *
+	 * Gated on [GRAMMAR_VERSION], not on equality with the current version: a wipe destroys the
+	 * owner's whole transcript, so it must fire only when the keys are genuinely unreadable, never
+	 * merely because a later version added a field. A store at or above the grammar floor is carried
+	 * forward and stamped current, which is safe because every field added since is optional on the
+	 * DEVICE's own hand-written row codec even where the wire requires it.
+	 *
+	 * Must be called BEFORE the first thread/label load-parse so a stale-grammar key never reaches a
+	 * parser. Returns true only on a real wipe, so the caller purges the matching filesDir caches
+	 * (stranded attachment bytes + TTS audio) on the same latch.
+	 */
+	fun migrateSchemaIfNeeded(): Boolean {
 		val stored = prefs.getInt(KEY_SCHEMA_VERSION, 0)
-		if (stored == CURRENT_SCHEMA_VERSION) return SchemaMigration.NONE
-		if (stored == ROLE_MIGRATION_FROM_VERSION) return SchemaMigration.STAMP_ROLES
+		if (stored == CURRENT_SCHEMA_VERSION) return false
+		val wipe = stored < GRAMMAR_VERSION
 		prefs.edit().apply {
-			SCHEMA_WIPE_KEYS.forEach { remove(it) }
+			if (wipe) SCHEMA_WIPE_KEYS.forEach { remove(it) }
 			putInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION)
 		}.apply()
-		return SchemaMigration.WIPE
+		return wipe
 	}
-
-	/** Seal a STAMP_ROLES conversion the caller just finished. */
-	fun markSchemaCurrent() = prefs.edit().putInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION).apply()
 
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
@@ -416,11 +413,10 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		const val KEY_SCHEMA_VERSION = "schema_version"
 		const val CURRENT_SCHEMA_VERSION = 4
 
-		/** The one stored version that converts in place instead of wiping: v3 rows are structurally
-		 * current, they just predate declared file roles. Anything below it is a grammar break.
-		 * TODO(2026-09): remove with LegacyRefMigration once the owner's install has converted
-		 * (a then-stale v3 install falls into the WIPE branch, which is the documented clean break). */
-		const val ROLE_MIGRATION_FROM_VERSION = 3
+		/** The version that last changed the persisted KEY GRAMMAR. Only a store below this is
+		 * unreadable and therefore wiped; bump it solely when keys stop parsing, never for an added
+		 * field, or a routine bump silently deletes the owner's history. */
+		const val GRAMMAR_VERSION = 3
 
 		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft/absence-streak
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
