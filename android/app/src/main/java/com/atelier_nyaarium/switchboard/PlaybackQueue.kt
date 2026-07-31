@@ -12,13 +12,9 @@ data class QueueStep(val next: QueueEntry?, val paused: Boolean, val failed: Que
 /**
  * The autoplay queue with no player in it: enqueue, one head at a time, advance on an outcome.
  *
- * ADVANCING IS ONE OPERATION. A player completion and a user swipe can arrive together, and an advance
+ * Advancing is ONE operation. A player completion and a user swipe can arrive together, and an advance
  * that read the head and then mutated across two calls would let both act on the same head - one entry
  * played twice, or skipped without ever being spoken.
- *
- * STOPPED is the only outcome that does not advance. That distinction is the whole reason outcomes are
- * typed: a file that fails to decode must not retire an entry as though it had been heard, and a pause
- * must not walk the queue forward.
  */
 class PlaybackQueue {
 	private val pending = ArrayDeque<QueueEntry>()
@@ -81,8 +77,6 @@ class PlaybackQueue {
 			SttsPlayer.Outcome.PLAYBACK_ERROR, SttsPlayer.Outcome.SYNTH_ERROR -> {
 				retired(entry)
 				if (retried.add(entry)) {
-					// One rotation to the tail: a transient provider or decode failure gets a second
-					// chance, but behind everything already waiting rather than ahead of it.
 					pending.addLast(entry)
 					QueueStep(takeNext(), paused = false)
 				} else {
@@ -99,11 +93,11 @@ class PlaybackQueue {
 	fun resume(): QueueEntry? = head ?: pending.removeFirstOrNull()?.also { head = it }
 
 	/**
-	 * Forget everything belonging to one team: what is queued, what is playing, and what is remembered.
+	 * Forget everything belonging to one team: queued, playing, and remembered.
 	 *
-	 * Returns whether the HEAD was taken, because the caller must stop the player itself and must do so
-	 * knowing this queue no longer points at it. Dropping before stopping is what keeps a stop's own
-	 * terminal from advancing into an entry whose audio the same call is deleting.
+	 * Returns whether the HEAD was taken, so the caller can stop the player knowing this queue no
+	 * longer points at it. Dropping before stopping is what keeps a stop's own terminal from advancing
+	 * into an entry whose audio the same call is deleting.
 	 */
 	@Synchronized
 	fun dropTeam(team: String): Boolean {

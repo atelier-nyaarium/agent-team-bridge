@@ -8,8 +8,8 @@ import org.junit.Test
 
 /**
  * The queue is read through what it hands back to play next, so that is what these assert. Which
- * outcome advances and which holds is the contract Phase 1 rests on: a decode failure that retires an
- * entry as though it were heard loses a message silently.
+ * outcome advances and which holds is the whole contract: a decode failure that retires an entry as
+ * though it were heard loses a message silently.
  */
 class PlaybackQueueTest {
 	private val team = "local.gw.evie-bot.main"
@@ -74,8 +74,6 @@ class PlaybackQueueTest {
 		val q = queueOf(entry(1), entry(2))
 		val first = q.startNext()!!
 
-		// Behind everything already waiting, not ahead of it: a transient failure must not starve the
-		// messages queued after it.
 		val afterFirstFailure = q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR)
 		assertEquals(entry(2), afterFirstFailure.next)
 		assertNull(afterFirstFailure.failed)
@@ -95,8 +93,6 @@ class PlaybackQueueTest {
 		val head = q.startNext()!!
 		q.advance(head, SttsPlayer.Outcome.COMPLETED)
 
-		// A terminal from a request that was already replaced. Acting on it would retire entry 2
-		// without it ever being spoken.
 		val late = q.advance(entry(1), SttsPlayer.Outcome.COMPLETED)
 
 		assertNull(late.next)
@@ -108,8 +104,7 @@ class PlaybackQueueTest {
 		val q = queueOf(entry(1), entry(2), entry(3))
 		val head = q.startNext()!!
 
-		// A player completion and a user swipe arriving together. Read-head-then-mutate would let both
-		// through and skip entry 2 entirely.
+		// A player completion and a user swipe arriving together.
 		val a = q.advance(head, SttsPlayer.Outcome.COMPLETED)
 		val b = q.advance(head, SttsPlayer.Outcome.COMPLETED)
 
@@ -120,23 +115,26 @@ class PlaybackQueueTest {
 
 	@Test
 	fun `dropping a team takes its queued, playing and remembered entries`() {
-		val q = queueOf(entry(1), entry(2, other), entry(3))
-		val head = q.startNext()!!
-		q.advance(head, SttsPlayer.Outcome.PLAYBACK_ERROR)
-		q.advance(entry(2, other), SttsPlayer.Outcome.COMPLETED)
-		q.advance(entry(3), SttsPlayer.Outcome.COMPLETED)
+		val q = queueOf(entry(1))
+		val failing = q.startNext()!!
+		q.advance(failing, SttsPlayer.Outcome.PLAYBACK_ERROR)
 		q.advance(entry(1), SttsPlayer.Outcome.PLAYBACK_ERROR)
 		assertEquals(listOf(entry(1)), q.remembered())
 
+		// One of this team's entries must still be WAITING when the drop lands, or the queued half of
+		// this assertion passes on an already-empty pending list and never exercises the removal.
+		q.enqueue(entry(2))
+		q.enqueue(entry(3, other))
 		q.enqueue(entry(4))
 		q.startNext()
+
 		val tookPlaying = q.dropTeam(team)
 
-		// A remembered failure is no longer queued, so a teardown scoped to queued entries alone would
-		// leave it pointing at a thread forget has already removed.
 		assertTrue(tookPlaying)
+		// A remembered failure is no longer a queued entry, so a teardown scoped to the queue alone
+		// leaves it pointing at a thread forget has already removed.
 		assertTrue(q.remembered().isEmpty())
-		assertTrue(q.queued().isEmpty())
+		assertEquals(listOf(entry(3, other)), q.queued())
 	}
 
 	@Test
