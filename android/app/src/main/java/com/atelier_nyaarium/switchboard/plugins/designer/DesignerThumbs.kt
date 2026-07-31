@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.plugins.designer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.util.LruCache
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.Image
@@ -23,6 +22,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.atelier_nyaarium.switchboard.ThumbCache
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -56,14 +56,12 @@ private const val RENDER_TIMEOUT_MS = 4_000L
  * thumb for an updated canvas is structurally impossible.
  */
 internal object DesignerThumbs {
-	// ~20 thumbs at 300 KB each; sized in bytes so a future capture-size change stays bounded.
-	private val cache = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
-		override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-	}
+	// The shared cache holds no lock, so this one covers captures only and an image decode never
+	// queues behind a card render.
 	private val renderLock = Mutex()
 	private var webView: WebView? = null
 
-	fun cached(rel: String?): Bitmap? = rel?.let { cache.get(it) }
+	fun cached(rel: String?): Bitmap? = rel?.let { ThumbCache.get(ThumbCache.card(it)) }
 
 	fun attach(wv: WebView) {
 		webView = wv
@@ -78,12 +76,13 @@ internal object DesignerThumbs {
 	 * placeholder). */
 	suspend fun render(filesDir: File, card: DesignerCard): Bitmap? {
 		val rel = card.rel ?: return null
-		cache.get(rel)?.let { return it }
+		val key = ThumbCache.card(rel)
+		ThumbCache.get(key)?.let { return it }
 		val html = withContext(Dispatchers.IO) { readCardHtml(filesDir, rel) } ?: return null
 		return renderLock.withLock {
-			cache.get(rel)?.let { return it }
+			ThumbCache.get(key)?.let { return it }
 			val wv = webView ?: return null
-			withTimeoutOrNull(RENDER_TIMEOUT_MS) { renderOn(wv, html) }?.also { cache.put(rel, it) }
+			withTimeoutOrNull(RENDER_TIMEOUT_MS) { renderOn(wv, html) }?.also { ThumbCache.put(key, it) }
 		}
 	}
 

@@ -681,6 +681,15 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onDraftTextChange = { repo.setDraftText(openTeam!!, it) },
 				onAddDraftFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },
 				onRemoveDraftFile = { src -> repo.removeDraftFile(openTeam!!, src) },
+				// A draft file resolves the same way a tapped transcript attachment does, so the
+				// viewer sees one shape of OpenAttachment no matter which surface opened it.
+				onOpenDraftFile = { file ->
+					val rel = Attachments.relOf(file.src)
+					val resolved = Attachments.fileFor(context.filesDir, file.src)
+					if (rel != null && resolved != null) {
+						viewer = OpenAttachment(resolved, file.name, file.mime, rel, file.size, file.modifiedAt)
+					}
+				},
 				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },
 				onClearDraft = { repo.clearDraft(openTeam!!) },
 				scheduledSend = state.scheduledSends[openTeam!!],
@@ -2608,6 +2617,7 @@ fun ThreadScreen(
 	onDraftTextChange: (String) -> Unit,
 	onAddDraftFiles: (List<Uri>) -> Unit,
 	onRemoveDraftFile: (String) -> Unit,
+	onOpenDraftFile: (MessageFile) -> Unit,
 	// The plugin dock's composer-insert seam (e.g. the Designer's "Reference in chat").
 	onAppendDraftText: (String) -> Unit,
 	// Send hands the draft's content off (re-bucketed under its own out-$opId - see the Send
@@ -2967,35 +2977,12 @@ fun ThreadScreen(
 			// letting the text field survive alongside it would let the user keep typing into a
 			// message that no longer has anywhere to go until the dock is cancelled or fires.
 			if (scheduledSend == null) {
-			if (draft.files.isNotEmpty()) {
-				Row(
-					Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp),
-					horizontalArrangement = Arrangement.spacedBy(6.dp),
-				) {
-					draft.files.forEach { file ->
-						Surface(
-							color = MaterialTheme.colorScheme.surfaceVariant,
-							shape = MaterialTheme.shapes.small,
-						) {
-							Row(
-								Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
-								verticalAlignment = Alignment.CenterVertically,
-							) {
-								Text(
-									file.name,
-									style = MaterialTheme.typography.labelSmall,
-									maxLines = 1,
-									overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-									modifier = Modifier.widthIn(max = 120.dp),
-								)
-								IconButton(onClick = hapticClick { file.src?.let(onRemoveDraftFile) }) {
-									Icon(Icons.Default.Close, contentDescription = "Remove attachment")
-								}
-							}
-						}
-					}
-				}
-			}
+			DraftAttachments(
+				files = draft.files,
+				filesDir = composerContext.filesDir,
+				onOpen = onOpenDraftFile,
+				onRemove = onRemoveDraftFile,
+			)
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
 					value = draft.text,

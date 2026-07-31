@@ -31,6 +31,9 @@ object Attachments {
 	fun purgeAll(filesDir: File) {
 		root(filesDir).deleteRecursively()
 		BlobStore.root(filesDir).deleteRecursively()
+		// Thumbnails outlive their files in memory, so a purge that skipped this would keep drawing
+		// revoked attachments until the process died.
+		ThumbCache.clear()
 	}
 
 	/** Basename only, with anything outside a safe charset collapsed to '_'. */
@@ -161,8 +164,8 @@ object Attachments {
 
 	/** The attachments-relative path component of a src (e.g. "1234-5/photo.jpg" out of the full
 	 * appassets URL), or null for a metadata-only file (no src) or an unresolvable one. The one
-	 * parse every src consumer below shares. */
-	private fun relOf(src: String?): String? = src?.substringAfter("/$DIR/", "")?.takeIf { it.isNotEmpty() }
+	 * parse every src consumer shares, including the composer, which is why it is not private. */
+	internal fun relOf(src: String?): String? = src?.substringAfter("/$DIR/", "")?.takeIf { it.isNotEmpty() }
 
 	/** A [MessageFile.src] resolved back to its on-disk File via [resolve] - the traversal-safe
 	 * idiom every src consumer shares. Null for a metadata-only file (no src) or an unresolvable
