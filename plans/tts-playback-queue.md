@@ -405,6 +405,13 @@ the player as it stands (L2-1, L2-2, L2-3). These are prerequisites, not refinem
 - Also warm TITLE, not just SUMMARY and FULL: with auto-play on Title every entry is otherwise a live
   cache-miss synth on that single thread, which is precisely the burst this phase claims to verify.
 
+**NOT delivered by the first implementation pass, deliberately recorded rather than dropped:** the
+per-entry generation deadline. The lane split means a stalled synth no longer blocks playback, but it
+still occupies the synth lane for the transport's full 80s (`SttsClient.kt`), so the NEXT entry's
+synthesis waits behind it. Bounding that needs either a cancellable `Call` (an `SttsClient` contract
+change, which its header calls deliberate: "Blocking OkHttp, by design ... callers own the dispatcher
+boundary") or a multi-threaded synth lane. Neither is in this pass.
+
 - Autoplay drain: replace `msgs.lastOrNull { !it.fromMe }` with EVERY agent message, in order.
 - **Re-key `isDuplicatePeerAutoPlay` on (from, to, body-content-hash)** - CORRECTED by L3-1; do NOT use
   `at`. The current `"${from}|${to}"` key was correct when only one message per burst could be spoken;
@@ -787,6 +794,204 @@ for hand-rolling those on the overlay root, or for not using Compose in the over
 
 **L3-8. MINOR - the toggle rests on a platform claim that is not true.** API 34 enforcement has no runtime
 prerequisite for `mediaPlayback`, so there was no hostility to dodge. Independent corroboration of L3-2.
+
+### For the framework-first step: one bug class, hit three times in one session
+
+Not three unrelated mistakes. One class: **identity re-derived by parsing a formatted string, instead of
+carried as a value.** Each instance was caught by a different mechanism, and each time the fix I reached
+for first was to patch the parser rather than to stop parsing.
+
+1. **Plan, lap 1.** Proposed keying the peer dedupe on `(from, to, at)`, assuming the two mirror copies
+   shared `at`. They do not: `device-mailbox.ts:147` re-stamps `at` after the spread, and
+   `routes.ts:1282-1283` lands two independent entries. Refuted by the lap-3 audit.
+2. **Code, Phase 1a.** `tierOfKey` recovered the tier by splitting a cache key on its first dash. Team
+   addresses legally contain dashes (`evie-bot.0713b7` is a live one), so the tier came back null for
+   real teams. Caught by the align audit. Fixed by THREADING the tier through as a parameter, which is
+   the class-level fix rather than a better parser.
+3. **Tooling, same session.** `grep 'stts.purge'` matched `stts.purgeAll`, producing a false "three call
+   sites" claim that was reported to the owner before being checked.
+
+**The codebase already contains the correct pattern**, which is what makes this worth a framework pass
+rather than three patches: `shared/session-id.ts` is explicitly built so "a store key and a lookup key
+are the SAME value by construction", with one grammar owner and no shadow parsers. `tierOfKey` was
+re-parsing a composite two files away from that discipline.
+
+What the framework step should look for: any place that recovers a component from a rendered/composite
+string (cache keys, addresses, ids, file names) where the producer had the typed value and could have
+carried it. The fix is always the same shape - carry it, do not re-derive it - and it kills the class
+rather than the instance.
+
+### Second framework target: the request registry is untestable by construction
+
+Phase 1a took 8 defects across two audit rounds before a redesign, and every one was caught by REVIEW
+rather than by a test. The reason is structural: the request state machine (claim, finish, the single
+terminal event, the preempt-predecessor rule) is pure logic, but it lives inside `SttsPlayer` alongside
+`MediaPlayer` and `LoudnessEnhancer`, which a JVM unit test cannot construct. So the one part of this
+feature with real invariants is the one part no test can reach, and `testDebugUnitTest` stayed green
+through all 8.
+
+Extracting the registry - claim / finish / release / the live map, with playback as an injected effect -
+would make the whole event contract assertable: every path emits exactly one terminal, no request leaks,
+preemption reports the predecessor, a rejected duplicate mutates nothing. That is behaviour testing, not
+state testing, and it is the difference between catching the ninth defect and shipping it.
+
+### Phase 1a as built
+
+`PlaybackRequests.kt` (new, no Android import) owns the request lifecycle; `SttsPlayer` keeps only the
+playback effects. `PlaybackRequestsTest.kt` covers the contract with 19 tests.
+
+- **One carried identity.** `PlaybackId(team, at, tier, gen)` is minted at `claim` and threaded through
+  both lane hand-offs into every event. `gen` separates a re-claim of an entry from the claim it
+  replaced, so a late hand-off drives nothing. Replaces three disagreeing identities: a cache key
+  (which smuggled provider and voice into identity), an event tuple, and four loose `current*` fields.
+  The sounding pointer lives in the registry too, so the bulk drop is one atomic decision rather than
+  two monitors agreeing by luck.
+- **One terminal per entry.** `finish` returns the event or null; a second caller gets null. Every
+  ending routes through it, so an outcome cannot be reported twice or not at all.
+- **Ordered delivery.** A `Started` is minted under the lock and refused once the request has ended, so
+  it can never trail its own terminal and strand a consumer on a phantom playing entry.
+- **Events emitted outside the monitor**, so a listener cannot re-enter and deadlock.
+- **MediaPlayer built into a local** and released by hand on failure; a field assigned via `apply` is
+  never assigned when the block throws, which is exactly when it must be released.
+
+Cost of getting here, worth recording: 11 defects across 3 audit rounds, none catchable by a test until
+the extraction. That is the evidence for the second framework target above, not a hypothetical.
+
+### Red team on Phase 1a
+
+8 audit angles, 22 findings raised, 5 refuted by both skeptics, 17 survivors collapsing to 5 root
+causes. Two splits, both broken toward the finding, reasons below.
+
+**RC-A. `apply()` releases the field, not the request's player.** Four angles found it independently.
+The `soundingEnded` decision is taken under the registry monitor and acted on after a separate
+acquisition of the `SttsPlayer` monitor, which `playFile` holds across `prepare()`. A teardown racing
+a start releases the NEW player and leaves its request live, sounding, and terminal-less forever -
+`MediaPlayer.release()` nulls its own listeners, so nothing can ever mint that terminal. This is the
+one invariant the extraction exists to guarantee. The trailing `Ended` also lands after the newer
+`Started`, contradicting `emit`'s own mint-order claim. Fix direction: `PlaybackDrop` carries WHICH id
+was sounding, teardown is identity-guarded against the player's owner, and events publish before the
+effect rather than after it.
+
+**RC-B. Preload shares the play path's claim.** Mine, from round 6, and the largest cluster: seven
+findings. Claiming was right (a purge must reach that producer), the key was wrong - a preload and a
+play request are different roles that now collide on one `(team, at, tier)` entry. Consequences, all
+real: `isPlayingMessage` reports true for a message only being pre-synthesized, so the in-thread Play
+button is dead for the whole synthesis window and instead stops whatever else is audible; a Play that
+does land cancels the preload and plays nothing; and a superseded preload's completion unconditionally
+`dest.delete()`s a file a newer live claim owns. Fix direction: give the entry a role, count only PLAY
+roles in the toggle predicates, and let purge sweep both. Note this is the same shape as the recorded
+bug class - two different things sharing one identity - which is why it belongs in framework-first, not
+just in a patch.
+
+**RC-C. The glyph listener drops the tier.** Three angles. `sounding` is keyed `team -> at`, so a
+sibling tier's `Ended` clears the glyph of the tier that is still playing, which is precisely what its
+own comment claims to prevent. Reachable whenever autoplay speaks TITLE while the notification starts
+FULL.
+
+**RC-D. `isLiveForMessage` has zero coverage.** The one predicate the whole toggle hangs on, and the
+only public method of the registry with no test. RC-B rode in under it.
+
+**RC-E (minor, split). The cache-hit check sits inside the single-threaded synth lane**, so a cached
+play queues behind a stalled fetch for up to the transport's 80s. Skeptic A refuted it as pre-existing
+serialization; skeptic B held that the plan's recorded carve-out covers "the next entry's SYNTHESIS
+waits", which does not cover an entry needing no synthesis at all. Broken toward the finding: the
+serialization is old but the class doc asserting it cannot happen is new in this diff, and hoisting the
+`dest.exists()` check ahead of the lane hop is a few lines.
+
+**Tie-break on the preload delete (RC-B).** Skeptic A refuted it by showing the in-thread Play tap
+never reaches `stopEntry`, because `isPlayingMessage` is true during preload and the tap diverts to
+`stopPlayback()`. That is not a refutation - it is RC-B's own defect standing in front of this one.
+Fixing RC-B opens the path. Skeptic B independently found a second route through
+`reconcileTeamNotifications`, whose Play actions carry `last.at`. Severity does drop: the sounding
+`MediaPlayer` holds an open fd, so unlinking cannot interrupt audio being heard; the harm is a wasted
+re-synthesis, not a glitch.
+
+### Bug Classes
+
+Two mechanisms have now been patched more than once for the same defect class. Recorded here rather
+than fixed properly, because a third patch in the same place is the signal that the design is wrong,
+not the patch. `framework-fan-out` owns the redesign.
+
+**Mechanism: the terminal decision and the player-release effect.**
+Defect class: the decision is taken under one lock and the effect runs under another, so the effect
+lands on whatever state exists when it wins its lock rather than the state the decision was about.
+
+- Rounds 1-6, pre-extraction: 11 defects. Patched in turn by adding an outcome, making the outcome
+  non-contradictory, ordering the emit, making the bulk drop atomic, extracting `PlaybackRequests`,
+  and finally moving the sounding pointer into it.
+- Round 7 (red team): `apply()` released whatever `player` held, on a boolean taken earlier under the
+  registry's lock. A teardown racing `playFile` killed the newcomer's player and stranded its request
+  with no terminal. Patched by having the drop NAME the id that lost the sound and guarding the
+  release on `playerOwner`, plus publishing events before running the effect.
+
+- Round 8 (red team, lap 2): three more from the same seam. The release ran inline on whatever thread
+  reported the terminal, and MediaPlayer's callbacks land on the MAIN Looper, so main blocked on a
+  monitor held across `prepare()`. Both MediaPlayer callbacks and the playback-failure path ended the
+  ENTRY rather than the request, so a late callback killed the generation that replaced it. And
+  because minting and publishing are still not one step, a terminal could be delivered after the
+  Started that replaced it. Patched by moving the release onto the play lane, scoping those terminals
+  to the request with `finishRequest`, and putting `gen` on the events so a consumer can tell a stale
+  terminal from its own.
+
+- Round 9 (red team, lap 3): a `Started` can be published after its own `Ended`, stranding a row on
+  "playing" with no terminal left to clear it. The comment claiming the monitor made mint and publish
+  one step was worse than wrong: no terminal path takes that monitor at all, so holding it orders
+  nothing. Patched at the CONSUMER - the glyph listener now refuses a Started whose generation has
+  already ended - and the comment now says the ordering cannot be fixed from the producer side.
+
+Every round so far has moved the seam rather than removed it. The seam is that two locks exist at
+all: `PlaybackRequests` has its monitor and `SttsPlayer` has its own, and `playFile` holds the second
+across `prepare()`. Mint-and-publish is the same seam seen from the other side, and both `gen` on the
+event and the consumer's ended-guard are ways to SURVIVE it, not fixes. Every mint already happens
+under the registry's monitor; publishing there too would make enqueue order equal mint order by
+construction and delete this entire class. That is the redesign.
+
+**Mechanism: the claim key.**
+Defect class: two roles collapsed onto one identity, so a predicate answering for one answers for the
+other.
+
+- Round 6: preload was invisible to `purge`, so a forget mid-preload recreated the directory it had
+  just deleted. Patched by having preload claim the play entry.
+- Round 7 (red team): that claim made a message being warmed read as playing. Seven findings from one
+  cause: a dead Play button for the whole synthesis, a tap that stopped a different message, a Play
+  that cancelled the warm-up and started nothing, and a superseded preload deleting a file a live
+  claim owned. Patched by adding a role to the entry and scoping the toggle predicates to PLAY.
+- Same round, same class: `isPlayingMessage` asked "any tier of this message" while `stop()` acted on
+  "whatever is sounding". Patched by adding `finishMessage` so the action matches the question.
+- Round 8 (red team, lap 2): making the question claim-wide was itself wrong, because a row gives the
+  user no way to SEE a claim. With autoplay on, one tap on a fresh message cancelled the autoplay and
+  played nothing. The button is back to toggling on audible; the claim-scoped toggle is blocked on the
+  Loading / Playing / Queued button state, which is where the owner already put it.
+
+**Mechanism: purge versus an in-flight producer.**
+Defect class: a purge is an instant and a producer spans one, so "is this claimed" cannot answer "is
+this still wanted".
+
+- Round 6: preload was invisible to the sweep. Patched by claiming.
+- Round 7: the claim collided with the play entry. Patched by adding the role.
+- Round 8: the sweep still could not reach a producer that held no claim at the moment it ran - either
+  mid-fetch on the play path, which recreated the deleted directory via `mkdirs`, or in the gap
+  between two preload tiers. Patched with a purge epoch stamped from the same counter as `gen`, so a
+  producer can ask `isStale` at any later point instead of asking whether it is still claimed.
+
+- Round 9: the epoch was stamped by `finishTeam`, which the voice sample also uses to supersede
+  itself, so testing a voice made its own in-flight synthesis read as purged and delete the audio it
+  had just paid for. And because the stamp was compared against the id's own `gen`, a producer that
+  re-claims per work item moved its horizon past the very purge it needed to see, leaving the
+  between-tiers gap exactly as open as before I claimed to have closed it. Patched by splitting
+  `purgeTeam` from `finishTeam` and capturing the horizon once with `purgeStamp`.
+
+Four rounds, four different answers to "who is allowed to write into a team's cache directory". The
+question is really one of ownership of that directory, and nothing here owns it: the player, the
+preload, and `forget` all reach into the same path with no arbiter. Every fix so far has been a way
+for a writer to guess whether its file is still wanted.
+
+**The pattern across all three mechanisms.** Rounds 7, 8 and 9 each introduced their own successor:
+the role fix made the button claim-wide (round 8 regression), the button fix left `play` still
+cancelling a synthesizing entry (round 9 regression, MAJOR), and the purge epoch broke the voice
+sample (round 9 regression). A fix landing in a mechanism that has no owner does not converge - it
+relocates. That is the argument for `framework-fan-out` doing structural work here rather than a
+tenth round of patches.
 
 ### Gates
 

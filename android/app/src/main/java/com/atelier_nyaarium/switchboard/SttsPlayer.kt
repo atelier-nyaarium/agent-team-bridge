@@ -6,7 +6,6 @@ import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
 import com.atelier_nyaarium.switchboard.proto.SttsProvider
 import java.io.File
-import java.util.Collections
 import java.util.concurrent.Executors
 
 /**
@@ -18,45 +17,123 @@ import java.util.concurrent.Executors
  * container varies by provider (MP3 or streaming WAV mislabeled as audio/wav),
  * so files keep a neutral extension and MediaPlayer sniffs.
  *
- * Single-flight: a tap while the same message+tier is synthesizing is a no-op;
- * a cache hit plays with no request; tapping the one currently playing stops
- * it (toggle). Synthesis and playback hand-offs run on one daemon thread, so
- * impatient multi-taps can never fire a second request.
+ * Single-flight per entry, so impatient taps cannot fire a second request; a cache hit plays with no
+ * request. A tap on an entry that is already claimed cancels it, whether it is sounding or still
+ * synthesizing. [PlaybackRequests] owns which entry is claimed and which is sounding; this class owns
+ * only the effects. Synthesis, playback, control and event delivery each get their own lane, so a
+ * blocking fetch can never hold up a cancel, a cached playback, or an event.
  */
 class SttsPlayer(private val root: File) {
 	enum class Tier(val suffix: String) { FULL("full"), SUMMARY("summary"), TITLE("title") }
 
-	private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts").apply { isDaemon = true } }
-	private val inFlight = Collections.synchronizedSet(mutableSetOf<String>())
+	/** Why a playback ended. A queue advances on COMPLETED, PREEMPTED and the two errors, but not
+	 * on STOPPED, so these cannot collapse back into a single "ended" signal: a file that fails to
+	 * DECODE would then pop an entry as though it had been heard, and the retry would never fire. */
+	enum class Outcome { COMPLETED, STOPPED, PREEMPTED, PLAYBACK_ERROR, SYNTH_ERROR }
+
+	/** Carries the (team, at, tier) it belongs to, so a consumer can attribute an outcome to the
+	 * entry that caused it. `tier` is null only for the settings voice sample, which is not a
+	 * message. `gen` names the REQUEST: minting and publishing are not one step, so a terminal can be
+	 * delivered after the Started of the request that replaced it, and without a generation a
+	 * consumer cannot tell that apart from its own request ending. */
+	sealed interface Event {
+		val team: String
+		val at: Long
+		val tier: Tier?
+		val gen: Long
+
+		data class Started(
+			override val team: String,
+			override val at: Long,
+			override val tier: Tier?,
+			override val gen: Long,
+		) : Event
+
+		data class Ended(
+			override val team: String,
+			override val at: Long,
+			override val tier: Tier?,
+			override val gen: Long,
+			val outcome: Outcome,
+			val reason: String? = null,
+		) : Event
+	}
+
+	fun interface Listener {
+		fun onPlaybackEvent(event: Event)
+	}
+
+	// Separate lanes: SttsClient blocks for up to 80s, and a stalled synth must never hold up a
+	// playback whose audio is already cached.
+	private val synthExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-synth").apply { isDaemon = true } }
+	private val playExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-play").apply { isDaemon = true } }
+	private val eventExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-events").apply { isDaemon = true } }
+	// Control work gets a lane that blocking synthesis can never occupy. Sharing one meant a tap that
+	// should supersede an in-flight preview sat behind the very fetch it was trying to cancel.
+	private val controlExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-ctl").apply { isDaemon = true } }
+	// The request lifecycle lives in its own pure unit so its invariants can be tested without a
+	// MediaPlayer. This class owns only the playback effects.
+	private val requests = PlaybackRequests()
 
 	@Volatile private var player: MediaPlayer? = null
 	@Volatile private var loudness: LoudnessEnhancer? = null
-	@Volatile private var currentKey: String? = null
-	@Volatile private var currentTeam: String? = null
-	@Volatile private var currentAt: Long = 0
 
-	/** Set by the owner; fired on any thread when playback starts (playing=true)
-	 * or ends by completion, error, stop, or replacement (playing=false), so the
-	 * thread UI can swap its play/stop glyph. */
-	@Volatile var onPlayingChanged: ((team: String, at: Long, playing: Boolean) -> Unit)? = null
+	// Which request the current player belongs to. A drop decides under the registry's lock and
+	// releases under this class's, and a newer request can take the sound in between; without an owner
+	// to check against, that release kills the newcomer's player and strands it with no terminal.
+	private var playerOwner: PlaybackId? = null
 
-	/** Set by the owner; fired on the player thread when a synthesis or
-	 * playback attempt fails, so a tap never dead-ends silently (e.g. a
-	 * provider the service has no key for streams zero bytes). */
-	@Volatile var onPlaybackError: ((reason: String) -> Unit)? = null
 
-	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
-		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
+	/** Every listener sees every event, on whichever thread it occurred. Playback that continues in
+	 * the background keeps its signal even when a UI listener unsubscribes. */
+	private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
 
-	/** Whether this message is playing in ANY tier. The play button toggles by message (it cannot
-	 * know which tier an autoplay chose), unlike [isPlaying] which is tier-specific. */
-	fun isPlayingMessage(team: String, at: Long): Boolean = currentKey != null && currentTeam == team && currentAt == at
+	/** Add-once per subscriber; a duplicate add would double-deliver. Returns the listener so a
+	 * caller that must later remove it can register a lambda without naming it twice. */
+	fun addListener(listener: Listener): Listener {
+		listeners.addIfAbsent(listener)
+		return listener
+	}
+
+	fun removeListener(listener: Listener) {
+		listeners.remove(listener)
+	}
+
+	/** Publish on one lane, so delivery order is mint order. Emitting from whichever thread minted the
+	 * event let a terminal parked on the monitor overtake a Started that was already minted, leaving a
+	 * consumer holding an entry that had ended. Handing off also means a caller can emit while holding
+	 * the monitor without a listener re-entering it. */
+	private fun emit(event: Event?) {
+		if (event == null) return
+		eventExec.execute {
+			for (l in listeners) {
+				runCatching { l.onPlaybackEvent(event) }
+					.onFailure { Log.w(TAG, "playback listener threw: ${it.message}") }
+			}
+		}
+	}
+
+	/** Publish a drop, then release the player the drop actually took. The registry decides; this only
+	 * runs the effect. Events go first so a terminal minted here cannot arrive behind a Started that
+	 * was minted later on the play lane while this thread waited for the monitor. */
+	private fun apply(drop: PlaybackDrop) {
+		for (e in drop.events) emit(e)
+		// Released on the play lane rather than here. MediaPlayer's callbacks run on the main Looper,
+		// and this monitor is held across `prepare()`, so doing it inline blocks main on disk I/O.
+		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
+	}
+
+	fun isPlaying(team: String, at: Long, tier: Tier): Boolean = requests.isLive(team, at, tier)
+
+	/** Whether this message is audible, in any tier. What the row shows, and so what its button may
+	 * toggle on; [PlaybackRequests.isSoundingForMessage] says why it is not the claim. */
+	fun isPlayingMessage(team: String, at: Long): Boolean = requests.isSoundingForMessage(team, at)
 
 	/** Run work on the player's daemon thread. Lets callers move credential
 	 * loading and message resolution off their own thread (a broadcast
 	 * receiver's main thread must hold zero disk or crypto work). */
 	fun post(action: () -> Unit) {
-		exec.execute(action)
+		controlExec.execute(action)
 	}
 
 	/** Play (or toggle-stop) one message tier. Synthesizes through `client` on a
@@ -72,13 +149,12 @@ class SttsPlayer(private val root: File) {
 		text: String,
 		volumePct: Int = 100,
 	) {
-		val k = key(team, at, tier, provider, voice)
-		if (currentKey == k) {
-			stop()
-			return
-		}
+		// Toggle on what the user can see. A tap while this is still synthesizing is NOT a cancel: the
+		// row shows nothing yet, so cancelling would read as a dead button, and single-flight already
+		// refuses the duplicate claim below.
+		if (stopSounding(team, at, tier)) return
 		if (text.isBlank()) return
-		synthesizeAndPlay(k, team, at, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
+		synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -87,38 +163,61 @@ class SttsPlayer(private val root: File) {
 	 * sample endpoint (stream for providers without one) and plays. Cached per
 	 * provider+voice under the reserved "_sample" team, purged with clearAll. */
 	fun playSample(client: SttsClient, provider: SttsProvider, voice: String?, text: String, volumePct: Int = 100) {
-		val k = "_sample/${provider.path}-${safeVoice(voice)}"
-		if (currentKey == k) {
-			stop()
-			return
-		}
-		val dest = File(File(root, "stts/_sample"), "${provider.path}-${safeVoice(voice)}.audio")
-		synthesizeAndPlay(k, "_sample", 0, dest, volumePct) { d -> client.sample(provider, text, voice, d) }
+		// Each voice is its own entry, so Test toggles the voice you pressed rather than whatever
+		// happens to be audible, and picking a different voice supersedes instead of just stopping.
+		val voiceAt = sampleAt(provider, voice)
+		if (stopEntry(SAMPLE_TEAM, voiceAt, null)) return
+		apply(requests.finishTeam(SAMPLE_TEAM, Outcome.PREEMPTED))
+		val dest = File(File(root, "stts/$SAMPLE_TEAM"), "${provider.path}-${safeVoice(voice)}.audio")
+		synthesizeAndPlay(SAMPLE_TEAM, voiceAt, null, dest, volumePct) { d -> client.sample(provider, text, voice, d) }
 	}
 
-	/** Pre-synthesize both tiers of one message into the cache without playing,
-	 * so a later Play is a cache hit. Blocking - call off the main thread.
-	 * Dedups when both tiers speak the same text: synthesize once and copy.
-	 * Never throws; a failed tier just synthesizes on demand at Play. */
-	fun preloadBoth(
+	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
+	 * cache hit. Blocking - call off the main thread. Dedups tiers that speak the same text:
+	 * synthesize once and copy. Never throws; a failed tier just synthesizes on demand at Play. */
+	fun preloadTiers(
 		client: SttsClient,
 		provider: SttsProvider,
 		voice: String?,
 		team: String,
 		at: Long,
+		titleText: String,
 		summaryText: String,
 		fullText: String,
 	) {
-		val sumDest = cacheFile(team, at, Tier.SUMMARY, provider, voice)
-		val sumOk = synthToCache(client, provider, voice, summaryText, sumDest)
-		val fullDest = cacheFile(team, at, Tier.FULL, provider, voice)
-		if (fullText == summaryText) {
-			if (sumOk && (!fullDest.exists() || fullDest.length() == 0L)) {
-				runCatching { sumDest.copyTo(fullDest, overwrite = true) }
+		// Captured ONCE, before the first claim. This producer re-claims per tier, and a horizon read
+		// per claim always sits after the purge it was meant to notice - including in the gaps between
+		// tiers, where it holds no claim for a sweep to find.
+		val horizon = requests.purgeStamp()
+		val done = mutableMapOf<String, File>()
+		for ((tier, text) in listOf(Tier.SUMMARY to summaryText, Tier.FULL to fullText, Tier.TITLE to titleText)) {
+			val dest = cacheFile(team, at, tier, provider, voice)
+			val twin = done[text]
+			if (twin != null) {
+				if (!dest.exists() || dest.length() == 0L) runCatching { twin.copyTo(dest, overwrite = true) }
+				// The copy writes cache under no claim of its own, so it needs the same check.
+				if (requests.purgedSince(team, horizon)) return discardPreload(dest)
+				continue
 			}
-		} else {
-			synthToCache(client, provider, voice, fullText, fullDest)
+			// Claimed under the PRELOAD role, so a purge reaches this producer without the warm-up
+			// reading as playback.
+			val id = requests.claim(team, at, tier, PlaybackRole.PRELOAD) ?: continue
+			val ok = synthToCache(client, provider, voice, text, dest)
+			// Purged at any point since this preload began, or dropped while synthesizing: either way
+			// the write above resurrected a deleted directory, so undo it.
+			if (requests.purgedSince(team, horizon) || requests.finish(id, Outcome.COMPLETED) == null) {
+				requests.finish(id, Outcome.PREEMPTED)
+				return discardPreload(dest)
+			}
+			if (ok) done[text] = dest
 		}
+	}
+
+	/** Remove what a preload wrote into a directory that a purge had already deleted. The parent goes
+	 * only if it is now empty, so this cannot take a sibling message's cached audio with it. */
+	private fun discardPreload(dest: File) {
+		dest.delete()
+		dest.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
 	}
 
 	/** Synthesize `text` into `dest` (atomic, cache-skip), returning whether
@@ -153,9 +252,22 @@ class SttsPlayer(private val root: File) {
 
 	/** Shared synthesis path: single-flight on the key, atomic cache write,
 	 * then playback. `fetch` writes the audio into the destination file. */
-	private fun synthesizeAndPlay(k: String, team: String, at: Long, dest: File, volumePct: Int, fetch: (File) -> Unit) {
-		if (!inFlight.add(k)) return
-		exec.execute {
+	private fun synthesizeAndPlay(
+		team: String,
+		at: Long,
+		tier: Tier?,
+		dest: File,
+		volumePct: Int,
+		fetch: (File) -> Unit,
+	) {
+		val id = requests.claim(team, at, tier) ?: return
+		// A cache hit goes straight to the play lane. Left inside the synth lane it queued behind a
+		// stalled fetch, which is the one thing the lane split exists to prevent.
+		if (dest.isFile && dest.length() > 0L) {
+			playExec.execute { playGuarded(id, dest, volumePct) }
+			return
+		}
+		synthExec.execute {
 			try {
 				if (!dest.exists() || dest.length() == 0L) {
 					dest.parentFile?.mkdirs()
@@ -165,25 +277,85 @@ class SttsPlayer(private val root: File) {
 						tmp.delete()
 						error("synthesis returned no audio")
 					}
+					// A purge that landed while this was fetching already deleted the directory, and
+					// the write above recreated it. Nothing else collects that, so undo it here.
+					if (requests.isStale(id)) {
+						discardPreload(dest)
+						emit(requests.finish(id, Outcome.PREEMPTED, "purged"))
+						return@execute
+					}
 				}
-				playFile(k, team, at, dest, volumePct)
+				// The id crosses the lane, so a hand-off that arrives after this request was abandoned
+				// and the entry re-claimed drives nothing.
+				playExec.execute { playGuarded(id, dest, volumePct) }
 			} catch (e: Exception) {
-				Log.w(TAG, "stts $k failed: ${e.message}")
+				Log.w(TAG, "stts synth failed: ${e.message}")
 				dest.delete()
-				onPlaybackError?.invoke(e.message ?: "synthesis failed")
-			} finally {
-				inFlight.remove(k)
+				emit(requests.finish(id, Outcome.SYNTH_ERROR, e.message ?: "synthesis failed"))
 			}
 		}
 	}
 
+	/** Play on its own lane. `prepare` throws on a cached file that will not decode and
+	 * `LoudnessEnhancer` throws on devices without the effect; neither reaches `setOnErrorListener`,
+	 * so both are caught here rather than ending the request with no event at all. */
+	private fun playGuarded(id: PlaybackId, dest: File, volumePct: Int) {
+		try {
+			playFile(id, dest, volumePct)
+		} catch (e: Exception) {
+			Log.w(TAG, "playback failed: ${e.message}")
+			dest.delete()
+			apply(requests.finishRequest(id, Outcome.PLAYBACK_ERROR, e.message ?: "playback failed"))
+		}
+	}
+
+	fun stop() = apply(requests.finishSounding(Outcome.STOPPED))
+
+	/** Stop one message in whichever tier it is playing, sounding or still synthesizing. What the
+	 * button asked about with [isPlayingMessage] is what this acts on. */
+	fun stopMessage(team: String, at: Long) = apply(requests.finishMessage(team, at, Outcome.STOPPED))
+
+	/** Stop whatever is sounding and report `outcome`. The queue has to tell "the user stopped this"
+	 * apart from "something replaced it": only one of those advances. */
+	fun stopWith(outcome: Outcome) = apply(requests.finishSounding(outcome))
+
+	/** Stop ONE entry, whether it is sounding or still synthesizing, and say whether it was there.
+	 * The check and the act are one registry operation, so a toggle cannot end whatever became
+	 * current in between - and STOPPED is the one outcome a queue does not advance on, so a
+	 * mis-scoped stop would halt it on an entry nobody touched. */
+	private fun stopEntry(team: String, at: Long, tier: Tier?): Boolean {
+		val drop = requests.finishEntry(team, at, tier, Outcome.STOPPED)
+		apply(drop)
+		return drop.events.isNotEmpty()
+	}
+
+	/** Stop ONE entry only while it is audible, and say whether it was. */
+	private fun stopSounding(team: String, at: Long, tier: Tier?): Boolean {
+		val drop = requests.finishIfSounding(team, at, tier, Outcome.STOPPED)
+		apply(drop)
+		return drop.events.isNotEmpty()
+	}
+
+	/** Give up on one queue entry's audio: stop it if sounding, drop its claim so a synthesis still
+	 * running cannot go on to play it, and report PREEMPTED now rather than when the uncancellable
+	 * fetch finally returns. Tier-scoped, so abandoning one entry never preempts a sibling tier of
+	 * the same message. */
+	fun abandon(team: String, at: Long, tier: Tier?) = apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED))
+
 	@Synchronized
-	fun stop() {
+	private fun teardownPlayer() {
 		runCatching { loudness?.release() }
 		loudness = null
 		runCatching { player?.release() }
 		player = null
-		clearNowPlaying()
+		playerOwner = null
+	}
+
+	/** Release the player only while `id` still owns it. A newer request that took the sound in the
+	 * gap owns it now, and releasing that one would leave a live request no path to a terminal. */
+	@Synchronized
+	private fun releasePlayerOf(id: PlaybackId) {
+		if (playerOwner == id) teardownPlayer()
 	}
 
 	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
@@ -191,77 +363,81 @@ class SttsPlayer(private val root: File) {
 	 * does not nest a subdir: the team string is the unique path, so two distinct sessions never
 	 * share a cache dir. */
 	fun purge(team: String) {
-		if (currentKey?.startsWith("$team/") == true) stop()
+		// Every claimed request, not just the sounding one, so a synthesis still running cannot go on
+		// to play a forgotten team. The delete below races that synthesis rather than ordering it: a
+		// producer that writes afterwards finds itself stale and removes what it recreated.
+		apply(requests.purgeTeam(team))
 		File(root, "stts/$team").deleteRecursively()
 	}
 
 	/** Stop and delete the entire cache root; wired into ChatRepository.clearAll
 	 * so the repository never reaches into the player's directory layout. */
 	fun purgeAll() {
-		stop()
+		apply(requests.purgeEverything())
 		File(root, "stts").deleteRecursively()
 	}
 
-	/** Null out the now-playing fields and notify the glyph listener. Callers
-	 * hold the monitor or run on the completion path where currentKey matched. */
-	private fun clearNowPlaying() {
-		val team = currentTeam
-		val at = currentAt
-		currentKey = null
-		currentTeam = null
-		currentAt = 0
-		if (team != null) onPlayingChanged?.invoke(team, at, false)
-	}
-
+	/** Start `id` playing, or do nothing if it was abandoned before it reached the lane. Throws if
+	 * MediaPlayer setup fails, having assigned nothing for the caller to unpick. */
 	@Synchronized
-	private fun playFile(k: String, team: String, at: Long, f: File, volumePct: Int) {
-		runCatching { loudness?.release() }
-		loudness = null
-		runCatching { player?.release() }
-		if (currentKey != null) clearNowPlaying()
-		currentKey = k
-		currentTeam = team
-		currentAt = at
+	private fun playFile(id: PlaybackId, f: File, volumePct: Int) {
+		if (!requests.isLive(id)) return
 		val (linear, gainMb) = volumeSteps(volumePct)
-		player = MediaPlayer().apply {
-			setAudioAttributes(
+		// Built into a local and released by hand on failure: an object assigned only after `apply`
+		// returns is unreachable if the block throws, which is precisely when it must be released.
+		val mp = MediaPlayer()
+		var effect: LoudnessEnhancer? = null
+		try {
+			mp.setAudioAttributes(
 				AudioAttributes.Builder()
 					.setUsage(AudioAttributes.USAGE_MEDIA)
 					.setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
 					.build(),
 			)
-			setDataSource(f.absolutePath)
-			setVolume(linear, linear)
-			setOnCompletionListener {
-				runCatching { loudness?.release() }
-				loudness = null
-				runCatching { it.release() }
-				if (currentKey == k) {
-					player = null
-					clearNowPlaying()
-				}
-			}
-			setOnErrorListener { mp, what, extra ->
-				Log.w(TAG, "playback $k error what=$what extra=$extra")
-				runCatching { loudness?.release() }
-				loudness = null
-				runCatching { mp.release() }
-				if (currentKey == k) {
-					player = null
-					clearNowPlaying()
-				}
+			mp.setDataSource(f.absolutePath)
+			mp.setVolume(linear, linear)
+			// Scoped to this request, not to its entry: a callback that arrives after a re-claim must
+			// report its own outcome and never end the generation that replaced it.
+			mp.setOnCompletionListener { apply(requests.finishRequest(id, Outcome.COMPLETED)) }
+			mp.setOnErrorListener { _, what, extra ->
+				Log.w(TAG, "playback error what=$what extra=$extra")
+				// A cached file that will not decode lands here, so it must not read as COMPLETED:
+				// the entry would pop unheard and never retry.
+				apply(requests.finishRequest(id, Outcome.PLAYBACK_ERROR, "playback failed ($what/$extra)"))
 				true
 			}
-			prepare()
+			mp.prepare()
 			if (gainMb > 0) {
-				loudness = LoudnessEnhancer(audioSessionId).apply {
-					setTargetGain(gainMb)
-					enabled = true
-				}
+				// Assigned before it is configured: `apply` returns the object, so a throw inside the
+				// block leaves nothing assigned and the catch below releases a null.
+				val fx = LoudnessEnhancer(mp.audioSessionId)
+				effect = fx
+				fx.setTargetGain(gainMb)
+				fx.enabled = true
 			}
-			start()
+			mp.start()
+		} catch (e: Exception) {
+			runCatching { effect?.release() }
+			runCatching { mp.release() }
+			throw e
 		}
-		onPlayingChanged?.invoke(team, at, true)
+		// Taking the sound displaces whatever held it, and the registry reports that terminal rather
+		// than it vanishing. Null means this request was abandoned while the player was being built.
+		val displaced = requests.sound(id)
+		if (displaced == null) {
+			runCatching { effect?.release() }
+			runCatching { mp.release() }
+			return
+		}
+		teardownPlayer()
+		player = mp
+		loudness = effect
+		playerOwner = id
+		for (e in displaced.events) emit(e)
+		// Minting and publishing are two steps and no terminal path takes this monitor, so a terminal
+		// for THIS request can still reach the lane first. Consumers must therefore treat a Started
+		// they have already seen the terminal for as stale; this cannot be fixed from here.
+		emit(requests.started(id))
 	}
 
 	// The path (not the descriptor id) is the cache component so entries survive
@@ -272,11 +448,20 @@ class SttsPlayer(private val root: File) {
 	private fun cacheFile(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): File =
 		File(File(root, "stts/$team"), "$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}.audio")
 
+	/** The sample entry's `at`. The preview is not a message, so this stands in for one, derived from
+	 * provider and voice so two voices are two entries. */
+	private fun sampleAt(provider: SttsProvider, voice: String?): Long =
+		"${provider.path}-${safeVoice(voice)}".hashCode().toLong()
+
 	private fun safeVoice(voice: String?): String =
 		(voice ?: "default").replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
 
 	companion object {
 		private const val TAG = "SttsPlayer"
+
+		/** Reserved team for the settings voice preview, which is not a message. Lets a listener tell
+		 * a preview's failure apart from a real entry's. */
+		const val SAMPLE_TEAM = "_sample"
 
 		/** Map a 0-200% volume setting to a MediaPlayer linear gain (0-100% range, free and exact)
 		 * plus a LoudnessEnhancer target gain in millibels for the 100-200% half MediaPlayer can't

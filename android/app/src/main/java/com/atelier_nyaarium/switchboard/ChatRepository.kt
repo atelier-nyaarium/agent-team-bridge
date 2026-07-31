@@ -1406,10 +1406,10 @@ class ChatRepository(
 	/**
 	 * Speak one message tier (notification action or thread button). The whole
 	 * resolution (credential decrypt, message lookup, text prep) hops to the
-	 * player's daemon thread so a broadcast receiver's main thread does zero
+	 * player's control lane so a broadcast receiver's main thread does zero
 	 * disk or crypto work. Cache and single-flight live in SttsPlayer, so
-	 * impatient multi-taps synthesize once; tapping the playing message stops
-	 * it. No-op when unconfigured or the message is gone.
+	 * impatient multi-taps synthesize once; tapping an entry that is already
+	 * claimed cancels it. No-op when unconfigured or the message is gone.
 	 */
 	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
 		stts.post {
@@ -1423,7 +1423,7 @@ class ChatRepository(
 
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
 
-	fun stopPlayback() = stts.stop()
+	fun stopMessage(team: String, at: Long) = stts.stopMessage(team, at)
 
 	/** When on, an incoming message for a followed (open) thread is
 	 * pre-synthesized before its notification. Persisted in prefs. */
@@ -1465,7 +1465,7 @@ class ChatRepository(
 		else -> null
 	}
 
-	/** Pre-synthesize both tiers of a message into the cache so a later Play is
+	/** Pre-synthesize every tier of a message into the cache so a later Play is
 	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
 	 * failure - the notification fires regardless and Play falls back to live
 	 * synthesis. No-op when unconfigured or the message is gone. */
@@ -1474,12 +1474,13 @@ class ChatRepository(
 		val provider = currentProvider() ?: return
 		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		stts.preloadBoth(
+		stts.preloadTiers(
 			client,
 			provider,
 			voice,
 			team,
 			at,
+			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.TITLE),
 			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.SUMMARY),
 			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.FULL),
 		)

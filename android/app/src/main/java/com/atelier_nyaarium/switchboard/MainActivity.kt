@@ -339,7 +339,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	rendererPool.onPlayTap = { team, at ->
 		// Toggle by message: a tap stops whatever tier is playing for this message (autoplay may have
 		// chosen Title/Summary), else plays it FULL. Avoids synthesizing FULL on top of an autoplay.
-		if (repo.isMessagePlaying(team, at)) repo.stopPlayback() else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
+		if (repo.isMessagePlaying(team, at)) repo.stopMessage(team, at) else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
 	}
 	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
 	// Links: a tap on a standard anchor routes through the scheme dispatcher (openLink); the
@@ -374,10 +374,29 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
-		repo.stts.onPlayingChanged = { team, at, playing ->
-			scope.launch { rendererPool.setPlaying(team, if (playing) at else null) }
+		// Keyed by the REQUEST's generation: a sibling tier reports Ended too, and anything coarser
+		// blanks a row that is still playing. `ended` is what makes this safe against ORDER as well as
+		// identity - a Started can arrive behind its own terminal, and lighting the row on one that has
+		// already finished strands it, because the request has spent its single terminal and nothing
+		// will ever clear it.
+		val sounding = java.util.concurrent.ConcurrentHashMap<String, Long>()
+		val ended = java.util.concurrent.ConcurrentHashMap<String, Long>()
+		val glyphs = repo.stts.addListener { event ->
+			when (event) {
+				is SttsPlayer.Event.Started -> if (ended[event.team] != event.gen) {
+					sounding[event.team] = event.gen
+					scope.launch { rendererPool.setPlaying(event.team, event.at) }
+				}
+				is SttsPlayer.Event.Ended -> {
+					ended[event.team] = event.gen
+					if (sounding[event.team] == event.gen) {
+						sounding.remove(event.team)
+						scope.launch { rendererPool.setPlaying(event.team, null) }
+					}
+				}
+			}
 		}
-		onDispose { repo.stts.onPlayingChanged = null }
+		onDispose { repo.stts.removeListener(glyphs) }
 	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
@@ -3489,8 +3508,15 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	// Failed previews surface here instead of dead-ending in the log (snapshot
 	// state writes are thread-safe, so the player thread can set it directly).
 	DisposableEffect(Unit) {
-		repo.stts.onPlaybackError = { reason -> sampleError = reason }
-		onDispose { repo.stts.onPlaybackError = null }
+		val errors = repo.stts.addListener { event ->
+			val ended = event as? SttsPlayer.Event.Ended
+			// Only the sample's own failures belong on this screen; a queue entry failing elsewhere
+			// is not this preview's business.
+			if (ended != null && ended.team == SttsPlayer.SAMPLE_TEAM && ended.reason != null) {
+				sampleError = ended.reason
+			}
+		}
+		onDispose { repo.stts.removeListener(errors) }
 	}
 
 	// The voice + playback controls below stay hidden until a Test confirms BOTH the service and a
