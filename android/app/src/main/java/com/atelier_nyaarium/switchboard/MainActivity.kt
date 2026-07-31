@@ -302,18 +302,25 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
 	rendererPool.onAttachmentTap = { tapTeam, rel ->
 		Attachments.resolve(context.filesDir, rel)?.let { file ->
-			val wireMime = state.threads.values.asSequence().flatten()
+			// Drafts as well as threads: a picked file belongs to no message, so a threads-only
+			// scan leaves the viewer's rows blank for exactly the files a pre-send check is for.
+			val wire = state.threads.values.asSequence().flatten()
 				.flatMap { it.files.asSequence() }
+				.plus(state.drafts.values.asSequence().flatMap { it.files.asSequence() })
 				.firstOrNull { it.src?.endsWith("/$rel") == true }
-				?.mime?.takeIf { it.isNotEmpty() }
-			val mime = wireMime ?: mimeForFile(file)
+			val mime = wire?.mime?.takeIf { it.isNotEmpty() } ?: mimeForFile(file)
 			// A plugin (e.g. the Designer) may claim a tapped attachment and open it in its own
 			// viewer; only fall back to the generic attachment viewer when none does. The team is
 			// the tapped thread's own (bound per-renderer), not the ambient on-screen team.
 			val claimed = pluginManager.host.attachmentOpeners.anyCaught(onError = ::logPluginThrow) {
 				it.tryOpen(context, tapTeam, rel, mime, file.name)
 			}
-			if (!claimed) viewer = OpenAttachment(file, file.name, mime, rel)
+			if (!claimed) {
+				// Size and mtime come from the WIRE, not from the local copy: the file on disk was
+				// written by the fetch, so its own mtime is when it landed here, not the age the
+				// sender meant to carry. Absent when the sender never stamped it, and the row hides.
+				viewer = OpenAttachment(file, file.name, mime, rel, wire?.size, wire?.modifiedAt)
+			}
 		}
 	}
 	// A plugin may decorate its own attachment chips (e.g. the Designer's card title); the first

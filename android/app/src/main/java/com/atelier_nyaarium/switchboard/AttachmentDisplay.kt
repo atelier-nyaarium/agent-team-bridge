@@ -41,6 +41,25 @@ private val PREVIEWABLE_MIMES = setOf(
 	"image/avif",
 )
 
+/**
+ * Formats the fullscreen stage can decode that a thumbnail surface cannot.
+ *
+ * The two renderers disagree in BOTH directions, which is why one set cannot serve both. The WebView
+ * draws SVG that BitmapFactory refuses, and BitmapFactory decodes these that the WebView refuses. A
+ * thumbnail must promise a tap that works, so the intersection rules there; the viewer has no such
+ * constraint and opens everything it can actually draw.
+ */
+private val VIEWER_ONLY_MIMES = setOf("image/heic", "image/heif")
+
+private fun normalizeMime(mime: String): String = mime.substringBefore(';').trim().lowercase()
+
+/** Whether the fullscreen image stage can decode this type. Routing on this instead of an `image/`
+ * prefix is what keeps an SVG or TIFF tap on the file sheet rather than a decode error. */
+internal fun viewerDecodableImage(mime: String): Boolean {
+	val m = normalizeMime(mime)
+	return m in PREVIEWABLE_MIMES || m in VIEWER_ONLY_MIMES
+}
+
 /** The role vocabulary this build understands. A value outside it was said DELIBERATELY by a
  * NEWER sender; absent (a pre-role row, or a stripping middle hop) means an ordinary attachment. */
 private val KNOWN_ROLES = setOf("attachment", "ref-snapshot", "design-card")
@@ -56,7 +75,7 @@ private fun ordinaryRole(file: MessageFile): Boolean = file.role == null || file
  * signal is spent on RANKING, not reachability, so a wrong guess is a demoted row rather than an
  * unreachable file. */
 internal fun isPreviewable(file: MessageFile): Boolean =
-	file.src != null && ordinaryRole(file) && file.mime.substringBefore(';').trim().lowercase() in PREVIEWABLE_MIMES
+	file.src != null && ordinaryRole(file) && normalizeMime(file.mime) in PREVIEWABLE_MIMES
 
 /**
  * The attachments to show, in the order to show them: previewables first as thumbnails, then files
