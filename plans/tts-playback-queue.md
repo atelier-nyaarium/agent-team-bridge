@@ -1707,11 +1707,17 @@ Still to wire, all in `ChatRepository`:
 
 Not a code audit. What actually hurt while working here.
 
-**No audio was ever heard.** Every change across ten rounds was verified by compile, unit test and
-`assembleEmulator` only. Nothing automated covers the play lane, and I never put the AVD in front of a
-message and listened. The toggle semantics changed three times in this work and all three are unheard.
-That is the single largest gap between "green" and "known good" in this plan, and it is worth an
-emulator pass before Phase 1b builds a queue on top.
+**No audio was ever heard while it was being built.** Every change across every round was verified by
+compile, unit test, `assembleEmulator` and screenshots only. Nothing automated covers the play lane and
+the emulator has no working TTS key, so the single largest gap in this plan was between "green" and
+"known good" for its entire construction.
+
+**Closed at the end, partially, by the owner installing 7.19.4 and using it.** Confirmed working in
+ordinary use, and the boundary markers - the chime and the spoken session name - sound right. What that
+does NOT cover, and what is still unobserved by anyone: audio focus ducking under a run, the pause when
+a call arrives, the stop when headphones are unplugged, whether the user's music resumes once the queue
+drains, whether a burst across several sessions ever announces the wrong one, and the lockscreen,
+headphone and watch controls. Those remain reasoned-correct and unwitnessed.
 
 **`SttsPlayer` cannot be constructed by a JVM test, and that is where every defect lived.** All ten
 rounds found their defects in the effect layer; the pure registry has 39 tests and produced almost
