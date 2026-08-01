@@ -28,21 +28,23 @@ class TtsTextFramedTest {
 			isPeer = true,
 		)
 		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp", "alice.sakura.coollib.main" to "CoolLib"))
-		assertEquals("CoolApp to CoolLib: hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
+		// The body carries no attribution: the sentinel announces the speaker as its own playback, so
+		// prefixing here as well would say it twice.
+		assertEquals("hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
 	}
 
 	@Test
 	fun peerRowWithNoResolvedToDropsTheToClause() {
 		val m = Message(fromMe = false, text = "hello there", at = 1000L, from = "alice.sakura.coolapp.main", to = null, isPeer = true)
 		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp"))
-		assertEquals("CoolApp: hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
+		assertEquals("hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
 	}
 
 	@Test
 	fun peerRowWithNoFromFallsBackToSomeone() {
 		val m = Message(fromMe = false, text = "hello there", at = 1000L, from = null, to = "alice.sakura.coollib.main", isPeer = true)
 		val state = stateWith(mapOf("alice.sakura.coollib.main" to "CoolLib"))
-		assertEquals("someone to CoolLib: hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
+		assertEquals("hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL))
 	}
 
 	@Test
@@ -58,8 +60,8 @@ class TtsTextFramedTest {
 			isPeer = true,
 		)
 		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp", "alice.sakura.coollib.main" to "CoolLib"))
-		assertEquals("CoolApp to CoolLib: the summary", ttsTextFramed(state, m, SttsPlayer.Tier.SUMMARY))
-		assertEquals("CoolApp to CoolLib: the title", ttsTextFramed(state, m, SttsPlayer.Tier.TITLE))
+		assertEquals("the summary", ttsTextFramed(state, m, SttsPlayer.Tier.SUMMARY))
+		assertEquals("the title", ttsTextFramed(state, m, SttsPlayer.Tier.TITLE))
 	}
 
 	@Test
@@ -97,7 +99,7 @@ class TtsTextFramedTest {
 		)
 		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp", "alice.sakura.coollib.main" to "CoolLib"))
 		assertEquals(
-			"CoolApp to CoolLib: Please review the doc.\n\n Code block omitted. \n\nThanks!",
+			"Please review the doc.\n\n Code block omitted. \n\nThanks!",
 			ttsTextFramed(state, m, SttsPlayer.Tier.FULL),
 		)
 	}

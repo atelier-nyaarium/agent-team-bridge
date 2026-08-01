@@ -222,6 +222,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		repo.onScheduledSendFailed = { team, opId -> notifyScheduledSendFailed(repo, team, opId) }
+		repo.chimeSource = { resolveChime() }
 		repo.pushback.scheduler = this
 		repo.scheduledSendScheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
@@ -275,11 +276,27 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
+	/** The chime as a playable file. Copied out of resources on first use, because a raw resource is
+	 * not a path a MediaPlayer can open and the player deliberately deals only in files. Cached, so
+	 * this costs one copy per install rather than one per run. */
+	private fun resolveChime(): java.io.File? {
+		val dest = java.io.File(java.io.File(filesDir, "stts/${SttsPlayer.MARKER_TEAM}"), "chime.audio")
+		if (dest.isFile && dest.length() > 0L) return dest
+		return runCatching {
+			dest.parentFile?.mkdirs()
+			resources.openRawResource(R.raw.stts_chime).use { input ->
+				dest.outputStream().use { input.copyTo(it) }
+			}
+			dest
+		}.getOrNull()
+	}
+
 	override fun onDestroy() {
 		destroyed = true
 		val repo = Repo.get(this)
 		repo.onInbound = null
 		repo.onScheduledSendFailed = null
+		repo.chimeSource = null
 		// The poll loop's transport is cancellable, but Kotlin cancellation is cooperative: a cancel
 		// arriving in the loop's non-suspend tail still lets that pass finish normally - the loop can
 		// still run one more decide() after this method returns, and scope.cancel() below cannot close

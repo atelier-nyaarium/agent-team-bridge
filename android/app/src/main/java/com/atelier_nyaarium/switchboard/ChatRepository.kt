@@ -494,17 +494,10 @@ internal fun sentinelText(state: ChatState, msg: Message, team: String): String 
 	return if (toLabel != null) "$fromLabel on $toLabel" else fromLabel
 }
 
-/** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
- * as if addressed to this console - neither party in a peer-mirror row is this console's own
- * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
- * arrow glyph, since TTS engines render symbols unpredictably. */
-internal fun ttsTextFramed(state: ChatState, msg: Message, tier: SttsPlayer.Tier): String {
-	val text = SttsPlayer.ttsText(msg, tier)
-	if (!msg.isPeer) return text
-	val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
-	val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
-	return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
-}
+/** A tier's TTS text. Carries no attribution of its own: [sentinelText] announces who is speaking, as
+ * its own playback before the body, so prefixing here too would say it twice. */
+internal fun ttsTextFramed(state: ChatState, msg: Message, tier: SttsPlayer.Tier): String =
+	SttsPlayer.ttsText(msg, tier)
 
 /** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
  * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
@@ -1477,6 +1470,22 @@ class ChatRepository(
 
 	fun stopMessage(team: String, at: Long) = stts.stopMessage(team, at)
 
+	/**
+	 * The markers still owed before the current entry's body may speak, in order.
+	 *
+	 * A marker is an ordinary request with its own terminal, so the sequence advances the same way the
+	 * queue does - on a terminal - rather than through a second mechanism. Held here rather than on
+	 * [QueueEntry] because what an entry CONSISTS of is not the queue's business; the queue answers
+	 * what plays next.
+	 */
+	private val pendingMarkers = ArrayDeque<Marker>()
+
+	private sealed interface Marker {
+		data object Chime : Marker
+
+		data class Spoken(val text: String) : Marker
+	}
+
 	/** Queue one message for autoplay, and speak it if nothing is speaking. */
 	suspend fun enqueueAutoPlay(team: String, at: Long, tier: SttsPlayer.Tier) {
 		val entry = QueueEntry(team, at, tier)
@@ -1485,16 +1494,66 @@ class ChatRepository(
 			// and can land after a close or forget has already swept this team, putting an entry back
 			// into a queue the teardown believed it had emptied.
 			if (team !in _state.value.openTabs) return
+			// Asked BEFORE the enqueue: mid-run the queue is never idle, so the chime marks the run
+			// rather than every message in it.
+			val beginsRun = queue.isIdle()
 			if (!queue.enqueue(entry)) return
+			if (beginsRun) queueMarkers(team, at, chime = true)
 			resumeIfSilent()
 		}
 	}
+
+	/** Stage the markers that precede one entry's body. A manual tap never chimes; it is not a run. */
+	private fun queueMarkers(team: String, at: Long, chime: Boolean) {
+		pendingMarkers.clear()
+		if (chime) pendingMarkers.addLast(Marker.Chime)
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
+		pendingMarkers.addLast(Marker.Spoken(sentinelText(_state.value, msg, team)))
+	}
+
+	/** Play the next owed marker, or report that the body may now speak. */
+	private fun nextMarkerStarted(): Boolean {
+		while (pendingMarkers.isNotEmpty()) {
+			val started = when (val marker = pendingMarkers.removeFirst()) {
+				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsVolume) } == true
+				is Marker.Spoken -> speakMarker(marker.text)
+			}
+			// A marker that will not play is skipped rather than allowed to stall the body behind it:
+			// losing a boundary is a smaller harm than losing the message.
+			if (started) return true
+		}
+		return false
+	}
+
+	private fun speakMarker(text: String): Boolean {
+		val client = sttsClient() ?: return false
+		val provider = currentProvider() ?: return false
+		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		return stts.playMarker(client, provider, voice, text, sttsVolume)
+	}
+
+	/**
+	 * Resolves the chime to a file the player can open. Set by the app layer, because reading a raw
+	 * resource or a user-chosen content URI needs a Context and this class deliberately holds none -
+	 * the same seam the alarm scheduler uses.
+	 *
+	 * Unset or failing means no chime, and the sequence carries on to the sentinel. A boundary marker
+	 * that cannot load must not hold up the message behind it.
+	 */
+	@Volatile
+	var chimeSource: (() -> File?)? = null
 
 	/** Retire the entry that just ended and speak whatever follows. Every terminal routes here, so the
 	 * outcome alone decides whether the queue moves: a decode failure must not retire an entry as
 	 * though it had been heard, and a user stop must not walk forward. */
 	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
 		advanceMutex.withLock {
+			// A marker finishing means the sequence moves on, never that the queue does: the body it
+			// precedes has not been spoken yet, and advancing here would skip the message entirely.
+			if (entry.team == SttsPlayer.MARKER_TEAM) {
+				if (!nextMarkerStarted()) queue.playing()?.let { speakBody(it) }
+				return
+			}
 			val step = queue.advance(entry, outcome)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
 			if (step.next != null) {
@@ -1537,6 +1596,14 @@ class ChatRepository(
 	 * it. Without that, an entry the engine silently declines leaves the head un-retired and every
 	 * message behind it unspoken for the life of the process. */
 	private fun speak(entry: QueueEntry) {
+		// Markers first when this entry is owed any. Their terminals chain the body behind them, so
+		// this returns having started the boundary rather than the message.
+		if (pendingMarkers.isEmpty()) queueMarkers(entry.team, entry.at, chime = false)
+		if (nextMarkerStarted()) return
+		speakBody(entry)
+	}
+
+	private fun speakBody(entry: QueueEntry) {
 		val tier = entry.tier
 		if (tier == null) {
 			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
