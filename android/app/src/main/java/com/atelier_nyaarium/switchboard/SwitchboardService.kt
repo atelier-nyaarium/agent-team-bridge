@@ -291,6 +291,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private fun resolveChime(): java.io.File? {
 		val repo = Repo.get(this)
 		val chosen = repo.sttsChimeUri
+		if (chosen == ChatRepository.CHIME_SILENT) return null
 		if (chosen.isNotEmpty()) {
 			copyChime("chime-${chosen.hashCode()}.audio") { contentResolver.openInputStream(Uri.parse(chosen)) }
 				?.let { return it }
@@ -298,14 +299,18 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		return copyChime("chime.audio") { resources.openRawResource(R.raw.stts_chime) }
 	}
 
+	/** Copied through a temp file and renamed, so a copy interrupted by a kill leaves no half-written
+	 * file behind. A partial one would pass the exists-and-non-empty check forever after and play as a
+	 * clipped chime that nothing would ever repair. */
 	private fun copyChime(name: String, open: () -> java.io.InputStream?): java.io.File? {
 		val dest = java.io.File(java.io.File(filesDir, "stts/${SttsPlayer.MARKER_TEAM}"), name)
 		if (dest.isFile && dest.length() > 0L) return dest
+		val tmp = java.io.File(dest.parentFile, "$name.tmp")
 		return runCatching {
 			dest.parentFile?.mkdirs()
-			open().use { input -> dest.outputStream().use { requireNotNull(input).copyTo(it) } }
-			dest.takeIf { it.length() > 0L }
-		}.getOrNull()
+			open().use { input -> tmp.outputStream().use { requireNotNull(input).copyTo(it) } }
+			if (tmp.length() > 0L && tmp.renameTo(dest)) dest else null
+		}.getOrNull().also { if (it == null) tmp.delete() }
 	}
 
 	override fun onDestroy() {

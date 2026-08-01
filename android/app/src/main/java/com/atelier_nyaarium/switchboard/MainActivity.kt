@@ -3768,6 +3768,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		}
 	}
 
+	val chimeContext = LocalContext.current
 	var chimeUri by remember { mutableStateOf(repo.sttsChimeUri) }
 	// Android's own ringtone picker rather than a file picker: it already lists the sounds the user
 	// has, handles the permission, and hands back a Uri.
@@ -3775,14 +3776,29 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		if (result.resultCode == android.app.Activity.RESULT_OK) {
 			val picked = result.data
 				?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, android.net.Uri::class.java)
-			chimeUri = picked?.toString() ?: ""
+			// A null pick is "Silent", which is a choice rather than an absence: it must not fall back
+			// to the bundled sound the way an unset preference does.
+			chimeUri = picked?.toString() ?: ChatRepository.CHIME_SILENT
+			// The sound is read again on every run, long after this Activity is gone, so ask to keep
+			// the grant. A provider that will not persist one simply plays until it stops working,
+			// which the resolver already falls back from.
+			picked?.let { uri ->
+				runCatching {
+					chimeContext.contentResolver
+						.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+				}
+			}
 			repo.sttsChimeUri = chimeUri
 		}
 	}
 	Column {
 		Text("Run start chime", style = MaterialTheme.typography.titleSmall)
 		Text(
-			if (chimeUri.isEmpty()) "The bundled chime, once at the start of an automatic run." else "A sound you picked.",
+			when (chimeUri) {
+				"" -> "The bundled chime, once at the start of an automatic run."
+				ChatRepository.CHIME_SILENT -> "Silent. A run starts with the session name and no chime."
+				else -> "A sound you picked, once at the start of an automatic run."
+			},
 			style = MaterialTheme.typography.bodySmall,
 		)
 		Spacer(Modifier.height(4.dp))

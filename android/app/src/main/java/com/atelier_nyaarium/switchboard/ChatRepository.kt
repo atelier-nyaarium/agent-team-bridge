@@ -494,10 +494,26 @@ internal fun sentinelText(state: ChatState, msg: Message, team: String): String 
 	return if (toLabel != null) "$fromLabel on $toLabel" else fromLabel
 }
 
-/** A tier's TTS text. Carries no attribution of its own: [sentinelText] announces who is speaking, as
- * its own playback before the body, so prefixing here too would say it twice. */
-internal fun ttsTextFramed(state: ChatState, msg: Message, tier: SttsPlayer.Tier): String =
-	SttsPlayer.ttsText(msg, tier)
+/**
+ * A tier's TTS text, attributed only when nothing else will attribute it.
+ *
+ * An autoplay run speaks [sentinelText] as its own playback first, so prefixing there too would say
+ * the speaker twice. A message played by hand gets no such marker - a boundary marker delimits a run,
+ * and one message is not a run - so a peer row would otherwise play back as if this console had been
+ * addressed, which is the thing the prefix has always existed to prevent.
+ */
+internal fun ttsTextFramed(
+	state: ChatState,
+	msg: Message,
+	tier: SttsPlayer.Tier,
+	attributed: Boolean = false,
+): String {
+	val text = SttsPlayer.ttsText(msg, tier)
+	if (!attributed || !msg.isPeer) return text
+	val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
+	val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
+}
 
 /** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
  * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
@@ -1456,11 +1472,19 @@ class ChatRepository(
 	/** Whether the engine TOOK this message, which is the same as whether a terminal is now owed for
 	 * it. Every reason to give up returns false here rather than returning silently, because a queue
 	 * waiting on a terminal that will never come waits forever. */
-	private fun startPlayback(team: String, at: Long, tier: SttsPlayer.Tier, yielding: Boolean = false): Boolean {
+	private fun startPlayback(
+		team: String,
+		at: Long,
+		tier: SttsPlayer.Tier,
+		yielding: Boolean = false,
+		// A run announces its speaker with a sentinel; a single message played by hand has no marker,
+		// so it carries its own attribution instead.
+		attributed: Boolean = true,
+	): Boolean {
 		val client = sttsClient() ?: return false
 		val provider = currentProvider() ?: return false
 		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return false
-		val text = ttsTextFramed(_state.value, msg, tier)
+		val text = ttsTextFramed(_state.value, msg, tier, attributed)
 		if (text.isBlank()) return false
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
 		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
@@ -1622,13 +1646,14 @@ class ChatRepository(
 		// Yielding: by the time this reaches the player the user may have started something of their
 		// own, and autoplay stands down rather than talking over it.
 		stts.post {
-			if (!startPlayback(entry.team, entry.at, tier, yielding = true)) {
+			if (!startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)) {
 				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
 			}
 		}
 	}
 
-	/** The run-start sound, as a content Uri. Empty means the bundled asset. Persisted in prefs. */
+	/** The run-start sound, as a content Uri. Empty means the bundled asset; [CHIME_SILENT] means the
+	 * user chose no sound at all, which is a decision rather than an unset preference. Persisted. */
 	var sttsChimeUri: String
 		get() = store.chimeUri
 		set(value) {
@@ -5282,6 +5307,9 @@ class ChatRepository(
 	// internal (not private): a couple of these are pinned against gateway-side TypeScript
 	// constants by ChatRepositoryConstantsTest, which needs to read the real values.
 	internal companion object {
+		/** Chosen silence. Distinct from an empty preference, which means "the bundled sound". */
+		const val CHIME_SILENT = "silent"
+
 		const val POLL_INTERVAL_MS = 5_000L
 		// Visible cadence: server-held long-poll (under the gateway's 45s cap - pinned against
 		// schemas.ts's MAX_POLL_HOLD_MS in ChatRepositoryConstantsTest).

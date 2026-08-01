@@ -34,6 +34,31 @@ class TtsTextFramedTest {
 	}
 
 	@Test
+	fun anAttributedPeerRowNamesBothParties() {
+		val m = Message(
+			fromMe = false,
+			text = "hello there",
+			at = 1000L,
+			from = "alice.sakura.coolapp.main",
+			to = "alice.sakura.coollib.main",
+			isPeer = true,
+		)
+		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp", "alice.sakura.coollib.main" to "CoolLib"))
+
+		// A message played by hand gets no sentinel - a boundary marker delimits a run, and one message
+		// is not a run - so without this a peer row plays back as if this console had been addressed.
+		assertEquals("CoolApp to CoolLib: hello there", ttsTextFramed(state, m, SttsPlayer.Tier.FULL, attributed = true))
+	}
+
+	@Test
+	fun anAttributedOrdinaryRowIsUnchanged() {
+		val m = Message(fromMe = false, text = "hello there", at = 1000L, from = "alice.sakura.coollib.main")
+
+		// Only a peer row has an ambiguous speaker. An ordinary row is from the thread you are reading.
+		assertEquals("hello there", ttsTextFramed(stateWith(emptyMap()), m, SttsPlayer.Tier.FULL, attributed = true))
+	}
+
+	@Test
 	fun peerRowWithNoResolvedToDropsTheToClause() {
 		val m = Message(fromMe = false, text = "hello there", at = 1000L, from = "alice.sakura.coolapp.main", to = null, isPeer = true)
 		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp"))

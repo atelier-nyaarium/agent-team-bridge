@@ -494,17 +494,20 @@ In progress. Landed and green:
 
 **Still open on Phase 2, verified or clearly real, NOT yet fixed:**
 
-- **No timed gaps.** The spec asks for gaps around the body; the three playbacks currently run
-  back to back with zero silence.
-- **A manual tap and the notification Play action have NO attribution at all.** The prefix was deleted
-  but the sentinel plays only on the autoplay path, so a peer row played by hand is now less
-  attributed than before Phase 2. This is a regression I introduced and it needs deciding: either
-  markers play for manual taps too, or the prefix returns for non-autoplay.
+- **Attribution restored for a message played by hand.** `ttsTextFramed` takes an `attributed` flag:
+  an autoplay run has a sentinel and needs none, a manual tap has no marker and carries the prefix. A
+  boundary marker delimits a RUN, and one message is not a run - so the answer was not "play markers
+  for manual taps".
+- **The chime copy is atomic** (temp then rename). A copy interrupted by a kill used to leave a
+  half-written file that passed the exists-and-non-empty check forever after.
+- **A picked sound takes a persistable read grant**, and **"Silent" is now a choice** rather than an
+  absence: it is stored distinctly from the unset preference, so it no longer falls back to bundled.
+
+**Still open on Phase 2:**
+
+- **No timed gaps.** The spec asks for gaps around the body; the three playbacks run back to back.
 - **`pendingMarkers` is process-global and bound to no entry**, so a sentinel can announce the wrong
   session, and no teardown clears it.
-- **The chime copy is not atomic**, so an interrupted copy caches and replays forever.
-- **Nothing takes a persistable read grant on a picked sound**, so a chosen chime can stop working.
-- **Picking "Silent" in the ringtone picker falls back to the bundled chime** rather than being silent.
 
 Still to build, with the decisions already made:
 
