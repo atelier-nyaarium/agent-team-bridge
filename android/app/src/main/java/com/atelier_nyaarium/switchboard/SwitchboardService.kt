@@ -224,6 +224,16 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		repo.onScheduledSendFailed = { team, opId -> notifyScheduledSendFailed(repo, team, opId) }
 		repo.chimeSource = { resolveChime() }
+		// Transport surfaces send commands and show state; they never hold state of their own, so the
+		// lockscreen and the in-thread row cannot disagree about what is playing.
+		transport = SttsTransport(
+			this,
+			CHANNEL_STATUS,
+			onPlay = { repo.command { resumePlayback() } },
+			onPause = { repo.command { pausePlayback() } },
+			onSkip = { repo.command { skipPlayback() } },
+		)
+		transportSubscription = repo.stts.addListener { publishTransport() }
 		repo.pushback.scheduler = this
 		repo.scheduledSendScheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
@@ -277,6 +287,23 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
+	private var transport: SttsTransport? = null
+	private var transportSubscription: SttsPlayer.Listener? = null
+
+	/** Mirror the run onto the lockscreen and shade. Called on every playback event, since that is
+	 * exactly when what a transport should show has changed. */
+	private fun publishTransport() {
+		val repo = Repo.get(this)
+		val (active, paused) = repo.transportState()
+		transport?.publish(active, paused, null)
+		val manager = getSystemService(NotificationManager::class.java)
+		if (active) {
+			transport?.let { manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null)) }
+		} else {
+			manager.cancel(TRANSPORT_NOTIFICATION_ID)
+		}
+	}
+
 	/**
 	 * The chime as a playable file: the user's chosen system sound, or the bundled asset.
 	 *
@@ -319,6 +346,11 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onInbound = null
 		repo.onScheduledSendFailed = null
 		repo.chimeSource = null
+		transportSubscription?.let { repo.stts.removeListener(it) }
+		transportSubscription = null
+		transport?.release()
+		transport = null
+		getSystemService(NotificationManager::class.java).cancel(TRANSPORT_NOTIFICATION_ID)
 		// The poll loop's transport is cancellable, but Kotlin cancellation is cooperative: a cancel
 		// arriving in the loop's non-suspend tail still lets that pass finish normally - the loop can
 		// still run one more decide() after this method returns, and scope.cancel() below cannot close
@@ -557,6 +589,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
 	companion object {
+		const val TRANSPORT_NOTIFICATION_ID = 4271
+
 		const val CHANNEL_STATUS = "status"
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val CHANNEL_SCHEDULED_SEND_FAILED = "scheduled_send_failed"

@@ -20,6 +20,14 @@ class NotificationReceiver : BroadcastReceiver() {
 			SwitchboardService.statusDismissed = true
 			return
 		}
+		// Transport buttons act on the RUN, not on a message, so they carry no team or `at` and must
+		// be handled before the extras below are required.
+		val repo = Repo.get(context)
+		when (intent.action) {
+			SttsTransport.ACTION_PLAY -> return repo.command { resumePlayback() }
+			SttsTransport.ACTION_PAUSE -> return repo.command { pausePlayback() }
+			SttsTransport.ACTION_SKIP -> return repo.command { skipPlayback() }
+		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
 		when (intent.action) {
