@@ -502,6 +502,12 @@ always arrives after the next run is staged. `playMarker`/`playChime` now return
 report, and the branch ignores anything else. Capturing the gap owner (below) only ever guarded the
 350ms window, never entry into the branch.
 
+**Teardown abandons a marker by identity, not by stopping whatever is audible.** The untargeted stop
+missed a marker still SYNTHESIZING - which owns no sound at all, so a forgotten session went on to
+announce itself anyway - and could silence a playback belonging to a team nobody asked to touch. The
+field is `markerInFlight` and it is deliberately CLAIMED rather than sounding, because the window that
+mattered is the one where the marker is audible to nothing.
+
 **Also fixed, found by the re-audit:** the marker gap callback RE-READ the current head when the gap
 expired instead of capturing it. A run torn down during a gap, with a new one staged behind it, left a
 stale callback that drove the NEW entry's sequence and dropped its body unspoken. The owner is now

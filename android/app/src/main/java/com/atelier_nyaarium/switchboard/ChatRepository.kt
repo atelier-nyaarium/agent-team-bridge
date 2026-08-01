@@ -1529,9 +1529,10 @@ class ChatRepository(
 	 * that moved on while one was in flight must not let the leftovers introduce the wrong one. */
 	private var markersFor: QueueEntry? = null
 
-	/** The marker currently speaking, by its own entry key. A terminal that does not match it belongs
-	 * to a run that has already ended, and must drive nothing. */
-	private var soundingMarker: Long? = null
+	/** The marker handed to the engine, by its own entry key. CLAIMED rather than sounding: a marker
+	 * spends its whole synthesis owning nothing audible, and a teardown in that window still has to
+	 * reach it. A terminal that does not match belongs to a run that has already ended. */
+	private var markerInFlight: Long? = null
 
 	private sealed interface Marker {
 		data object Chime : Marker
@@ -1574,7 +1575,7 @@ class ChatRepository(
 	private fun clearMarkers() {
 		pendingMarkers.clear()
 		markersFor = null
-		soundingMarker = null
+		markerInFlight = null
 	}
 
 	/** Play the next owed marker, or report that the body may now speak. Records WHICH marker is in
@@ -1589,11 +1590,11 @@ class ChatRepository(
 			// A marker that will not play is skipped rather than allowed to stall the body behind it:
 			// losing a boundary is a smaller harm than losing the message.
 			if (started != null) {
-				soundingMarker = started
+				markerInFlight = started
 				return true
 			}
 		}
-		soundingMarker = null
+		markerInFlight = null
 		return false
 	}
 
@@ -1626,8 +1627,8 @@ class ChatRepository(
 				// Matched to the marker that was actually started. A terminal from a torn-down run
 				// otherwise looks indistinguishable from this run's own, and drives it a step forward
 				// while its message has not been spoken.
-				if (entry.at != soundingMarker) return
-				soundingMarker = null
+				if (entry.at != markerInFlight) return
+				markerInFlight = null
 				val head = queue.playing()
 				// The run these markers belonged to is gone, either torn down or moved on. Nothing else
 				// will report a terminal for it, so drop the leftovers and pick the queue back up
@@ -1681,11 +1682,12 @@ class ChatRepository(
 		advanceMutex.withLock {
 			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
 			// A marker lives under its own reserved team, so dropping the message's team cannot reach
-			// one already handed to the engine. Without this, a session you just forgot carries on
-			// announcing itself by name.
+			// one already handed to the engine. Abandoned by its own identity rather than by stopping
+			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
+			// what IS audible may belong to a team nobody asked to silence.
 			if (markersFor?.team == team) {
+				markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
 				clearMarkers()
-				stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
 			}
 			resumeIfSilent()
 		}
