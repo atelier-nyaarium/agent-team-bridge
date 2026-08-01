@@ -1744,6 +1744,12 @@ class ChatRepository(
 	}
 
 	private fun resumeIfSilent() {
+		// A pause describes a RUN, so it cannot outlive one. A run can end without a terminal - close the
+		// thread mid-pause and its entries are dropped rather than spoken - and a flag left set then
+		// refuses every later run on every team, with no control left to clear it: the transport is gone
+		// with the queue, and the in-thread Play button reports "queued", which is a state the row styles
+		// as taking no taps. Normalized here because this is the one place the flag is read.
+		if (queue.isIdle()) transportPaused = false
 		if (transportPaused || queue.playing() != null || stts.isSounding()) return
 		queue.startNext()?.let { speak(it) }
 	}
@@ -1765,10 +1771,15 @@ class ChatRepository(
 				// already sounding - during a marker, or while the body is still synthesizing, there is
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
-				// Where it got to, captured BEFORE the abandon releases the player.
-				stts.positionSnapshot()?.let { (position, _) ->
-					stts.rememberPosition(head.team, head.at, head.tier, position)
-				}
+				// Where it got to, captured BEFORE the abandon releases the player - and only when the
+				// player is playing THE HEAD. At the top of every run the audible thing is the chime or
+				// the session sentinel while the head is already the body, so a position taken on trust
+				// here belongs to the marker: the body would resume a second or two in with its opening
+				// cut, or - when the sentinel outruns a short body - seek past the end and retire as
+				// heard without ever being spoken. A pause during a boundary simply remembers nothing.
+				stts.positionSnapshot()
+					?.takeIf { it.entry == head }
+					?.let { stts.rememberPosition(it) }
 				queue.requeueFront(head)
 				stts.abandon(head.team, head.at, head.tier)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
@@ -1837,11 +1848,23 @@ class ChatRepository(
 		}
 	}
 
-	/** Where the audible message is and how long it is, for the sheet's one bar. Null when nothing is
-	 * playing, which the bar shows as disabled rather than as zero. */
-	fun playbackPosition(): Pair<Long, Long>? = stts.positionSnapshot()
+	/**
+	 * Where the current BODY is and how long it is, for the sheet's one bar. Null when nothing is
+	 * playing, which the bar shows as disabled rather than as zero.
+	 *
+	 * Scoped to the head, so the bar is null through the chime and the sentinel rather than sweeping
+	 * them. The plan is explicit that neither marker gets a timeline, and a bar that ran over one would
+	 * invite a seek into audio there is nowhere useful to land in.
+	 */
+	fun playbackPosition(): SttsPlayer.Position? =
+		stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
 
-	fun seekPlayback(ms: Long) = stts.seekTo(ms)
+	/** Move the current body. Named, so a bar built a moment ago cannot seek whatever took the sound
+	 * since - a marker, or the next message. */
+	fun seekPlayback(ms: Long) {
+		val snap = playbackPosition() ?: return
+		stts.seekTo(snap.owner, ms)
+	}
 
 	/** Open the thread a queue entry belongs to and reveal that message, reusing the machinery a tap
 	 * on a notification already goes through. */

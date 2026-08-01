@@ -312,9 +312,18 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		}
 		// The bubble draws on the same settled state, so it cannot disagree with the shade about how
 		// much is left. Touching views needs main; playback settles on the player's lanes.
+		//
+		// It OUTLIVES the run when something failed. Hiding on `active` alone took the alert away at the
+		// exact moment it was supposed to start standing on its own: the last entry to fail is also the
+		// one that drains the queue, so the dot appeared and vanished in the same breath and the user
+		// was never told anything had been dropped.
 		val counts = repo.queueCounts()
 		mainHandler.post {
-			if (active) bubble?.show(counts.first, counts.second, counts.third) else bubble?.hide()
+			if (active || counts.third > 0) {
+				bubble?.show(counts.first, counts.second, counts.third)
+			} else {
+				bubble?.hide()
+			}
 		}
 	}
 

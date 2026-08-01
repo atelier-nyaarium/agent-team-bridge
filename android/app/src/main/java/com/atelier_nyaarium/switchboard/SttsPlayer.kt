@@ -33,6 +33,14 @@ class SttsPlayer(private val root: File) {
 	 * DECODE would then pop an entry as though it had been heard, and the retry would never fire. */
 	enum class Outcome { COMPLETED, STOPPED, PREEMPTED, PLAYBACK_ERROR, SYNTH_ERROR }
 
+	/** Where a playback is and whose it is. The owner rides ALONG so a caller never has to guess whose
+	 * position it just read; asking the queue instead names the wrong sound for the whole marker
+	 * sequence at the head of a run. */
+	data class Position(val owner: PlaybackId, val positionMs: Long, val durationMs: Long) {
+		/** The (team, at, tier) this playback belongs to, for comparing against a queue entry. */
+		val entry: QueueEntry get() = QueueEntry(owner.team, owner.at, owner.tier)
+	}
+
 	/** Carries the (team, at, tier) it belongs to, so a consumer can attribute an outcome to the
 	 * entry that caused it. `tier` is null only for the settings voice sample, which is not a
 	 * message. `gen` names the REQUEST: minting and publishing are not one step, so a terminal can be
@@ -107,22 +115,29 @@ class SttsPlayer(private val root: File) {
 	fun isSounding(): Boolean = requests.isSounding()
 
 	/**
-	 * Where the audible message is, and how long it is. Null when nothing is playing.
+	 * Where the audible playback is, how long it is, and WHICH request it belongs to. Null when
+	 * nothing is playing.
 	 *
 	 * A SNAPSHOT taken on the play lane's behalf, read under the same monitor that installs and
 	 * releases the player - a caller polling `player` directly would be reading a handle that can be
 	 * released between its null check and its call, which is a native crash rather than a wrong number.
+	 *
+	 * It NAMES its request. "Whatever is audible" is not an answer any caller can use: at the head of
+	 * every run the audible thing is a boundary marker while the queue's head is already the body, so a
+	 * position attributed by asking the queue instead of asking the player belongs to the wrong sound.
 	 */
 	@Synchronized
-	fun positionSnapshot(): Pair<Long, Long>? {
+	fun positionSnapshot(): Position? {
 		val mp = player ?: return null
-		return runCatching { mp.currentPosition.toLong() to mp.duration.toLong() }.getOrNull()
+		val owner = playerOwner ?: return null
+		return runCatching { Position(owner, mp.currentPosition.toLong(), mp.duration.toLong()) }.getOrNull()
 	}
 
-	/** Move the audible message. Ignored when nothing is playing, so a stale bar cannot seek into
-	 * whatever started since. */
+	/** Move a NAMED playback. Ignored unless that request still owns the sound, so a bar built from a
+	 * snapshot that has since been replaced cannot seek into whatever started after it. */
 	@Synchronized
-	fun seekTo(ms: Long) {
+	fun seekTo(owner: PlaybackId, ms: Long) {
+		if (playerOwner != owner) return
 		runCatching { player?.seekTo(ms.toInt()) }
 	}
 
@@ -416,6 +431,10 @@ class SttsPlayer(private val root: File) {
 		// to play a forgotten team. The delete below races that synthesis rather than ordering it: a
 		// producer that writes afterwards finds itself stale and removes what it recreated.
 		apply(requests.purgeTeam(team))
+		// The offsets go with the audio. A remembered position points INTO a file that is about to be
+		// deleted, so leaving it behind would seek freshly re-synthesized speech to where the copy that
+		// no longer exists happened to be paused.
+		resumeAt.keys.removeAll { it.team == team }
 		File(root, "stts/$team").deleteRecursively()
 	}
 
@@ -423,6 +442,7 @@ class SttsPlayer(private val root: File) {
 	 * so the repository never reaches into the player's directory layout. */
 	fun purgeAll() {
 		apply(requests.purgeEverything())
+		resumeAt.clear()
 		File(root, "stts").deleteRecursively()
 	}
 
@@ -488,9 +508,16 @@ class SttsPlayer(private val root: File) {
 	 * describes audio, and the queue deliberately knows nothing about audio. */
 	private val resumeAt = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
 
-	/** Remember where a message was when it stopped, so resuming continues rather than restarts. */
-	fun rememberPosition(team: String, at: Long, tier: Tier?, ms: Long) {
-		if (ms > 0) resumeAt[QueueEntry(team, at, tier)] = ms
+	/**
+	 * Remember where a playback was when it stopped, so resuming continues rather than restarts.
+	 *
+	 * Takes the SNAPSHOT, not loose numbers, and files under the entry the snapshot names. A caller
+	 * that could pass a position and an entry separately is a caller that can pair a boundary marker's
+	 * position with the body's key, which cuts the opening off the message - or, when the marker runs
+	 * longer than the body, seeks past its end so it retires as heard without ever being spoken.
+	 */
+	fun rememberPosition(position: Position) {
+		if (position.positionMs > 0) resumeAt[position.entry] = position.positionMs
 	}
 
 	fun forgetPosition(team: String, at: Long, tier: Tier?) {
