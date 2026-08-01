@@ -377,7 +377,7 @@ Also **frozen at enqueue: provider and voice** (audit finding 5). The cache key 
 (team, at, tier, provider, voice), so an entry that is queued-but-unsynthesized would otherwise pick up
 whatever provider is current when its turn arrives, giving one run two different voices.
 
-### Phase 1 - Queue and engine, no new UI
+### Phase 1 - Queue and engine, no new UI ✅
 
 Scope corrected by audit finding 4: this phase plays the BODY only. Chime and sentinel move wholly to
 Phase 2, because Phase 1 cannot play audio whose text and asset Phase 2 is what defines.
@@ -626,7 +626,7 @@ answer "who is this?".
   where a marker already names the speaker. The notification Play action bypasses the queue, so it
   keeps the prefix and gets no marker.
 
-### Phase 4 - Background control surface
+### Phase 4 - Background control surface ✅
 
 **Use the PLATFORM media APIs, not a new dependency.** The app has no media dependency today
 (`app/build.gradle.kts` has no media3 or androidx.media), and it does not need one: `minSdk 33` puts
@@ -775,7 +775,7 @@ whether the MediaStyle notification RENDERS correctly - it is confirmed construc
 that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active
 session with a MediaStyle notification on modern Android, but is unconfirmed.
 
-### Phase 5 - Bubble and modal
+### Phase 5 - Bubble and modal ✅
 
 **Build the overlay WITHOUT Compose.** The plan offers two ways past the ViewTree-owner problem, and
 plain Android Views is the cheaper one: the bubble is a count badge, a spinner and a swipe gesture,
