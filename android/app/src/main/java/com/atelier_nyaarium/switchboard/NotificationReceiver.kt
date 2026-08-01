@@ -31,9 +31,14 @@ class NotificationReceiver : BroadcastReceiver() {
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
 		when (intent.action) {
-			ACTION_MARK_READ -> Repo.get(context).markRead(team)
-			ACTION_PLAY_FULL -> if (at > 0) Repo.get(context).playMessage(team, at, SttsPlayer.Tier.FULL)
-			ACTION_PLAY_SUMMARY -> if (at > 0) Repo.get(context).playMessage(team, at, SttsPlayer.Tier.SUMMARY)
+			ACTION_MARK_READ -> repo.markRead(team)
+			// Queued rather than played directly, like the in-thread tap: a playback outside the queue
+			// is invisible to the row, the bubble and the lockscreen, all three of which report what the
+			// queue is doing. It also stops a notification tap racing a run already in progress.
+			ACTION_PLAY_FULL ->
+				if (at > 0) repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false, requireFollowed = false) }
+			ACTION_PLAY_SUMMARY ->
+				if (at > 0) repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.SUMMARY, announceRun = false, requireFollowed = false) }
 		}
 	}
 

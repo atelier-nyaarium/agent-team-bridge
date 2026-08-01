@@ -82,7 +82,10 @@ class SttsTransport(
 			.setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
 			.setContentTitle(speaking ?: "Speaking")
 			.setContentText("Agent messages")
-			.setOngoing(!paused)
+			// Ongoing even while paused. A paused run is not a finished one, and making the notification
+			// dismissible exactly when it is paused would let the only control that can un-pause be
+			// swiped away - leaving autoplay held with nothing left to release it.
+			.setOngoing(true)
 			.addAction(
 				if (paused) {
 					action(android.R.drawable.ic_media_play, "Play", ACTION_PLAY)

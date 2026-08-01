@@ -1549,13 +1549,22 @@ class ChatRepository(
 	 * pressed a button already knows they started it. The sentinel still plays, because which session
 	 * is speaking is not something the tap tells them.
 	 */
-	suspend fun enqueueForPlay(team: String, at: Long, tier: SttsPlayer.Tier, announceRun: Boolean) {
+	suspend fun enqueueForPlay(
+		team: String,
+		at: Long,
+		tier: SttsPlayer.Tier,
+		announceRun: Boolean,
+		// Autoplay only speaks followed threads. A person asking for a specific message has already
+		// decided, and a notification can name a thread that is not open - refusing there would be a
+		// button that does nothing and says nothing.
+		requireFollowed: Boolean = true,
+	) {
 		val entry = QueueEntry(team, at, tier)
 		advanceMutex.withLock {
 			// Re-checked under the lock, not just at the drain. A burst job runs on its own coroutine
 			// and can land after a close or forget has already swept this team, putting an entry back
 			// into a queue the teardown believed it had emptied.
-			if (team !in _state.value.openTabs) return
+			if (requireFollowed && team !in _state.value.openTabs) return
 			// Asked BEFORE the enqueue: mid-run the queue is never idle, so the chime marks the run
 			// rather than every message in it.
 			val beginsRun = queue.isIdle()
@@ -1706,6 +1715,9 @@ class ChatRepository(
 			}
 			resumeIfSilent()
 		}
+		// A teardown changes what there is to show as surely as a terminal does. Without this, closing
+		// a thread mid-run left the lockscreen holding a transport for a run that no longer exists.
+		transportChanged()
 	}
 
 	/** Start the next entry only while nothing is audible. "The queue has no head" is not the same

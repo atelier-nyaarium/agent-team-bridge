@@ -732,6 +732,18 @@ something concrete needs it, not by habit.
   republish; the controls kept showing Paused while audio played. Wrapped in `try/finally`, the way
   the terminal path already was.
 
+- **A teardown republishes the transport.** Closing or forgetting a thread mid-run left the lockscreen
+  holding a transport for a run that no longer existed; a teardown changes what there is to show as
+  surely as a terminal does.
+- **The transport notification stays ongoing even while paused.** It was dismissible exactly WHEN
+  paused, so the only control that could un-pause could be swiped away, leaving autoplay held with
+  nothing left to release it.
+- **The notification's Play actions go through the queue** like the in-thread tap, so a playback they
+  start is visible to the row, the bubble and the lockscreen rather than being a fourth thing none of
+  them know about. Those actions deliberately BYPASS the followed-thread gate: autoplay only speaks
+  open tabs, but a notification can name a closed one, and refusing there is a button that does
+  nothing and says nothing.
+
 **Known unverified, needs real hardware:** an actual lockscreen, headphone or watch controls, and
 whether the MediaStyle notification RENDERS correctly - it is confirmed constructed and posted, not
 that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active
