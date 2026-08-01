@@ -716,13 +716,13 @@ something concrete needs it, not by habit.
   stop - so the head stayed installed AND sat waiting in pending, which is stuck, and then spoken
   twice when the synthesis nobody cancelled finally landed.
 
-**OPEN, not fixed - marker identity is content-derived.** `markerAt` hashes the spoken words, which is
-right for caching and wrong for identity: two runs of the SAME session produce the same `at`, so
-skipping during a sentinel lets the abandoned marker's terminal match the marker just started, and
-drive it. The registry already mints a unique `gen` per claim and the event already carries it - the
-listener discards it and `playMarker` returns `at` instead. The fix is to plumb that `gen` through
-rather than invent a second identity, which is the same answer as every other round of this class.
-Deliberately left rather than rushed.
+- **A marker is tracked by GENERATION, not by its entry key.** `markerAt` hashes the spoken words,
+  which is right for caching - one session's sentinel is synthesized once and reused - and wrong for
+  identity, because two runs of the same session then share it. Skipping during a sentinel let the
+  abandoned marker's terminal match the one just started and drive it. `playMarker`/`playChime` return
+  the request's `gen`, the listener carries the `gen` the event was already reporting instead of
+  discarding it, and `finishGeneration` abandons by that. Same answer as every other round of this
+  class: carry the identity that exists rather than add a guard.
 
 **Known unverified, needs real hardware:** an actual lockscreen, headphone or watch controls, and
 whether the MediaStyle notification RENDERS correctly - it is confirmed constructed and posted, not

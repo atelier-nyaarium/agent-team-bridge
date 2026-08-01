@@ -1180,7 +1180,9 @@ class ChatRepository(
 		stts.addListener { event ->
 			if (event is SttsPlayer.Event.Ended) {
 				val entry = QueueEntry(event.team, event.at, event.tier)
-				repoScope.launch { onPlaybackEnded(entry, event.outcome) }
+				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
+				// and a marker's entry key is shared by every run of the same session.
+				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen) }
 			}
 		}
 	}
@@ -1620,16 +1622,19 @@ class ChatRepository(
 	/** Retire the entry that just ended and speak whatever follows. Every terminal routes here, so the
 	 * outcome alone decides whether the queue moves: a decode failure must not retire an entry as
 	 * though it had been heard, and a user stop must not walk forward. */
-	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
+	/** `gen` names the request that ended. Zero means "no request at all" - a terminal this class
+	 * synthesized because the engine declined the entry, which is never a marker. Generations start at
+	 * one, so it cannot collide with a real one. */
+	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long = 0L) {
 		try {
-			advanceEnded(entry, outcome)
+			advanceEnded(entry, outcome, gen)
 		} finally {
 			// After the advance, not on the event: the queue is only correct once this has run.
 			transportChanged()
 		}
 	}
 
-	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
+	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long) {
 		advanceMutex.withLock {
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
@@ -1637,7 +1642,7 @@ class ChatRepository(
 				// Matched to the marker that was actually started. A terminal from a torn-down run
 				// otherwise looks indistinguishable from this run's own, and drives it a step forward
 				// while its message has not been spoken.
-				if (entry.at != markerInFlight) return
+				if (gen != markerInFlight) return
 				markerInFlight = null
 				val head = queue.playing()
 				// The run these markers belonged to is gone, either torn down or moved on. Nothing else
@@ -1696,7 +1701,7 @@ class ChatRepository(
 			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
 			// what IS audible may belong to a team nobody asked to silence.
 			if (markersFor?.team == team) {
-				markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
+				markerInFlight?.let { stts.abandonGeneration(it) }
 				clearMarkers()
 			}
 			resumeIfSilent()
@@ -1740,7 +1745,7 @@ class ChatRepository(
 			// - autoplay AND the in-thread button, which share this start path - would be refused.
 			if (queue.isIdle()) return@withLock
 			transportPaused = true
-			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
+			markerInFlight?.let { stts.abandonGeneration(it) }
 			clearMarkers()
 			val head = queue.playing()
 			if (head != null) {
@@ -1769,7 +1774,7 @@ class ChatRepository(
 	suspend fun skipPlayback() {
 		advanceMutex.withLock {
 			transportPaused = false
-			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
+			markerInFlight?.let { stts.abandonGeneration(it) }
 			clearMarkers()
 			val head = queue.playing()
 			if (head == null) {

@@ -100,6 +100,9 @@ class SttsPlayer(private val root: File) {
 		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
 	}
 
+	/** Give up one request named by the generation its terminal would carry. */
+	fun abandonGeneration(gen: Long) = apply(requests.finishGeneration(gen, Outcome.PREEMPTED))
+
 	/** Whether anything at all is audible right now, whoever owns it. */
 	fun isSounding(): Boolean = requests.isSounding()
 
@@ -140,7 +143,7 @@ class SttsPlayer(private val root: File) {
 		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
 		// difference from "declined, silently", which is a terminal that never arrives.
 		val audio = cacheFile(team, at, tier, provider, voice, text)
-		return synthesizeAndPlay(team, at, tier, audio, volumePct, yielding) { dest ->
+		return null != synthesizeAndPlay(team, at, tier, audio, volumePct, yielding) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -184,16 +187,18 @@ class SttsPlayer(private val root: File) {
 		if (text.isBlank()) return null
 		val at = markerAt(text, provider, voice)
 		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${safeVoice(voice)}.audio")
-		val started = synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding) { d ->
+		// Returns the request's GENERATION, not its entry key. The key is derived from the spoken words
+		// so one session's sentinel is synthesized once and reused - which means two runs of the same
+		// session share it, and a terminal keyed on it cannot say WHICH run it belongs to.
+		return synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding) { d ->
 			client.stream(provider, text, voice, d)
 		}
-		return at.takeIf { started }
 	}
 
 	/** Play the bundled or user-chosen chime. Takes a resolved local source rather than synthesizing,
 	 * since the audio is an asset and not speech. */
 	fun playChime(source: File, volumePct: Int = 100): Long? =
-		CHIME_AT.takeIf { synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { } }
+		synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { }
 
 	/** Let a gap fall between two playbacks before running `then`. Silence between a marker and what
 	 * it announces is what makes it read as a boundary rather than as part of the sentence; run
@@ -288,13 +293,13 @@ class SttsPlayer(private val root: File) {
 		volumePct: Int,
 		yielding: Boolean,
 		fetch: (File) -> Unit,
-	): Boolean {
-		val id = requests.claim(team, at, tier) ?: return false
+	): Long? {
+		val id = requests.claim(team, at, tier) ?: return null
 		// A cache hit goes straight to the play lane. Left inside the synth lane it queued behind a
 		// stalled fetch, which is the one thing the lane split exists to prevent.
 		if (dest.isFile && dest.length() > 0L) {
 			playExec.execute { playGuarded(id, dest, volumePct, yielding) }
-			return true
+			return id.gen
 		}
 		synthExec.execute {
 			try {
@@ -323,7 +328,7 @@ class SttsPlayer(private val root: File) {
 				requests.finish(id, Outcome.SYNTH_ERROR, e.message ?: "synthesis failed")
 			}
 		}
-		return true
+		return id.gen
 	}
 
 

@@ -396,6 +396,23 @@ class PlaybackRequestsTest {
 	}
 
 	@Test
+	fun `a generation ends one request even when the entry key is reused`() {
+		val r = requests()
+		// A marker's key is derived from the words it speaks, so every run of one session shares it.
+		// The generation is the only thing that tells two such requests apart.
+		val first = r.claim(SttsPlayer.MARKER_TEAM, 77, null)!!
+		r.finish(first, SttsPlayer.Outcome.PREEMPTED)
+		val second = r.claim(SttsPlayer.MARKER_TEAM, 77, null)!!
+
+		assertTrue(r.finishGeneration(first.gen, SttsPlayer.Outcome.PREEMPTED).events.isEmpty())
+		assertTrue(r.isLive(second))
+
+		val ended = r.finishGeneration(second.gen, SttsPlayer.Outcome.PREEMPTED).events.single()
+		assertEquals(second.gen, ended.gen)
+		assertFalse(r.isLive(second))
+	}
+
+	@Test
 	fun `a drop names the request that lost the sound`() {
 		val r = requests()
 		val loud = r.claim(team, at, tier)!!

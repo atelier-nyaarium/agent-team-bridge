@@ -208,6 +208,13 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	@Synchronized
 	fun finishSounding(outcome: SttsPlayer.Outcome): PlaybackDrop = drop(listOfNotNull(sounding), outcome)
 
+	/** End one request by GENERATION. For a caller holding only the identity a terminal reports - which
+	 * is the only thing that distinguishes two requests whose entry key is deliberately shared, as a
+	 * cached marker's is across every run of the same session. */
+	@Synchronized
+	fun finishGeneration(gen: Long, outcome: SttsPlayer.Outcome): PlaybackDrop =
+		drop(live.values.filter { it.gen == gen }.toList(), outcome)
+
 	/** End this entry only if it is the one currently audible. The check and the act are one operation
 	 * so a toggle cannot end whatever became audible in between, and an entry that is merely claimed
 	 * is left alone: the user cannot see it, so a tap must not silently cancel it. */
