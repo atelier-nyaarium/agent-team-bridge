@@ -236,6 +236,10 @@ class MainActivity : FragmentActivity() {
 
 	override fun onNewIntent(intent: Intent) {
 		super.onNewIntent(intent)
+		// setIntent, or getIntent() keeps answering with the one this Activity was CREATED with. A
+		// rotation re-runs onCreate against that stale intent, so a sheet the user had already
+		// dismissed would open itself again on every configuration change.
+		setIntent(intent)
 		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let { openTeamRequest.value = it }
 		if (intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)) openQueueRequest.value = true
 	}
@@ -695,6 +699,7 @@ fun App(
 				canRename = kind == "loose",
 				openNonce = openNonce,
 				revealAt = revealAt,
+				onRevealed = { revealAt = null },
 				unreadBoundary = repo::unreadBoundary,
 				onGateway = { t ->
 					// A tab switch onto a DIFFERENT thread is a genuine open (re-snap to its first
@@ -825,44 +830,23 @@ fun App(
 
 	// The queue list. Opened by the bubble and by the transport notification's body, so it is reachable
 	// whether or not the overlay permission was ever granted.
-	if (openQueueRequest.value) {
-		// Re-read on every settled change, and on a slow tick so the bar moves while a message plays.
-		// Both are pulls: this sheet is the fourth surface reporting one run, and the three that kept
-		// their own copy are the three that drifted from it.
-		val revision by repo.queueRevision.collectAsState()
-		var beat by remember { mutableStateOf(0) }
-		LaunchedEffect(Unit) {
-			while (true) {
-				kotlinx.coroutines.delay(500)
-				beat++
-			}
-		}
-		val rows = remember(revision, beat) { repo.queueRows() }
-		val failed = remember(revision) { repo.failedRows() }
-		val position = remember(revision, beat) { repo.playbackPosition() }
-		val paused = remember(revision) { repo.transportState().second }
-		androidx.compose.material3.ModalBottomSheet(onDismissRequest = { openQueueRequest.value = false }) {
-			QueueSheet(
-				rows = rows,
-				failed = failed,
-				paused = paused,
-				positionMs = position?.positionMs,
-				durationMs = position?.durationMs,
-				onPlayPause = { repo.command { if (paused) resumePlayback() else pausePlayback() } },
-				onSkip = { repo.command { skipPlayback() } },
-				onSeek = { repo.seekPlayback(it) },
-				onTrash = { entry -> repo.command { dropFromQueue(entry) } },
-				onJump = { entry ->
-					// Through the same request the notification tap uses, so the jump inherits its whole
-					// open gesture - dismissing masking surfaces, selecting the tab, re-snapping - rather
-					// than re-implementing a partial copy of it.
-					revealAt = entry.team to entry.at
-					openTeamRequest.value = entry.team
-					openQueueRequest.value = false
-				},
-				onDismissFailure = { entry -> repo.command { acknowledgeFailure(entry) } },
-			)
-		}
+	// NOT while locked. Every other overlay down here is reached by an in-app gesture, which already
+	// implies an unlocked session; this one arrives by INTENT from the notification or the bubble, so
+	// without the guard a tap on a locked phone would put queued message titles and working transport
+	// controls on top of the lock screen.
+	if (openQueueRequest.value && !locked) {
+		QueueSheetHost(
+			repo = repo,
+			onDismiss = { openQueueRequest.value = false },
+			onJump = { entry ->
+				// Through the same request the notification tap uses, so the jump inherits its whole
+				// open gesture - dismissing masking surfaces, selecting the tab, re-snapping - rather
+				// than re-implementing a partial copy of it.
+				revealAt = entry.team to entry.at
+				openTeamRequest.value = entry.team
+				openQueueRequest.value = false
+			},
+		)
 	}
 
 	// Composed after the screens so it overlays them and its BackHandler wins.
@@ -2688,6 +2672,10 @@ fun ThreadScreen(
 	openNonce: Int,
 	// (team, at) a queue tile asked to land on, or null. Passed straight through to ThreadWebView.
 	revealAt: Pair<String, Long>?,
+	// Cleared once the reveal has been handed to the renderer. Without it the request stays set and
+	// re-fires on every later genuine open of that thread, so a notification tap weeks later would
+	// still snap to whichever message was once tapped in the queue.
+	onRevealed: () -> Unit,
 	// The current (first unread row id, pointer-region ids) for the team named by the argument,
 	// re-read live at reveal time (never a stale snapshot) so a just-flushed receipt is always
 	// reflected. Takes the team explicitly rather than closing over an ambient "current" team, so a
@@ -2999,6 +2987,7 @@ fun ThreadScreen(
 					openNonce = openNonce,
 					unreadBoundary = unreadBoundary,
 					revealAt = revealAt,
+					onRevealed = onRevealed,
 					composerOccupied = draft.isOccupied,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
@@ -4333,6 +4322,48 @@ fun DirectoryField(
 }
 
 /**
+ * The queue list, and everything it has to re-read to stay honest.
+ *
+ * Its OWN composable so the 500ms bar tick recomposes this sheet and nothing else. Held in App, the
+ * beat sat in that scope and re-ran the whole activity's composition twice a second for as long as
+ * the sheet was open.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QueueSheetHost(repo: ChatRepository, onDismiss: () -> Unit, onJump: (QueueEntry) -> Unit) {
+	// Re-read on every settled change, and on a slow tick so the bar moves while a message plays. Both
+	// are pulls: this sheet is the fourth surface reporting one run, and the three that kept their own
+	// copy are the three that drifted from it.
+	val revision by repo.queueRevision.collectAsState()
+	var beat by remember { mutableStateOf(0) }
+	LaunchedEffect(Unit) {
+		while (true) {
+			kotlinx.coroutines.delay(500)
+			beat++
+		}
+	}
+	val rows = remember(revision, beat) { repo.queueRows() }
+	val failed = remember(revision) { repo.failedRows() }
+	val position = remember(revision, beat) { repo.playbackPosition() }
+	val paused = remember(revision) { repo.transportState().second }
+	androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+		QueueSheet(
+			rows = rows,
+			failed = failed,
+			paused = paused,
+			positionMs = position?.positionMs,
+			durationMs = position?.durationMs,
+			onPlayPause = { repo.command { if (paused) resumePlayback() else pausePlayback() } },
+			onSkip = { repo.command { skipPlayback() } },
+			onSeek = { repo.seekPlayback(it) },
+			onTrash = { entry -> repo.command { dropFromQueue(entry) } },
+			onJump = onJump,
+			onDismissFailure = { entry -> repo.command { acknowledgeFailure(entry) } },
+		)
+	}
+}
+
+/**
  * Hosts a thread's pooled WebView inside a FrameLayout. The renderer is pulled from
  * the pool (so scroll position and rendered DOM survive tab switches and Sessions
  * round-trips) and re-fed incrementally via sync(). A crashed renderer is swapped
@@ -4348,6 +4379,10 @@ fun ThreadWebView(
 	// (team, at) a queue tile asked to land on, or null for an ordinary open. Carries its team so a
 	// stale request cannot scroll a thread it was never about.
 	revealAt: Pair<String, Long>?,
+	// Cleared once the reveal has been handed to the renderer. Without it the request stays set and
+	// re-fires on every later genuine open of that thread, so a notification tap weeks later would
+	// still snap to whichever message was once tapped in the queue.
+	onRevealed: () -> Unit,
 	// Whether the composer holds text: mirrored into the renderer so a failed row's Cancel, which
 	// hands its content back to that box, greys out rather than overwriting what is being typed.
 	composerOccupied: Boolean,
@@ -4404,7 +4439,16 @@ fun ThreadWebView(
 			// A queue tile named a specific message, so land on THAT rather than wherever reading
 			// happens to have got to. Runs after the unread snap so it wins, and only for the thread the
 			// tile pointed at - a tile tapped while a different tab was open must not drag this one.
-			revealAt?.let { (wanted, at) -> if (wanted == team) renderer.revealMessage(at) }
+			//
+			// Resolved to the ROW KEY here. A queue entry is identified by its timestamp, but the DOM is
+			// keyed by Message.id, a per-thread local key that is deliberately not `at` - handing the
+			// timestamp straight to the renderer matched no row at all, so the jump silently did nothing.
+			revealAt?.let { (wanted, at) ->
+				if (wanted == team) {
+					messages.firstOrNull { it.at == at && !it.fromMe }?.let { renderer.revealMessage(it.id) }
+					onRevealed()
+				}
+			}
 		}
 	}
 

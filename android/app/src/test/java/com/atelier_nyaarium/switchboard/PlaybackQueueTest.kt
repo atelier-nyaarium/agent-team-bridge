@@ -286,16 +286,22 @@ class PlaybackQueueTest {
 
 	@Test
 	fun `a dropped entry that comes back counts as a first failure again`() {
+		// TWO entries, because the mark has to be earned AND the marked entry has to still be waiting.
+		// With one, the failure rotates it to the tail and `takeNext` promotes it straight back to head,
+		// where `drop` correctly refuses it - so the original version of this test dropped an entry that
+		// was never marked, and passed against a `drop` that cleared nothing at all.
 		val q = queueOf(entry(1), entry(2))
-		q.startNext()
-		q.drop(entry(2))
+		val first = q.startNext()!!
+		assertNull(q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR).failed)
+		assertEquals(listOf(entry(2), entry(1)), q.queued())
 
-		q.enqueue(entry(2))
-		val revived = q.queued().last()
+		assertTrue(q.drop(entry(1)))
+		q.enqueue(entry(1))
 		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		val revived = q.playing()!!
 
-		// The retry mark went with the drop. Without that, a re-queued entry would arrive already
-		// marked and be discarded on what looks like its second failure but is really its first.
+		// The mark went with the drop, so this counts as a first failure again - it rotates to the tail
+		// rather than being discarded on what would look like its second.
 		assertNull(q.advance(revived, SttsPlayer.Outcome.SYNTH_ERROR).failed)
 	}
 

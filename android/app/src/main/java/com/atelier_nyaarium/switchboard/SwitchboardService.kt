@@ -305,7 +305,12 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		val (active, paused) = repo.transportState()
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
-		if (active) {
+		val counts = repo.queueCounts()
+		// Kept up while anything gave up, even with the run over. This notification is the only entry
+		// point to the queue list that needs no permission, so cancelling it the moment the queue
+		// drained left someone without the overlay grant an alert they could see on the bubble - if they
+		// had one - and no way to open the list and find out what had been dropped.
+		if (active || counts.third > 0) {
 			transport?.let {
 				manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
 			}
@@ -319,7 +324,6 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// exact moment it was supposed to start standing on its own: the last entry to fail is also the
 		// one that drains the queue, so the dot appeared and vanished in the same breath and the user
 		// was never told anything had been dropped.
-		val counts = repo.queueCounts()
 		mainHandler.post {
 			if (active || counts.third > 0) {
 				bubble?.show(counts.first, counts.second, counts.third)

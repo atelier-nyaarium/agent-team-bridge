@@ -1782,15 +1782,12 @@ class ChatRepository(
 				// already sounding - during a marker, or while the body is still synthesizing, there is
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
-				// Where it got to, captured BEFORE the abandon releases the player - and only when the
-				// player is playing THE HEAD. At the top of every run the audible thing is the chime or
-				// the session sentinel while the head is already the body, so a position taken on trust
-				// here belongs to the marker: the body would resume a second or two in with its opening
-				// cut, or - when the sentinel outruns a short body - seek past the end and retire as
-				// heard without ever being spoken. A pause during a boundary simply remembers nothing.
-				stts.positionSnapshot()
-					?.takeIf { it.entry == head }
-					?.let { stts.rememberPosition(it) }
+				// Where it got to is NOT captured here. The engine files it on the way out of any
+				// displacement, keyed by the request that actually owned the sound and the recording it
+				// was in - so a pause landing during the chime or the session sentinel stores the
+				// marker's position under the MARKER, and the body is untouched. Deciding it here meant
+				// guessing whose position had just been read, and the guess was wrong for the whole
+				// marker sequence at the head of every run.
 				queue.requeueFront(head)
 				stts.abandon(head.team, head.at, head.tier)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
@@ -1879,13 +1876,26 @@ class ChatRepository(
 	 * terminal has nothing to advance, and the run would stop there.
 	 */
 	suspend fun dropFromQueue(entry: QueueEntry) {
-		if (queue.playing() == entry) {
-			skipPlayback()
-			return
-		}
-		advanceMutex.withLock {
+		// The head test happens UNDER the lock, and `drop` refuses the head itself, so a terminal
+		// promoting this entry between the test and the removal cannot make the trash take the wrong
+		// branch - which would either skip a message the user did not tap or leave the tapped one
+		// installed with its claim abandoned and no terminal coming to retire it.
+		val wasHead = advanceMutex.withLock {
+			if (queue.playing() == entry) return@withLock true
 			queue.drop(entry)
 			stts.abandon(entry.team, entry.at, entry.tier)
+			// Giving up on a message gives up on where it had got to, exactly as a skip does. Left
+			// behind, the offset would be waiting if the message were ever queued again.
+			stts.forgetPosition(entry.team, entry.at, entry.tier)
+			// This is a way to EMPTY the queue, so it has to be a way to release a pause too. Without
+			// it, trashing the entry a pause parked leaves the flag set over an idle queue and every
+			// later run on every team is refused, with no enabled control anywhere to clear it.
+			resumeIfSilent()
+			false
+		}
+		if (wasHead) {
+			skipPlayback()
+			return
 		}
 		transportChanged()
 	}

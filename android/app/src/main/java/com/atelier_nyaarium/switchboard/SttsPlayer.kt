@@ -33,13 +33,28 @@ class SttsPlayer(private val root: File) {
 	 * DECODE would then pop an entry as though it had been heard, and the retry would never fire. */
 	enum class Outcome { COMPLETED, STOPPED, PREEMPTED, PLAYBACK_ERROR, SYNTH_ERROR }
 
-	/** Where a playback is and whose it is. The owner rides ALONG so a caller never has to guess whose
-	 * position it just read; asking the queue instead names the wrong sound for the whole marker
-	 * sequence at the head of a run. */
-	data class Position(val owner: PlaybackId, val positionMs: Long, val durationMs: Long) {
+	/**
+	 * Where a playback is, whose it is, and which AUDIO it is in.
+	 *
+	 * The owner rides along so a caller never has to guess whose position it just read; asking the
+	 * queue instead names the wrong sound for the whole marker sequence at the head of a run.
+	 *
+	 * `audio` is the cache file's name, and it is not redundant with the owner. One message is spoken
+	 * two ways - attributed when played by hand, unattributed inside a run where the sentinel already
+	 * said the session - so an offset filed under the entry alone would be handed to a DIFFERENT
+	 * recording of the same message, of a different length.
+	 */
+	data class Position(val owner: PlaybackId, val audio: String, val positionMs: Long, val durationMs: Long) {
 		/** The (team, at, tier) this playback belongs to, for comparing against a queue entry. */
 		val entry: QueueEntry get() = QueueEntry(owner.team, owner.at, owner.tier)
+
+		internal val key: ResumeKey get() = ResumeKey(entry, audio)
 	}
+
+	/** What a resume offset is filed under: the message it belongs to AND the recording it points
+	 * into. The entry half keeps forget-by-message and purge-by-team expressible; the audio half is
+	 * what stops one rendering's offset being applied to another's. */
+	internal data class ResumeKey(val entry: QueueEntry, val audio: String)
 
 	/** Carries the (team, at, tier) it belongs to, so a consumer can attribute an outcome to the
 	 * entry that caused it. `tier` is null only for the settings voice sample, which is not a
@@ -94,6 +109,10 @@ class SttsPlayer(private val root: File) {
 	// to check against, that release kills the newcomer's player and strands it with no terminal.
 	private var playerOwner: PlaybackId? = null
 
+	// Which RECORDING the current player is in. One message is spoken two ways, so the owner alone
+	// does not identify the audio a position points into.
+	private var playerAudio: String? = null
+
 
 	/** Every listener sees every event, on whichever thread it occurred. Playback that continues in the
 	 * background keeps its signal even when a UI listener unsubscribes. */
@@ -101,11 +120,21 @@ class SttsPlayer(private val root: File) {
 
 	fun removeListener(listener: Listener) = requests.removeListener(listener)
 
-	/** Run the one effect a drop implies. The registry already published the events under its own
+	/**
+	 * Run the one effect a drop implies. The registry already published the events under its own
 	 * monitor; this releases the player the drop actually took, on the play lane so a MediaPlayer
-	 * callback arriving on the main Looper never blocks there. */
+	 * callback arriving on the main Looper never blocks there.
+	 *
+	 * A request that was DISPLACED remembers where it got to on the way out. Displacement is the only
+	 * terminal that means "not finished with this" - a completion is at the end, and a stop is a
+	 * decision to be done - so this is the one place a resume offset can be taken without any caller
+	 * having to work out whose position it just read.
+	 */
 	private fun apply(drop: PlaybackDrop) {
-		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
+		drop.soundingEnded?.let { id ->
+			val displaced = drop.events.any { it.gen == id.gen && it.outcome == Outcome.PREEMPTED }
+			playExec.execute { releasePlayerOf(id, remember = displaced) }
+		}
 	}
 
 	/** Give up one request named by the generation its terminal would carry. */
@@ -130,7 +159,10 @@ class SttsPlayer(private val root: File) {
 	fun positionSnapshot(): Position? {
 		val mp = player ?: return null
 		val owner = playerOwner ?: return null
-		return runCatching { Position(owner, mp.currentPosition.toLong(), mp.duration.toLong()) }.getOrNull()
+		val audio = playerAudio ?: return null
+		return runCatching {
+			Position(owner, audio, mp.currentPosition.toLong(), mp.duration.toLong())
+		}.getOrNull()
 	}
 
 	/** Move a NAMED playback. Ignored unless that request still owns the sound, so a bar built from a
@@ -413,13 +445,22 @@ class SttsPlayer(private val root: File) {
 		runCatching { player?.release() }
 		player = null
 		playerOwner = null
+		playerAudio = null
 	}
 
-	/** Release the player only while `id` still owns it. A newer request that took the sound in the
-	 * gap owns it now, and releasing that one would leave a live request no path to a terminal. */
+	/**
+	 * Release the player only while `id` still owns it. A newer request that took the sound in the
+	 * gap owns it now, and releasing that one would leave a live request no path to a terminal.
+	 *
+	 * `remember` files where it got to first, for a displacement. Taken HERE rather than by the caller
+	 * that decided to displace it: this is the last moment the position exists, and it is the only
+	 * moment at which whose position it is has already been established by `playerOwner`.
+	 */
 	@Synchronized
-	private fun releasePlayerOf(id: PlaybackId) {
-		if (playerOwner == id) teardownPlayer()
+	private fun releasePlayerOf(id: PlaybackId, remember: Boolean = false) {
+		if (playerOwner != id) return
+		if (remember) positionSnapshot()?.let { rememberPosition(it) }
+		teardownPlayer()
 	}
 
 	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
@@ -434,7 +475,7 @@ class SttsPlayer(private val root: File) {
 		// The offsets go with the audio. A remembered position points INTO a file that is about to be
 		// deleted, so leaving it behind would seek freshly re-synthesized speech to where the copy that
 		// no longer exists happened to be paused.
-		resumeAt.keys.removeAll { it.team == team }
+		resumeAt.keys.removeAll { it.entry.team == team }
 		File(root, "stts/$team").deleteRecursively()
 	}
 
@@ -497,39 +538,46 @@ class SttsPlayer(private val root: File) {
 			runCatching { mp.release() }
 			return
 		}
-		installPlayer(id, mp, effect)
-		// Resume where it stopped. Consumed on use, so an offset can never outlive the pause that set
-		// it and silently skip the opening of some later message.
-		resumeAt.remove(QueueEntry(id.team, id.at, id.tier))?.let { runCatching { mp.seekTo(it.toInt()) } }
+		installPlayer(id, mp, effect, f)
+		// Resume where it stopped. Keyed on THIS recording, so the offset a hand-played (attributed)
+		// rendering left behind is not handed to the unattributed one a run speaks, which is a
+		// different file of a different length. Consumed on use, so it can never outlive its pause.
+		resumeAt.remove(ResumeKey(QueueEntry(id.team, id.at, id.tier), f.name))
+			?.let { runCatching { mp.seekTo(it.toInt()) } }
 		requests.started(id)
 	}
 
-	/** Where a paused message should pick up, by entry. Held here rather than on the queue because it
-	 * describes audio, and the queue deliberately knows nothing about audio. */
-	private val resumeAt = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
+	/** Where a paused playback should pick up. Held here rather than on the queue because it describes
+	 * audio, and the queue deliberately knows nothing about audio. */
+	private val resumeAt = java.util.concurrent.ConcurrentHashMap<ResumeKey, Long>()
 
 	/**
 	 * Remember where a playback was when it stopped, so resuming continues rather than restarts.
 	 *
-	 * Takes the SNAPSHOT, not loose numbers, and files under the entry the snapshot names. A caller
-	 * that could pass a position and an entry separately is a caller that can pair a boundary marker's
-	 * position with the body's key, which cuts the opening off the message - or, when the marker runs
-	 * longer than the body, seeks past its end so it retires as heard without ever being spoken.
+	 * Takes the SNAPSHOT, not loose numbers, and files under the message AND the recording the
+	 * snapshot names. A caller that could pass a position and a key separately is a caller that can
+	 * pair a boundary marker's position with the body's key, which cuts the opening off the message -
+	 * or, when the marker runs longer than the body, seeks past its end so it retires as heard without
+	 * ever being spoken.
 	 */
 	fun rememberPosition(position: Position) {
-		if (position.positionMs > 0) resumeAt[position.entry] = position.positionMs
+		if (position.positionMs > 0) resumeAt[position.key] = position.positionMs
 	}
 
+	/** Forget every recording of one message. Coarse ON PURPOSE: giving up on a message gives up on it
+	 * however it would have been spoken. */
 	fun forgetPosition(team: String, at: Long, tier: Tier?) {
-		resumeAt.remove(QueueEntry(team, at, tier))
+		val entry = QueueEntry(team, at, tier)
+		resumeAt.keys.removeAll { it.entry == entry }
 	}
 
 	/** Swap in the player that just took the sound. The only part of playback that needs the monitor,
 	 * so it is the only part that holds it: building and preparing a MediaPlayer is disk work and
 	 * happens outside, where nothing else can be made to wait on it. */
 	@Synchronized
-	private fun installPlayer(id: PlaybackId, mp: MediaPlayer, effect: LoudnessEnhancer?) {
+	private fun installPlayer(id: PlaybackId, mp: MediaPlayer, effect: LoudnessEnhancer?, source: File) {
 		teardownPlayer()
+		playerAudio = source.name
 		player = mp
 		loudness = effect
 		playerOwner = id

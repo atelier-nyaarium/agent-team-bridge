@@ -833,6 +833,13 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   while the code's own comment promised the queue would "pick up again". It now picks up on the
   message it was interrupted on, at the position it reached.
 
+  **This claim was false when first written.** The requeue landed without any position capture, so the
+  message restarted from zero and the second half of the sentence was aspiration. The alignment audit
+  caught it. The position is now taken in `releasePlayerOf` on the way out of a displacement, which is
+  both the last moment it exists and the only moment at which whose position it is has already been
+  settled by `playerOwner` - so no caller has to work it out, and the pause path stopped needing its
+  own capture at all.
+
 ### Phase 5 - what the audit found, and what it cost
 
 44 findings raised, top 6 verified, **0 refuted** - the only round in this plan where every verified
@@ -843,6 +850,37 @@ independent agents said so. The gates could not see it because dead Compose code
 
 The correction that generalizes: an "as built" entry must name the call site that reaches the thing,
 not the file that contains it.
+
+### Phase 5 - the alignment round on the repairs
+
+The four repair commits were themselves audited, and that round also came back **0 refuted of 6**. Six
+majors, all against code written to fix the previous six. Worth keeping, because the failure modes were
+not the same shape as the originals:
+
+- **The sheet composed over the biometric lock screen.** Every other overlay at that level is reached
+  by an in-app gesture, which already implies an unlocked session. This one arrives by INTENT, so it
+  needed the guard the others never did. Queued message titles and live transport controls, in front
+  of a locked phone.
+- **The jump was wired to the wrong key.** `revealMessage` was handed the message's `at`; the DOM row
+  is keyed by `Message.id`, documented in its own declaration as "NOT the mailbox seq". The lookup
+  matched nothing, so a tile navigated and then sat still. A working-looking feature that did nothing.
+- **`transportPaused` was stranded by the trash.** `resumeIfSilent`'s comment claims it is "the one
+  place the flag is read", and that was true when written - then `dropFromQueue` was added three
+  commits later as a new way to empty the queue, and did not route through it. **The invariant was
+  documented and then broken by its own author in the same session.** A comment asserting uniqueness
+  is not enforcement; the residue tests in this repo exist because of exactly this.
+- **A resume offset named the message, not the recording.** One message is spoken two ways, so the
+  entry key addressed two different files - the identity class again, one level below where it was
+  just "fixed". Now keyed on `(entry, audio)`.
+- **`dropFromQueue` decided head-vs-not outside the mutex**, so a terminal promoting that entry
+  between the test and the removal could make the trash skip a message the user never tapped.
+- **A test written in the same commit was vacuous.** It dropped an entry that had never been marked
+  retried, so it passed against a `drop` that cleared nothing. Rewritten to earn the mark first, and
+  verified by breaking the line under test.
+
+The lesson, and it is about process rather than code: **repairs deserve the same audit as the code they
+repair.** Six defects in four commits, none of which the gates could see, all of which came from an
+author who had just finished reasoning carefully about that exact subsystem.
 
 ### Audit findings (lap 1)
 

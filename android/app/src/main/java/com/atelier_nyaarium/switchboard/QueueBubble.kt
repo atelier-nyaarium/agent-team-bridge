@@ -136,7 +136,14 @@ class QueueBubble(
 
 		return FrameLayout(context).apply {
 			addView(badge, FrameLayout.LayoutParams(size, size))
-			addView(ring, FrameLayout.LayoutParams(size, size))
+			// A RING around the badge, not a disc over it. Laid out in the badge's own bounds it covered
+			// the count, so the one moment the spinner matters was the one moment the number vanished.
+			addView(
+				ring,
+				FrameLayout.LayoutParams(dp(16), dp(16)).apply {
+					gravity = Gravity.BOTTOM or Gravity.START
+				},
+			)
 			addView(
 				dot,
 				FrameLayout.LayoutParams(dp(12), dp(12)).apply { gravity = Gravity.TOP or Gravity.END },
