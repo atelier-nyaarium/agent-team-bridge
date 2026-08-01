@@ -590,6 +590,13 @@ discover the staleness the hard way, so ask rather than improvising it.
 
 ### Phase 4 - Background control surface
 
+**Use the PLATFORM media APIs, not a new dependency.** The app has no media dependency today
+(`app/build.gradle.kts` has no media3 or androidx.media), and it does not need one: `minSdk 33` puts
+`android.media.session.MediaSession` and `Notification.MediaStyle` both well inside the platform.
+Adding `media3-session` would pull a dependency tree into a project whose rules are exact pins, a
+lockfile, and a residue check - a real cost for a transport this small. Reach for media3 only if
+something concrete needs it, not by habit.
+
 - `MediaSession` plus a media-style notification: play / pause / skip, lockscreen, shade, headphone,
   watch.
 - **The foreground-service change is bigger than "add a type"** (audit finding 2). With `minSdk 33` /
