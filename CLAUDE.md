@@ -312,6 +312,28 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 - **Per-row play state** (`playStatesFor`, `setPlayStates`): the repository ANSWERS what each row is
   doing; consumers do not accumulate it from events. A row is painted as it is built as well as on
   push, since state changes when playback does, not when a row re-renders.
+- **Four surfaces, one answer** (`SttsTransport.kt`, `QueueBubble.kt`, `QueueSheet.kt`, plus the
+  in-thread row): the lockscreen/shade transport, the floating bubble, the queue sheet and the row all
+  READ from the repository and hold no playback state. They redraw off `onTransportChanged` and
+  `queueRevision`, which fire after the queue has SETTLED - a raw playback event fires before the
+  terminal it reports has advanced anything, so a surface painted from it shows the state from just
+  before the advance with no later event to correct it. The bubble is plain Views because a Service
+  carries none of the three ViewTree owners a `ComposeView` needs. The sheet is reachable from the
+  bubble, the transport notification AND the board header: the first two are permission-gated, so
+  without the third a user who refuses both has no pause and no skip at all.
+- **Giving up on a sound states whether its position survives** (`SttsPlayer.abandon`): a pause, a
+  skip, a trash and a genuine displacement all end as PREEMPTED and disagree about the resume offset,
+  so the caller declares intent (`remember`, no default - the compiler demands it) and the engine
+  answers whose position it is and which recording it points into. Markers and the settings sample are
+  never resumable: a marker's cache key is the words it speaks, shared by every run of that session.
+- **Audio focus** (`SpeechFocus.kt`): held for a RUN, `AUDIOFOCUS_GAIN_TRANSIENT` so the user's music
+  resumes, released on a pause as well as at the end. Every loss pauses, including the duckable one -
+  with `CONTENT_TYPE_SPEECH` the system does not auto-duck, and speech under speech is worse than a
+  gap. A refused request pauses rather than speaking anyway, and `ACTION_AUDIO_BECOMING_NOISY` is its
+  own receiver because unplugging a headset is a route change, not a focus change.
+- **`transportPaused` normalizes in its GETTER**, so a pause cannot be observed over an idle queue. The
+  rule lived at the writers through three rounds and each new way of emptying the queue reintroduced
+  it; at the value, a future one cannot.
 - **Attachment viewer** (`AttachmentViewer.kt`): one fullscreen sheet for every tapped file. Which
   stage it shows is decided by `viewerDecodableImage` in `AttachmentDisplay.kt`, never by a mime
   prefix, because the two renderers disagree in BOTH directions (the WebView draws SVG that
