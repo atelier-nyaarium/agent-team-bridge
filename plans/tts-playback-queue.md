@@ -844,11 +844,17 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   implying the bubble is required, and the button disappears once granted.
 - **Seek** (`positionSnapshot`, `seekTo`) is read under the same monitor that installs and releases the
   player: polling the handle directly would read something that can be released between the null check
-  and the call, which is a native crash rather than a wrong number. A pause captures the position
-  BEFORE abandoning, and the offset is consumed on use, so it can never outlive its pause and skip the
-  opening of a later message. Skipping forgets the position, since giving up on a message should not
-  leave it resuming mid-sentence. A purge forgets it too - an offset points INTO a file, and audio
-  deleted and re-synthesized has no reason to match where the old copy was paused.
+  and the call, which is a native crash rather than a wrong number. The offset is consumed on use, so
+  it cannot outlive its pause and skip the opening of a later message; a skip, a trash and a teardown
+  all forget it, since giving up on a message should not leave it resuming mid-sentence; and a purge
+  forgets it because an offset points INTO a file, which re-synthesized audio has no reason to match.
+  A teardown sweeps the whole TEAM, not the entry it was handed - a pause parks its message in
+  `pending`, so the one entry actually holding an offset is never the head.
+- **The pause no longer captures anything itself.** Whether a position survives is the CALLER'S to
+  declare (`abandon(..., remember)`, with no default so the compiler demands it) and whose position it
+  is remains the engine's to answer. Markers and the settings sample refuse to be resumable at all:
+  a marker's cache key is the words it speaks, shared by every run of that session, so one stale
+  offset would truncate that session's announcement permanently.
 - **A position NAMES its request.** `positionSnapshot` returns the owner with the numbers and
   `rememberPosition` takes the whole snapshot, so pairing one sound's position with another's key is
   not expressible. See the sixth entry under Bug Classes: this was found as "pause during the chime
@@ -857,7 +863,8 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   speak, not whether to. Retiring the head on PREEMPTED let a settings voice sample - or a row's own
   Play - silently consume the message the run had reached, with no alert and no count to notice it by,
   while the code's own comment promised the queue would "pick up again". It now picks up on the
-  message it was interrupted on, at the position it reached.
+  message it was interrupted on, at the position it reached - captured in `playFile` just before
+  `installPlayer` tears the outgoing player down, which is the only place that path passes through.
 
   **This claim was false twice before it was true.** First the requeue landed with no capture at all,
   so the message restarted from zero. Then the capture was inferred from the PREEMPTED outcome, which
@@ -865,6 +872,27 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   displacement goes through `requests.sound`, which no `apply` ever followed), and it fired for cases
   that wanted the opposite, silently undoing `skipPlayback`'s `forgetPosition` from the play lane one
   line after the delete. See "Bug Classes: intent and identity" below.
+
+- **Three notification states, not two.** A live run gets the MediaStyle transport; a finished run that
+  dropped something gets a plain ALERT on its own DEFAULT-importance channel, because the transport's
+  controls have nothing left to act on and an entry titled "Speaking" over silence is a lie with two
+  dead buttons on it. `CHANNEL_STATUS` is `IMPORTANCE_MIN` with no badge, which is right for "the
+  bridge is connected" and would have made the one notice that a message went unspoken invisible.
+  The alert is ongoing, since a swipe is not an acknowledgement.
+- **A failure says WHY.** `startPlayback` returns the reason it declined rather than a bare `false` -
+  no key, no provider, the message gone, nothing speakable - and the tile maps it to a short cause.
+  The raw provider string is never rendered: it is an HTTP body that can run to paragraphs and echo
+  request content back.
+- **The failures list is bounded and deduped**, keyed by entry so the sheet cannot be handed duplicate
+  keys, and a message that is later spoken successfully leaves the list. Only a COMPLETED clears it -
+  a skip retires an entry exactly as a completion does, but claiming it had been heard told the user
+  they had heard the very thing they gave up on.
+- **The queue is reachable without any permission.** A board-header control opens the sheet and shows
+  which of three states the queue is in; the bubble needs an overlay grant and the transport needs
+  notifications, so refusing both previously left the pause and skip existing but unreachable.
+- **A process kill cannot strand the notification.** The queue and the failures live in memory, so a
+  kill leaves an ongoing entry describing a run that no longer exists; the service cancels it on
+  start, since nothing else reconciles a state that had no playback change to hook.
 
 ### Phase 5 - what the audit found, and what it cost
 
@@ -1635,6 +1663,26 @@ the writers that exist today.
 
 The general form, worth applying before the fourth round of anything: **if two independent fixes for
 one invariant both landed at call sites, the third fix belongs at the value.**
+
+**Framework decision for this lap, and what is deliberately NOT done.**
+
+Two classes were recorded this lap and both were closed with a redesign rather than a patch: intent and
+identity travelling together (`abandon(..., remember)`, default removed so the compiler demands it at
+every call site), and the pause rule moving from the writers into the value (`transportPaused`
+normalized in its getter). That is this lap's framework budget, spent.
+
+**Not done, and recorded rather than skipped: extracting the marker sequencer.** It is spread across
+about twelve sites in `ChatRepository` - `markersFor`, `markerInFlight`, the pending list,
+`queueMarkers`/`clearMarkers`/`nextMarkerStarted`, plus the terminal matching inside `onPlaybackEnded`
+- and it is untestable by construction, which is exactly where four consecutive rounds of "a torn-down
+run's marker drove the current one" lived. It should become a `MarkerSequencer` with
+`queueFor`/`next`/`started`/`isMine`/`clear`, effects staying in the repository, mirroring how
+`PlaybackRequests` and `PlaybackQueue` were already split out, with the same residue-test treatment.
+
+The reason it is deferred is worth stating plainly rather than dressing up: it fixes no known defect,
+it is a large refactor of the most defect-prone unit in the subsystem, and starting it at the end of a
+long session is how a seventh audit round gets created. **It is the first thing to do when this area
+is next touched.**
 
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
