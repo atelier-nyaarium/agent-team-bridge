@@ -346,9 +346,20 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		super.onDestroy()
 	}
 
+	/**
+	 * Both types are declared for the service's whole life, never toggled. API 34 enforces per-type,
+	 * and a service that dropped mediaPlayback while idle would have to re-acquire it at the moment
+	 * playback starts - from a background poll, which is exactly when the platform can refuse. The
+	 * cost of holding it is a manifest declaration; the cost of toggling is a class of failure that
+	 * only appears on someone else's device.
+	 */
 	private fun startInForeground() {
 		val notification = buildStatusNotification("Connecting...", 0)
-		startForeground(STATUS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+		startForeground(
+			STATUS_NOTIFICATION_ID,
+			notification,
+			ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+		)
 	}
 
 	private fun createChannels() {

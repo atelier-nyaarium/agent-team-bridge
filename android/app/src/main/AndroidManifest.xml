@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- A partial WakeLock the poll service holds while running, so the poll loop's
          sleep resumes through Doze instead of the CPU being parked (the background
          "stops polling" bug). Paired with the battery-optimization exemption row. -->
@@ -45,7 +46,7 @@
         <service
             android:name=".SwitchboardService"
             android:exported="false"
-            android:foregroundServiceType="remoteMessaging" />
+            android:foregroundServiceType="remoteMessaging|mediaPlayback" />
 
         <receiver
             android:name=".BootReceiver"
