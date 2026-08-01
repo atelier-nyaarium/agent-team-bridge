@@ -330,11 +330,13 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// Held exactly while the app INTENDS to make sound, which is what makes a pause give the user's
 		// music back - holding through a pause defeats the transient gain the whole design rests on.
 		//
-		// A refusal is acted on rather than noted: something else is mid-call, and speaking over it is
-		// the thing this exists to prevent. Pausing here leaves the queue intact and the run resumes
-		// when focus arrives.
+		// A refusal does NOT pause. It cannot: a refused request registers no listener, so no GAIN can
+		// ever arrive to lift the pause, and the queue sits there full and silent with a play button the
+		// user never pressed. Speaking without focus for a moment is recoverable; a run that can never
+		// start is not. This retries on every event instead, so focus and its listener are picked up the
+		// moment they are grantable.
 		if (active && !paused) {
-			if (!focus.acquire()) repo.command { pausePlayback() }
+			focus.acquire()
 		} else {
 			focus.release()
 		}

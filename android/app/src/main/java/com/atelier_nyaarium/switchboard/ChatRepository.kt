@@ -1863,16 +1863,22 @@ class ChatRepository(
 	 *
 	 * Built here rather than in the UI so the sheet holds no state of its own - it is the fourth
 	 * surface reporting this run, and the ones that kept their own copy are the ones that drifted.
-	 * Duration is null until the audio exists, which the tile shows as a spinner rather than a zero.
 	 */
 	fun queueRows(): List<QueueRow> {
 		val head = queue.playing()
-		// Known only for the entry that is actually playing - a queued one has no audio yet, which the
-		// tile draws as a spinner. Read once rather than per row: it is the same answer for all of them,
-		// and asking inside the loop would let the current entry change mid-list.
+		// Read once rather than per row: it is the same answer for all of them, and asking inside the
+		// loop would let the current entry change mid-list.
 		val current = playbackPosition()
+		// Only the HEAD can be mid-synthesis, and only until its audio starts. Everything behind it is
+		// waiting its turn, which is a different thing and must not draw as work in progress.
+		val generating = head != null && !stts.isPlayingMessage(head.team, head.at)
 		return queue.queued().distinct().map { entry ->
-			row(entry, isCurrent = entry == head, durationMs = current?.takeIf { it.entry == entry }?.durationMs)
+			row(
+				entry,
+				isCurrent = entry == head,
+				durationMs = current?.takeIf { it.entry == entry }?.durationMs,
+				generating = generating && entry == head,
+			)
 		}
 	}
 
@@ -1908,6 +1914,7 @@ class ChatRepository(
 		entry: QueueEntry,
 		isCurrent: Boolean,
 		durationMs: Long?,
+		generating: Boolean = false,
 		gaveUp: Boolean = false,
 		reason: String? = null,
 	): QueueRow {
@@ -1918,6 +1925,7 @@ class ChatRepository(
 			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
 			durationMs = durationMs,
 			isCurrent = isCurrent,
+			generating = generating,
 			gaveUp = gaveUp,
 			reason = reason,
 		)
