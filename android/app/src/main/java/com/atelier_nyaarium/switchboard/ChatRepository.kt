@@ -477,6 +477,23 @@ internal fun filterTombstoned(teams: List<Team>, forgottenUntil: MutableMap<Stri
 	return if (forgottenUntil.isEmpty()) teams else teams.filterNot { forgottenUntil.containsKey(it.name) }
 }
 
+/**
+ * What the boundary marker says before a message is read out: which session is about to speak.
+ *
+ * A peer-mirror row names both parties, because neither of them is this console's own team - "someone"
+ * stands in for an author the labels cannot resolve, so the marker never announces a blank. Spoken
+ * form spells words out rather than using glyphs, since engines render symbols unpredictably.
+ *
+ * Deliberately independent of the message: it depends only on who is speaking, which is what lets one
+ * synthesis be cached and reused for every message in that session.
+ */
+internal fun sentinelText(state: ChatState, msg: Message, team: String): String {
+	if (!msg.isPeer) return state.label(team, state.localGatewayId)
+	val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
+	val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel on $toLabel" else fromLabel
+}
+
 /** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
  * as if addressed to this console - neither party in a peer-mirror row is this console's own
  * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an

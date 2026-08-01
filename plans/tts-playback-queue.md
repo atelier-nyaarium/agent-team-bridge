@@ -1082,6 +1082,13 @@ Kotlin is not covered by `ci.yml`, so `./gradlew :app:testDebugUnitTest` locally
 `assembleEmulator` and a real look on the AVD for anything visual. Cards live in the Designer dock
 (`tts-queue.html`, `tts-play-states.html`).
 
+**Audio is the owner's to verify, at the end.** They will test the whole feature once the plan runs top
+to bottom, so "I cannot hear it" is not a blocker on any phase and must not gate progress. What still
+gets verified without ears, and should be: that the expected file is produced and cached under the
+expected key, and that the ORDER of playback events is right - which is the actual risk in the chime
+and sentinel work, and is observable through the event stream. Anything VISUAL gets a real emulator
+screenshot rather than a description.
+
 **Audit fan-outs are capped at 12 agents PER LEVEL** (owner's instruction; the cycle script's "8+ up to
 20" is the looser bound). The shape that fits: 8 explore agents, then rank every finding and send the
 top 6 to adversarial verify at 2 opus skeptics each, which is 12 in the verify level. Anything below
