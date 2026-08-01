@@ -300,6 +300,18 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
   is bounded only by the transport's timeout. Consequence worth knowing before adding a caller-side
   guard: `advance` installs the next entry as the head BEFORE returning it, so a caller that declines
   to speak it strands an entry no terminal will ever retire. Hand it over and let it yield.
+- **Spoken boundary markers** (`ChatRepository`'s marker sequencer): a run plays chime, then a sentinel
+  naming the session, then the body, as SEPARATE gapped playbacks - never concatenated, because
+  providers differ in container. A marker is an ordinary request under the reserved `_marker` team, so
+  it inherits one-terminal and ordered delivery; the chime alone does not yield, since standing an
+  instantaneous sound down drops the boundary rather than delaying it. `playMarker`/`playChime` return
+  WHICH request will report, and the sequencer matches terminals against it - matching on "which entry
+  is playing" instead let a torn-down run's marker drive the current one and swallow its message, four
+  times. Cached speech is keyed on the WORDS, not just the entry, because one message is spoken two
+  ways: attributed when played by hand, unattributed inside a run where the sentinel already said it.
+- **Per-row play state** (`playStatesFor`, `setPlayStates`): the repository ANSWERS what each row is
+  doing; consumers do not accumulate it from events. A row is painted as it is built as well as on
+  push, since state changes when playback does, not when a row re-renders.
 - **Attachment viewer** (`AttachmentViewer.kt`): one fullscreen sheet for every tapped file. Which
   stage it shows is decided by `viewerDecodableImage` in `AttachmentDisplay.kt`, never by a mime
   prefix, because the two renderers disagree in BOTH directions (the WebView draws SVG that
