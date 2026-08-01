@@ -3828,6 +3828,40 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		}
 	}
 
+	// The bubble needs a permission only an Activity can ask for, and the whole point of the bubble is
+	// that the app is NOT in front. So the grant is offered here, ahead of time, rather than prompted
+	// at the moment it would be useful - by which point there is no Activity to prompt from.
+	var canOverlay by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(chimeContext)) }
+	val overlayGrant = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+		canOverlay = android.provider.Settings.canDrawOverlays(chimeContext)
+	}
+	Column {
+		Text("Floating queue bubble", style = MaterialTheme.typography.titleSmall)
+		Text(
+			if (canOverlay) {
+				"Shows what is left to speak, over other apps."
+			} else {
+				"Needs permission to draw over other apps. Without it the run still shows in the shade."
+			},
+			style = MaterialTheme.typography.bodySmall,
+		)
+		if (!canOverlay) {
+			Spacer(Modifier.height(4.dp))
+			OutlinedButton(
+				onClick = hapticClick {
+					overlayGrant.launch(
+						Intent(
+							android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+							android.net.Uri.parse("package:${chimeContext.packageName}"),
+						),
+					)
+				},
+			) {
+				Text("Allow the bubble")
+			}
+		}
+	}
+
 	var volume by remember { mutableStateOf(repo.sttsVolume) }
 	Column {
 		Text("Playback volume: $volume%", style = MaterialTheme.typography.titleSmall)
