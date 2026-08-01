@@ -694,6 +694,13 @@ something concrete needs it, not by habit.
 
 ### Phase 5 - Bubble and modal
 
+**Build the overlay WITHOUT Compose.** The plan offers two ways past the ViewTree-owner problem, and
+plain Android Views is the cheaper one: the bubble is a count badge, a spinner and a swipe gesture,
+none of which need a recomposition engine. Hand-rolling a `LifecycleRegistry`, a
+`SavedStateRegistryController` and a `ViewModelStore` onto an overlay root is three lifecycle objects
+to keep correct across a Service restart, for a widget that draws two numbers. The MODAL is a normal
+Activity surface and stays Compose - it is only the overlay that leaves.
+
 - Overlay bubble via `SYSTEM_ALERT_WINDOW` when granted; degrade to Phase 4's notification alone when
   not. Count badge, spinner while the HEAD is generating, error as an ADDITIONAL badge that keeps the
   count. Swipe to dismiss = stop current, advance, bubble returns for the next.
