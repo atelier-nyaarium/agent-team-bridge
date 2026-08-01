@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
@@ -3762,6 +3763,54 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 					shape = SegmentedButtonDefaults.itemShape(index = index, count = autoPlayOptions.size),
 				) {
 					Text(label)
+				}
+			}
+		}
+	}
+
+	var chimeUri by remember { mutableStateOf(repo.sttsChimeUri) }
+	// Android's own ringtone picker rather than a file picker: it already lists the sounds the user
+	// has, handles the permission, and hands back a Uri.
+	val chimePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+		if (result.resultCode == android.app.Activity.RESULT_OK) {
+			val picked = result.data
+				?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, android.net.Uri::class.java)
+			chimeUri = picked?.toString() ?: ""
+			repo.sttsChimeUri = chimeUri
+		}
+	}
+	Column {
+		Text("Run start chime", style = MaterialTheme.typography.titleSmall)
+		Text(
+			if (chimeUri.isEmpty()) "The bundled chime, once at the start of an automatic run." else "A sound you picked.",
+			style = MaterialTheme.typography.bodySmall,
+		)
+		Spacer(Modifier.height(4.dp))
+		Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+			OutlinedButton(
+				onClick = hapticClick {
+					chimePicker.launch(
+						Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+							putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+							putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Run start chime")
+							putExtra(
+								RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+								chimeUri.takeIf { it.isNotEmpty() }?.let { android.net.Uri.parse(it) },
+							)
+						},
+					)
+				},
+			) {
+				Text("Choose a sound")
+			}
+			if (chimeUri.isNotEmpty()) {
+				TextButton(
+					onClick = hapticClick {
+						chimeUri = ""
+						repo.sttsChimeUri = ""
+					},
+				) {
+					Text("Use bundled")
 				}
 			}
 		}

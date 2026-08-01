@@ -112,6 +112,15 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			prefs.edit().putString(KEY_AUTO_PLAY, value).apply()
 		}
 
+	/** The sound that marks the start of an automatic run, as a content Uri. Empty means the bundled
+	 * asset. A user-chosen system sound can be any format Android happens to ship, which is why the
+	 * player takes a resolved file rather than assuming the bundled asset's own encoding. */
+	var chimeUri: String
+		get() = prefs.getString(KEY_CHIME_URI, "") ?: ""
+		set(value) {
+			prefs.edit().putString(KEY_CHIME_URI, value).apply()
+		}
+
 	/** The folder the user last chose to save attachments into, as a SAF tree Uri. Empty until they
 	 * pick one, which is why the first save cannot use SAF at all: no grant exists yet. The grant
 	 * behind it can die between runs, so a reader must re-validate rather than trust this. */
@@ -407,6 +416,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		val DEFAULT_ON_IDS = setOf("references")
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
+		const val KEY_CHIME_URI = "stts_chime_uri"
 		// Deliberately absent from SCHEMA_WIPE_KEYS: it holds no address grammar, and clearing it
 		// would make the user re-pick their folder for an unrelated schema change.
 		const val KEY_SAVE_TREE_URI = "save_tree_uri"

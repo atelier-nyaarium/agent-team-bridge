@@ -9,6 +9,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.PowerManager
@@ -276,18 +277,34 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
-	/** The chime as a playable file. Copied out of resources on first use, because a raw resource is
-	 * not a path a MediaPlayer can open and the player deliberately deals only in files. Cached, so
-	 * this costs one copy per install rather than one per run. */
+	/**
+	 * The chime as a playable file: the user's chosen system sound, or the bundled asset.
+	 *
+	 * Copied out rather than handed over as a Uri, because a raw resource has no path a MediaPlayer
+	 * can open and the player deliberately deals only in files. Cached per source, so switching sounds
+	 * and switching back does not re-copy, and a stale copy of a sound no longer chosen is simply never
+	 * read again.
+	 *
+	 * A chosen sound that cannot be read falls back to the bundled asset. A revoked grant or a deleted
+	 * ringtone should cost the boundary marker, not the run.
+	 */
 	private fun resolveChime(): java.io.File? {
-		val dest = java.io.File(java.io.File(filesDir, "stts/${SttsPlayer.MARKER_TEAM}"), "chime.audio")
+		val repo = Repo.get(this)
+		val chosen = repo.sttsChimeUri
+		if (chosen.isNotEmpty()) {
+			copyChime("chime-${chosen.hashCode()}.audio") { contentResolver.openInputStream(Uri.parse(chosen)) }
+				?.let { return it }
+		}
+		return copyChime("chime.audio") { resources.openRawResource(R.raw.stts_chime) }
+	}
+
+	private fun copyChime(name: String, open: () -> java.io.InputStream?): java.io.File? {
+		val dest = java.io.File(java.io.File(filesDir, "stts/${SttsPlayer.MARKER_TEAM}"), name)
 		if (dest.isFile && dest.length() > 0L) return dest
 		return runCatching {
 			dest.parentFile?.mkdirs()
-			resources.openRawResource(R.raw.stts_chime).use { input ->
-				dest.outputStream().use { input.copyTo(it) }
-			}
-			dest
+			open().use { input -> dest.outputStream().use { requireNotNull(input).copyTo(it) } }
+			dest.takeIf { it.length() > 0L }
 		}.getOrNull()
 	}
 

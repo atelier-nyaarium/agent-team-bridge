@@ -1618,6 +1618,13 @@ class ChatRepository(
 		}
 	}
 
+	/** The run-start sound, as a content Uri. Empty means the bundled asset. Persisted in prefs. */
+	var sttsChimeUri: String
+		get() = store.chimeUri
+		set(value) {
+			store.chimeUri = value
+		}
+
 	/** When on, an incoming message for a followed (open) thread is
 	 * pre-synthesized before its notification. Persisted in prefs. */
 	var sttsAutoGen: Boolean
