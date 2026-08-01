@@ -724,6 +724,14 @@ something concrete needs it, not by habit.
   discarding it, and `finishGeneration` abandons by that. Same answer as every other round of this
   class: carry the identity that exists rather than add a guard.
 
+- **Skip after a pause discards the paused entry instead of replaying it.** A pause retires the head
+  and parks the message at the FRONT, so afterwards there is no head for Skip to act on - and the
+  empty-head branch resumed the queue, which popped that very entry. Skip did the opposite of skip.
+  It now promotes the parked entry and retires it. Related, found with it: a bare `return` inside
+  `withLock` is a NON-LOCAL return, so it left the whole function and bypassed the transport
+  republish; the controls kept showing Paused while audio played. Wrapped in `try/finally`, the way
+  the terminal path already was.
+
 **Known unverified, needs real hardware:** an actual lockscreen, headphone or watch controls, and
 whether the MediaStyle notification RENDERS correctly - it is confirmed constructed and posted, not
 that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active

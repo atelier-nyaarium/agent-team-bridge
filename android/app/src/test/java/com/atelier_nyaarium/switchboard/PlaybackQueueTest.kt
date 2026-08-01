@@ -48,6 +48,25 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `skipping after a pause discards the paused entry rather than replaying it`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		// Pause: the entry is parked at the front and the head is retired, so there is no head left for
+		// a later skip to act on.
+		q.requeueFront(head)
+		q.advance(head, SttsPlayer.Outcome.PREEMPTED)
+		assertNull(q.playing())
+
+		// Skip promotes the parked entry and retires it. Resuming instead would replay the very message
+		// the user asked to move past - Skip doing the opposite of skip.
+		val promoted = q.playing() ?: q.startNext()!!
+		assertEquals(entry(1), promoted)
+		assertEquals(entry(2), q.advance(promoted, SttsPlayer.Outcome.COMPLETED).next)
+		assertEquals(listOf(entry(2)), q.queued())
+	}
+
+	@Test
 	fun `requeueing something already waiting changes nothing`() {
 		val q = queueOf(entry(1), entry(2))
 

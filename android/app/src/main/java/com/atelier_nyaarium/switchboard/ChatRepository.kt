@@ -1772,19 +1772,25 @@ class ChatRepository(
 	/** Give up on what is speaking and move to the next entry. Distinct from a pause: this one is a
 	 * decision about THIS message, so the run continues. */
 	suspend fun skipPlayback() {
-		advanceMutex.withLock {
-			transportPaused = false
-			markerInFlight?.let { stts.abandonGeneration(it) }
-			clearMarkers()
-			val head = queue.playing()
-			if (head == null) {
-				resumeIfSilent()
-				return
+		// try/finally, because a bare return inside `withLock` leaves the whole function - the surfaces
+		// would keep showing the state from before the skip until some later terminal happened to
+		// correct them.
+		try {
+			advanceMutex.withLock {
+				transportPaused = false
+				markerInFlight?.let { stts.abandonGeneration(it) }
+				clearMarkers()
+				// A pause retires the head and parks the message at the FRONT of the queue, so after one
+				// there is no head to skip - the thing being skipped is that parked entry. Promoting it
+				// first means Skip discards it, rather than resuming the very message it was asked to
+				// move past.
+				val head = queue.playing() ?: queue.startNext() ?: return@withLock
+				stts.abandon(head.team, head.at, head.tier)
+				queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
 			}
-			stts.abandon(head.team, head.at, head.tier)
-			queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
+		} finally {
+			transportChanged()
 		}
-		transportChanged()
 	}
 
 	/** What a transport surface should show: whether anything is queued at all, and whether it is
