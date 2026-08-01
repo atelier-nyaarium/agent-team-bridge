@@ -550,6 +550,29 @@ silently inert.** Their video frames landing after a row rendered is what made i
 change nothing a sync otherwise looks at. They offered to fold play state in properly rather than let us
 discover the staleness the hard way, so ask rather than improvising it.
 
+### Phase 3 as built
+
+- **Three states on the play button** (`thread.css`, `thread.js`): queued, loading, playing as filled
+  captioned chips that are not pressable. Filled rather than recoloured because idle is the outlined
+  state; captioned because three states cannot be told apart by colour; only `loading` animates,
+  because it is the one with no end in sight and a thread of pulsing chips reads as noise. Respects
+  `prefers-reduced-motion`.
+- **Per-row state over the BRIDGE** (`setPlayStates`), not the row payload, so it stays outside the
+  re-render fingerprint. Each row is painted as it is BUILT as well as on push: state changes when
+  playback does, not when a row re-renders, so a rebuilt row would otherwise sit idle awaiting a push
+  that may never come.
+- **The repository answers, consumers do not accumulate** (`playStatesFor`). This closes the deferred
+  framework finding "make consumers query current truth instead of reconstructing it from the event
+  stream". The glyph listener's own reconstruction was wrong twice - once blanking a row still
+  playing, once stranding one that had ended - and it is now two lines that hold no state to drift.
+- **A tap APPENDS at FULL** rather than playing alongside the queue, and an already-queued row is
+  inert by construction (`pointer-events: none`). A tap on an audible message still stops it.
+- **A tap does not chime, but does get a sentinel.** A chime marks a run that began on its own; a
+  person who pressed a button knows they started it. Which session is speaking is not something the
+  tap tells them, so the sentinel stays - and that keeps the `attributed` prefix off the queue path,
+  where a marker already names the speaker. The notification Play action bypasses the queue, so it
+  keeps the prefix and gets no marker.
+
 ### Phase 4 - Background control surface
 
 - `MediaSession` plus a media-style notification: play / pause / skip, lockscreen, shade, headphone,

@@ -338,9 +338,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// in-session lights the buttons for renderers built afterward.
 	rendererPool.playEnabled = repo.sttsReady()
 	rendererPool.onPlayTap = { team, at ->
-		// Toggle by message: a tap stops whatever tier is playing for this message (autoplay may have
-		// chosen Title/Summary), else plays it FULL. Avoids synthesizing FULL on top of an autoplay.
-		if (repo.isMessagePlaying(team, at)) repo.stopMessage(team, at) else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
+		// A tap on an audible message stops it; otherwise it JOINS the queue at FULL rather than
+		// starting alongside it. A row that is already queued renders unpressable, so a tap can only
+		// ever arrive for one that is idle or playing.
+		if (repo.isMessagePlaying(team, at)) {
+			repo.stopMessage(team, at)
+		} else {
+			repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false) }
+		}
 	}
 	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
 	// Links: a tap on a standard anchor routes through the scheme dispatcher (openLink); the

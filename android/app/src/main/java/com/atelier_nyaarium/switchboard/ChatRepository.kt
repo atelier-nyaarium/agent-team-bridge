@@ -1535,8 +1535,14 @@ class ChatRepository(
 		data class Spoken(val text: String) : Marker
 	}
 
-	/** Queue one message for autoplay, and speak it if nothing is speaking. */
-	suspend fun enqueueAutoPlay(team: String, at: Long, tier: SttsPlayer.Tier) {
+	/**
+	 * Queue one message and speak it if nothing is speaking.
+	 *
+	 * `announceRun` is false for a tap: a chime marks a run that began on its own, and a person who
+	 * pressed a button already knows they started it. The sentinel still plays, because which session
+	 * is speaking is not something the tap tells them.
+	 */
+	suspend fun enqueueForPlay(team: String, at: Long, tier: SttsPlayer.Tier, announceRun: Boolean) {
 		val entry = QueueEntry(team, at, tier)
 		advanceMutex.withLock {
 			// Re-checked under the lock, not just at the drain. A burst job runs on its own coroutine
@@ -1547,7 +1553,7 @@ class ChatRepository(
 			// rather than every message in it.
 			val beginsRun = queue.isIdle()
 			if (!queue.enqueue(entry)) return
-			if (beginsRun) queueMarkers(entry, chime = true)
+			if (beginsRun) queueMarkers(entry, chime = announceRun)
 			resumeIfSilent()
 		}
 	}
@@ -4212,7 +4218,9 @@ class ChatRepository(
 								// speaks the first immediately and the rest as each terminal
 								// lands, so a burst is heard whole instead of only its last.
 								if (autoTier != null) {
-									for ((msg, owner) in queueable) enqueueAutoPlay(owner, msg.at, autoTier)
+									for ((msg, owner) in queueable) {
+									enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
+								}
 								}
 							}
 						} else {
