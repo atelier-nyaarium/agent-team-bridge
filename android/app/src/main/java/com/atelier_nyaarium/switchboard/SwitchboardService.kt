@@ -239,7 +239,13 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		bubble = QueueBubble(
 			this,
 			onTap = { startActivity(openQueueIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
-			onSwipeAway = { repo.command { skipPlayback() } },
+			// A swipe means "move past this". With a run that is a skip; with only an alert left there
+			// is nothing to skip, so it dismisses the bubble instead of firing a command that cannot
+			// act. The failures themselves stay - they are still in the list and still in the shade,
+			// and there is deliberately no gesture that discards several of them at once.
+			onSwipeAway = {
+				if (repo.transportState().first) repo.command { skipPlayback() } else mainHandler.post { bubble?.hide() }
+			},
 		)
 		repo.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
@@ -306,16 +312,17 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
 		val counts = repo.queueCounts()
-		// Kept up while anything gave up, even with the run over. This notification is the only entry
-		// point to the queue list that needs no permission, so cancelling it the moment the queue
-		// drained left someone without the overlay grant an alert they could see on the bubble - if they
-		// had one - and no way to open the list and find out what had been dropped.
-		if (active || counts.third > 0) {
-			transport?.let {
-				manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
+		// Three states, not two. A run gets the media notification; a finished run that dropped
+		// something gets an ALERT, because the transport's controls have nothing left to act on and an
+		// entry titled "Speaking" over silence is a lie with two dead buttons on it. The alert still
+		// has to exist: this is the only route into the queue list that needs no permission, so
+		// cancelling on "run over" left anyone without the overlay grant no way to see what was lost.
+		transport?.let {
+			when {
+				active -> manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
+				counts.third > 0 -> manager.notify(TRANSPORT_NOTIFICATION_ID, it.alert(counts.third, openQueuePending()))
+				else -> manager.cancel(TRANSPORT_NOTIFICATION_ID)
 			}
-		} else {
-			manager.cancel(TRANSPORT_NOTIFICATION_ID)
 		}
 		// The bubble draws on the same settled state, so it cannot disagree with the shade about how
 		// much is left. Touching views needs main; playback settles on the player's lanes.

@@ -42,6 +42,24 @@ class PlaybackResidueTest {
 	}
 
 	@Test
+	fun givingUpOnASoundStatesWhetherToKeepItsPosition() {
+		// A pause, a skip, a trash and a genuine displacement all end as PREEMPTED, and they do not
+		// agree about the position: two keep it, two destroy it. Inferring the answer from the outcome
+		// made `forgetPosition` a no-op - the inference re-filed the offset on the play lane one line
+		// after the delete, so a skipped message resumed mid-sentence while the code above it said it
+		// could not. Every `abandon` therefore names its intent, and the default is to forget, because
+		// forgetting a position costs an opening replayed and keeping a wrong one costs a message.
+		val offenders = sourcesOutsideRegistry()
+			.filter { it.name != "SttsPlayer.kt" }
+			.flatMap { file ->
+				Regex("""\.abandon\((?![^)]*remember\s*=)[^)]*\)""")
+					.findAll(file.readText())
+					.map { "${file.name}: ${it.value}" }
+			}
+		assertEquals("every abandon must say whether the position survives it", emptyList<String>(), offenders)
+	}
+
+	@Test
 	fun theRegistryStaysFreeOfAndroid() {
 		// Every defect in the effect layer was uncatchable because no JVM test can construct it. This
 		// unit is testable only while it imports no platform type, and the pressure to break that is

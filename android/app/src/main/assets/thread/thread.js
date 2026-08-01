@@ -830,10 +830,11 @@
 	function revealMessage(id) {
 		const row = rowFor(id);
 		if (!row) return;
-		// `stuck` only, never `snapped`. Snapped means "anchored at the unread divider", and latching it
-		// for a jump made the first content reflow yank the reader back to that divider instead of
-		// leaving them where they asked to be.
+		// Both flags CLEARED, not merely left alone. This runs two statements after revealFirstUnread,
+		// which sets `snapped` itself - so not setting it here was never enough, and the first content
+		// reflow still pulled the reader from the message they asked for back to the divider.
 		stuck = false;
+		snapped = false;
 		runPin(() => row.scrollIntoView({ block: "start" }));
 	}
 

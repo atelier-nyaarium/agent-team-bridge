@@ -125,19 +125,18 @@ class SttsPlayer(private val root: File) {
 	 * monitor; this releases the player the drop actually took, on the play lane so a MediaPlayer
 	 * callback arriving on the main Looper never blocks there.
 	 *
-	 * A request that was DISPLACED remembers where it got to on the way out. Displacement is the only
-	 * terminal that means "not finished with this" - a completion is at the end, and a stop is a
-	 * decision to be done - so this is the one place a resume offset can be taken without any caller
-	 * having to work out whose position it just read.
+	 * `remember` is the CALLER'S, and it has to be: an outcome cannot answer it. A pause, a skip, a
+	 * trash and a genuine displacement all end as PREEMPTED, and two of those want the position kept
+	 * while two want it gone - so inferring here silently resurrected the offset a skip had just
+	 * deleted, on the play lane, one line after the delete. Identity is the engine's to supply and
+	 * intent is the caller's to declare; neither substitutes for the other.
 	 */
-	private fun apply(drop: PlaybackDrop) {
-		drop.soundingEnded?.let { id ->
-			val displaced = drop.events.any { it.gen == id.gen && it.outcome == Outcome.PREEMPTED }
-			playExec.execute { releasePlayerOf(id, remember = displaced) }
-		}
+	private fun apply(drop: PlaybackDrop, remember: Boolean = false) {
+		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id, remember) } }
 	}
 
-	/** Give up one request named by the generation its terminal would carry. */
+	/** Give up one request named by the generation its terminal would carry. Never resumable: this is
+	 * only ever a marker, and a boundary that starts halfway is worse than one that repeats. */
 	fun abandonGeneration(gen: Long) = apply(requests.finishGeneration(gen, Outcome.PREEMPTED))
 
 	/** Whether anything at all is audible right now, whoever owns it. */
@@ -436,7 +435,8 @@ class SttsPlayer(private val root: File) {
 	 * running cannot go on to play it, and report PREEMPTED now rather than when the uncancellable
 	 * fetch finally returns. Tier-scoped, so abandoning one entry never preempts a sibling tier of
 	 * the same message. */
-	fun abandon(team: String, at: Long, tier: Tier?) = apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED))
+	fun abandon(team: String, at: Long, tier: Tier?, remember: Boolean = false) =
+		apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED), remember)
 
 	@Synchronized
 	private fun teardownPlayer() {
@@ -452,16 +452,33 @@ class SttsPlayer(private val root: File) {
 	 * Release the player only while `id` still owns it. A newer request that took the sound in the
 	 * gap owns it now, and releasing that one would leave a live request no path to a terminal.
 	 *
-	 * `remember` files where it got to first, for a displacement. Taken HERE rather than by the caller
-	 * that decided to displace it: this is the last moment the position exists, and it is the only
-	 * moment at which whose position it is has already been established by `playerOwner`.
+	 * `remember` files where it got to first. The caller decides that; this decides WHOSE position it
+	 * is, which is the half a caller cannot see.
 	 */
 	@Synchronized
 	private fun releasePlayerOf(id: PlaybackId, remember: Boolean = false) {
 		if (playerOwner != id) return
-		if (remember) positionSnapshot()?.let { rememberPosition(it) }
+		if (remember) rememberWhereItGotTo()
 		teardownPlayer()
 	}
+
+	/** File the sounding position, unless the sound is not the kind of thing anyone resumes. */
+	@Synchronized
+	private fun rememberWhereItGotTo() {
+		val id = playerOwner ?: return
+		if (!isResumable(id)) return
+		positionSnapshot()?.let { rememberPosition(it) }
+	}
+
+	/**
+	 * Whether a request is the kind of sound worth resuming.
+	 *
+	 * Markers and the settings sample are not. A marker's cache key is its WORDS, so one is shared by
+	 * every run of a session - an offset left on one truncates the announcement of every later run,
+	 * for good. And neither is a message: there is no row to come back to and nothing a user could
+	 * point at to say "start that again".
+	 */
+	private fun isResumable(id: PlaybackId): Boolean = id.team != MARKER_TEAM && id.tier != null
 
 	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
 	 * team address ("domain.gateway.spawn.session") is a flat path segment with no slash, so it
@@ -538,6 +555,13 @@ class SttsPlayer(private val root: File) {
 			runCatching { mp.release() }
 			return
 		}
+		// The request that just lost the sound did not ASK to stop - something else took it - so keep
+		// where it got to. Taken here because `installPlayer` tears that player down on the next line,
+		// and because this path never goes through `apply`: the registry publishes the displaced
+		// terminal from inside `sound()`, so nothing else was ever going to run an effect for it. This
+		// is the ordinary way a run is interrupted, and for a long time it was the one case that
+		// recorded nothing.
+		if (displaced.soundingEnded != null) rememberWhereItGotTo()
 		installPlayer(id, mp, effect, f)
 		// Resume where it stopped. Keyed on THIS recording, so the offset a hand-played (attributed)
 		// rendering left behind is not handed to the unattributed one a run speaks, which is a

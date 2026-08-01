@@ -1704,7 +1704,12 @@ class ChatRepository(
 	 * separate step, so closing a tab the user may reopen keeps its audio. */
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
-			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
+			// Tearing the thread down is not a pause. Keeping the position would leave an offset for a
+			// message whose tab is gone, waiting to seek whatever plays if it is ever reopened.
+			queue.dropTeam(team)?.let {
+				stts.abandon(it.team, it.at, it.tier, remember = false)
+				stts.forgetPosition(it.team, it.at, it.tier)
+			}
 			// A marker lives under its own reserved team, so dropping the message's team cannot reach
 			// one already handed to the engine. Abandoned by its own identity rather than by stopping
 			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
@@ -1782,13 +1787,12 @@ class ChatRepository(
 				// already sounding - during a marker, or while the body is still synthesizing, there is
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
-				// Where it got to is NOT captured here. The engine files it on the way out of any
-				// displacement, keyed by the request that owned the sound and the recording it was in,
-				// so a pause landing during the chime or the sentinel stores that marker's position
-				// under the MARKER. Deciding it here meant guessing whose position had just been read,
-				// and the guess is wrong for the whole marker sequence at the head of every run.
+				// A pause KEEPS where it got to - that is what separates it from a skip. Which sound's
+				// position that is stays the engine's to answer: during the chime or the sentinel the
+				// audible thing is a marker, and a marker is never resumable, so a pause landing there
+				// files nothing rather than cutting the opening off the body.
 				queue.requeueFront(head)
-				stts.abandon(head.team, head.at, head.tier)
+				stts.abandon(head.team, head.at, head.tier, remember = true)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
 			}
 		}
@@ -1820,9 +1824,11 @@ class ChatRepository(
 				// move past.
 				val head = queue.playing() ?: queue.startNext() ?: return@withLock
 				// Skipping is giving up on the message, so any paused position for it goes too -
-				// otherwise it would resume mid-sentence if it ever came back.
+				// otherwise it would resume mid-sentence if it ever came back. The abandon has to be
+				// told that as well: left to infer, it re-filed the offset on the play lane a moment
+				// after this line deleted it, and the forget looked correct while doing nothing.
 				stts.forgetPosition(head.team, head.at, head.tier)
-				stts.abandon(head.team, head.at, head.tier)
+				stts.abandon(head.team, head.at, head.tier, remember = false)
 				queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
 			}
 		} finally {
@@ -1880,8 +1886,9 @@ class ChatRepository(
 		val wasHead = advanceMutex.withLock {
 			if (queue.playing() == entry) return@withLock true
 			queue.drop(entry)
-			stts.abandon(entry.team, entry.at, entry.tier)
-			// Giving up on a message gives up on where it had got to, exactly as a skip does.
+			// Giving up on a message gives up on where it had got to, exactly as a skip does - which
+			// the abandon is told outright rather than left to work out from the outcome.
+			stts.abandon(entry.team, entry.at, entry.tier, remember = false)
 			stts.forgetPosition(entry.team, entry.at, entry.tier)
 			// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
 			// parked otherwise leaves the flag set over an idle queue, refusing every later run on

@@ -226,8 +226,7 @@ class MainActivity : FragmentActivity() {
 		val repo = Repo.get(this)
 		val injected = intent.getStringExtra("provisioning_b64")
 			?.let { runCatching { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)) }.getOrNull() }
-		openTeamRequest.value = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)
-		openQueueRequest.value = intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)
+		consume(intent)
 		setContent {
 			val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
 			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest, openQueueRequest) }
@@ -236,12 +235,26 @@ class MainActivity : FragmentActivity() {
 
 	override fun onNewIntent(intent: Intent) {
 		super.onNewIntent(intent)
-		// setIntent, or getIntent() keeps answering with the one this Activity was CREATED with. A
-		// rotation re-runs onCreate against that stale intent, so a sheet the user had already
-		// dismissed would open itself again on every configuration change.
 		setIntent(intent)
-		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let { openTeamRequest.value = it }
-		if (intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)) openQueueRequest.value = true
+		consume(intent)
+	}
+
+	/**
+	 * Read the one-shot extras and REMOVE them.
+	 *
+	 * Removal is the load-bearing half. The intent outlives the Activity, so every configuration
+	 * change re-runs onCreate against it - and an extra left in place is not a request, it is a
+	 * standing instruction to reopen the sheet and re-jump the thread on every rotation, forever.
+	 */
+	private fun consume(intent: Intent) {
+		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let {
+			openTeamRequest.value = it
+			intent.removeExtra(SwitchboardService.EXTRA_OPEN_TEAM)
+		}
+		if (intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)) {
+			openQueueRequest.value = true
+			intent.removeExtra(SwitchboardService.EXTRA_OPEN_QUEUE)
+		}
 	}
 }
 

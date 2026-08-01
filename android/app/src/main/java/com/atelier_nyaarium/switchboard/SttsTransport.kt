@@ -104,6 +104,23 @@ class SttsTransport(
 			.setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1))
 			.build()
 
+	/**
+	 * The alert for messages that gave up, with no run behind it.
+	 *
+	 * Its own notification rather than the media one kept alive: with an empty queue the transport's
+	 * Pause and Skip do nothing at all, and a media-style entry titled "Speaking" over a run that
+	 * ended is a claim the app cannot back. This says what happened and offers the one thing that
+	 * helps, which is opening the list.
+	 */
+	fun alert(count: Int, openQueue: PendingIntent?): Notification =
+		Notification.Builder(context, channelId)
+			.setSmallIcon(android.R.drawable.stat_notify_error)
+			.setContentTitle(if (count == 1) "A message could not be spoken" else "$count messages could not be spoken")
+			.setContentText("Tap to see which")
+			.apply { openQueue?.let { setContentIntent(it) } }
+			.setAutoCancel(false)
+			.build()
+
 	fun release() {
 		session.isActive = false
 		session.release()

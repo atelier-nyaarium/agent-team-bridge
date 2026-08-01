@@ -833,12 +833,12 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   while the code's own comment promised the queue would "pick up again". It now picks up on the
   message it was interrupted on, at the position it reached.
 
-  **This claim was false when first written.** The requeue landed without any position capture, so the
-  message restarted from zero and the second half of the sentence was aspiration. The alignment audit
-  caught it. The position is now taken in `releasePlayerOf` on the way out of a displacement, which is
-  both the last moment it exists and the only moment at which whose position it is has already been
-  settled by `playerOwner` - so no caller has to work it out, and the pause path stopped needing its
-  own capture at all.
+  **This claim was false twice before it was true.** First the requeue landed with no capture at all,
+  so the message restarted from zero. Then the capture was inferred from the PREEMPTED outcome, which
+  was wrong in both directions at once: it never fired for the case the sentence describes (a real
+  displacement goes through `requests.sound`, which no `apply` ever followed), and it fired for cases
+  that wanted the opposite, silently undoing `skipPlayback`'s `forgetPosition` from the play lane one
+  line after the delete. See "Bug Classes: intent and identity" below.
 
 ### Phase 5 - what the audit found, and what it cost
 
@@ -1563,6 +1563,33 @@ The tell, and it is now reliable: three or more consecutive fixes that narrow a 
 answer "who is this?" means the identity is already in the system and is being dropped somewhere
 upstream. `playerOwner` had existed since Phase 1a and `releasePlayerOf` was already using it for
 exactly this question - the position API simply never asked.
+
+**Mechanism: intent and identity are two halves, and dropping either one fails the same way.**
+Defect class: a hand-off carries only half of what the far side needs. The earlier entries are all the
+identity half being dropped. Phase 5 produced the mirror image, which is worth recording because the
+"fix" for one is the cause of the other if applied without thought.
+
+- The position capture lived at the CALL SITE, which knew intent (pause versus skip) but had to guess
+  identity - and guessed wrong for the whole marker sequence at the head of every run.
+- So it moved into the ENGINE, which knows identity exactly. But intent was then inferred from the
+  outcome, and `PREEMPTED` is not a decision: a pause, a skip, a trash and a genuine displacement all
+  produce it, two wanting the position kept and two wanting it destroyed. The inference made
+  `forgetPosition` a no-op - it re-filed the offset on the play lane one line after the delete - and
+  gave boundary markers offsets that nothing forgets, so a skip during the sentinel truncated the next
+  run's announcement permanently, the marker cache being keyed on the words it speaks.
+- It also never fired for the case it was written for. A genuine displacement resolves inside
+  `requests.sound()`, and nothing ran an effect for that drop at all.
+
+CLOSED by carrying BOTH. `abandon(team, at, tier, remember)` takes the caller's intent; the engine
+answers whose position it is and which recording it points into; and `isResumable` refuses markers and
+the settings sample outright, since a boundary shared across every run of a session must always play
+whole. The displacement path captures before `installPlayer` tears the player down.
+
+Enforced by `PlaybackResidueTest.givingUpOnASoundStatesWhetherToKeepItsPosition`, because the previous
+attempt was guarded by a comment claiming `resumeIfSilent` was "the one place the flag is read" - true
+when written, and broken by its own author three commits later in the same session. **A comment
+asserting an invariant is documentation; only a test is enforcement.** The rule caught a fifth call
+site (thread teardown) on its first run.
 
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
