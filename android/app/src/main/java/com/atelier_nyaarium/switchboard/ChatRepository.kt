@@ -1783,11 +1783,10 @@ class ChatRepository(
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
 				// Where it got to is NOT captured here. The engine files it on the way out of any
-				// displacement, keyed by the request that actually owned the sound and the recording it
-				// was in - so a pause landing during the chime or the session sentinel stores the
-				// marker's position under the MARKER, and the body is untouched. Deciding it here meant
-				// guessing whose position had just been read, and the guess was wrong for the whole
-				// marker sequence at the head of every run.
+				// displacement, keyed by the request that owned the sound and the recording it was in,
+				// so a pause landing during the chime or the sentinel stores that marker's position
+				// under the MARKER. Deciding it here meant guessing whose position had just been read,
+				// and the guess is wrong for the whole marker sequence at the head of every run.
 				queue.requeueFront(head)
 				stts.abandon(head.team, head.at, head.tier)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
@@ -1876,20 +1875,17 @@ class ChatRepository(
 	 * terminal has nothing to advance, and the run would stop there.
 	 */
 	suspend fun dropFromQueue(entry: QueueEntry) {
-		// The head test happens UNDER the lock, and `drop` refuses the head itself, so a terminal
-		// promoting this entry between the test and the removal cannot make the trash take the wrong
-		// branch - which would either skip a message the user did not tap or leave the tapped one
-		// installed with its claim abandoned and no terminal coming to retire it.
+		// The head test is UNDER the lock: a terminal promoting this entry between test and removal
+		// would otherwise send the trash down the wrong branch, skipping a message nobody tapped.
 		val wasHead = advanceMutex.withLock {
 			if (queue.playing() == entry) return@withLock true
 			queue.drop(entry)
 			stts.abandon(entry.team, entry.at, entry.tier)
-			// Giving up on a message gives up on where it had got to, exactly as a skip does. Left
-			// behind, the offset would be waiting if the message were ever queued again.
+			// Giving up on a message gives up on where it had got to, exactly as a skip does.
 			stts.forgetPosition(entry.team, entry.at, entry.tier)
-			// This is a way to EMPTY the queue, so it has to be a way to release a pause too. Without
-			// it, trashing the entry a pause parked leaves the flag set over an idle queue and every
-			// later run on every team is refused, with no enabled control anywhere to clear it.
+			// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
+			// parked otherwise leaves the flag set over an idle queue, refusing every later run on
+			// every team with no enabled control left to clear it.
 			resumeIfSilent()
 			false
 		}

@@ -39,10 +39,8 @@ class QueueBubble(
 	/**
 	 * Draw the run.
 	 *
-	 * `count` and `generating` are INDEPENDENT facts: how many are left to speak, and whether the one
-	 * at the front is still being made. Folding them together (a spinner only when the count reached
-	 * zero) made the spinner unreachable, since the head is itself counted - so the whole synthesis
-	 * window, which a cache miss bounds only by the TTS timeout, looked identical to speaking.
+	 * `count` and `generating` are INDEPENDENT facts, and drawn independently: the head is itself
+	 * counted, so any rule that shows the spinner only at a count of zero never shows it at all.
 	 */
 	fun show(count: Int, generating: Boolean, failures: Int) {
 		if (!canShow()) return
@@ -72,11 +70,11 @@ class QueueBubble(
 	/**
 	 * The attached root, building and adding it when there is not one.
 	 *
-	 * Returns null when the add FAILED, having kept nothing - so the next call tries again. Holding a
-	 * view that was never attached would have been indistinguishable from a healthy bubble: every later
-	 * show would set visibility on a detached view and draw nothing, for the life of the service, while
-	 * settings went on reporting the feature enabled. That is reachable without a crash - revoking the
-	 * grant takes the window away underneath us, and re-granting it must bring the bubble back.
+	 * Null when the add FAILED, keeping nothing, so the next call tries again. A remembered view that
+	 * was never attached is indistinguishable from a healthy bubble: every later show would set
+	 * visibility on it and draw nothing, for the life of the service, while settings went on reporting
+	 * the feature enabled. Revoking the grant takes the window away with no crash, and re-granting it
+	 * has to bring the bubble back.
 	 */
 	private fun attached(): FrameLayout? {
 		root?.let { return it }
