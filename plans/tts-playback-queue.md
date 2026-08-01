@@ -788,7 +788,28 @@ Activity surface and stays Compose - it is only the overlay that leaves.
 - **`QueueSheet.kt`** - transport row, ONE bar over the current entry's BODY (markers are boundaries,
   not content, and seeking into them lands nowhere), and fat tiles. The bar is DISABLED rather than
   hidden while the length is unknown, so the row does not jump under a thumb when synthesis finishes;
-  an unknown duration is a spinner rather than a zero, which would look like a real length.
+  an unknown duration is a spinner rather than a zero, which would look like a real length. The
+  transport row is disabled outright on an empty queue: a Pause that does nothing reads as broken
+  where an absent one reads as idle.
+- **Reachable from TWO places** - the bubble, and the transport notification's body. The notification
+  is the one that matters: the bubble sits behind a permission the user may never grant, and with only
+  that entry point the list would have been unreachable for them while a notification sat on screen
+  advertising a run they could not inspect.
+- **A jump lands on the MESSAGE.** Routed through the same `openTeamRequest` a notification tap uses,
+  so it inherits that whole gesture - dismissing masking surfaces, selecting the tab, re-snapping -
+  rather than a partial re-implementation. The scroll itself needed a new `thread.revealMessage`: the
+  existing reveal draws an unread divider, and a tile the user chose to tap says nothing about what
+  they have read.
+- **The sheet is a fourth READER, never a fourth copy.** It re-reads on `queueRevision`, a counter the
+  settled-state hook bumps. Deliberately not a second `onTransportChanged`: that is one slot the
+  service owns, and a UI that took it would have silently unhooked the lockscreen.
+- **Trash on the head is a skip.** The head is installed in the engine, so lifting it out of the queue
+  would strand a playback whose terminal has nothing to retire and the run would stop there.
+  `PlaybackQueue.drop` refuses the head for that reason, and the repository routes it to `skipPlayback`.
+- **The failure alert outlives the drained queue and can be answered.** Failed entries list under
+  their own header with jump-or-dismiss, and dismissal is "seen", not "resolved" - the message was
+  never spoken and nothing here pretends otherwise. The bubble stays up on a failure count alone;
+  hiding on "is a run active" took the alert away in the same breath as the last entry created it.
 - **Every surface reads from the repository** (`queueRows`, `queueCounts`, `transportState`,
   `playStatesFor`). Four surfaces now report one run, and every one that kept its own copy tonight is
   one that drifted from it.
@@ -800,7 +821,28 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   and the call, which is a native crash rather than a wrong number. A pause captures the position
   BEFORE abandoning, and the offset is consumed on use, so it can never outlive its pause and skip the
   opening of a later message. Skipping forgets the position, since giving up on a message should not
-  leave it resuming mid-sentence.
+  leave it resuming mid-sentence. A purge forgets it too - an offset points INTO a file, and audio
+  deleted and re-synthesized has no reason to match where the old copy was paused.
+- **A position NAMES its request.** `positionSnapshot` returns the owner with the numbers and
+  `rememberPosition` takes the whole snapshot, so pairing one sound's position with another's key is
+  not expressible. See the sixth entry under Bug Classes: this was found as "pause during the chime
+  corrupts the body's resume", but the defect was the anonymous API, not the pause.
+- **A displaced message goes back to the front rather than being dropped.** Yielding decides WHEN to
+  speak, not whether to. Retiring the head on PREEMPTED let a settings voice sample - or a row's own
+  Play - silently consume the message the run had reached, with no alert and no count to notice it by,
+  while the code's own comment promised the queue would "pick up again". It now picks up on the
+  message it was interrupted on, at the position it reached.
+
+### Phase 5 - what the audit found, and what it cost
+
+44 findings raised, top 6 verified, **0 refuted** - the only round in this plan where every verified
+finding survived both skeptics. Worth recording plainly: the phase was written, gated green, and
+described in this file as complete while `QueueSheet` was never composed anywhere in the app. Six
+independent agents said so. The gates could not see it because dead Compose code compiles, and the
+"as built" notes above were originally written from intent rather than from what was reachable.
+
+The correction that generalizes: an "as built" entry must name the call site that reaches the thing,
+not the file that contains it.
 
 ### Audit findings (lap 1)
 
@@ -1461,6 +1503,28 @@ to ask.
 
 The lesson worth keeping: once the invariant moved into `sound()`, every guard protecting it from
 outside became a liability rather than insurance. A redundant check is not free when it can refuse.
+
+**Mechanism: an identity that exists, thrown away, then re-derived from something coarser.**
+Defect class: a value that already names WHO is not carried across a hand-off, so the far side asks a
+cheaper question - "what is playing?", "which entry is the head?" - and gets the wrong answer whenever
+the two have drifted apart. Every instance is fixed by carrying the value, never by narrowing the
+window in which the drift is visible.
+
+- Marker terminals matched against "whichever entry is playing" instead of the request that was
+  started. Four rounds of window-narrowing; closed by carrying `gen`.
+- A drop released "the player" instead of the player its request owned. Closed by `playerOwner`.
+- A cache key derived from the entry rather than the spoken words, so one message spoken two ways
+  collided. Closed by keying on the text hash.
+- Phase 5: `positionSnapshot`/`seekTo` read the bare `player` field and named nothing, so pause
+  attributed a boundary marker's position to the queue head - cutting the opening off the body, or
+  seeking past the end of a short one so it retired as heard without ever being spoken. Closed by
+  returning the owner ALONGSIDE the numbers and taking the whole snapshot into `rememberPosition`, so
+  no caller can pair one sound's position with another's key.
+
+The tell, and it is now reliable: three or more consecutive fixes that narrow a WINDOW rather than
+answer "who is this?" means the identity is already in the system and is being dropped somewhere
+upstream. `playerOwner` had existed since Phase 1a and `releasePlayerOf` was already using it for
+exactly this question - the position API simply never asked.
 
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
