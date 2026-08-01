@@ -38,6 +38,12 @@ class PlaybackQueue {
 	@Synchronized
 	fun playing(): QueueEntry? = head
 
+	/** Nothing playing and nothing waiting. Asked BEFORE an autoplay enqueue, this is what makes the
+	 * chime sound once for a run rather than once per message: mid-run the queue is never idle, and it
+	 * becomes idle again only after the last entry has been spoken. */
+	@Synchronized
+	fun isIdle(): Boolean = head == null && pending.isEmpty()
+
 	@Synchronized
 	fun remembered(): List<QueueEntry> = failures.toList()
 

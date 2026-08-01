@@ -34,6 +34,39 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `a run is idle only before it starts and after it drains`() {
+		val q = PlaybackQueue()
+		assertTrue(q.isIdle())
+
+		q.enqueue(entry(1))
+		q.enqueue(entry(2))
+		// Not idle mid-run, which is what keeps the boundary marker to once per run rather than once
+		// per message.
+		assertFalse(q.isIdle())
+
+		val head = q.startNext()!!
+		assertFalse(q.isIdle())
+		val second = q.advance(head, SttsPlayer.Outcome.COMPLETED).next!!
+		assertFalse(q.isIdle())
+
+		q.advance(second, SttsPlayer.Outcome.COMPLETED)
+		// Drained, so the next arrival begins a fresh run and marks itself again.
+		assertTrue(q.isIdle())
+	}
+
+	@Test
+	fun `a run that stood down is not idle`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		q.advance(head, SttsPlayer.Outcome.PREEMPTED)
+
+		// The head is gone but the run is not over - entry 2 is still owed. Reading this as idle would
+		// re-announce a run already in progress once the sound came free.
+		assertFalse(q.isIdle())
+	}
+
+	@Test
 	fun `the same message is not queued twice`() {
 		val q = queueOf(entry(1))
 
