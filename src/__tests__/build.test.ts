@@ -2,7 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkDerivedSites, nextVersion, readVersion, setVersion, versionTargets } from "../../scripts/bump-version.js";
+import {
+	checkDerivedSites,
+	dirtyTrackedFiles,
+	nextVersion,
+	readVersion,
+	setVersion,
+	versionTargets,
+} from "../../scripts/build.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -114,5 +121,42 @@ describe("the set of files a bump writes", () => {
 		for (const target of targets) {
 			expect([target, readVersion(fs.readFileSync(path.join(ROOT, target), "utf8"))]).toEqual([target, version]);
 		}
+	});
+});
+
+describe("the clean-tree gate", () => {
+	// Real `git status --porcelain=v2 --branch` shapes: header lines, then one record per path.
+	const headers = "# branch.oid abc123\n# branch.head main\n";
+
+	it("passes a clean tree", () => {
+		expect(dirtyTrackedFiles(headers)).toEqual([]);
+	});
+
+	it("catches an ordinary modification", () => {
+		expect(dirtyTrackedFiles(`${headers}1 .M N... 100644 100644 100644 abc def package.json`)).toEqual([
+			"package.json",
+		]);
+	});
+
+	it("lets untracked and ignored files through, so a scratch file cannot block a release", () => {
+		expect(dirtyTrackedFiles(`${headers}? scratch.txt\n! node_modules/\n`)).toEqual([]);
+	});
+
+	it("keeps spaces in a path rather than truncating at the first one", () => {
+		expect(dirtyTrackedFiles(`${headers}1 .M N... 100644 100644 100644 abc def my notes.md`)).toEqual([
+			"my notes.md",
+		]);
+	});
+
+	it("reports the new path of a rename, not the original it trails", () => {
+		expect(dirtyTrackedFiles(`${headers}2 R. N... 100644 100644 100644 abc def R100 new.ts\told.ts`)).toEqual([
+			"new.ts",
+		]);
+	});
+
+	it("catches an unmerged path, which has its own field count", () => {
+		expect(dirtyTrackedFiles(`${headers}u UU N... 100644 100644 100644 100644 aaa bbb ccc conflict.ts`)).toEqual([
+			"conflict.ts",
+		]);
 	});
 });

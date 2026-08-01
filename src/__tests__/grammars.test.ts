@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Language, Parser } from "web-tree-sitter";
-import { GRAMMAR_SOURCES, grammarForPath, grammarWasmPath, MANIFEST_FILE } from "../mcp/references/grammarSources.js";
+import { GRAMMAR_SOURCES, grammarForPath, grammarWasmPath, manifestFile } from "../mcp/references/grammarSources.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -40,7 +40,7 @@ describe("the committed grammars", () => {
 	});
 
 	it("records the toolchain that produced them, since a wasm cannot be asked", () => {
-		const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
+		const manifest = JSON.parse(fs.readFileSync(manifestFile(), "utf8"));
 
 		expect(manifest.treeSitterCli).toBe(manifest.webTreeSitter);
 		expect(Object.keys(manifest.grammars).sort()).toEqual(GRAMMAR_SOURCES.map((s) => s.id).sort());

@@ -8,6 +8,7 @@
 			"!**/android",
 			"!**/coverage",
 			"!**/data/stts-voices",
+			"!**/dist",
 			"!**/plans",
 			"!**/tests/fixtures/ref-project",
 			"!**/node_modules",

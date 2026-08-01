@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pluginRoot } from "../../shared/plugin-root.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -28,10 +29,7 @@ interface MarkdownParser {
  * patching that would have made it the same parser.
  */
 const VENDORED_PARSER = path.join(
-	import.meta.dirname,
-	"..",
-	"..",
-	"..",
+	pluginRoot(),
 	"android",
 	"app",
 	"src",

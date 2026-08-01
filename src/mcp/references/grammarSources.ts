@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
+import { moduleDir, pluginRoot } from "../../shared/plugin-root.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -31,9 +33,24 @@ export const GRAMMAR_SOURCES: GrammarSource[] = [
 	{ id: "gdscript", package: "tree-sitter-gdscript" },
 ];
 
-export const GRAMMARS_DIR = path.join(import.meta.dirname, "..", "..", "..", "grammars");
+/** The committed grammar wasms. */
+export function grammarsDir(): string {
+	return path.join(pluginRoot(), "grammars");
+}
 
-export const MANIFEST_FILE = path.join(GRAMMARS_DIR, "manifest.json");
+/**
+ * web-tree-sitter's own runtime wasm, which it otherwise locates inside its `node_modules` package.
+ * The build copies it beside the bundle, so prefer that; fall back to the package for a source run.
+ */
+export function treeSitterWasmPath(): string {
+	const beside = path.join(moduleDir(import.meta.url), "web-tree-sitter.wasm");
+	if (existsSync(beside)) return beside;
+	return path.join(pluginRoot(), "node_modules", "web-tree-sitter", "web-tree-sitter.wasm");
+}
+
+export function manifestFile(): string {
+	return path.join(grammarsDir(), "manifest.json");
+}
 
 /**
  * Which grammar parses a given file, by extension. Explicit rather than derived: `.ts` and `.tsx`
@@ -70,5 +87,5 @@ export function grammarForPath(filePath: string): string | null {
 
 /** The wasm file for a grammar id. */
 export function grammarWasmPath(id: string): string {
-	return path.join(GRAMMARS_DIR, `${id}.wasm`);
+	return path.join(grammarsDir(), `${id}.wasm`);
 }

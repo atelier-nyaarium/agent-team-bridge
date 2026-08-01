@@ -1,5 +1,5 @@
 import { Language, type Node, Parser } from "web-tree-sitter";
-import { grammarForPath, grammarWasmPath } from "./grammarSources.js";
+import { grammarForPath, grammarWasmPath, treeSitterWasmPath } from "./grammarSources.js";
 import type { Matcher, Ref } from "./refGrammar.js";
 
 ////////////////////////////////
@@ -47,7 +47,9 @@ async function parserFor(grammarId: string): Promise<Parser> {
 	const cached = parsers.get(grammarId);
 	if (cached) return cached;
 
-	await Parser.init();
+	// Named explicitly: the library's own default finds this inside node_modules, which the bundled
+	// build has no copy of.
+	await Parser.init({ locateFile: () => treeSitterWasmPath() });
 	const parser = new Parser();
 	parser.setLanguage(await Language.load(grammarWasmPath(grammarId)));
 	parsers.set(grammarId, parser);

@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { GRAMMAR_SOURCES, GRAMMARS_DIR, MANIFEST_FILE } from "../src/mcp/references/grammarSources.js";
+import { GRAMMAR_SOURCES } from "../src/mcp/references/grammarSources.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -18,17 +18,22 @@ import { GRAMMAR_SOURCES, GRAMMARS_DIR, MANIFEST_FILE } from "../src/mcp/referen
  *
  * Run `bun scripts/build-grammars.ts` after changing any pinned version, and commit the result.
  */
+// The generator states the layout rather than searching for it, because it CREATES this directory:
+// a resolver that finds `grammars/` by looking for it cannot name a path that does not exist yet.
+const OUT_DIR = path.join(import.meta.dirname, "..", "grammars");
+const OUT_MANIFEST = path.join(OUT_DIR, "manifest.json");
+
 function packageVersion(pkg: string): string {
 	const manifest = path.join("node_modules", pkg, "package.json");
 	return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
 }
 
 function build(): void {
-	fs.mkdirSync(GRAMMARS_DIR, { recursive: true });
+	fs.mkdirSync(OUT_DIR, { recursive: true });
 
 	const grammars: Record<string, { package: string; version: string; bytes: number }> = {};
 	for (const source of GRAMMAR_SOURCES) {
-		const out = path.join(GRAMMARS_DIR, `${source.id}.wasm`);
+		const out = path.join(OUT_DIR, `${source.id}.wasm`);
 		const dir = path.join("node_modules", source.package, source.subdir ?? "");
 		process.stderr.write(`[grammars] building ${source.id} from ${dir}\n`);
 
@@ -48,7 +53,7 @@ function build(): void {
 	// no way to tell which CLI produced a committed file, which is the one thing that decides whether
 	// the runtime can load it.
 	fs.writeFileSync(
-		MANIFEST_FILE,
+		OUT_MANIFEST,
 		`${JSON.stringify(
 			{
 				treeSitterCli: packageVersion("tree-sitter-cli"),
@@ -59,7 +64,7 @@ function build(): void {
 			"\t",
 		)}\n`,
 	);
-	process.stderr.write(`[grammars] wrote ${MANIFEST_FILE}\n`);
+	process.stderr.write(`[grammars] wrote ${OUT_MANIFEST}\n`);
 }
 
 build();

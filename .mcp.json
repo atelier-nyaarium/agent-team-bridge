@@ -1,8 +1,8 @@
 {
 	"mcpServers": {
 		"switchboard": {
-			"command": "bun",
-			"args": ["run", "${CLAUDE_PLUGIN_ROOT}/src/main-mcp.ts"]
+			"command": "node",
+			"args": ["${CLAUDE_PLUGIN_ROOT}/dist/main-mcp.js"]
 		}
 	}
 }

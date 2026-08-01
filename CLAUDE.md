@@ -49,7 +49,7 @@ code does not belong here; rationale lives in `git log`.
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
-- `scripts/` - `bump-version.ts`, `codegen-kotlin.ts`, `sync-leaf.ts`, `setup.ts` (the admin menu),
+- `scripts/` - `build.ts`, `codegen-kotlin.ts`, `sync-leaf.ts`, `setup.ts` (the admin menu),
   `check-module-residue.ts`, `import-stts-voices.ts`, `build-grammars.ts`
 - `tests/fixtures/` - golden wire fixtures and signing vectors read by BOTH vitest and the Kotlin
   tests. `_manifest.json` and `_signing-vectors-manifest.json` are the inventories both runtimes
@@ -392,7 +392,8 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 
 - `bun run lint` - Biome CI + tsc
 - `bun run test` - vitest
-- `bun run bump patch|minor|major` (`--dry-run` to preview) - the version ritual; see Deploying > Plugin
+- `bun run build patch|minor|major` - the release ritual; see Deploying > Plugin
+- `bun run build --build-only` - bundle `dist/` without bumping or committing
 - `bun scripts/codegen-kotlin.ts` - regenerate `proto/Protocol.kt` after editing a shared schema; CI
   fails on drift
 - `bun scripts/check-module-residue.ts` - verify node_modules against bun.lock
@@ -554,16 +555,19 @@ invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fiel
 
 ### Plugin
 
-1. `bun run bump patch|minor|major` (`--dry-run` to preview).
-   - It bumps `package.json`, sets that value into `plugin.json` and every console plugin manifest, and aborts if the APK or MCP versions stop deriving from `package.json`.
-2. Commit the bump alongside your changes, then push.
-3. Reload on target containers with the `reload_plugins` tool, not the `/reload-plugins` slash command.
+1. Commit your source work. The build script refuses to start on a dirty tree.
+2. `bun run build patch|minor|major`.
+   - It bumps `package.json`, sets that value into `plugin.json` and every console plugin manifest, bundles `dist/`, and commits as `Build X.Y.Z`.
+3. Push.
+4. Reload on target containers with the `reload_plugins` tool, not the `/reload-plugins` slash command.
 
-Never hand-edit a version field. `src/mcp/index.ts` and the APK `versionName` derive from `package.json`, and the bump script verifies those derivations rather than writing them.
+Never hand-edit a version field. `src/mcp/index.ts` and the APK `versionName` derive from `package.json`, and the build script verifies those derivations rather than writing them.
 
 The marketplace reads `plugin.json` to decide whether an update is available. A stale version there silently skips the update.
 
-`.mcp.json` runs `bun run ${CLAUDE_PLUGIN_ROOT}/src/main-mcp.ts` from source, so the plugin directory needs `bun install`.
+`.mcp.json` runs `node ${CLAUDE_PLUGIN_ROOT}/dist/main-mcp.js`. Dependencies are bundled into that file and `web-tree-sitter.wasm` is copied beside it, so the plugin needs no install step and no bun on the machine running it. `dist/` is committed for that reason.
+
+Only the MCP entrypoint is bundled. The gateway runs in Docker from `oven/bun:1` and the host daemon runs on the host under tmux, so both keep running from source under bun.
 
 ### Installing
 
