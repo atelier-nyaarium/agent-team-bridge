@@ -138,6 +138,16 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			prefs.edit().putInt(KEY_STTS_VOLUME, value.coerceIn(0, 200)).apply()
 		}
 
+	/** The run-start chime's own volume, same 0-200 scale. Separate from [sttsVolume] because the two
+	 * are balanced against different things: speech against whatever else is playing, and the chime
+	 * against the speech that follows it. A bundled tone at the level that suits a voice is usually
+	 * louder than anyone wants a repeated notification to be. */
+	var sttsChimeVolume: Int
+		get() = prefs.getInt(KEY_STTS_CHIME_VOLUME, 100).coerceIn(0, 200)
+		set(value) {
+			prefs.edit().putInt(KEY_STTS_CHIME_VOLUME, value.coerceIn(0, 200)).apply()
+		}
+
 	/** How often the terminal view re-captures the pane, in ms. A device setting (not the
 	 * blob), default 2s; clamped to the server's floor (the gateway re-uses a capture within
 	 * ~300ms regardless, so a smaller value only adds round-trips). */
@@ -421,6 +431,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		// would make the user re-pick their folder for an unrelated schema change.
 		const val KEY_SAVE_TREE_URI = "save_tree_uri"
 		const val KEY_STTS_VOLUME = "stts_volume"
+		const val KEY_STTS_CHIME_VOLUME = "stts_chime_volume"
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
 		const val KEY_IDLE_SILENCE_START = "idle_silence_start"

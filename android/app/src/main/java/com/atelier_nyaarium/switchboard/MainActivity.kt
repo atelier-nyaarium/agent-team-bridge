@@ -4001,6 +4001,25 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		)
 	}
 
+	// Its own slider rather than a share of the speech one. The chime is balanced against the voice
+	// that follows it, and a tone pitched to sit under speech is usually louder than anyone wants a
+	// sound they hear at the start of every run to be. Written on release, like the one above, so
+	// dragging does not thrash prefs.
+	var chimeVolume by remember { mutableStateOf(repo.sttsChimeVolume) }
+	Column {
+		Text("Chime volume: $chimeVolume%", style = MaterialTheme.typography.titleSmall)
+		Slider(
+			value = chimeVolume.toFloat(),
+			onValueChange = { chimeVolume = it.toInt() },
+			onValueChangeFinished = { repo.sttsChimeVolume = chimeVolume },
+			valueRange = 0f..200f,
+		)
+		Text(
+			"How loud the sound at the start of a run is, relative to the speech after it.",
+			style = MaterialTheme.typography.bodySmall,
+		)
+	}
+
 	if (pickerOpen) {
 		AlertDialog(
 			onDismissRequest = { pickerOpen = false },

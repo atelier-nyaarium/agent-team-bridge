@@ -1603,7 +1603,7 @@ class ChatRepository(
 	private fun nextMarkerStarted(): Boolean {
 		while (pendingMarkers.isNotEmpty()) {
 			val started = when (val marker = pendingMarkers.removeFirst()) {
-				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsVolume) }
+				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsChimeVolume) }
 				is Marker.Spoken -> speakMarker(marker.text)
 			}
 			// A marker that will not play is skipped rather than allowed to stall the body behind it:
@@ -2135,6 +2135,14 @@ class ChatRepository(
 		get() = store.sttsVolume
 		set(value) {
 			store.sttsVolume = value
+		}
+
+	/** The chime's own volume, 0-200%. Its own control because it is balanced against the speech that
+	 * follows it, not against whatever else the phone is playing. */
+	var sttsChimeVolume: Int
+		get() = store.sttsChimeVolume
+		set(value) {
+			store.sttsChimeVolume = value
 		}
 
 	/** Map the autoPlay pref string to its tier, or null for "off"/unknown. */
