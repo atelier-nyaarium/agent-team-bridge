@@ -403,6 +403,15 @@ fun App(
 		}
 		onDispose { repo.stts.removeListener(glyphs) }
 	}
+	// And again once the queue has SETTLED. A raw playback event fires before the terminal it reports
+	// has advanced the queue, so a row painted from it can show the state from just before the advance
+	// with no later event to correct it - the same pre-settle race the transport hit, answered the same
+	// way. Every open tab, since one terminal can start a message in a different thread.
+	LaunchedEffect(Unit) {
+		repo.queueRevision.collect {
+			for (team in repo.state.value.openTabs) rendererPool.setPlayStates(team, repo.playStatesFor(team))
+		}
+	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
 	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
@@ -3895,6 +3904,13 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	val overlayGrant = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
 		canOverlay = android.provider.Settings.canDrawOverlays(chimeContext)
 	}
+	// Re-read on every resume, not only on the launcher's result. This grant is revocable from system
+	// settings at any time, and the launcher only ever hears about the trip it started - so a
+	// revocation made anywhere else left this row claiming the bubble was on while it had stopped
+	// drawing. Same treatment the battery-optimization row already gets, for the same reason.
+	androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+		canOverlay = android.provider.Settings.canDrawOverlays(chimeContext)
+	}
 	Column {
 		Text("Floating queue bubble", style = MaterialTheme.typography.titleSmall)
 		Text(
@@ -3908,13 +3924,18 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		if (!canOverlay) {
 			Spacer(Modifier.height(4.dp))
 			OutlinedButton(
+				// Guarded like the battery-optimization button beside it: not every build ships this
+				// settings screen, and the bubble is an addition - failing to open its grant page must
+				// not take the settings screen down with it.
 				onClick = hapticClick {
-					overlayGrant.launch(
-						Intent(
-							android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-							android.net.Uri.parse("package:${chimeContext.packageName}"),
-						),
-					)
+					runCatching {
+						overlayGrant.launch(
+							Intent(
+								android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+								android.net.Uri.parse("package:${chimeContext.packageName}"),
+							),
+						)
+					}
 				},
 			) {
 				Text("Allow the bubble")

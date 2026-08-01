@@ -83,10 +83,16 @@ class PlaybackQueue {
 				QueueStep(takeNext())
 			}
 
-			// Something outside the queue took the sound. Retire the head but start nothing: speaking
-			// now would talk over whatever the user just asked for. The queue picks up again when that
-			// playback reports its own terminal.
+			// Something outside the queue took the sound. Stand down and start nothing: speaking now
+			// would talk over whatever the user just asked for.
+			//
+			// Put BACK at the front rather than dropped. Yielding is a decision about WHEN to speak,
+			// not about whether to: retiring it outright meant a settings voice sample, or a row's own
+			// Play button, silently consumed the message the run had reached, with no alert and no
+			// count to notice it by. The queue picks up here when the interloper reports its terminal,
+			// and the paused-position machinery already lets it resume where it left off.
 			SttsPlayer.Outcome.PREEMPTED -> {
+				requeueFrontLocked(entry)
 				retired(entry)
 				QueueStep(null, standDown = true)
 			}
@@ -127,10 +133,14 @@ class PlaybackQueue {
 	 * the request, which retires it - so without this, resuming would skip the very message that was
 	 * paused. There is no seek yet, so it resumes from the start. */
 	@Synchronized
-	fun requeueFront(entry: QueueEntry) {
-		// Deliberately allowed while it is still the head: a pause requeues BEFORE the stop retires it,
-		// which is the only moment the caller still knows what was playing. Guarded on `pending` alone,
-		// so requeueing something already waiting cannot make it speak twice.
+	fun requeueFront(entry: QueueEntry) = requeueFrontLocked(entry)
+
+	// Deliberately allowed while it is still the head: a pause requeues BEFORE the stop retires it,
+	// which is the only moment the caller still knows what was playing. Guarded on `pending` alone, so
+	// requeueing something already waiting cannot make it speak twice. Called from advance() too, which
+	// already holds this object's monitor - @Synchronized is reentrant, but a private unsynchronized
+	// body says plainly that the lock is the caller's to hold.
+	private fun requeueFrontLocked(entry: QueueEntry) {
 		if (pending.contains(entry)) return
 		pending.addFirst(entry)
 	}

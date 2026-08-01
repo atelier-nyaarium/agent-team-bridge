@@ -144,7 +144,10 @@ class PlaybackQueueTest {
 		// whatever the user just asked for; the queue waits for that playback to report its own end.
 		assertNull(step.next)
 		assertNull(q.playing())
-		assertEquals(listOf(entry(2)), q.queued())
+		// And the displaced entry is still THERE, at the front. Yielding decides when to speak, not
+		// whether to: dropping it let a settings voice sample eat the message the run had reached,
+		// with no alert and no count to notice the loss by.
+		assertEquals(listOf(entry(1), entry(2)), q.queued())
 		// The flag, not the empty head, is what says "do not fill this silence". Asserting only the
 		// two above passed while the caller restarted anyway, because a stood-down queue and an idle
 		// one look identical from here.
@@ -172,7 +175,9 @@ class PlaybackQueueTest {
 		// sees an idle queue with a backlog and restarts it.
 		val unrelated = q.advance(QueueEntry("local.gw.manual.main", 99, SttsPlayer.Tier.FULL), SttsPlayer.Outcome.COMPLETED)
 		assertNull(unrelated.next)
-		assertEquals(entry(2), q.startNext())
+		// Picking up on the message it was interrupted ON, not the one after it. The stored position
+		// is what keeps that from restarting it at the top.
+		assertEquals(entry(1), q.startNext())
 	}
 
 	@Test
