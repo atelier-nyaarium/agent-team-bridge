@@ -435,7 +435,7 @@ class SttsPlayer(private val root: File) {
 	 * running cannot go on to play it, and report PREEMPTED now rather than when the uncancellable
 	 * fetch finally returns. Tier-scoped, so abandoning one entry never preempts a sibling tier of
 	 * the same message. */
-	fun abandon(team: String, at: Long, tier: Tier?, remember: Boolean = false) =
+	fun abandon(team: String, at: Long, tier: Tier?, remember: Boolean) =
 		apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED), remember)
 
 	@Synchronized
@@ -593,6 +593,26 @@ class SttsPlayer(private val root: File) {
 	fun forgetPosition(team: String, at: Long, tier: Tier?) {
 		val entry = QueueEntry(team, at, tier)
 		resumeAt.keys.removeAll { it.entry == entry }
+	}
+
+	/**
+	 * Forget every offset a team holds, without touching its cached audio.
+	 *
+	 * What a teardown needs, and it cannot be done message by message: a pause parks its entry in the
+	 * queue's pending list, so the one message that actually holds an offset is never the head - and
+	 * the head is the only thing a teardown is handed. Closing a paused thread therefore left a live
+	 * resume point behind, waiting to seek whatever played next if the tab was ever reopened.
+	 */
+	fun forgetTeamPositions(team: String) {
+		resumeAt.keys.removeAll { it.entry.team == team }
+	}
+
+	/** Where a message would pick up if it started now, across whichever recording holds an offset.
+	 * What a paused sheet shows: the position exists, so leaving the timeline blank hides the one
+	 * thing a pause is for. */
+	fun heldPosition(team: String, at: Long, tier: Tier?): Long? {
+		val entry = QueueEntry(team, at, tier)
+		return resumeAt.entries.firstOrNull { it.key.entry == entry }?.value
 	}
 
 	/** Swap in the player that just took the sound. The only part of playback that needs the monitor,

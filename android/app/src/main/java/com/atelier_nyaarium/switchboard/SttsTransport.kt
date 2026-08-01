@@ -112,13 +112,16 @@ class SttsTransport(
 	 * ended is a claim the app cannot back. This says what happened and offers the one thing that
 	 * helps, which is opening the list.
 	 */
-	fun alert(count: Int, openQueue: PendingIntent?): Notification =
-		Notification.Builder(context, channelId)
+	fun alert(count: Int, alertChannelId: String, openQueue: PendingIntent?): Notification =
+		Notification.Builder(context, alertChannelId)
 			.setSmallIcon(android.R.drawable.stat_notify_error)
 			.setContentTitle(if (count == 1) "A message could not be spoken" else "$count messages could not be spoken")
 			.setContentText("Tap to see which")
 			.apply { openQueue?.let { setContentIntent(it) } }
-			.setAutoCancel(false)
+			// Ongoing, like the transport it replaces. This is the only route into the failed list that
+			// needs no permission, and a swipe is not an acknowledgement - dismissing it would leave
+			// messages that were never spoken with nothing left pointing at them.
+			.setOngoing(true)
 			.build()
 
 	fun release() {

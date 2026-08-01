@@ -27,13 +27,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** One row of the queue as the sheet needs it. Durations are null until the audio exists. */
+/**
+ * One row of the queue as the sheet needs it.
+ *
+ * `durationMs` is null until the audio exists, which the tile draws as a spinner - but only while the
+ * row is still WAITING. A row that gave up is not waiting for anything, and spinning at it forever
+ * says the opposite of what happened.
+ */
 data class QueueRow(
 	val entry: QueueEntry,
 	val sessionLabel: String,
 	val title: String,
 	val durationMs: Long?,
 	val isCurrent: Boolean,
+	val gaveUp: Boolean = false,
 )
 
 /**
@@ -128,11 +135,12 @@ private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {
 					Text(row.sessionLabel, style = MaterialTheme.typography.titleSmall)
 					Spacer(Modifier.size(8.dp))
 					// A spinner until the length is known, because "no duration" and "zero seconds"
-					// would otherwise look the same.
-					if (row.durationMs == null) {
-						CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
-					} else {
-						Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
+					// would otherwise look the same. Nothing spins for a row that gave up: it is not
+					// waiting, and a permanent spinner would read as still trying.
+					when {
+						row.gaveUp -> Text("not spoken", style = MaterialTheme.typography.labelSmall)
+						row.durationMs == null -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
+						else -> Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
 					}
 				}
 				Text(row.title, style = MaterialTheme.typography.bodySmall, maxLines = 2)

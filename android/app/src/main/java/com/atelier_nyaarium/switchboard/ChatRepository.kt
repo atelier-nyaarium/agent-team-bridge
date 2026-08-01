@@ -1704,12 +1704,11 @@ class ChatRepository(
 	 * separate step, so closing a tab the user may reopen keeps its audio. */
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
-			// Tearing the thread down is not a pause. Keeping the position would leave an offset for a
-			// message whose tab is gone, waiting to seek whatever plays if it is ever reopened.
-			queue.dropTeam(team)?.let {
-				stts.abandon(it.team, it.at, it.tier, remember = false)
-				stts.forgetPosition(it.team, it.at, it.tier)
-			}
+			// Tearing the thread down is not a pause. Swept across the whole TEAM rather than the entry
+			// handed back: a pause parks its message in pending, so the one entry that actually holds an
+			// offset is never the head, and the head is all a teardown is told about.
+			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier, remember = false) }
+			stts.forgetTeamPositions(team)
 			// A marker lives under its own reserved team, so dropping the message's team cannot reach
 			// one already handed to the engine. Abandoned by its own identity rather than by stopping
 			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
@@ -1815,21 +1814,12 @@ class ChatRepository(
 		// correct them.
 		try {
 			advanceMutex.withLock {
-				transportPaused = false
-				markerInFlight?.let { stts.abandonGeneration(it) }
-				clearMarkers()
 				// A pause retires the head and parks the message at the FRONT of the queue, so after one
 				// there is no head to skip - the thing being skipped is that parked entry. Promoting it
 				// first means Skip discards it, rather than resuming the very message it was asked to
 				// move past.
 				val head = queue.playing() ?: queue.startNext() ?: return@withLock
-				// Skipping is giving up on the message, so any paused position for it goes too -
-				// otherwise it would resume mid-sentence if it ever came back. The abandon has to be
-				// told that as well: left to infer, it re-filed the offset on the play lane a moment
-				// after this line deleted it, and the forget looked correct while doing nothing.
-				stts.forgetPosition(head.team, head.at, head.tier)
-				stts.abandon(head.team, head.at, head.tier, remember = false)
-				queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
+				retireHead(head)
 			}
 		} finally {
 			transportChanged()
@@ -1860,9 +1850,10 @@ class ChatRepository(
 
 	/** The entries that gave up, for the alert's list. Separate from [queueRows] because these are no
 	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
-	fun failedRows(): List<QueueRow> = queue.remembered().map { row(it, isCurrent = false, durationMs = null) }
+	fun failedRows(): List<QueueRow> =
+		queue.remembered().map { row(it, isCurrent = false, durationMs = null, gaveUp = true) }
 
-	private fun row(entry: QueueEntry, isCurrent: Boolean, durationMs: Long?): QueueRow {
+	private fun row(entry: QueueEntry, isCurrent: Boolean, durationMs: Long?, gaveUp: Boolean = false): QueueRow {
 		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
 		return QueueRow(
 			entry = entry,
@@ -1870,6 +1861,7 @@ class ChatRepository(
 			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
 			durationMs = durationMs,
 			isCurrent = isCurrent,
+			gaveUp = gaveUp,
 		)
 	}
 
@@ -1881,26 +1873,40 @@ class ChatRepository(
 	 * terminal has nothing to advance, and the run would stop there.
 	 */
 	suspend fun dropFromQueue(entry: QueueEntry) {
-		// The head test is UNDER the lock: a terminal promoting this entry between test and removal
-		// would otherwise send the trash down the wrong branch, skipping a message nobody tapped.
-		val wasHead = advanceMutex.withLock {
-			if (queue.playing() == entry) return@withLock true
-			queue.drop(entry)
-			// Giving up on a message gives up on where it had got to, exactly as a skip does - which
-			// the abandon is told outright rather than left to work out from the outcome.
-			stts.abandon(entry.team, entry.at, entry.tier, remember = false)
-			stts.forgetPosition(entry.team, entry.at, entry.tier)
-			// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
-			// parked otherwise leaves the flag set over an idle queue, refusing every later run on
-			// every team with no enabled control left to clear it.
-			resumeIfSilent()
-			false
+		// ONE critical section, and it names the entry throughout. Deciding head-vs-not under the lock
+		// and then acting outside it still let the head advance in between, so the trash discarded
+		// whatever had become current rather than the tile that was tapped - the same "re-derive it
+		// later from something coarser" shape this subsystem keeps producing.
+		try {
+			advanceMutex.withLock {
+				if (queue.playing() == entry) {
+					retireHead(entry)
+					return@withLock
+				}
+				queue.drop(entry)
+				// Giving up on a message gives up on where it had got to, exactly as a skip does - which
+				// the abandon is told outright rather than left to work out from the outcome.
+				stts.abandon(entry.team, entry.at, entry.tier, remember = false)
+				stts.forgetPosition(entry.team, entry.at, entry.tier)
+				// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
+				// parked otherwise leaves the flag set over an idle queue, refusing every later run on
+				// every team with no enabled control left to clear it.
+				resumeIfSilent()
+			}
+		} finally {
+			transportChanged()
 		}
-		if (wasHead) {
-			skipPlayback()
-			return
-		}
-		transportChanged()
+	}
+
+	/** Retire a NAMED head and start whatever follows it. The shared body of skip and of trashing the
+	 * tile that is speaking, so the two cannot drift; both must already hold [advanceMutex]. */
+	private fun retireHead(head: QueueEntry) {
+		transportPaused = false
+		markerInFlight?.let { stts.abandonGeneration(it) }
+		clearMarkers()
+		stts.forgetPosition(head.team, head.at, head.tier)
+		stts.abandon(head.team, head.at, head.tier, remember = false)
+		queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
 	}
 
 	/** Acknowledge one failure. "Seen", not "resolved" - the message was never spoken and this does not
@@ -1920,6 +1926,15 @@ class ChatRepository(
 	 */
 	fun playbackPosition(): SttsPlayer.Position? =
 		stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
+
+	/** Where the run would pick up while it is held. A pause has no player, so the live snapshot is
+	 * null and the sheet showed nothing at all - blanking the timeline at precisely the moment the
+	 * preserved position is the thing worth seeing. Duration stays unknown until audio exists again. */
+	fun heldPosition(): Long? {
+		if (!transportPaused) return null
+		val parked = queue.queued().firstOrNull() ?: return null
+		return stts.heldPosition(parked.team, parked.at, parked.tier)
+	}
 
 	/** Move the current body. Named, so a bar built a moment ago cannot seek whatever took the sound
 	 * since - a marker, or the next message. */

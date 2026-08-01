@@ -104,7 +104,10 @@ class PlaybackQueue {
 					QueueStep(takeNext())
 				} else {
 					retried.remove(entry)
-					failures.add(entry)
+					// AT MOST ONCE. The same message can fail, be re-enqueued and fail again, and a second
+					// copy here gives the sheet's list two rows with one key - which Compose rejects
+					// outright rather than merely drawing oddly.
+					if (entry !in failures) failures.add(entry)
 					QueueStep(takeNext(), failed = entry)
 				}
 			}

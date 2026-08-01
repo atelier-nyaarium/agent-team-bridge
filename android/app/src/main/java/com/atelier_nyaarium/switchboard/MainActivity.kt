@@ -4358,13 +4358,14 @@ private fun QueueSheetHost(repo: ChatRepository, onDismiss: () -> Unit, onJump: 
 	val rows = remember(revision, beat) { repo.queueRows() }
 	val failed = remember(revision) { repo.failedRows() }
 	val position = remember(revision, beat) { repo.playbackPosition() }
+	val held = remember(revision) { repo.heldPosition() }
 	val paused = remember(revision) { repo.transportState().second }
 	androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
 		QueueSheet(
 			rows = rows,
 			failed = failed,
 			paused = paused,
-			positionMs = position?.positionMs,
+			positionMs = position?.positionMs ?: held,
 			durationMs = position?.durationMs,
 			onPlayPause = { repo.command { if (paused) resumePlayback() else pausePlayback() } },
 			onSkip = { repo.command { skipPlayback() } },

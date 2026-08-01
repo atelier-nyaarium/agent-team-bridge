@@ -43,9 +43,18 @@ class QueueBubble(
 	 * counted, so any rule that shows the spinner only at a count of zero never shows it at all.
 	 */
 	fun show(count: Int, generating: Boolean, failures: Int) {
-		if (!canShow()) return
+		// Losing the grant takes the window away underneath us with no callback, so the remembered root
+		// is detached and every later show would draw nothing. Dropped here, where the permission is
+		// already being asked about, so a re-grant brings the bubble back rather than needing a restart.
+		if (!canShow()) {
+			release()
+			return
+		}
+		if (dismissed) return
 		val view = attached() ?: return
-		countText?.text = count.toString()
+		// The count is what is left to SPEAK. In the failures-only state there is nothing left to speak,
+		// and a "0" beside an alert dot reads as a broken badge rather than a finished run.
+		countText?.text = if (count == 0) "!" else count.toString()
 		spinner?.visibility = if (generating) View.VISIBLE else View.GONE
 		alertDot?.visibility = if (failures > 0) View.VISIBLE else View.GONE
 		view.visibility = View.VISIBLE
@@ -53,6 +62,20 @@ class QueueBubble(
 
 	fun hide() {
 		root?.visibility = View.GONE
+	}
+
+	// Swiped away by hand. Sticky, because the next playback event anywhere in the app republishes and
+	// would otherwise put the bubble straight back - a dismissal that survives one event and no more is
+	// not a dismissal. Cleared when a real run starts, which is the next thing worth interrupting for.
+	private var dismissed = false
+
+	fun dismiss() {
+		dismissed = true
+		hide()
+	}
+
+	fun undismiss() {
+		dismissed = false
 	}
 
 	fun release() {

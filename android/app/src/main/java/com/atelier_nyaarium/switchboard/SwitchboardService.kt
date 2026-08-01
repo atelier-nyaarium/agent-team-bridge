@@ -244,7 +244,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			// act. The failures themselves stay - they are still in the list and still in the shade,
 			// and there is deliberately no gesture that discards several of them at once.
 			onSwipeAway = {
-				if (repo.transportState().first) repo.command { skipPlayback() } else mainHandler.post { bubble?.hide() }
+				if (repo.transportState().first) repo.command { skipPlayback() } else mainHandler.post { bubble?.dismiss() }
 			},
 		)
 		repo.onTransportChanged = { publishTransport() }
@@ -320,7 +320,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		transport?.let {
 			when {
 				active -> manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
-				counts.third > 0 -> manager.notify(TRANSPORT_NOTIFICATION_ID, it.alert(counts.third, openQueuePending()))
+				counts.third > 0 ->
+					manager.notify(TRANSPORT_NOTIFICATION_ID, it.alert(counts.third, CHANNEL_SPEECH_FAILED, openQueuePending()))
 				else -> manager.cancel(TRANSPORT_NOTIFICATION_ID)
 			}
 		}
@@ -332,6 +333,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// one that drains the queue, so the dot appeared and vanished in the same breath and the user
 		// was never told anything had been dropped.
 		mainHandler.post {
+			// A live run clears a hand dismissal: the swipe said "not this alert", not "never again".
+			if (active) bubble?.undismiss()
 			if (active || counts.third > 0) {
 				bubble?.show(counts.first, counts.second, counts.third)
 			} else {
@@ -471,6 +474,15 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 						.build(),
 				)
 				enableVibration(true)
+			},
+		)
+		// NOT the status channel. That one is MIN with no badge, which is right for "the bridge is
+		// connected" and wrong for the only notice that a message was never spoken - it would have been
+		// silent, badgeless, and absent from the status bar, which is indistinguishable from never
+		// telling the user at all. DEFAULT rather than HIGH: nothing was lost, only unsaid.
+		nm.createNotificationChannel(
+			NotificationChannel(CHANNEL_SPEECH_FAILED, "Unspoken messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
+				description = "A message could not be read aloud"
 			},
 		)
 		nm.createNotificationChannel(
@@ -647,6 +659,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		const val TRANSPORT_NOTIFICATION_ID = 4271
 
 		const val CHANNEL_STATUS = "status"
+		const val CHANNEL_SPEECH_FAILED = "speech_failed"
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val CHANNEL_SCHEDULED_SEND_FAILED = "scheduled_send_failed"
 		const val STATUS_NOTIFICATION_ID = 1
