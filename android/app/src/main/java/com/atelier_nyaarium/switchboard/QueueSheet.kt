@@ -43,6 +43,10 @@ data class QueueRow(
 	val title: String,
 	val durationMs: Long?,
 	val isCurrent: Boolean,
+	// Whether this row is BEING MADE right now. Only the head can be, and only until its audio starts.
+	// Not the same as "no duration": everything behind the head also has no duration, and spinning at
+	// all of them said the whole queue was working when it was simply waiting its turn.
+	val generating: Boolean = false,
 	val gaveUp: Boolean = false,
 	// WHY it gave up. The engine has carried this on every terminal all along; without it a missing
 	// API key, a dead network and an undecodable file all read as the same shrug.
@@ -140,13 +144,14 @@ private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {
 				Row(verticalAlignment = Alignment.CenterVertically) {
 					Text(row.sessionLabel, style = MaterialTheme.typography.titleSmall)
 					Spacer(Modifier.size(8.dp))
-					// A spinner until the length is known, because "no duration" and "zero seconds"
-					// would otherwise look the same. Nothing spins for a row that gave up: it is not
-					// waiting, and a permanent spinner would read as still trying.
+					// A spinner means THIS row is being made right now, which only the head ever is.
+					// Keying it on a missing duration instead spun every row in the queue at once and
+					// said the whole thing was working when it was only waiting.
 					when {
 						row.gaveUp -> Text(row.reason ?: "not spoken", style = MaterialTheme.typography.labelSmall)
-						row.durationMs == null -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
-						else -> Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
+						row.generating -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
+						row.durationMs != null -> Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
+						else -> Text("waiting", style = MaterialTheme.typography.labelSmall)
 					}
 				}
 				Text(row.title, style = MaterialTheme.typography.bodySmall, maxLines = 2)
