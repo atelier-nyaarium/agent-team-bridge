@@ -492,6 +492,16 @@ In progress. Landed and green:
   still held the sound, and the marker's terminal then found no head and started nothing. That is A3
   re-opened through a path A3's fix could not see. The marker branch now resumes when its run is gone.
 
+**The marker sequence now matches terminals to the marker that was started.** This is the root cause
+under three rounds of marker-ownership patches, and it is the recorded bug class again: the identity
+EXISTED and was thrown away. A marker terminal carries its own `at` (and a `gen` the listener drops),
+and the branch matched only on the head - so a terminal from a torn-down run was indistinguishable
+from this run's own and drove it a step forward with its message unspoken. Deterministic, not racy:
+`dropQueuedFor` holds the advance lock from the marker stop through the resume, so the stale terminal
+always arrives after the next run is staged. `playMarker`/`playChime` now return WHICH request will
+report, and the branch ignores anything else. Capturing the gap owner (below) only ever guarded the
+350ms window, never entry into the branch.
+
 **Also fixed, found by the re-audit:** the marker gap callback RE-READ the current head when the gap
 expired instead of capturing it. A run torn down during a gap, with a new one staged behind it, left a
 stale callback that drove the NEW entry's sequence and dropped its body unspoken. The owner is now

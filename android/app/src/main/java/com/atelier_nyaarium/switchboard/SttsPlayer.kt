@@ -180,19 +180,20 @@ class SttsPlayer(private val root: File) {
 		text: String,
 		volumePct: Int = 100,
 		yielding: Boolean = true,
-	): Boolean {
-		if (text.isBlank()) return false
+	): Long? {
+		if (text.isBlank()) return null
 		val at = markerAt(text, provider, voice)
 		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${safeVoice(voice)}.audio")
-		return synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding) { d ->
+		val started = synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding) { d ->
 			client.stream(provider, text, voice, d)
 		}
+		return at.takeIf { started }
 	}
 
 	/** Play the bundled or user-chosen chime. Takes a resolved local source rather than synthesizing,
 	 * since the audio is an asset and not speech. */
-	fun playChime(source: File, volumePct: Int = 100): Boolean =
-		synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { }
+	fun playChime(source: File, volumePct: Int = 100): Long? =
+		CHIME_AT.takeIf { synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { } }
 
 	/** Let a gap fall between two playbacks before running `then`. Silence between a marker and what
 	 * it announces is what makes it read as a boundary rather than as part of the sentence; run

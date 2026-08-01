@@ -1529,6 +1529,10 @@ class ChatRepository(
 	 * that moved on while one was in flight must not let the leftovers introduce the wrong one. */
 	private var markersFor: QueueEntry? = null
 
+	/** The marker currently speaking, by its own entry key. A terminal that does not match it belongs
+	 * to a run that has already ended, and must drive nothing. */
+	private var soundingMarker: Long? = null
+
 	private sealed interface Marker {
 		data object Chime : Marker
 
@@ -1570,25 +1574,32 @@ class ChatRepository(
 	private fun clearMarkers() {
 		pendingMarkers.clear()
 		markersFor = null
+		soundingMarker = null
 	}
 
-	/** Play the next owed marker, or report that the body may now speak. */
+	/** Play the next owed marker, or report that the body may now speak. Records WHICH marker is in
+	 * flight, so a terminal can be matched to it: without that, a marker from a run that has already
+	 * been torn down drives the current run's sequence and swallows its message. */
 	private fun nextMarkerStarted(): Boolean {
 		while (pendingMarkers.isNotEmpty()) {
 			val started = when (val marker = pendingMarkers.removeFirst()) {
-				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsVolume) } == true
+				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsVolume) }
 				is Marker.Spoken -> speakMarker(marker.text)
 			}
 			// A marker that will not play is skipped rather than allowed to stall the body behind it:
 			// losing a boundary is a smaller harm than losing the message.
-			if (started) return true
+			if (started != null) {
+				soundingMarker = started
+				return true
+			}
 		}
+		soundingMarker = null
 		return false
 	}
 
-	private fun speakMarker(text: String): Boolean {
-		val client = sttsClient() ?: return false
-		val provider = currentProvider() ?: return false
+	private fun speakMarker(text: String): Long? {
+		val client = sttsClient() ?: return null
+		val provider = currentProvider() ?: return null
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
 		return stts.playMarker(client, provider, voice, text, sttsVolume)
 	}
@@ -1612,6 +1623,11 @@ class ChatRepository(
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
 			if (entry.team == SttsPlayer.MARKER_TEAM) {
+				// Matched to the marker that was actually started. A terminal from a torn-down run
+				// otherwise looks indistinguishable from this run's own, and drives it a step forward
+				// while its message has not been spoken.
+				if (entry.at != soundingMarker) return
+				soundingMarker = null
 				val head = queue.playing()
 				// The run these markers belonged to is gone, either torn down or moved on. Nothing else
 				// will report a terminal for it, so drop the leftovers and pick the queue back up
