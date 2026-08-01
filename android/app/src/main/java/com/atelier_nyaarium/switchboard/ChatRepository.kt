@@ -1621,14 +1621,18 @@ class ChatRepository(
 					resumeIfSilent()
 					return
 				}
-				// Gapped, so each marker reads as a boundary rather than running into what follows.
+				// Gapped, so each marker reads as a boundary rather than running into what follows. The
+				// owner is captured HERE, not re-read when the gap expires: by then the run may have
+				// been torn down and a new one staged, and a stale callback that re-bound to whatever
+				// was current would drive the new entry's sequence and drop its body unspoken.
+				val owner = head
 				stts.afterGap {
 					repoScope.launch {
 						advanceMutex.withLock {
-							if (markersFor != queue.playing()) return@withLock
+							if (markersFor != owner || queue.playing() != owner) return@withLock
 							if (nextMarkerStarted()) return@withLock
 							clearMarkers()
-							queue.playing()?.let { speakBody(it) }
+							speakBody(owner)
 						}
 					}
 				}
@@ -1660,6 +1664,13 @@ class ChatRepository(
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
 			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
+			// A marker lives under its own reserved team, so dropping the message's team cannot reach
+			// one already handed to the engine. Without this, a session you just forgot carries on
+			// announcing itself by name.
+			if (markersFor?.team == team) {
+				clearMarkers()
+				stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
+			}
 			resumeIfSilent()
 		}
 	}

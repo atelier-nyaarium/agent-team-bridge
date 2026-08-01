@@ -492,6 +492,13 @@ In progress. Landed and green:
   still held the sound, and the marker's terminal then found no head and started nothing. That is A3
   re-opened through a path A3's fix could not see. The marker branch now resumes when its run is gone.
 
+**Also fixed, found by the re-audit:** the marker gap callback RE-READ the current head when the gap
+expired instead of capturing it. A run torn down during a gap, with a new one staged behind it, left a
+stale callback that drove the NEW entry's sequence and dropped its body unspoken. The owner is now
+captured when the gap starts. Related and fixed with it: no teardown could reach a marker already
+handed to the engine, because a marker lives under its own reserved team - so a session you had just
+forgotten carried on announcing itself by name.
+
 **Also fixed, found by the re-audit:** the `attributed` flag changed the spoken text but NOT the cache
 key, so whichever variant synthesized first was served to both paths - and a cache hit never looks at
 the text it was asked for. The direction was deterministic rather than racy: the preload runs
