@@ -326,6 +326,13 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
   so the caller declares intent (`remember`, no default - the compiler demands it) and the engine
   answers whose position it is and which recording it points into. Markers and the settings sample are
   never resumable: a marker's cache key is the words it speaks, shared by every run of that session.
+- **The queue warms its own backlog** (`SttsPlayer.warm`, driven from `ChatRepository.warmQueued`):
+  every queued entry synthesizes ahead of its turn on a 3-wide pool, keyed on the words the RUN will
+  speak rather than the attributed form a hand-play uses, or the cache fills and playback still
+  synthesizes live. Holds NO claim - a warm-up is not something a consumer can see or stop, and a
+  purge reaches it through the epoch. Keeps going while PAUSED, since a pause means the person is
+  busy, not that the work should stop. The measured duration is the by-product that lets a queued
+  tile show its length instead of a spinner.
 - **Audio focus** (`SpeechFocus.kt`): held for a RUN, `AUDIOFOCUS_GAIN_TRANSIENT` so the user's music
   resumes, released on a pause as well as at the end. Every loss pauses, including the duckable one -
   with `CONTENT_TYPE_SPEECH` the system does not auto-duck, and speech under speech is worse than a

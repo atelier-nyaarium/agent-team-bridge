@@ -91,6 +91,12 @@ class SttsPlayer(private val root: File) {
 	// Separate lanes: SttsClient blocks for up to 80s, and a stalled synth must never hold up a
 	// playback whose audio is already cached.
 	private val synthExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-synth").apply { isDaemon = true } }
+
+	// Warming runs WIDE, unlike every other lane here, because these are independent network fetches
+	// with nothing ordered about them - the queue decides what is spoken next, not the order these
+	// happen to finish in. Bounded at three: enough that a burst is ready before it is reached, few
+	// enough not to open a fetch per message and have the provider rate-limit the whole run.
+	private val warmExec = Executors.newFixedThreadPool(3) { r -> Thread(r, "stts-warm").apply { isDaemon = true } }
 	private val playExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-play").apply { isDaemon = true } }
 	private val eventExec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts-events").apply { isDaemon = true } }
 	// Control work gets a lane that blocking synthesis can never occupy. Sharing one meant a tap that
@@ -312,6 +318,62 @@ class SttsPlayer(private val root: File) {
 		}
 	}
 
+	// What has been warmed, and how long it turned out to be. The duration is the useful by-product:
+	// until audio exists nothing can say how long a message will take, so a queue tile has nothing to
+	// show but a shrug.
+	private val warmedMs = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
+	private val warming = java.util.concurrent.ConcurrentHashMap.newKeySet<QueueEntry>()
+
+	/** How long a warmed message runs, or null if its audio does not exist yet. */
+	fun warmedDuration(team: String, at: Long, tier: Tier?): Long? = warmedMs[QueueEntry(team, at, tier)]
+
+	/**
+	 * Synthesize one queued entry ahead of its turn, off on the warm pool.
+	 *
+	 * Holds NO claim, deliberately: a warm-up is not something a consumer can see, stop, or advance a
+	 * queue on, and giving it one made a message being pre-generated read as playing. A purge reaches
+	 * it through the epoch instead, which also covers the gap between the write and the measure where
+	 * no claim could exist.
+	 *
+	 * Idempotent per entry, so the repository can call it on every queue change without stacking
+	 * fetches for something already in flight.
+	 */
+	fun warm(
+		client: SttsClient,
+		provider: SttsProvider,
+		voice: String?,
+		team: String,
+		at: Long,
+		tier: Tier,
+		text: String,
+	) {
+		val entry = QueueEntry(team, at, tier)
+		if (warmedMs.containsKey(entry) || !warming.add(entry)) return
+		warmExec.execute {
+			try {
+				val horizon = requests.purgeStamp()
+				val dest = cacheFile(team, at, tier, provider, voice, text)
+				if (!dest.isFile || dest.length() == 0L) {
+					if (!synthToCache(client, provider, voice, text, dest)) return@execute
+					if (requests.purgedSince(team, horizon)) return@execute discardPreload(dest)
+				}
+				durationOf(dest)?.let { warmedMs[entry] = it }
+			} finally {
+				warming.remove(entry)
+			}
+		}
+	}
+
+	/** A cached file's length in milliseconds. Best effort: an unreadable or half-written file simply
+	 * has no duration yet, which the tile shows as waiting rather than as a wrong number. */
+	private fun durationOf(f: File): Long? =
+		runCatching {
+			android.media.MediaMetadataRetriever().use { mmr ->
+				mmr.setDataSource(f.absolutePath)
+				mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+			}
+		}.getOrNull()
+
 	/** Remove what a preload wrote into a directory that a purge had already deleted. The parent goes
 	 * only if it is now empty, so this cannot take a sibling message's cached audio with it. */
 	private fun discardPreload(dest: File) {
@@ -491,8 +553,9 @@ class SttsPlayer(private val root: File) {
 		apply(requests.purgeTeam(team))
 		// The offsets go with the audio. A remembered position points INTO a file that is about to be
 		// deleted, so leaving it behind would seek freshly re-synthesized speech to where the copy that
-		// no longer exists happened to be paused.
+		// no longer exists happened to be paused. A measured duration describes that same deleted file.
 		resumeAt.keys.removeAll { it.entry.team == team }
+		warmedMs.keys.removeAll { it.team == team }
 		File(root, "stts/$team").deleteRecursively()
 	}
 
@@ -501,6 +564,7 @@ class SttsPlayer(private val root: File) {
 	fun purgeAll() {
 		apply(requests.purgeEverything())
 		resumeAt.clear()
+		warmedMs.clear()
 		File(root, "stts").deleteRecursively()
 	}
 
