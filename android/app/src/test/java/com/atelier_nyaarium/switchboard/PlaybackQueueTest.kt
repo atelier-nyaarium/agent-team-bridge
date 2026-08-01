@@ -34,6 +34,30 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `a paused entry comes back before everything waiting`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		// Pausing stops the audio, which ends the request and retires it. Putting it back at the front
+		// is what makes resume replay the paused message rather than skip to the next one.
+		q.requeueFront(head)
+		q.advance(head, SttsPlayer.Outcome.PREEMPTED)
+
+		assertEquals(entry(1), q.startNext())
+		assertEquals(listOf(entry(1), entry(2)), q.queued())
+	}
+
+	@Test
+	fun `requeueing something already waiting changes nothing`() {
+		val q = queueOf(entry(1), entry(2))
+
+		q.requeueFront(entry(2))
+
+		// Otherwise a double pause, or a pause of an entry the queue never lost, speaks it twice.
+		assertEquals(listOf(entry(1), entry(2)), q.queued())
+	}
+
+	@Test
 	fun `a run is idle only before it starts and after it drains`() {
 		val q = PlaybackQueue()
 		assertTrue(q.isIdle())

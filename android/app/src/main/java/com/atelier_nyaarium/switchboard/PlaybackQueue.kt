@@ -123,6 +123,18 @@ class PlaybackQueue {
 		return dropped
 	}
 
+	/** Put an entry back at the FRONT, ahead of everything waiting. A pause stops the audio by ending
+	 * the request, which retires it - so without this, resuming would skip the very message that was
+	 * paused. There is no seek yet, so it resumes from the start. */
+	@Synchronized
+	fun requeueFront(entry: QueueEntry) {
+		// Deliberately allowed while it is still the head: a pause requeues BEFORE the stop retires it,
+		// which is the only moment the caller still knows what was playing. Guarded on `pending` alone,
+		// so requeueing something already waiting cannot make it speak twice.
+		if (pending.contains(entry)) return
+		pending.addFirst(entry)
+	}
+
 	@Synchronized
 	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry)
 

@@ -1696,10 +1696,57 @@ class ChatRepository(
 	/** Start the next entry only while nothing is audible. "The queue has no head" is not the same
 	 * question: the queue is headless the instant it stands down, and answering the wrong one is how it
 	 * ends up speaking over the playback it just yielded to. Callers hold [advanceMutex]. */
+	/** Whether a transport control has held the run. Distinct from an empty queue: paused means there
+	 * is something to come back to, which is why nothing auto-resumes past it. */
+	@Volatile
+	private var transportPaused = false
+
 	private fun resumeIfSilent() {
-		if (queue.playing() != null || stts.isSounding()) return
+		if (transportPaused || queue.playing() != null || stts.isSounding()) return
 		queue.startNext()?.let { speak(it) }
 	}
+
+	/** Hold the run where it is. PREEMPTED already means "stand down and wait" rather than "advance",
+	 * so a pause is that plus a flag stopping the next terminal from picking the run back up. */
+	suspend fun pausePlayback() {
+		advanceMutex.withLock {
+			transportPaused = true
+			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
+			clearMarkers()
+			// Stopping the audio ends the request, which retires it. Put it back at the front first, or
+			// resuming would skip the very message that was paused.
+			queue.playing()?.let { queue.requeueFront(it) }
+			stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
+		}
+	}
+
+	suspend fun resumePlayback() {
+		advanceMutex.withLock {
+			transportPaused = false
+			resumeIfSilent()
+		}
+	}
+
+	/** Give up on what is speaking and move to the next entry. Distinct from a pause: this one is a
+	 * decision about THIS message, so the run continues. */
+	suspend fun skipPlayback() {
+		advanceMutex.withLock {
+			transportPaused = false
+			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
+			clearMarkers()
+			val head = queue.playing()
+			if (head == null) {
+				resumeIfSilent()
+				return
+			}
+			stts.abandon(head.team, head.at, head.tier)
+			queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
+		}
+	}
+
+	/** What a transport surface should show: whether anything is queued at all, and whether it is
+	 * currently held. */
+	fun transportState(): Pair<Boolean, Boolean> = Pair(!queue.isIdle(), transportPaused)
 
 	/** Hand an entry to the engine, and synthesise its terminal ourselves if the engine would not take
 	 * it. Without that, an entry the engine silently declines leaves the head un-retired and every
