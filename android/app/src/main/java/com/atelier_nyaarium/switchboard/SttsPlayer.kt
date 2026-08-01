@@ -162,6 +162,35 @@ class SttsPlayer(private val root: File) {
 		}
 	}
 
+	/**
+	 * Speak a boundary marker: the words that announce who is about to talk. Its own request, so it
+	 * gets one terminal and ordered delivery like anything else, and the caller chains the body behind
+	 * that terminal rather than concatenating audio - providers differ in container, so one stream
+	 * would mean re-encoding.
+	 *
+	 * Never yields. A marker is short and it delimits a run; standing it down would silently drop the
+	 * boundary rather than delay it, and a run whose marker vanished reads as a message from nobody.
+	 */
+	fun playMarker(
+		client: SttsClient,
+		provider: SttsProvider,
+		voice: String?,
+		text: String,
+		volumePct: Int = 100,
+	): Boolean {
+		if (text.isBlank()) return false
+		val at = markerAt(text, provider, voice)
+		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${safeVoice(voice)}.audio")
+		return synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding = false) { d ->
+			client.stream(provider, text, voice, d)
+		}
+	}
+
+	/** Play the bundled or user-chosen chime. Takes a resolved local source rather than synthesizing,
+	 * since the audio is an asset and not speech. */
+	fun playChime(source: File, volumePct: Int = 100): Boolean =
+		synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { }
+
 	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
 	 * cache hit. Blocking - call off the main thread. Dedups tiers that speak the same text:
 	 * synthesize once and copy. Never throws; a failed tier just synthesizes on demand at Play. */
@@ -437,6 +466,12 @@ class SttsPlayer(private val root: File) {
 	private fun sampleAt(provider: SttsProvider, voice: String?): Long =
 		"${provider.path}-${safeVoice(voice)}".hashCode().toLong()
 
+	/** A marker's entry key. Derived from the spoken WORDS, so every message from one session reuses a
+	 * single synthesis instead of paying per message - and two sessions that happen to share a label
+	 * share the audio, which is correct because the audio is the label. */
+	private fun markerAt(text: String, provider: SttsProvider, voice: String?): Long =
+		"$text|${provider.path}-${safeVoice(voice)}".hashCode().toLong()
+
 	private fun safeVoice(voice: String?): String =
 		(voice ?: "default").replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
 
@@ -446,6 +481,14 @@ class SttsPlayer(private val root: File) {
 		/** Reserved team for the settings voice preview, which is not a message. Lets a listener tell
 		 * a preview's failure apart from a real entry's. */
 		const val SAMPLE_TEAM = "_sample"
+
+		/** Reserved team for boundary markers. Separate from a real thread so a marker is never a queue
+		 * entry, never counts toward unread, and is swept by clearAll rather than by any one forget. */
+		const val MARKER_TEAM = "_marker"
+
+		/** The chime's fixed entry. One asset, so one key - unlike a sentinel, whose audio varies with
+		 * the words it speaks. */
+		const val CHIME_AT = 0L
 
 		/** Map a 0-200% volume setting to a MediaPlayer linear gain (0-100% range, free and exact)
 		 * plus a LoudnessEnhancer target gain in millibels for the 100-200% half MediaPlayer can't
