@@ -1551,7 +1551,17 @@ class ChatRepository(
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
 			if (entry.team == SttsPlayer.MARKER_TEAM) {
-				if (!nextMarkerStarted()) queue.playing()?.let { speakBody(it) }
+				if (nextMarkerStarted()) return
+				val head = queue.playing()
+				// No head means the run this marker belonged to was torn down while it was speaking.
+				// Nothing else will report a terminal, so without this the backlog waits for a message
+				// that may never arrive.
+				if (head == null) {
+					pendingMarkers.clear()
+					resumeIfSilent()
+					return
+				}
+				speakBody(head)
 				return
 			}
 			val step = queue.advance(entry, outcome)

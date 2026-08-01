@@ -168,8 +168,9 @@ class SttsPlayer(private val root: File) {
 	 * that terminal rather than concatenating audio - providers differ in container, so one stream
 	 * would mean re-encoding.
 	 *
-	 * Never yields. A marker is short and it delimits a run; standing it down would silently drop the
-	 * boundary rather than delay it, and a run whose marker vanished reads as a message from nobody.
+	 * Yields like the body it announces. Only the chime is exempt: it is instantaneous, so standing it
+	 * down drops the boundary rather than delaying it. A sentinel is speech of the same length as any
+	 * other, and one that talked over a person would be autoplay reaching around the yield rule.
 	 */
 	fun playMarker(
 		client: SttsClient,
@@ -177,11 +178,12 @@ class SttsPlayer(private val root: File) {
 		voice: String?,
 		text: String,
 		volumePct: Int = 100,
+		yielding: Boolean = true,
 	): Boolean {
 		if (text.isBlank()) return false
 		val at = markerAt(text, provider, voice)
 		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${safeVoice(voice)}.audio")
-		return synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding = false) { d ->
+		return synthesizeAndPlay(MARKER_TEAM, at, null, dest, volumePct, yielding) { d ->
 			client.stream(provider, text, voice, d)
 		}
 	}

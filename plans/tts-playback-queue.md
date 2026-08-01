@@ -480,6 +480,32 @@ In progress. Landed and green:
   this is the "once per run" rule - mid-run the queue is never idle, and a stood-down run is not idle
   either, so the marker cannot re-announce a run already in progress.
 
+**Audit on Phase 2: five verified MAJORs, and two re-opened a closed class.** Fixed so far:
+
+- **The sentinel did not yield.** I wrote "the chime must not yield" and then built `playMarker`
+  non-yielding for BOTH markers, so a sentinel talked over a manual play. That is bug class A5 -
+  "who takes the sound" - reaching around the rule through a path added after the rule. Only the chime
+  is exempt now, and the reason is specific: it is instantaneous, so standing it down DROPS the
+  boundary rather than delaying it. A sentinel is speech like any other and yields.
+- **A marker terminal with no head stalled the queue.** Tear a team down while its chime or sentinel is
+  speaking and every other team's backlog went silent: the drop's own resume bailed because the marker
+  still held the sound, and the marker's terminal then found no head and started nothing. That is A3
+  re-opened through a path A3's fix could not see. The marker branch now resumes when its run is gone.
+
+**Still open on Phase 2, verified or clearly real, NOT yet fixed:**
+
+- **No timed gaps.** The spec asks for gaps around the body; the three playbacks currently run
+  back to back with zero silence.
+- **A manual tap and the notification Play action have NO attribution at all.** The prefix was deleted
+  but the sentinel plays only on the autoplay path, so a peer row played by hand is now less
+  attributed than before Phase 2. This is a regression I introduced and it needs deciding: either
+  markers play for manual taps too, or the prefix returns for non-autoplay.
+- **`pendingMarkers` is process-global and bound to no entry**, so a sentinel can announce the wrong
+  session, and no teardown clears it.
+- **The chime copy is not atomic**, so an interrupted copy caches and replays forever.
+- **Nothing takes a persistable read grant on a picked sound**, so a chosen chime can stop working.
+- **Picking "Silent" in the ringtone picker falls back to the bundled chime** rather than being silent.
+
 Still to build, with the decisions already made:
 
 - **The marker sequence.** An entry plays as chime (only when the run begins) then sentinel then body,
