@@ -41,6 +41,9 @@ data class QueueRow(
 	val durationMs: Long?,
 	val isCurrent: Boolean,
 	val gaveUp: Boolean = false,
+	// WHY it gave up. The engine has carried this on every terminal all along; without it a missing
+	// API key, a dead network and an undecodable file all read as the same shrug.
+	val reason: String? = null,
 )
 
 /**
@@ -138,7 +141,7 @@ private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {
 					// would otherwise look the same. Nothing spins for a row that gave up: it is not
 					// waiting, and a permanent spinner would read as still trying.
 					when {
-						row.gaveUp -> Text("not spoken", style = MaterialTheme.typography.labelSmall)
+						row.gaveUp -> Text(row.reason ?: "not spoken", style = MaterialTheme.typography.labelSmall)
 						row.durationMs == null -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
 						else -> Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
 					}

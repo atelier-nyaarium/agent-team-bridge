@@ -28,9 +28,15 @@ class PlaybackQueue {
 	// whose audio will never decode cannot hold the queue in a retry loop.
 	private val retried = mutableSetOf<QueueEntry>()
 
-	// Dropped after their retry. Kept so the UI can show an alert and offer a jump to the session,
-	// which is why a team's teardown has to take these too - otherwise they point at a removed thread.
-	private val failures = mutableListOf<QueueEntry>()
+	// Dropped after their retry, each against WHY. Kept so the UI can show an alert and offer a jump to
+	// the session, which is why a team's teardown has to take these too - otherwise they point at a
+	// removed thread.
+	//
+	// A map, so one message cannot appear twice (the sheet keys its list by entry and Compose rejects a
+	// duplicate outright), and BOUNDED, because every realistic cause of failure - no key, no network,
+	// a provider outage - fails every message in the burst rather than one. Insertion-ordered, so the
+	// cap drops the oldest rather than an arbitrary one.
+	private val failures = LinkedHashMap<QueueEntry, String?>()
 
 	@Synchronized
 	fun queued(): List<QueueEntry> = listOfNotNull(head) + pending
@@ -45,7 +51,12 @@ class PlaybackQueue {
 	fun isIdle(): Boolean = head == null && pending.isEmpty()
 
 	@Synchronized
-	fun remembered(): List<QueueEntry> = failures.toList()
+	fun remembered(): List<QueueEntry> = failures.keys.toList()
+
+	/** Why a remembered entry gave up. The engine already carries a reason on every terminal; dropping
+	 * it made a missing API key, a dead network and an undecodable file all read identically. */
+	@Synchronized
+	fun reasonFor(entry: QueueEntry): String? = failures[entry]
 
 	/** Append unless this entry is already queued or playing. Returns whether it was taken, so a caller
 	 * can tell "queued" from "already had it" without asking a second question. */
@@ -73,13 +84,16 @@ class PlaybackQueue {
 	 * would advance past an entry nobody has heard.
 	 */
 	@Synchronized
-	fun advance(entry: QueueEntry, outcome: SttsPlayer.Outcome): QueueStep {
+	fun advance(entry: QueueEntry, outcome: SttsPlayer.Outcome, reason: String? = null): QueueStep {
 		if (head != entry) return QueueStep(null)
 		return when (outcome) {
 			// The user stopped THIS message, which is not the same as stopping the run. It is retired
 			// and the queue carries on; a real pause needs a control that says so, and there is none.
 			SttsPlayer.Outcome.COMPLETED, SttsPlayer.Outcome.STOPPED -> {
 				retired(entry)
+				// Actually speaking it settles the matter: a message that has now been heard has no
+				// business still sitting in the alert as one that never was.
+				failures.remove(entry)
 				QueueStep(takeNext())
 			}
 
@@ -104,10 +118,10 @@ class PlaybackQueue {
 					QueueStep(takeNext())
 				} else {
 					retried.remove(entry)
-					// AT MOST ONCE. The same message can fail, be re-enqueued and fail again, and a second
-					// copy here gives the sheet's list two rows with one key - which Compose rejects
-					// outright rather than merely drawing oddly.
-					if (entry !in failures) failures.add(entry)
+					failures[entry] = reason
+					while (failures.size > MAX_REMEMBERED_FAILURES) {
+						failures.remove(failures.keys.first())
+					}
 					QueueStep(takeNext(), failed = entry)
 				}
 			}
@@ -126,7 +140,7 @@ class PlaybackQueue {
 	fun dropTeam(team: String): QueueEntry? {
 		pending.removeAll { it.team == team }
 		retried.removeAll { it.team == team }
-		failures.removeAll { it.team == team }
+		failures.keys.removeAll { it.team == team }
 		val dropped = head?.takeIf { it.team == team }
 		if (dropped != null) head = null
 		return dropped
@@ -163,7 +177,7 @@ class PlaybackQueue {
 	}
 
 	@Synchronized
-	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry)
+	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry) != null || false
 
 	@Synchronized
 	fun clear() {
@@ -180,5 +194,11 @@ class PlaybackQueue {
 	private fun takeNext(): QueueEntry? {
 		head = pending.removeFirstOrNull()
 		return head
+	}
+
+	private companion object {
+		// Enough to describe an outage without becoming a list nobody can face. Every realistic cause
+		// fails a whole burst at once, so this is a bound on grief rather than on information.
+		const val MAX_REMEMBERED_FAILURES = 50
 	}
 }

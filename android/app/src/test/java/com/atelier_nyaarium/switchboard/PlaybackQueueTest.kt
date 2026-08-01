@@ -306,6 +306,47 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `speaking a remembered failure clears it from the alert`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		val retryTarget = q.playing()!!
+		q.advance(retryTarget, SttsPlayer.Outcome.SYNTH_ERROR)
+		assertEquals(listOf(entry(1)), q.remembered())
+
+		// Played by hand and actually heard. A message that has now been spoken has no business still
+		// standing in the alert as one that never was - the list is about what the user MISSED.
+		q.enqueue(entry(1))
+		val revived = q.startNext()!!
+		q.advance(revived, SttsPlayer.Outcome.COMPLETED)
+
+		assertEquals(emptyList<QueueEntry>(), q.remembered())
+	}
+
+	@Test
+	fun `a failure remembers why, and the same message never doubles up`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+
+		assertEquals("no api key", q.reasonFor(entry(1)))
+
+		// Round two of the same outage. One row, not two: the sheet keys its list by entry and Compose
+		// rejects a duplicate key outright rather than merely drawing oddly. Re-queued and failed
+		// twice more, which is one rotation to the tail and then the drop - and because a single-entry
+		// queue promotes its own rotation straight back to head, the second advance takes it directly.
+		q.enqueue(entry(1))
+		q.advance(q.startNext()!!, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR, "still no api key")
+
+		assertEquals(listOf(entry(1)), q.remembered())
+		assertEquals("still no api key", q.reasonFor(entry(1)))
+	}
+
+	@Test
 	fun `a dropped team's failure can no longer be retried into the queue`() {
 		val q = queueOf(entry(1))
 		val head = q.startNext()!!

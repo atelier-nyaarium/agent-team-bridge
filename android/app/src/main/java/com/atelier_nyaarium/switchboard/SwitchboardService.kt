@@ -215,6 +215,12 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		statusDismissed = false
 		createChannels()
 		startInForeground()
+		// The queue and the failures list are in-memory, so a process kill takes them and leaves any
+		// transport or alert behind - ongoing, so unswipeable, with dead buttons and an empty sheet
+		// behind it. Nothing else reconciles it, because the settled-state hook only fires when
+		// playback CHANGES and a fresh process has no playback to change. Cleared unconditionally
+		// here: whatever it was describing did not survive.
+		getSystemService(NotificationManager::class.java).cancel(TRANSPORT_NOTIFICATION_ID)
 
 		val repo = Repo.get(this)
 		if (!repo.state.value.provisioned) {
@@ -304,11 +310,26 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private var transport: SttsTransport? = null
 	private var bubble: QueueBubble? = null
 
+	/** Held for as long as a run has anything to say. Lives here rather than in the repository, which
+	 * holds no Context by construction, and is driven off the same settled state every other surface
+	 * reads so it cannot disagree with them about whether a run is going. */
+	private val focus by lazy {
+		SpeechFocus(
+			this,
+			onPause = { Repo.get(this).command { pausePlayback() } },
+			onResume = { Repo.get(this).command { resumePlayback() } },
+		)
+	}
+
 	/** Mirror the run onto the lockscreen and shade. Called on every playback event, since that is
 	 * exactly when what a transport should show has changed. */
 	private fun publishTransport() {
 		val repo = Repo.get(this)
 		val (active, paused) = repo.transportState()
+		// Taken while a run is live and given back the moment it is not. Anchored to the same settled
+		// state the transport and the bubble read, so the app cannot be holding the right to speak
+		// while showing nothing, or speaking while holding nothing.
+		if (active && !paused) focus.acquire() else if (!active) focus.release()
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
 		val counts = repo.queueCounts()
@@ -403,6 +424,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onTransportChanged = null
 		// Captured into a local first: the field is cleared below, and a lambda referencing the FIELD
 		// would find it null by the time main ran it, leaking the window.
+		focus.release()
 		val leaving = bubble
 		bubble = null
 		mainHandler.post { leaving?.release() }

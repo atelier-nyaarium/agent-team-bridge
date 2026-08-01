@@ -692,6 +692,32 @@ something concrete needs it, not by habit.
     notification, a separate "pre-generate" toggle covers a case that no longer exists. Candidate for
     retirement, which is a settings change and therefore the owner's call.
 
+### Phase 4 was sealed with audio focus missing
+
+Recorded at the top of this section because it is the most serious thing this plan produced, and the
+gates could not see any of it.
+
+The phase settles audio focus in detail above - `AUDIOFOCUS_GAIN_TRANSIENT`, `LOSS_TRANSIENT` pauses
+and resumes, `LOSS_TRANSIENT_CAN_DUCK` handled explicitly because `CONTENT_TYPE_SPEECH` means the
+system does not auto-duck, permanent `LOSS` pauses and leaves the queue intact. **None of it was
+written.** A grep for `AudioManager` across the whole Android source returned nothing, "Phase 4 as
+built" did not mention it, and the phase was sealed anyway.
+
+What that meant on a real phone: speech over the top of music with no ducking, a phone call talked
+straight through, and - because nothing listened for `ACTION_AUDIO_BECOMING_NOISY` - unplugging
+headphones re-routed agent messages to the loudspeaker. That last one is a privacy harm, not a polish
+item.
+
+Four alignment rounds over the diffs never found it, because every one of them asked "is this change
+correct?" and a thing that was never written has no diff to be wrong in. The red team round asked
+"what does a real person hit?" and had it inside one pass. **The correction that generalizes: an
+"as built" section is only worth what its absences are checked against, so a phase's spec list and its
+built list have to be diffed deliberately - reading either one alone will not do it.**
+
+Built in `SpeechFocus.kt`. Every loss pauses, including the duckable one: that is the explicit choice
+the plan left open, and ducking speech underneath a navigation prompt leaves two voices talking at
+once, which is worse than a gap.
+
 ### Phase 4 as built
 
 - **Foreground service holds both types for its whole life**, never toggled. Verified on device:

@@ -279,6 +279,9 @@ fun App(
 	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
 	// so re-opening the same thread later does not silently re-scroll to an old message.
 	var revealAt by remember { mutableStateOf<Pair<String, Long>?>(null) }
+	// Read here as well as in the sheet: the board's own way in has to appear the moment a run starts
+	// and go when it ends, and that is a settled-state question like every other one in this feature.
+	val queueRevision by repo.queueRevision.collectAsState()
 	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -813,6 +816,8 @@ fun App(
 					settingsRoute = SettingsRoute.HUB
 					showSettings = true
 				},
+				speaking = queueRevision.let { repo.transportState().first || repo.failedRows().isNotEmpty() },
+				onQueue = { openQueueRequest.value = true },
 				onManage = { showManage = true },
 				onAddGateway = { showAddGateway = true },
 				onHostHelp = { showHostHelp = true },
@@ -1313,6 +1318,10 @@ fun SessionsScreen(
 	state: ChatState,
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
+	// Whether anything is queued or has given up, and the way in. Shown only when there is something
+	// to show, so the header does not carry a permanently dead control.
+	speaking: Boolean,
+	onQueue: () -> Unit,
 	onManage: () -> Unit,
 	onAddGateway: () -> Unit,
 	onHostHelp: () -> Unit,
@@ -1390,6 +1399,14 @@ fun SessionsScreen(
 			TopAppBar(
 				title = { Text("Agent Sessions") },
 				actions = {
+					// The queue's only IN-APP door. The bubble needs an overlay grant and the transport
+					// needs notifications, so a user who refuses both had no way to reach the list, the
+					// pause or the skip at all - the controls existed and were unreachable.
+					if (speaking) {
+						IconButton(onClick = hapticClick(onQueue)) {
+							Icon(Icons.Default.PlayArrow, contentDescription = "Speaking queue")
+						}
+					}
 					IconButton(onClick = hapticClick(onRefresh)) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
 					TextButton(onClick = hapticClick(onSettings)) { Text("Settings") }
 				},

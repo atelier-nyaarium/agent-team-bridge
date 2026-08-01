@@ -1182,7 +1182,7 @@ class ChatRepository(
 				val entry = QueueEntry(event.team, event.at, event.tier)
 				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
 				// and a marker's entry key is shared by every run of the same session.
-				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen) }
+				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen, event.reason) }
 			}
 		}
 	}
@@ -1634,16 +1634,21 @@ class ChatRepository(
 	/** `gen` names the request that ended. Zero means "no request at all" - a terminal this class
 	 * synthesized because the engine declined the entry, which is never a marker. Generations start at
 	 * one, so it cannot collide with a real one. */
-	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long = 0L) {
+	private suspend fun onPlaybackEnded(
+		entry: QueueEntry,
+		outcome: SttsPlayer.Outcome,
+		gen: Long = 0L,
+		reason: String? = null,
+	) {
 		try {
-			advanceEnded(entry, outcome, gen)
+			advanceEnded(entry, outcome, gen, reason)
 		} finally {
 			// After the advance, not on the event: the queue is only correct once this has run.
 			transportChanged()
 		}
 	}
 
-	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long) {
+	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long, reason: String?) {
 		advanceMutex.withLock {
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
@@ -1679,7 +1684,7 @@ class ChatRepository(
 				}
 				return
 			}
-			val step = queue.advance(entry, outcome)
+			val step = queue.advance(entry, outcome, reason)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
 			if (step.next != null) {
 				// Spoken unconditionally. `advance` has already installed this as the head, so refusing
@@ -1851,9 +1856,17 @@ class ChatRepository(
 	/** The entries that gave up, for the alert's list. Separate from [queueRows] because these are no
 	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
 	fun failedRows(): List<QueueRow> =
-		queue.remembered().map { row(it, isCurrent = false, durationMs = null, gaveUp = true) }
+		queue.remembered().map {
+			row(it, isCurrent = false, durationMs = null, gaveUp = true, reason = queue.reasonFor(it))
+		}
 
-	private fun row(entry: QueueEntry, isCurrent: Boolean, durationMs: Long?, gaveUp: Boolean = false): QueueRow {
+	private fun row(
+		entry: QueueEntry,
+		isCurrent: Boolean,
+		durationMs: Long?,
+		gaveUp: Boolean = false,
+		reason: String? = null,
+	): QueueRow {
 		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
 		return QueueRow(
 			entry = entry,
@@ -1862,6 +1875,7 @@ class ChatRepository(
 			durationMs = durationMs,
 			isCurrent = isCurrent,
 			gaveUp = gaveUp,
+			reason = reason,
 		)
 	}
 
@@ -1901,12 +1915,24 @@ class ChatRepository(
 	/** Retire a NAMED head and start whatever follows it. The shared body of skip and of trashing the
 	 * tile that is speaking, so the two cannot drift; both must already hold [advanceMutex]. */
 	private fun retireHead(head: QueueEntry) {
-		transportPaused = false
 		markerInFlight?.let { stts.abandonGeneration(it) }
 		clearMarkers()
 		stts.forgetPosition(head.team, head.at, head.tier)
 		stts.abandon(head.team, head.at, head.tier, remember = false)
-		queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
+		val next = queue.advance(head, SttsPlayer.Outcome.COMPLETED).next ?: return
+		// Skip means "move past this one", NEVER "start playing". Clearing the pause here made the
+		// lockscreen's own next button start the phone talking out loud from a state the user had
+		// deliberately silenced - and every media app on the platform advances without sounding.
+		//
+		// The promoted entry has to be parked rather than left alone, because `advance` installs it as
+		// the head BEFORE handing it back: declining to speak it would strand an entry the engine never
+		// received and no terminal will ever retire. PREEMPTED puts it back at the front, which is
+		// exactly where a resume should find it.
+		if (transportPaused) {
+			queue.advance(next, SttsPlayer.Outcome.PREEMPTED)
+		} else {
+			speak(next)
+		}
 	}
 
 	/** Acknowledge one failure. "Seen", not "resolved" - the message was never spoken and this does not
