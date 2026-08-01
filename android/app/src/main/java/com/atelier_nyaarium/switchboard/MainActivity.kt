@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Add
@@ -284,7 +285,17 @@ fun App(
 	// Keyed on the revision so the failures scan runs when the queue changes rather than on every
 	// unrelated recomposition of the board.
 	val queueRevision by repo.queueRevision.collectAsState()
-	val speaking = remember(queueRevision) { repo.transportState().first || repo.failedRows().isNotEmpty() }
+	val queueState = remember(queueRevision) {
+		val (active, paused) = repo.transportState()
+		when {
+			// The alert outranks the run: a message that was never spoken is the thing worth showing,
+			// and it is the state that outlives everything else.
+			repo.failedRows().isNotEmpty() -> QueueGlance.ALERT
+			active && paused -> QueueGlance.PAUSED
+			active -> QueueGlance.SPEAKING
+			else -> QueueGlance.IDLE
+		}
+	}
 	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -819,7 +830,7 @@ fun App(
 					settingsRoute = SettingsRoute.HUB
 					showSettings = true
 				},
-				speaking = speaking,
+				queueState = queueState,
 				onQueue = { openQueueRequest.value = true },
 				onManage = { showManage = true },
 				onAddGateway = { showAddGateway = true },
@@ -1321,9 +1332,9 @@ fun SessionsScreen(
 	state: ChatState,
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
-	// Whether anything is queued or has given up, and the way in. Shown only when there is something
-	// to show, so the header does not carry a permanently dead control.
-	speaking: Boolean,
+	// What the queue is doing at a glance, and the way in. IDLE hides the control entirely, so the
+	// header never carries a button that does nothing.
+	queueState: QueueGlance,
 	onQueue: () -> Unit,
 	onManage: () -> Unit,
 	onAddGateway: () -> Unit,
@@ -1405,9 +1416,23 @@ fun SessionsScreen(
 					// The queue's only IN-APP door. The bubble needs an overlay grant and the transport
 					// needs notifications, so a user who refuses both had no way to reach the list, the
 					// pause or the skip at all - the controls existed and were unreachable.
-					if (speaking) {
+					if (queueState != QueueGlance.IDLE) {
 						IconButton(onClick = hapticClick(onQueue)) {
-							Icon(Icons.Default.PlayArrow, contentDescription = "Speaking queue")
+							// The icon says WHICH of the three states this is. A play arrow over a paused
+							// run, or over a run that ended leaving messages unspoken, invites a tap that
+							// means the opposite of what it looks like.
+							Icon(
+								when (queueState) {
+									QueueGlance.ALERT -> Icons.Filled.Warning
+									QueueGlance.PAUSED -> Icons.Filled.Pause
+									else -> Icons.Default.PlayArrow
+								},
+								contentDescription = when (queueState) {
+									QueueGlance.ALERT -> "Messages not spoken"
+									QueueGlance.PAUSED -> "Speaking queue, paused"
+									else -> "Speaking queue"
+								},
+							)
 						}
 					}
 					IconButton(onClick = hapticClick(onRefresh)) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }

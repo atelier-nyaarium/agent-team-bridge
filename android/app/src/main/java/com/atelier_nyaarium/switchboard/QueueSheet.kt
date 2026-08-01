@@ -27,6 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** What the queue is doing, coarsely enough for one glanceable control. */
+enum class QueueGlance { IDLE, SPEAKING, PAUSED, ALERT }
+
 /**
  * One row of the queue as the sheet needs it.
  *

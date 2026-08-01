@@ -1482,14 +1482,21 @@ class ChatRepository(
 		// A run announces its speaker with a sentinel; a single message played by hand has no marker,
 		// so it carries its own attribution instead.
 		attributed: Boolean = true,
-	): Boolean {
-		val client = sttsClient() ?: return false
-		val provider = currentProvider() ?: return false
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return false
+		// Null when it started; otherwise WHY it did not. Four quite different problems - no key, no
+		// provider, a message that has since gone, and a row with nothing speakable in it - used to
+		// collapse into one `false`, and the alert could only shrug at all of them. The no-key case is
+		// the likeliest cause of a whole burst failing at once, which is exactly when a user needs to
+		// be told which of their problems this is.
+	): String? {
+		val client = sttsClient() ?: return "no voice key set"
+		val provider = currentProvider() ?: return "no voice provider set"
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe }
+			?: return "message is no longer here"
 		val text = ttsTextFramed(_state.value, msg, tier, attributed)
-		if (text.isBlank()) return false
+		if (text.isBlank()) return "nothing to read aloud"
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
+		val taken = stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
+		return if (taken) null else "already speaking"
 	}
 
 	/**
@@ -1891,6 +1898,8 @@ class ChatRepository(
 			raw.contains("429") -> "voice service busy"
 			raw.contains("timeout", true) || raw.contains("timed out", true) -> "voice service timed out"
 			raw.contains("playback failed", true) -> "audio would not play"
+			// Already a phrase written for a person - the decline paths mint these themselves.
+			raw.length <= 60 && !raw.contains('{') && !raw.contains('<') -> raw
 			else -> raw.lineSequence().first().take(60)
 		}
 	}
@@ -2038,14 +2047,14 @@ class ChatRepository(
 	private fun speakBody(entry: QueueEntry) {
 		val tier = entry.tier
 		if (tier == null) {
-			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = "no tier to speak") }
 			return
 		}
 		// Yielding: by the time this reaches the player the user may have started something of their
 		// own, and autoplay stands down rather than talking over it.
 		stts.post {
-			if (!startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)) {
-				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)?.let { why ->
+				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = why) }
 			}
 		}
 	}
