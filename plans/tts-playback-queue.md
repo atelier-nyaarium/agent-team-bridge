@@ -778,6 +778,30 @@ Activity surface and stays Compose - it is only the overlay that leaves.
 - Alert bubble outlives a drained queue; tapping LISTS the failed entries, each offering jump-to-session
   or dismissal. The alert clears on acknowledgement, treated as "seen" rather than "resolved".
 
+### Phase 5 as built
+
+- **`QueueBubble.kt`** - plain Views, not Compose, because a Service carries none of the three ViewTree
+  owners a `ComposeView` needs and hand-rolling them for a widget that draws two numbers is not worth
+  the ongoing surface. Count badge, spinner while the head generates, and the alert as an ADDITIONAL
+  badge so a failure never hides how much is left. Tap opens the app; swipe reuses `skipPlayback`, so
+  it is the same action as the modal's trash rather than a second implementation of it.
+- **`QueueSheet.kt`** - transport row, ONE bar over the current entry's BODY (markers are boundaries,
+  not content, and seeking into them lands nowhere), and fat tiles. The bar is DISABLED rather than
+  hidden while the length is unknown, so the row does not jump under a thumb when synthesis finishes;
+  an unknown duration is a spinner rather than a zero, which would look like a real length.
+- **Every surface reads from the repository** (`queueRows`, `queueCounts`, `transportState`,
+  `playStatesFor`). Four surfaces now report one run, and every one that kept its own copy tonight is
+  one that drifted from it.
+- **Overlay permission is offered in settings, ahead of need**, because only an Activity can ask and
+  the phase's premise is that the app is not in front. The copy states the degradation rather than
+  implying the bubble is required, and the button disappears once granted.
+- **Seek** (`positionSnapshot`, `seekTo`) is read under the same monitor that installs and releases the
+  player: polling the handle directly would read something that can be released between the null check
+  and the call, which is a native crash rather than a wrong number. A pause captures the position
+  BEFORE abandoning, and the offset is consumed on use, so it can never outlive its pause and skip the
+  opening of a later message. Skipping forgets the position, since giving up on a message should not
+  leave it resuming mid-sentence.
+
 ### Audit findings (lap 1)
 
 **Provenance caveat: this is a SINGLE-perspective audit.** The `audit-fan-out` step calls for parallel

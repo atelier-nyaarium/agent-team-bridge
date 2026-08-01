@@ -1765,6 +1765,10 @@ class ChatRepository(
 				// already sounding - during a marker, or while the body is still synthesizing, there is
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
+				// Where it got to, captured BEFORE the abandon releases the player.
+				stts.positionSnapshot()?.let { (position, _) ->
+					stts.rememberPosition(head.team, head.at, head.tier, position)
+				}
 				queue.requeueFront(head)
 				stts.abandon(head.team, head.at, head.tier)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
@@ -1797,6 +1801,9 @@ class ChatRepository(
 				// first means Skip discards it, rather than resuming the very message it was asked to
 				// move past.
 				val head = queue.playing() ?: queue.startNext() ?: return@withLock
+				// Skipping is giving up on the message, so any paused position for it goes too -
+				// otherwise it would resume mid-sentence if it ever came back.
+				stts.forgetPosition(head.team, head.at, head.tier)
 				stts.abandon(head.team, head.at, head.tier)
 				queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
 			}
@@ -1829,6 +1836,12 @@ class ChatRepository(
 			)
 		}
 	}
+
+	/** Where the audible message is and how long it is, for the sheet's one bar. Null when nothing is
+	 * playing, which the bar shows as disabled rather than as zero. */
+	fun playbackPosition(): Pair<Long, Long>? = stts.positionSnapshot()
+
+	fun seekPlayback(ms: Long) = stts.seekTo(ms)
 
 	/** Open the thread a queue entry belongs to and reveal that message, reusing the machinery a tap
 	 * on a notification already goes through. */

@@ -106,6 +106,26 @@ class SttsPlayer(private val root: File) {
 	/** Whether anything at all is audible right now, whoever owns it. */
 	fun isSounding(): Boolean = requests.isSounding()
 
+	/**
+	 * Where the audible message is, and how long it is. Null when nothing is playing.
+	 *
+	 * A SNAPSHOT taken on the play lane's behalf, read under the same monitor that installs and
+	 * releases the player - a caller polling `player` directly would be reading a handle that can be
+	 * released between its null check and its call, which is a native crash rather than a wrong number.
+	 */
+	@Synchronized
+	fun positionSnapshot(): Pair<Long, Long>? {
+		val mp = player ?: return null
+		return runCatching { mp.currentPosition.toLong() to mp.duration.toLong() }.getOrNull()
+	}
+
+	/** Move the audible message. Ignored when nothing is playing, so a stale bar cannot seek into
+	 * whatever started since. */
+	@Synchronized
+	fun seekTo(ms: Long) {
+		runCatching { player?.seekTo(ms.toInt()) }
+	}
+
 	/** Whether this message is audible, in any tier. What the row shows, and so what its button may
 	 * toggle on; [PlaybackRequests.isSoundingForMessage] says why it is not the claim. */
 	fun isPlayingMessage(team: String, at: Long): Boolean = requests.isSoundingForMessage(team, at)
@@ -458,7 +478,23 @@ class SttsPlayer(private val root: File) {
 			return
 		}
 		installPlayer(id, mp, effect)
+		// Resume where it stopped. Consumed on use, so an offset can never outlive the pause that set
+		// it and silently skip the opening of some later message.
+		resumeAt.remove(QueueEntry(id.team, id.at, id.tier))?.let { runCatching { mp.seekTo(it.toInt()) } }
 		requests.started(id)
+	}
+
+	/** Where a paused message should pick up, by entry. Held here rather than on the queue because it
+	 * describes audio, and the queue deliberately knows nothing about audio. */
+	private val resumeAt = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
+
+	/** Remember where a message was when it stopped, so resuming continues rather than restarts. */
+	fun rememberPosition(team: String, at: Long, tier: Tier?, ms: Long) {
+		if (ms > 0) resumeAt[QueueEntry(team, at, tier)] = ms
+	}
+
+	fun forgetPosition(team: String, at: Long, tier: Tier?) {
+		resumeAt.remove(QueueEntry(team, at, tier))
 	}
 
 	/** Swap in the player that just took the sound. The only part of playback that needs the monitor,
