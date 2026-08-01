@@ -492,7 +492,15 @@ In progress. Landed and green:
   still held the sound, and the marker's terminal then found no head and started nothing. That is A3
   re-opened through a path A3's fix could not see. The marker branch now resumes when its run is gone.
 
-**Still open on Phase 2, verified or clearly real, NOT yet fixed:**
+**Also fixed, found by the re-audit:** the `attributed` flag changed the spoken text but NOT the cache
+key, so whichever variant synthesized first was served to both paths - and a cache hit never looks at
+the text it was asked for. The direction was deterministic rather than racy: the preload runs
+unattributed and finishes before the notification exists, so a manual tap on a peer row played the
+unattributed audio and the restored attribution was silently defeated. The body cache is now keyed on
+the spoken words, the same way a marker already was; `markerAt` had the right shape and its own doc
+saying why, and the body key simply had not followed it. Dead `key()` removed with it.
+
+**Fixed earlier in Phase 2 (this heading was stale and is corrected):**
 
 - **Attribution restored for a message played by hand.** `ttsTextFramed` takes an `attributed` flag:
   an autoplay run has a sentinel and needs none, a manual tap has no marker and carries the prefix. A

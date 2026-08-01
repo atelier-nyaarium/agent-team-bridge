@@ -139,7 +139,8 @@ class SttsPlayer(private val root: File) {
 		if (text.isBlank()) return false
 		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
 		// difference from "declined, silently", which is a terminal that never arrives.
-		return synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct, yielding) { dest ->
+		val audio = cacheFile(team, at, tier, provider, voice, text)
+		return synthesizeAndPlay(team, at, tier, audio, volumePct, yielding) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -222,7 +223,7 @@ class SttsPlayer(private val root: File) {
 		val horizon = requests.purgeStamp()
 		val done = mutableMapOf<String, File>()
 		for ((tier, text) in listOf(Tier.SUMMARY to summaryText, Tier.FULL to fullText, Tier.TITLE to titleText)) {
-			val dest = cacheFile(team, at, tier, provider, voice)
+			val dest = cacheFile(team, at, tier, provider, voice, text)
 			val twin = done[text]
 			if (twin != null) {
 				if (!dest.exists() || dest.length() == 0L) runCatching { twin.copyTo(dest, overwrite = true) }
@@ -465,13 +466,25 @@ class SttsPlayer(private val root: File) {
 		playerOwner = id
 	}
 
-	// The path (not the descriptor id) is the cache component so entries survive
-	// an id rename.
-	private fun key(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): String =
-		"$team/$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}"
-
-	private fun cacheFile(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): File =
-		File(File(root, "stts/$team"), "$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}.audio")
+	/**
+	 * Keyed on the spoken WORDS as well as the entry, the same way a marker is.
+	 *
+	 * One entry can be spoken more than one way - a message played by hand carries its own attribution
+	 * while one inside a run does not, because a marker already said it. Without the text in the key,
+	 * whichever variant synthesized first is served to both, and a cache hit never looks at the text it
+	 * was asked for.
+	 */
+	private fun cacheFile(
+		team: String,
+		at: Long,
+		tier: Tier,
+		provider: SttsProvider,
+		voice: String?,
+		text: String,
+	): File = File(
+		File(root, "stts/$team"),
+		"$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}-${text.hashCode()}.audio",
+	)
 
 	/** The sample entry's `at`. The preview is not a message, so this stands in for one, derived from
 	 * provider and voice so two voices are two entries. */
