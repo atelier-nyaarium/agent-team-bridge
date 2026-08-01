@@ -1789,7 +1789,33 @@ class ChatRepository(
 
 	private fun transportChanged() {
 		_queueRevision.value = _queueRevision.value + 1
+		warmQueued()
 		runCatching { onTransportChanged?.invoke() }
+	}
+
+	/**
+	 * Get every queued entry's audio made before its turn comes.
+	 *
+	 * Driven off the settled queue rather than off message arrival, so it follows what will ACTUALLY
+	 * be spoken - the old pre-generate warmed on delivery, behind a settings toggle, and knew nothing
+	 * about the queue. Warming is idempotent per entry, so calling it on every change is free.
+	 *
+	 * Deliberately keeps going while the run is PAUSED. A pause means the person is busy, not that the
+	 * work should stop; having the backlog ready is most of the value of pausing at all.
+	 */
+	private fun warmQueued() {
+		val client = sttsClient() ?: return
+		val provider = currentProvider() ?: return
+		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		val state = _state.value
+		for (entry in queue.queued()) {
+			val tier = entry.tier ?: continue
+			val msg = state.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: continue
+			// The words the RUN will speak, not the attributed form a hand-play uses - the cache is keyed
+			// on the text, so warming the other one would fill the cache and still synthesize live.
+			val text = ttsTextFramed(state, msg, tier, attributed = false)
+			if (text.isNotBlank()) stts.warm(client, provider, voice, entry.team, entry.at, tier, text)
+		}
 	}
 
 	private fun resumeIfSilent() {
@@ -1876,7 +1902,11 @@ class ChatRepository(
 			row(
 				entry,
 				isCurrent = entry == head,
-				durationMs = current?.takeIf { it.entry == entry }?.durationMs,
+				// The live player for the one that is sounding; otherwise whatever warming measured. A
+				// queued entry knows its own length as soon as its audio exists, which is the point of
+				// making it early.
+				durationMs = current?.takeIf { it.entry == entry }?.durationMs
+					?: stts.warmedDuration(entry.team, entry.at, entry.tier),
 				generating = generating && entry == head,
 			)
 		}
