@@ -215,6 +215,12 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		statusDismissed = false
 		createChannels()
 		startInForeground()
+		// The queue and the failures list are in-memory, so a process kill takes them and leaves any
+		// transport or alert behind - ongoing, so unswipeable, with dead buttons and an empty sheet
+		// behind it. Nothing else reconciles it, because the settled-state hook only fires when
+		// playback CHANGES and a fresh process has no playback to change. Cleared unconditionally
+		// here: whatever it was describing did not survive.
+		getSystemService(NotificationManager::class.java).cancel(TRANSPORT_NOTIFICATION_ID)
 
 		val repo = Repo.get(this)
 		if (!repo.state.value.provisioned) {
@@ -238,8 +244,14 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// would show a run that is already over, with no later event to correct it.
 		bubble = QueueBubble(
 			this,
-			onTap = { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
-			onSwipeAway = { repo.command { skipPlayback() } },
+			onTap = { startActivity(openQueueIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
+			// A swipe means "move past this". With a run that is a skip; with only an alert left there
+			// is nothing to skip, so it dismisses the bubble instead of firing a command that cannot
+			// act. The failures themselves stay - they are still in the list and still in the shade,
+			// and there is deliberately no gesture that discards several of them at once.
+			onSwipeAway = {
+				if (repo.transportState().first) repo.command { skipPlayback() } else mainHandler.post { bubble?.dismiss() }
+			},
 		)
 		repo.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
@@ -298,27 +310,82 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private var transport: SttsTransport? = null
 	private var bubble: QueueBubble? = null
 
+	/** Held for as long as a run has anything to say. Lives here rather than in the repository, which
+	 * holds no Context by construction, and is driven off the same settled state every other surface
+	 * reads so it cannot disagree with them about whether a run is going. */
+	private val focus by lazy {
+		SpeechFocus(
+			this,
+			alreadyPaused = { Repo.get(this).transportState().second },
+			onPause = { Repo.get(this).command { pausePlayback() } },
+			onResume = { Repo.get(this).command { resumePlayback() } },
+		)
+	}
+
 	/** Mirror the run onto the lockscreen and shade. Called on every playback event, since that is
 	 * exactly when what a transport should show has changed. */
 	private fun publishTransport() {
 		val repo = Repo.get(this)
 		val (active, paused) = repo.transportState()
+		// Held exactly while the app INTENDS to make sound, which is what makes a pause give the user's
+		// music back - holding through a pause defeats the transient gain the whole design rests on.
+		//
+		// A refusal is acted on rather than noted: something else is mid-call, and speaking over it is
+		// the thing this exists to prevent. Pausing here leaves the queue intact and the run resumes
+		// when focus arrives.
+		if (active && !paused) {
+			if (!focus.acquire()) repo.command { pausePlayback() }
+		} else {
+			focus.release()
+		}
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
-		if (active) {
-			transport?.let { manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null)) }
-		} else {
-			manager.cancel(TRANSPORT_NOTIFICATION_ID)
+		val counts = repo.queueCounts()
+		// Three states, not two. A run gets the media notification; a finished run that dropped
+		// something gets an ALERT, because the transport's controls have nothing left to act on and an
+		// entry titled "Speaking" over silence is a lie with two dead buttons on it. The alert still
+		// has to exist: this is the only route into the queue list that needs no permission, so
+		// cancelling on "run over" left anyone without the overlay grant no way to see what was lost.
+		transport?.let {
+			when {
+				active -> manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
+				counts.third > 0 ->
+					manager.notify(TRANSPORT_NOTIFICATION_ID, it.alert(counts.third, CHANNEL_SPEECH_FAILED, openQueuePending()))
+				else -> manager.cancel(TRANSPORT_NOTIFICATION_ID)
+			}
 		}
 		// The bubble draws on the same settled state, so it cannot disagree with the shade about how
 		// much is left. Touching views needs main; playback settles on the player's lanes.
-		val counts = repo.queueCounts()
+		//
+		// It OUTLIVES the run when something failed. Hiding on `active` alone took the alert away at the
+		// exact moment it was supposed to start standing on its own: the last entry to fail is also the
+		// one that drains the queue, so the dot appeared and vanished in the same breath and the user
+		// was never told anything had been dropped.
 		mainHandler.post {
-			if (active) bubble?.show(counts.first, counts.second, counts.third) else bubble?.hide()
+			// A live run clears a hand dismissal: the swipe said "not this alert", not "never again".
+			if (active) bubble?.undismiss()
+			if (active || counts.third > 0) {
+				bubble?.show(counts.first, counts.second, counts.third)
+			} else {
+				bubble?.hide()
+			}
 		}
 	}
 
 	private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+	/** The one way into the queue list, used by both the bubble and the transport notification's body,
+	 * so the two cannot drift into opening different things. */
+	private fun openQueueIntent(): Intent =
+		Intent(this, MainActivity::class.java).putExtra(EXTRA_OPEN_QUEUE, true)
+
+	private fun openQueuePending(): PendingIntent =
+		PendingIntent.getActivity(
+			this,
+			REQUEST_OPEN_QUEUE,
+			openQueueIntent(),
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
 
 	/**
 	 * The chime as a playable file: the user's chosen system sound, or the bundled asset.
@@ -365,6 +432,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onTransportChanged = null
 		// Captured into a local first: the field is cleared below, and a lambda referencing the FIELD
 		// would find it null by the time main ran it, leaking the window.
+		focus.release()
 		val leaving = bubble
 		bubble = null
 		mainHandler.post { leaving?.release() }
@@ -436,6 +504,15 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 						.build(),
 				)
 				enableVibration(true)
+			},
+		)
+		// NOT the status channel. That one is MIN with no badge, which is right for "the bridge is
+		// connected" and wrong for the only notice that a message was never spoken - it would have been
+		// silent, badgeless, and absent from the status bar, which is indistinguishable from never
+		// telling the user at all. DEFAULT rather than HIGH: nothing was lost, only unsaid.
+		nm.createNotificationChannel(
+			NotificationChannel(CHANNEL_SPEECH_FAILED, "Unspoken messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
+				description = "A message could not be read aloud"
 			},
 		)
 		nm.createNotificationChannel(
@@ -612,11 +689,16 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		const val TRANSPORT_NOTIFICATION_ID = 4271
 
 		const val CHANNEL_STATUS = "status"
+		const val CHANNEL_SPEECH_FAILED = "speech_failed"
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val CHANNEL_SCHEDULED_SEND_FAILED = "scheduled_send_failed"
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
 		const val EXTRA_MESSAGE_AT = "message_at"
+		const val EXTRA_OPEN_QUEUE = "open_queue"
+
+		/** Its own request code, so the queue's PendingIntent cannot collapse into a team's. */
+		private const val REQUEST_OPEN_QUEUE = 4272
 
 		/** The user swiped the status entry away this process; stop re-posting it.
 		 * Reset on service start so it returns with the next boot/launch. */

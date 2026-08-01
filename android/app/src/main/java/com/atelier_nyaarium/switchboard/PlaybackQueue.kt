@@ -28,9 +28,15 @@ class PlaybackQueue {
 	// whose audio will never decode cannot hold the queue in a retry loop.
 	private val retried = mutableSetOf<QueueEntry>()
 
-	// Dropped after their retry. Kept so the UI can show an alert and offer a jump to the session,
-	// which is why a team's teardown has to take these too - otherwise they point at a removed thread.
-	private val failures = mutableListOf<QueueEntry>()
+	// Dropped after their retry, each against WHY. Kept so the UI can show an alert and offer a jump to
+	// the session, which is why a team's teardown has to take these too - otherwise they point at a
+	// removed thread.
+	//
+	// A map, so one message cannot appear twice (the sheet keys its list by entry and Compose rejects a
+	// duplicate outright), and BOUNDED, because every realistic cause of failure - no key, no network,
+	// a provider outage - fails every message in the burst rather than one. Insertion-ordered, so the
+	// cap drops the oldest rather than an arbitrary one.
+	private val failures = LinkedHashMap<QueueEntry, String?>()
 
 	@Synchronized
 	fun queued(): List<QueueEntry> = listOfNotNull(head) + pending
@@ -45,7 +51,12 @@ class PlaybackQueue {
 	fun isIdle(): Boolean = head == null && pending.isEmpty()
 
 	@Synchronized
-	fun remembered(): List<QueueEntry> = failures.toList()
+	fun remembered(): List<QueueEntry> = failures.keys.toList()
+
+	/** Why a remembered entry gave up. The engine already carries a reason on every terminal; dropping
+	 * it made a missing API key, a dead network and an undecodable file all read identically. */
+	@Synchronized
+	fun reasonFor(entry: QueueEntry): String? = failures[entry]
 
 	/** Append unless this entry is already queued or playing. Returns whether it was taken, so a caller
 	 * can tell "queued" from "already had it" without asking a second question. */
@@ -73,20 +84,30 @@ class PlaybackQueue {
 	 * would advance past an entry nobody has heard.
 	 */
 	@Synchronized
-	fun advance(entry: QueueEntry, outcome: SttsPlayer.Outcome): QueueStep {
+	fun advance(entry: QueueEntry, outcome: SttsPlayer.Outcome, reason: String? = null): QueueStep {
 		if (head != entry) return QueueStep(null)
 		return when (outcome) {
 			// The user stopped THIS message, which is not the same as stopping the run. It is retired
 			// and the queue carries on; a real pause needs a control that says so, and there is none.
 			SttsPlayer.Outcome.COMPLETED, SttsPlayer.Outcome.STOPPED -> {
 				retired(entry)
+				// Only a COMPLETED settles the matter. A message that has now been heard has no business
+				// sitting in the alert as one that never was - but a STOPPED is a skip or a trash, which
+				// is the opposite, and clearing on it told the user they had heard what they gave up on.
+				if (outcome == SttsPlayer.Outcome.COMPLETED) failures.remove(entry)
 				QueueStep(takeNext())
 			}
 
-			// Something outside the queue took the sound. Retire the head but start nothing: speaking
-			// now would talk over whatever the user just asked for. The queue picks up again when that
-			// playback reports its own terminal.
+			// Something outside the queue took the sound. Stand down and start nothing: speaking now
+			// would talk over whatever the user just asked for.
+			//
+			// Put BACK at the front rather than dropped. Yielding is a decision about WHEN to speak,
+			// not about whether to: retiring it outright meant a settings voice sample, or a row's own
+			// Play button, silently consumed the message the run had reached, with no alert and no
+			// count to notice it by. The queue picks up here when the interloper reports its terminal,
+			// and the paused-position machinery already lets it resume where it left off.
 			SttsPlayer.Outcome.PREEMPTED -> {
+				requeueFrontLocked(entry)
 				retired(entry)
 				QueueStep(null, standDown = true)
 			}
@@ -98,7 +119,10 @@ class PlaybackQueue {
 					QueueStep(takeNext())
 				} else {
 					retried.remove(entry)
-					failures.add(entry)
+					failures[entry] = reason
+					while (failures.size > MAX_REMEMBERED_FAILURES) {
+						failures.remove(failures.keys.first())
+					}
 					QueueStep(takeNext(), failed = entry)
 				}
 			}
@@ -117,7 +141,7 @@ class PlaybackQueue {
 	fun dropTeam(team: String): QueueEntry? {
 		pending.removeAll { it.team == team }
 		retried.removeAll { it.team == team }
-		failures.removeAll { it.team == team }
+		failures.keys.removeAll { it.team == team }
 		val dropped = head?.takeIf { it.team == team }
 		if (dropped != null) head = null
 		return dropped
@@ -127,16 +151,34 @@ class PlaybackQueue {
 	 * the request, which retires it - so without this, resuming would skip the very message that was
 	 * paused. There is no seek yet, so it resumes from the start. */
 	@Synchronized
-	fun requeueFront(entry: QueueEntry) {
-		// Deliberately allowed while it is still the head: a pause requeues BEFORE the stop retires it,
-		// which is the only moment the caller still knows what was playing. Guarded on `pending` alone,
-		// so requeueing something already waiting cannot make it speak twice.
+	fun requeueFront(entry: QueueEntry) = requeueFrontLocked(entry)
+
+	// Deliberately allowed while it is still the head: a pause requeues BEFORE the stop retires it,
+	// which is the only moment the caller still knows what was playing. Guarded on `pending` alone, so
+	// requeueing something already waiting cannot make it speak twice. Called from advance() too, which
+	// already holds this object's monitor - @Synchronized is reentrant, but a private unsynchronized
+	// body says plainly that the lock is the caller's to hold.
+	private fun requeueFrontLocked(entry: QueueEntry) {
 		if (pending.contains(entry)) return
 		pending.addFirst(entry)
 	}
 
+	/**
+	 * Take one WAITING entry out. Returns whether it was there to take.
+	 *
+	 * Refuses the head on purpose. The head is installed in the engine, so removing it here would leave
+	 * a playback whose terminal has no entry to retire and the run would stop on it; giving up on the
+	 * head is a skip, which retires it and starts the next.
+	 */
 	@Synchronized
-	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry)
+	fun drop(entry: QueueEntry): Boolean {
+		if (head == entry) return false
+		retried.remove(entry)
+		return pending.remove(entry)
+	}
+
+	@Synchronized
+	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry) != null || false
 
 	@Synchronized
 	fun clear() {
@@ -153,5 +195,11 @@ class PlaybackQueue {
 	private fun takeNext(): QueueEntry? {
 		head = pending.removeFirstOrNull()
 		return head
+	}
+
+	private companion object {
+		// Enough to describe an outage without becoming a list nobody can face. Every realistic cause
+		// fails a whole burst at once, so this is a bound on grief rather than on information.
+		const val MAX_REMEMBERED_FAILURES = 50
 	}
 }

@@ -144,7 +144,10 @@ class PlaybackQueueTest {
 		// whatever the user just asked for; the queue waits for that playback to report its own end.
 		assertNull(step.next)
 		assertNull(q.playing())
-		assertEquals(listOf(entry(2)), q.queued())
+		// And the displaced entry is still THERE, at the front. Yielding decides when to speak, not
+		// whether to: dropping it let a settings voice sample eat the message the run had reached,
+		// with no alert and no count to notice the loss by.
+		assertEquals(listOf(entry(1), entry(2)), q.queued())
 		// The flag, not the empty head, is what says "do not fill this silence". Asserting only the
 		// two above passed while the caller restarted anyway, because a stood-down queue and an idle
 		// one look identical from here.
@@ -172,7 +175,9 @@ class PlaybackQueueTest {
 		// sees an idle queue with a backlog and restarts it.
 		val unrelated = q.advance(QueueEntry("local.gw.manual.main", 99, SttsPlayer.Tier.FULL), SttsPlayer.Outcome.COMPLETED)
 		assertNull(unrelated.next)
-		assertEquals(entry(2), q.startNext())
+		// Picking up on the message it was interrupted ON, not the one after it. The stored position
+		// is what keeps that from restarting it at the top.
+		assertEquals(entry(1), q.startNext())
 	}
 
 	@Test
@@ -255,6 +260,108 @@ class PlaybackQueueTest {
 		assertNull(tookPlaying)
 		assertEquals(head, q.playing())
 		assertEquals(listOf(entry(1, other)), q.queued())
+	}
+
+	@Test
+	fun `dropping a waiting entry removes it and leaves the rest speaking in order`() {
+		val q = queueOf(entry(1), entry(2), entry(3))
+		val head = q.startNext()!!
+
+		assertTrue(q.drop(entry(2)))
+
+		assertEquals(head, q.playing())
+		assertEquals(listOf(entry(1), entry(3)), q.queued())
+	}
+
+	@Test
+	fun `dropping the head is refused, so nothing removes an entry the engine is already playing`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		// Removing it here would strand the playback: its terminal would find no entry to retire and
+		// the run would stop on it. Giving up on the head is a skip, which retires it and starts the next.
+		assertFalse(q.drop(head))
+		assertEquals(head, q.playing())
+	}
+
+	@Test
+	fun `a dropped entry that comes back counts as a first failure again`() {
+		// TWO entries, because the mark has to be earned AND the marked entry has to still be waiting.
+		// With one, the failure rotates it to the tail and `takeNext` promotes it straight back to head,
+		// where `drop` correctly refuses it - so the original version of this test dropped an entry that
+		// was never marked, and passed against a `drop` that cleared nothing at all.
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		assertNull(q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR).failed)
+		assertEquals(listOf(entry(2), entry(1)), q.queued())
+
+		assertTrue(q.drop(entry(1)))
+		q.enqueue(entry(1))
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		val revived = q.playing()!!
+
+		// The mark went with the drop, so this counts as a first failure again - it rotates to the tail
+		// rather than being discarded on what would look like its second.
+		assertNull(q.advance(revived, SttsPlayer.Outcome.SYNTH_ERROR).failed)
+	}
+
+	@Test
+	fun `speaking a remembered failure clears it from the alert`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		val retryTarget = q.playing()!!
+		q.advance(retryTarget, SttsPlayer.Outcome.SYNTH_ERROR)
+		assertEquals(listOf(entry(1)), q.remembered())
+
+		// Played by hand and actually heard. A message that has now been spoken has no business still
+		// standing in the alert as one that never was - the list is about what the user MISSED.
+		q.enqueue(entry(1))
+		val revived = q.startNext()!!
+		q.advance(revived, SttsPlayer.Outcome.COMPLETED)
+
+		assertEquals(emptyList<QueueEntry>(), q.remembered())
+	}
+
+	@Test
+	fun `skipping a remembered failure does not count as having heard it`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR)
+		assertEquals(listOf(entry(1)), q.remembered())
+
+		// Re-queued and then SKIPPED. A skip retires the entry exactly as a completion does, which is
+		// why the two share this branch - but only one of them means the user heard anything, and
+		// clearing on both told them they had heard the very message they had just given up on.
+		q.enqueue(entry(1))
+		q.advance(q.startNext()!!, SttsPlayer.Outcome.STOPPED)
+
+		assertEquals(listOf(entry(1)), q.remembered())
+	}
+
+	@Test
+	fun `a failure remembers why, and the same message never doubles up`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+
+		assertEquals("no api key", q.reasonFor(entry(1)))
+
+		// Round two of the same outage. One row, not two: the sheet keys its list by entry and Compose
+		// rejects a duplicate key outright rather than merely drawing oddly. Re-queued and failed
+		// twice more, which is one rotation to the tail and then the drop - and because a single-entry
+		// queue promotes its own rotation straight back to head, the second advance takes it directly.
+		q.enqueue(entry(1))
+		q.advance(q.startNext()!!, SttsPlayer.Outcome.SYNTH_ERROR, "no api key")
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR, "still no api key")
+
+		assertEquals(listOf(entry(1)), q.remembered())
+		assertEquals("still no api key", q.reasonFor(entry(1)))
 	}
 
 	@Test

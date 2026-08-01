@@ -1182,7 +1182,7 @@ class ChatRepository(
 				val entry = QueueEntry(event.team, event.at, event.tier)
 				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
 				// and a marker's entry key is shared by every run of the same session.
-				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen) }
+				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen, event.reason) }
 			}
 		}
 	}
@@ -1482,14 +1482,21 @@ class ChatRepository(
 		// A run announces its speaker with a sentinel; a single message played by hand has no marker,
 		// so it carries its own attribution instead.
 		attributed: Boolean = true,
-	): Boolean {
-		val client = sttsClient() ?: return false
-		val provider = currentProvider() ?: return false
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return false
+		// Null when it started; otherwise WHY it did not. Four quite different problems - no key, no
+		// provider, a message that has since gone, and a row with nothing speakable in it - used to
+		// collapse into one `false`, and the alert could only shrug at all of them. The no-key case is
+		// the likeliest cause of a whole burst failing at once, which is exactly when a user needs to
+		// be told which of their problems this is.
+	): String? {
+		val client = sttsClient() ?: return "no voice key set"
+		val provider = currentProvider() ?: return "no voice provider set"
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe }
+			?: return "message is no longer here"
 		val text = ttsTextFramed(_state.value, msg, tier, attributed)
-		if (text.isBlank()) return false
+		if (text.isBlank()) return "nothing to read aloud"
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
+		val taken = stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
+		return if (taken) null else "already speaking"
 	}
 
 	/**
@@ -1634,16 +1641,21 @@ class ChatRepository(
 	/** `gen` names the request that ended. Zero means "no request at all" - a terminal this class
 	 * synthesized because the engine declined the entry, which is never a marker. Generations start at
 	 * one, so it cannot collide with a real one. */
-	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long = 0L) {
+	private suspend fun onPlaybackEnded(
+		entry: QueueEntry,
+		outcome: SttsPlayer.Outcome,
+		gen: Long = 0L,
+		reason: String? = null,
+	) {
 		try {
-			advanceEnded(entry, outcome, gen)
+			advanceEnded(entry, outcome, gen, reason)
 		} finally {
 			// After the advance, not on the event: the queue is only correct once this has run.
 			transportChanged()
 		}
 	}
 
-	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long) {
+	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long, reason: String?) {
 		advanceMutex.withLock {
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
@@ -1679,7 +1691,7 @@ class ChatRepository(
 				}
 				return
 			}
-			val step = queue.advance(entry, outcome)
+			val step = queue.advance(entry, outcome, reason)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
 			if (step.next != null) {
 				// Spoken unconditionally. `advance` has already installed this as the head, so refusing
@@ -1704,7 +1716,11 @@ class ChatRepository(
 	 * separate step, so closing a tab the user may reopen keeps its audio. */
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
-			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
+			// Tearing the thread down is not a pause. Swept across the whole TEAM rather than the entry
+			// handed back: a pause parks its message in pending, so the one entry that actually holds an
+			// offset is never the head, and the head is all a teardown is told about.
+			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier, remember = false) }
+			stts.forgetTeamPositions(team)
 			// A marker lives under its own reserved team, so dropping the message's team cannot reach
 			// one already handed to the engine. Abandoned by its own identity rather than by stopping
 			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
@@ -1726,7 +1742,29 @@ class ChatRepository(
 	/** Whether a transport control has held the run. Distinct from an empty queue: paused means there
 	 * is something to come back to, which is why nothing auto-resumes past it. */
 	@Volatile
-	private var transportPaused = false
+	/**
+	 * Whether the run is held. Read through an accessor that CANNOT report a pause over an idle queue.
+	 *
+	 * A pause describes a run, so it cannot outlive one - and three separate rounds each found a new
+	 * way for a run to end without passing through whichever single place was normalizing the flag at
+	 * the time (a thread torn down, an entry trashed, the last entry skipped). Each fix was correct
+	 * where it landed and none of them held, because the rule lived at the writers rather than at the
+	 * value. A stranded flag refuses autoplay on every team afterwards, with no enabled control left
+	 * on screen to clear it.
+	 *
+	 * Normalizing in the GETTER is what makes the bad state unobservable rather than merely unreached:
+	 * a new way to empty the queue cannot reintroduce it, because there is no longer a reader that
+	 * could see it.
+	 */
+	private var pausedFlag = false
+	private var transportPaused: Boolean
+		get() {
+			if (pausedFlag && queue.isIdle()) pausedFlag = false
+			return pausedFlag
+		}
+		set(value) {
+			pausedFlag = value
+		}
 
 	/**
 	 * Called after the run's state has SETTLED, never from a raw playback event.
@@ -1739,7 +1777,18 @@ class ChatRepository(
 	@Volatile
 	var onTransportChanged: (() -> Unit)? = null
 
+	/**
+	 * Bumped whenever the settled queue state changes. What the sheet re-reads on.
+	 *
+	 * A counter rather than a second callback slot: [onTransportChanged] is one slot the service owns,
+	 * and a UI that took it would silently unhook the lockscreen. A counter has no owner, so any number
+	 * of surfaces can watch it, and it carries no state of its own to drift - it only says "ask again".
+	 */
+	val queueRevision: kotlinx.coroutines.flow.StateFlow<Int> get() = _queueRevision
+	private val _queueRevision = kotlinx.coroutines.flow.MutableStateFlow(0)
+
 	private fun transportChanged() {
+		_queueRevision.value = _queueRevision.value + 1
 		runCatching { onTransportChanged?.invoke() }
 	}
 
@@ -1765,12 +1814,12 @@ class ChatRepository(
 				// already sounding - during a marker, or while the body is still synthesizing, there is
 				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
 				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
-				// Where it got to, captured BEFORE the abandon releases the player.
-				stts.positionSnapshot()?.let { (position, _) ->
-					stts.rememberPosition(head.team, head.at, head.tier, position)
-				}
+				// A pause KEEPS where it got to - that is what separates it from a skip. Which sound's
+				// position that is stays the engine's to answer: during the chime or the sentinel the
+				// audible thing is a marker, and a marker is never resumable, so a pause landing there
+				// files nothing rather than cutting the opening off the body.
 				queue.requeueFront(head)
-				stts.abandon(head.team, head.at, head.tier)
+				stts.abandon(head.team, head.at, head.tier, remember = true)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
 			}
 		}
@@ -1793,19 +1842,12 @@ class ChatRepository(
 		// correct them.
 		try {
 			advanceMutex.withLock {
-				transportPaused = false
-				markerInFlight?.let { stts.abandonGeneration(it) }
-				clearMarkers()
 				// A pause retires the head and parks the message at the FRONT of the queue, so after one
 				// there is no head to skip - the thing being skipped is that parked entry. Promoting it
 				// first means Skip discards it, rather than resuming the very message it was asked to
 				// move past.
 				val head = queue.playing() ?: queue.startNext() ?: return@withLock
-				// Skipping is giving up on the message, so any paused position for it goes too -
-				// otherwise it would resume mid-sentence if it ever came back.
-				stts.forgetPosition(head.team, head.at, head.tier)
-				stts.abandon(head.team, head.at, head.tier)
-				queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
+				retireHead(head)
 			}
 		} finally {
 			transportChanged()
@@ -1825,29 +1867,159 @@ class ChatRepository(
 	 */
 	fun queueRows(): List<QueueRow> {
 		val head = queue.playing()
-		return queue.queued().map { entry ->
-			val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
-			QueueRow(
-				entry = entry,
-				sessionLabel = _state.value.label(entry.team, _state.value.localGatewayId),
-				title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
-				durationMs = null,
-				isCurrent = entry == head,
-			)
+		// Known only for the entry that is actually playing - a queued one has no audio yet, which the
+		// tile draws as a spinner. Read once rather than per row: it is the same answer for all of them,
+		// and asking inside the loop would let the current entry change mid-list.
+		val current = playbackPosition()
+		return queue.queued().distinct().map { entry ->
+			row(entry, isCurrent = entry == head, durationMs = current?.takeIf { it.entry == entry }?.durationMs)
 		}
 	}
 
-	/** Where the audible message is and how long it is, for the sheet's one bar. Null when nothing is
-	 * playing, which the bar shows as disabled rather than as zero. */
-	fun playbackPosition(): Pair<Long, Long>? = stts.positionSnapshot()
+	/** The entries that gave up, for the alert's list. Separate from [queueRows] because these are no
+	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
+	fun failedRows(): List<QueueRow> =
+		queue.remembered().map {
+			row(it, isCurrent = false, durationMs = null, gaveUp = true, reason = shortCause(queue.reasonFor(it)))
+		}
 
-	fun seekPlayback(ms: Long) = stts.seekTo(ms)
-
-	/** Open the thread a queue entry belongs to and reveal that message, reusing the machinery a tap
-	 * on a notification already goes through. */
-	fun jumpTo(entry: QueueEntry) {
-		openThread(entry.team)
+	/**
+	 * A cause a person can read, from whatever the provider said.
+	 *
+	 * The raw string is an HTTP body: it can run to paragraphs, name internal endpoints, and echo
+	 * request content back. A tile is not the place for it - what a user needs is which of their
+	 * problems this is, and only the first line of it.
+	 */
+	private fun shortCause(reason: String?): String {
+		val raw = reason?.trim().orEmpty()
+		return when {
+			raw.isEmpty() -> "not spoken"
+			raw.contains("401") || raw.contains("403", true) -> "voice key rejected"
+			raw.contains("429") -> "voice service busy"
+			raw.contains("timeout", true) || raw.contains("timed out", true) -> "voice service timed out"
+			raw.contains("playback failed", true) -> "audio would not play"
+			// Already a phrase written for a person - the decline paths mint these themselves.
+			raw.length <= 60 && !raw.contains('{') && !raw.contains('<') -> raw
+			else -> raw.lineSequence().first().take(60)
+		}
 	}
+
+	private fun row(
+		entry: QueueEntry,
+		isCurrent: Boolean,
+		durationMs: Long?,
+		gaveUp: Boolean = false,
+		reason: String? = null,
+	): QueueRow {
+		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
+		return QueueRow(
+			entry = entry,
+			sessionLabel = _state.value.label(entry.team, _state.value.localGatewayId),
+			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
+			durationMs = durationMs,
+			isCurrent = isCurrent,
+			gaveUp = gaveUp,
+			reason = reason,
+		)
+	}
+
+	/**
+	 * Take one entry out of the queue. The tile's trash, and the same action as a swipe on the bubble.
+	 *
+	 * Routed through skip when it is the HEAD, rather than reaching into the queue: the head is
+	 * installed in the engine, so removing it without retiring the request would leave a playback whose
+	 * terminal has nothing to advance, and the run would stop there.
+	 */
+	suspend fun dropFromQueue(entry: QueueEntry) {
+		// ONE critical section, and it names the entry throughout. Deciding head-vs-not under the lock
+		// and then acting outside it still let the head advance in between, so the trash discarded
+		// whatever had become current rather than the tile that was tapped - the same "re-derive it
+		// later from something coarser" shape this subsystem keeps producing.
+		try {
+			advanceMutex.withLock {
+				if (queue.playing() == entry) {
+					retireHead(entry)
+					return@withLock
+				}
+				queue.drop(entry)
+				// Giving up on a message gives up on where it had got to, exactly as a skip does - which
+				// the abandon is told outright rather than left to work out from the outcome.
+				stts.abandon(entry.team, entry.at, entry.tier, remember = false)
+				stts.forgetPosition(entry.team, entry.at, entry.tier)
+				// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
+				// parked otherwise leaves the flag set over an idle queue, refusing every later run on
+				// every team with no enabled control left to clear it.
+				resumeIfSilent()
+			}
+		} finally {
+			transportChanged()
+		}
+	}
+
+	/** Retire a NAMED head and start whatever follows it. The shared body of skip and of trashing the
+	 * tile that is speaking, so the two cannot drift; both must already hold [advanceMutex]. */
+	private fun retireHead(head: QueueEntry) {
+		markerInFlight?.let { stts.abandonGeneration(it) }
+		clearMarkers()
+		stts.forgetPosition(head.team, head.at, head.tier)
+		stts.abandon(head.team, head.at, head.tier, remember = false)
+		// STOPPED, not COMPLETED. The queue advances on both, but only COMPLETED means "heard" - and a
+		// skip that claimed it did cleared the message out of the failures list, telling the user they
+		// had heard the very thing they had just given up on.
+		val next = queue.advance(head, SttsPlayer.Outcome.STOPPED).next ?: return
+		// Skip means "move past this one", NEVER "start playing". Clearing the pause here made the
+		// lockscreen's own next button start the phone talking out loud from a state the user had
+		// deliberately silenced - and every media app on the platform advances without sounding.
+		//
+		// The promoted entry has to be parked rather than left alone, because `advance` installs it as
+		// the head BEFORE handing it back: declining to speak it would strand an entry the engine never
+		// received and no terminal will ever retire. PREEMPTED puts it back at the front, which is
+		// exactly where a resume should find it.
+		if (transportPaused) {
+			queue.advance(next, SttsPlayer.Outcome.PREEMPTED)
+		} else {
+			speak(next)
+		}
+	}
+
+	/** Acknowledge one failure. "Seen", not "resolved" - the message was never spoken and this does not
+	 * pretend otherwise; it only stops the alert asking again. */
+	suspend fun acknowledgeFailure(entry: QueueEntry) {
+		advanceMutex.withLock { queue.forgetFailure(entry) }
+		transportChanged()
+	}
+
+	/**
+	 * Where the current BODY is and how long it is, for the sheet's one bar. Null when nothing is
+	 * playing, which the bar shows as disabled rather than as zero.
+	 *
+	 * Scoped to the head, so the bar is null through the chime and the sentinel rather than sweeping
+	 * them. The plan is explicit that neither marker gets a timeline, and a bar that ran over one would
+	 * invite a seek into audio there is nowhere useful to land in.
+	 */
+	fun playbackPosition(): SttsPlayer.Position? =
+		stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
+
+	/** Where the run would pick up while it is held. A pause has no player, so the live snapshot is
+	 * null and the sheet showed nothing at all - blanking the timeline at precisely the moment the
+	 * preserved position is the thing worth seeing. Duration stays unknown until audio exists again. */
+	fun heldPosition(): Long? {
+		if (!transportPaused) return null
+		val parked = queue.queued().firstOrNull() ?: return null
+		return stts.heldPosition(parked.team, parked.at, parked.tier)
+	}
+
+	/** Move the current body. Named, so a bar built a moment ago cannot seek whatever took the sound
+	 * since - a marker, or the next message. */
+	fun seekPlayback(ms: Long) {
+		val snap = playbackPosition() ?: return
+		stts.seekTo(snap.owner, ms)
+	}
+
+	/** Open the thread a queue entry belongs to, returning the CANONICAL key its tab is filed under so
+	 * the caller can point the active tab at the same value. Revealing the message itself is the
+	 * caller's half: only the view layer can scroll, and this class holds no view. */
+	fun jumpTo(entry: QueueEntry): String = openThread(entry.team)
 
 	/** What the bubble draws: how many are still to speak, whether the current one is still being
 	 * generated, and how many gave up. The failure count outlives a drained queue, which is why it is
@@ -1875,14 +2047,14 @@ class ChatRepository(
 	private fun speakBody(entry: QueueEntry) {
 		val tier = entry.tier
 		if (tier == null) {
-			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = "no tier to speak") }
 			return
 		}
 		// Yielding: by the time this reaches the player the user may have started something of their
 		// own, and autoplay stands down rather than talking over it.
 		stts.post {
-			if (!startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)) {
-				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
+			startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)?.let { why ->
+				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = why) }
 			}
 		}
 	}

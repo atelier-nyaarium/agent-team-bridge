@@ -377,7 +377,7 @@ Also **frozen at enqueue: provider and voice** (audit finding 5). The cache key 
 (team, at, tier, provider, voice), so an entry that is queued-but-unsynthesized would otherwise pick up
 whatever provider is current when its turn arrives, giving one run two different voices.
 
-### Phase 1 - Queue and engine, no new UI
+### Phase 1 - Queue and engine, no new UI ✅
 
 Scope corrected by audit finding 4: this phase plays the BODY only. Chime and sentinel move wholly to
 Phase 2, because Phase 1 cannot play audio whose text and asset Phase 2 is what defines.
@@ -626,7 +626,7 @@ answer "who is this?".
   where a marker already names the speaker. The notification Play action bypasses the queue, so it
   keeps the prefix and gets no marker.
 
-### Phase 4 - Background control surface
+### Phase 4 - Background control surface ✅
 
 **Use the PLATFORM media APIs, not a new dependency.** The app has no media dependency today
 (`app/build.gradle.kts` has no media3 or androidx.media), and it does not need one: `minSdk 33` puts
@@ -692,6 +692,32 @@ something concrete needs it, not by habit.
     notification, a separate "pre-generate" toggle covers a case that no longer exists. Candidate for
     retirement, which is a settings change and therefore the owner's call.
 
+### Phase 4 was sealed with audio focus missing
+
+Recorded at the top of this section because it is the most serious thing this plan produced, and the
+gates could not see any of it.
+
+The phase settles audio focus in detail above - `AUDIOFOCUS_GAIN_TRANSIENT`, `LOSS_TRANSIENT` pauses
+and resumes, `LOSS_TRANSIENT_CAN_DUCK` handled explicitly because `CONTENT_TYPE_SPEECH` means the
+system does not auto-duck, permanent `LOSS` pauses and leaves the queue intact. **None of it was
+written.** A grep for `AudioManager` across the whole Android source returned nothing, "Phase 4 as
+built" did not mention it, and the phase was sealed anyway.
+
+What that meant on a real phone: speech over the top of music with no ducking, a phone call talked
+straight through, and - because nothing listened for `ACTION_AUDIO_BECOMING_NOISY` - unplugging
+headphones re-routed agent messages to the loudspeaker. That last one is a privacy harm, not a polish
+item.
+
+Four alignment rounds over the diffs never found it, because every one of them asked "is this change
+correct?" and a thing that was never written has no diff to be wrong in. The red team round asked
+"what does a real person hit?" and had it inside one pass. **The correction that generalizes: an
+"as built" section is only worth what its absences are checked against, so a phase's spec list and its
+built list have to be diffed deliberately - reading either one alone will not do it.**
+
+Built in `SpeechFocus.kt`. Every loss pauses, including the duckable one: that is the explicit choice
+the plan left open, and ducking speech underneath a navigation prompt leaves two voices talking at
+once, which is worse than a gap.
+
 ### Phase 4 as built
 
 - **Foreground service holds both types for its whole life**, never toggled. Verified on device:
@@ -749,7 +775,7 @@ whether the MediaStyle notification RENDERS correctly - it is confirmed construc
 that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active
 session with a MediaStyle notification on modern Android, but is unconfirmed.
 
-### Phase 5 - Bubble and modal
+### Phase 5 - Bubble and modal ✅
 
 **Build the overlay WITHOUT Compose.** The plan offers two ways past the ViewTree-owner problem, and
 plain Android Views is the cheaper one: the bubble is a count badge, a spinner and a swipe gesture,
@@ -788,7 +814,28 @@ Activity surface and stays Compose - it is only the overlay that leaves.
 - **`QueueSheet.kt`** - transport row, ONE bar over the current entry's BODY (markers are boundaries,
   not content, and seeking into them lands nowhere), and fat tiles. The bar is DISABLED rather than
   hidden while the length is unknown, so the row does not jump under a thumb when synthesis finishes;
-  an unknown duration is a spinner rather than a zero, which would look like a real length.
+  an unknown duration is a spinner rather than a zero, which would look like a real length. The
+  transport row is disabled outright on an empty queue: a Pause that does nothing reads as broken
+  where an absent one reads as idle.
+- **Reachable from TWO places** - the bubble, and the transport notification's body. The notification
+  is the one that matters: the bubble sits behind a permission the user may never grant, and with only
+  that entry point the list would have been unreachable for them while a notification sat on screen
+  advertising a run they could not inspect.
+- **A jump lands on the MESSAGE.** Routed through the same `openTeamRequest` a notification tap uses,
+  so it inherits that whole gesture - dismissing masking surfaces, selecting the tab, re-snapping -
+  rather than a partial re-implementation. The scroll itself needed a new `thread.revealMessage`: the
+  existing reveal draws an unread divider, and a tile the user chose to tap says nothing about what
+  they have read.
+- **The sheet is a fourth READER, never a fourth copy.** It re-reads on `queueRevision`, a counter the
+  settled-state hook bumps. Deliberately not a second `onTransportChanged`: that is one slot the
+  service owns, and a UI that took it would have silently unhooked the lockscreen.
+- **Trash on the head is a skip.** The head is installed in the engine, so lifting it out of the queue
+  would strand a playback whose terminal has nothing to retire and the run would stop there.
+  `PlaybackQueue.drop` refuses the head for that reason, and the repository routes it to `skipPlayback`.
+- **The failure alert outlives the drained queue and can be answered.** Failed entries list under
+  their own header with jump-or-dismiss, and dismissal is "seen", not "resolved" - the message was
+  never spoken and nothing here pretends otherwise. The bubble stays up on a failure count alone;
+  hiding on "is a run active" took the alert away in the same breath as the last entry created it.
 - **Every surface reads from the repository** (`queueRows`, `queueCounts`, `transportState`,
   `playStatesFor`). Four surfaces now report one run, and every one that kept its own copy tonight is
   one that drifted from it.
@@ -797,10 +844,97 @@ Activity surface and stays Compose - it is only the overlay that leaves.
   implying the bubble is required, and the button disappears once granted.
 - **Seek** (`positionSnapshot`, `seekTo`) is read under the same monitor that installs and releases the
   player: polling the handle directly would read something that can be released between the null check
-  and the call, which is a native crash rather than a wrong number. A pause captures the position
-  BEFORE abandoning, and the offset is consumed on use, so it can never outlive its pause and skip the
-  opening of a later message. Skipping forgets the position, since giving up on a message should not
-  leave it resuming mid-sentence.
+  and the call, which is a native crash rather than a wrong number. The offset is consumed on use, so
+  it cannot outlive its pause and skip the opening of a later message; a skip, a trash and a teardown
+  all forget it, since giving up on a message should not leave it resuming mid-sentence; and a purge
+  forgets it because an offset points INTO a file, which re-synthesized audio has no reason to match.
+  A teardown sweeps the whole TEAM, not the entry it was handed - a pause parks its message in
+  `pending`, so the one entry actually holding an offset is never the head.
+- **The pause no longer captures anything itself.** Whether a position survives is the CALLER'S to
+  declare (`abandon(..., remember)`, with no default so the compiler demands it) and whose position it
+  is remains the engine's to answer. Markers and the settings sample refuse to be resumable at all:
+  a marker's cache key is the words it speaks, shared by every run of that session, so one stale
+  offset would truncate that session's announcement permanently.
+- **A position NAMES its request.** `positionSnapshot` returns the owner with the numbers and
+  `rememberPosition` takes the whole snapshot, so pairing one sound's position with another's key is
+  not expressible. See the sixth entry under Bug Classes: this was found as "pause during the chime
+  corrupts the body's resume", but the defect was the anonymous API, not the pause.
+- **A displaced message goes back to the front rather than being dropped.** Yielding decides WHEN to
+  speak, not whether to. Retiring the head on PREEMPTED let a settings voice sample - or a row's own
+  Play - silently consume the message the run had reached, with no alert and no count to notice it by,
+  while the code's own comment promised the queue would "pick up again". It now picks up on the
+  message it was interrupted on, at the position it reached - captured in `playFile` just before
+  `installPlayer` tears the outgoing player down, which is the only place that path passes through.
+
+  **This claim was false twice before it was true.** First the requeue landed with no capture at all,
+  so the message restarted from zero. Then the capture was inferred from the PREEMPTED outcome, which
+  was wrong in both directions at once: it never fired for the case the sentence describes (a real
+  displacement goes through `requests.sound`, which no `apply` ever followed), and it fired for cases
+  that wanted the opposite, silently undoing `skipPlayback`'s `forgetPosition` from the play lane one
+  line after the delete. See "Bug Classes: intent and identity" below.
+
+- **Three notification states, not two.** A live run gets the MediaStyle transport; a finished run that
+  dropped something gets a plain ALERT on its own DEFAULT-importance channel, because the transport's
+  controls have nothing left to act on and an entry titled "Speaking" over silence is a lie with two
+  dead buttons on it. `CHANNEL_STATUS` is `IMPORTANCE_MIN` with no badge, which is right for "the
+  bridge is connected" and would have made the one notice that a message went unspoken invisible.
+  The alert is ongoing, since a swipe is not an acknowledgement.
+- **A failure says WHY.** `startPlayback` returns the reason it declined rather than a bare `false` -
+  no key, no provider, the message gone, nothing speakable - and the tile maps it to a short cause.
+  The raw provider string is never rendered: it is an HTTP body that can run to paragraphs and echo
+  request content back.
+- **The failures list is bounded and deduped**, keyed by entry so the sheet cannot be handed duplicate
+  keys, and a message that is later spoken successfully leaves the list. Only a COMPLETED clears it -
+  a skip retires an entry exactly as a completion does, but claiming it had been heard told the user
+  they had heard the very thing they gave up on.
+- **The queue is reachable without any permission.** A board-header control opens the sheet and shows
+  which of three states the queue is in; the bubble needs an overlay grant and the transport needs
+  notifications, so refusing both previously left the pause and skip existing but unreachable.
+- **A process kill cannot strand the notification.** The queue and the failures live in memory, so a
+  kill leaves an ongoing entry describing a run that no longer exists; the service cancels it on
+  start, since nothing else reconciles a state that had no playback change to hook.
+
+### Phase 5 - what the audit found, and what it cost
+
+44 findings raised, top 6 verified, **0 refuted** - the only round in this plan where every verified
+finding survived both skeptics. Worth recording plainly: the phase was written, gated green, and
+described in this file as complete while `QueueSheet` was never composed anywhere in the app. Six
+independent agents said so. The gates could not see it because dead Compose code compiles, and the
+"as built" notes above were originally written from intent rather than from what was reachable.
+
+The correction that generalizes: an "as built" entry must name the call site that reaches the thing,
+not the file that contains it.
+
+### Phase 5 - the alignment round on the repairs
+
+The four repair commits were themselves audited, and that round also came back **0 refuted of 6**. Six
+majors, all against code written to fix the previous six. Worth keeping, because the failure modes were
+not the same shape as the originals:
+
+- **The sheet composed over the biometric lock screen.** Every other overlay at that level is reached
+  by an in-app gesture, which already implies an unlocked session. This one arrives by INTENT, so it
+  needed the guard the others never did. Queued message titles and live transport controls, in front
+  of a locked phone.
+- **The jump was wired to the wrong key.** `revealMessage` was handed the message's `at`; the DOM row
+  is keyed by `Message.id`, documented in its own declaration as "NOT the mailbox seq". The lookup
+  matched nothing, so a tile navigated and then sat still. A working-looking feature that did nothing.
+- **`transportPaused` was stranded by the trash.** `resumeIfSilent`'s comment claims it is "the one
+  place the flag is read", and that was true when written - then `dropFromQueue` was added three
+  commits later as a new way to empty the queue, and did not route through it. **The invariant was
+  documented and then broken by its own author in the same session.** A comment asserting uniqueness
+  is not enforcement; the residue tests in this repo exist because of exactly this.
+- **A resume offset named the message, not the recording.** One message is spoken two ways, so the
+  entry key addressed two different files - the identity class again, one level below where it was
+  just "fixed". Now keyed on `(entry, audio)`.
+- **`dropFromQueue` decided head-vs-not outside the mutex**, so a terminal promoting that entry
+  between the test and the removal could make the trash skip a message the user never tapped.
+- **A test written in the same commit was vacuous.** It dropped an entry that had never been marked
+  retried, so it passed against a `drop` that cleared nothing. Rewritten to earn the mark first, and
+  verified by breaking the line under test.
+
+The lesson, and it is about process rather than code: **repairs deserve the same audit as the code they
+repair.** Six defects in four commits, none of which the gates could see, all of which came from an
+author who had just finished reasoning carefully about that exact subsystem.
 
 ### Audit findings (lap 1)
 
@@ -1462,6 +1596,94 @@ to ask.
 The lesson worth keeping: once the invariant moved into `sound()`, every guard protecting it from
 outside became a liability rather than insurance. A redundant check is not free when it can refuse.
 
+**Mechanism: an identity that exists, thrown away, then re-derived from something coarser.**
+Defect class: a value that already names WHO is not carried across a hand-off, so the far side asks a
+cheaper question - "what is playing?", "which entry is the head?" - and gets the wrong answer whenever
+the two have drifted apart. Every instance is fixed by carrying the value, never by narrowing the
+window in which the drift is visible.
+
+- Marker terminals matched against "whichever entry is playing" instead of the request that was
+  started. Four rounds of window-narrowing; closed by carrying `gen`.
+- A drop released "the player" instead of the player its request owned. Closed by `playerOwner`.
+- A cache key derived from the entry rather than the spoken words, so one message spoken two ways
+  collided. Closed by keying on the text hash.
+- Phase 5: `positionSnapshot`/`seekTo` read the bare `player` field and named nothing, so pause
+  attributed a boundary marker's position to the queue head - cutting the opening off the body, or
+  seeking past the end of a short one so it retired as heard without ever being spoken. Closed by
+  returning the owner ALONGSIDE the numbers and taking the whole snapshot into `rememberPosition`, so
+  no caller can pair one sound's position with another's key.
+
+The tell, and it is now reliable: three or more consecutive fixes that narrow a WINDOW rather than
+answer "who is this?" means the identity is already in the system and is being dropped somewhere
+upstream. `playerOwner` had existed since Phase 1a and `releasePlayerOf` was already using it for
+exactly this question - the position API simply never asked.
+
+**Mechanism: intent and identity are two halves, and dropping either one fails the same way.**
+Defect class: a hand-off carries only half of what the far side needs. The earlier entries are all the
+identity half being dropped. Phase 5 produced the mirror image, which is worth recording because the
+"fix" for one is the cause of the other if applied without thought.
+
+- The position capture lived at the CALL SITE, which knew intent (pause versus skip) but had to guess
+  identity - and guessed wrong for the whole marker sequence at the head of every run.
+- So it moved into the ENGINE, which knows identity exactly. But intent was then inferred from the
+  outcome, and `PREEMPTED` is not a decision: a pause, a skip, a trash and a genuine displacement all
+  produce it, two wanting the position kept and two wanting it destroyed. The inference made
+  `forgetPosition` a no-op - it re-filed the offset on the play lane one line after the delete - and
+  gave boundary markers offsets that nothing forgets, so a skip during the sentinel truncated the next
+  run's announcement permanently, the marker cache being keyed on the words it speaks.
+- It also never fired for the case it was written for. A genuine displacement resolves inside
+  `requests.sound()`, and nothing ran an effect for that drop at all.
+
+CLOSED by carrying BOTH. `abandon(team, at, tier, remember)` takes the caller's intent; the engine
+answers whose position it is and which recording it points into; and `isResumable` refuses markers and
+the settings sample outright, since a boundary shared across every run of a session must always play
+whole. The displacement path captures before `installPlayer` tears the player down.
+
+Enforced by `PlaybackResidueTest.givingUpOnASoundStatesWhetherToKeepItsPosition`, because the previous
+attempt was guarded by a comment claiming `resumeIfSilent` was "the one place the flag is read" - true
+when written, and broken by its own author three commits later in the same session. **A comment
+asserting an invariant is documentation; only a test is enforcement.** The rule caught a fifth call
+site (thread teardown) on its first run.
+
+**Mechanism: a rule enforced at the writers instead of at the value.**
+Defect class: an invariant maintained by normalizing in whichever place currently mutates the state.
+Every fix is correct where it lands, and the next new mutator reintroduces the bug - because nothing
+about the value itself forbids the bad state.
+
+- `transportPaused` stranded over an idle queue, refusing autoplay on every team with no enabled
+  control left on screen to clear it. Round 1: normalized in `resumeIfSilent`, documented as "the one
+  place the flag is read". Round 2: `dropFromQueue` was added as a new way to empty the queue and did
+  not route through it - broken by its own author, three commits later, in the same session. Round 3:
+  skipping the LAST entry returned early before reaching the normalization at all.
+
+CLOSED by moving the rule into the value. `transportPaused` is now a property whose GETTER clears a
+stale pause, so a run that ends by any means - present or future - cannot produce an observable
+paused-but-idle state. The bad state is unrepresentable to readers rather than merely unreached by
+the writers that exist today.
+
+The general form, worth applying before the fourth round of anything: **if two independent fixes for
+one invariant both landed at call sites, the third fix belongs at the value.**
+
+**Framework decision for this lap, and what is deliberately NOT done.**
+
+Two classes were recorded this lap and both were closed with a redesign rather than a patch: intent and
+identity travelling together (`abandon(..., remember)`, default removed so the compiler demands it at
+every call site), and the pause rule moving from the writers into the value (`transportPaused`
+normalized in its getter). That is this lap's framework budget, spent.
+
+**Not done, and recorded rather than skipped: extracting the marker sequencer.** It is spread across
+about twelve sites in `ChatRepository` - `markersFor`, `markerInFlight`, the pending list,
+`queueMarkers`/`clearMarkers`/`nextMarkerStarted`, plus the terminal matching inside `onPlaybackEnded`
+- and it is untestable by construction, which is exactly where four consecutive rounds of "a torn-down
+run's marker drove the current one" lived. It should become a `MarkerSequencer` with
+`queueFor`/`next`/`started`/`isMine`/`clear`, effects staying in the repository, mirroring how
+`PlaybackRequests` and `PlaybackQueue` were already split out, with the same residue-test treatment.
+
+The reason it is deferred is worth stating plainly rather than dressing up: it fixes no known defect,
+it is a large refactor of the most defect-prone unit in the subsystem, and starting it at the end of a
+long session is how a seventh audit round gets created. **It is the first thing to do when this area
+is next touched.**
+
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
 rows sharing one `at` collapsing into a single entry; unspeakable rows (status-only, files-only) being
@@ -1548,3 +1770,45 @@ braces.
 **A stale doc count survived nine rounds.** The plan's own as-built preamble claimed 19 tests while the
 suite held 37, and it took an audit agent to notice. Counts in prose go stale the moment they are
 written; the plan now says where to look instead of restating the number.
+
+**The gates cannot see an ABSENCE, and that is the shape of this plan's worst bugs.** Green `lint`,
+green `test`, green `testDebugUnitTest`, green `assembleEmulator` - over a queue sheet that was never
+composed, and over an audio-focus design that was never written. Dead Compose code compiles, and an
+unwritten feature has no diff to be wrong in. Four alignment rounds asking "is this change correct?"
+found neither; the round that asked "what does a real person hit?" found both in one pass. The lesson
+is not "audit more", it is **audit a different question** - and specifically, diff a phase's spec list
+against its built list rather than reading either alone.
+
+**Everything worth testing lives where no test can reach it.** `ChatRepository` cannot be constructed
+by a JVM test, and it holds the queue, the marker sequencer, the transport hook and every advance
+decision; `SttsPlayer` is the same. The pure units have dozens of tests between them and produced
+almost none of this session's defects, which is the point: the untestable half is where the bugs live,
+and the only detection mechanism available for it is an expensive multi-agent audit.
+
+**A comment asserting an invariant is worth nothing, and I proved it on myself twice.** I wrote that
+`resumeIfSilent` was "the one place the flag is read" - true when written - then added a new mutator
+three commits later in the same session and broke it, then broke it again from a third path. The
+instinct on noticing an invariant is to write a sentence about it, and a sentence does not fail a build.
+
+**Verifying a test by breaking one line proves it CAN go red, not that it covers what it claims.** That
+ritual ran all session and still let through a vacuous residue test: a regex over call sites that could
+not distinguish "every call declares its intent" from "the pattern matched nothing". The stronger move
+was available the whole time - deleting the default parameter makes the compiler enforce the same rule
+exhaustively, with nothing to evade. **Prefer making a bad state unrepresentable over writing a test
+that goes looking for it.**
+
+**Two doors, both behind permissions, is zero doors.** The queue sheet was reachable from the overlay
+bubble and the transport notification, so a user who refuses both had no pause and no skip at all -
+controls that existed and could not be reached. Standing rule worth keeping: if every route to a
+feature is permission-gated, the feature is optional whether or not that was intended.
+
+**`?: return` inside a lock bit twice in one subsystem.** Once as a bare non-local return leaving every
+surface stale, and once as an early return that skipped the normalization below it. Both read as
+obviously correct. In a critical section an early return is a branch that silently declines the rest of
+the invariant maintenance, and this file has enough of them to deserve a convention.
+
+**Repairs need auditing as much as the code they repair.** Rounds 2, 3, 4 and 6 each found their
+defects in the PREVIOUS round's repairs - including six majors in an audio-focus file forty minutes
+old, written carefully, by someone who had just finished reasoning about that exact subsystem. The
+convergence signal, when it came, was a round returning zero survivors because everything it raised had
+already been found and fixed independently.

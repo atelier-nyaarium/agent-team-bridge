@@ -42,6 +42,27 @@ class PlaybackResidueTest {
 	}
 
 	@Test
+	fun abandonHasNoDefaultForWhetherThePositionSurvives() {
+		// A pause, a skip, a trash and a genuine displacement all end as PREEMPTED and do not agree
+		// about the position: two keep it, two destroy it. Inferring from the outcome made
+		// `forgetPosition` a no-op, re-filing the offset on the play lane one line after the delete.
+		//
+		// The ENFORCEMENT is the missing default: with none, a call site that says nothing does not
+		// compile, which is exhaustive and has no pattern to evade. This asserts only that the default
+		// is still absent, because the first version of this rule was a regex over call sites - and a
+		// regex cannot tell "every call declares its intent" from "the pattern matched nothing", which
+		// is the same vacuity it was written to prevent.
+		val signature = File(mainSrc, "SttsPlayer.kt").readText()
+			.lines()
+			.first { it.contains("fun abandon(") }
+		assertEquals(
+			"abandon must not default `remember`; the compiler is what makes every caller declare it",
+			true,
+			signature.contains("remember: Boolean)") && !signature.contains("remember: Boolean ="),
+		)
+	}
+
+	@Test
 	fun theRegistryStaysFreeOfAndroid() {
 		// Every defect in the effect layer was uncatchable because no JVM test can construct it. This
 		// unit is testable only while it imports no platform type, and the pressure to break that is

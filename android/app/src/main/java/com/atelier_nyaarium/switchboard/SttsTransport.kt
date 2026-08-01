@@ -76,12 +76,19 @@ class SttsTransport(
 		)
 	}
 
-	/** A media-style notification carrying the same three controls, for the shade. */
-	fun notification(paused: Boolean, speaking: String?): Notification =
+	/**
+	 * A media-style notification carrying the same three controls, for the shade.
+	 *
+	 * `openQueue` is the body tap. It matters that this exists: the bubble is behind a permission the
+	 * user may never grant, and without a tap target here the queue list would be unreachable for them
+	 * while the notification sat on screen advertising a run they could not inspect.
+	 */
+	fun notification(paused: Boolean, speaking: String?, openQueue: PendingIntent? = null): Notification =
 		Notification.Builder(context, channelId)
 			.setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
 			.setContentTitle(speaking ?: "Speaking")
 			.setContentText("Agent messages")
+			.apply { openQueue?.let { setContentIntent(it) } }
 			// Ongoing even while paused. A paused run is not a finished one, and making the notification
 			// dismissible exactly when it is paused would let the only control that can un-pause be
 			// swiped away - leaving autoplay held with nothing left to release it.
@@ -95,6 +102,26 @@ class SttsTransport(
 			)
 			.addAction(action(android.R.drawable.ic_media_next, "Skip", ACTION_SKIP))
 			.setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1))
+			.build()
+
+	/**
+	 * The alert for messages that gave up, with no run behind it.
+	 *
+	 * Its own notification rather than the media one kept alive: with an empty queue the transport's
+	 * Pause and Skip do nothing at all, and a media-style entry titled "Speaking" over a run that
+	 * ended is a claim the app cannot back. This says what happened and offers the one thing that
+	 * helps, which is opening the list.
+	 */
+	fun alert(count: Int, alertChannelId: String, openQueue: PendingIntent?): Notification =
+		Notification.Builder(context, alertChannelId)
+			.setSmallIcon(android.R.drawable.stat_notify_error)
+			.setContentTitle(if (count == 1) "A message could not be spoken" else "$count messages could not be spoken")
+			.setContentText("Tap to see which")
+			.apply { openQueue?.let { setContentIntent(it) } }
+			// Ongoing, like the transport it replaces. This is the only route into the failed list that
+			// needs no permission, and a swipe is not an acknowledgement - dismissing it would leave
+			// messages that were never spoken with nothing left pointing at them.
+			.setOngoing(true)
 			.build()
 
 	fun release() {

@@ -27,13 +27,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** One row of the queue as the sheet needs it. Durations are null until the audio exists. */
+/** What the queue is doing, coarsely enough for one glanceable control. */
+enum class QueueGlance { IDLE, SPEAKING, PAUSED, ALERT }
+
+/**
+ * One row of the queue as the sheet needs it.
+ *
+ * `durationMs` is null until the audio exists, which the tile draws as a spinner - but only while the
+ * row is still WAITING. A row that gave up is not waiting for anything, and spinning at it forever
+ * says the opposite of what happened.
+ */
 data class QueueRow(
 	val entry: QueueEntry,
 	val sessionLabel: String,
 	val title: String,
 	val durationMs: Long?,
 	val isCurrent: Boolean,
+	val gaveUp: Boolean = false,
+	// WHY it gave up. The engine has carried this on every terminal all along; without it a missing
+	// API key, a dead network and an undecodable file all read as the same shrug.
+	val reason: String? = null,
 )
 
 /**
@@ -49,6 +62,7 @@ data class QueueRow(
 @Composable
 fun QueueSheet(
 	rows: List<QueueRow>,
+	failed: List<QueueRow>,
 	paused: Boolean,
 	positionMs: Long?,
 	durationMs: Long?,
@@ -57,16 +71,20 @@ fun QueueSheet(
 	onSeek: (Long) -> Unit,
 	onTrash: (QueueEntry) -> Unit,
 	onJump: (QueueEntry) -> Unit,
+	onDismissFailure: (QueueEntry) -> Unit,
 ) {
+	// An empty queue has nothing to pause or skip. Left enabled, the row offered a Pause that did
+	// nothing and a Skip with nothing to skip, which reads as a broken control rather than an idle one.
+	val running = rows.isNotEmpty()
 	Column(Modifier.fillMaxWidth().padding(16.dp)) {
 		Row(verticalAlignment = Alignment.CenterVertically) {
-			IconButton(onClick = onPlayPause) {
+			IconButton(onClick = onPlayPause, enabled = running) {
 				Icon(
 					if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
 					contentDescription = if (paused) "Resume" else "Pause",
 				)
 			}
-			IconButton(onClick = onSkip) {
+			IconButton(onClick = onSkip, enabled = running) {
 				Icon(Icons.Filled.SkipNext, contentDescription = "Skip")
 			}
 			Text(clock(positionMs) + " / " + clock(durationMs), style = MaterialTheme.typography.labelMedium)
@@ -83,13 +101,32 @@ fun QueueSheet(
 			enabled = durationMs != null && durationMs > 0,
 		)
 		Spacer(Modifier.height(8.dp))
+		// One list, so the failures cannot scroll independently of the queue above them. There is
+		// deliberately no clear-all: per-entry trash plus swipe-to-skip covers it, and nothing here is
+		// worth an action that discards several messages on one tap.
 		LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-			items(rows, key = { "${it.entry.team}|${it.entry.at}|${it.entry.tier}" }) { row ->
+			items(rows, key = { "q|" + keyOf(it.entry) }) { row ->
 				QueueTile(row, onTrash = { onTrash(row.entry) }, onJump = { onJump(row.entry) })
+			}
+			if (failed.isNotEmpty()) {
+				item(key = "failed-header") {
+					Text(
+						"Gave up",
+						style = MaterialTheme.typography.titleSmall,
+						modifier = Modifier.padding(top = 12.dp),
+					)
+				}
+				items(failed, key = { "f|" + keyOf(it.entry) }) { row ->
+					// Dismissing is "seen", not "resolved". The message was never spoken and nothing here
+					// pretends otherwise - the jump is what actually gets the user to it.
+					QueueTile(row, onTrash = { onDismissFailure(row.entry) }, onJump = { onJump(row.entry) })
+				}
 			}
 		}
 	}
 }
+
+private fun keyOf(entry: QueueEntry): String = "${entry.team}|${entry.at}|${entry.tier}"
 
 @Composable
 private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {
@@ -104,11 +141,12 @@ private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {
 					Text(row.sessionLabel, style = MaterialTheme.typography.titleSmall)
 					Spacer(Modifier.size(8.dp))
 					// A spinner until the length is known, because "no duration" and "zero seconds"
-					// would otherwise look the same.
-					if (row.durationMs == null) {
-						CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
-					} else {
-						Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
+					// would otherwise look the same. Nothing spins for a row that gave up: it is not
+					// waiting, and a permanent spinner would read as still trying.
+					when {
+						row.gaveUp -> Text(row.reason ?: "not spoken", style = MaterialTheme.typography.labelSmall)
+						row.durationMs == null -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
+						else -> Text(clock(row.durationMs), style = MaterialTheme.typography.labelSmall)
 					}
 				}
 				Text(row.title, style = MaterialTheme.typography.bodySmall, maxLines = 2)

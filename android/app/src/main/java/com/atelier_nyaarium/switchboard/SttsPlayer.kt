@@ -33,6 +33,29 @@ class SttsPlayer(private val root: File) {
 	 * DECODE would then pop an entry as though it had been heard, and the retry would never fire. */
 	enum class Outcome { COMPLETED, STOPPED, PREEMPTED, PLAYBACK_ERROR, SYNTH_ERROR }
 
+	/**
+	 * Where a playback is, whose it is, and which AUDIO it is in.
+	 *
+	 * The owner rides along so a caller never has to guess whose position it just read; asking the
+	 * queue instead names the wrong sound for the whole marker sequence at the head of a run.
+	 *
+	 * `audio` is the cache file's name, and it is not redundant with the owner. One message is spoken
+	 * two ways - attributed when played by hand, unattributed inside a run where the sentinel already
+	 * said the session - so an offset filed under the entry alone would be handed to a DIFFERENT
+	 * recording of the same message, of a different length.
+	 */
+	data class Position(val owner: PlaybackId, val audio: String, val positionMs: Long, val durationMs: Long) {
+		/** The (team, at, tier) this playback belongs to, for comparing against a queue entry. */
+		val entry: QueueEntry get() = QueueEntry(owner.team, owner.at, owner.tier)
+
+		internal val key: ResumeKey get() = ResumeKey(entry, audio)
+	}
+
+	/** What a resume offset is filed under: the message it belongs to AND the recording it points
+	 * into. The entry half keeps forget-by-message and purge-by-team expressible; the audio half is
+	 * what stops one rendering's offset being applied to another's. */
+	internal data class ResumeKey(val entry: QueueEntry, val audio: String)
+
 	/** Carries the (team, at, tier) it belongs to, so a consumer can attribute an outcome to the
 	 * entry that caused it. `tier` is null only for the settings voice sample, which is not a
 	 * message. `gen` names the REQUEST: minting and publishing are not one step, so a terminal can be
@@ -86,6 +109,10 @@ class SttsPlayer(private val root: File) {
 	// to check against, that release kills the newcomer's player and strands it with no terminal.
 	private var playerOwner: PlaybackId? = null
 
+	// Which RECORDING the current player is in. One message is spoken two ways, so the owner alone
+	// does not identify the audio a position points into.
+	private var playerAudio: String? = null
+
 
 	/** Every listener sees every event, on whichever thread it occurred. Playback that continues in the
 	 * background keeps its signal even when a UI listener unsubscribes. */
@@ -93,36 +120,55 @@ class SttsPlayer(private val root: File) {
 
 	fun removeListener(listener: Listener) = requests.removeListener(listener)
 
-	/** Run the one effect a drop implies. The registry already published the events under its own
+	/**
+	 * Run the one effect a drop implies. The registry already published the events under its own
 	 * monitor; this releases the player the drop actually took, on the play lane so a MediaPlayer
-	 * callback arriving on the main Looper never blocks there. */
-	private fun apply(drop: PlaybackDrop) {
-		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id) } }
+	 * callback arriving on the main Looper never blocks there.
+	 *
+	 * `remember` is the CALLER'S, and it has to be: an outcome cannot answer it. A pause, a skip, a
+	 * trash and a genuine displacement all end as PREEMPTED, and two of those want the position kept
+	 * while two want it gone - so inferring here silently resurrected the offset a skip had just
+	 * deleted, on the play lane, one line after the delete. Identity is the engine's to supply and
+	 * intent is the caller's to declare; neither substitutes for the other.
+	 */
+	private fun apply(drop: PlaybackDrop, remember: Boolean = false) {
+		drop.soundingEnded?.let { id -> playExec.execute { releasePlayerOf(id, remember) } }
 	}
 
-	/** Give up one request named by the generation its terminal would carry. */
+	/** Give up one request named by the generation its terminal would carry. Never resumable: this is
+	 * only ever a marker, and a boundary that starts halfway is worse than one that repeats. */
 	fun abandonGeneration(gen: Long) = apply(requests.finishGeneration(gen, Outcome.PREEMPTED))
 
 	/** Whether anything at all is audible right now, whoever owns it. */
 	fun isSounding(): Boolean = requests.isSounding()
 
 	/**
-	 * Where the audible message is, and how long it is. Null when nothing is playing.
+	 * Where the audible playback is, how long it is, and WHICH request it belongs to. Null when
+	 * nothing is playing.
 	 *
 	 * A SNAPSHOT taken on the play lane's behalf, read under the same monitor that installs and
 	 * releases the player - a caller polling `player` directly would be reading a handle that can be
 	 * released between its null check and its call, which is a native crash rather than a wrong number.
+	 *
+	 * It NAMES its request. "Whatever is audible" is not an answer any caller can use: at the head of
+	 * every run the audible thing is a boundary marker while the queue's head is already the body, so a
+	 * position attributed by asking the queue instead of asking the player belongs to the wrong sound.
 	 */
 	@Synchronized
-	fun positionSnapshot(): Pair<Long, Long>? {
+	fun positionSnapshot(): Position? {
 		val mp = player ?: return null
-		return runCatching { mp.currentPosition.toLong() to mp.duration.toLong() }.getOrNull()
+		val owner = playerOwner ?: return null
+		val audio = playerAudio ?: return null
+		return runCatching {
+			Position(owner, audio, mp.currentPosition.toLong(), mp.duration.toLong())
+		}.getOrNull()
 	}
 
-	/** Move the audible message. Ignored when nothing is playing, so a stale bar cannot seek into
-	 * whatever started since. */
+	/** Move a NAMED playback. Ignored unless that request still owns the sound, so a bar built from a
+	 * snapshot that has since been replaced cannot seek into whatever started after it. */
 	@Synchronized
-	fun seekTo(ms: Long) {
+	fun seekTo(owner: PlaybackId, ms: Long) {
+		if (playerOwner != owner) return
 		runCatching { player?.seekTo(ms.toInt()) }
 	}
 
@@ -389,7 +435,8 @@ class SttsPlayer(private val root: File) {
 	 * running cannot go on to play it, and report PREEMPTED now rather than when the uncancellable
 	 * fetch finally returns. Tier-scoped, so abandoning one entry never preempts a sibling tier of
 	 * the same message. */
-	fun abandon(team: String, at: Long, tier: Tier?) = apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED))
+	fun abandon(team: String, at: Long, tier: Tier?, remember: Boolean) =
+		apply(requests.finishEntry(team, at, tier, Outcome.PREEMPTED), remember)
 
 	@Synchronized
 	private fun teardownPlayer() {
@@ -398,14 +445,40 @@ class SttsPlayer(private val root: File) {
 		runCatching { player?.release() }
 		player = null
 		playerOwner = null
+		playerAudio = null
 	}
 
-	/** Release the player only while `id` still owns it. A newer request that took the sound in the
-	 * gap owns it now, and releasing that one would leave a live request no path to a terminal. */
+	/**
+	 * Release the player only while `id` still owns it. A newer request that took the sound in the
+	 * gap owns it now, and releasing that one would leave a live request no path to a terminal.
+	 *
+	 * `remember` files where it got to first. The caller decides that; this decides WHOSE position it
+	 * is, which is the half a caller cannot see.
+	 */
 	@Synchronized
-	private fun releasePlayerOf(id: PlaybackId) {
-		if (playerOwner == id) teardownPlayer()
+	private fun releasePlayerOf(id: PlaybackId, remember: Boolean = false) {
+		if (playerOwner != id) return
+		if (remember) rememberWhereItGotTo()
+		teardownPlayer()
 	}
+
+	/** File the sounding position, unless the sound is not the kind of thing anyone resumes. */
+	@Synchronized
+	private fun rememberWhereItGotTo() {
+		val id = playerOwner ?: return
+		if (!isResumable(id)) return
+		positionSnapshot()?.let { rememberPosition(it) }
+	}
+
+	/**
+	 * Whether a request is the kind of sound worth resuming.
+	 *
+	 * Markers and the settings sample are not. A marker's cache key is its WORDS, so one is shared by
+	 * every run of a session - an offset left on one truncates the announcement of every later run,
+	 * for good. And neither is a message: there is no row to come back to and nothing a user could
+	 * point at to say "start that again".
+	 */
+	private fun isResumable(id: PlaybackId): Boolean = id.team != MARKER_TEAM && id.tier != null
 
 	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
 	 * team address ("domain.gateway.spawn.session") is a flat path segment with no slash, so it
@@ -416,6 +489,10 @@ class SttsPlayer(private val root: File) {
 		// to play a forgotten team. The delete below races that synthesis rather than ordering it: a
 		// producer that writes afterwards finds itself stale and removes what it recreated.
 		apply(requests.purgeTeam(team))
+		// The offsets go with the audio. A remembered position points INTO a file that is about to be
+		// deleted, so leaving it behind would seek freshly re-synthesized speech to where the copy that
+		// no longer exists happened to be paused.
+		resumeAt.keys.removeAll { it.entry.team == team }
 		File(root, "stts/$team").deleteRecursively()
 	}
 
@@ -423,6 +500,7 @@ class SttsPlayer(private val root: File) {
 	 * so the repository never reaches into the player's directory layout. */
 	fun purgeAll() {
 		apply(requests.purgeEverything())
+		resumeAt.clear()
 		File(root, "stts").deleteRecursively()
 	}
 
@@ -477,32 +555,73 @@ class SttsPlayer(private val root: File) {
 			runCatching { mp.release() }
 			return
 		}
-		installPlayer(id, mp, effect)
-		// Resume where it stopped. Consumed on use, so an offset can never outlive the pause that set
-		// it and silently skip the opening of some later message.
-		resumeAt.remove(QueueEntry(id.team, id.at, id.tier))?.let { runCatching { mp.seekTo(it.toInt()) } }
+		// The request that just lost the sound did not ASK to stop - something else took it - so keep
+		// where it got to. Taken here because `installPlayer` tears that player down on the next line,
+		// and because this path never goes through `apply`: the registry publishes the displaced
+		// terminal from inside `sound()`, so nothing else was ever going to run an effect for it. This
+		// is the ordinary way a run is interrupted, and for a long time it was the one case that
+		// recorded nothing.
+		if (displaced.soundingEnded != null) rememberWhereItGotTo()
+		installPlayer(id, mp, effect, f)
+		// Resume where it stopped. Keyed on THIS recording, so the offset a hand-played (attributed)
+		// rendering left behind is not handed to the unattributed one a run speaks, which is a
+		// different file of a different length. Consumed on use, so it can never outlive its pause.
+		resumeAt.remove(ResumeKey(QueueEntry(id.team, id.at, id.tier), f.name))
+			?.let { runCatching { mp.seekTo(it.toInt()) } }
 		requests.started(id)
 	}
 
-	/** Where a paused message should pick up, by entry. Held here rather than on the queue because it
-	 * describes audio, and the queue deliberately knows nothing about audio. */
-	private val resumeAt = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
+	/** Where a paused playback should pick up. Held here rather than on the queue because it describes
+	 * audio, and the queue deliberately knows nothing about audio. */
+	private val resumeAt = java.util.concurrent.ConcurrentHashMap<ResumeKey, Long>()
 
-	/** Remember where a message was when it stopped, so resuming continues rather than restarts. */
-	fun rememberPosition(team: String, at: Long, tier: Tier?, ms: Long) {
-		if (ms > 0) resumeAt[QueueEntry(team, at, tier)] = ms
+	/**
+	 * Remember where a playback was when it stopped, so resuming continues rather than restarts.
+	 *
+	 * Takes the SNAPSHOT, not loose numbers, and files under the message AND the recording the
+	 * snapshot names. A caller that could pass a position and a key separately is a caller that can
+	 * pair a boundary marker's position with the body's key, which cuts the opening off the message -
+	 * or, when the marker runs longer than the body, seeks past its end so it retires as heard without
+	 * ever being spoken.
+	 */
+	fun rememberPosition(position: Position) {
+		if (position.positionMs > 0) resumeAt[position.key] = position.positionMs
 	}
 
+	/** Forget every recording of one message. Coarse ON PURPOSE: giving up on a message gives up on it
+	 * however it would have been spoken. */
 	fun forgetPosition(team: String, at: Long, tier: Tier?) {
-		resumeAt.remove(QueueEntry(team, at, tier))
+		val entry = QueueEntry(team, at, tier)
+		resumeAt.keys.removeAll { it.entry == entry }
+	}
+
+	/**
+	 * Forget every offset a team holds, without touching its cached audio.
+	 *
+	 * What a teardown needs, and it cannot be done message by message: a pause parks its entry in the
+	 * queue's pending list, so the one message that actually holds an offset is never the head - and
+	 * the head is the only thing a teardown is handed. Closing a paused thread therefore left a live
+	 * resume point behind, waiting to seek whatever played next if the tab was ever reopened.
+	 */
+	fun forgetTeamPositions(team: String) {
+		resumeAt.keys.removeAll { it.entry.team == team }
+	}
+
+	/** Where a message would pick up if it started now, across whichever recording holds an offset.
+	 * What a paused sheet shows: the position exists, so leaving the timeline blank hides the one
+	 * thing a pause is for. */
+	fun heldPosition(team: String, at: Long, tier: Tier?): Long? {
+		val entry = QueueEntry(team, at, tier)
+		return resumeAt.entries.firstOrNull { it.key.entry == entry }?.value
 	}
 
 	/** Swap in the player that just took the sound. The only part of playback that needs the monitor,
 	 * so it is the only part that holds it: building and preparing a MediaPlayer is disk work and
 	 * happens outside, where nothing else can be made to wait on it. */
 	@Synchronized
-	private fun installPlayer(id: PlaybackId, mp: MediaPlayer, effect: LoudnessEnhancer?) {
+	private fun installPlayer(id: PlaybackId, mp: MediaPlayer, effect: LoudnessEnhancer?, source: File) {
 		teardownPlayer()
+		playerAudio = source.name
 		player = mp
 		loudness = effect
 		playerOwner = id
