@@ -581,6 +581,28 @@ silently inert.** Their video frames landing after a row rendered is what made i
 change nothing a sync otherwise looks at. They offered to fold play state in properly rather than let us
 discover the staleness the hard way, so ask rather than improvising it.
 
+### Bug Classes (Phase 2)
+
+**Mechanism: which run a marker belongs to.**
+Defect class: a marker outlives the run that staged it, and nothing on the terminal says which run that
+was - so a stale marker drives whatever is current.
+
+- Round 1: `pendingMarkers` was process-global. Patched by binding it to an entry (`markersFor`).
+- Round 2: the gap callback re-read the current head when it expired. Patched by capturing the owner
+  when the gap starts.
+- Round 3: teardown could not silence a marker at all. Patched by checking the marker's team.
+- Round 4: the branch matched only on the head, so a terminal from a torn-down run was
+  indistinguishable from this run's own. Patched by having the player return WHICH request will
+  report, and matching on it. Teardown abandons by that identity too, which also reached a marker that
+  was still synthesizing and owned no sound.
+
+Rounds 1-3 were all guards, and each was a correct patch to a real hole that was not the one doing the
+damage. The identity was on the terminal the whole time - `at`, plus a `gen` the listener discarded -
+which is the recorded class from Phase 1a exactly: identity that exists and is thrown away, then
+re-derived from something coarser. The fix that ended it was carrying the value, not adding a fourth
+check. Worth remembering the tell: three consecutive fixes that each narrow a window rather than
+answer "who is this?".
+
 ### Phase 3 as built
 
 - **Three states on the play button** (`thread.css`, `thread.js`): queued, loading, playing as filled
