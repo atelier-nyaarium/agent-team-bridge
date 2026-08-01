@@ -449,7 +449,7 @@ boundary") or a multi-threaded synth lane. Neither is in this pass.
   queue and no bubble exist when TTS is unprovisioned.
 - Verifiable without UI: a burst of N messages speaks N times, in order.
 
-### Phase 2 - Spoken form
+### Phase 2 - Spoken form ✅
 
 This phase now owns BOTH boundary markers end to end - their text, their assets, and their playback -
 since Phase 1 deliberately ships body-only.
@@ -561,7 +561,7 @@ Still to build, with the decisions already made:
   the reason the player must accept an arbitrary content URI and whatever format sits behind it, so
   the bundled asset's own format stops being special.
 
-### Phase 3 - In-thread control
+### Phase 3 - In-thread control ✅
 
 - `thread.css`: keep the shared `.play-btn` / `.copy-btn` rule as the pressable base so idle-play and
   copy stay identical. Add state classes on play only: queued, loading, playing - filled, captioned,
@@ -1426,6 +1426,19 @@ reading quickly.
 **`ChatRepository.kt` is too large to read.** It exceeded the context budget to open at all, so every
 question about it had to be answered by grep. A file that cannot be read is a file whose invariants
 are discovered by accident.
+
+**The marker work had no tests at all, and that is why it took four rounds.** `PlaybackRequests` and
+`PlaybackQueue` are pure and heavily tested, and their defects were caught fast. The marker sequencer
+lives in `ChatRepository`, which no JVM test can construct, so every one of its four rounds was found
+by an expensive audit instead of a cheap test. The sequencer is nearly pure - it is a small state
+machine over an entry, a marker list and an in-flight id - and the only reason it is welded to the
+repository is that it reaches `stts` and `_state` directly. Extracting it the way the registry and
+queue were extracted is the obvious next framework target if this area is touched again.
+
+**Two settings screens are invisible without a provisioned service.** The whole playback half of Voice
+& TTS renders only once a key exists, which is correct for a real install and meant the emulator build
+could not show the screen it exists to show. The sandbox seeds a placeholder key now. Worth knowing
+that gating a settings section on service state costs you the ability to look at it.
 
 **A green test suite meant nothing, three separate times.** Every defect the queue work produced passed
 the full suite. Worse, three tests passed while the exact behaviour they were named for was broken: a
