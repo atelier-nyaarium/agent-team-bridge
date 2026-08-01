@@ -1561,6 +1561,7 @@ class ChatRepository(
 			if (beginsRun) queueMarkers(entry, chime = announceRun)
 			resumeIfSilent()
 		}
+		transportChanged()
 	}
 
 	/** Stage the markers that precede one entry's body. A manual tap never chimes; it is not a run. */
@@ -1620,6 +1621,15 @@ class ChatRepository(
 	 * outcome alone decides whether the queue moves: a decode failure must not retire an entry as
 	 * though it had been heard, and a user stop must not walk forward. */
 	private suspend fun onPlaybackEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
+		try {
+			advanceEnded(entry, outcome)
+		} finally {
+			// After the advance, not on the event: the queue is only correct once this has run.
+			transportChanged()
+		}
+	}
+
+	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome) {
 		advanceMutex.withLock {
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
@@ -1701,6 +1711,21 @@ class ChatRepository(
 	@Volatile
 	private var transportPaused = false
 
+	/**
+	 * Called after the run's state has SETTLED, never from a raw playback event.
+	 *
+	 * A transport surface asks what the queue is doing, and an event fires before the queue has been
+	 * advanced for it - so a listener reading on the event sees the entry that just ended still
+	 * installed. Mid-run that self-corrects on the next start; at the last terminal there is no next
+	 * start, and the surface stays showing a run that is over.
+	 */
+	@Volatile
+	var onTransportChanged: (() -> Unit)? = null
+
+	private fun transportChanged() {
+		runCatching { onTransportChanged?.invoke() }
+	}
+
 	private fun resumeIfSilent() {
 		if (transportPaused || queue.playing() != null || stts.isSounding()) return
 		queue.startNext()?.let { speak(it) }
@@ -1710,6 +1735,10 @@ class ChatRepository(
 	 * so a pause is that plus a flag stopping the next terminal from picking the run back up. */
 	suspend fun pausePlayback() {
 		advanceMutex.withLock {
+			// Nothing to pause means nothing to resume. Setting the flag here would stick: an idle
+			// queue mints no terminal, so no event would ever arrive to clear it, and every later run
+			// - autoplay AND the in-thread button, which share this start path - would be refused.
+			if (queue.isIdle()) return@withLock
 			transportPaused = true
 			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
 			clearMarkers()
@@ -1718,6 +1747,7 @@ class ChatRepository(
 			queue.playing()?.let { queue.requeueFront(it) }
 			stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
 		}
+		transportChanged()
 	}
 
 	suspend fun resumePlayback() {
@@ -1725,6 +1755,7 @@ class ChatRepository(
 			transportPaused = false
 			resumeIfSilent()
 		}
+		transportChanged()
 	}
 
 	/** Give up on what is speaking and move to the next entry. Distinct from a pause: this one is a
@@ -1742,6 +1773,7 @@ class ChatRepository(
 			stts.abandon(head.team, head.at, head.tier)
 			queue.advance(head, SttsPlayer.Outcome.COMPLETED).next?.let { speak(it) }
 		}
+		transportChanged()
 	}
 
 	/** What a transport surface should show: whether anything is queued at all, and whether it is

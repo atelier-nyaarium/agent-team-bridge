@@ -233,7 +233,10 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			onPause = { repo.command { pausePlayback() } },
 			onSkip = { repo.command { skipPlayback() } },
 		)
-		transportSubscription = repo.stts.addListener { publishTransport() }
+		// Driven by the repository's settled-state hook rather than raw playback events: an event fires
+		// before the queue has been advanced for it, so at the last terminal a transport built from it
+		// would show a run that is already over, with no later event to correct it.
+		repo.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
 		repo.scheduledSendScheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
@@ -288,7 +291,6 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
 	private var transport: SttsTransport? = null
-	private var transportSubscription: SttsPlayer.Listener? = null
 
 	/** Mirror the run onto the lockscreen and shade. Called on every playback event, since that is
 	 * exactly when what a transport should show has changed. */
@@ -346,8 +348,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onInbound = null
 		repo.onScheduledSendFailed = null
 		repo.chimeSource = null
-		transportSubscription?.let { repo.stts.removeListener(it) }
-		transportSubscription = null
+		repo.onTransportChanged = null
 		transport?.release()
 		transport = null
 		getSystemService(NotificationManager::class.java).cancel(TRANSPORT_NOTIFICATION_ID)

@@ -692,6 +692,30 @@ something concrete needs it, not by habit.
     notification, a separate "pre-generate" toggle covers a case that no longer exists. Candidate for
     retirement, which is a settings change and therefore the owner's call.
 
+### Phase 4 as built
+
+- **Foreground service holds both types for its whole life**, never toggled. Verified on device:
+  `dumpsys` reports `types=0x00000202`, which is `MEDIA_PLAYBACK` plus `REMOTE_MESSAGING`.
+- **Platform `MediaSession`** (no dependency added), registered - confirmed in `dumpsys media_session`.
+  Transport buttons use EXPLICIT intents; the receiver declares no intent-filter, so an action-only
+  intent resolves to nothing and the buttons would have done nothing at all, silently.
+- **Pause / resume / skip** over the run. Pause reuses PREEMPTED, which already means "stand down and
+  wait" rather than "advance", plus a flag stopping the next terminal from picking the run back up.
+  Pause requeues the head at the FRONT first, because stopping the audio retires it and resume would
+  otherwise skip the very message that was paused. No seek yet, so a resumed message restarts.
+- **Transport surfaces are driven by a SETTLED-state hook, not by raw playback events.** An event
+  fires before the queue has been advanced for it, so a surface built on the event sees the entry that
+  just ended still installed. Mid-run that self-corrects on the next start; at the LAST terminal there
+  is no next start, and the lockscreen kept a live transport for a run that was over. Pausing that
+  dead transport then set a flag no event could ever clear, which refused every later run - autoplay
+  and the in-thread button alike, since they share one start path. Pausing an idle queue is now a
+  no-op for the same reason.
+
+**Known unverified, needs real hardware:** an actual lockscreen, headphone or watch controls, and
+whether the MediaStyle notification RENDERS correctly - it is confirmed constructed and posted, not
+that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active
+session with a MediaStyle notification on modern Android, but is unconfirmed.
+
 ### Phase 5 - Bubble and modal
 
 **Build the overlay WITHOUT Compose.** The plan offers two ways past the ViewTree-owner problem, and
