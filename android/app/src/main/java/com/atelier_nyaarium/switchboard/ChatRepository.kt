@@ -1809,6 +1809,33 @@ class ChatRepository(
 	 * currently held. */
 	fun transportState(): Pair<Boolean, Boolean> = Pair(!queue.isIdle(), transportPaused)
 
+	/**
+	 * The queue as the sheet renders it, in speaking order, current entry first.
+	 *
+	 * Built here rather than in the UI so the sheet holds no state of its own - it is the fourth
+	 * surface reporting this run, and the ones that kept their own copy are the ones that drifted.
+	 * Duration is null until the audio exists, which the tile shows as a spinner rather than a zero.
+	 */
+	fun queueRows(): List<QueueRow> {
+		val head = queue.playing()
+		return queue.queued().map { entry ->
+			val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
+			QueueRow(
+				entry = entry,
+				sessionLabel = _state.value.label(entry.team, _state.value.localGatewayId),
+				title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
+				durationMs = null,
+				isCurrent = entry == head,
+			)
+		}
+	}
+
+	/** Open the thread a queue entry belongs to and reveal that message, reusing the machinery a tap
+	 * on a notification already goes through. */
+	fun jumpTo(entry: QueueEntry) {
+		openThread(entry.team)
+	}
+
 	/** What the bubble draws: how many are still to speak, whether the current one is still being
 	 * generated, and how many gave up. The failure count outlives a drained queue, which is why it is
 	 * reported separately rather than folded into the total. */
