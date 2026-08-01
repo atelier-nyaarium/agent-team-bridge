@@ -392,8 +392,7 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 
 - `bun run lint` - Biome CI + tsc
 - `bun run test` - vitest
-- `bun run bump patch|minor|major` (`--dry-run` to preview) - the whole version ritual. Marketplace
-  updates hinge on `plugin.json`, so a stale one silently skips the update
+- `bun run bump patch|minor|major` (`--dry-run` to preview) - the version ritual; see Deploying > Plugin
 - `bun scripts/codegen-kotlin.ts` - regenerate `proto/Protocol.kt` after editing a shared schema; CI
   fails on drift
 - `bun scripts/check-module-residue.ts` - verify node_modules against bun.lock
@@ -552,6 +551,31 @@ is never private:** it ships off-device and stays on logcat, so never embed a be
 invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fields.
 
 ## Deploying
+
+### Plugin
+
+1. `bun run bump patch|minor|major` (`--dry-run` to preview).
+   - It bumps `package.json`, sets that value into `plugin.json` and every console plugin manifest, and aborts if the APK or MCP versions stop deriving from `package.json`.
+2. Commit the bump alongside your changes, then push.
+3. Reload on target containers with the `reload_plugins` tool, not the `/reload-plugins` slash command.
+
+Never hand-edit a version field. `src/mcp/index.ts` and the APK `versionName` derive from `package.json`, and the bump script verifies those derivations rather than writing them.
+
+The marketplace reads `plugin.json` to decide whether an update is available. A stale version there silently skips the update.
+
+`.mcp.json` runs `bun run ${CLAUDE_PLUGIN_ROOT}/src/main-mcp.ts` from source, so the plugin directory needs `bun install`.
+
+### Installing
+
+Listed under [`atelier-nyaarium/claude-marketplace`](https://github.com/atelier-nyaarium/claude-marketplace)
+
+```bash
+# Install my marketplace once
+claude plugin marketplace add atelier-nyaarium/claude-marketplace
+
+# Install switchboard
+claude plugin install switchboard@atelier-nyaarium
+```
 
 ### Console bridge
 
