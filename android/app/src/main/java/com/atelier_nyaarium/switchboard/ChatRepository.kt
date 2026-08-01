@@ -1504,6 +1504,10 @@ class ChatRepository(
 	 */
 	private val pendingMarkers = ArrayDeque<Marker>()
 
+	/** The entry [pendingMarkers] were staged for. A marker announces a specific session, so a queue
+	 * that moved on while one was in flight must not let the leftovers introduce the wrong one. */
+	private var markersFor: QueueEntry? = null
+
 	private sealed interface Marker {
 		data object Chime : Marker
 
@@ -1522,17 +1526,23 @@ class ChatRepository(
 			// rather than every message in it.
 			val beginsRun = queue.isIdle()
 			if (!queue.enqueue(entry)) return
-			if (beginsRun) queueMarkers(team, at, chime = true)
+			if (beginsRun) queueMarkers(entry, chime = true)
 			resumeIfSilent()
 		}
 	}
 
 	/** Stage the markers that precede one entry's body. A manual tap never chimes; it is not a run. */
-	private fun queueMarkers(team: String, at: Long, chime: Boolean) {
+	private fun queueMarkers(entry: QueueEntry, chime: Boolean) {
 		pendingMarkers.clear()
+		markersFor = entry
 		if (chime) pendingMarkers.addLast(Marker.Chime)
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
-		pendingMarkers.addLast(Marker.Spoken(sentinelText(_state.value, msg, team)))
+		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: return
+		pendingMarkers.addLast(Marker.Spoken(sentinelText(_state.value, msg, entry.team)))
+	}
+
+	private fun clearMarkers() {
+		pendingMarkers.clear()
+		markersFor = null
 	}
 
 	/** Play the next owed marker, or report that the body may now speak. */
@@ -1575,17 +1585,26 @@ class ChatRepository(
 			// A marker finishing means the sequence moves on, never that the queue does: the body it
 			// precedes has not been spoken yet, and advancing here would skip the message entirely.
 			if (entry.team == SttsPlayer.MARKER_TEAM) {
-				if (nextMarkerStarted()) return
 				val head = queue.playing()
-				// No head means the run this marker belonged to was torn down while it was speaking.
-				// Nothing else will report a terminal, so without this the backlog waits for a message
-				// that may never arrive.
-				if (head == null) {
-					pendingMarkers.clear()
+				// The run these markers belonged to is gone, either torn down or moved on. Nothing else
+				// will report a terminal for it, so drop the leftovers and pick the queue back up
+				// rather than leaving the backlog waiting on a message that may never arrive.
+				if (head == null || markersFor != head) {
+					clearMarkers()
 					resumeIfSilent()
 					return
 				}
-				speakBody(head)
+				// Gapped, so each marker reads as a boundary rather than running into what follows.
+				stts.afterGap {
+					repoScope.launch {
+						advanceMutex.withLock {
+							if (markersFor != queue.playing()) return@withLock
+							if (nextMarkerStarted()) return@withLock
+							clearMarkers()
+							queue.playing()?.let { speakBody(it) }
+						}
+					}
+				}
 				return
 			}
 			val step = queue.advance(entry, outcome)
@@ -1631,8 +1650,10 @@ class ChatRepository(
 	 * message behind it unspoken for the life of the process. */
 	private fun speak(entry: QueueEntry) {
 		// Markers first when this entry is owed any. Their terminals chain the body behind them, so
-		// this returns having started the boundary rather than the message.
-		if (pendingMarkers.isEmpty()) queueMarkers(entry.team, entry.at, chime = false)
+		// this returns having started the boundary rather than the message. Markers staged for a
+		// DIFFERENT entry are discarded: they name a session, and announcing the wrong one is worse
+		// than announcing none.
+		if (markersFor != entry) queueMarkers(entry, chime = false)
 		if (nextMarkerStarted()) return
 		speakBody(entry)
 	}

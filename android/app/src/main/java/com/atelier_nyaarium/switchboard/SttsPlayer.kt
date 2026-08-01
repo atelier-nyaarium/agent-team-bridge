@@ -193,6 +193,16 @@ class SttsPlayer(private val root: File) {
 	fun playChime(source: File, volumePct: Int = 100): Boolean =
 		synthesizeAndPlay(MARKER_TEAM, CHIME_AT, null, source, volumePct, yielding = false) { }
 
+	/** Let a gap fall between two playbacks before running `then`. Silence between a marker and what
+	 * it announces is what makes it read as a boundary rather than as part of the sentence; run
+	 * back to back they blur into one utterance. */
+	fun afterGap(then: () -> Unit) {
+		playExec.execute {
+			runCatching { Thread.sleep(MARKER_GAP_MS) }
+			then()
+		}
+	}
+
 	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
 	 * cache hit. Blocking - call off the main thread. Dedups tiers that speak the same text:
 	 * synthesize once and copy. Never throws; a failed tier just synthesizes on demand at Play. */
@@ -491,6 +501,10 @@ class SttsPlayer(private val root: File) {
 		/** The chime's fixed entry. One asset, so one key - unlike a sentinel, whose audio varies with
 		 * the words it speaks. */
 		const val CHIME_AT = 0L
+
+		/** Silence between a boundary marker and what follows it. Long enough to hear as a pause,
+		 * short enough that a run of short messages does not feel padded. */
+		const val MARKER_GAP_MS = 350L
 
 		/** Map a 0-200% volume setting to a MediaPlayer linear gain (0-100% range, free and exact)
 		 * plus a LoudnessEnhancer target gain in millibels for the 100-200% half MediaPlayer can't

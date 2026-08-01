@@ -503,11 +503,13 @@ In progress. Landed and green:
 - **A picked sound takes a persistable read grant**, and **"Silent" is now a choice** rather than an
   absence: it is stored distinctly from the unset preference, so it no longer falls back to bundled.
 
-**Still open on Phase 2:**
+- **Markers are bound to the entry they were staged for** (`markersFor`). Leftovers for an entry the
+  queue has moved past are discarded rather than spoken: a marker names a session, and announcing the
+  wrong one is worse than announcing none.
+- **Timed gaps exist** (`MARKER_GAP_MS`, on the play lane). Run back to back, a marker and its message
+  blur into one utterance instead of reading as a boundary.
 
-- **No timed gaps.** The spec asks for gaps around the body; the three playbacks run back to back.
-- **`pendingMarkers` is process-global and bound to no entry**, so a sentinel can announce the wrong
-  session, and no teardown clears it.
+Phase 2 code is complete. Not yet re-audited after this batch, and the gap timing is unheard.
 
 Still to build, with the decisions already made:
 
