@@ -467,6 +467,38 @@ since Phase 1 deliberately ships body-only.
   an Android notification sound. The system option means the player must accept an arbitrary content URI
   and whatever format sits behind it, so the bundled asset's own format stops being special.
 
+### Phase 2 as built
+
+In progress. Landed and green:
+
+- **`sentinelText`** (in `ChatRepository.kt`, pure, tested): the session label, or `"<from> on <to>"`
+  for a peer row, with `"someone"` standing in for an unresolvable author so the marker never
+  announces a blank. Depends only on the SPEAKER, never on the message - that is what lets one
+  synthesis be cached and reused for every message in a session, and a test pins it.
+- **The chime asset** at `res/raw/stts_chime.wav` (mono 16-bit 44.1 kHz, 86548 bytes).
+- **`PlaybackQueue.isIdle`**: nothing playing and nothing waiting. Asked BEFORE an autoplay enqueue,
+  this is the "once per run" rule - mid-run the queue is never idle, and a stood-down run is not idle
+  either, so the marker cannot re-announce a run already in progress.
+
+Still to build, with the decisions already made:
+
+- **The marker sequence.** An entry plays as chime (only when the run begins) then sentinel then body,
+  as SEPARATE playbacks with gaps. No concatenation - providers differ in container, so one stream
+  would have to re-encode. Neither marker is seekable and neither appears on the timeline.
+- **Where the sequencer lives.** NOT in `PlaybackQueue`: an entry is one thing to a queue, and making
+  it a segment list would put "what does an entry consist of" into the unit that owns "what plays
+  next". The repository already owns sequencing-by-terminal, so the markers chain there. Each marker
+  is an ordinary request with its own identity, which means it inherits one terminal, the yield rule,
+  and delivery ordering for free rather than needing a parallel path.
+- **The chime must not yield.** It is the shortest possible sound and it marks a boundary; standing it
+  down would silently drop the boundary rather than delay it. The body still yields.
+- **Deleting `ttsTextFramed`'s `"<from> to <to>: "` prefix** happens in the SAME commit that starts
+  playing the sentinel, never before. Landing it early would leave peer rows with no attribution at
+  all in between.
+- **The chime source setting**: bundled default, or a system notification sound. The system option is
+  the reason the player must accept an arbitrary content URI and whatever format sits behind it, so
+  the bundled asset's own format stops being special.
+
 ### Phase 3 - In-thread control
 
 - `thread.css`: keep the shared `.play-btn` / `.copy-btn` rule as the pressable base so idle-play and
