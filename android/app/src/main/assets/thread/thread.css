@@ -85,6 +85,32 @@ html, body {
 .copy-btn { font-size: 12px; }
 .play-btn:active, .copy-btn:active { opacity: 1; }
 
+/* A row that is doing something says so and stops offering to be pressed. Filled rather than
+   outlined, because the idle state is the outlined one and the difference has to read at a glance on
+   a row of small controls. Captioned, because three states cannot be told apart by colour alone. */
+.play-btn.queued,
+.play-btn.loading,
+.play-btn.playing {
+	opacity: 1;
+	border-color: transparent;
+	background: var(--accent-tint, rgba(127, 127, 127, 0.18));
+	color: var(--fg, inherit);
+	pointer-events: none;
+	min-width: 62px;
+}
+/* Loading is the one state with no end in sight, so it is the one that moves. Queued and playing are
+   static: a row of pulsing chips would read as noise rather than as progress. */
+.play-btn.loading {
+	animation: play-pulse 1.4s ease-in-out infinite;
+}
+@keyframes play-pulse {
+	0%, 100% { opacity: 0.55; }
+	50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.play-btn.loading { animation: none; }
+}
+
 .row.user {
 	background: var(--user-tint);
 	box-shadow: inset 3px 0 0 var(--user-edge);

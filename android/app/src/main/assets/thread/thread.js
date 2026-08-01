@@ -201,14 +201,20 @@
 		const actions = document.createElement("div");
 		actions.className = "row-actions";
 
-		// Agent rows get a Play button when the host enables it (canPlay rides each message). Tap
-		// toggles: the host pushes the playing state back through setPlaying, which swaps the glyph.
+		// Agent rows get a Play button when the host enables it (canPlay rides each message). The host
+		// pushes state back through setPlayStates; a rebuilt row starts idle and is repainted from the
+		// state this module still holds, so a re-render cannot lose it.
 		const hasPlay = m.canPlay && m.role === "agent" && m.at !== undefined && m.at !== null;
 		if (hasPlay) {
 			const play = document.createElement("button");
 			play.className = "play-btn";
-			play.textContent = playingAt === m.at ? "\u25A0" : "\u25B6";
 			play.setAttribute("aria-label", "Play message");
+			// Painted as it is built, so a rebuilt row is already correct rather than idle until the
+			// next push. There may not BE a next push: state changes when playback does, not when a
+			// row re-renders.
+			applyPlayState(play, m.at);
+			// A row with a state is not pressable (pointer-events: none), so a tap here can only ever
+			// be a request to start one that is idle.
 			play.addEventListener("click", () => {
 				if (window.Android && typeof window.Android.playMessage === "function") {
 					window.Android.playMessage(String(m.at));
@@ -842,15 +848,39 @@
 
 	initMermaid();
 
-	// The at of the message currently speaking (null = none). Pushed by the
-	// host so glyphs stay honest even when playback ends on its own.
-	let playingAt = null;
-	function setPlaying(at) {
-		playingAt = at === undefined ? null : at;
-		for (const btn of container.querySelectorAll(".play-btn")) {
-			const rowAt = Number(btn.parentElement.dataset.at);
-			btn.textContent = playingAt !== null && rowAt === playingAt ? "\u25A0" : "\u25B6";
+	// Per-row playback state, pushed by the host as { "<at>": "queued"|"loading"|"playing" }. Rows the
+	// host does not mention are idle. Kept as host-pushed state rather than row payload: the renderer's
+	// fingerprint decides re-render, and anything riding the payload that changes while a row is on
+	// screen has to be folded into it or the row goes stale. Bridge state mutating in place is outside
+	// the fingerprint by design.
+	let playStates = {};
+	const PLAY_LABEL = { queued: "Queued", loading: "Loading", playing: "\u25A0 Playing" };
+
+	function applyPlayState(btn, at) {
+		const state = playStates[String(at)];
+		btn.classList.remove("queued", "loading", "playing");
+		if (state) {
+			btn.classList.add(state);
+			btn.textContent = PLAY_LABEL[state] || state;
+		} else {
+			btn.textContent = "\u25B6";
 		}
+	}
+
+	function paintPlayStates() {
+		for (const btn of container.querySelectorAll(".play-btn")) {
+			applyPlayState(btn, btn.parentElement.dataset.at);
+		}
+	}
+
+	function setPlayStates(states) {
+		playStates = states || {};
+		paintPlayStates();
+	}
+
+	// Kept so a host that still speaks the old single-pointer protocol keeps working.
+	function setPlaying(at) {
+		setPlayStates(at === undefined || at === null ? {} : { [String(at)]: "playing" });
 	}
 
 	window.thread = {
@@ -859,6 +889,7 @@
 		appendMessages,
 		setTheme,
 		setPlaying,
+		setPlayStates,
 		setVisible,
 		revealFirstUnread,
 		flushReadUpTo,
