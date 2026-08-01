@@ -1770,3 +1770,45 @@ braces.
 **A stale doc count survived nine rounds.** The plan's own as-built preamble claimed 19 tests while the
 suite held 37, and it took an audit agent to notice. Counts in prose go stale the moment they are
 written; the plan now says where to look instead of restating the number.
+
+**The gates cannot see an ABSENCE, and that is the shape of this plan's worst bugs.** Green `lint`,
+green `test`, green `testDebugUnitTest`, green `assembleEmulator` - over a queue sheet that was never
+composed, and over an audio-focus design that was never written. Dead Compose code compiles, and an
+unwritten feature has no diff to be wrong in. Four alignment rounds asking "is this change correct?"
+found neither; the round that asked "what does a real person hit?" found both in one pass. The lesson
+is not "audit more", it is **audit a different question** - and specifically, diff a phase's spec list
+against its built list rather than reading either alone.
+
+**Everything worth testing lives where no test can reach it.** `ChatRepository` cannot be constructed
+by a JVM test, and it holds the queue, the marker sequencer, the transport hook and every advance
+decision; `SttsPlayer` is the same. The pure units have dozens of tests between them and produced
+almost none of this session's defects, which is the point: the untestable half is where the bugs live,
+and the only detection mechanism available for it is an expensive multi-agent audit.
+
+**A comment asserting an invariant is worth nothing, and I proved it on myself twice.** I wrote that
+`resumeIfSilent` was "the one place the flag is read" - true when written - then added a new mutator
+three commits later in the same session and broke it, then broke it again from a third path. The
+instinct on noticing an invariant is to write a sentence about it, and a sentence does not fail a build.
+
+**Verifying a test by breaking one line proves it CAN go red, not that it covers what it claims.** That
+ritual ran all session and still let through a vacuous residue test: a regex over call sites that could
+not distinguish "every call declares its intent" from "the pattern matched nothing". The stronger move
+was available the whole time - deleting the default parameter makes the compiler enforce the same rule
+exhaustively, with nothing to evade. **Prefer making a bad state unrepresentable over writing a test
+that goes looking for it.**
+
+**Two doors, both behind permissions, is zero doors.** The queue sheet was reachable from the overlay
+bubble and the transport notification, so a user who refuses both had no pause and no skip at all -
+controls that existed and could not be reached. Standing rule worth keeping: if every route to a
+feature is permission-gated, the feature is optional whether or not that was intended.
+
+**`?: return` inside a lock bit twice in one subsystem.** Once as a bare non-local return leaving every
+surface stale, and once as an early return that skipped the normalization below it. Both read as
+obviously correct. In a critical section an early return is a branch that silently declines the rest of
+the invariant maintenance, and this file has enough of them to deserve a convention.
+
+**Repairs need auditing as much as the code they repair.** Rounds 2, 3, 4 and 6 each found their
+defects in the PREVIOUS round's repairs - including six majors in an audio-focus file forty minutes
+old, written carefully, by someone who had just finished reasoning about that exact subsystem. The
+convergence signal, when it came, was a round returning zero survivors because everything it raised had
+already been found and fixed independently.
