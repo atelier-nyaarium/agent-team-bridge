@@ -33,6 +33,13 @@ class SandboxApp : Application() {
 		// listed here, so a fresh install of this build is what verifies that default still holds.
 		for (id in SANDBOX_PLUGINS) AppStateStore(this).setPluginEnabled(id, true)
 
+		// The whole playback half of Voice & TTS is hidden until a key is present, so without one the
+		// screen this build exists to look at does not render at all. The key is a placeholder and
+		// nothing here can reach a real service; synthesis fails, which is fine for looking at layout.
+		AppStateStore(this).let { store ->
+			if (store.sttsKey.isEmpty()) store.sttsKey = "sandbox-placeholder-key"
+		}
+
 		val repo = Repo.get(this)
 		val fixtures = SandboxFixtures(filesDir, assets)
 		val threads = fixtures.threads()
