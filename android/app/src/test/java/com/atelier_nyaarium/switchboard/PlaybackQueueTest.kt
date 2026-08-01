@@ -258,6 +258,43 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `dropping a waiting entry removes it and leaves the rest speaking in order`() {
+		val q = queueOf(entry(1), entry(2), entry(3))
+		val head = q.startNext()!!
+
+		assertTrue(q.drop(entry(2)))
+
+		assertEquals(head, q.playing())
+		assertEquals(listOf(entry(1), entry(3)), q.queued())
+	}
+
+	@Test
+	fun `dropping the head is refused, so nothing removes an entry the engine is already playing`() {
+		val q = queueOf(entry(1), entry(2))
+		val head = q.startNext()!!
+
+		// Removing it here would strand the playback: its terminal would find no entry to retire and
+		// the run would stop on it. Giving up on the head is a skip, which retires it and starts the next.
+		assertFalse(q.drop(head))
+		assertEquals(head, q.playing())
+	}
+
+	@Test
+	fun `a dropped entry that comes back counts as a first failure again`() {
+		val q = queueOf(entry(1), entry(2))
+		q.startNext()
+		q.drop(entry(2))
+
+		q.enqueue(entry(2))
+		val revived = q.queued().last()
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+
+		// The retry mark went with the drop. Without that, a re-queued entry would arrive already
+		// marked and be discarded on what looks like its second failure but is really its first.
+		assertNull(q.advance(revived, SttsPlayer.Outcome.SYNTH_ERROR).failed)
+	}
+
+	@Test
 	fun `a dropped team's failure can no longer be retried into the queue`() {
 		val q = queueOf(entry(1))
 		val head = q.startNext()!!

@@ -76,12 +76,19 @@ class SttsTransport(
 		)
 	}
 
-	/** A media-style notification carrying the same three controls, for the shade. */
-	fun notification(paused: Boolean, speaking: String?): Notification =
+	/**
+	 * A media-style notification carrying the same three controls, for the shade.
+	 *
+	 * `openQueue` is the body tap. It matters that this exists: the bubble is behind a permission the
+	 * user may never grant, and without a tap target here the queue list would be unreachable for them
+	 * while the notification sat on screen advertising a run they could not inspect.
+	 */
+	fun notification(paused: Boolean, speaking: String?, openQueue: PendingIntent? = null): Notification =
 		Notification.Builder(context, channelId)
 			.setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
 			.setContentTitle(speaking ?: "Speaking")
 			.setContentText("Agent messages")
+			.apply { openQueue?.let { setContentIntent(it) } }
 			// Ongoing even while paused. A paused run is not a finished one, and making the notification
 			// dismissible exactly when it is paused would let the only control that can un-pause be
 			// swiped away - leaving autoplay held with nothing left to release it.

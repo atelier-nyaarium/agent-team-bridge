@@ -49,6 +49,7 @@ data class QueueRow(
 @Composable
 fun QueueSheet(
 	rows: List<QueueRow>,
+	failed: List<QueueRow>,
 	paused: Boolean,
 	positionMs: Long?,
 	durationMs: Long?,
@@ -57,16 +58,20 @@ fun QueueSheet(
 	onSeek: (Long) -> Unit,
 	onTrash: (QueueEntry) -> Unit,
 	onJump: (QueueEntry) -> Unit,
+	onDismissFailure: (QueueEntry) -> Unit,
 ) {
+	// An empty queue has nothing to pause or skip. Left enabled, the row offered a Pause that did
+	// nothing and a Skip with nothing to skip, which reads as a broken control rather than an idle one.
+	val running = rows.isNotEmpty()
 	Column(Modifier.fillMaxWidth().padding(16.dp)) {
 		Row(verticalAlignment = Alignment.CenterVertically) {
-			IconButton(onClick = onPlayPause) {
+			IconButton(onClick = onPlayPause, enabled = running) {
 				Icon(
 					if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
 					contentDescription = if (paused) "Resume" else "Pause",
 				)
 			}
-			IconButton(onClick = onSkip) {
+			IconButton(onClick = onSkip, enabled = running) {
 				Icon(Icons.Filled.SkipNext, contentDescription = "Skip")
 			}
 			Text(clock(positionMs) + " / " + clock(durationMs), style = MaterialTheme.typography.labelMedium)
@@ -83,13 +88,32 @@ fun QueueSheet(
 			enabled = durationMs != null && durationMs > 0,
 		)
 		Spacer(Modifier.height(8.dp))
+		// One list, so the failures cannot scroll independently of the queue above them. There is
+		// deliberately no clear-all: per-entry trash plus swipe-to-skip covers it, and nothing here is
+		// worth an action that discards several messages on one tap.
 		LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-			items(rows, key = { "${it.entry.team}|${it.entry.at}|${it.entry.tier}" }) { row ->
+			items(rows, key = { "q|" + keyOf(it.entry) }) { row ->
 				QueueTile(row, onTrash = { onTrash(row.entry) }, onJump = { onJump(row.entry) })
+			}
+			if (failed.isNotEmpty()) {
+				item(key = "failed-header") {
+					Text(
+						"Gave up",
+						style = MaterialTheme.typography.titleSmall,
+						modifier = Modifier.padding(top = 12.dp),
+					)
+				}
+				items(failed, key = { "f|" + keyOf(it.entry) }) { row ->
+					// Dismissing is "seen", not "resolved". The message was never spoken and nothing here
+					// pretends otherwise - the jump is what actually gets the user to it.
+					QueueTile(row, onTrash = { onDismissFailure(row.entry) }, onJump = { onJump(row.entry) })
+				}
 			}
 		}
 	}
 }
+
+private fun keyOf(entry: QueueEntry): String = "${entry.team}|${entry.at}|${entry.tier}"
 
 @Composable
 private fun QueueTile(row: QueueRow, onTrash: () -> Unit, onJump: () -> Unit) {

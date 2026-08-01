@@ -135,6 +135,20 @@ class PlaybackQueue {
 		pending.addFirst(entry)
 	}
 
+	/**
+	 * Take one WAITING entry out. Returns whether it was there to take.
+	 *
+	 * Refuses the head on purpose. The head is installed in the engine, so removing it here would leave
+	 * a playback whose terminal has no entry to retire and the run would stop on it; giving up on the
+	 * head is a skip, which retires it and starts the next.
+	 */
+	@Synchronized
+	fun drop(entry: QueueEntry): Boolean {
+		if (head == entry) return false
+		retried.remove(entry)
+		return pending.remove(entry)
+	}
+
 	@Synchronized
 	fun forgetFailure(entry: QueueEntry): Boolean = failures.remove(entry)
 

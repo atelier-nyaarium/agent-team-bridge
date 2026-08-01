@@ -9,6 +9,7 @@
 //                                                   composer holds text it would overwrite
 //   thread.setVisible(visible)                      app foreground/background transition
 //   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
+//   thread.revealMessage(id)                        scroll to one row, no unread divider
 //   thread.flushReadUpTo()                          flush any pending debounced read receipt now
 // Message shape: {id, role: "user"|"agent", from, at, body, status?, counts?, ownSend?,
 //   arrivedVisible?, files?: [{name, mime, src?, size?, modifiedAt?, previewable, label,
@@ -819,6 +820,21 @@
 		scrollToDivider();
 	}
 
+	/**
+	 * Scroll one named row into view, WITHOUT the unread divider.
+	 *
+	 * Distinct from revealFirstUnread on purpose: a queue tile names a message the user chose to go
+	 * to, which says nothing about what they have read. Borrowing the unread path to get there would
+	 * draw an "unread from here" line above a message they may well have already read.
+	 */
+	function revealMessage(id) {
+		const row = rowFor(id);
+		if (!row) return;
+		stuck = false;
+		snapped = true;
+		runPin(() => row.scrollIntoView({ block: "start" }));
+	}
+
 	/** Kotlin mirrors the composer's own emptiness here, since only it can see that box. Applied to
 	 * already-rendered rows too, so a row that failed before you started typing greys immediately. */
 	function setComposerOccupied(occupied) {
@@ -887,6 +903,7 @@
 		setPlayStates,
 		setVisible,
 		revealFirstUnread,
+		revealMessage,
 		flushReadUpTo,
 	};
 })();

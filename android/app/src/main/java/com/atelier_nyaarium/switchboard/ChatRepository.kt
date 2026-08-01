@@ -1739,7 +1739,18 @@ class ChatRepository(
 	@Volatile
 	var onTransportChanged: (() -> Unit)? = null
 
+	/**
+	 * Bumped whenever the settled queue state changes. What the sheet re-reads on.
+	 *
+	 * A counter rather than a second callback slot: [onTransportChanged] is one slot the service owns,
+	 * and a UI that took it would silently unhook the lockscreen. A counter has no owner, so any number
+	 * of surfaces can watch it, and it carries no state of its own to drift - it only says "ask again".
+	 */
+	val queueRevision: kotlinx.coroutines.flow.StateFlow<Int> get() = _queueRevision
+	private val _queueRevision = kotlinx.coroutines.flow.MutableStateFlow(0)
+
 	private fun transportChanged() {
+		_queueRevision.value = _queueRevision.value + 1
 		runCatching { onTransportChanged?.invoke() }
 	}
 
@@ -1836,16 +1847,54 @@ class ChatRepository(
 	 */
 	fun queueRows(): List<QueueRow> {
 		val head = queue.playing()
-		return queue.queued().map { entry ->
-			val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
-			QueueRow(
-				entry = entry,
-				sessionLabel = _state.value.label(entry.team, _state.value.localGatewayId),
-				title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
-				durationMs = null,
-				isCurrent = entry == head,
-			)
+		// Known only for the entry that is actually playing - a queued one has no audio yet, which the
+		// tile draws as a spinner. Read once rather than per row: it is the same answer for all of them,
+		// and asking inside the loop would let the current entry change mid-list.
+		val current = playbackPosition()
+		return queue.queued().distinct().map { entry ->
+			row(entry, isCurrent = entry == head, durationMs = current?.takeIf { it.entry == entry }?.durationMs)
 		}
+	}
+
+	/** The entries that gave up, for the alert's list. Separate from [queueRows] because these are no
+	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
+	fun failedRows(): List<QueueRow> = queue.remembered().map { row(it, isCurrent = false, durationMs = null) }
+
+	private fun row(entry: QueueEntry, isCurrent: Boolean, durationMs: Long?): QueueRow {
+		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
+		return QueueRow(
+			entry = entry,
+			sessionLabel = _state.value.label(entry.team, _state.value.localGatewayId),
+			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
+			durationMs = durationMs,
+			isCurrent = isCurrent,
+		)
+	}
+
+	/**
+	 * Take one entry out of the queue. The tile's trash, and the same action as a swipe on the bubble.
+	 *
+	 * Routed through skip when it is the HEAD, rather than reaching into the queue: the head is
+	 * installed in the engine, so removing it without retiring the request would leave a playback whose
+	 * terminal has nothing to advance, and the run would stop there.
+	 */
+	suspend fun dropFromQueue(entry: QueueEntry) {
+		if (queue.playing() == entry) {
+			skipPlayback()
+			return
+		}
+		advanceMutex.withLock {
+			queue.drop(entry)
+			stts.abandon(entry.team, entry.at, entry.tier)
+		}
+		transportChanged()
+	}
+
+	/** Acknowledge one failure. "Seen", not "resolved" - the message was never spoken and this does not
+	 * pretend otherwise; it only stops the alert asking again. */
+	suspend fun acknowledgeFailure(entry: QueueEntry) {
+		advanceMutex.withLock { queue.forgetFailure(entry) }
+		transportChanged()
 	}
 
 	/**
@@ -1866,11 +1915,10 @@ class ChatRepository(
 		stts.seekTo(snap.owner, ms)
 	}
 
-	/** Open the thread a queue entry belongs to and reveal that message, reusing the machinery a tap
-	 * on a notification already goes through. */
-	fun jumpTo(entry: QueueEntry) {
-		openThread(entry.team)
-	}
+	/** Open the thread a queue entry belongs to, returning the CANONICAL key its tab is filed under so
+	 * the caller can point the active tab at the same value. Revealing the message itself is the
+	 * caller's half: only the view layer can scroll, and this class holds no view. */
+	fun jumpTo(entry: QueueEntry): String = openThread(entry.team)
 
 	/** What the bubble draws: how many are still to speak, whether the current one is still being
 	 * generated, and how many gave up. The failure count outlives a drained queue, which is why it is

@@ -385,6 +385,12 @@ class ThreadRenderer(context: Context) {
 		eval("window.thread.revealFirstUnread($idArg, $idsJson)")
 	}
 
+	/** Scroll to one message, leaving the unread divider alone. What a queue tile's tap goes through:
+	 * it names a message, which is not a claim about what has been read. */
+	fun revealMessage(at: Long) {
+		eval("window.thread.revealMessage($at)")
+	}
+
 	/** A video's frames, or empty for anything else and for a video whose set has not landed. */
 	private fun framesFor(file: MessageFile): List<String> {
 		if (!file.mime.startsWith("video/")) return emptyList()

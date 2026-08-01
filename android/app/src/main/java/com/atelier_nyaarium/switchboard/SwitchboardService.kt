@@ -238,7 +238,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// would show a run that is already over, with no later event to correct it.
 		bubble = QueueBubble(
 			this,
-			onTap = { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
+			onTap = { startActivity(openQueueIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
 			onSwipeAway = { repo.command { skipPlayback() } },
 		)
 		repo.onTransportChanged = { publishTransport() }
@@ -306,7 +306,9 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
 		if (active) {
-			transport?.let { manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null)) }
+			transport?.let {
+				manager.notify(TRANSPORT_NOTIFICATION_ID, it.notification(paused, null, openQueuePending()))
+			}
 		} else {
 			manager.cancel(TRANSPORT_NOTIFICATION_ID)
 		}
@@ -328,6 +330,19 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	}
 
 	private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+	/** The one way into the queue list, used by both the bubble and the transport notification's body,
+	 * so the two cannot drift into opening different things. */
+	private fun openQueueIntent(): Intent =
+		Intent(this, MainActivity::class.java).putExtra(EXTRA_OPEN_QUEUE, true)
+
+	private fun openQueuePending(): PendingIntent =
+		PendingIntent.getActivity(
+			this,
+			REQUEST_OPEN_QUEUE,
+			openQueueIntent(),
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
 
 	/**
 	 * The chime as a playable file: the user's chosen system sound, or the bundled asset.
@@ -626,6 +641,10 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
 		const val EXTRA_MESSAGE_AT = "message_at"
+		const val EXTRA_OPEN_QUEUE = "open_queue"
+
+		/** Its own request code, so the queue's PendingIntent cannot collapse into a team's. */
+		private const val REQUEST_OPEN_QUEUE = 4272
 
 		/** The user swiped the status entry away this process; stop re-posting it.
 		 * Reset on service start so it returns with the next boot/launch. */

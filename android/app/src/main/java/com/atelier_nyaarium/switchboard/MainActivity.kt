@@ -217,6 +217,9 @@ class MainActivity : FragmentActivity() {
 	/** Team a notification tap asked to open; consumed by App, refreshed by onNewIntent. */
 	private val openTeamRequest = mutableStateOf<String?>(null)
 
+	/** The bubble or the transport notification asked for the queue list; consumed by App. */
+	private val openQueueRequest = mutableStateOf(false)
+
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		DebugLog.init(this)
@@ -224,20 +227,28 @@ class MainActivity : FragmentActivity() {
 		val injected = intent.getStringExtra("provisioning_b64")
 			?.let { runCatching { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)) }.getOrNull() }
 		openTeamRequest.value = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)
+		openQueueRequest.value = intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)
 		setContent {
 			val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest) }
+			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest, openQueueRequest) }
 		}
 	}
 
 	override fun onNewIntent(intent: Intent) {
 		super.onNewIntent(intent)
 		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let { openTeamRequest.value = it }
+		if (intent.getBooleanExtra(SwitchboardService.EXTRA_OPEN_QUEUE, false)) openQueueRequest.value = true
 	}
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableState<String?>) {
+fun App(
+	repo: ChatRepository,
+	injectedBlob: String?,
+	openTeamRequest: MutableState<String?>,
+	openQueueRequest: MutableState<Boolean>,
+) {
 	val state by repo.state.collectAsState()
 	val scope = rememberCoroutineScope()
 	val context = LocalContext.current
@@ -248,6 +259,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// effect in ThreadWebView so it re-snaps to the first unread row on each such open, even when
 	// `openTeam` itself is unchanged (re-tapping a notification for the thread already on screen).
 	var openNonce by remember { mutableStateOf(0) }
+	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
+	// so re-opening the same thread later does not silently re-scroll to an old message.
+	var revealAt by remember { mutableStateOf<Pair<String, Long>?>(null) }
 	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -671,6 +685,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
 				openNonce = openNonce,
+				revealAt = revealAt,
 				unreadBoundary = repo::unreadBoundary,
 				onGateway = { t ->
 					// A tab switch onto a DIFFERENT thread is a genuine open (re-snap to its first
@@ -795,6 +810,48 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// rooted an enroll invite but has not completed the in-person trust step).
 				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
 					?.let { c -> { enrolleeCeremonyCtx = c } },
+			)
+		}
+	}
+
+	// The queue list. Opened by the bubble and by the transport notification's body, so it is reachable
+	// whether or not the overlay permission was ever granted.
+	if (openQueueRequest.value) {
+		// Re-read on every settled change, and on a slow tick so the bar moves while a message plays.
+		// Both are pulls: this sheet is the fourth surface reporting one run, and the three that kept
+		// their own copy are the three that drifted from it.
+		val revision by repo.queueRevision.collectAsState()
+		var beat by remember { mutableStateOf(0) }
+		LaunchedEffect(Unit) {
+			while (true) {
+				kotlinx.coroutines.delay(500)
+				beat++
+			}
+		}
+		val rows = remember(revision, beat) { repo.queueRows() }
+		val failed = remember(revision) { repo.failedRows() }
+		val position = remember(revision, beat) { repo.playbackPosition() }
+		val paused = remember(revision) { repo.transportState().second }
+		androidx.compose.material3.ModalBottomSheet(onDismissRequest = { openQueueRequest.value = false }) {
+			QueueSheet(
+				rows = rows,
+				failed = failed,
+				paused = paused,
+				positionMs = position?.positionMs,
+				durationMs = position?.durationMs,
+				onPlayPause = { repo.command { if (paused) resumePlayback() else pausePlayback() } },
+				onSkip = { repo.command { skipPlayback() } },
+				onSeek = { repo.seekPlayback(it) },
+				onTrash = { entry -> repo.command { dropFromQueue(entry) } },
+				onJump = { entry ->
+					// Through the same request the notification tap uses, so the jump inherits its whole
+					// open gesture - dismissing masking surfaces, selecting the tab, re-snapping - rather
+					// than re-implementing a partial copy of it.
+					revealAt = entry.team to entry.at
+					openTeamRequest.value = entry.team
+					openQueueRequest.value = false
+				},
+				onDismissFailure = { entry -> repo.command { acknowledgeFailure(entry) } },
 			)
 		}
 	}
@@ -2620,6 +2677,8 @@ fun ThreadScreen(
 	// App-scope openNonce); keys ThreadWebView's reveal effect so it re-snaps to the first unread
 	// row even when `team` itself is unchanged (re-tapping a notification for the open thread).
 	openNonce: Int,
+	// (team, at) a queue tile asked to land on, or null. Passed straight through to ThreadWebView.
+	revealAt: Pair<String, Long>?,
 	// The current (first unread row id, pointer-region ids) for the team named by the argument,
 	// re-read live at reveal time (never a stale snapshot) so a just-flushed receipt is always
 	// reflected. Takes the team explicitly rather than closing over an ambient "current" team, so a
@@ -2930,6 +2989,7 @@ fun ThreadScreen(
 					rendererPool = rendererPool,
 					openNonce = openNonce,
 					unreadBoundary = unreadBoundary,
+					revealAt = revealAt,
 					composerOccupied = draft.isOccupied,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
@@ -4264,6 +4324,9 @@ fun ThreadWebView(
 	rendererPool: ThreadRendererPool,
 	openNonce: Int,
 	unreadBoundary: (String) -> Pair<Long?, List<Long>>,
+	// (team, at) a queue tile asked to land on, or null for an ordinary open. Carries its team so a
+	// stale request cannot scroll a thread it was never about.
+	revealAt: Pair<String, Long>?,
 	// Whether the composer holds text: mirrored into the renderer so a failed row's Cancel, which
 	// hands its content back to that box, greys out rather than overwriting what is being typed.
 	composerOccupied: Boolean,
@@ -4317,6 +4380,10 @@ fun ThreadWebView(
 		renderer.flushThenReveal {
 			val (firstUnreadId, region) = unreadBoundary(team)
 			renderer.revealFirstUnread(firstUnreadId, region)
+			// A queue tile named a specific message, so land on THAT rather than wherever reading
+			// happens to have got to. Runs after the unread snap so it wins, and only for the thread the
+			// tile pointed at - a tile tapped while a different tab was open must not drag this one.
+			revealAt?.let { (wanted, at) -> if (wanted == team) renderer.revealMessage(at) }
 		}
 	}
 
