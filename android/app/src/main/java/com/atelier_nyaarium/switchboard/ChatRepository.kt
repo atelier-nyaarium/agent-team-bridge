@@ -1742,10 +1742,16 @@ class ChatRepository(
 			transportPaused = true
 			markerInFlight?.let { stts.abandon(SttsPlayer.MARKER_TEAM, it, null) }
 			clearMarkers()
-			// Stopping the audio ends the request, which retires it. Put it back at the front first, or
-			// resuming would skip the very message that was paused.
-			queue.playing()?.let { queue.requeueFront(it) }
-			stts.stopWith(SttsPlayer.Outcome.PREEMPTED)
+			val head = queue.playing()
+			if (head != null) {
+				// Requeued at the FRONT, then retired. Stopping audio would only reach a body that is
+				// already sounding - during a marker, or while the body is still synthesizing, there is
+				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
+				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
+				queue.requeueFront(head)
+				stts.abandon(head.team, head.at, head.tier)
+				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
+			}
 		}
 		transportChanged()
 	}

@@ -711,6 +711,19 @@ something concrete needs it, not by habit.
   and the in-thread button alike, since they share one start path. Pausing an idle queue is now a
   no-op for the same reason.
 
+- **Pause retires the head rather than stopping audio.** Stopping only reaches a body that is already
+  sounding; during a marker, or while the body is still synthesizing, there is nothing audible to
+  stop - so the head stayed installed AND sat waiting in pending, which is stuck, and then spoken
+  twice when the synthesis nobody cancelled finally landed.
+
+**OPEN, not fixed - marker identity is content-derived.** `markerAt` hashes the spoken words, which is
+right for caching and wrong for identity: two runs of the SAME session produce the same `at`, so
+skipping during a sentinel lets the abandoned marker's terminal match the marker just started, and
+drive it. The registry already mints a unique `gen` per claim and the event already carries it - the
+listener discards it and `playMarker` returns `at` instead. The fix is to plumb that `gen` through
+rather than invent a second identity, which is the same answer as every other round of this class.
+Deliberately left rather than rushed.
+
 **Known unverified, needs real hardware:** an actual lockscreen, headphone or watch controls, and
 whether the MediaStyle notification RENDERS correctly - it is confirmed constructed and posted, not
 that it looks right. `dumpsys` shows `mediaButtonReceiver=null`, which should be fine for an active
