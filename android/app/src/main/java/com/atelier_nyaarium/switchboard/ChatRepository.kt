@@ -1490,6 +1490,27 @@ class ChatRepository(
 		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
 	}
 
+	/**
+	 * What each of one team's messages is doing: "playing" for the audible one, "loading" for the one
+	 * handed to the engine but not yet sounding, "queued" for the rest. A message not named is idle.
+	 *
+	 * A QUERY rather than something a consumer accumulates from events. Every subscriber that rebuilt
+	 * this from the stream would have to get the same reconstruction right, and the glyph listener -
+	 * the only one that ever tried - got it wrong twice.
+	 */
+	fun playStatesFor(team: String): Map<Long, String> {
+		val states = mutableMapOf<Long, String>()
+		for (entry in queue.queued()) {
+			if (entry.team != team) continue
+			states[entry.at] = when {
+				stts.isPlayingMessage(entry.team, entry.at) -> "playing"
+				entry == queue.playing() -> "loading"
+				else -> "queued"
+			}
+		}
+		return states
+	}
+
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
 
 	fun stopMessage(team: String, at: Long) = stts.stopMessage(team, at)

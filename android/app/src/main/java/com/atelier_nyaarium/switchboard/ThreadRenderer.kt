@@ -442,11 +442,20 @@ class ThreadRenderer(context: Context) {
 		eval("window.thread.setComposerOccupied($occupied)")
 	}
 
-	/** Swap the Play glyph on the row whose message is playing (null = none).
-	 * Safe from any thread: playback state changes arrive from the player's
-	 * daemon thread and evaluateJavascript must run on main. */
-	fun setPlaying(at: Long?) {
-		webView.post { eval("window.thread.setPlaying(${at ?: "null"})") }
+	/**
+	 * Push per-row playback state: `at` to one of "queued", "loading", "playing". A row not named is
+	 * idle, so a cleared run is the empty map rather than a per-row reset.
+	 *
+	 * Sent over the bridge rather than folded into the row payload, which is what keeps it outside the
+	 * re-render fingerprint: state that changes while a row is on screen would otherwise need folding
+	 * in, and be silently stale until it was.
+	 *
+	 * Safe from any thread: playback state arrives on the player's lanes and evaluateJavascript must
+	 * run on main.
+	 */
+	fun setPlayStates(states: Map<Long, String>) {
+		val json = states.entries.joinToString(",") { (at, state) -> "\"$at\":\"$state\"" }
+		webView.post { eval("window.thread.setPlayStates({$json})") }
 	}
 
 	fun destroy() {

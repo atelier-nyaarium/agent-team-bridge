@@ -375,21 +375,12 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
-		// Keyed by the REQUEST's generation: a sibling tier reports Ended too, and anything coarser
-		// blanks a row that is still playing. Order needs no defence here - events arrive in the order
-		// the registry made the transitions.
-		val sounding = java.util.concurrent.ConcurrentHashMap<String, Long>()
+		// An event is a nudge to re-read, not a fact to accumulate. Asking the repository what is true
+		// now means this cannot drift from it - the version that tracked generations itself was wrong
+		// twice, once blanking a row still playing and once stranding one that had ended.
 		val glyphs = repo.stts.addListener { event ->
-			when (event) {
-				is SttsPlayer.Event.Started -> {
-					sounding[event.team] = event.gen
-					scope.launch { rendererPool.setPlaying(event.team, event.at) }
-				}
-				is SttsPlayer.Event.Ended -> if (sounding[event.team] == event.gen) {
-					sounding.remove(event.team)
-					scope.launch { rendererPool.setPlaying(event.team, null) }
-				}
-			}
+			val team = event.team
+			scope.launch { rendererPool.setPlayStates(team, repo.playStatesFor(team)) }
 		}
 		onDispose { repo.stts.removeListener(glyphs) }
 	}

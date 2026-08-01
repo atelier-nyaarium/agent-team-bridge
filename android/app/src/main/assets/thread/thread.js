@@ -878,17 +878,12 @@
 		paintPlayStates();
 	}
 
-	// Kept so a host that still speaks the old single-pointer protocol keeps working.
-	function setPlaying(at) {
-		setPlayStates(at === undefined || at === null ? {} : { [String(at)]: "playing" });
-	}
 
 	window.thread = {
 		setMessages,
 		setComposerOccupied,
 		appendMessages,
 		setTheme,
-		setPlaying,
 		setPlayStates,
 		setVisible,
 		revealFirstUnread,

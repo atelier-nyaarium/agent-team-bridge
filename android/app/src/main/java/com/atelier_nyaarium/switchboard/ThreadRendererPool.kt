@@ -102,9 +102,9 @@ class ThreadRendererPool(private val context: Context) {
 			}
 		}
 
-	/** Push the now-playing message to one team's renderer (null = stopped). */
-	fun setPlaying(team: String, at: Long?) {
-		renderers[team]?.setPlaying(at)
+	/** Push one team's per-row playback state. A row not named is idle. */
+	fun setPlayStates(team: String, states: Map<Long, String>) {
+		renderers[team]?.setPlayStates(states)
 	}
 
 	/** System "Open with" chooser for a validated attachment path. */
