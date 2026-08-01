@@ -1735,7 +1735,29 @@ class ChatRepository(
 	/** Whether a transport control has held the run. Distinct from an empty queue: paused means there
 	 * is something to come back to, which is why nothing auto-resumes past it. */
 	@Volatile
-	private var transportPaused = false
+	/**
+	 * Whether the run is held. Read through an accessor that CANNOT report a pause over an idle queue.
+	 *
+	 * A pause describes a run, so it cannot outlive one - and three separate rounds each found a new
+	 * way for a run to end without passing through whichever single place was normalizing the flag at
+	 * the time (a thread torn down, an entry trashed, the last entry skipped). Each fix was correct
+	 * where it landed and none of them held, because the rule lived at the writers rather than at the
+	 * value. A stranded flag refuses autoplay on every team afterwards, with no enabled control left
+	 * on screen to clear it.
+	 *
+	 * Normalizing in the GETTER is what makes the bad state unobservable rather than merely unreached:
+	 * a new way to empty the queue cannot reintroduce it, because there is no longer a reader that
+	 * could see it.
+	 */
+	private var pausedFlag = false
+	private var transportPaused: Boolean
+		get() {
+			if (pausedFlag && queue.isIdle()) pausedFlag = false
+			return pausedFlag
+		}
+		set(value) {
+			pausedFlag = value
+		}
 
 	/**
 	 * Called after the run's state has SETTLED, never from a raw playback event.
@@ -1764,12 +1786,6 @@ class ChatRepository(
 	}
 
 	private fun resumeIfSilent() {
-		// A pause describes a RUN, so it cannot outlive one. A run can end without a terminal - close the
-		// thread mid-pause and its entries are dropped rather than spoken - and a flag left set then
-		// refuses every later run on every team, with no control left to clear it: the transport is gone
-		// with the queue, and the in-thread Play button reports "queued", which is a state the row styles
-		// as taking no taps. Normalized here because this is the one place the flag is read.
-		if (queue.isIdle()) transportPaused = false
 		if (transportPaused || queue.playing() != null || stts.isSounding()) return
 		queue.startNext()?.let { speak(it) }
 	}
@@ -1857,8 +1873,27 @@ class ChatRepository(
 	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
 	fun failedRows(): List<QueueRow> =
 		queue.remembered().map {
-			row(it, isCurrent = false, durationMs = null, gaveUp = true, reason = queue.reasonFor(it))
+			row(it, isCurrent = false, durationMs = null, gaveUp = true, reason = shortCause(queue.reasonFor(it)))
 		}
+
+	/**
+	 * A cause a person can read, from whatever the provider said.
+	 *
+	 * The raw string is an HTTP body: it can run to paragraphs, name internal endpoints, and echo
+	 * request content back. A tile is not the place for it - what a user needs is which of their
+	 * problems this is, and only the first line of it.
+	 */
+	private fun shortCause(reason: String?): String {
+		val raw = reason?.trim().orEmpty()
+		return when {
+			raw.isEmpty() -> "not spoken"
+			raw.contains("401") || raw.contains("403", true) -> "voice key rejected"
+			raw.contains("429") -> "voice service busy"
+			raw.contains("timeout", true) || raw.contains("timed out", true) -> "voice service timed out"
+			raw.contains("playback failed", true) -> "audio would not play"
+			else -> raw.lineSequence().first().take(60)
+		}
+	}
 
 	private fun row(
 		entry: QueueEntry,
@@ -1919,7 +1954,10 @@ class ChatRepository(
 		clearMarkers()
 		stts.forgetPosition(head.team, head.at, head.tier)
 		stts.abandon(head.team, head.at, head.tier, remember = false)
-		val next = queue.advance(head, SttsPlayer.Outcome.COMPLETED).next ?: return
+		// STOPPED, not COMPLETED. The queue advances on both, but only COMPLETED means "heard" - and a
+		// skip that claimed it did cleared the message out of the failures list, telling the user they
+		// had heard the very thing they had just given up on.
+		val next = queue.advance(head, SttsPlayer.Outcome.STOPPED).next ?: return
 		// Skip means "move past this one", NEVER "start playing". Clearing the pause here made the
 		// lockscreen's own next button start the phone talking out loud from a state the user had
 		// deliberately silenced - and every media app on the platform advances without sounding.

@@ -325,6 +325,24 @@ class PlaybackQueueTest {
 	}
 
 	@Test
+	fun `skipping a remembered failure does not count as having heard it`() {
+		val q = queueOf(entry(1), entry(2))
+		val first = q.startNext()!!
+		q.advance(first, SttsPlayer.Outcome.SYNTH_ERROR)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.COMPLETED)
+		q.advance(q.playing()!!, SttsPlayer.Outcome.SYNTH_ERROR)
+		assertEquals(listOf(entry(1)), q.remembered())
+
+		// Re-queued and then SKIPPED. A skip retires the entry exactly as a completion does, which is
+		// why the two share this branch - but only one of them means the user heard anything, and
+		// clearing on both told them they had heard the very message they had just given up on.
+		q.enqueue(entry(1))
+		q.advance(q.startNext()!!, SttsPlayer.Outcome.STOPPED)
+
+		assertEquals(listOf(entry(1)), q.remembered())
+	}
+
+	@Test
 	fun `a failure remembers why, and the same message never doubles up`() {
 		val q = queueOf(entry(1), entry(2))
 		val first = q.startNext()!!

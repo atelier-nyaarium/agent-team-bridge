@@ -1617,6 +1617,25 @@ when written, and broken by its own author three commits later in the same sessi
 asserting an invariant is documentation; only a test is enforcement.** The rule caught a fifth call
 site (thread teardown) on its first run.
 
+**Mechanism: a rule enforced at the writers instead of at the value.**
+Defect class: an invariant maintained by normalizing in whichever place currently mutates the state.
+Every fix is correct where it lands, and the next new mutator reintroduces the bug - because nothing
+about the value itself forbids the bad state.
+
+- `transportPaused` stranded over an idle queue, refusing autoplay on every team with no enabled
+  control left on screen to clear it. Round 1: normalized in `resumeIfSilent`, documented as "the one
+  place the flag is read". Round 2: `dropFromQueue` was added as a new way to empty the queue and did
+  not route through it - broken by its own author, three commits later, in the same session. Round 3:
+  skipping the LAST entry returned early before reaching the normalization at all.
+
+CLOSED by moving the rule into the value. `transportPaused` is now a property whose GETTER clears a
+stale pause, so a run that ends by any means - present or future - cannot produce an observable
+paused-but-idle state. The bad state is unrepresentable to readers rather than merely unreached by
+the writers that exist today.
+
+The general form, worth applying before the fourth round of anything: **if two independent fixes for
+one invariant both landed at call sites, the third fix belongs at the value.**
+
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
 rows sharing one `at` collapsing into a single entry; unspeakable rows (status-only, files-only) being

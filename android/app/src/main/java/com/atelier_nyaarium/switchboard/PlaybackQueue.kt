@@ -91,9 +91,10 @@ class PlaybackQueue {
 			// and the queue carries on; a real pause needs a control that says so, and there is none.
 			SttsPlayer.Outcome.COMPLETED, SttsPlayer.Outcome.STOPPED -> {
 				retired(entry)
-				// Actually speaking it settles the matter: a message that has now been heard has no
-				// business still sitting in the alert as one that never was.
-				failures.remove(entry)
+				// Only a COMPLETED settles the matter. A message that has now been heard has no business
+				// sitting in the alert as one that never was - but a STOPPED is a skip or a trash, which
+				// is the opposite, and clearing on it told the user they had heard what they gave up on.
+				if (outcome == SttsPlayer.Outcome.COMPLETED) failures.remove(entry)
 				QueueStep(takeNext())
 			}
 

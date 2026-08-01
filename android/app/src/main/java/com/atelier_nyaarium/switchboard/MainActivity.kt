@@ -281,7 +281,10 @@ fun App(
 	var revealAt by remember { mutableStateOf<Pair<String, Long>?>(null) }
 	// Read here as well as in the sheet: the board's own way in has to appear the moment a run starts
 	// and go when it ends, and that is a settled-state question like every other one in this feature.
+	// Keyed on the revision so the failures scan runs when the queue changes rather than on every
+	// unrelated recomposition of the board.
 	val queueRevision by repo.queueRevision.collectAsState()
+	val speaking = remember(queueRevision) { repo.transportState().first || repo.failedRows().isNotEmpty() }
 	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -816,7 +819,7 @@ fun App(
 					settingsRoute = SettingsRoute.HUB
 					showSettings = true
 				},
-				speaking = queueRevision.let { repo.transportState().first || repo.failedRows().isNotEmpty() },
+				speaking = speaking,
 				onQueue = { openQueueRequest.value = true },
 				onManage = { showManage = true },
 				onAddGateway = { showAddGateway = true },

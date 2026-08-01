@@ -316,6 +316,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private val focus by lazy {
 		SpeechFocus(
 			this,
+			alreadyPaused = { Repo.get(this).transportState().second },
 			onPause = { Repo.get(this).command { pausePlayback() } },
 			onResume = { Repo.get(this).command { resumePlayback() } },
 		)
@@ -326,10 +327,17 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private fun publishTransport() {
 		val repo = Repo.get(this)
 		val (active, paused) = repo.transportState()
-		// Taken while a run is live and given back the moment it is not. Anchored to the same settled
-		// state the transport and the bubble read, so the app cannot be holding the right to speak
-		// while showing nothing, or speaking while holding nothing.
-		if (active && !paused) focus.acquire() else if (!active) focus.release()
+		// Held exactly while the app INTENDS to make sound, which is what makes a pause give the user's
+		// music back - holding through a pause defeats the transient gain the whole design rests on.
+		//
+		// A refusal is acted on rather than noted: something else is mid-call, and speaking over it is
+		// the thing this exists to prevent. Pausing here leaves the queue intact and the run resumes
+		// when focus arrives.
+		if (active && !paused) {
+			if (!focus.acquire()) repo.command { pausePlayback() }
+		} else {
+			focus.release()
+		}
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
 		val counts = repo.queueCounts()
