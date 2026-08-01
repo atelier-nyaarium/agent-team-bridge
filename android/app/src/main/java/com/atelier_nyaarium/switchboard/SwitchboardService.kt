@@ -236,6 +236,11 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// Driven by the repository's settled-state hook rather than raw playback events: an event fires
 		// before the queue has been advanced for it, so at the last terminal a transport built from it
 		// would show a run that is already over, with no later event to correct it.
+		bubble = QueueBubble(
+			this,
+			onTap = { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
+			onSwipeAway = { repo.command { skipPlayback() } },
+		)
 		repo.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
 		repo.scheduledSendScheduler = this
@@ -291,6 +296,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
 	private var transport: SttsTransport? = null
+	private var bubble: QueueBubble? = null
 
 	/** Mirror the run onto the lockscreen and shade. Called on every playback event, since that is
 	 * exactly when what a transport should show has changed. */
@@ -304,7 +310,15 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		} else {
 			manager.cancel(TRANSPORT_NOTIFICATION_ID)
 		}
+		// The bubble draws on the same settled state, so it cannot disagree with the shade about how
+		// much is left. Touching views needs main; playback settles on the player's lanes.
+		val counts = repo.queueCounts()
+		mainHandler.post {
+			if (active) bubble?.show(counts.first, counts.second, counts.third) else bubble?.hide()
+		}
 	}
+
+	private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
 	/**
 	 * The chime as a playable file: the user's chosen system sound, or the bundled asset.
@@ -349,6 +363,11 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		repo.onScheduledSendFailed = null
 		repo.chimeSource = null
 		repo.onTransportChanged = null
+		// Captured into a local first: the field is cleared below, and a lambda referencing the FIELD
+		// would find it null by the time main ran it, leaking the window.
+		val leaving = bubble
+		bubble = null
+		mainHandler.post { leaving?.release() }
 		transport?.release()
 		transport = null
 		getSystemService(NotificationManager::class.java).cancel(TRANSPORT_NOTIFICATION_ID)

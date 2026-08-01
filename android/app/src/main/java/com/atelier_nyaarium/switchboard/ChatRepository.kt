@@ -1809,6 +1809,16 @@ class ChatRepository(
 	 * currently held. */
 	fun transportState(): Pair<Boolean, Boolean> = Pair(!queue.isIdle(), transportPaused)
 
+	/** What the bubble draws: how many are still to speak, whether the current one is still being
+	 * generated, and how many gave up. The failure count outlives a drained queue, which is why it is
+	 * reported separately rather than folded into the total. */
+	fun queueCounts(): Triple<Int, Boolean, Int> {
+		val queued = queue.queued()
+		val head = queue.playing()
+		val generating = head != null && !stts.isPlayingMessage(head.team, head.at)
+		return Triple(queued.size, generating, queue.remembered().size)
+	}
+
 	/** Hand an entry to the engine, and synthesise its terminal ourselves if the engine would not take
 	 * it. Without that, an entry the engine silently declines leaves the head un-retired and every
 	 * message behind it unspoken for the life of the process. */
