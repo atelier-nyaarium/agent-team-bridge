@@ -1116,3 +1116,51 @@ lines. The plan is deleted; what follows is what it left behind.
 - **A debug log stream found in one pass what hours of reading source did not.** The attachment race
   was diagnosed the moment the device reported `uris=1 read=0` beside a file that existed a
   millisecond earlier. Reach for instrumentation before narrating what has been ruled out.
+
+## Attachment gallery (`plans/attachment-gallery.md`, deleted, shipped - 2026-08-02)
+
+Sections 1-9 and both required intermissions all landed. Nothing was left unresolved; the only
+deferral on record is J-1, message-level file metadata, scoped out deliberately rather than skipped.
+Its own painpoints were folded into the artifact-references section above as they were found.
+
+## Emulator sandbox build (`plans/emulator-sandbox-build.md`, deleted, shipped - 2026-08-02)
+
+The build type shipped and earns its keep, but it carried three open items its plan never closed.
+
+- **The sandbox cannot fake presence states** (`working`, `verifying`, `available`), which drive the
+  pulse bar and the terminal view's own gating. Confirmed as a real gap while shipping the
+  usage-limit dialog: the chat dock and board tile were both verifiable by seeding a `Team`, but the
+  terminal's own Resume affordance derives from a peeked pane, and there is no canned frame to peek.
+  Rendering one needs a seam in shared code, not a fixture edit, which is why that one surface
+  shipped compile-verified rather than seen.
+- **`SwitchboardService`'s poll loop is left running** in this build rather than suppressed, failing
+  into a cosmetic "Gateway not provisioned" banner. Deliberate, and the banner is honest about what
+  the build is, but it was never revisited.
+- **The board's version column wraps one character per line** for a longer `versionName`. Noticed
+  because a `-sandbox` suffix mangled it. The suffix is gone; the weakness is not.
+
+## Scheduled send (`plans/scheduled-send.md`, deleted, shipped - 2026-08-02)
+
+Both phases shipped. The residue is process rather than code, and all of it outlives the feature.
+
+- **An `Edit` call silently wrote a literal NUL byte into a Kotlin source file.** Nothing about the
+  call looked wrong and the file read back normally. The only symptom was `grep` and `file` quietly
+  starting to treat it as binary, `grep` returning nothing at all rather than an error. If a
+  text tool inexplicably goes silent on a file you just edited, suspect a control character before
+  anything more exotic.
+- **A delegated `var x by remember { mutableStateOf(...) }` is NEVER smart-castable**, because a
+  custom-getter property never is, regardless of a surrounding null check. That is what makes
+  `MainActivity.kt`'s pervasive `openTeam!!` load-bearing rather than defensive noise: a bare
+  `state.scheduledSends[openTeam]` inside the same null-checked branch as a dozen `!!` uses looks
+  like it should compile and does not. Match the file's convention instead of reasoning about the
+  language rule in the abstract.
+- **`minimumInteractiveComponentSize()` and a separately-applied `combinedClickable` have unclear
+  composed hit-testing.** Sidestepped rather than proven: put both modifiers on the SAME outer node
+  and keep the inner node purely visual, mirroring `IconButtonKt`'s own structure. Worth reusing as
+  a recipe the next time a custom clickable needs a non-standard touch target.
+- **`Workflow()` scripts are plain JS, and apostrophes are the recurring way they fail to parse.**
+  Backticks inside template literals and a shell-quoting artifact pasted into a string literal have
+  each killed a script before it could launch. Rewriting to avoid the character has been the
+  reliable fix both times, more so than escaping it.
+- Its fourth painpoint, not knowing the `~/android-dev` toolchain existed, is already recorded in
+  CLAUDE.md and is not repeated here.
