@@ -26,6 +26,8 @@ import {
 	CodexRequestErrorSchema,
 	CodexStartAgentInputSchema,
 	codexOperationFingerprint,
+	projectCodexListAgent,
+	projectCodexListResult,
 } from "../shared/codex-thinking.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 
@@ -556,6 +558,28 @@ describe("Codex internal protocol projections", () => {
 });
 
 describe("Codex persisted and list contracts", () => {
+	it("projects validated persisted agents without recovery-only fields", () => {
+		const persisted = requestedAgent();
+		const projected = projectCodexListAgent(persisted);
+		const result = projectCodexListResult([persisted], {
+			code: "daemon_unavailable",
+			message: "Reconnect pending",
+			retryable: true,
+		});
+		const serialized = JSON.stringify(result);
+
+		expect(projected).toMatchObject({
+			agentId: AGENT_ID,
+			agentState: "creating",
+			exchanges: [{ kind: "start", prompt: "Review", status: "requested", createdAt: 10 }],
+		});
+		expect(result.observation).toBe("unavailable");
+		expect(serialized).not.toContain("operationId");
+		expect(serialized).not.toContain("exchangeId");
+		expect(serialized).not.toContain("requestedTarget");
+		expect(serialized).not.toContain("threadId");
+	});
+
 	it("validates a requested agent without exposing internal recovery fields in list output", () => {
 		const persisted = requestedAgent();
 		expect(CodexPersistedAgentSchema.safeParse(persisted).success).toBe(true);
@@ -710,6 +734,27 @@ describe("Codex persisted and list contracts", () => {
 			],
 		};
 		expect(CodexPersistedAgentSchema.safeParse(steered).success).toBe(true);
+		const projected = projectCodexListAgent(
+			CodexPersistedAgentSchema.parse({
+				...accepted,
+				turns: [
+					{
+						...turn,
+						finalItemId: "item-final",
+						activities: [{ kind: "commentary", itemId: "item-commentary", text: "Checking" }],
+					},
+				],
+			}),
+		);
+		expect(projected.turns[0]).toEqual({
+			id: "turn-1",
+			state: "completed",
+			activities: [{ kind: "commentary", text: "Checking" }],
+			finalResponse: "Done",
+			updatedAt: 12,
+		});
+		expect(JSON.stringify(projected)).not.toContain("item-final");
+		expect(JSON.stringify(projected)).not.toContain("item-commentary");
 		expect(
 			CodexPersistedAgentSchema.safeParse({
 				...steered,

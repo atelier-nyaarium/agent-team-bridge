@@ -159,7 +159,7 @@ Running the server in the same execution target as the invoking Claude session g
 
 ### Bug Classes
 
-- Runtime state validation: repeated alignment and red-team rounds found lifecycle, reference, and causal-time drift between persisted records and their public list projections. Phase 1 now shares the exchange schema, but the relational checks still run in parallel; the architecture pass should decide whether a single validated projection mechanism can prevent future drift.
+- Runtime state validation: repeated alignment and red-team rounds found lifecycle, reference, and causal-time drift between persisted records and their public list projections. Phase 1 now applies one shared history validator to both contracts and exposes one validated persisted-to-public projector that explicitly removes recovery-only fields.
 
 ## Phase 2 - Add session-owned persistence with checked commits
 

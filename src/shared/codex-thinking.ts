@@ -509,6 +509,98 @@ export const CodexReconciliationFenceSchema = z
 	})
 	.strict();
 
+export interface CodexAgentHistoryView {
+	agentState: z.infer<typeof CodexAgentStateSchema>;
+	activeTurnId?: string;
+	exchanges: ReadonlyArray<{
+		kind: "start" | "message";
+		status: "requested" | "accepted" | "indeterminate";
+		delivery?: z.infer<typeof CodexDeliverySchema>;
+		turnId?: string;
+		createdAt: number;
+		acceptedAt?: number;
+	}>;
+	turns: ReadonlyArray<{
+		id: string;
+		state: z.infer<typeof CodexTurnStateSchema>;
+		updatedAt: number;
+	}>;
+	createdAt: number;
+	updatedAt: number;
+}
+
+export function codexAgentHistoryIssues(value: CodexAgentHistoryView): string[] {
+	const issues: string[] = [];
+	if (value.updatedAt < value.createdAt) issues.push("agent update cannot predate creation");
+
+	const activeTurns = value.activeTurnId ? value.turns.filter((turn) => turn.id === value.activeTurnId) : [];
+	if (value.activeTurnId && (activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress")) {
+		issues.push("active turn must resolve to one in-progress turn");
+	}
+	if (!value.activeTurnId && value.turns.some((turn) => turn.state === "inProgress")) {
+		issues.push("an in-progress turn must be the active turn");
+	}
+	if (value.agentState === "working" && !value.activeTurnId) issues.push("working agent requires an active turn");
+	if (value.agentState === "idle" && value.activeTurnId) issues.push("idle agent cannot retain an active turn");
+	if (new Set(value.turns.map((turn) => turn.id)).size !== value.turns.length) {
+		issues.push("turn IDs must be unique");
+	}
+
+	if (
+		value.exchanges.filter((exchange) => exchange.kind === "start").length !== 1 ||
+		value.exchanges[0]?.kind !== "start"
+	) {
+		issues.push("history requires one leading start exchange");
+	}
+	const startedTurnIds = value.exchanges.flatMap((exchange) =>
+		exchange.delivery === "started" && exchange.turnId ? [exchange.turnId] : [],
+	);
+	if (new Set(startedTurnIds).size !== startedTurnIds.length) {
+		issues.push("a native turn can be started by only one exchange");
+	}
+	for (const turn of value.turns) {
+		if (startedTurnIds.filter((turnId) => turnId === turn.id).length !== 1) {
+			issues.push("every turn requires one starting exchange");
+		}
+	}
+
+	for (const exchange of value.exchanges) {
+		if (
+			exchange.createdAt < value.createdAt ||
+			exchange.createdAt > value.updatedAt ||
+			(exchange.acceptedAt !== undefined && exchange.acceptedAt > value.updatedAt)
+		) {
+			issues.push("exchange timestamp is outside its agent lifetime");
+		}
+		if (exchange.turnId && !value.turns.some((turn) => turn.id === exchange.turnId)) {
+			issues.push("exchange turn must exist");
+		}
+	}
+	for (const turn of value.turns) {
+		if (turn.updatedAt < value.createdAt || turn.updatedAt > value.updatedAt) {
+			issues.push("turn timestamp is outside its agent lifetime");
+		}
+		const acceptedAt = value.exchanges.flatMap((exchange) =>
+			exchange.turnId === turn.id && exchange.acceptedAt !== undefined ? [exchange.acceptedAt] : [],
+		);
+		if (acceptedAt.some((timestamp) => timestamp > turn.updatedAt)) {
+			issues.push("turn cannot predate accepted delivery");
+		}
+	}
+
+	if (
+		value.agentState === "creating" &&
+		(value.activeTurnId ||
+			value.turns.length > 0 ||
+			value.exchanges.length !== 1 ||
+			value.exchanges[0]?.kind !== "start" ||
+			value.exchanges[0]?.status !== "requested")
+	) {
+		issues.push("creating agent can contain only its requested start");
+	}
+	return issues;
+}
+
 export const CodexPersistedAgentSchema = z
 	.object({
 		version: z.literal(1),
@@ -535,9 +627,7 @@ export const CodexPersistedAgentSchema = z
 	})
 	.strict()
 	.superRefine((value, ctx) => {
-		if (value.updatedAt < value.createdAt) {
-			ctx.addIssue({ code: "custom", message: "agent update cannot predate creation" });
-		}
+		for (const message of codexAgentHistoryIssues(value)) ctx.addIssue({ code: "custom", message });
 		if (!!value.resolvedTarget !== !!value.threadId) {
 			ctx.addIssue({ code: "custom", message: "resolved target and thread ID must appear together" });
 		}
@@ -562,10 +652,7 @@ export const CodexPersistedAgentSchema = z
 		}
 		if (
 			value.agentState === "creating" &&
-			(value.exchanges.length !== 1 ||
-				value.exchanges[0]?.kind !== "start" ||
-				value.exchanges[0]?.status !== "requested" ||
-				value.operations.length !== 1 ||
+			(value.operations.length !== 1 ||
 				value.operations.some((operation) => operation.kind !== "start" || operation.state !== "requested"))
 		) {
 			ctx.addIssue({ code: "custom", message: "creating agent can contain only its requested start" });
@@ -585,22 +672,6 @@ export const CodexPersistedAgentSchema = z
 		if (value.fence && (!value.resolvedTarget || value.fence.targetId !== value.resolvedTarget.targetId)) {
 			ctx.addIssue({ code: "custom", message: "reconciliation fence must match a resolved target" });
 		}
-		const activeTurns = value.activeTurnId ? value.turns.filter((turn) => turn.id === value.activeTurnId) : [];
-		if (value.activeTurnId && (activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress")) {
-			ctx.addIssue({ code: "custom", message: "active turn must resolve to one in-progress stored turn" });
-		}
-		if (!value.activeTurnId && value.turns.some((turn) => turn.state === "inProgress")) {
-			ctx.addIssue({ code: "custom", message: "in-progress stored turn must be the active turn" });
-		}
-		if (value.agentState === "working" && !value.activeTurnId) {
-			ctx.addIssue({ code: "custom", message: "working agent requires an active turn" });
-		}
-		if (value.agentState === "idle" && value.activeTurnId) {
-			ctx.addIssue({ code: "custom", message: "idle agent cannot retain an active turn" });
-		}
-		if (new Set(value.turns.map((turn) => turn.id)).size !== value.turns.length) {
-			ctx.addIssue({ code: "custom", message: "stored turn IDs must be unique" });
-		}
 		if (new Set(value.exchanges.map((exchange) => exchange.exchangeId)).size !== value.exchanges.length) {
 			ctx.addIssue({ code: "custom", message: "stored exchange IDs must be unique" });
 		}
@@ -610,23 +681,6 @@ export const CodexPersistedAgentSchema = z
 		if (new Set(value.operations.map((operation) => operation.operationId)).size !== value.operations.length) {
 			ctx.addIssue({ code: "custom", message: "stored operation IDs must be unique" });
 		}
-		const startedTurnIds = value.exchanges.flatMap((exchange) =>
-			exchange.delivery === "started" && exchange.turnId ? [exchange.turnId] : [],
-		);
-		if (new Set(startedTurnIds).size !== startedTurnIds.length) {
-			ctx.addIssue({ code: "custom", message: "a native turn can be started by only one exchange" });
-		}
-		for (const turn of value.turns) {
-			if (startedTurnIds.filter((turnId) => turnId === turn.id).length !== 1) {
-				ctx.addIssue({ code: "custom", message: "every stored turn requires one starting exchange" });
-			}
-		}
-		if (
-			value.exchanges.filter((exchange) => exchange.kind === "start").length !== 1 ||
-			value.exchanges[0]?.kind !== "start"
-		) {
-			ctx.addIssue({ code: "custom", message: "stored history requires one leading start exchange" });
-		}
 		if (
 			value.operations.filter((operation) => operation.kind === "start").length !== 1 ||
 			value.operations[0]?.kind !== "start"
@@ -634,13 +688,6 @@ export const CodexPersistedAgentSchema = z
 			ctx.addIssue({ code: "custom", message: "stored history requires one leading start operation" });
 		}
 		for (const exchange of value.exchanges) {
-			if (
-				exchange.createdAt < value.createdAt ||
-				exchange.createdAt > value.updatedAt ||
-				(exchange.acceptedAt !== undefined && exchange.acceptedAt > value.updatedAt)
-			) {
-				ctx.addIssue({ code: "custom", message: "stored exchange timestamp is outside its agent lifetime" });
-			}
 			const operation = value.operations.find((candidate) => candidate.operationId === exchange.operationId);
 			if (!operation || operation.kind !== exchange.kind || operation.state !== exchange.status) {
 				ctx.addIssue({ code: "custom", message: "stored exchange must match its operation" });
@@ -665,9 +712,6 @@ export const CodexPersistedAgentSchema = z
 			if (operation.fingerprint !== codexOperationFingerprint(exchange.kind, value.agentId, exchange.prompt)) {
 				ctx.addIssue({ code: "custom", message: "stored prompt operation fingerprint does not match" });
 			}
-			if (exchange.turnId && !value.turns.some((turn) => turn.id === exchange.turnId)) {
-				ctx.addIssue({ code: "custom", message: "stored exchange turn must exist" });
-			}
 		}
 		for (const operation of value.operations) {
 			if (operation.createdAt < value.createdAt || operation.updatedAt > value.updatedAt) {
@@ -690,17 +734,6 @@ export const CodexPersistedAgentSchema = z
 				operation.fingerprint !== codexOperationFingerprint("stop", value.agentId)
 			) {
 				ctx.addIssue({ code: "custom", message: "stored stop operation fingerprint does not match" });
-			}
-		}
-		for (const turn of value.turns) {
-			if (turn.updatedAt < value.createdAt || turn.updatedAt > value.updatedAt) {
-				ctx.addIssue({ code: "custom", message: "stored turn timestamp is outside its agent lifetime" });
-			}
-			const acceptedAt = value.exchanges.flatMap((exchange) =>
-				exchange.turnId === turn.id && exchange.acceptedAt !== undefined ? [exchange.acceptedAt] : [],
-			);
-			if (acceptedAt.some((timestamp) => timestamp > turn.updatedAt)) {
-				ctx.addIssue({ code: "custom", message: "stored turn cannot predate accepted delivery" });
 			}
 		}
 		if (value.pendingInterrupt) {
@@ -771,75 +804,7 @@ export const CodexListAgentSchema = z
 	})
 	.strict()
 	.superRefine((value, ctx) => {
-		if (value.updatedAt < value.createdAt) {
-			ctx.addIssue({ code: "custom", message: "listed agent update cannot predate creation" });
-		}
-		const activeTurns = value.activeTurnId ? value.turns.filter((turn) => turn.id === value.activeTurnId) : [];
-		if (value.activeTurnId && (activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress")) {
-			ctx.addIssue({ code: "custom", message: "active turn must resolve to one in-progress listed turn" });
-		}
-		if (!value.activeTurnId && value.turns.some((turn) => turn.state === "inProgress")) {
-			ctx.addIssue({ code: "custom", message: "in-progress listed turn must be the active turn" });
-		}
-		if (value.agentState === "working" && !value.activeTurnId) {
-			ctx.addIssue({ code: "custom", message: "working agent requires an active turn" });
-		}
-		if (value.agentState === "idle" && value.activeTurnId) {
-			ctx.addIssue({ code: "custom", message: "idle agent cannot retain an active turn" });
-		}
-		if (new Set(value.turns.map((turn) => turn.id)).size !== value.turns.length) {
-			ctx.addIssue({ code: "custom", message: "listed turn IDs must be unique" });
-		}
-		if (
-			value.exchanges.filter((exchange) => exchange.kind === "start").length !== 1 ||
-			value.exchanges[0]?.kind !== "start"
-		) {
-			ctx.addIssue({ code: "custom", message: "listed history requires one leading start exchange" });
-		}
-		const startedTurnIds = value.exchanges.flatMap((exchange) =>
-			exchange.delivery === "started" && exchange.turnId ? [exchange.turnId] : [],
-		);
-		if (new Set(startedTurnIds).size !== startedTurnIds.length) {
-			ctx.addIssue({ code: "custom", message: "a listed turn can be started by only one exchange" });
-		}
-		for (const turn of value.turns) {
-			if (startedTurnIds.filter((turnId) => turnId === turn.id).length !== 1) {
-				ctx.addIssue({ code: "custom", message: "every listed turn requires one starting exchange" });
-			}
-		}
-		for (const exchange of value.exchanges) {
-			if (
-				exchange.createdAt < value.createdAt ||
-				exchange.createdAt > value.updatedAt ||
-				(exchange.acceptedAt !== undefined && exchange.acceptedAt > value.updatedAt)
-			) {
-				ctx.addIssue({ code: "custom", message: "listed exchange timestamp is outside its agent lifetime" });
-			}
-			if (exchange.turnId && !value.turns.some((turn) => turn.id === exchange.turnId)) {
-				ctx.addIssue({ code: "custom", message: "listed exchange turn must exist" });
-			}
-		}
-		for (const turn of value.turns) {
-			if (turn.updatedAt < value.createdAt || turn.updatedAt > value.updatedAt) {
-				ctx.addIssue({ code: "custom", message: "listed turn timestamp is outside its agent lifetime" });
-			}
-			const acceptedAt = value.exchanges.flatMap((exchange) =>
-				exchange.turnId === turn.id && exchange.acceptedAt !== undefined ? [exchange.acceptedAt] : [],
-			);
-			if (acceptedAt.some((timestamp) => timestamp > turn.updatedAt)) {
-				ctx.addIssue({ code: "custom", message: "listed turn cannot predate accepted delivery" });
-			}
-		}
-		if (
-			value.agentState === "creating" &&
-			(value.activeTurnId ||
-				value.turns.length > 0 ||
-				value.exchanges.length !== 1 ||
-				value.exchanges[0]?.kind !== "start" ||
-				value.exchanges[0]?.status !== "requested")
-		) {
-			ctx.addIssue({ code: "custom", message: "creating list row cannot contain native state" });
-		}
+		for (const message of codexAgentHistoryIssues(value)) ctx.addIssue({ code: "custom", message });
 	});
 
 export const CodexListAgentsResultSchema = z
@@ -1129,7 +1094,65 @@ export type CodexStoredTurn = z.infer<typeof CodexStoredTurnSchema>;
 export type CodexStoredExchange = z.infer<typeof CodexStoredExchangeSchema>;
 export type CodexStoredOperation = z.infer<typeof CodexStoredOperationSchema>;
 export type CodexPersistedAgent = z.infer<typeof CodexPersistedAgentSchema>;
+export type CodexListAgent = z.infer<typeof CodexListAgentSchema>;
 export type CodexListAgentsResult = z.infer<typeof CodexListAgentsResultSchema>;
+export type CodexListAvailabilityError = z.infer<typeof CodexListAvailabilityErrorSchema>;
 export type CodexDaemonCommand = z.infer<typeof CodexDaemonCommandSchema>;
 export type CodexDaemonEvent = z.infer<typeof CodexDaemonEventSchema>;
 export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
+
+export function projectCodexListAgent(agent: CodexPersistedAgent): CodexListAgent {
+	const stored = CodexPersistedAgentSchema.parse(agent);
+	const exchanges = stored.exchanges.map((exchange) => ({
+		kind: exchange.kind,
+		prompt: exchange.prompt,
+		status: exchange.status,
+		delivery: exchange.delivery,
+		turnId: exchange.turnId,
+		createdAt: exchange.createdAt,
+		acceptedAt: exchange.acceptedAt,
+	}));
+	const turns = stored.turns.map((turn) => {
+		const base = {
+			id: turn.id,
+			state: turn.state,
+			activities: turn.activities.map((activity) =>
+				activity.kind === "commentary"
+					? { kind: activity.kind, text: activity.text }
+					: { kind: activity.kind, omitted: activity.omitted },
+			),
+			updatedAt: turn.updatedAt,
+		};
+		switch (turn.state) {
+			case "completed":
+				return { ...base, state: turn.state, finalResponse: turn.finalResponse };
+			case "failed":
+				return { ...base, state: turn.state, error: turn.error };
+			case "inProgress":
+			case "interrupted":
+				return { ...base, state: turn.state };
+			default:
+				throw new Error("unsupported Codex turn state");
+		}
+	});
+	return CodexListAgentSchema.parse({
+		agentId: stored.agentId,
+		agentState: stored.agentState,
+		activeTurnId: stored.activeTurnId,
+		exchanges,
+		turns,
+		createdAt: stored.createdAt,
+		updatedAt: stored.updatedAt,
+	});
+}
+
+export function projectCodexListResult(
+	agents: readonly CodexPersistedAgent[],
+	error?: CodexListAvailabilityError,
+): CodexListAgentsResult {
+	return CodexListAgentsResultSchema.parse({
+		agents: agents.map(projectCodexListAgent),
+		observation: error ? "unavailable" : undefined,
+		error,
+	});
+}
