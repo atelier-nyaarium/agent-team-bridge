@@ -21,9 +21,10 @@ import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
-import { type SessionRecord, SessionStore } from "../shared/session-store.js";
+import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
+import { CodexAgentService } from "./codexAgentService.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -190,8 +191,20 @@ export async function startGateway(): Promise<void> {
 	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
 	// project or a reserved host session, so the clash space is injected here.
 	const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
+	let persistCodexCatalogChecked: (() => void) | undefined;
+	let codexCatalogWriter: CodexCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
 		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
+		codexCatalogPersistence: {
+			persistChecked: () => {
+				if (!persistCodexCatalogChecked) throw new Error("Codex persistence is not initialized");
+				persistCodexCatalogChecked();
+			},
+			receiveWriter: (writer) => {
+				codexCatalogWriter = writer;
+			},
+		},
 	});
 	// What plugins the owner's consoles have enabled. Starting empty costs only that tools fail open
 	// until a device re-registers, which is the same posture as a fresh install.
@@ -202,7 +215,6 @@ export async function startGateway(): Promise<void> {
 	// between "presence knows its epoch" and "SessionStore knows its sessions" (the two-file idiom
 	// every OTHER durable store here uses) is structurally impossible, since they are no longer two
 	// files. `sessions` holds SessionStore's own snapshot shape; `planes` holds PlaneRegistry's.
-	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
 	const loadedResumeRaw = sessionResumeDurable.load();
 	// A pre-migration file is the bare flat team->record map SessionStore.snapshot() always
 	// produced; the wrapped shape is `{sessions, planes}`. Distinguished by the wrapper key's
@@ -305,6 +317,20 @@ export async function startGateway(): Promise<void> {
 	// friend actually pushes; nothing calls its methods until then.
 	const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, restoredPlanes);
 	crossDomainPresenceConsumer.restore(restoredCrossDomainPresence);
+	const sessionResumeSnapshot = (cleanShutdown: boolean) => ({
+		sessions: sessionStore.snapshot(),
+		planes: planeRegistry.persistedState(cleanShutdown),
+		readAnchors: readAnchors.snapshot(),
+		crossDomainPresence: crossDomainPresenceConsumer.snapshot(),
+	});
+	persistCodexCatalogChecked = () => sessionResumeDurable.saveChecked(sessionResumeSnapshot(false));
+	if (!codexCatalogWriter) throw new Error("Codex catalog writer was not initialized");
+	const codexAgentService = new CodexAgentService({
+		auth: sessionAuthority,
+		sessionStore,
+		offlineCatalog,
+		catalogWriter: codexCatalogWriter,
+	});
 
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
@@ -341,12 +367,7 @@ export async function startGateway(): Promise<void> {
 		// unbounded store is not merely untidy, it eventually stops the gateway persisting its keys.
 		const freed = blobStore.sweep({ maxBytes: MAX_BLOB_STORE_BYTES });
 		if (freed > 0) console.error(`[blobs] swept ${freed} bytes`);
-		sessionResumeDurable.save({
-			sessions: sessionStore.snapshot(),
-			planes: planeRegistry.persistedState(cleanShutdown),
-			readAnchors: readAnchors.snapshot(),
-			crossDomainPresence: crossDomainPresenceConsumer.snapshot(),
-		});
+		sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown));
 		replayPersist?.();
 	};
 	const persistTimer = setInterval(() => persistDelivery(false), 3_000);
@@ -1012,6 +1033,7 @@ export async function startGateway(): Promise<void> {
 			conversationRegistry,
 			store,
 			capabilityStore,
+			codexAgentService,
 			blobStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },

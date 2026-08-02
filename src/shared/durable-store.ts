@@ -42,14 +42,15 @@ export class DurableStore {
 		this.quarantined = true;
 	}
 
-	/** Atomic write: a partial file from a crash mid-write is never read (tmp + rename). */
+	/** Atomic write that reports failure to callers whose state transition depends on durability. */
+	saveChecked(state: unknown): void {
+		this.writeAtomic(state, true);
+	}
+
+	/** Best-effort atomic write for periodic snapshots and shutdown persistence. */
 	save(state: unknown): void {
 		try {
-			fs.mkdirSync(path.dirname(this.file), { recursive: true });
-			const tmp = `${this.file}.tmp.${process.pid}`;
-			fs.writeFileSync(tmp, JSON.stringify(state));
-			fs.renameSync(tmp, this.file);
-			this.lastError = null;
+			this.writeAtomic(state, false);
 		} catch (e) {
 			// Best-effort durability must never crash delivery, but a persistent write failure (full
 			// or read-only disk) is otherwise invisible. Surface it once per distinct error so a
@@ -63,6 +64,42 @@ export class DurableStore {
 					console.error(`[durable-store] save failed for ${path.basename(this.file)}: ${msg}`);
 				} catch {}
 			}
+		}
+	}
+
+	private writeAtomic(state: unknown, durable: boolean): void {
+		const serialized = JSON.stringify(state);
+		if (serialized === undefined) throw new TypeError("durable state must be JSON serializable");
+		const directory = path.dirname(this.file);
+		fs.mkdirSync(directory, { recursive: true });
+		const tmp = `${this.file}.tmp.${process.pid}`;
+		let renamed = false;
+		try {
+			const descriptor = fs.openSync(tmp, "w");
+			try {
+				fs.writeFileSync(descriptor, serialized);
+				if (durable) fs.fsyncSync(descriptor);
+			} finally {
+				fs.closeSync(descriptor);
+			}
+			fs.renameSync(tmp, this.file);
+			renamed = true;
+			if (durable && process.platform !== "win32") {
+				const directoryDescriptor = fs.openSync(directory, "r");
+				try {
+					fs.fsyncSync(directoryDescriptor);
+				} finally {
+					fs.closeSync(directoryDescriptor);
+				}
+			}
+			this.lastError = null;
+		} catch (error) {
+			if (!renamed) {
+				try {
+					fs.unlinkSync(tmp);
+				} catch {}
+			}
+			throw error;
 		}
 	}
 }

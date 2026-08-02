@@ -1,4 +1,10 @@
 import crypto from "node:crypto";
+import {
+	type CodexAgentCatalog,
+	CodexAgentCatalogSchema,
+	type CodexPersistedAgent,
+	restoreCodexAgentCatalog,
+} from "./codex-thinking.js";
 import { composeSessionName, isComposite, isSlug, parseSessionName } from "./session-id.js";
 
 ////////////////////////////////
@@ -50,6 +56,20 @@ export interface SessionRecord {
 	lastSeen: number;
 }
 
+export type PersistedSessionRecord = Omit<SessionRecord, "liveTeam"> & { codexCatalog?: CodexAgentCatalog };
+
+export type CodexCatalogCommitResult =
+	| { committed: true; catalog: CodexAgentCatalog }
+	| { committed: false; reason: "owner_missing" | "revision_conflict" };
+
+export interface CodexCatalogWriter {
+	commit(
+		owner: SessionRecord,
+		expectedRevision: number,
+		agents: readonly CodexPersistedAgent[],
+	): CodexCatalogCommitResult;
+}
+
 /** Extra id-space the mint/adopt clash check must avoid beyond existing records: catalog project
  * names and reserved host sessions live in gateway state, so the gateway injects the predicate. */
 export type ClashPredicate = (id: string) => boolean;
@@ -61,6 +81,10 @@ export interface SessionStoreOptions {
 	idGen?: () => string;
 	// Injectable binding-token generator for deterministic tests; production uses 32-byte randomBytes.
 	tokenGen?: () => string;
+	codexCatalogPersistence?: {
+		persistChecked: () => void;
+		receiveWriter: (writer: CodexCatalogWriter) => void;
+	};
 }
 
 interface CreateOpts {
@@ -157,6 +181,7 @@ function bindingTokensEqual(a: string, b: string): boolean {
  */
 export class SessionStore {
 	private readonly records = new Map<string, SessionRecord>();
+	private readonly codexCatalogs = new WeakMap<SessionRecord, CodexAgentCatalog>();
 	// Per-spawn set of taken labels, so dedup is O(1) rather than a full-store scan on every create.
 	private readonly labels = new Map<string, Set<string>>();
 	private readonly clash: ClashPredicate;
@@ -169,6 +194,13 @@ export class SessionStore {
 		this.now = opts.now ?? (() => Date.now());
 		this.idGen = opts.idGen ?? randomId;
 		this.tokenGen = opts.tokenGen ?? randomBindToken;
+		if (opts.codexCatalogPersistence) {
+			const { persistChecked, receiveWriter } = opts.codexCatalogPersistence;
+			receiveWriter({
+				commit: (owner, expectedRevision, agents) =>
+					this.commitCodexCatalog(owner, expectedRevision, agents, persistChecked),
+			});
+		}
 	}
 
 	/** The record a session token belongs to, or undefined. A token is meaningless without a record,
@@ -233,6 +265,43 @@ export class SessionStore {
 	/** The record a composite team field names, or undefined. */
 	getByTeam(team: string): SessionRecord | undefined {
 		return isComposite(team) ? this.records.get(team) : undefined;
+	}
+
+	/** A validated copy of one owner's catalog. Callers cannot mutate the stored nested objects. */
+	codexCatalog(owner: SessionRecord): CodexAgentCatalog | undefined {
+		if (this.records.get(this.teamOf(owner)) !== owner) return undefined;
+		const catalog = this.codexCatalogs.get(owner);
+		return catalog ? CodexAgentCatalogSchema.parse(catalog) : undefined;
+	}
+
+	listCodexAgents(owner: SessionRecord): readonly CodexPersistedAgent[] {
+		return this.codexCatalog(owner)?.agents ?? [];
+	}
+
+	private commitCodexCatalog(
+		owner: SessionRecord,
+		expectedRevision: number,
+		agents: readonly CodexPersistedAgent[],
+		persistChecked: () => void,
+	): CodexCatalogCommitResult {
+		if (this.records.get(this.teamOf(owner)) !== owner) return { committed: false, reason: "owner_missing" };
+		const previous = this.codexCatalogs.get(owner);
+		const currentRevision = previous?.revision ?? 0;
+		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
+		const next = CodexAgentCatalogSchema.parse({
+			version: 1,
+			revision: expectedRevision + 1,
+			agents,
+		});
+		this.codexCatalogs.set(owner, next);
+		try {
+			persistChecked();
+		} catch (error) {
+			if (previous) this.codexCatalogs.set(owner, previous);
+			else this.codexCatalogs.delete(owner);
+			throw error;
+		}
+		return { committed: true, catalog: CodexAgentCatalogSchema.parse(next) };
 	}
 
 	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
@@ -431,11 +500,20 @@ export class SessionStore {
 
 	/** The persisted shape: records keyed by their composite team, live pointers stripped (a
 	 * liveTeam stamp must never survive the sockets it points at). */
-	snapshot(): Record<string, Omit<SessionRecord, "liveTeam">> {
-		const out: Record<string, Omit<SessionRecord, "liveTeam">> = {};
+	snapshot(): Record<string, PersistedSessionRecord> {
+		const out: Record<string, PersistedSessionRecord> = {};
 		for (const record of this.records.values()) {
-			const { liveTeam: _live, ...rest } = record;
-			out[this.teamOf(record)] = rest;
+			const {
+				codexCatalog: _escaped,
+				liveTeam: _live,
+				...rest
+			} = record as SessionRecord & {
+				codexCatalog?: unknown;
+			};
+			const codexCatalog = this.codexCatalogs.get(record);
+			out[this.teamOf(record)] = codexCatalog
+				? { ...rest, codexCatalog: CodexAgentCatalogSchema.parse(codexCatalog) }
+				: rest;
 		}
 		return out;
 	}
@@ -462,7 +540,7 @@ export class SessionStore {
 			if (!isComposite(team) || this.records.has(team)) continue;
 			const { project: spawn, session: segment } = parseSessionName(team);
 			if (!isSlug(spawn) || !isSlug(segment)) continue;
-			const v = value as Partial<SessionRecord> & { claudeSessionId?: string; lastSeen?: number };
+			const v = value as Partial<PersistedSessionRecord> & { claudeSessionId?: string; lastSeen?: number };
 			const lastSeen = typeof v.lastSeen === "number" ? v.lastSeen : this.now();
 			const persisted = typeof v.id === "string";
 			if (!persisted && typeof v.claudeSessionId !== "string") continue;
@@ -488,6 +566,8 @@ export class SessionStore {
 				lastSeen,
 			};
 			this.records.set(team, record);
+			const codexCatalog = persisted ? restoreCodexAgentCatalog(v.codexCatalog) : undefined;
+			if (codexCatalog) this.codexCatalogs.set(record, codexCatalog);
 			this.claimLabel(record);
 		}
 	}

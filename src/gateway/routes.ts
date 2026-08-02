@@ -77,6 +77,8 @@ export interface RoutesDeps {
 	// test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
 	capabilityStore?: Pick<import("./console/capabilityStore.js").CapabilityStore, "snapshot">;
+	// The Codex route boundary, constructed with the checked session-resume writer.
+	codexAgentService?: import("./codexAgentService.js").CodexAgentService;
 	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
 	// to-refresh and the poll response's presence plane can never compute two different answers.
 	// Optional so a harness testing routes with no presence wiring still gets an empty teams list

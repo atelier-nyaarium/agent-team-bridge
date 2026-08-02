@@ -177,6 +177,10 @@ Running the server in the same execution target as the invoking Claude session g
 - If dispatch may have occurred but the acceptance commit fails, return `indeterminate` from the already-durable intent and never replay it. Reconciliation is possible only while the daemon still retains an unacknowledged acceptance receipt with the native IDs; after both sides restart, a newly created but uncommitted native thread may be orphaned and is not claimed recoverable.
 - Let existing Claude-session forget/sweep behavior remove its nested catalog. Add no independent Codex TTL, kill operation, or App Server-thread deletion.
 
+### Bug Classes
+
+- Recovery ordering and durability: repeated audits found that a checked intent alone was insufficient unless retries were non-dispatchable, prompt mutations were serialized, receipt fences were monotonic, and checked writes crossed the filesystem durability barrier. Phase 2 now centralizes those invariants in the catalog writer, service, and schema rather than relying on route timing.
+
 ## Phase 3 - Announce and aggregate config-based capability
 
 - Read only `CODEX_THINKING_ENABLED=true` and pass it through the existing POSIX and PowerShell host-daemon launch paths.
@@ -208,7 +212,7 @@ Running the server in the same execution target as the invoking Claude session g
   - Decline/cancel command, file-change, user-input, elicitation, and app/tool approval requests.
   - Grant no additional permission roots.
   - Return a bounded protocol error for unknown request methods instead of ignoring them.
-- Filter output at ingress. Keep the last completed agent message for the active turn in volatile memory regardless of phase, but persist only bounded completed `commentary` activities and the terminal answer/error.
+- Filter output at ingress. Keep the last completed agent message for the active turn in volatile memory regardless of phase, but persist only bounded completed `commentary` activities and the terminal answer or a controlled, sanitized failure summary derived from documented error fields. Never stringify a raw App Server event, command, tool call, or approval payload into an error.
 - Treat `item/completed` as the completed-message signal and `turn/completed` as the authoritative terminal signal. For a successful turn, prefer the last completed `final_answer`; if phase is absent, fall back to the last completed agent message for that exact turn.
 - If the terminal event arrives before its final item, hold it pending while draining already-correlated items and perform a bounded scheduler-driven thread/read reconciliation. Persist/acknowledge the terminal only after that barrier, then use the exact-turn fallback if no phased final exists. Never borrow a message from another thread/turn/item; failed and interrupted turns receive no invented final response.
 - Unsubscribe an idle thread only after its terminal state has been durably acknowledged. Resume/read it before a later follow-up.

@@ -4,6 +4,7 @@ import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
 import {
 	CODEX_ACTIVITY_MAX_BYTES,
+	CODEX_ERROR_MAX_BYTES,
 	CODEX_PROMPT_MAX_BYTES,
 	CodexActivitySchema,
 	CodexAgentResultSchema,
@@ -19,6 +20,7 @@ import {
 	CodexDaemonCommandSchema,
 	CodexDaemonEventSchema,
 	CodexDaemonReceiptSchema,
+	CodexErrorTextSchema,
 	CodexGatewayRequestSchema,
 	CodexListAgentsResultSchema,
 	type CodexPersistedAgent,
@@ -28,14 +30,30 @@ import {
 	codexOperationFingerprint,
 	projectCodexListAgent,
 	projectCodexListResult,
+	sanitizeCodexErrorText,
 } from "../shared/codex-thinking.js";
-import { type SessionRecord, SessionStore } from "../shared/session-store.js";
+import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../shared/session-store.js";
 
 const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
+const ACCEPTANCE_FENCE = {
+	daemonInstanceId: "daemon-1",
+	targetId: "container:recipe-app",
+	generation: 1,
+	lastEventId: 2,
+};
 
-function setup() {
-	const sessionStore = new SessionStore();
+function setup(opts: { persistChecked?: (sessionStore: SessionStore) => void } = {}) {
+	let sessionStore!: SessionStore;
+	let catalogWriter: CodexCatalogWriter | undefined;
+	sessionStore = new SessionStore({
+		codexCatalogPersistence: {
+			persistChecked: () => opts.persistChecked?.(sessionStore),
+			receiveWriter: (writer) => {
+				catalogWriter = writer;
+			},
+		},
+	});
 	const registry: TeamRegistry = new Map();
 	const auth = createSessionAuthority({
 		sessionStore,
@@ -45,10 +63,12 @@ function setup() {
 		localGatewayId: "sakura",
 	});
 	const offlineCatalog = new Map<string, string>();
-	const agentsByOwner = new WeakMap<SessionRecord, CodexPersistedAgent[]>();
-	const agentCatalog = { list: (owner: SessionRecord) => agentsByOwner.get(owner) ?? [] };
-	const service = new CodexAgentService({ auth, sessionStore, offlineCatalog, agentCatalog });
-	return { auth, sessionStore, offlineCatalog, service, agentsByOwner };
+	if (!catalogWriter) throw new Error("catalog writer unavailable");
+	const service = new CodexAgentService({ auth, sessionStore, offlineCatalog, catalogWriter });
+	const writer = catalogWriter;
+	const setAgents = (owner: SessionRecord, agents: CodexPersistedAgent[]) =>
+		writer.commit(owner, sessionStore.codexCatalog(owner)?.revision ?? 0, agents);
+	return { auth, sessionStore, offlineCatalog, service, setAgents };
 }
 
 function confirmManaged(sessionStore: SessionStore, spawn: string) {
@@ -82,6 +102,7 @@ function requestedAgent(agentId = AGENT_ID): CodexPersistedAgent {
 				kind: "start",
 				fingerprint: codexOperationFingerprint("start", agentId, "Review"),
 				state: "requested",
+				preDispatch: { agentState: "creating" },
 				createdAt: 10,
 				updatedAt: 10,
 			},
@@ -124,6 +145,17 @@ describe("Codex tool contracts", () => {
 			CodexStartAgentInputSchema.safeParse({ prompt: emoji.repeat(CODEX_PROMPT_MAX_BYTES / 4 + 1) }).success,
 		).toBe(false);
 		expect(CodexStartAgentInputSchema.safeParse({ prompt: "  \n" }).success).toBe(false);
+	});
+
+	it("normalizes untrusted errors before they cross protocol or persistence boundaries", () => {
+		const raw = `  daemon\nfailed\u0000 with\u200b detail ${"🙂".repeat(CODEX_ERROR_MAX_BYTES)}  `;
+		const sanitized = sanitizeCodexErrorText(raw);
+
+		expect(sanitized).toBe(sanitizeCodexErrorText(sanitized));
+		expect(sanitized).not.toMatch(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/u);
+		expect(new TextEncoder().encode(sanitized).byteLength).toBeLessThanOrEqual(CODEX_ERROR_MAX_BYTES);
+		expect(CodexErrorTextSchema.safeParse(sanitized).success).toBe(true);
+		expect(CodexErrorTextSchema.safeParse(raw).success).toBe(false);
 	});
 
 	it("rejects contradictory result observations and misplaced truncation markers", () => {
@@ -218,6 +250,7 @@ describe("Codex tool contracts", () => {
 			finalResponse: "Done",
 		};
 		expect(CodexAgentResultSchema.safeParse(completed).success).toBe(true);
+		expect(CodexAgentResultSchema.safeParse({ ...completed, finalResponse: undefined }).success).toBe(false);
 		expect(CodexAgentResultSchema.safeParse({ ...completed, turn: undefined }).success).toBe(false);
 		expect(
 			CodexAgentResultSchema.safeParse({ ...completed, turn: { id: "turn-1", state: "failed" } }).success,
@@ -485,6 +518,7 @@ describe("Codex internal protocol projections", () => {
 		expect(CodexDaemonEventSchema.safeParse({ ...base, state: "completed", finalResponse: "Done" }).success).toBe(
 			true,
 		);
+		expect(CodexDaemonEventSchema.safeParse({ ...base, state: "completed" }).success).toBe(false);
 		expect(CodexDaemonEventSchema.safeParse({ ...base, state: "failed", error: "Model failed" }).success).toBe(
 			true,
 		);
@@ -679,11 +713,26 @@ describe("Codex persisted and list contracts", () => {
 				},
 			],
 			turns: [turn],
-			operations: [{ ...persisted.operations[0]!, state: "accepted", turnId: "turn-1", updatedAt: 11 }],
+			operations: [
+				{
+					...persisted.operations[0]!,
+					state: "accepted",
+					turnId: "turn-1",
+					acceptanceFence: ACCEPTANCE_FENCE,
+					updatedAt: 11,
+				},
+			],
+			fence: ACCEPTANCE_FENCE,
 			updatedAt: 12,
 		};
 
 		expect(CodexPersistedAgentSchema.safeParse(accepted).success).toBe(true);
+		expect(
+			CodexPersistedAgentSchema.safeParse({
+				...accepted,
+				turns: [{ ...turn, finalResponse: undefined }],
+			}).success,
+		).toBe(false);
 		expect(CodexPersistedAgentSchema.safeParse({ ...accepted, agentState: "creating" }).success).toBe(false);
 		expect(
 			CodexPersistedAgentSchema.safeParse({ ...accepted, resolvedTarget: undefined, threadId: undefined })
@@ -728,6 +777,13 @@ describe("Codex persisted and list contracts", () => {
 					state: "accepted",
 					turnId: "turn-1",
 					expectedTurnId: "turn-1",
+					acceptanceFence: ACCEPTANCE_FENCE,
+					preDispatch: {
+						agentState: "working",
+						threadId: "thread-1",
+						turnId: "turn-1",
+						fence: ACCEPTANCE_FENCE,
+					},
 					createdAt: 12,
 					updatedAt: 12,
 				},
@@ -792,6 +848,7 @@ describe("Codex persisted and list contracts", () => {
 						fingerprint: codexOperationFingerprint("message", AGENT_ID, "Again"),
 						state: "accepted",
 						turnId: "turn-1",
+						preDispatch: { agentState: "idle", threadId: "thread-1", fence: ACCEPTANCE_FENCE },
 						createdAt: 12,
 						updatedAt: 12,
 					},
@@ -822,6 +879,7 @@ describe("Codex persisted and list contracts", () => {
 						kind: "stop",
 						fingerprint: codexOperationFingerprint("stop", AGENT_ID),
 						state: "accepted",
+						preDispatch: { agentState: "idle", threadId: "thread-1", fence: ACCEPTANCE_FENCE },
 						createdAt: 13,
 						updatedAt: 13,
 					},
@@ -839,6 +897,7 @@ describe("Codex persisted and list contracts", () => {
 						kind: "stop",
 						fingerprint: codexOperationFingerprint("stop", AGENT_ID),
 						state: "accepted",
+						preDispatch: { agentState: "idle", threadId: "thread-1", fence: ACCEPTANCE_FENCE },
 						noOp: true,
 						createdAt: 13,
 						updatedAt: 13,
@@ -871,6 +930,28 @@ describe("Codex persisted and list contracts", () => {
 		};
 
 		expect(CodexListAgentsResultSchema.safeParse({ agents: [working] }).success).toBe(true);
+		expect(
+			CodexListAgentsResultSchema.safeParse({
+				agents: [
+					{
+						...working,
+						exchanges: [
+							...working.exchanges,
+							{
+								kind: "message",
+								prompt: "Start another turn",
+								status: "accepted",
+								delivery: "started",
+								turnId: "turn-2",
+								createdAt: 11,
+								acceptedAt: 11,
+							},
+						],
+						turns: [...working.turns, { ...inProgress, id: "turn-2" }],
+					},
+				],
+			}).success,
+		).toBe(false);
 		expect(CodexListAgentsResultSchema.safeParse({ agents: [working, working] }).success).toBe(false);
 		expect(
 			CodexListAgentsResultSchema.safeParse({ agents: [{ ...working, agentState: "creating" }] }).success,
@@ -989,11 +1070,11 @@ describe("Codex session ownership and target resolution", () => {
 	});
 
 	it("looks up agents and operations only inside the confirmed owner's catalog", () => {
-		const { sessionStore, service, agentsByOwner } = setup();
+		const { sessionStore, service, setAgents } = setup();
 		const mine = confirmManaged(sessionStore, "recipe-app");
 		const foreign = confirmManaged(sessionStore, "other-app");
 		const foreignAgent = requestedAgent();
-		agentsByOwner.set(foreign.record, [foreignAgent]);
+		setAgents(foreign.record, [foreignAgent]);
 		const mineRequest = new Request("http://gateway/codex", {
 			headers: { "x-session-token": mine.token },
 		});

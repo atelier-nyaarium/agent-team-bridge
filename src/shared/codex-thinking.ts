@@ -18,6 +18,29 @@ function boundedUtf8(maxBytes: number, name: string) {
 	});
 }
 
+/** Normalizes untrusted daemon errors before they enter durable or caller-visible state. */
+export function sanitizeCodexErrorText(raw: string): string {
+	const normalized = raw
+		.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]+/gu, " ")
+		.replace(/\s+/gu, " ")
+		.trim();
+	if (new TextEncoder().encode(normalized).byteLength <= CODEX_ERROR_MAX_BYTES) return normalized;
+
+	let result = "";
+	let bytes = 0;
+	for (const character of normalized) {
+		const characterBytes = new TextEncoder().encode(character).byteLength;
+		if (bytes + characterBytes > CODEX_ERROR_MAX_BYTES) break;
+		result += character;
+		bytes += characterBytes;
+	}
+	return result.trimEnd();
+}
+
+export const CodexErrorTextSchema = boundedUtf8(CODEX_ERROR_MAX_BYTES, "error")
+	.refine((value) => value.length > 0, "error must not be blank")
+	.refine((value) => value === sanitizeCodexErrorText(value), "error must be normalized");
+
 function isAbsolutePath(value: string): boolean {
 	return value.startsWith("/") || value.startsWith("\\\\") || /^[a-zA-Z]:[\\/]/.test(value);
 }
@@ -68,7 +91,7 @@ export const CodexErrorCodeSchema = z.enum([
 export const CodexErrorSchema = z
 	.object({
 		code: CodexErrorCodeSchema,
-		message: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+		message: CodexErrorTextSchema,
 		retryable: z.boolean(),
 	})
 	.strict();
@@ -226,6 +249,13 @@ export const CodexAgentResultSchema = z
 				message: "final response requires a completed terminal observation",
 				path: ["finalResponse"],
 			});
+		}
+		if (
+			value.observation === "terminal" &&
+			value.turn?.state === "completed" &&
+			value.finalResponse === undefined
+		) {
+			ctx.addIssue({ code: "custom", message: "completed terminal turn requires its final response" });
 		}
 		if (value.observation === "terminal" && value.turn?.state === "failed" && value.error?.code !== "turn_failed") {
 			ctx.addIssue({ code: "custom", message: "failed turn requires a turn_failed error", path: ["error"] });
@@ -407,7 +437,7 @@ export const CodexStoredTurnSchema = z.discriminatedUnion("state", [
 			state: z.literal("completed"),
 			activities: CodexStoredActivitiesSchema,
 			finalItemId: OpaqueIdSchema.optional(),
-			finalResponse: z.string().optional(),
+			finalResponse: z.string(),
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -416,7 +446,7 @@ export const CodexStoredTurnSchema = z.discriminatedUnion("state", [
 			id: OpaqueIdSchema,
 			state: z.literal("failed"),
 			activities: CodexStoredActivitiesSchema,
-			error: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+			error: CodexErrorTextSchema,
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -465,6 +495,15 @@ export const CodexStoredExchangeSchema = CodexListExchangeSchema.safeExtend({
 	operationId: OperationIdSchema,
 }).strict();
 
+export const CodexReconciliationFenceSchema = z
+	.object({
+		daemonInstanceId: OpaqueIdSchema,
+		targetId: OpaqueIdSchema,
+		generation: z.number().int().nonnegative(),
+		lastEventId: z.number().int().nonnegative(),
+	})
+	.strict();
+
 export const CodexStoredOperationSchema = z
 	.object({
 		operationId: OperationIdSchema,
@@ -473,6 +512,16 @@ export const CodexStoredOperationSchema = z
 		state: z.enum(["requested", "accepted", "indeterminate"]),
 		turnId: OpaqueIdSchema.optional(),
 		expectedTurnId: OpaqueIdSchema.optional(),
+		acceptanceFence: CodexReconciliationFenceSchema.optional(),
+		acceptanceUnverified: z.literal(true).optional(),
+		preDispatch: z
+			.object({
+				agentState: CodexAgentStateSchema,
+				threadId: OpaqueIdSchema.optional(),
+				turnId: OpaqueIdSchema.optional(),
+				fence: CodexReconciliationFenceSchema.optional(),
+			})
+			.strict(),
 		noOp: z.literal(true).optional(),
 		createdAt: z.number().int().nonnegative(),
 		updatedAt: z.number().int().nonnegative(),
@@ -491,23 +540,68 @@ export const CodexStoredOperationSchema = z
 		if (value.kind !== "message" && value.expectedTurnId) {
 			ctx.addIssue({ code: "custom", message: "only a message operation can carry an expected turn" });
 		}
+		if (value.state !== "accepted" && value.acceptanceFence) {
+			ctx.addIssue({ code: "custom", message: "only an accepted operation can retain an acceptance fence" });
+		}
+		if (
+			value.acceptanceUnverified &&
+			(value.state !== "accepted" || value.kind === "stop" || value.acceptanceFence)
+		) {
+			ctx.addIssue({ code: "custom", message: "unverified acceptance must be an unfenced prompt delivery" });
+		}
+		if (
+			(value.kind === "start" || value.kind === "message") &&
+			value.state === "accepted" &&
+			!value.acceptanceFence &&
+			!value.acceptanceUnverified
+		) {
+			ctx.addIssue({ code: "custom", message: "accepted prompt delivery requires its receipt fence" });
+		}
+		if (value.kind === "start" && value.preDispatch.agentState !== "creating") {
+			ctx.addIssue({ code: "custom", message: "start operation requires a creating pre-dispatch state" });
+		}
+		if (
+			value.kind === "start" &&
+			(value.preDispatch.threadId || value.preDispatch.turnId || value.preDispatch.fence)
+		) {
+			ctx.addIssue({ code: "custom", message: "start operation cannot expect native identifiers" });
+		}
+		if (
+			value.kind !== "start" &&
+			(!value.preDispatch.threadId || (!value.preDispatch.fence && !value.acceptanceUnverified))
+		) {
+			ctx.addIssue({
+				code: "custom",
+				message: "existing-agent operation requires its expected thread and fence",
+			});
+		}
+		if (
+			value.kind !== "start" &&
+			value.preDispatch.agentState !== "idle" &&
+			value.preDispatch.agentState !== "working"
+		) {
+			ctx.addIssue({ code: "custom", message: "existing-agent operation requires an operational prior state" });
+		}
+		if (value.preDispatch.agentState === "idle" && value.preDispatch.turnId) {
+			ctx.addIssue({ code: "custom", message: "idle pre-dispatch state cannot carry an active turn" });
+		}
+		if (value.kind !== "start" && value.preDispatch.agentState === "working" && !value.preDispatch.turnId) {
+			ctx.addIssue({ code: "custom", message: "working pre-dispatch state requires its active turn" });
+		}
+		if (value.kind === "message" && value.expectedTurnId !== value.preDispatch.turnId) {
+			ctx.addIssue({ code: "custom", message: "expected turn must match the pre-dispatch turn" });
+		}
 		if (value.kind === "stop") {
 			const acceptedNoOp = value.state === "accepted" && value.noOp === true && !value.turnId;
 			const targeted = value.noOp === undefined && value.turnId !== undefined;
 			if (!acceptedNoOp && !targeted) {
 				ctx.addIssue({ code: "custom", message: "stop operation requires a target turn or an accepted no-op" });
 			}
+			if (targeted && value.turnId !== value.preDispatch.turnId) {
+				ctx.addIssue({ code: "custom", message: "stop target must match the pre-dispatch turn" });
+			}
 		}
 	});
-
-export const CodexReconciliationFenceSchema = z
-	.object({
-		daemonInstanceId: OpaqueIdSchema,
-		targetId: OpaqueIdSchema,
-		generation: z.number().int().nonnegative(),
-		lastEventId: z.number().int().nonnegative(),
-	})
-	.strict();
 
 export interface CodexAgentHistoryView {
 	agentState: z.infer<typeof CodexAgentStateSchema>;
@@ -535,10 +629,14 @@ export function codexAgentHistoryIssues(value: CodexAgentHistoryView): string[] 
 	if (value.updatedAt < value.createdAt) issues.push("agent update cannot predate creation");
 
 	const activeTurns = value.activeTurnId ? value.turns.filter((turn) => turn.id === value.activeTurnId) : [];
-	if (value.activeTurnId && (activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress")) {
+	const inProgressTurns = value.turns.filter((turn) => turn.state === "inProgress");
+	if (
+		value.activeTurnId &&
+		(activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress" || inProgressTurns.length !== 1)
+	) {
 		issues.push("active turn must resolve to one in-progress turn");
 	}
-	if (!value.activeTurnId && value.turns.some((turn) => turn.state === "inProgress")) {
+	if (!value.activeTurnId && inProgressTurns.length > 0) {
 		issues.push("an in-progress turn must be the active turn");
 	}
 	if (value.agentState === "working" && !value.activeTurnId) issues.push("working agent requires an active turn");
@@ -642,6 +740,10 @@ export const CodexPersistedAgentSchema = z
 		if (hasNativeHistory && (!value.resolvedTarget || !value.threadId)) {
 			ctx.addIssue({ code: "custom", message: "native history requires its resolved target and thread" });
 		}
+		const hasUnverifiedAcceptance = value.operations.some((operation) => operation.acceptanceUnverified);
+		if (hasNativeHistory && !hasUnverifiedAcceptance && !value.fence) {
+			ctx.addIssue({ code: "custom", message: "verified native history requires its reconciliation fence" });
+		}
 		if (value.threadId && !hasNativeHistory) {
 			ctx.addIssue({ code: "custom", message: "stored thread requires accepted native history" });
 		}
@@ -682,6 +784,9 @@ export const CodexPersistedAgentSchema = z
 		if (new Set(value.operations.map((operation) => operation.operationId)).size !== value.operations.length) {
 			ctx.addIssue({ code: "custom", message: "stored operation IDs must be unique" });
 		}
+		if (hasUnverifiedAcceptance && value.agentState !== "recovering" && value.agentState !== "unavailable") {
+			ctx.addIssue({ code: "custom", message: "unverified acceptance requires recovery state" });
+		}
 		if (
 			value.operations.filter((operation) => operation.kind === "start").length !== 1 ||
 			value.operations[0]?.kind !== "start"
@@ -705,10 +810,27 @@ export const CodexPersistedAgentSchema = z
 			}
 			if (
 				exchange.kind === "message" &&
+				exchange.status === "accepted" &&
+				operation.preDispatch.agentState === "idle" &&
+				exchange.delivery !== "started"
+			) {
+				ctx.addIssue({ code: "custom", message: "message delivery must match its pre-dispatch state" });
+			}
+			if (
+				exchange.kind === "message" &&
 				exchange.delivery === "steered" &&
-				operation.expectedTurnId !== exchange.turnId
+				(operation.preDispatch.agentState !== "working" || operation.expectedTurnId !== exchange.turnId)
 			) {
 				ctx.addIssue({ code: "custom", message: "steered message must match its expected turn" });
+			}
+			if (
+				exchange.kind === "message" &&
+				exchange.delivery === "started" &&
+				operation.preDispatch.agentState === "working" &&
+				(operation.expectedTurnId === exchange.turnId ||
+					!value.turns.some((turn) => turn.id === operation.expectedTurnId && turn.state !== "inProgress"))
+			) {
+				ctx.addIssue({ code: "custom", message: "started message requires a settled expected turn" });
 			}
 			if (operation.fingerprint !== codexOperationFingerprint(exchange.kind, value.agentId, exchange.prompt)) {
 				ctx.addIssue({ code: "custom", message: "stored prompt operation fingerprint does not match" });
@@ -729,6 +851,42 @@ export const CodexPersistedAgentSchema = z
 			}
 			if (operation.expectedTurnId && !value.turns.some((turn) => turn.id === operation.expectedTurnId)) {
 				ctx.addIssue({ code: "custom", message: "stored expected turn must exist" });
+			}
+			if (operation.preDispatch.threadId && operation.preDispatch.threadId !== value.threadId) {
+				ctx.addIssue({ code: "custom", message: "pre-dispatch thread must match the stored native thread" });
+			}
+			if (
+				operation.preDispatch.fence &&
+				(!value.resolvedTarget || operation.preDispatch.fence.targetId !== value.resolvedTarget.targetId)
+			) {
+				ctx.addIssue({ code: "custom", message: "pre-dispatch fence must match the resolved target" });
+			}
+			if (
+				operation.preDispatch.fence &&
+				value.fence &&
+				operation.preDispatch.fence.daemonInstanceId === value.fence.daemonInstanceId &&
+				operation.preDispatch.fence.generation === value.fence.generation &&
+				operation.preDispatch.fence.lastEventId > value.fence.lastEventId
+			) {
+				ctx.addIssue({ code: "custom", message: "pre-dispatch fence cannot outrun agent recovery" });
+			}
+			if (
+				operation.acceptanceFence &&
+				(!value.resolvedTarget || operation.acceptanceFence.targetId !== value.resolvedTarget.targetId)
+			) {
+				ctx.addIssue({ code: "custom", message: "operation acceptance fence must match the resolved target" });
+			}
+			if (
+				operation.acceptanceFence &&
+				value.fence &&
+				operation.acceptanceFence.daemonInstanceId === value.fence.daemonInstanceId &&
+				operation.acceptanceFence.generation === value.fence.generation &&
+				operation.acceptanceFence.lastEventId > value.fence.lastEventId
+			) {
+				ctx.addIssue({ code: "custom", message: "operation acceptance fence cannot outrun agent recovery" });
+			}
+			if (operation.preDispatch.turnId && !value.turns.some((turn) => turn.id === operation.preDispatch.turnId)) {
+				ctx.addIssue({ code: "custom", message: "pre-dispatch turn must exist" });
 			}
 			if (
 				operation.kind === "stop" &&
@@ -756,6 +914,38 @@ export const CodexPersistedAgentSchema = z
 		}
 	});
 
+export const CodexAgentCatalogSchema = z
+	.object({
+		version: z.literal(1),
+		revision: z.number().int().nonnegative(),
+		agents: z.array(CodexPersistedAgentSchema),
+	})
+	.strict()
+	.superRefine((value, ctx) => {
+		const agentIds = new Set<string>();
+		const operationIds = new Set<string>();
+		for (const [index, agent] of value.agents.entries()) {
+			if (agentIds.has(agent.agentId)) {
+				ctx.addIssue({
+					code: "custom",
+					message: "agent IDs must be unique within an owner catalog",
+					path: ["agents", index, "agentId"],
+				});
+			}
+			agentIds.add(agent.agentId);
+			for (const operation of agent.operations) {
+				if (operationIds.has(operation.operationId)) {
+					ctx.addIssue({
+						code: "custom",
+						message: "operation IDs must be unique within an owner catalog",
+						path: ["agents", index, "operations"],
+					});
+				}
+				operationIds.add(operation.operationId);
+			}
+		}
+	});
+
 export const CodexListTurnSchema = z.discriminatedUnion("state", [
 	z
 		.object({
@@ -770,7 +960,7 @@ export const CodexListTurnSchema = z.discriminatedUnion("state", [
 			id: OpaqueIdSchema,
 			state: z.literal("completed"),
 			activities: CodexActivitiesSchema,
-			finalResponse: z.string().optional(),
+			finalResponse: z.string(),
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -779,7 +969,7 @@ export const CodexListTurnSchema = z.discriminatedUnion("state", [
 			id: OpaqueIdSchema,
 			state: z.literal("failed"),
 			activities: CodexActivitiesSchema,
-			error: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+			error: CodexErrorTextSchema,
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -899,7 +1089,7 @@ export const CodexDaemonEventSchema = z.union([
 			turnId: OpaqueIdSchema,
 			state: z.literal("completed"),
 			finalItemId: OpaqueIdSchema.optional(),
-			finalResponse: z.string().optional(),
+			finalResponse: z.string(),
 		})
 		.strict(),
 	z
@@ -908,7 +1098,7 @@ export const CodexDaemonEventSchema = z.union([
 			kind: z.literal("terminal"),
 			turnId: OpaqueIdSchema,
 			state: z.literal("failed"),
-			error: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+			error: CodexErrorTextSchema,
 		})
 		.strict(),
 	z
@@ -953,7 +1143,7 @@ export const CodexDaemonReceiptSchema = z
 				...DaemonReceiptBase,
 				kind: z.literal("rejected"),
 				operationId: OperationIdSchema.optional(),
-				error: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+				error: CodexErrorTextSchema,
 			})
 			.strict(),
 		z
@@ -974,7 +1164,7 @@ export const CodexDaemonReceiptSchema = z
 				threadId: OpaqueIdSchema,
 				turnId: OpaqueIdSchema,
 				ok: z.literal(false),
-				error: boundedUtf8(CODEX_ERROR_MAX_BYTES, "error"),
+				error: CodexErrorTextSchema,
 			})
 			.strict(),
 		z
@@ -1095,12 +1285,113 @@ export type CodexStoredTurn = z.infer<typeof CodexStoredTurnSchema>;
 export type CodexStoredExchange = z.infer<typeof CodexStoredExchangeSchema>;
 export type CodexStoredOperation = z.infer<typeof CodexStoredOperationSchema>;
 export type CodexPersistedAgent = z.infer<typeof CodexPersistedAgentSchema>;
+export type CodexAgentCatalog = z.infer<typeof CodexAgentCatalogSchema>;
+export type CodexReconciliationFence = z.infer<typeof CodexReconciliationFenceSchema>;
 export type CodexListAgent = z.infer<typeof CodexListAgentSchema>;
 export type CodexListAgentsResult = z.infer<typeof CodexListAgentsResultSchema>;
 export type CodexListAvailabilityError = z.infer<typeof CodexListAvailabilityErrorSchema>;
 export type CodexDaemonCommand = z.infer<typeof CodexDaemonCommandSchema>;
 export type CodexDaemonEvent = z.infer<typeof CodexDaemonEventSchema>;
 export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
+
+function migrateCodexAgentRecoveryIntent(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const agent = raw as Record<string, unknown>;
+	if (!Array.isArray(agent.operations)) return raw;
+	const threadId = typeof agent.threadId === "string" ? agent.threadId : undefined;
+	const agentFence = CodexReconciliationFenceSchema.safeParse(agent.fence);
+	let hasUnverifiedAcceptance = false;
+	const operations = agent.operations.map((candidate) => {
+		if (!candidate || typeof candidate !== "object") return candidate;
+		const operation = candidate as Record<string, unknown>;
+		let migrated = operation;
+		if (operation.preDispatch === undefined) {
+			switch (operation.kind) {
+				case "start":
+					migrated = { ...operation, preDispatch: { agentState: "creating" } };
+					break;
+				case "message": {
+					const turnId = typeof operation.expectedTurnId === "string" ? operation.expectedTurnId : undefined;
+					migrated = {
+						...operation,
+						preDispatch: { agentState: turnId ? "working" : "idle", threadId, turnId },
+					};
+					break;
+				}
+				case "stop": {
+					const turnId = typeof operation.turnId === "string" ? operation.turnId : undefined;
+					migrated = {
+						...operation,
+						preDispatch: { agentState: turnId ? "working" : "idle", threadId, turnId },
+					};
+					break;
+				}
+			}
+		}
+		if (
+			migrated.kind !== "start" &&
+			migrated.preDispatch &&
+			typeof migrated.preDispatch === "object" &&
+			!("fence" in migrated.preDispatch) &&
+			agentFence.success
+		) {
+			migrated = {
+				...migrated,
+				preDispatch: { ...(migrated.preDispatch as Record<string, unknown>), fence: agentFence.data },
+			};
+		}
+		if (
+			(migrated.kind === "start" || migrated.kind === "message") &&
+			migrated.state === "accepted" &&
+			migrated.acceptanceFence === undefined &&
+			migrated.acceptanceUnverified === undefined
+		) {
+			hasUnverifiedAcceptance = true;
+			migrated = { ...migrated, acceptanceUnverified: true };
+		}
+		if (migrated.acceptanceUnverified === true) hasUnverifiedAcceptance = true;
+		return migrated;
+	});
+	return {
+		...agent,
+		agentState: hasUnverifiedAcceptance ? "recovering" : agent.agentState,
+		operations,
+	};
+}
+
+/** Restore a session-owned catalog without sacrificing its owner to one damaged agent entry. */
+export function restoreCodexAgentCatalog(raw: unknown): CodexAgentCatalog | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const envelope = raw as { version?: unknown; revision?: unknown; agents?: unknown };
+	if (
+		envelope.version !== 1 ||
+		typeof envelope.revision !== "number" ||
+		!Number.isInteger(envelope.revision) ||
+		envelope.revision < 0 ||
+		!Array.isArray(envelope.agents)
+	)
+		return undefined;
+
+	const parsed = envelope.agents.flatMap((candidate) => {
+		const result = CodexPersistedAgentSchema.safeParse(migrateCodexAgentRecoveryIntent(candidate));
+		return result.success ? [result.data] : [];
+	});
+	const agentIdCounts = new Map<string, number>();
+	const operationIdCounts = new Map<string, number>();
+	for (const agent of parsed) {
+		agentIdCounts.set(agent.agentId, (agentIdCounts.get(agent.agentId) ?? 0) + 1);
+		for (const operation of agent.operations) {
+			operationIdCounts.set(operation.operationId, (operationIdCounts.get(operation.operationId) ?? 0) + 1);
+		}
+	}
+	const agents = parsed.filter(
+		(agent) =>
+			agentIdCounts.get(agent.agentId) === 1 &&
+			agent.operations.every((operation) => operationIdCounts.get(operation.operationId) === 1),
+	);
+	const catalog = CodexAgentCatalogSchema.safeParse({ version: 1, revision: envelope.revision, agents });
+	return catalog.success ? catalog.data : undefined;
+}
 
 /** Builds the complete caller-visible history by explicitly copying only public fields. */
 export function projectCodexListAgent(agent: CodexPersistedAgent): CodexListAgent {

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openDurable, restoreDurable } from "../shared/durable-store.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -76,5 +76,34 @@ describe("restoreDurable", () => {
 		// The real hazard is not the throw, it is the restore AFTER it never running: the persist
 		// tick writes every store back unconditionally, so a skipped restore overwrites a good file.
 		expect(sessions.get("host.abc")).toBe("restored");
+	});
+});
+
+describe("DurableStore checked saves", () => {
+	it("crosses the filesystem durability barrier only for checked saves", () => {
+		const fsync = vi.spyOn(fs, "fsyncSync");
+		const store = new DurableStore(dir, "checked");
+
+		store.saveChecked({ revision: 1 });
+		expect(fsync).toHaveBeenCalled();
+		fsync.mockClear();
+		store.save({ revision: 2 });
+		expect(fsync).not.toHaveBeenCalled();
+		fsync.mockRestore();
+	});
+
+	it("throws a checked serialization failure without replacing the last good snapshot", () => {
+		const store = new DurableStore(dir, "checked");
+		store.saveChecked({ revision: 1 });
+
+		expect(() => store.saveChecked({ revision: 2, unsupported: 1n })).toThrow();
+		expect(readFileFor("checked")).toEqual({ revision: 1 });
+	});
+
+	it("keeps the existing best-effort save contract", () => {
+		const store = new DurableStore(dir, "best-effort");
+		store.save({ unsupported: 1n });
+
+		expect(store.load()).toBeNull();
 	});
 });
