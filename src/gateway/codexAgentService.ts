@@ -350,7 +350,7 @@ export class CodexAgentService {
 		return this.acceptDeliveryForOwner(this.requireOwner(req), input);
 	}
 
-	/** Applies a receipt from the authenticated host channel without fabricating Claude authority. */
+	/** Applies an authenticated host receipt after correlating it to one exact stored owner. */
 	acceptDeliveryFromDaemon(input: CodexDaemonDeliveryAcceptance): CodexAcceptanceResult {
 		const ownerKey = CodexOwnerKeySchema.parse(input.ownerKey);
 		const agentId = CodexAgentIdSchema.parse(input.agentId);

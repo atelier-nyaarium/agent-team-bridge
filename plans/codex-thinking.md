@@ -161,7 +161,7 @@ Running the server in the same execution target as the invoking Claude session g
 
 - Runtime state validation: repeated alignment and red-team rounds found lifecycle, reference, and causal-time drift between persisted records and their public list projections. Phase 1 now applies one shared history validator to both contracts and exposes one validated persisted-to-public projector that explicitly removes recovery-only fields.
 
-## Phase 2 - Add session-owned persistence with checked commits
+## Phase 2 - Add session-owned persistence with checked commits ✅
 
 - Extend each `SessionRecord` with its own Codex-agent catalog; do not create a second global catalog. Access it through narrow `SessionStore`/presence APIs rather than direct nested-object mutations.
 - Persist for each agent:
@@ -270,4 +270,5 @@ Running the server in the same execution target as the invoking Claude session g
 ## Painpoints
 
 - `src/shared/codex-thinking.ts` intentionally exposes one compatibility import today, but its public, persistence, daemon, and App Server boundaries now occupy one high-conflict module. Preserve the barrel import and split the implementation by trust boundary when later phases add their consumers.
-- `src/__tests__/codex-thinking.test.ts` has strong mutation coverage but is already large and still hand-builds several valid histories. Before persistence and reducer race matrices multiply those fixtures, introduce canonical creating, working, and settled agent builders that all public projection tests share.
+- `src/gateway/codexAgentService.ts:CodexAgentService` is the correct single transition owner, but its begin and acceptance branches already hand-build state changes. Introduce the planned pure per-agent reducer before Phase 6 adds terminal, reconciliation, interrupt, and activity transitions.
+- The Codex contract and persistence tests have strong mutation coverage but now repeat several valid histories, receipts, and restored-service setups. Introduce canonical creating, working, settled, and receipt builders before the Phase 6 race matrix multiplies them further.

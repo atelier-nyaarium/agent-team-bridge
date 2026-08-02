@@ -67,13 +67,17 @@ export type CodexCatalogCheckpointResult =
 	| { confirmed: true; catalog: CodexAgentCatalog }
 	| { confirmed: false; reason: "owner_missing" | "revision_conflict" };
 
+/** Composition-root capability for catalog mutation. Every operation snapshots the full session
+ * resume envelope through the checked persistence callback before reporting confirmation. */
 export interface CodexCatalogWriter {
 	commit(
 		owner: SessionRecord,
 		expectedRevision: number,
 		agents: readonly CodexPersistedAgent[],
 	): CodexCatalogCommitResult;
+	/** Whether the exact live revision has crossed the checked persistence barrier. */
 	isDurable(owner: SessionRecord, revision: number): boolean;
+	/** Rewrites an unchanged revision to confirm an installed or restored snapshot. */
 	checkpoint(owner: SessionRecord, expectedRevision: number): CodexCatalogCheckpointResult;
 }
 
@@ -618,6 +622,8 @@ export class SessionStore {
 			const codexCatalog = persisted ? restoreCodexAgentCatalog(v.codexCatalog) : undefined;
 			if (codexCatalog) {
 				this.codexCatalogs.set(record, codexCatalog);
+				// A restored pathname is readable, but only a new checked save confirms its directory entry
+				// before an acceptance receipt is acknowledged.
 				this.unconfirmedCodexCatalogs.set(record, codexCatalog.revision);
 			}
 			this.claimLabel(record);
