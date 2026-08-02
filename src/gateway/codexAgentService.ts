@@ -4,6 +4,7 @@ import {
 	type CodexExecutionTarget,
 	CodexExecutionTargetSchema,
 	CodexOperationIdSchema,
+	CodexOwnerKeySchema,
 	type CodexPersistedAgent,
 	CodexPersistedAgentSchema,
 	CodexPromptSchema,
@@ -59,6 +60,10 @@ export interface CodexDeliveryAcceptance {
 	delivery: "started" | "steered";
 	fence: CodexReconciliationFence;
 	at: number;
+}
+
+export interface CodexDaemonDeliveryAcceptance extends CodexDeliveryAcceptance {
+	ownerKey: string;
 }
 
 export interface CodexTransitionResult extends OwnedCodexOperation {
@@ -342,7 +347,27 @@ export class CodexAgentService {
 	}
 
 	acceptDelivery(req: Request, input: CodexDeliveryAcceptance): CodexAcceptanceResult {
-		const owner = this.requireOwner(req);
+		return this.acceptDeliveryForOwner(this.requireOwner(req), input);
+	}
+
+	/** Applies a receipt from the authenticated host channel without fabricating Claude authority. */
+	acceptDeliveryFromDaemon(input: CodexDaemonDeliveryAcceptance): CodexAcceptanceResult {
+		const ownerKey = CodexOwnerKeySchema.parse(input.ownerKey);
+		const agentId = CodexAgentIdSchema.parse(input.agentId);
+		const operationId = CodexOperationIdSchema.parse(input.operationId);
+		const owner = this.sessionStore.getByTeam(ownerKey);
+		const matches = (owner ? this.sessionStore.listCodexAgents(owner) : []).filter(
+			(agent) =>
+				agent.agentId === agentId &&
+				agent.operations.some((operation) => operation.operationId === operationId),
+		);
+		if (!owner || matches.length !== 1) {
+			throw new CodexTransitionError("not_found", "receipt did not resolve to one managed operation");
+		}
+		return this.acceptDeliveryForOwner(owner, input);
+	}
+
+	private acceptDeliveryForOwner(owner: SessionRecord, input: CodexDeliveryAcceptance): CodexAcceptanceResult {
 		const agentId = CodexAgentIdSchema.parse(input.agentId);
 		const operationId = CodexOperationIdSchema.parse(input.operationId);
 		const resolvedTarget = CodexResolvedTargetSchema.parse(input.resolvedTarget);
@@ -370,6 +395,9 @@ export class CodexAgentService {
 				!sameFence(operation.acceptanceFence, fence)
 			) {
 				throw new CodexTransitionError("operation_conflict", "accepted delivery does not match its receipt");
+			}
+			if (!this.ensureCatalogDurable(owner, catalog.revision)) {
+				return this.indeterminate(owner, current, operation, catalog.revision);
 			}
 			return { owner, agent: current, operation, disposition: "replayed", catalogRevision: catalog.revision };
 		}
@@ -483,16 +511,26 @@ export class CodexAgentService {
 		if (matches.length !== 1 || matches[0]!.operation.fingerprint !== fingerprint) {
 			throw new CodexTransitionError("operation_conflict", "operation ID was reused with different input");
 		}
+		const replayable =
+			matches[0]!.operation.state === "accepted" &&
+			!matches[0]!.operation.acceptanceUnverified &&
+			this.ensureCatalogDurable(owner, catalog.revision);
 		return {
 			owner,
 			agent: matches[0]!.agent,
 			operation: matches[0]!.operation,
-			disposition:
-				matches[0]!.operation.state !== "accepted" || matches[0]!.operation.acceptanceUnverified
-					? "indeterminate"
-					: "replayed",
+			disposition: replayable ? "replayed" : "indeterminate",
 			catalogRevision: catalog.revision,
 		};
+	}
+
+	private ensureCatalogDurable(owner: SessionRecord, revision: number): boolean {
+		if (this.catalogWriter.isDurable(owner, revision)) return true;
+		try {
+			return this.catalogWriter.checkpoint(owner, revision).confirmed;
+		} catch {
+			return false;
+		}
 	}
 
 	private commit(

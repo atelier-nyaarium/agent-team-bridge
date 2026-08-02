@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** A checked snapshot reached its final pathname, but the directory sync could not be confirmed. */
+export class DurableStoreInstalledError extends Error {
+	constructor(cause: unknown) {
+		super("durable snapshot was installed but its directory sync could not be confirmed", { cause });
+		this.name = "DurableStoreInstalledError";
+	}
+}
+
 ////////////////////////////////
 //  Class
 
@@ -98,7 +106,9 @@ export class DurableStore {
 				try {
 					fs.unlinkSync(tmp);
 				} catch {}
+				throw error;
 			}
+			if (durable) throw new DurableStoreInstalledError(error);
 			throw error;
 		}
 	}

@@ -9,6 +9,7 @@ import {
 	codexOperationFingerprint,
 	restoreCodexAgentCatalog,
 } from "../shared/codex-thinking.js";
+import { DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
 
 const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";
@@ -50,14 +51,17 @@ function requestedAgent(agentId = AGENT_ID, operationId = OPERATION_ID): CodexPe
 	});
 }
 
-function setup(opts: { failSave?: (saveNumber: number) => boolean } = {}) {
+function setup(opts: { failSave?: (saveNumber: number) => boolean; installedFailure?: boolean } = {}) {
 	let sessionStore!: SessionStore;
 	let catalogWriter: CodexCatalogWriter | undefined;
 	let saves = 0;
 	const savedSnapshots: unknown[] = [];
 	const persistChecked = () => {
 		saves++;
-		if (opts.failSave?.(saves)) throw new Error("disk unavailable");
+		if (opts.failSave?.(saves)) {
+			const cause = new Error("disk unavailable");
+			throw opts.installedFailure ? new DurableStoreInstalledError(cause) : cause;
+		}
 		savedSnapshots.push(sessionStore.snapshot());
 	};
 	sessionStore = new SessionStore({
@@ -288,6 +292,16 @@ describe("session-owned Codex catalog", () => {
 		expect(store.codexCatalog(owner)).toBeUndefined();
 	});
 
+	it("retains an installed catalog when only durability confirmation fails", () => {
+		const { store, catalogWriter } = storeWithCatalogWriter(() => {
+			throw new DurableStoreInstalledError(new Error("directory sync unavailable"));
+		});
+		const owner = store.mint({ spawn: "recipe-app" });
+
+		expect(() => catalogWriter.commit(owner, 0, [requestedAgent()])).toThrow(DurableStoreInstalledError);
+		expect(store.codexCatalog(owner)).toMatchObject({ revision: 1, agents: [{ agentState: "creating" }] });
+	});
+
 	it("returns detached catalog reads and snapshots", () => {
 		const { store, catalogWriter } = storeWithCatalogWriter();
 		const owner = store.mint({ spawn: "recipe-app" });
@@ -437,6 +451,63 @@ describe("Codex checked recovery transitions", () => {
 				at: 22,
 			}),
 		).toThrowError(CodexTransitionError);
+	});
+
+	it("correlates daemon receipts without a Claude HTTP request", () => {
+		const { request, owner, service, sessionStore } = setup();
+		service.beginStart(request, {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			prompt: "Review",
+			at: 20,
+		});
+
+		const accepted = service.acceptDeliveryFromDaemon({
+			ownerKey: sessionStore.teamOf(owner),
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			resolvedTarget: { kind: "devcontainer", targetId: "container:recipe-app", cwd: "/workspace" },
+			threadId: "thread-1",
+			turnId: "turn-1",
+			delivery: "started",
+			fence: { daemonInstanceId: "daemon-1", targetId: "container:recipe-app", generation: 1, lastEventId: 2 },
+			at: 21,
+		});
+
+		expect(accepted.disposition).toBe("committed");
+		expect(accepted.owner.spawn).toBe("recipe-app");
+	});
+
+	it("uses the echoed owner correlation when internal IDs collide", () => {
+		const { request, owner, service, sessionStore, catalogWriter } = setup();
+		service.beginStart(request, {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			prompt: "Review",
+			at: 20,
+		});
+		const otherOwner = sessionStore.mint({ spawn: "other-project" });
+		catalogWriter.commit(otherOwner, 0, [requestedAgent()]);
+
+		const accepted = service.acceptDeliveryFromDaemon({
+			ownerKey: sessionStore.teamOf(owner),
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			resolvedTarget: { kind: "devcontainer", targetId: "container:recipe-app", cwd: "/workspace" },
+			threadId: "thread-1",
+			turnId: "turn-1",
+			delivery: "started",
+			fence: {
+				daemonInstanceId: "daemon-1",
+				targetId: "container:recipe-app",
+				generation: 1,
+				lastEventId: 2,
+			},
+			at: 21,
+		});
+
+		expect(accepted.owner).toBe(owner);
+		expect(sessionStore.codexCatalog(otherOwner)?.agents[0]?.agentState).toBe("creating");
 	});
 
 	it("serializes unresolved prompt delivery ahead of messages and stops", () => {
@@ -687,6 +758,121 @@ describe("Codex checked recovery transitions", () => {
 		).toBe("indeterminate");
 	});
 
+	it("re-checkpoints an installed but unconfirmed acceptance before replay", () => {
+		const { request, owner, service, sessionStore, saves } = setup({
+			failSave: (save) => save === 2,
+			installedFailure: true,
+		});
+		service.beginStart(request, {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			prompt: "Review",
+			at: 20,
+		});
+		const receipt = {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			resolvedTarget: {
+				kind: "devcontainer" as const,
+				targetId: "container:recipe-app",
+				cwd: "/workspace",
+			},
+			threadId: "thread-1",
+			turnId: "turn-1",
+			delivery: "started" as const,
+			fence: {
+				daemonInstanceId: "daemon-1",
+				targetId: "container:recipe-app",
+				generation: 1,
+				lastEventId: 2,
+			},
+			at: 21,
+		};
+
+		expect(service.acceptDelivery(request, receipt).disposition).toBe("indeterminate");
+		expect(sessionStore.codexCatalog(owner)).toMatchObject({
+			revision: 2,
+			agents: [{ operations: [{ state: "accepted" }] }],
+		});
+		expect(service.acceptDelivery(request, { ...receipt, at: 22 }).disposition).toBe("replayed");
+		expect(saves()).toBe(3);
+
+		let restoredWriter: CodexCatalogWriter | undefined;
+		let restartCheckpoints = 0;
+		const restoredStore = new SessionStore({
+			codexCatalogPersistence: {
+				persistChecked: () => {
+					restartCheckpoints++;
+				},
+				receiveWriter: (writer) => {
+					restoredWriter = writer;
+				},
+			},
+		});
+		restoredStore.restore(sessionStore.snapshot());
+		const restoredOwner = restoredStore.getByTeam(sessionStore.teamOf(owner))!;
+		const restoredService = new CodexAgentService({
+			auth: createSessionAuthority({
+				sessionStore: restoredStore,
+				registry: new Map(),
+				resolveLive: resolveLiveIncarnation,
+				localDomainId: () => "alice",
+				localGatewayId: "sakura",
+			}),
+			sessionStore: restoredStore,
+			offlineCatalog: new Map([["recipe-app", "/trusted/recipe-app"]]),
+			catalogWriter: restoredWriter!,
+		});
+		const restoredRequest = new Request("http://gateway/codex", {
+			headers: { "x-session-token": restoredOwner.bindToken! },
+		});
+
+		expect(
+			restoredService.beginStart(restoredRequest, {
+				agentId: AGENT_ID,
+				operationId: OPERATION_ID,
+				prompt: "Review",
+				at: 23,
+			}).disposition,
+		).toBe("replayed");
+		expect(restartCheckpoints).toBe(1);
+	});
+
+	it("keeps acceptance indeterminate while its checkpoint remains unconfirmed", () => {
+		const { request, service } = setup({
+			failSave: (save) => save >= 2,
+			installedFailure: true,
+		});
+		service.beginStart(request, {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			prompt: "Review",
+			at: 20,
+		});
+		const receipt = {
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID,
+			resolvedTarget: {
+				kind: "devcontainer" as const,
+				targetId: "container:recipe-app",
+				cwd: "/workspace",
+			},
+			threadId: "thread-1",
+			turnId: "turn-1",
+			delivery: "started" as const,
+			fence: {
+				daemonInstanceId: "daemon-1",
+				targetId: "container:recipe-app",
+				generation: 1,
+				lastEventId: 2,
+			},
+			at: 21,
+		};
+
+		expect(service.acceptDelivery(request, receipt).disposition).toBe("indeterminate");
+		expect(service.acceptDelivery(request, { ...receipt, at: 22 }).disposition).toBe("indeterminate");
+	});
+
 	it("rolls back a start intent when its pre-dispatch checked save fails", () => {
 		const { request, owner, service, sessionStore } = setup({ failSave: (save) => save === 1 });
 
@@ -699,6 +885,34 @@ describe("Codex checked recovery transitions", () => {
 			}),
 		).toThrowError(CodexTransitionError);
 		expect(sessionStore.codexCatalog(owner)).toBeUndefined();
+	});
+
+	it("keeps an installed but unconfirmed start intent non-dispatchable", () => {
+		const { request, owner, service, sessionStore } = setup({
+			failSave: (save) => save === 1,
+			installedFailure: true,
+		});
+
+		expect(() =>
+			service.beginStart(request, {
+				agentId: AGENT_ID,
+				operationId: OPERATION_ID,
+				prompt: "Review",
+				at: 20,
+			}),
+		).toThrowError(CodexTransitionError);
+		expect(sessionStore.codexCatalog(owner)).toMatchObject({
+			revision: 1,
+			agents: [{ operations: [{ state: "requested" }] }],
+		});
+		expect(
+			service.beginStart(request, {
+				agentId: AGENT_ID,
+				operationId: OPERATION_ID,
+				prompt: "Review",
+				at: 21,
+			}).disposition,
+		).toBe("indeterminate");
 	});
 
 	it("blocks follow-up delivery while an interrupt is pending", () => {

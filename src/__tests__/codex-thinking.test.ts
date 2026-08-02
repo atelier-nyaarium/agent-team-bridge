@@ -36,6 +36,7 @@ import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../sh
 
 const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
+const OWNER_KEY = "recipe-app.owner";
 const ACCEPTANCE_FENCE = {
 	daemonInstanceId: "daemon-1",
 	targetId: "container:recipe-app",
@@ -396,6 +397,7 @@ describe("Codex internal protocol projections", () => {
 			type: "codex_command",
 			kind: "start",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			operationId: OPERATION_ID,
 			agentId: AGENT_ID,
 			target: { kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
@@ -415,6 +417,7 @@ describe("Codex internal protocol projections", () => {
 		const common = {
 			type: "codex_command",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			agentId: AGENT_ID,
 			target: resolvedTarget,
 			threadId: "thread-1",
@@ -438,6 +441,7 @@ describe("Codex internal protocol projections", () => {
 			type: "codex_receipt",
 			kind: "accepted",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			operationId: OPERATION_ID,
 			daemonInstanceId: "daemon-1",
 			targetId: "container:recipe-app",
@@ -450,6 +454,8 @@ describe("Codex internal protocol projections", () => {
 			delivery: "started",
 		};
 		expect(CodexDaemonReceiptSchema.safeParse(accepted).success).toBe(true);
+		expect(CodexDaemonReceiptSchema.safeParse({ ...accepted, ownerKey: undefined }).success).toBe(false);
+		expect(CodexDaemonReceiptSchema.safeParse({ ...accepted, ownerKey: "recipe.app.owner" }).success).toBe(false);
 		expect(CodexDaemonReceiptSchema.safeParse({ ...accepted, turnId: undefined }).success).toBe(false);
 		expect(CodexDaemonReceiptSchema.safeParse({ ...accepted, resolvedTarget: undefined }).success).toBe(false);
 		expect(
@@ -465,6 +471,7 @@ describe("Codex internal protocol projections", () => {
 			type: "codex_receipt",
 			kind: "rejected",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			operationId: OPERATION_ID,
 			daemonInstanceId: "daemon-1",
 			eventId: 4,
@@ -475,6 +482,7 @@ describe("Codex internal protocol projections", () => {
 			type: "codex_receipt",
 			kind: "interruptResult",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			operationId: OPERATION_ID,
 			daemonInstanceId: "daemon-1",
 			targetId: "host",
@@ -489,6 +497,7 @@ describe("Codex internal protocol projections", () => {
 			type: "codex_receipt",
 			kind: "reconciled",
 			requestId: OPERATION_ID,
+			ownerKey: OWNER_KEY,
 			daemonInstanceId: "daemon-1",
 			targetId: "host",
 			generation: 1,
@@ -507,6 +516,7 @@ describe("Codex internal protocol projections", () => {
 		const base = {
 			type: "codex_event",
 			kind: "terminal",
+			ownerKey: OWNER_KEY,
 			daemonInstanceId: "daemon-1",
 			targetId: "host",
 			generation: 1,

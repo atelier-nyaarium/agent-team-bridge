@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
+import { DurableStore, DurableStoreInstalledError, openDurable, restoreDurable } from "../shared/durable-store.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -98,6 +98,20 @@ describe("DurableStore checked saves", () => {
 
 		expect(() => store.saveChecked({ revision: 2, unsupported: 1n })).toThrow();
 		expect(readFileFor("checked")).toEqual({ revision: 1 });
+	});
+
+	it("reports when a checked snapshot was installed before directory sync failed", () => {
+		const store = new DurableStore(dir, "installed");
+		const fsync = vi
+			.spyOn(fs, "fsyncSync")
+			.mockImplementationOnce(() => {})
+			.mockImplementationOnce(() => {
+				throw new Error("directory sync unavailable");
+			});
+
+		expect(() => store.saveChecked({ revision: 2 })).toThrow(DurableStoreInstalledError);
+		expect(readFileFor("installed")).toEqual({ revision: 2 });
+		fsync.mockRestore();
 	});
 
 	it("keeps the existing best-effort save contract", () => {

@@ -5,6 +5,7 @@ import {
 	type CodexPersistedAgent,
 	restoreCodexAgentCatalog,
 } from "./codex-thinking.js";
+import { DurableStoreInstalledError } from "./durable-store.js";
 import { composeSessionName, isComposite, isSlug, parseSessionName } from "./session-id.js";
 
 ////////////////////////////////
@@ -62,12 +63,18 @@ export type CodexCatalogCommitResult =
 	| { committed: true; catalog: CodexAgentCatalog }
 	| { committed: false; reason: "owner_missing" | "revision_conflict" };
 
+export type CodexCatalogCheckpointResult =
+	| { confirmed: true; catalog: CodexAgentCatalog }
+	| { confirmed: false; reason: "owner_missing" | "revision_conflict" };
+
 export interface CodexCatalogWriter {
 	commit(
 		owner: SessionRecord,
 		expectedRevision: number,
 		agents: readonly CodexPersistedAgent[],
 	): CodexCatalogCommitResult;
+	isDurable(owner: SessionRecord, revision: number): boolean;
+	checkpoint(owner: SessionRecord, expectedRevision: number): CodexCatalogCheckpointResult;
 }
 
 /** Extra id-space the mint/adopt clash check must avoid beyond existing records: catalog project
@@ -182,6 +189,7 @@ function bindingTokensEqual(a: string, b: string): boolean {
 export class SessionStore {
 	private readonly records = new Map<string, SessionRecord>();
 	private readonly codexCatalogs = new WeakMap<SessionRecord, CodexAgentCatalog>();
+	private readonly unconfirmedCodexCatalogs = new WeakMap<SessionRecord, number>();
 	// Per-spawn set of taken labels, so dedup is O(1) rather than a full-store scan on every create.
 	private readonly labels = new Map<string, Set<string>>();
 	private readonly clash: ClashPredicate;
@@ -199,6 +207,9 @@ export class SessionStore {
 			receiveWriter({
 				commit: (owner, expectedRevision, agents) =>
 					this.commitCodexCatalog(owner, expectedRevision, agents, persistChecked),
+				isDurable: (owner, revision) => this.isCodexCatalogDurable(owner, revision),
+				checkpoint: (owner, expectedRevision) =>
+					this.checkpointCodexCatalog(owner, expectedRevision, persistChecked),
 			});
 		}
 	}
@@ -288,6 +299,7 @@ export class SessionStore {
 		const previous = this.codexCatalogs.get(owner);
 		const currentRevision = previous?.revision ?? 0;
 		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
+		const previousUnconfirmedRevision = this.unconfirmedCodexCatalogs.get(owner);
 		const next = CodexAgentCatalogSchema.parse({
 			version: 1,
 			revision: expectedRevision + 1,
@@ -297,11 +309,48 @@ export class SessionStore {
 		try {
 			persistChecked();
 		} catch (error) {
-			if (previous) this.codexCatalogs.set(owner, previous);
-			else this.codexCatalogs.delete(owner);
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmedCodexCatalogs.set(owner, next.revision);
+			} else {
+				if (previous) this.codexCatalogs.set(owner, previous);
+				else this.codexCatalogs.delete(owner);
+				if (previousUnconfirmedRevision === undefined) this.unconfirmedCodexCatalogs.delete(owner);
+				else this.unconfirmedCodexCatalogs.set(owner, previousUnconfirmedRevision);
+			}
 			throw error;
 		}
+		this.unconfirmedCodexCatalogs.delete(owner);
 		return { committed: true, catalog: CodexAgentCatalogSchema.parse(next) };
+	}
+
+	private isCodexCatalogDurable(owner: SessionRecord, revision: number): boolean {
+		if (this.records.get(this.teamOf(owner)) !== owner) return false;
+		return (
+			this.codexCatalogs.get(owner)?.revision === revision &&
+			this.unconfirmedCodexCatalogs.get(owner) !== revision
+		);
+	}
+
+	private checkpointCodexCatalog(
+		owner: SessionRecord,
+		expectedRevision: number,
+		persistChecked: () => void,
+	): CodexCatalogCheckpointResult {
+		if (this.records.get(this.teamOf(owner)) !== owner) return { confirmed: false, reason: "owner_missing" };
+		const catalog = this.codexCatalogs.get(owner);
+		if (!catalog || catalog.revision !== expectedRevision) {
+			return { confirmed: false, reason: "revision_conflict" };
+		}
+		try {
+			persistChecked();
+		} catch (error) {
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmedCodexCatalogs.set(owner, catalog.revision);
+			}
+			throw error;
+		}
+		this.unconfirmedCodexCatalogs.delete(owner);
+		return { confirmed: true, catalog: CodexAgentCatalogSchema.parse(catalog) };
 	}
 
 	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
@@ -567,7 +616,10 @@ export class SessionStore {
 			};
 			this.records.set(team, record);
 			const codexCatalog = persisted ? restoreCodexAgentCatalog(v.codexCatalog) : undefined;
-			if (codexCatalog) this.codexCatalogs.set(record, codexCatalog);
+			if (codexCatalog) {
+				this.codexCatalogs.set(record, codexCatalog);
+				this.unconfirmedCodexCatalogs.set(record, codexCatalog.revision);
+			}
 			this.claimLabel(record);
 		}
 	}

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { isSlug } from "./session-id.js";
+import { isComposite, isSlug, parseSessionName } from "./session-id.js";
 
 export const CODEX_PROMPT_MAX_BYTES = 256 * 1024;
 export const CODEX_ACTIVITY_MAX_BYTES = 16 * 1024;
@@ -46,6 +46,15 @@ function isAbsolutePath(value: string): boolean {
 }
 
 export const CodexAgentIdSchema = z.string().regex(CODEX_AGENT_ID_RE);
+export const CodexOwnerKeySchema = z
+	.string()
+	.min(3)
+	.max(129)
+	.refine((value) => {
+		if (!isComposite(value)) return false;
+		const { project, session } = parseSessionName(value);
+		return isSlug(project) && isSlug(session);
+	}, "owner key must contain two canonical slugs");
 export const CodexPromptSchema = z
 	.string()
 	.refine((value) => value.trim().length > 0, "prompt must not be blank")
@@ -1017,6 +1026,7 @@ export const CodexListAgentsResultSchema = z
 const DaemonCommandBase = {
 	type: z.literal("codex_command"),
 	requestId: OperationIdSchema,
+	ownerKey: CodexOwnerKeySchema,
 	agentId: CodexAgentIdSchema,
 };
 
@@ -1064,6 +1074,7 @@ export const CodexDaemonCommandSchema = z.discriminatedUnion("kind", [
 
 const DaemonEventBase = {
 	type: z.literal("codex_event"),
+	ownerKey: CodexOwnerKeySchema,
 	daemonInstanceId: OpaqueIdSchema,
 	targetId: OpaqueIdSchema,
 	generation: z.number().int().nonnegative(),
@@ -1114,6 +1125,7 @@ export const CodexDaemonEventSchema = z.union([
 const DaemonReceiptBase = {
 	type: z.literal("codex_receipt"),
 	requestId: OperationIdSchema,
+	ownerKey: CodexOwnerKeySchema,
 	daemonInstanceId: OpaqueIdSchema,
 	eventId: z.number().int().nonnegative(),
 	agentId: CodexAgentIdSchema,

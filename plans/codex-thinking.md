@@ -179,7 +179,7 @@ Running the server in the same execution target as the invoking Claude session g
 
 ### Bug Classes
 
-- Recovery ordering and durability: repeated audits found that a checked intent alone was insufficient unless retries were non-dispatchable, prompt mutations were serialized, receipt fences were monotonic, and checked writes crossed the filesystem durability barrier. Phase 2 now centralizes those invariants in the catalog writer, service, and schema rather than relying on route timing.
+- Recovery ordering and durability in the catalog writer, service, and schema: alignment made ambiguous retries non-dispatchable; red-team rounds serialized prompt mutations, made receipt fences monotonic, and crossed the filesystem durability barrier; architecture review distinguished pre-install failure from an installed-but-unconfirmed snapshot, requires a checked checkpoint before replaying restored acceptance, and added daemon receipt correlation without fabricating Claude request authority.
 
 ## Phase 3 - Announce and aggregate config-based capability
 
@@ -220,6 +220,7 @@ Running the server in the same execution target as the invoking Claude session g
 ## Phase 6 - Relay, reduce, acknowledge, and reconcile
 
 - Add typed Codex commands, acceptances, reconciliation messages, asynchronous events, and event acknowledgements to the existing authenticated gateway/host WebSocket. Leave the terminal `HostOpCoordinator` and its 20-second protocol unchanged.
+- Carry the gateway-issued canonical owner key on every Codex command, receipt, and event. The daemon echoes it for durable correlation; it is never accepted from Claude, and the gateway still verifies that the referenced agent and operation belong to that exact live session record.
 - Generate a private operation ID once in each mutating MCP tool invocation, before `routerPost`, and reuse it across that invocation's automatic HTTP retries. Do not expose request IDs to Claude. The gateway generates the stable `agentId` for start.
 - Scope idempotency to `(owner session, operation ID)` and fingerprint the operation kind, agent, and prompt. A retry with the same ID and payload returns the committed result; the same ID with a different payload is a conflict. A separate Claude tool call is a new requested mutation, even when its text matches.
 - Route command acceptance, App Server events, stop results, and reconciliation through one per-agent reducer/critical section. Release the section during daemon I/O and nine-minute waits, then compare-and-apply only if the captured fences and expected state still match.
