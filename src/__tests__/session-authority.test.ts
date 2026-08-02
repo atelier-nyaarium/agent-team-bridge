@@ -201,6 +201,49 @@ describe("identity between principals", () => {
 	});
 });
 
+describe("confirmed managed callers", () => {
+	it("resolves the exact confirmed record from its active request binding", () => {
+		const { auth, sessionStore } = setup();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		const token = sessionStore.ensureBindToken(record);
+		sessionStore.activateBinding(record);
+		sessionStore.confirm(sessionStore.teamOf(record));
+
+		expect(auth.resolveConfirmedManagedSession(withToken(token))).toBe(record);
+	});
+
+	it("refuses missing, foreign, inactive, and unconfirmed bindings", () => {
+		const { auth, sessionStore } = setup();
+		const inactive = sessionStore.mint({ spawn: "inactive-app" });
+		const inactiveToken = sessionStore.ensureBindToken(inactive);
+		const unconfirmed = sessionStore.mint({ spawn: "unconfirmed-app" });
+		const unconfirmedToken = sessionStore.ensureBindToken(unconfirmed);
+		sessionStore.activateBinding(unconfirmed);
+
+		expect(auth.resolveConfirmedManagedSession(new Request("http://gateway/codex"))).toBeNull();
+		expect(auth.resolveConfirmedManagedSession(withToken("not-a-real-token"))).toBeNull();
+		expect(auth.resolveConfirmedManagedSession(withToken(inactiveToken))).toBeNull();
+		expect(auth.resolveConfirmedManagedSession(withToken(unconfirmedToken))).toBeNull();
+	});
+
+	it("refuses an ambiguous token from a malformed restored snapshot", () => {
+		const { auth, sessionStore } = setup();
+		const duplicate = {
+			sessionLabel: "Work",
+			bindToken: "duplicate-token",
+			bindActiveAt: 10,
+			confirmedAt: 10,
+			lastSeen: 10,
+		};
+		sessionStore.restore({
+			"first.aaa111": { ...duplicate, id: "aaa111", spawn: "first" },
+			"second.bbb222": { ...duplicate, id: "bbb222", spawn: "second" },
+		});
+
+		expect(auth.resolveConfirmedManagedSession(withToken("duplicate-token"))).toBeNull();
+	});
+});
+
 // The rule this whole module exists to enforce was previously written out at eight call sites and
 // went wrong at three of them, each time by reading a credential field directly and deriving its own
 // answer. Keeping those fields unreachable is what stops a ninth site inventing a ninth rule.

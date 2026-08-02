@@ -107,6 +107,9 @@ export interface SessionAuthority {
 
 	/** Are these the same principal? Not satisfaction: UNBOUND equals only UNBOUND. */
 	sameAs(a: SessionBinding, b: SessionBinding): boolean;
+
+	/** The confirmed managed session whose active binding a request proves. */
+	resolveConfirmedManagedSession(req: Request): SessionRecord | null;
 }
 
 ////////////////////////////////
@@ -203,5 +206,23 @@ export function createSessionAuthority(deps: SessionAuthorityDeps): SessionAutho
 		return bound.some((r) => satisfies(binding(r.bindToken), got));
 	}
 
-	return { toClaim, toAnswerFor, toActFor, localTeamKey, satisfies, sameAs, mayUseLocalPlane };
+	function resolveConfirmedManagedSession(req: Request): SessionRecord | null {
+		if (!sessionStore) return null;
+		const got = presentedByRequest(req);
+		if (!got.token) return null;
+		const record = sessionStore.recordByBindToken(got.token);
+		if (!record || !sessionStore.isBindingActive(record) || record.confirmedAt === undefined) return null;
+		return satisfies(binding(record.bindToken), got) ? record : null;
+	}
+
+	return {
+		toClaim,
+		toAnswerFor,
+		toActFor,
+		localTeamKey,
+		satisfies,
+		sameAs,
+		mayUseLocalPlane,
+		resolveConfirmedManagedSession,
+	};
 }

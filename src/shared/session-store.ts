@@ -138,6 +138,12 @@ function randomBindToken(): string {
 	return crypto.randomBytes(32).toString("hex");
 }
 
+function bindingTokensEqual(a: string, b: string): boolean {
+	const left = Buffer.from(a);
+	const right = Buffer.from(b);
+	return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
 ////////////////////////////////
 //  Class
 
@@ -166,12 +172,15 @@ export class SessionStore {
 	}
 
 	/** The record a session token belongs to, or undefined. A token is meaningless without a record,
-	 * so an unknown one resolves to nothing and the caller treats the registrant as unbound. */
+	 * so an unknown or ambiguous one resolves to nothing and the caller treats it as unbound. */
 	recordByBindToken(token: string): SessionRecord | undefined {
+		let found: SessionRecord | undefined;
 		for (const record of this.records.values()) {
-			if (record.bindToken && record.bindToken === token) return record;
+			if (!record.bindToken || !bindingTokensEqual(record.bindToken, token)) continue;
+			if (found) return undefined;
+			found = record;
 		}
-		return undefined;
+		return found;
 	}
 
 	/**
