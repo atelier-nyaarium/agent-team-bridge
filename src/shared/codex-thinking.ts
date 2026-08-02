@@ -529,6 +529,7 @@ export interface CodexAgentHistoryView {
 	updatedAt: number;
 }
 
+/** Cross-boundary history invariants shared by the private catalog and its public projection. */
 export function codexAgentHistoryIssues(value: CodexAgentHistoryView): string[] {
 	const issues: string[] = [];
 	if (value.updatedAt < value.createdAt) issues.push("agent update cannot predate creation");
@@ -1101,6 +1102,7 @@ export type CodexDaemonCommand = z.infer<typeof CodexDaemonCommandSchema>;
 export type CodexDaemonEvent = z.infer<typeof CodexDaemonEventSchema>;
 export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
 
+/** Builds the complete caller-visible history by explicitly copying only public fields. */
 export function projectCodexListAgent(agent: CodexPersistedAgent): CodexListAgent {
 	const stored = CodexPersistedAgentSchema.parse(agent);
 	const exchanges = stored.exchanges.map((exchange) => ({

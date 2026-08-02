@@ -137,7 +137,7 @@ Running the server in the same execution target as the invoking Claude session g
 
 # Plan
 
-## Phase 1 - Lock the shared contract and ownership boundary
+## Phase 1 - Lock the shared contract and ownership boundary ✅
 
 - Add shared, runtime-validated schemas for MCP requests, the gateway route, gateway/daemon commands and events, App Server projections, persisted records, and tool results. Tolerate unknown additive App Server fields while rejecting incompatible shapes used by Switchboard.
 - Keep native and Switchboard state distinct:
@@ -261,3 +261,8 @@ Running the server in the same execution target as the invoking Claude session g
 - Add end-to-end tool tests for immediate completion, background start/message, repeated await, list after simulated Claude compaction, daemon/gateway restart recovery, stop then follow-up, unavailable App Server, and host versus devcontainer target selection.
 - Keep a real logged-in App Server smoke test opt-in and separate from deterministic CI. Run lint, type checking, unit/integration tests, and build.
 - Document only `CODEX_THINKING_ENABLED=true`, the five tools, wait/stop/recovery semantics, execution-target placement, the caution statement, capability cache/reload behavior, and the residual risk that Codex can mutate its workspace and start subprocesses. Ship no Switchboard red-team skill.
+
+## Painpoints
+
+- `src/shared/codex-thinking.ts` intentionally exposes one compatibility import today, but its public, persistence, daemon, and App Server boundaries now occupy one high-conflict module. Preserve the barrel import and split the implementation by trust boundary when later phases add their consumers.
+- `src/__tests__/codex-thinking.test.ts` has strong mutation coverage but is already large and still hand-builds several valid histories. Before persistence and reducer race matrices multiply those fixtures, introduce canonical creating, working, and settled agent builders that all public projection tests share.

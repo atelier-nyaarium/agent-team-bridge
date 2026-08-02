@@ -29,6 +29,8 @@ export interface OwnedCodexOperation extends OwnedCodexAgent {
 	operation: CodexStoredOperation;
 }
 
+/** Session-owned gateway boundary for Codex access and state transitions. Route and daemon
+ * adapters resolve through this service rather than receiving catalog authority directly. */
 export class CodexAgentService {
 	private readonly auth: SessionAuthority;
 	private readonly sessionStore: SessionStore;
