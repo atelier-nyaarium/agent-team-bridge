@@ -151,7 +151,7 @@ internal fun loadFiles(m: JSONObject): List<MessageFile> {
 }
 
 /** A banked send waiting for its wall-clock time, keyed by team in ChatState.scheduledSends (at
- * most one per team - see plans/scheduled-send.md). `opId` is minted at schedule time and carried
+ * most one per team). `opId` is minted at schedule time and carried
  * all the way to `deliver()`, so the gateway's idempotency cache covers this fire the same as any
  * live send. `targetDomainId` is resolved once at schedule time (from the same live `teams` entry
  * the composer had on screen) because `deliver()`'s own internal resolution reads `state.teams`,
@@ -3952,7 +3952,7 @@ class ChatRepository(
 	}
 
 	/** Bank `text`/`uris` as a scheduled send for `team`, firing at `fireAtMillis` on its own even if
-	 * the app is backgrounded or killed in the meantime (plans/scheduled-send.md). Replaces any
+	 * the app is backgrounded or killed in the meantime. Replaces any
 	 * existing scheduled send for this team - the dock is the sole edit/reschedule surface, so a
 	 * second `Schedule Send` on an already-scheduled team is a deliberate replace, not a queue. Any
 	 * `content://` uri is eagerly copied into its own bucket now (a transient grant may not outlive
@@ -4104,8 +4104,8 @@ class ChatRepository(
 	 * SwitchboardService.onCreate). Both funnel through the same mutex-guarded function, so a warm
 	 * kick can never double-convert the same due record with a concurrent cold-chain call - but the
 	 * mutex alone does NOT guarantee the warm kick waits for connect() to have run first (see
-	 * awaitSchedulerWired's own doc for why, and plans/scheduled-send.md's implementation notes for
-	 * why that residual ordering gap is accepted rather than more heavily engineered around). */
+	 * awaitSchedulerWired's own doc for why). That residual ordering gap is accepted rather than
+	 * more heavily engineered around. */
 	fun kickScheduledSendFire() {
 		repoScope.launch {
 			awaitSchedulerWired()
@@ -4470,7 +4470,7 @@ class ChatRepository(
 					}
 					if (adv.gap) _state.update { it.copy(gap = true) }
 					// Idle pushback: any genuinely-fresh entry is comms activity, resetting the silence
-					// clock back to the fast cadence (see plans/idle-pushback-manager.md Q2).
+					// clock back to the fast cadence.
 					if (adv.fresh.isNotEmpty()) pushback.onCommsActivity(System.currentTimeMillis(), visible)
 					val burst = mutableMapOf<String, MutableList<Message>>()
 					val deviceAddr = thisDeviceAddress()
@@ -5663,8 +5663,8 @@ class ChatRepository(
 		runCatching { store.saveScheduledSends(scheduledSendsJson(records)) }
 	}
 
-	/** Same disposable storage class as drafts/labels (no special re-provisioning survival - see
-	 * plans/scheduled-send.md); a corrupt or legacy-grammar row is dropped rather than risked as a
+	/** Same disposable storage class as drafts/labels, with no special re-provisioning survival.
+	 * A corrupt or legacy-grammar row is dropped rather than risked as a
 	 * bogus immediate fire (a blank opId or a non-positive fireAt reads as "already due"). Each row
 	 * parses under its OWN runCatching, not one wrapping the whole loop - a single malformed team
 	 * entry (a torn/partial SharedPreferences write, a future schema mismatch) must not throw away
@@ -5802,7 +5802,7 @@ class ChatRepository(
 		// upload was still using.
 		internal const val STALE_BLOB_MAX_AGE_MS = 24 * 60 * 60 * 1000L
 
-		// A scheduled send's own bounded failure recovery (plans/scheduled-send.md): reconcilePending
+		// A scheduled send's own bounded failure recovery: reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire
 		// that fails outright gets exactly one automatic retry this far out before falling back to
 		// the tap-to-retry error row + a local notification. Long enough that a momentary blip (the

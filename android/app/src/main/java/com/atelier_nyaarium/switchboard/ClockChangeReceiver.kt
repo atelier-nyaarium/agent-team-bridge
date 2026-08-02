@@ -12,8 +12,8 @@ import android.content.Intent
  * when I tapped Schedule" - should be preserved across a clock jump at all; it re-derives the next
  * alarm from whatever fireAtMillis is already persisted, the same way ChatRepository.
  * fireDueScheduledSends's own end-of-pass re-arm already does on every fire and every schedule/
- * cancel/reschedule (see plans/scheduled-send.md's "Follow-up focused re-check" notes). ACTION_TIME_
- * CHANGED and ACTION_TIMEZONE_CHANGED are both on Android's small manifest-registration exemption
+ * cancel/reschedule. ACTION_TIME_CHANGED and ACTION_TIMEZONE_CHANGED are both on Android's small
+ * manifest-registration exemption
  * list from the Oreo+ implicit-broadcast restrictions, so a static receiver (not a dynamically
  * registered one) is the correct, always-on shape here - verified by simulating both broadcasts on
  * a real emulator and confirming this receiver actually fires. */

@@ -53,10 +53,9 @@ function presenceIdentityOf(rows: PresenceRow[]): string {
  * Every route into a presence-read field goes through a method here. websocket.ts's own small,
  * fixed set of live-socket transition points (register, resolveHandshake, close, evictSocket) call
  * `markDirty()` directly at each exact site, since a WsData mutation is a raw property write with
- * no class boundary to wrap - see plans/versioned-state-planes.md's item 3 for why that is still
- * the single-writer pattern (a small closed set of transition points announcing their own store's
- * change) and not the callsite-nudge anti-pattern (many scattered UI triggers remembering to
- * refresh something else's state).
+ * no class boundary to wrap. That is still the single-writer pattern (a small closed set of
+ * transition points announcing their own store's change) and not the callsite-nudge anti-pattern
+ * (many scattered UI triggers remembering to refresh something else's state).
  */
 export class PresenceFacade {
 	private readonly sessionStore: SessionStore;

@@ -296,8 +296,8 @@ const HumanNotifySchema = z
 
 // `from` is the ONLY identity field, and it names the CALLING agent's own session (exactly what
 // every other agent-originated route already trusts at the same level - see send()'s own `from`;
-// this route adds no NEW trust boundary beyond that pre-existing, network-level one, tracked in
-// plans/pain-points.md). Strict on purpose: there is no separate "to"/"target"/"team" field
+// this route adds no NEW trust boundary beyond that pre-existing, network-level one, which is a
+// known gap). Strict on purpose: there is no separate "to"/"target"/"team" field
 // a caller could add ON TOP OF its own `from` to reach a different conversation than the one `from`
 // itself already resolves to - the caller's own resolved address (via localAddress(from)) is the
 // only possible target. pluginId/actionType are slug-constrained (matching every other identifier

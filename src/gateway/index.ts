@@ -1468,8 +1468,8 @@ export async function startGateway(): Promise<void> {
 				// host daemon's trusted catalog (offlineCatalog, written only under the HOST_WS_TOKEN gate)
 				// may be proxied. Deliberately NOT isCatalogProject: that also trusts knownTeamPaths, which
 				// an unauthenticated /bridge register can poison with a hostile name (e.g. "localhost").
-				// Requires the host daemon connected; the broader unauth-/bridge surface is tracked in
-				// plans/pain-points.md (postponed).
+				// Requires the host daemon connected; the broader unauth-/bridge surface is a known,
+				// deliberately postponed gap.
 				if (!offlineCatalog.has(project)) {
 					return new Response("Unknown connector project", { status: 404 });
 				}

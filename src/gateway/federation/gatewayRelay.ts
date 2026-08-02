@@ -270,9 +270,8 @@ export function createGatewayRelayHandler({
 				// The inverse gate from console_push above: presence_push is CROSS-DOMAIN ONLY (a
 				// same-Domain Gateway has no reason to push itself its own presence). Identity alone
 				// (already verified by the seal before handleOp ever runs) is the correct and
-				// sufficient gate here - see the FederatedOpSchema doc comment on this op and
-				// plans/cross-domain-presence.md's "Trust boundary" section for why this op's threat
-				// model differs from console_push's.
+				// sufficient gate here - see the FederatedOpSchema doc comment on this op for why its
+				// threat model differs from console_push's.
 				if (srcDomainId === null) {
 					throw new Error("presence_push requires a cross-Domain sender");
 				}

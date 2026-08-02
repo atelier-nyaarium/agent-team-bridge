@@ -82,7 +82,7 @@ interface IdleSilenceStore {
  * side effects through [scheduler]. FOREGROUND and MINUTE are a kickable coroutine delay with the
  * wakelock held throughout; HALF_HOUR/HOURLY/TWELVE_HOUR release the wakelock and schedule a
  * wall-clock-aligned `AlarmManager` wakeup instead, so a long silent background stint stops
- * costing continuous CPU wake time. Full design + audit trail: plans/idle-pushback-manager.md.
+ * costing continuous CPU wake time.
  */
 class IdlePushbackManager(
 	private val store: IdleSilenceStore,

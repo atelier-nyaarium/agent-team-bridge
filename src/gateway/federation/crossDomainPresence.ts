@@ -110,8 +110,8 @@ export interface CoalescedPusher {
 /** At most one in-flight `presence_push` attempt per destination Domain; a new push arriving
  * while a prior attempt to the SAME destination is still retrying REPLACES that attempt's payload
  * rather than queuing a second one, so a stale retry can never land after a fresher one already
- * succeeded. Reuses `plans/cross-gateway-presence-exchange.md`'s already-specified coalescing
- * design (the parked same-Domain sibling feature) rather than re-inventing it. */
+ * succeeded. The same coalescing design the parked same-Domain sibling feature specifies, reused
+ * rather than re-invented. */
 export function createCoalescedPresencePusher(
 	sendOnce: (domainId: string, sessions: PresenceForDomain) => Promise<{ ok: boolean; error?: string }>,
 ): CoalescedPusher {

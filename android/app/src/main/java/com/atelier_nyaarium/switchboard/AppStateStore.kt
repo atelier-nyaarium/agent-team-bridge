@@ -245,8 +245,8 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 
 	fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
 
-	/** At most one pending scheduled send per team, same disposable storage class as drafts
-	 * (no special re-provisioning survival - see plans/scheduled-send.md). */
+	/** At most one pending scheduled send per team, same disposable storage class as drafts, with no
+	 * special re-provisioning survival. */
 	fun saveScheduledSends(json: String) = prefs.edit().putString(KEY_SCHEDULED_SENDS, json).apply()
 
 	fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)

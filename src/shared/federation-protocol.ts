@@ -32,7 +32,7 @@ const MAX_ADDRESS_LEN = 320;
 /** Cap on the sessions array a single `presence_push` may carry, and on the same-shaped array
  * stored/re-served per linked Domain (schemas.ts's CrossDomainPresenceEntrySchema.sessions) - a
  * malformed or misbehaving sender must not be able to hand a receiving Gateway an unbounded
- * payload. See plans/cross-domain-presence.md's "Trust boundary" section. */
+ * payload. */
 export const MAX_CROSSDOMAIN_PRESENCE_SESSIONS = 200;
 
 /** One session in a `presence_push` payload - a deliberately narrower, length-capped mirror of
@@ -168,8 +168,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	// sessions, the same content that Domain's list_teams answer already carries today, trusted
 	// identically. So identity verification (already automatic and universal for every
 	// gateway_relay frame via the sealer) is the correct and sufficient gate; the landing side
-	// stores this under the VERIFIED sender's Domain id, never a payload-supplied one. See
-	// plans/cross-domain-presence.md's "Trust boundary" section for the full reasoning.
+	// stores this under the VERIFIED sender's Domain id, never a payload-supplied one.
 	z.object({
 		kind: z.literal("presence_push"),
 		sessions: z.array(CrossDomainPresenceSessionSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS),

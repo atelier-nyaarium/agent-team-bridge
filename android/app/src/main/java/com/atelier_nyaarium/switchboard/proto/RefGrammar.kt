@@ -13,8 +13,7 @@ import java.nio.charset.CodingErrorAction
  * (`tests/fixtures/refs/vectors.json`, read by `RefGrammarVectorsTest` and by vitest).
  *
  * Two lexing modes, five token kinds, and one ambiguity rule: the first structural marker by
- * position wins and everything after it is ordinary text. The full spec lives in
- * `plans/artifact-references.md`.
+ * position wins and everything after it is ordinary text.
  */
 sealed class Matcher {
 	data class Text(val text: String) : Matcher()

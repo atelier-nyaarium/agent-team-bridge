@@ -2113,8 +2113,8 @@ fun SessionCard(
 				)
 				if (limitHit) StatusChip("limit hit", presenceColor("limit hit"))
 				if (checkTerminal) StatusChip("check terminal", presenceColor("check terminal"))
-				// Visible from the board without opening the thread (plans/scheduled-send.md) - the
-				// dock inside the thread is still the sole edit/cancel surface, this is read-only.
+				// Visible from the board without opening the thread. The dock inside the thread is
+				// still the sole edit/cancel surface, this is read-only.
 				if (state.scheduledSends.containsKey(team.name)) {
 					Icon(
 						Icons.Default.Schedule,
@@ -2216,8 +2216,8 @@ private fun relativeTime(at: Long): String {
 	}
 }
 
-/** A scheduled send's remaining wait, coarsest-unit-first (plans/scheduled-send.md's "live-ish"
- * countdown - recomputed roughly every minute by the caller, not truly live-ticking). Unlike
+/** A scheduled send's remaining wait, coarsest-unit-first. Live-ish rather than truly
+ * live-ticking: the caller recomputes it roughly every minute. Unlike
  * [relativeTime] (a "time since" delta, which reads negative/nonsensical for a FUTURE instant),
  * this takes an already-computed remaining duration. Internal (not private): pure and top-level,
  * unit-tested without Android the same way IdlePushbackManager's tierFor/nextAlignedMark are. */
@@ -2241,7 +2241,7 @@ internal fun absoluteTimeText(atMillis: Long, zone: java.time.ZoneId): String {
 	return if (at.toLocalDate() == java.time.LocalDate.now(zone)) time else "${at.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${at.dayOfMonth}, $time"
 }
 
-/** The dock indicator for a pending scheduled send (plans/scheduled-send.md) - a plain sibling in
+/** The dock indicator for a pending scheduled send - a plain sibling in
  * ThreadScreen's own Column, stacking above the composer the same way the Designer dock's
  * threadDockSlots already do. Tapping the body reopens [ScheduleSendDialog] to change the time
  * (see onEdit's own doc at the ThreadScreen call site for why this is time-only, not a full
@@ -2407,8 +2407,8 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 		val day = java.time.Instant.ofEpochMilli(dateMillis).atZone(java.time.ZoneOffset.UTC).toLocalDate()
 		day.atTime(timeState.hour, timeState.minute).atZone(zone).toInstant().toEpochMilli()
 	}
-	// A minute of slack, not a bare `> now` - the picker rejects a past time (plans/
-	// scheduled-send.md), and a razor-thin margin here would let a pick go stale by the time the
+	// A minute of slack, not a bare `> now` - the picker rejects a past time, and a razor-thin
+	// margin here would let a pick go stale by the time the
 	// user actually taps Schedule. The DatePicker itself has no upper bound of its own (Material3's
 	// default year range is 1900-2100), so a stray far-future pick is rejected too - this feature is
 	// for hours-to-days-out reminders, not an unbounded storage commitment (SCHEDULED_SEND_MAX_HORIZON_MS,
@@ -2759,7 +2759,7 @@ fun ThreadScreen(
 	onClearDraft: () -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
-	// At most one pending scheduled send for this team (plans/scheduled-send.md), null otherwise -
+	// At most one pending scheduled send for this team, null otherwise -
 	// drives the dock and gates the long-press menu's Schedule Send item.
 	scheduledSend: ScheduledSend?,
 	// True while a send is waiting on this team's cold boot, drawing the notice card above the
@@ -3184,8 +3184,7 @@ fun ThreadScreen(
 							text = { Text("Schedule Send") },
 							// No scheduledSend == null guard needed here: this whole menu is unreachable once
 							// one's already active, since the composer row it lives in is replaced by the dock
-							// entirely (plans/scheduled-send.md) - the dock is the sole edit/reschedule/cancel
-							// surface.
+							// entirely - the dock is the sole edit/reschedule/cancel surface.
 							enabled = sendEnabled,
 							onClick = hapticClick {
 								showSendMenu = false
