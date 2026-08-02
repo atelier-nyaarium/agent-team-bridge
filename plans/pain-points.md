@@ -1,5 +1,33 @@
 # Pain points
 
+## Grepping `SYNC-HASH` lies about which files are synced leaves (2026-08-02)
+
+The obvious way to answer "is this file a synced leaf, so must I re-stamp it after editing?" is to
+grep the file for `SYNC-HASH`. That returns a **false positive on two files**, because both discuss
+the mechanism in prose while explicitly stating they are not leaves:
+
+- `src/shared/federation-protocol.ts` (the prose sits around line 232)
+- `src/shared/cross-domain-sas.ts`
+
+Both look identical to a real leaf under `grep -l "SYNC-HASH"`. The five files that actually carry a
+stamp are exactly the five CLAUDE.md's table lists, so the table is right and the grep is what lies.
+
+Two checks that do not:
+
+```bash
+grep -q "^// SYNC-HASH:" <file>          # anchored to the marker LINE, not the word
+bun scripts/check-sync-hash.ts <file>    # exits 1 on a missing or stale stamp
+```
+
+Why it is worth the paranoia: editing a real leaf without re-stamping fails the SIBLING repo's CI on
+a hash mismatch, which surfaces after a merge rather than before one, and the recovery is a
+cross-repo sync rather than a local fix. Hit while stripping plan references from code comments: a
+bare grep said `federation-protocol.ts` was a leaf, and the edit had already been made.
+
+The inverse is the direction that actually bites. A false positive costs time and stops you. A real
+leaf that lost its marker while keeping a prose mention would read as fine under the same bare grep,
+and nothing local would catch it.
+
 ## Versioned state planes (`plans/versioned-state-planes.md`, deleted, closed out - 2026-07-18)
 
 Phase 1 (plane registry framework, presence facade, PollWaitHub, working/needs-login derivation,
