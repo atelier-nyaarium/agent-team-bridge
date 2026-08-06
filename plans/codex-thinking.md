@@ -391,7 +391,29 @@ Spiked on `codex-cli 0.146.0`, so these are observations rather than assumptions
 - If the terminal event arrives before its final item, hold it pending while draining already-correlated items and perform a bounded scheduler-driven thread/read reconciliation. Persist/acknowledge the terminal only after that barrier, then use the exact-turn fallback if no phased final exists. Never borrow a message from another thread/turn/item; failed and interrupted turns receive no invented final response.
 - Unsubscribe an idle thread only after its terminal state has been durably acknowledged. Resume/read it before a later follow-up.
 
-## Phase 6 - Relay, reduce, acknowledge, and reconcile
+## Phase 6 - Relay, reduce, acknowledge, and reconcile ✅
+
+Shipped: `codexDaemonService.ts` (the daemon half: commands in, receipts and events out, per-agent
+serialization, ack-gated outbox, reconnect replay), `codexRelay.ts` (the gateway half: per-agent
+critical section, cumulative per-generation acknowledgement, gateway-enumerated reconciliation), and
+the event/terminal/interrupt/rejection/reconciliation reducers on `CodexAgentService`. Wire additions:
+`codex_ack` and `codex_hello`. Verified live against a real App Server for start, terminal,
+reconciliation, steer-to-new-turn and interrupt.
+
+Deferred to crust, both from the architecture pass and both deliberately NOT taken before Phase 7:
+
+- **`Observation<T>` as a shared primitive**, with a fold that makes routing "could not find out" into
+  a definite branch a compile error. The rule is applied at all three sites already; what is missing
+  is enforcement. Worth doing once Phase 7's three further readers of the same fact exist.
+- **`codexAckAuthority.ts`** as the sole owner of "may the daemon retire this". The verdict is still
+  re-derived at each return site; the `unresolved` flag narrowed it but did not centralize it. Large,
+  and it collides with the reducer work below, so it wants its own lap.
+- **A transition reducer for the persisted agent.** Ten functions now share one shape (read record,
+  build candidate, `CodexPersistedAgentSchema.parse`, catch the throw and reinterpret it as a domain
+  outcome). Three of them do not catch it at all, so a reducer bug and a legitimate race are
+  indistinguishable in the other seven.
+
+### Original spec
 
 - Add typed Codex commands, acceptances, reconciliation messages, asynchronous events, and event acknowledgements to the existing authenticated gateway/host WebSocket. Leave the terminal `HostOpCoordinator` and its 20-second protocol unchanged.
 - Carry the gateway-issued canonical owner key on every Codex command, receipt, and event. The daemon echoes it for durable correlation; it is never accepted from Claude, and the gateway still verifies that the referenced agent and operation belong to that exact live session record.

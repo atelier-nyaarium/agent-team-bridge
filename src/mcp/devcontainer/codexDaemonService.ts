@@ -13,6 +13,7 @@ import {
 	type CodexResolvedTarget,
 	CodexResolvedTargetSchema,
 	codexContainerTargetId,
+	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-thinking.js";
 import { CodexAppServerClient, createJsonlTransport } from "./codexAppServer.js";
@@ -69,20 +70,6 @@ interface TargetSession {
 // without bound. Overflow drops the OLDEST, since the newest carry the state a reconcile would
 // otherwise have to rediscover.
 const OUTBOX_MAX_ENTRIES = 1_000;
-
-/**
- * Whether losing this message would change what an owner believes about an outcome.
- *
- * A refusal carries no generation and is sent once: losing it costs the operation its wait budget,
- * which the gateway already treats as unproven delivery. Commentary is replaceable narration.
- * Everything else is a state transition the gateway has to see.
- *
- * Deliberately NOT derived from whether the message is fenced. An activity event carries a
- * generation too, because a fence is what orders it, not because its loss matters.
- */
-function isReliable(message: { kind?: unknown; generation?: unknown }): boolean {
-	return typeof message.generation === "number" && message.kind !== "activity";
-}
 
 export function codexTargetIdFor(target: CodexExecutionTarget): string {
 	return target.kind === "host" ? CODEX_HOST_TARGET_ID : codexContainerTargetId(target.project);
@@ -204,7 +191,7 @@ export class CodexDaemonService {
 		const parsed = CodexDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
 		const command = parsed.data;
-		const key = `${command.ownerKey} ${command.agentId}`;
+		const key = `${command.ownerKey}${command.agentId}`;
 		const previous = this.inflight.get(key) ?? Promise.resolve();
 		const next = previous
 			.then(() => this.dispatch(command))
@@ -560,10 +547,17 @@ export class CodexDaemonService {
 		);
 	}
 
+	/** Number, validate, retain if it matters, send. The schema's own parsed value is what decides
+	 * whether to retain, so the reliability table is consulted against the real union rather than
+	 * against an untyped draft. */
 	private publish(
 		session: TargetSession,
 		partial: Record<string, unknown>,
-		schema: { safeParse(value: unknown): { success: boolean } },
+		schema: {
+			safeParse(
+				value: unknown,
+			): { success: true; data: CodexDaemonEvent | CodexDaemonReceipt } | { success: false };
+		},
 	): void {
 		const eventId = session.nextEventId;
 		session.nextEventId += 1;
@@ -576,8 +570,9 @@ export class CodexDaemonService {
 		};
 		// Validated before it can be retained. An unparseable message would be replayed forever and
 		// refused every time, which reads to an owner as a permanently stuck agent.
-		if (!schema.safeParse(message).success) return;
-		if (isReliable(message)) this.retain(session.targetId, session.generation, eventId, message);
+		const parsed = schema.safeParse(message);
+		if (!parsed.success) return;
+		if (isReliableCodexMessage(parsed.data)) this.retain(session.targetId, session.generation, eventId, message);
 		this.deps.send(message);
 	}
 

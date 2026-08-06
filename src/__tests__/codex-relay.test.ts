@@ -43,15 +43,30 @@ function setup() {
 	sessionStore.confirm(sessionStore.teamOf(owner));
 	const request = new Request("http://gateway/codex", { headers: { "x-session-token": token } });
 	const sent: Record<string, unknown>[] = [];
+	// Mutable so a test can take the host away mid-run, which is the state the relay must not read as
+	// a fact about the record.
+	const host = { attached: true };
 	const relay = new CodexRelay({
 		service,
 		sessionStore,
 		sendToHost: (message) => {
+			if (!host.attached) return false;
 			sent.push(message);
 			return true;
 		},
 	});
-	return { service, relay, request, sessionStore, owner, ownerKey: sessionStore.teamOf(owner), sent };
+	return {
+		service,
+		relay,
+		request,
+		sessionStore,
+		owner,
+		ownerKey: sessionStore.teamOf(owner),
+		sent,
+		set attached(value: boolean) {
+			host.attached = value;
+		},
+	};
 }
 
 /** An agent whose start has been accepted, so it holds a thread, an active turn, and a fence. */
@@ -632,6 +647,53 @@ describe("Codex relay acknowledgement", () => {
 		// stream advance past it instead of stalling for the life of the generation.
 		const acks = context.sent.filter((message) => message.type === "codex_ack");
 		expect(acks.at(-1)).toMatchObject({ throughEventId: 3 });
+	});
+
+	it("asks about a held frame on reconnect even after its agent has gone idle", async () => {
+		const context = working(setup());
+		context.attached = false;
+		// Held, but the ask never left the socket.
+		context.relay.handleHostMessage(
+			frame(context, 1, { turnId: "turn-unknown", kind: "activity", itemId: "item-1", text: "reading" }),
+		);
+		await settle();
+
+		context.attached = true;
+		// The agent's real turn ends normally, so the record is idle and no longer "needs" reconciling.
+		context.relay.handleHostMessage(
+			frame(context, 2, { kind: "terminal", state: "completed", finalResponse: "done" }),
+		);
+		await settle();
+		expect(currentAgent(context).agentState).toBe("idle");
+		context.sent.length = 0;
+
+		context.relay.handleHostMessage({
+			type: "codex_hello",
+			daemonInstanceId: "daemon-1",
+			targets: [{ targetId: TARGET_ID, generation: 1 }],
+		});
+		await settle();
+
+		// Without this, the hold caps the acknowledgement for every agent on this target forever.
+		expect(context.sent.filter((message) => message.type === "codex_command")).toMatchObject([
+			{ kind: "reconcile", agentId: AGENT_ID },
+		]);
+	});
+
+	it("re-sends an acknowledgement whose first attempt never left the socket", async () => {
+		const context = working(setup());
+		context.attached = false;
+		context.relay.handleHostMessage(frame(context, 1, { kind: "activity", itemId: "item-1", text: "reading" }));
+		await settle();
+		expect(context.sent).toEqual([]);
+
+		// The daemon reconnects and replays what it still holds. A watermark advanced on the failed send
+		// would suppress this as already-acknowledged, and a quiet stream would never recover.
+		context.attached = true;
+		context.relay.handleHostMessage(frame(context, 1, { kind: "activity", itemId: "item-1", text: "reading" }));
+		await settle();
+
+		expect(context.sent.filter((message) => message.type === "codex_ack")).toMatchObject([{ throughEventId: 1 }]);
 	});
 
 	it("reconciles every record its owner still believes is working when the daemon reconnects", () => {

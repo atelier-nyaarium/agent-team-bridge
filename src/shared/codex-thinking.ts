@@ -1360,6 +1360,32 @@ export type CodexListAvailabilityError = z.infer<typeof CodexListAvailabilityErr
 export type CodexDaemonCommand = z.infer<typeof CodexDaemonCommandSchema>;
 export type CodexDaemonEvent = z.infer<typeof CodexDaemonEventSchema>;
 export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
+/**
+ * Whether losing one daemon message would change what an owner believes about an outcome.
+ *
+ * Stated per kind rather than inferred, and keyed by the unions themselves so a new kind added above
+ * without an entry here fails the build. It was inferred once, from "carries a generation", and that
+ * read a fence's ORDERING role as a durability claim: commentary carries one too, and sat in the
+ * daemon's outbox being replayed forever.
+ */
+export const CODEX_RELIABLE_EVENT_KIND: Record<CodexDaemonEvent["kind"], boolean> = {
+	activity: false,
+	terminal: true,
+};
+export const CODEX_RELIABLE_RECEIPT_KIND: Record<CodexDaemonReceipt["kind"], boolean> = {
+	accepted: true,
+	rejected: false,
+	interruptResult: true,
+	interruptFailed: true,
+	reconciled: true,
+};
+
+export function isReliableCodexMessage(message: CodexDaemonEvent | CodexDaemonReceipt): boolean {
+	return message.type === "codex_event"
+		? CODEX_RELIABLE_EVENT_KIND[message.kind]
+		: CODEX_RELIABLE_RECEIPT_KIND[message.kind];
+}
+
 export type CodexEventAck = z.infer<typeof CodexEventAckSchema>;
 export type CodexDaemonHello = z.infer<typeof CodexDaemonHelloSchema>;
 

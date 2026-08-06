@@ -19,6 +19,9 @@ code does not belong here; rationale lives in `git log`.
     anchors, host RPC correlation
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
+  - `codexAgentService.ts` / `codexRelay.ts` - the session-owned Codex catalog and its reducers, and
+    the per-agent critical section that folds daemon receipts and events into them (see Codex
+    delegation below)
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store
@@ -38,6 +41,9 @@ code does not belong here; rationale lives in `git log`.
       is refused, and a model is checked against `model/list` at each point of use, not just at open
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
+    - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
+      per-agent serialization, and the outbox the gateway acknowledges against. `session()` shares one
+      open per target, since commands serialize per AGENT and two agents share a child
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
@@ -292,6 +298,40 @@ no TTL. A starting MCP reads both before the McpServer exists.
   fresh read only ever adds a drift warning; reporting it as the answer would describe tools the
   session does not have.
 - A running session never changes its tools; a toggle is picked up at the next session start.
+
+### Codex delegation
+
+A session can hand a self-contained sub-task to a `codex app-server` thread it owns. The daemon
+supervises one child per execution target; the gateway owns the durable record and is the only side
+that decides anything.
+
+**A fence is which child spoke, and how far in:** `(daemonInstanceId, targetId, generation,
+lastEventId)`. Every fenced message carries all four and its own `eventId` IS the fence's high-water
+mark, so a receipt and the events around it order by construction. `classifyFence` sorts an arriving
+message into advances / duplicate / foreign, and **reconciliation is the ONLY path that may install a
+fence which does not advance the current one** - re-establishing which child speaks for an agent is
+what it is for.
+
+**An acknowledgement retires the daemon's only copy.** So `ignored` and `applied` both permit it
+(one changed state, the other never will) and only a withheld decision does not. A frame the gateway
+cannot place is held, and a completed reconciliation is the single thing that supersedes an agent's
+held frames - which is why the undecided set is keyed by agent even though the stream is per target.
+
+**Reliable is not the same as fenced.** An activity event carries a generation because a fence orders
+it, not because losing it matters. Commentary and refusals are sent once; acceptances, terminals and
+interrupt results are retained until acknowledged and replayed across a gateway reconnect.
+
+**A reader of App Server state returns what it KNOWS, and "could not find out" is one of the things
+it can know.** Three separate two-valued readers each turned a silence into a definite answer, and
+each one reported live work as dead. `ReadOutcome` and `runningTurn` are three-way for that reason;
+so is anything added beside them.
+
+**`thread/read` needs `includeTurns: true`** or it answers successfully with an empty `turns` array.
+Nothing catches that but a live server.
+
+**Notifications are dispatched in a microtask**, not inline. Resolving a request only SCHEDULES its
+continuation, so an inline listener runs first and inverts wire order whenever a reply and a
+notification arrive in one chunk - which is exactly what a steer and its own turn's completion do.
 
 ### Android app
 
