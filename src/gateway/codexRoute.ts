@@ -93,7 +93,14 @@ function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexSt
  * satisfy an earlier waiter. Everything else is derived from the stored state, which is why a result
  * cannot claim an outcome the record does not hold.
  */
-function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefined): CodexAgentResult {
+function describeAgent(
+	agent: CodexPersistedAgent,
+	waitedTurnId: string | undefined,
+	/** True when the caller asked not to wait. A running turn is then a DELIVERY, not an expiry: the
+	 * envelope has `accepted` for exactly that, and calling it `waitTimedOut` tells a caller its
+	 * prompt ran out of time when it was in fact handed over successfully. */
+	declinedToWait = false,
+): CodexAgentResult {
 	// An agent whose state could not be confirmed says exactly that, whatever turns it happens to
 	// hold. Checked FIRST and for every branch: reporting a settled turn's answer while the record is
 	// in recovery hands the caller a previous prompt's response as though it answered this one.
@@ -127,7 +134,7 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: "working",
-			observation: interrupting ? "interruptRequested" : "waitTimedOut",
+			observation: interrupting ? "interruptRequested" : declinedToWait ? "accepted" : "waitTimedOut",
 			turn: { id: turn.id, state: turn.state },
 			// An interrupt request reports the turn it is stopping, never how that turn was delivered:
 			// the delivery already happened and is no longer what the caller is being told about. Sending
@@ -367,7 +374,7 @@ export class CodexRoute {
 				},
 			});
 		}
-		if (!awaitResponse) return describeAgent(agent, turnId);
+		if (!awaitResponse) return describeAgent(agent, turnId, true);
 		await this.waitForTurn(owner, agentId, turnId, deadline);
 		return describeAgent(this.current(owner, agentId) ?? agent, turnId);
 	}

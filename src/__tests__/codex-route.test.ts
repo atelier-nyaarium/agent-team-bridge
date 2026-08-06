@@ -170,6 +170,24 @@ describe("Codex gateway route", () => {
 		return agentId;
 	}
 
+	it("calls a declined wait an acceptance, not a timeout", async () => {
+		const context = setup();
+		await working(context);
+
+		const body = await (
+			await context.route.handle(post(context.token), {
+				kind: "start",
+				operationId: OPERATION_ID,
+				prompt: "Audit",
+				awaitResponse: false,
+			})
+		).json();
+
+		// Nothing timed out: the caller chose not to wait and the prompt was delivered.
+		expect(body.observation).toBe("accepted");
+		expect(body.delivery).toBe("started");
+	});
+
 	it("answers a stop on a working agent instead of crashing on its own envelope", async () => {
 		const context = setup();
 		const agentId = await working(context);
