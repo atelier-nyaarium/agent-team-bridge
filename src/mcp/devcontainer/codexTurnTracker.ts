@@ -3,6 +3,7 @@ import {
 	CODEX_ACTIVITY_MAX_ITEMS,
 	CodexAppServerAgentMessageCompletedSchema,
 	CodexAppServerTurnCompletedSchema,
+	classifyCodexItemPhase,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-thinking.js";
 
@@ -29,9 +30,6 @@ export interface TurnOutcome {
 
 ////////////////////////////////
 //  Functions & Helpers
-
-const FINAL_ANSWER_PHASE = "final_answer";
-const COMMENTARY_PHASE = "commentary";
 
 function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf8");
@@ -138,12 +136,17 @@ export class CodexTurnTracker {
 		// dropped rather than merged, which is what keeps an answer from crossing threads.
 		if (entry.threadId !== params.threadId) return null;
 
-		const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
-		if (phase === FINAL_ANSWER_PHASE) entry.lastFinalAnswer = params.item.text;
-		// Commentary is retained but never answers for the turn. Everything else is a candidate,
-		// including a phase this build has not seen, since dropping agent text loses it entirely.
-		else if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params, params.item.id, params.item.text);
-		else entry.lastCandidate = params.item.text;
+		// Commentary is retained but never answers for the turn.
+		switch (classifyCodexItemPhase(params.item.phase)) {
+			case "answer":
+				entry.lastFinalAnswer = params.item.text;
+				break;
+			case "commentary":
+				this.retainActivity(entry, params, params.item.id, params.item.text);
+				break;
+			default:
+				entry.lastCandidate = params.item.text;
+		}
 
 		// The terminal beat its own answer. Release the hold only once an answer has actually landed,
 		// or commentary would release it and the real answer would arrive after the turn was reported.

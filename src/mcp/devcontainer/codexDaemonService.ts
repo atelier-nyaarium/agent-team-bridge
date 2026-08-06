@@ -12,6 +12,7 @@ import {
 	type CodexExecutionTarget,
 	type CodexResolvedTarget,
 	CodexResolvedTargetSchema,
+	classifyCodexItemPhase,
 	codexContainerTargetId,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
@@ -128,11 +129,18 @@ function outcomeFromRead(result: unknown, threadId: string, turnId: string): Rea
 	if (turn.status === "interrupted") return { known: "settled", outcome: { status: "interrupted" } };
 	// A read carries no error text, so a failure recovered this way says only that it failed.
 	if (turn.status === "failed") return { known: "settled", outcome: { status: "failed", error: "turn failed" } };
-	const answers = turn.items.filter(
+	const messages = turn.items.filter(
 		(item): item is { type: "agentMessage"; id: string; text: string; phase?: unknown } =>
 			item.type === "agentMessage",
 	);
-	const final = answers.findLast((item) => item.phase === "final_answer") ?? answers.at(-1);
+	// The same three-way classification the live tracker uses, so a turn rebuilt after a restart and
+	// one witnessed as it ran cannot disagree about which item was the answer. Commentary is excluded
+	// from the fallback: handing narration back as a final response is a WRONG answer, where handing
+	// back none is merely an empty one.
+	const classified = messages.map((item) => ({ item, kind: classifyCodexItemPhase(item.phase) }));
+	const final =
+		classified.findLast((entry) => entry.kind === "answer")?.item ??
+		classified.findLast((entry) => entry.kind === "candidate")?.item;
 	return {
 		known: "settled",
 		outcome: { status: "completed", finalResponse: final?.text, finalItemId: final?.id },

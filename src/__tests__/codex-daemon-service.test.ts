@@ -133,6 +133,76 @@ describe("Codex execution targets", () => {
 	});
 });
 
+describe("Codex answer selection", () => {
+	/** The same turn, seen live and rebuilt from a read, must yield the same answer. */
+	async function liveAnswer(items: Array<{ id: string; text: string; phase?: string }>) {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		for (const item of items) {
+			context.session.listener({
+				method: "item/completed",
+				params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", ...item } },
+			});
+		}
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		return (context.sent.find((message) => message.kind === "terminal") as { finalResponse?: string })
+			?.finalResponse;
+	}
+
+	async function rebuiltAnswer(items: Array<{ id: string; text: string; phase?: string }>) {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.read = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{ id: "turn-1", status: "completed", items: items.map((i) => ({ type: "agentMessage", ...i })) },
+				],
+			},
+		};
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+		return (context.sent.find((message) => message.kind === "terminal") as { finalResponse?: string })
+			?.finalResponse;
+	}
+
+	it("agrees between the live path and the rebuild when a final answer exists", async () => {
+		const items = [
+			{ id: "a", text: "thinking about it", phase: "commentary" },
+			{ id: "b", text: "THE ANSWER", phase: "final_answer" },
+		];
+		expect(await liveAnswer(items)).toBe("THE ANSWER");
+		expect(await rebuiltAnswer(items)).toBe("THE ANSWER");
+	});
+
+	it("never rebuilds commentary into the answer when a turn produced none", async () => {
+		// A turn that only acted. Handing its narration back as a final response would tell the caller
+		// their prompt was answered, quoting a line that was never an answer.
+		const items = [{ id: "a", text: "reading the parser", phase: "commentary" }];
+		expect(await rebuiltAnswer(items)).toBe("");
+		// The live path holds such a turn instead, waiting for an answer that never comes - a real
+		// asymmetry, but the deliberate one: it would rather say nothing yet than say the wrong thing.
+		expect(await liveAnswer(items)).toBeUndefined();
+	});
+});
+
 describe("Codex daemon commands", () => {
 	it("starts a thread and reports the accepted delivery", async () => {
 		const context = setup();

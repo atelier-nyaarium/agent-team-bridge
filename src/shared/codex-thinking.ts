@@ -1370,6 +1370,23 @@ export const CodexAppServerTurnCompletedSchema = z.looseObject({
 	}),
 });
 
+/**
+ * What one App Server item is, by its `phase`.
+ *
+ * The SOLE owner of that vocabulary. Two readers need it - the live tracker as items stream in, and
+ * the rebuild that reconstructs a turn from `thread/read` after a restart - and they used to spell
+ * it separately. The rebuild had never heard of `commentary`, so a completed turn with no final
+ * answer handed its last narration line back as the turn's answer.
+ *
+ * `candidate` is deliberately the default for an unrecognized phase: dropping agent text loses it
+ * entirely, while treating narration as an answer is only wrong when a real answer exists.
+ */
+export function classifyCodexItemPhase(phase: unknown): "answer" | "commentary" | "candidate" {
+	if (phase === "final_answer") return "answer";
+	if (phase === "commentary") return "commentary";
+	return "candidate";
+}
+
 export const CodexAppServerRequestSchema = z.looseObject({
 	id: z.union([z.string(), z.number()]),
 	method: z.string().min(1),
