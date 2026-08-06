@@ -167,6 +167,22 @@ A: Only if the App Server turns out to support it. Phase 5 establishes whether t
 
 > "when you invent the codex start and messageing MCP tools, discover if we can specify model, slip it in then. otherwise gpt-5.6-luna permanent."
 
+## Question 20 - How is a Codex pipeline shaped, and who states the guardrails?
+
+Q: Which legs of a fan-out belong to Codex, and which to Claude?
+A: Fan-out dimensions run on Codex, consolidating steps on Claude, with the join sized to its difficulty rather than pinned to a tier. Research is the one exception and stays on Opus, web research especially. An iterating dimension reuses one Codex thread across its attempts rather than starting a fresh agent per loop.
+
+> "As long as the fan-out portions are Codex Luna, and the consolidating steps are Claude."
+
+> "The only exception is All research (esp. the web) must be Opus."
+
+> "put Sonnet/Opus depending on complexity. Architecture is a difficult job, so that was explicitly Opus. But a simple collating of simple things don't need flagship models"
+
+Q: Does Switchboard state a default permission posture?
+A: No. Read-only stays unstated and every scope is the caller's to set. The start tool's description instead urges the caller to state them: whether the agent may write and to which paths, whether it may reach the network, and what done looks like. Code edits are explicitly fine when the scope is narrow.
+
+> "I want it non-stated. Let it be whatever. BUT the tool description needs to urge you to guide it."
+
 # Plan
 
 ## Phase 1 - Lock the shared contract and ownership boundary ✅
@@ -223,17 +239,28 @@ The Codex `instructions`, reachable only through the tool:
 Codex agents are enabled. A Codex agent is a second-model-family thread
 this session owns, for handing off a self-contained sub-task.
 
-Choosing the engine:
-- Before fanning out, ask whether the dimensions should run on Codex or
-  Claude. Left to you, choose Codex.
-- Codex suits a dimension: an audit of one subsystem, an adversarial
-  second read, an isolated repro. Synthesis stays on Claude, since a join
-  needs your session context and this repo's conventions.
+Shaping a pipeline:
+- Fan-out dimensions run on Codex: an audit of one subsystem, an
+  adversarial second read, an isolated repro, an iterative fix.
+- Research is the exception, web research especially. It stays on Opus.
+- Consolidating steps run on Claude, since a join reads every dimension
+  and needs your session context and this repo's conventions. Size it to
+  the work: Sonnet collates, Opus decides.
+- Shapes that work, not an exhaustive list:
+    Research (Opus)                  -> Rank (Sonnet)
+    Audit (Codex)                    -> Synthesize (Sonnet)
+    Architecture assessment (Codex)  -> Synthesize (Opus)
+    Iterative fix until pass (Codex) -> Report (Sonnet)
+- Ask before fanning out whether the dimensions should be Codex or
+  Claude. Left to you, choose Codex for anything that is not research.
 
 Driving one from a dimension:
 - The agent on a dimension owns its Codex thread for that thread's life,
   starting it with codexStartAgent and following up with
   codexMessageAgent until its question is settled.
+- An iterating dimension reuses that one thread across its attempts
+  rather than starting a fresh agent per loop. A thread holding its own
+  last three failures fixes the fourth.
 - Give each a schema so it returns data, not prose. Condense where the
   detail does not change what you do next; never paraphrase a finding you
   will act on.
@@ -337,7 +364,34 @@ This phase changes how every capability's guidance reaches every session, so it 
 - `codexListAgents` returns only the invoking Claude session's agents and their complete stored prompt/response exchange history inline, without pagination or a separate detail tool. During outages it may return persisted state plus an unavailable/recovery observation.
 - Render each prompt exchange once with its delivery and target turn, and associate prompts sharing a steered turn with that turn's single stored activities/final outcome. Do not imply that a shared turn's final response belongs exclusively to one prompt.
 - Use strict tool inputs: a documented bounded non-empty prompt, a validated opaque agent ID, and an optional boolean `awaitResponse` defaulting to true. Reject unknown/invalid fields before allocating an agent or operation.
-- Put the requested warning directly in the start tool description: GPT-family agents may pursue goals through unexpected or suspect actions; callers should state constraints explicitly and review consequential work.
+- Write the start tool's description to this text. It is the whole safety story, since Switchboard enforces nothing and the thread holds write and network access for its life whatever the prompt says.
+
+```
+Start a Codex agent: a second-model-family thread this session owns, for a
+self-contained sub-task.
+
+State its guardrails in the prompt. Switchboard sets none for you, and the
+thread holds workspace-write and network access for its whole life whatever
+you write, so the prompt is the only boundary that exists. Say plainly:
+  - whether it may write at all, and if so which paths
+  - whether it may reach the network
+  - what done looks like
+
+Codex is strong and it is literal. Given a goal and no edges, it will reach
+that goal by whatever route works, including routes you would not have picked.
+A narrow explicit scope gets excellent work out of it. An open brief gets
+surprises. Code edits are fine when the scope is narrow and you can state it.
+
+Reuse an agent rather than starting one per attempt. A thread that already
+holds its own last three failures fixes the fourth; a fresh one relearns the
+problem every time. Follow up with codexMessageAgent.
+
+awaitResponse (default true) waits up to nine minutes. Pass false to return on
+durable acceptance and collect later with codexAwaitAgent.
+
+The agent belongs to this session, not to its caller. If the caller dies,
+codexListAgents still returns it with its full history.
+```
 - Pass Claude's prompt through without Switchboard-injected red-team/read-only prose and without Switchboard-authored workflow status/final tools.
 
 ## Phase 8 - Verify races, recovery, isolation, and operability
