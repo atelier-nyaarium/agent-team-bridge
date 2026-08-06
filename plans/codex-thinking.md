@@ -597,10 +597,12 @@ not. Recorded rather than rushed, because each wants more care than the end of a
   bounded timer in the daemon that settles a held terminal with whatever it actually holds, which is
   exactly what `settlePending` was written for and what Phase 5's spec called a "bounded
   scheduler-driven reconciliation". It needs an injectable clock to stay testable.
-- **Nothing exercises `mcp/codex/codexTools.ts` end to end.** Every "end-to-end" test stops one layer
-  down at `CodexRoute.handle`, called with a pre-built body, so the tool registration, its schemas
-  and `routerPost` are all untested. That seam already shipped one regression - the `[object Object]`
-  refusal - and `routerErrorText` now has a direct test, but the tool layer above it does not.
+- ~~**Nothing exercises `mcp/codex/codexTools.ts` end to end.**~~ CLOSED. The body-building split off
+  into an exported `codexRequestBody`, checked against the gateway's OWN request schema rather than
+  against a hand-written expectation, and `routerPost` driven against a real `node:http` socket so a
+  structured refusal is proven to render its message. What remains uncovered is the registration
+  itself: `registerTool`'s wiring of an MCP input schema to a handler, which needs an MCP client and
+  is the next layer down again.
 - **No large-history test.** Exchanges, operations and turns are uncapped and unpaginated by design.
   Nothing builds an agent with hundreds of entries and checks that persistence, restore and the list
   projection still behave. A cost that only appears at scale would land on a long-lived session,
