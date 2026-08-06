@@ -165,6 +165,11 @@ This is a Codex thread setting and has no bearing on Workflow subagents, whose `
 Q: Can Claude choose the model per agent?
 A: Yes, confirmed against a live App Server. `thread/start` accepts `model` and echoes it back, so `codexStartAgent` takes an optional model defaulting to `gpt-5.6-luna`, fixed for that thread's life like every other thread setting. `codexMessageAgent` gains nothing from it.
 
+Q: What about reasoning effort and the other per-thread dials?
+A: Pinned to the strongest the chosen model advertises, and exposed nowhere. Luna's own default is `medium` and its ceiling is `max`, so an unset thread would quietly think less than it can. Nothing here is a caller choice: the model is the one dial, and it defaults rather than inheriting.
+
+> "Ensure that our tool defaults to Luna. not use default. And if it makes you choose context size and effort, max it out. No choices."
+
 > "when you invent the codex start and messageing MCP tools, discover if we can specify model, slip it in then. otherwise gpt-5.6-luna permanent."
 
 ## Question 20 - How is a Codex pipeline shaped, and who states the guardrails?
@@ -319,7 +324,9 @@ This phase changes how every capability's guidance reaches every session, so it 
 - Build an injectable `AppServerTransport`/child factory around JSONL stdio. Perform `initialize`/`initialized` before any work and verify compatibility with the documented supported Codex CLI/App Server version.
 - Use stable operations only: thread start/resume/read/unsubscribe and turn start/steer/interrupt. Do not use experimental dynamic tools or experimental terminal-cleanup APIs.
 - Configure every thread with its trusted canonical cwd, normal App Server workspace-write, network/web access, and `approvalPolicy: "never"`. Keep the ordinary workspace-write/temp behavior selected in the questionnaire; do not add a custom per-platform read-root policy.
-- Request `gpt-5.6-luna` on every thread, overridable by `CODEX_THINKING_MODEL`. Verify the id against `model/list` and refuse the thread with an explicit unavailable when it is not offered. Never fall back to the server's own default, since a caller would then believe it is getting one tier while receiving another. Report the model actually in use on every agent record so a list call can show it.
+- Request `gpt-5.6-luna` EXPLICITLY on every thread, overridable by `CODEX_THINKING_MODEL` or the start tool's optional model. Never omit it and inherit whatever the operator's `config.toml` happens to say, since that file is theirs and moves without warning. Verify the id against `model/list` and refuse the thread with an explicit unavailable when it is not offered, rather than falling back to the server default and leaving a caller believing it got one tier while running another. Report the model actually in use on every agent record so a list call can show it.
+- Pin reasoning effort to the STRONGEST tier that model advertises in `model/list`, read per model rather than hardcoded: luna tops out at `max` while sol also offers `ultra`, so a fixed string would silently under-drive one of them. An unset thread runs at the model's own default, which for luna is `medium`.
+- Expose no other per-thread dial. The model is the single choice, and it has a default rather than an inheritance.
 
 ### Confirmed against a live App Server
 
@@ -334,6 +341,8 @@ Spiked on `codex-cli 0.146.0`, so these are observations rather than assumptions
 - `item/agentMessage/delta` streams token deltas, which is the traffic Phase 2 refuses to persist.
 - Also seen and ignorable: `thread/started`, `turn/started`, `item/started`, `thread/status/changed`, `thread/tokenUsage/updated`, `account/rateLimits/updated`, `configWarning`, `mcpServer/startupStatus/updated`, `remoteControl/status/changed`.
 - An untrusted cwd logs a `configWarning` and continues with project-local config disabled. It is not an error, so do not treat it as one.
+- `modelProvider/capabilities/read` reports `webSearch: true`. Codex can reach the web on its own, which is why keeping research on Opus is a prompt-level instruction to the caller and not something the transport enforces.
+- Per-model `supportedReasoningEfforts` and `defaultReasoningEffort` both live in `model/list`, which is what makes the strongest-tier rule readable at runtime.
 - Implement every App Server server-initiated JSON-RPC request explicitly and fail closed:
   - Decline/cancel command, file-change, user-input, elicitation, and app/tool approval requests.
   - Grant no additional permission roots.
