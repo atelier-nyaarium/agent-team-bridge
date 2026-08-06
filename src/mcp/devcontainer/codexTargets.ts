@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import type { CodexResolvedTarget } from "../../shared/codex-thinking.js";
-import { isSlug } from "../../shared/session-id.js";
+import { type CodexResolvedTarget, parseCodexTargetId } from "../../shared/codex-thinking.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -91,11 +90,14 @@ export function containerEnvArgs(source: Record<string, string | undefined>): st
 		.flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
 
-// A name reaching docker exec must be a slug, matching the assertion every other exec call site in
-// the daemon makes. Defense in depth: the name is an argv element and never touches a shell.
-function containerName(project: string): string {
-	if (!isSlug(project)) throw Object.assign(new Error("target is not a slug"), { code: "badTarget" });
-	return `${project}_devcontainer-dev-1`;
+// The project comes from the shared targetId grammar rather than from reading the field directly, so
+// this cannot drift from whatever else builds one. The name is an argv element, never a shell string.
+function containerName(targetId: string): string {
+	const parsed = parseCodexTargetId(targetId);
+	if (parsed?.kind !== "devcontainer") {
+		throw Object.assign(new Error("target is not a container id"), { code: "badTarget" });
+	}
+	return `${parsed.project}_devcontainer-dev-1`;
 }
 
 function adoptProcess(proc: ReturnType<typeof spawn>): CodexChild {
@@ -144,6 +146,10 @@ function classify(err: unknown): string {
 	return typeof code === "string" ? code : "launchFailed";
 }
 
+function sameTarget(left: CodexResolvedTarget | undefined, right: CodexResolvedTarget): boolean {
+	return left?.kind === right.kind && left.targetId === right.targetId && left.cwd === right.cwd;
+}
+
 function describeExit(info: { code: number | null; signal: string | null }): string {
 	if (info.signal) return `signal:${info.signal}`;
 	return info.code === null ? "spawnError" : `exit:${info.code}`;
@@ -168,6 +174,7 @@ export class ExecutionTargetManager {
 		string,
 		{
 			lease?: TargetLease;
+			launchedFor?: CodexResolvedTarget;
 			generation: number;
 			fastFails: number;
 			backoffMs: number;
@@ -197,6 +204,12 @@ export class ExecutionTargetManager {
 		};
 		this.targets.set(target.targetId, entry);
 
+		// A child's cwd and launch mechanism are fixed for its whole life, so serving one to a caller
+		// asking for a different kind or cwd would hand back a process pointed somewhere else. Target
+		// sameness is kind + id + cwd here, matching what the gateway's own comparison already requires.
+		if (entry.lease && !sameTarget(entry.launchedFor, target)) {
+			return { state: "unavailable", errorClass: "targetIdCollision" };
+		}
 		if (entry.lease) return { state: "running", lease: entry.lease };
 
 		if (entry.gaveUpAt !== undefined) {
@@ -230,6 +243,7 @@ export class ExecutionTargetManager {
 
 		const lease: TargetLease = { generation: entry.generation, child };
 		entry.lease = lease;
+		entry.launchedFor = target;
 		child.onExit((info) => {
 			// Only the CURRENT generation's exit retires the lease. A late exit from a replaced child
 			// would otherwise tear down its successor.

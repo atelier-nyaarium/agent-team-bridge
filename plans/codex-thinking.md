@@ -313,6 +313,8 @@ Shipped as `mcp/devcontainer/codexTargets.ts`: `ExecutionTargetManager` over an 
 
 Two things the environment work had to get right: `docker exec` does not forward the caller's environment, so container settings ride as explicit `-e` pairs and only `CODEX_*` is worth carrying, and the container name is slug-asserted before it reaches argv the way every other exec call site in the daemon does.
 
+The targetId grammar now has one owner in `shared/codex-thinking.ts`: `host`, or `container:<project-slug>`. It was implied only by test fixtures before, and the launcher had read the field its own way, which would have rejected every real container target while its own fixtures passed. A cache hit also re-checks kind and cwd rather than trusting the id alone, matching the gateway's own target comparison, since a child's cwd is fixed for its whole life.
+
 Deliberately left for later phases, so a re-audit does not raise them again:
 
 - `acquire` has no production caller yet. Phase 6 routes Codex commands to it.

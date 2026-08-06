@@ -9,13 +9,13 @@ import {
 	scrubChildEnv,
 	type TargetLogEvent,
 } from "../mcp/devcontainer/codexTargets.js";
-import type { CodexResolvedTarget } from "../shared/codex-thinking.js";
+import { type CodexResolvedTarget, parseCodexTargetId } from "../shared/codex-thinking.js";
 
 ////////////////////////////////
 //  Functions & Helpers
 
 const HOST: CodexResolvedTarget = { kind: "host", targetId: "host", cwd: "/home/dev/projects/app" };
-const CONTAINER: CodexResolvedTarget = { kind: "devcontainer", targetId: "app", cwd: "/workspace/app" };
+const CONTAINER: CodexResolvedTarget = { kind: "devcontainer", targetId: "container:app", cwd: "/workspace/app" };
 
 function fakeChild(): CodexChild & { exit: (code?: number) => void; killed: boolean } {
 	const listeners: Array<(info: { code: number | null; signal: string | null }) => void> = [];
@@ -137,7 +137,19 @@ describe("one App Server per execution target", () => {
 		h.manager.acquire(HOST);
 		h.manager.acquire(CONTAINER);
 
-		expect(h.launched.map((l) => l.target.targetId)).toEqual(["host", "app"]);
+		expect(h.launched.map((l) => l.target.targetId)).toEqual(["host", "container:app"]);
+	});
+
+	it("refuses to serve a running child to a caller asking for a different cwd", () => {
+		// A child's cwd is fixed for its life, so handing this one over would point the caller at the
+		// wrong tree while reporting success.
+		const h = harness();
+		h.manager.acquire(CONTAINER);
+
+		const collided = h.manager.acquire({ ...CONTAINER, cwd: "/workspace/other" });
+
+		expect(collided.state).toBe("unavailable");
+		expect(collided.state === "unavailable" && collided.errorClass).toBe("targetIdCollision");
 	});
 
 	it("launches with a scrubbed environment", () => {
@@ -282,10 +294,19 @@ describe("what reaches a container", () => {
 		expect(containerEnvArgs({ HOST_WS_TOKEN: "secret", GH_TOKEN: "t" })).toEqual([]);
 	});
 
-	it("refuses a target name that is not a slug, before it can reach docker exec", () => {
-		const evil: CodexResolvedTarget = { kind: "devcontainer", targetId: "app; rm -rf /", cwd: "/workspace/app" };
+	it("reads the container name through the shared target grammar", () => {
+		// The rest of the codebase writes `container:<project>`, so a launcher reading the field its own
+		// way would reject every real target while its own fixtures looked fine.
+		expect(parseCodexTargetId(CONTAINER.targetId)).toEqual({ kind: "devcontainer", project: "app" });
+		expect(parseCodexTargetId("host")).toEqual({ kind: "host" });
+	});
 
-		expect(() => realLauncher.launch(evil, {})).toThrow();
+	it("refuses a target id that is not the grammar, before it can reach docker exec", () => {
+		for (const targetId of ["app", "container:app; rm -rf /", "container:", "container:UPPER"]) {
+			const bad: CodexResolvedTarget = { kind: "devcontainer", targetId, cwd: "/workspace/app" };
+
+			expect(() => realLauncher.launch(bad, {})).toThrow();
+		}
 	});
 });
 

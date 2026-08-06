@@ -431,6 +431,24 @@ export const CodexResolvedTargetSchema = z
 	})
 	.strict();
 
+/** The SOLE owner of the targetId grammar: `host`, or `container:<project-slug>`. Everything that
+ * builds or reads one goes through here, so a launcher cannot invent its own reading of the field. */
+export const CODEX_HOST_TARGET_ID = "host";
+const CODEX_CONTAINER_PREFIX = "container:";
+
+export function codexContainerTargetId(project: string): string {
+	return `${CODEX_CONTAINER_PREFIX}${project}`;
+}
+
+export function parseCodexTargetId(
+	targetId: string,
+): { kind: "host" } | { kind: "devcontainer"; project: string } | null {
+	if (targetId === CODEX_HOST_TARGET_ID) return { kind: "host" };
+	if (!targetId.startsWith(CODEX_CONTAINER_PREFIX)) return null;
+	const project = targetId.slice(CODEX_CONTAINER_PREFIX.length);
+	return isSlug(project) ? { kind: "devcontainer", project } : null;
+}
+
 export const CodexStoredTurnSchema = z.discriminatedUnion("state", [
 	z
 		.object({
