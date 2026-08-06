@@ -44,7 +44,6 @@ export interface CodexDaemonDeps {
 	/** Turns a host session's workdir HINT into a real directory. Injected because the rule lives in
 	 * the host daemon, and a hint may be a console-picked path or a bare human label. */
 	resolveHostCwd(hint: string | undefined): string;
-	model?: string;
 	now?(): number;
 }
 
@@ -469,7 +468,10 @@ export class CodexDaemonService {
 		const opened = this.deps.openClient ?? defaultOpenClient;
 		let client: AppServerSession;
 		try {
-			client = await opened(lease.child, this.deps.model ?? CODEX_DEFAULT_MODEL);
+			// The client's default, used only when a start names no model. A per-agent choice belongs on
+			// the tool call, not in this process's environment: a model is a property of the thread being
+			// opened, and one child serves threads that may each want a different one.
+			client = await opened(lease.child, CODEX_DEFAULT_MODEL);
 		} catch {
 			this.deps.targets.release(target.targetId);
 			return null;

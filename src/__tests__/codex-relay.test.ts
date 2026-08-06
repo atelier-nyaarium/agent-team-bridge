@@ -700,6 +700,37 @@ describe("Codex relay acknowledgement", () => {
 		]);
 	});
 
+	it("never acknowledges a frame it could not turn into a record", async () => {
+		const context = working(setup());
+		// A reducer that cannot build a valid record reports `failed`. That is a fact about the gateway,
+		// not about the frame, so acknowledging it would make the daemon delete the only copy of this
+		// turn's outcome. Stubbed because the natural triggers are schema edges, and the invariant under
+		// test belongs to the relay rather than to any one of them.
+		const stub = {
+			...context.service,
+			applyEvent: () => ({ disposition: "failed" as const, reason: "stubbed reducer failure" }),
+		} as unknown as CodexAgentService;
+		const sent: Record<string, unknown>[] = [];
+		const relay = new CodexRelay({
+			service: stub,
+			sessionStore: context.sessionStore,
+			sendToHost: (message) => {
+				sent.push(message);
+				return true;
+			},
+		});
+
+		relay.handleHostMessage({
+			...eventBase(context.ownerKey, 1),
+			kind: "terminal",
+			state: "completed",
+			finalResponse: "the only copy",
+		});
+		await settleRelay();
+
+		expect(sent.filter((message) => message.type === "codex_ack")).toEqual([]);
+	});
+
 	it("re-sends an acknowledgement whose first attempt never left the socket", async () => {
 		const context = working(setup());
 		context.attached = false;

@@ -103,7 +103,13 @@ export type CodexAcceptanceResult =
 export type CodexApplication =
 	| { disposition: "applied"; owner: SessionRecord; agent: CodexPersistedAgent; catalogRevision: number }
 	| { disposition: "ignored"; reason: string }
-	| { disposition: "reconcile"; owner: SessionRecord; agent: CodexPersistedAgent };
+	| { disposition: "reconcile"; owner: SessionRecord; agent: CodexPersistedAgent }
+	/**
+	 * The gateway could not build a valid record from this. That is evidence about THIS code, not
+	 * about the frame, so it must never be acknowledged: a reducer bug would otherwise make the daemon
+	 * delete the only copy of a terminal it was told to keep.
+	 */
+	| { disposition: "failed"; reason: string };
 
 export type CodexTransitionErrorCode =
 	| "invalid_input"
@@ -187,8 +193,15 @@ function classifyFence(
 	return next.lastEventId > current.lastEventId ? "advances" : "duplicate";
 }
 
+/** The frame does not describe anything this gateway owns, and never will. Safe to retire. */
 function ignore(reason: string): CodexApplication {
 	return { disposition: "ignored", reason };
+}
+
+/** The frame is fine; building a record from it failed. Never retired, because the failure is this
+ * gateway's and a retry or a reconcile may still place it. */
+function failed(reason: string): CodexApplication {
+	return { disposition: "failed", reason };
 }
 
 /** The fence a fenced daemon message stands at. Its own event ID is the fence's high-water mark, so
@@ -749,7 +762,7 @@ export class CodexAgentService {
 					? this.withActivity(agent, turnIndex, parsed.data.itemId, parsed.data.text, timestamp, fence)
 					: this.withTerminal(agent, turnIndex, parsed.data, timestamp, fence);
 		} catch {
-			return ignore("event did not produce a valid record");
+			return failed("event did not produce a valid record");
 		}
 		if (next === agent) return ignore("activity was already retained");
 		return this.applyAgent(owner, catalog, index, next);
@@ -914,7 +927,7 @@ export class CodexAgentService {
 			});
 			return this.applyAgent(owner, catalog, index, next);
 		} catch {
-			return ignore("rejection did not produce a valid record");
+			return failed("rejection did not produce a valid record");
 		}
 	}
 
@@ -956,7 +969,7 @@ export class CodexAgentService {
 			});
 			return this.applyAgent(owner, catalog, index, next);
 		} catch {
-			return ignore("interrupt result did not produce a valid record");
+			return failed("interrupt result did not produce a valid record");
 		}
 	}
 
@@ -994,7 +1007,7 @@ export class CodexAgentService {
 			});
 			return this.applyAgent(owner, catalog, index, next);
 		} catch {
-			return ignore("reconciliation did not produce a valid record");
+			return failed("reconciliation did not produce a valid record");
 		}
 	}
 

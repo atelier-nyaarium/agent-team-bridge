@@ -58,7 +58,6 @@ const codexDaemon = new CodexDaemonService({
 	daemonInstanceId,
 	send: safeSend,
 	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
-	model: process.env.CODEX_THINKING_MODEL,
 });
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
 // second handleWake against a session the first is still bringing up - the reattach branch could

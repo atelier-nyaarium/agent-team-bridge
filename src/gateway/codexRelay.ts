@@ -230,10 +230,18 @@ export class CodexRelay {
 		// for good. A record nobody can ask about at all - no thread yet - is genuinely decided, since
 		// holding it would cap the acknowledgement for every agent on that target with nothing left to
 		// release it.
-		const repairable = application.disposition === "reconcile" && isAskable(application.agent);
+		// `failed` means the gateway could not build a record, which is a fact about this code and not
+		// about the frame. It holds unconditionally: acknowledging it would let a reducer bug delete the
+		// daemon's only copy of a terminal. `reconcile` holds too, but only when there is somebody to
+		// ask - a record with no thread can never be answered about.
+		const repairable =
+			application.disposition === "failed" ||
+			(application.disposition === "reconcile" && isAskable(application.agent));
 		if (repairable) {
 			this.defer(message);
-			this.requestReconciliation(message.ownerKey, application.agent);
+			if (application.disposition === "reconcile") {
+				this.requestReconciliation(message.ownerKey, application.agent);
+			}
 		}
 		// A refusal carries no generation, so there is no stream to advance and nothing to acknowledge.
 		if ("targetId" in message && "generation" in message) {
