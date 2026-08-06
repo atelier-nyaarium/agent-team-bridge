@@ -32,6 +32,8 @@ code does not belong here; rationale lives in `git log`.
   - `designer/` / `connector/` - designer cards; game-client connector
   - `devcontainer/` - host daemon plumbing (`hostDaemon.ts`, `hostOpRunner.ts`, `tmuxCore.ts`) plus
     the per-session tools every peer registers
+    - `codexTargets.ts` - one supervised `codex app-server` per execution target. A working directory
+      is NOT a target property: a thread carries its own, so every host session shares one child
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
