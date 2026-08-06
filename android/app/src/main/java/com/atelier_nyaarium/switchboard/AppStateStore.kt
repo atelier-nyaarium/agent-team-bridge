@@ -39,7 +39,7 @@ sealed interface IdentityLoad {
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
  */
-class AppStateStore(context: Context) : IdleSilenceStore {
+class AppStateStore(context: Context) : IdleSilenceStore, com.atelier_nyaarium.switchboard.board.BoardStore {
 	/** Where this app's durable state lives on disk. The prefs live here already; anything else
 	 * that has to survive a restart (the blob store's bytes) roots off the same directory. */
 	val filesDir: File = context.applicationContext.filesDir
@@ -251,11 +251,17 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 
 	fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
 
+	/** The whole task-board blob: per-Gateway cache + sync metadata, the pending-action queue, and
+	 * the one board draft - ONE key, so an optimistic edit and its queue append land in one apply. */
+	override fun saveTaskBoard(json: String) = prefs.edit().putString(KEY_TASK_BOARD, json).apply()
+
+	override fun loadTaskBoard(): String? = prefs.getString(KEY_TASK_BOARD, null)
+
 	/** The connected Gateway's id, learned from the register result. Anchors the
 	 * composite (gatewayId, name) key; empty until a federation-aware Gateway reports it. */
 	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
 
-	fun loadGatewayId(): String = prefs.getString(KEY_GATEWAY_ID, "") ?: ""
+	override fun loadGatewayId(): String = prefs.getString(KEY_GATEWAY_ID, "") ?: ""
 
 	/** The console-owned mailbox consumption cursor, durable across restarts. Resuming from its OWN
 	 * cursor instead of a server-dictated one means backlog piled up while the app was closed is
@@ -412,6 +418,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_PLUGIN_ENABLED_PREFIX = "plugin_enabled."
+		const val KEY_TASK_BOARD = "task_board"
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_CHIME_URI = "stts_chime_uri"
@@ -444,7 +451,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
 		val SCHEMA_WIPE_KEYS = listOf(
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_ABSENCE_STREAKS,
-			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD,
 		)
 
 		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
@@ -456,7 +463,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH,
-			KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS,
+			KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
 		)
 	}
 }

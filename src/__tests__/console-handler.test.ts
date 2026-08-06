@@ -947,6 +947,78 @@ describe("createConsoleDispatcher", () => {
 			expect(boardStore.entry(OWNER, "e1")?.state).toBe("in_progress");
 		});
 
+		it("an assign naming the session by its full address stores the bare key every other board reader uses", async () => {
+			const boardStore = new BoardStore(fakeDurable(), new PlaneRegistry(), undefined);
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("a1b2c3", { spawn: "recipe-app", sessionLabel: "Dinner" });
+			const handler = createConsoleDispatcher({
+				registry: new Map() as TeamRegistry,
+				conversationRegistry: new Map() as ConversationRegistry,
+				mailboxStore: new DeviceMailboxStore(),
+				localGatewayId: "test-host",
+				localDomainId: "test-domain",
+				routes: {
+					send: async () => jsonRes({}),
+					respond: () => jsonRes({}),
+					teams: () => jsonRes([]),
+					discover: async () => jsonRes([]),
+				} as ConsoleRoutes,
+				durableOpStore: new DurableOpStore(fakeDurable()),
+				boardStore,
+				sessionStore,
+			});
+			await handler.handleFrame(
+				frame({ kind: "board_upsert", entries: [{ id: "e1", title: "t", state: "open", rank: "m" }] }, "op-up"),
+			);
+
+			// The console holds a chat's Team.name, which is the qualified address. Every board reader
+			// on this side keys by the bare local field, so the stored value has to be that one.
+			const assign = frame(
+				{ kind: "board_set_session", id: "e1", sessionId: "test-domain.test-host.recipe-app.a1b2c3" },
+				"op-assign",
+			);
+			expect((await handler.handleFrame(assign)).ok).toBe(true);
+			expect(boardStore.entry(OWNER, "e1")?.sessionId).toBe("recipe-app.a1b2c3");
+
+			// And the session-end hook, which speaks that same bare key, can therefore find it.
+			boardStore.sessionEnded("recipe-app.a1b2c3");
+			expect(boardStore.entry(OWNER, "e1")?.sessionId).toBeUndefined();
+		});
+
+		it("an assign naming a session on ANOTHER Gateway is refused rather than folded onto a local one", async () => {
+			const boardStore = new BoardStore(fakeDurable(), new PlaneRegistry(), undefined);
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("a1b2c3", { spawn: "recipe-app", sessionLabel: "Dinner" });
+			const handler = createConsoleDispatcher({
+				registry: new Map() as TeamRegistry,
+				conversationRegistry: new Map() as ConversationRegistry,
+				mailboxStore: new DeviceMailboxStore(),
+				localGatewayId: "test-host",
+				localDomainId: "test-domain",
+				routes: {
+					send: async () => jsonRes({}),
+					respond: () => jsonRes({}),
+					teams: () => jsonRes([]),
+					discover: async () => jsonRes([]),
+				} as ConsoleRoutes,
+				durableOpStore: new DurableOpStore(fakeDurable()),
+				boardStore,
+				sessionStore,
+			});
+			await handler.handleFrame(
+				frame({ kind: "board_upsert", entries: [{ id: "e1", title: "t", state: "open", rank: "m" }] }, "op-up"),
+			);
+			const reply = await handler.handleFrame(
+				frame(
+					{ kind: "board_set_session", id: "e1", sessionId: "test-domain.other-host.recipe-app.a1b2c3" },
+					"op-foreign",
+				),
+			);
+			expect(reply.ok).toBe(false);
+			expect(reply.error).toContain("refused:");
+			expect(boardStore.entry(OWNER, "e1")?.sessionId).toBeUndefined();
+		});
+
 		it("a backgrounded send stays in-flight until the background push actually lands, not when the running reply goes out", async () => {
 			const durableOpStore = new DurableOpStore(fakeDurable());
 			// One resolver per dispatch (not a single shared variable a retry would silently

@@ -1,0 +1,217 @@
+package com.atelier_nyaarium.switchboard.board
+
+import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BoardRowsTest {
+	private fun entry(
+		id: String,
+		state: String = "open",
+		parent: String? = null,
+		rank: String = "m",
+		sessionId: String? = null,
+		trashedAt: Long? = null,
+	) = BoardEntry(id = id, title = "t-$id", state = state, parent = parent, rank = rank, sessionId = sessionId, trashedAt = trashedAt)
+
+	private fun allIds(rows: BoardRows): List<String> {
+		val groups = listOf(rows.unassigned) + rows.sessions
+		return groups.flatMap { g -> (g.rows + g.gatheredRows).map { it.entry.id } } + rows.trash.map { it.entry.id }
+	}
+
+	@Test
+	fun everyEntryRendersExactlyOnceAcrossPileSessionsGatherAndTrash() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource(
+					"gw-a",
+					listOf(
+						entry("pile1"),
+						entry("pile2", parent = "pile1", rank = "V"),
+						entry("mine", sessionId = "s1", state = "in_progress"),
+						entry("kid", parent = "mine", sessionId = "s1"),
+						entry("doneLeaf", sessionId = "s1", state = "done", rank = "x"),
+						entry("bin", trashedAt = 5L),
+					),
+				),
+			),
+		)
+		val ids = allIds(rows)
+		assertEquals(ids.size, ids.distinct().size)
+		assertEquals(setOf("pile1", "pile2", "mine", "kid", "doneLeaf", "bin"), ids.toSet())
+	}
+
+	@Test
+	fun theDestinationCopyWinsEvenWhenTheStaleOriginCopyIsUnassigned() {
+		// The mid-move state on the origin: the entry is still there and no longer claimed. The
+		// resolver must answer "no Gateway" for an absent session, or the origin copy looks correctly
+		// homed and permanently beats the copy that actually moved.
+		val rows = flattenBoard(
+			listOf(
+				BoardSource("gw-a", listOf(entry("m1", sessionId = null))),
+				BoardSource("gw-b", listOf(entry("m1", sessionId = "sess-b", state = "in_progress"))),
+			),
+			sessionGateway = { if (it == "sess-b") "gw-b" else null },
+		)
+		val all = (listOf(rows.unassigned) + rows.sessions).flatMap { it.rows }
+		assertEquals(1, all.size)
+		assertEquals("gw-b", all[0].gatewayId)
+	}
+
+	@Test
+	fun twoGatewaysRunningTheSameSessionNameStayTwoGroups() {
+		// A stored sessionId is the bare local field, unique only within its Gateway. Grouping on it
+		// alone would merge two machines' work under one header, labelled with whichever was found.
+		val rows = flattenBoard(
+			listOf(
+				BoardSource("gw-a", listOf(entry("a1", sessionId = "recipe.claude"))),
+				BoardSource("gw-b", listOf(entry("b1", sessionId = "recipe.claude"))),
+			),
+		)
+		assertEquals(2, rows.sessions.size)
+		assertEquals(
+			setOf(GroupKey("gw-a", "recipe.claude"), GroupKey("gw-b", "recipe.claude")),
+			rows.sessions.mapNotNull { it.key }.toSet(),
+		)
+		assertEquals(listOf("a1"), rows.sessions.single { it.key?.gatewayId == "gw-a" }.rows.map { it.entry.id })
+	}
+
+	@Test
+	fun theMoveCrashWindowCollapsesById_destinationCopyWins() {
+		// Same id on both gateways: the copy homed where its sessionId lives (the destination) wins.
+		val rows = flattenBoard(
+			listOf(
+				BoardSource("gw-a", listOf(entry("m1", sessionId = "sess-b"))),
+				BoardSource("gw-b", listOf(entry("m1", sessionId = "sess-b", state = "in_progress"))),
+			),
+			sessionGateway = { if (it == "sess-b") "gw-b" else null },
+		)
+		val all = (listOf(rows.unassigned) + rows.sessions).flatMap { it.rows }
+		assertEquals(1, all.size)
+		assertEquals("gw-b", all[0].gatewayId)
+		assertEquals("in_progress", all[0].entry.state)
+	}
+
+	@Test
+	fun aLiveCopyBeatsATrashedOne() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource("gw-a", listOf(entry("x", trashedAt = 9L))),
+				BoardSource("gw-b", listOf(entry("x"))),
+			),
+		)
+		assertTrue(rows.trash.isEmpty())
+		assertEquals(listOf("x"), rows.unassigned.rows.map { it.entry.id })
+	}
+
+	@Test
+	fun aFinishedBranchFoldsOntoItsParentRowWithTheHiddenCount() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource(
+					"gw-a",
+					listOf(
+						entry("root", state = "in_progress", sessionId = "s1", rank = "a"),
+						entry("doneParent", state = "done", sessionId = "s1", rank = "b"),
+						entry("d1", state = "done", parent = "doneParent", sessionId = "s1", rank = "a"),
+						entry("d2", state = "cancelled", parent = "doneParent", sessionId = "s1", rank = "b"),
+					),
+				),
+			),
+		)
+		val group = rows.sessions.single()
+		val fold = group.rows.single { it.entry.id == "doneParent" }
+		assertEquals(2, fold.foldedCount)
+		assertTrue(group.rows.none { it.entry.id == "d1" || it.entry.id == "d2" })
+		assertTrue(group.gatheredRows.isEmpty())
+	}
+
+	@Test
+	fun oneOpenDescendantKeepsTheWholeBranchOpen() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource(
+					"gw-a",
+					listOf(
+						entry("doneParent", state = "done", sessionId = "s1"),
+						entry("stillOpen", state = "open", parent = "doneParent", sessionId = "s1"),
+					),
+				),
+			),
+		)
+		val group = rows.sessions.single()
+		assertEquals(listOf("doneParent", "stillOpen"), group.rows.map { it.entry.id })
+		assertEquals(0, group.rows[0].foldedCount)
+	}
+
+	@Test
+	fun aChildlessFinishedLeafGathersAtTheBottomAndAnExpandedFoldShowsItInPlace() {
+		val entries = listOf(
+			entry("live", state = "in_progress", sessionId = "s1", rank = "a"),
+			entry("loneDone", state = "done", sessionId = "s1", rank = "b"),
+			entry("doneParent", state = "done", sessionId = "s1", rank = "c"),
+			entry("dKid", state = "done", parent = "doneParent", sessionId = "s1"),
+		)
+		val folded = flattenBoard(listOf(BoardSource("gw-a", entries)))
+		val group = folded.sessions.single()
+		assertEquals(listOf("loneDone"), group.gatheredRows.map { it.entry.id })
+
+		val expanded = flattenBoard(listOf(BoardSource("gw-a", entries)), expandedFolds = setOf("doneParent"))
+		val expandedGroup = expanded.sessions.single()
+		assertTrue(expandedGroup.rows.any { it.entry.id == "dKid" })
+		assertEquals(listOf("loneDone"), expandedGroup.gatheredRows.map { it.entry.id })
+	}
+
+	@Test
+	fun siblingsOrderByRankAndAClaimedChildRootsItsOwnGroup() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource(
+					"gw-a",
+					listOf(
+						entry("p", rank = "m"),
+						entry("claimed", parent = "p", sessionId = "s1"),
+						entry("second", rank = "x"),
+						entry("first", rank = "a"),
+					),
+				),
+			),
+		)
+		assertEquals(listOf("first", "p", "second"), rows.unassigned.rows.map { it.entry.id })
+		val group = rows.sessions.single()
+		assertEquals(listOf("claimed"), group.rows.map { it.entry.id })
+		assertEquals(0, group.rows[0].depth)
+	}
+
+	@Test
+	fun aParentCycleFromBadDataTerminatesInsteadOfHangingTheUi() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource("gw-a", listOf(entry("a", parent = "b"), entry("b", parent = "a"))),
+			),
+		)
+		// Neither is a root (each parent is live in the same group), so neither renders - but the
+		// call returns rather than looping, and nothing crashes downstream.
+		assertTrue(allIds(rows).isEmpty())
+	}
+
+	@Test
+	fun trashSortsNewestFirstAndStaysOutOfTheTree() {
+		val rows = flattenBoard(
+			listOf(
+				BoardSource(
+					"gw-a",
+					listOf(
+						entry("old", trashedAt = 1L),
+						entry("new", trashedAt = 9L),
+						entry("kidOfTrashed", parent = "old"),
+					),
+				),
+			),
+		)
+		assertEquals(listOf("new", "old"), rows.trash.map { it.entry.id })
+		// A live child of a trashed parent renders as a root of its group, not under the trash.
+		assertEquals(listOf("kidOfTrashed"), rows.unassigned.rows.map { it.entry.id })
+	}
+}

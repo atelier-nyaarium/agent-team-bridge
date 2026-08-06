@@ -53,7 +53,7 @@ const FETCH_TIMEOUT_MS = 1500;
 
 /** The ids a gate may name. `CapabilityId` derives from it, so a gate against an id nothing reports
  * is a compile error rather than a surface that silently never appears. */
-export const GATED_CAPABILITY_IDS = ["designer", "references", CODEX_THINKING_CAPABILITY_ID] as const;
+export const GATED_CAPABILITY_IDS = ["designer", "references", "taskboard", CODEX_THINKING_CAPABILITY_ID] as const;
 
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
 

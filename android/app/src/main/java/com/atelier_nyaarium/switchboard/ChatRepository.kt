@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
@@ -12,6 +13,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
@@ -814,6 +816,15 @@ data class ChatState(
 	 * board nests under a spawn-point header, so the leaf alone identifies the session. The raw
 	 * canonical key is never shown. */
 	fun label(team: String, localGatewayId: String = ""): String = labelOrNull(team) ?: sessionLeaf(team)
+
+	/** The chat team an entry's stored `sessionId` names, on a given Gateway. Board entries key by
+	 * the bare local field, which is unique only within one Gateway, so both halves are needed or
+	 * two machines running the same project.session resolve to each other's label. Null when the
+	 * roster does not hold it: a forgotten session's leftovers, or the window between a presence
+	 * bump and the next mesh discovery pull. */
+	fun teamForSessionKey(gatewayId: String, key: String): String? =
+		teams.firstOrNull { it.gatewayId == gatewayId && localFieldOrSelf(it.name) == key }?.name
+			?: teams.firstOrNull { it.gatewayId.isEmpty() && localFieldOrSelf(it.name) == key }?.name
 }
 
 /** Recompute `team`'s unread count from `thread` and this state's OWN current anchor for it - the
@@ -1027,6 +1038,10 @@ class ChatRepository(
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. Declared before the migration
 	 * init block so the one-shot wipe can purge its cache root. */
 	val stts = SttsPlayer(filesDir)
+
+	/** The task board's console half: cache, pending queue and drain (see BoardManager's own doc).
+	 * The poll loop presents its known version, applies its plane snapshot, and drains it. */
+	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
 
 	/** What autoplay still has to speak. The repository owns it and advances it; [SttsPlayer] stays a
 	 * one-shot engine that knows nothing about what comes next. */
@@ -1387,7 +1402,23 @@ class ChatRepository(
 		runCatchingCancellable { client().register(enabledPlugins?.invoke()) }
 			.onSuccess { pluginReportPending = false }
 			.onFailure { DebugLog.log("Plugins", "re-register after toggle failed, retrying: ${it.message?.take(120)}") }
+		reportPluginsToOtherGateways()
 		Unit
+	}
+
+	/** The same plugin list to every OTHER Gateway this owner has. A capability store is per
+	 * Gateway and only the route one hears a register, so a session homed elsewhere would otherwise
+	 * never get the tools at all. Best-effort per Gateway; an offline one keeps its last report. */
+	private suspend fun reportPluginsToOtherGateways() {
+		val plugins = enabledPlugins?.invoke() ?: return
+		val route = localGatewayId
+		// From the KEYRING, not the session roster: a Gateway with no sessions listed still needs
+		// the report, and the first session created there would otherwise start with no tools.
+		val others = otherKeyringGateways(route)
+		for (gw in others) {
+			runCatchingCancellable { client().reportPluginsTo(gw, plugins) }
+				.onFailure { DebugLog.log("Plugins", "report to $gw failed (keeps its last): ${it.message?.take(80)}") }
+		}
 	}
 
 	/** STTS client from the settings-backed creds (NOT the blob), or null when not
@@ -2274,6 +2305,9 @@ class ChatRepository(
 			val reg = client().register(enabledPlugins?.invoke())
 			pluginReportPending = false
 			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
+			// Every OTHER Gateway needs the same list, or its sessions never learn this console's
+			// capabilities. Fired after the roster exists, so it runs off the poll loop's first pass.
+			repoScope.launch { reportPluginsToOtherGateways() }
 			val id = reg.gatewayId
 			if (id.isNotEmpty() && id != localGatewayId) {
 				localGatewayId = id
@@ -3873,6 +3907,154 @@ class ChatRepository(
 		runCatchingCancellable { client().listDirs(path).entries }.getOrDefault(emptyList())
 	}
 
+	/** board_read every NON-route Gateway the presence roster names (the route Gateway's half rides
+	 * the plane). Fired on board-tab open, pull-refresh, and entering a non-route session's thread;
+	 * a down Gateway just leaves its column stale. Same-Domain only: a linked friend's Gateway is
+	 * not this owner's board. */
+	fun refreshBoard() {
+		repoScope.launch {
+			for (gw in otherKeyringGateways(localGatewayId)) runCatchingCancellable { board.read(client(), gw) }
+		}
+	}
+
+	/** This owner's admitted Gateways other than the route one. Keyring-derived, so a Gateway with
+	 * no sessions in the roster is still reached, and a linked friend's is never included. */
+	private fun otherKeyringGateways(route: String): List<String> =
+		(Keyring.parse(store.loadDomain())?.admittedGatewayIds() ?: emptyList()).filter { it != route }
+
+	/** Sessions an entry may be assigned to: a live session (never a spawn-point, which has no record
+	 * for the gateway to resolve) on a Gateway this owner's keyring can seal to. The keyring is the
+	 * test rather than the Domain fields, which say nothing about whether a seal would succeed. */
+	fun boardAssignTargets(): List<Team> {
+		val reachable = (otherKeyringGateways(localGatewayId) + localGatewayId).toSet()
+		return _state.value.teams.filter {
+			it.kind != "console" && it.kind != "devcontainer" && (it.gatewayId.isEmpty() || it.gatewayId in reachable)
+		}
+	}
+
+	/** Forget a session that still holds unfinished board work. The disposition must REACH the
+	 * gateway before the forget does: the gateway's session-end hook unassigns everything it finds,
+	 * so a cancel arriving after it lands on an entry already back in the pile. A queued edit for one
+	 * of these entries would likewise send AFTER the disposition and overwrite it, since these ops
+	 * are absolute rather than monotonic, so the queue must be EMPTY for this Gateway before anything
+	 * is sent. Both checks happen first: a disposition that has already gone out cannot be recalled
+	 * when a later check decides to hold, and the owner would be left with cancelled tasks under a
+	 * session that still exists. */
+	fun forgetWithBoardDisposition(
+		team: String,
+		cancelThem: Boolean,
+		onHeld: (String) -> Unit,
+		onForgotten: () -> Unit,
+	) {
+		val gw = boardGatewayOf(team)
+		repoScope.launch {
+			// The caller reports a hold, not a transientMessage: this can be started from a thread,
+			// where nothing consumes that field, and the owner would be told nothing at all.
+			val flushed = runCatchingCancellable { board.drain(client()) }.getOrDefault(false)
+			if (!flushed || board.hasQueuedOn(gw)) {
+				DebugLog.log("Board", "forget held: $team still has queued edits")
+				withContext(Dispatchers.Main) { onHeld("Edits are still syncing. Try again in a moment.") }
+				return@launch
+			}
+			val landed = runCatchingCancellable {
+				board.sendDispositionBeforeForget(client(), gw, team, cancelThem)
+			}.getOrDefault(false)
+			if (!landed) {
+				DebugLog.log("Board", "forget held: $team's disposition did not land")
+				withContext(Dispatchers.Main) { onHeld("Could not reach the Gateway. Nothing was changed.") }
+				return@launch
+			}
+			forget(team)
+			// Only now is the session genuinely gone, so this is where its per-team plugin state and
+			// notifications may be destroyed - a held forget must leave them intact.
+			withContext(Dispatchers.Main) { onForgotten() }
+		}
+	}
+
+	/** Whether a session's thread belongs to a non-route Gateway (its board half is cadence-fresh
+	 * through board_read rather than live on the plane). */
+	fun isNonRouteSession(team: String): Boolean {
+		val gw = _state.value.teams.firstOrNull { it.name == team }?.gatewayId ?: return false
+		return gw.isNotEmpty() && gw != localGatewayId
+	}
+
+	/** The Gateway a session's board entries home on: its own, else the route Gateway. Takes a chat's
+	 * `Team.name` (the qualified address). */
+	fun boardGatewayOf(team: String?): String {
+		val gw = team?.let { s -> _state.value.teams.firstOrNull { it.name == s }?.gatewayId }
+		return gw?.ifEmpty { null } ?: localGatewayId
+	}
+
+	/** The same answer for an entry's stored `sessionId`, which is the bare local field rather than
+	 * the address, so it cannot be matched against `Team.name` directly. NULL rather than the route
+	 * fallback when nothing matches: the duplicate-id tie-break asks "is this copy homed where its
+	 * session lives", and a total function answers yes for a session that is not there at all.  */
+	fun boardGatewayOfKey(sessionKey: String): String? {
+		if (sessionKey.isEmpty()) return null
+		val gw = _state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
+		return gw?.ifEmpty { localGatewayId }
+	}
+
+	/** Capture a thought onto the route Gateway's backlog: root level, after the last root. */
+	fun boardCapture(title: String, body: String?) {
+		val gw = localGatewayId
+		val last = board.mergedEntries(gw)
+			.filter { it.parent == null && it.trashedAt == null }
+			.maxOfOrNull { it.rank }
+		val entry = com.atelier_nyaarium.switchboard.proto.BoardEntry(
+			id = UUID.randomUUID().toString().replace("-", "").take(32),
+			title = title,
+			body = body,
+			state = "open",
+			rank = com.atelier_nyaarium.switchboard.board.BoardRank.between(last, null),
+		)
+		board.enqueue(ConsoleOp.BoardUpsert(listOf(entry)), gw)
+	}
+
+	fun boardSetState(gatewayId: String, id: String, state: String) =
+		board.enqueue(ConsoleOp.BoardSetState(id, state), gatewayId)
+
+	fun boardSetTitle(gatewayId: String, id: String, title: String) =
+		board.enqueue(ConsoleOp.BoardSetTitle(id, title), gatewayId)
+
+	fun boardSetBody(gatewayId: String, id: String, body: String?) =
+		board.enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
+
+	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
+		board.enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
+
+	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the pile. A
+	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
+	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
+	fun boardAssign(fromGateway: String, id: String, team: String?) {
+		val target = boardGatewayOf(team)
+		// The stored value is the bare local field, never the address the chat tab is keyed by; the
+		// optimistic row has to group the same way the gateway will store it.
+		val sessionId = team?.let { board.sessionKeyOf(it) }
+		if (sessionId == null || target == fromGateway) {
+			board.enqueue(ConsoleOp.BoardSetSession(id, sessionId), fromGateway)
+			return
+		}
+		val entries = board.mergedEntries(fromGateway)
+		val children = entries.groupBy { it.parent }
+		val subtree = mutableListOf<com.atelier_nyaarium.switchboard.proto.BoardEntry>()
+		// Visited set, like every other walk over this tree: a self-parent from bad data would
+		// otherwise grow the list forever on the main thread.
+		val seen = mutableSetOf<String>()
+		val stack = ArrayDeque(listOf(id))
+		while (stack.isNotEmpty()) {
+			val cur = stack.removeLast()
+			if (!seen.add(cur)) continue
+			val e = entries.firstOrNull { it.id == cur } ?: continue
+			subtree.add(e.copy(sessionId = sessionId))
+			for (kid in children[cur] ?: emptyList()) stack.addLast(kid.id)
+		}
+		if (subtree.isEmpty()) return
+		// The moved root joins the destination at top level: its old parent stays behind.
+		subtree[0] = subtree[0].copy(parent = null)
+		board.enqueueMove(subtree, fromGateway, target)
+	}
+
 	val terminalRefreshMs: Long get() = store.terminalRefreshMs
 
 	fun setTerminalRefreshMs(ms: Long) {
@@ -4385,18 +4567,21 @@ class ChatRepository(
 					val presentedLinkedPeers = knownLinkedPeersVersion
 					val presentedReadAnchors = knownReadAnchorsVersion
 					val presentedCrossDomainPresence = knownCrossDomainPresenceVersions
+					val presentedTaskBoard = board.knownVersion
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
 					val mb = if (hold > 0) {
 						pollRacingFocusChange {
 							client().poll(
 								params.cursor, params.epoch, hold, presented, focus,
 								presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
+								presentedTaskBoard,
 							)
 						}
 					} else {
 						client().poll(
 							params.cursor, params.epoch, hold, presented, focus,
 							presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
+							presentedTaskBoard,
 						)
 					}
 					if (mb == null) {
@@ -4446,6 +4631,19 @@ class ChatRepository(
 					// resolve).
 					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
 					val pendingReadAnchors = mb.readAnchors
+					// Task-board plane: same generalized shape, one plane per owner. The route Gateway's
+					// half only - a non-route Gateway's entries arrive through board_read. Applying the
+					// snapshot never clobbers a pending local edit; mergedEntries re-applies the queue.
+					if (mb.taskBoard != null || mb.taskBoardVersion != null) {
+						mb.taskBoard?.let { entries ->
+							DebugLog.log("Plane", "taskBoard settled=${mb.settled} rows=${entries.size}")
+							board.applySnapshot(localGatewayId, entries, mb.taskBoardVersion, mb.taskBoardTruncated == true)
+						}
+					}
+					// Drain the board's pending actions on the poll cadence - the loop already runs at
+					// the right rate foreground and follows the pushback ladder backgrounded, and each
+					// action is its own relay carrying its own targetGateway.
+					launch { runCatching { board.drain(client()) } }
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the

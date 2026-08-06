@@ -404,6 +404,20 @@ export function createConsoleDispatcher({
 		return Address.local(localDomain, localGatewayId, project, session);
 	}
 
+	/** The bare `spawn.session` key a board entry stores, from whatever the console named the session
+	 * as. The console holds the fully-qualified Address (a chat's Team.name), while the board's every
+	 * other reader - the MCP route, sessionEnded, the TTL sweep - keys by the local field, so an
+	 * un-normalized value is stored but never matched again. A session on another Gateway is refused
+	 * rather than folded onto a same-named local one: a cross-Gateway assign moves the entry first, so
+	 * by the time this runs the target is always local. */
+	function localSessionKey(named: string): string {
+		const t = parseTarget(named, localDomain, localGatewayId);
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) throw new Error("refused: session_missing");
+		return t instanceof SpawnPoint
+			? composeSessionName(t.spawn, DEFAULT_SESSION)
+			: composeSessionName(t.spawn, t.session);
+	}
+
 	/** Resolve a console terminal target to the host tmux it maps to. The target is a local team
 	 * field (`spawn` -> default session, or `spawn.session`) or its fully-qualified Address;
 	 * `explicitSession` (create_session) overrides the derived session. A cross-Gateway target or an
@@ -1136,7 +1150,14 @@ export function createConsoleDispatcher({
 			// the sealed reply - the one shape the console's queue may retire an action on. Any other
 			// throw (disk trouble included) carries no prefix and the queue retries it.
 			case "board_upsert": {
-				return boardWrite(requireBoard().upsert(ownerId, op.entries));
+				return boardWrite(
+					requireBoard().upsert(
+						ownerId,
+						op.entries.map((e) =>
+							e.sessionId === undefined ? e : { ...e, sessionId: localSessionKey(e.sessionId) },
+						),
+					),
+				);
 			}
 			case "board_set_state": {
 				return boardWrite(requireBoard().setState(ownerId, op.id, op.state));
@@ -1157,10 +1178,11 @@ export function createConsoleDispatcher({
 				// The one existence check the store cannot make itself: an assign must name a session
 				// this Gateway knows (a cross-Gateway assign MOVES the entry first, so the target is
 				// always local). Unassign (absent sessionId) needs no such check.
-				if (op.sessionId !== undefined && sessionStore && !sessionStore.getByTeam(op.sessionId)) {
+				const sessionId = op.sessionId === undefined ? undefined : localSessionKey(op.sessionId);
+				if (sessionId !== undefined && sessionStore && !sessionStore.getByTeam(sessionId)) {
 					throw new Error("refused: session_missing");
 				}
-				return boardWrite(requireBoard().setSession(ownerId, op.id, op.sessionId));
+				return boardWrite(requireBoard().setSession(ownerId, op.id, sessionId));
 			}
 			case "board_remove": {
 				return boardWrite(requireBoard().remove(ownerId, op.ids));

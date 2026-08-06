@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.board.BoardWriter
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
@@ -18,6 +19,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleBoardReadResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBlobGetResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBlobPutResult
@@ -51,6 +53,7 @@ import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
+import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import com.atelier_nyaarium.switchboard.proto.TeamInfo
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
@@ -152,6 +155,12 @@ internal fun localFieldOf(canonical: String): String =
 		is Address -> composeSessionName(t.spawn, t.session)
 		is SpawnPoint -> t.spawn
 	}
+
+/** [localFieldOf] for a value that may ALREADY be a local field rather than a canonical address.
+ * `parseTarget` throws on one, and the board holds both forms: its entries store the local field
+ * while a chat's `Team.name` is the address. Idempotent, which is what lets a caller apply it
+ * without first knowing which form it was handed. */
+internal fun localFieldOrSelf(value: String): String = runCatching { localFieldOf(value) }.getOrDefault(value)
 
 /** The Gateway segment of a canonical address string. */
 internal fun gatewayOf(canonical: String): String =
@@ -321,6 +330,14 @@ data class ProvisionTenantResult(val ok: Boolean, val error: String? = null, val
  * which is what the gateway's schemas accept. */
 internal val wireJson = Json { ignoreUnknownKeys = true }
 
+/** The gateway's marker for a decision that will never apply, as opposed to a failure that might
+ * succeed later. Mirrors the prefix consoleHandler.ts stamps on a refusal. */
+const val BOARD_REFUSED_PREFIX = "refused:"
+
+/** A board op the gateway itself decided will never apply. The ONE outcome that retires a queued
+ * action; every other failure retries. */
+class BoardRefused(val reason: String) : Exception(reason)
+
 /** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields are identical by
  * design; the mapper avoids coupling the two class hierarchies. */
 private fun Crypto.SealedEnvelope.toProto(): SealedEnvelope =
@@ -331,7 +348,7 @@ private fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
 	Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
 /** Talks to the console bridge through the CA-pinned k8s API service-proxy. */
-class ConsoleClient(private val prov: Provisioning, private val store: AppStateStore) {
+class ConsoleClient(private val prov: Provisioning, private val store: AppStateStore) : BoardWriter {
 	private val client = buildPinnedClient(prov.caPem)
 
 	/** This device's staging half of the blob plane. Content-addressed, so attaching a file the
@@ -633,6 +650,21 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		"register",
 	)
 
+	/** Report this device's plugin list to a NON-route Gateway. A capability store is per Gateway
+	 * and only the route Gateway ever hears a plain register, so without this a session homed
+	 * anywhere else would never learn what this console can render - permanently, not as a rollout
+	 * window. Best-effort: an offline Gateway just keeps its previous report. */
+	suspend fun reportPluginsTo(gatewayId: String, enabledPlugins: List<EnabledPlugin>) {
+		relay(
+			ConsoleOp.Register(
+				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
+				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
+				enabledPlugins = enabledPlugins,
+			),
+			targetGateway = gatewayId,
+		)
+	}
+
 	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
 	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
 	 * back to `localGatewayId` (this connection's Gateway, learned at register). */
@@ -721,6 +753,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		knownLinkedPeersVersion: LinkedPeersVersion? = null,
 		knownReadAnchorsVersion: ReadAnchorsVersion? = null,
 		knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion>? = null,
+		knownTaskBoardVersion: TaskBoardVersion? = null,
 	): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
@@ -735,6 +768,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			knownLinkedPeersVersion = knownLinkedPeersVersion,
 			knownReadAnchorsVersion = knownReadAnchorsVersion,
 			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions,
+			knownTaskBoardVersion = knownTaskBoardVersion,
 		)
 		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
@@ -769,6 +803,27 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * seals E2E to that Gateway. Mirrors send(). */
 	private fun targetGatewayOf(target: String): String =
 		gatewayOfTarget(target, routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId())
+
+	/** A board mutation, sealed to the Gateway that homes the entry. Distinguishes the two outcomes
+	 * the pending queue must tell apart: an [BoardRefused] means the gateway itself decided the op
+	 * will never apply (retire it and flag the row), while a thrown error - transport, cleartext,
+	 * unseal, anything - means retry. Only a sealed, signature-verified reply can carry a refusal,
+	 * which the relay path already guarantees before this sees `ok`. */
+	override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String) {
+		val body = relay(op, opId, targetGateway = gatewayId)
+		if (body.ok) return
+		val error = body.error ?: ""
+		// A refusal is marked by its PREFIX, never by ok=false alone: the gateway answers ok=false
+		// for its own throws too (a Gateway not yet restarted says the board is unavailable), and
+		// retiring on those would discard the owner's edit on ordinary deploy skew.
+		if (error.startsWith(BOARD_REFUSED_PREFIX)) throw BoardRefused(error.removePrefix(BOARD_REFUSED_PREFIX).trim())
+		error("board write failed: ${error.ifEmpty { "unknown error" }}")
+	}
+
+	/** Read one Gateway's whole board half. The plane rides only the route Gateway's poll, so any
+	 * other Gateway's entries arrive through here. */
+	suspend fun boardRead(gatewayId: String): ConsoleBoardReadResult =
+		resultOf(relay(ConsoleOp.BoardRead, targetGateway = gatewayId), "board_read")
 
 	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
 	 * Gateway returns unchanged=true (no ansi) for an idle pane. */

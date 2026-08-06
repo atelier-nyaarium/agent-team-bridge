@@ -225,7 +225,7 @@ class ProtocolFixturesTest {
 		val poll = json.decodeFromString<ConsolePollResult>(fixture("poll-result-task-board.json"))
 		assertEquals("taskBoard", poll.settled)
 		assertEquals(1785179969544L, poll.taskBoard!![1].trashedAt)
-		assertNull("a live entry must keep trashedAt absent, never 0", poll.taskBoard!![0].trashedAt)
+		assertNull("a live entry must keep trashedAt absent, never 0", poll.taskBoard[0].trashedAt)
 
 		val upsert = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-board-upsert.json")).op
 		assertEquals("e-parent", (upsert as ConsoleOp.BoardUpsert).entries[1].parent)

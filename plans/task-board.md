@@ -702,6 +702,116 @@ The whole server half, landing together so it can deploy on its own.
   before committing, and restore is per-entry tolerant - four independent layers, any one of which
   now stops the class.
 
+- **Mechanism: the forget-with-undone-tasks path. Class: the disposition not actually reaching the
+  Gateway before the forget does.** Round 1: the disposition rode the ordinary pending queue, which
+  drains one op per Gateway per pass, so a session with two unfinished tasks could never flush in
+  time. Round 2: the queue-based `hasQueuedFor` check was blind to the unassign disposition, and the
+  drain still postponed whenever more than one op was pending. Round 3 (rewrite): sent inline and
+  awaited, which fixed the ordering against the forget but left an ORTHOGONAL race - a state edit
+  already in the queue sent afterwards and overwrote the owner's choice, since these ops are absolute
+  rather than monotonic. Patched by flushing the queue first and holding if anything survives.
+  **Not closed at the mechanism.** The real shape is that two writers (the queue and the inline
+  sender) target the same entries with no ordering between them, and every round has been a fresh
+  way for them to interleave. Raise at `architecture-fan-out`: either the disposition becomes a
+  single gateway-side op the console asks for by name, or the queue grows a per-entry barrier. A
+  fourth patch here should not be attempted.
+
+- **Mechanism: the session identifier crossing the console/gateway boundary. Class: one side's key
+  space silently used as the other's.** Round 1 (phase 2 red team): the console sent a chat's
+  qualified `Team.name` where the Gateway indexes by the bare `spawn.session`, so every assign was
+  refused and the forget gate could never fire. Round 2 (re-audit): the fix's own bare key is unique
+  only WITHIN a Gateway, so two machines running the same project+session merged into one group.
+  Closed at the mechanism by making the identity complete rather than by patching consumers: a board
+  session is `(gatewayId, sessionId)` everywhere the console reasons about one (`GroupKey`,
+  `teamForSessionKey`, `boardGatewayOfKey`), the conversion is one-directional through a single
+  function per side (`consoleHandler.localSessionKey` inbound, `BoardManager.sessionKeyOf`
+  console-side), and both resolvers return NULL for an unknown session rather than a plausible
+  wrong answer. A third round would mean a new op naming a session without the converter.
+
+### Phase 2 audit triage
+
+Twelve alignment gaps and eight defects, all verified against the code before acting. The ones that
+changed the design rather than just the implementation:
+
+- **A refusal must be recognised by its SHAPE, not by `ok=false`.** The gateway marks a real refusal
+  with a `refused: ` prefix and returns `ok=false` for every other throw too (a Gateway not yet
+  restarted answers "task board is not available"). Retiring on any `ok=false` silently discards the
+  owner's edits on exactly the deploy-skew CLAUDE.md calls normal.
+- **A refused write half must NOT unlock its linked delete.** Retiring the write on refusal makes the
+  delete eligible, and the entry dies on both Gateways - the loss write-then-delete exists to
+  prevent, inverted.
+- **The union's source list must include queued Gateways**, not just ones with a snapshot, or a move
+  to a never-read Gateway renders the entry ZERO times.
+- **A malformed op wedges its lane forever**: schema violations come back cleartext (retryable), and
+  only the oldest action per lane fires, so nothing behind it ever drains.
+
+### Phase 2 red-team outcomes
+
+Four angles over the working diff. The blocker and both majors were about the SAME thing, found from
+opposite ends, which is what earned the round its keep:
+
+- **BLOCKER - the two sides keyed sessions differently.** A chat's `Team.name` is the qualified
+  address; every board writer on the Gateway (the MCP route, `sessionEnded`, the TTL sweep) keys by
+  the bare `spawn.session`. The console sent the address, so `getByTeam` missed and EVERY console
+  assign came back `session_missing` - which also meant `undoneCount` was permanently 0, so the
+  forget gate the owner asked for could never once appear. Normalized at the console edge in
+  `consoleHandler` (where `forget`, `close_session` and `rename` already did it), with a foreign
+  Gateway refused rather than folded onto a same-named local session. The console converts through
+  the one `sessionKeyOf`, so the label lookup and the gateway-of-a-key resolution follow.
+- **The thread's own Forget skipped the gate entirely.** Same destructive action, gated from the
+  sessions list and ungated from the overflow menu. Both now share one teardown closure, so the
+  plugin sweep and the notification cancels cannot land on only one path.
+- **The disposition raced the pending queue.** A queued state edit sent AFTER it and overwrote the
+  choice; these ops are absolute, not monotonic. The forget now flushes the queue first and holds if
+  anything is left.
+- **`MAX_ATTEMPTS` discarded the owner's edit.** The counter was persisted and never reset, so it
+  measured an action's whole lifetime, not consecutive failures - and a peer Gateway down for eight
+  poll cycles threw the edit away. Directly against Q11 ("retries until it succeeds"). The count now
+  only drives a "not synced" row marker; a refusal is still the one thing that retires an action.
+- **Cancellation was being charged as a failure.** `catch (e: Exception)` with no
+  `rethrowIfCancellation`, the discipline `Cancellation.kt` names for every suspend-wrapping catch
+  site, so a service teardown spent attempts nothing had actually tried.
+- Smaller: the capture field and both fold states lost to a tab swipe (`rememberSaveable`, and the
+  per-group gather hoisted out of its `LazyColumn` item); the assign picker's Domain-flag filter
+  showed a guest console NOTHING and an admin console un-assignable spawn-points (keyring-derived
+  now); a fold badge counting children the expansion could never show; the strip's board read keyed
+  so a late-arriving roster never triggered it; a truncated column silently presented as complete.
+- **A test that pinned nothing.** `endRank rebalances instead of overflowing` never reached the
+  rebalance branch - a 63-digit tail still mints inside the bound. Only a full-width tail overflows.
+  Same class as the bug the test was written to guard, one layer up.
+
+**Second pass, over the fixes themselves.** Three of them had introduced defects of their own, which
+is why the re-audit was run rather than advancing:
+
+- **The key conversion traded a blocker for a collision.** A bare `spawn.session` is unique only
+  within its Gateway, so grouping on it merged two machines running the same project+session into
+  one header under whichever label was found first. Groups now carry `GroupKey(gatewayId,
+  sessionId)`, and `teamForSessionKey` takes both halves and returns NULL rather than guessing.
+- **The truncation merge resurrected deletions.** The projection is an id-sorted PREFIX, so it is
+  authoritative up to its own last id; carrying the prior cache forward unbounded re-added every
+  moved-away entry and every swept trash row on each poll, forever. Only the tail past the cut
+  carries now.
+- **Removing the retry ceiling wedged the lane.** The ceiling was also what eventually cleared an
+  op that could not send; without it one such op blocked its Gateway permanently. The lane now steps
+  PAST a struggling action rather than dropping it, and never onto another write to the same entry
+  (these ops are absolute, so reordering would apply the older value last).
+- **The forget sent before it decided.** `drain` silently no-ops when the poll's own drain holds the
+  lock, so ordering a send "after" it ordered it after nothing; and the queue check ran AFTER the
+  disposition had already gone out, so a held forget left tasks cancelled under a surviving session.
+  `drain` now reports whether it flushed, and both checks run before anything is sent.
+- A held forget reported nothing at all when started from a thread (`transientMessage` has no
+  consumer there). It is an app-level dialog now, shared by both surfaces.
+- The shared teardown closed whatever thread was open when a slow disposition finished, not the one
+  that was forgotten.
+
+**Deferred, deliberately.** `applyPresence` and `refreshDiscovery` both write the whole team roster,
+but the presence plane carries only the route Gateway's rows while discovery carries the mesh - so
+between a presence bump and the next discovery pull, non-route sessions are absent from `state.teams`
+entirely. Pre-existing and not board-specific (the session list has the same flicker today), but the
+board's by-name lookups now depend on that roster. The board degrades honestly rather than wrongly
+(an unmatched key falls back to its own leaf, never another machine's label). Raise at
+`architecture-fan-out`.
+
 ### Phase 1 red-team outcomes
 
 Fixed: the rank-overflow file-poisoning blocker (`endRank` rebalances, the store refuses `bad_rank`,
@@ -760,7 +870,10 @@ its own slice; the edit screen's placement field covers moves until it lands.
   rule - and the stale marker draws from it, so it can say how stale, not merely that a fetch
   failed.
 - Drag reorder is a NEW Compose-free module committing `(parentId, rank)` from the flattened rows
-  plus `visibleItemsInfo` - not a `TabDragMath` port. Its own slice.
+  plus `visibleItemsInfo` - not a `TabDragMath` port. Its own slice. **Landed as maths only**
+  (`BoardDragMath.kt` + tests): the drop resolver takes the row under the pointer and adopts ITS
+  parent, so a nested neighbour cannot silently reparent a row to the wrong depth. The gesture
+  wiring is deliberately still open; the edit screen's placement field covers moves until then.
 - Session card gains the live line as the top rung of its existing preview ladder, and drops the
   timestamp while a task is live.
 - The top strip in a thread: above `ReorderableTabRow` when tabs exist, expanded height capped with

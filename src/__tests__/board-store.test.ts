@@ -180,10 +180,17 @@ describe("durability and the plane", () => {
 			refused: "bad_rank",
 		});
 
-		store.upsert(OWNER, [entry("tail", { rank: `${"z".repeat(63)}V` })]);
+		// A full-width tail of MAX digits is the one shape whose end-mint OVERFLOWS: midpoint consumes
+		// every digit and appends one more. A 63-digit tail still mints inside the bound and would
+		// never reach the rebalance this asserts.
+		const overflowing = "z".repeat(64);
+		store.upsert(OWNER, [entry("tail", { rank: overflowing })]);
 		const minted = store.endRank(OWNER, undefined);
 		expect(minted.length).toBeLessThanOrEqual(64);
-		expect(store.entry(OWNER, "tail")!.rank < minted).toBe(true);
+		// The rebalance ran: the existing sibling was renumbered, not left at its old rank.
+		const tail = store.entry(OWNER, "tail")!.rank;
+		expect(tail).not.toBe(overflowing);
+		expect(tail < minted).toBe(true);
 	});
 
 	it("the projection sorts by id whatever the insertion order, so the plane hash is stable", () => {

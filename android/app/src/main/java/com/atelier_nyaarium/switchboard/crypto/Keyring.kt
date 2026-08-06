@@ -27,6 +27,14 @@ class Keyring(val snapshot: DomainSnapshot) {
 	/** The admission for a subject signing key, owner-verified and non-revoked. */
 	fun resolveSubject(signPubB64: String): Admission? = resolve { it.signPub == signPubB64 }
 
+	/** Every Gateway this owner has admitted and not revoked. The roster of sessions is a WEAKER
+	 * source: a Gateway with no sessions listed is still one this console must reach. */
+	fun admittedGatewayIds(): List<String> =
+		snapshot.admissions
+			.mapNotNull { it.admission.gatewayId?.takeIf { id -> it.admission.kind == "gateway" && id.isNotEmpty() } }
+			.distinct()
+			.filter { resolveGateway(it) != null }
+
 	private fun resolve(match: (Admission) -> Boolean): Admission? {
 		var best: SignedAdmission? = null
 		for (s in snapshot.admissions) {

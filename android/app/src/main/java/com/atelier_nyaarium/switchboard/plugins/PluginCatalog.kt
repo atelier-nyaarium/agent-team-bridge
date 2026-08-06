@@ -19,5 +19,9 @@ object PluginCatalog {
 	val all: List<Entry> = listOf(
 		Entry("designer", com.atelier_nyaarium.switchboard.plugins.designer.DesignerPlugin()),
 		Entry("references", com.atelier_nyaarium.switchboard.plugins.references.ReferencesPlugin()),
+		// Declaration-only: the board's surfaces are core app UI gated on isActive("taskboard"), so
+		// this claims no extension point. It exists to report the capability and carry the manifest's
+		// agent instructions to the gateway.
+		Entry("taskboard", PluginEntry {}),
 	)
 }

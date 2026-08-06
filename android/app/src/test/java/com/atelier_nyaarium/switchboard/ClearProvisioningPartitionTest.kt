@@ -39,6 +39,7 @@ class ClearProvisioningPartitionTest {
 			"sync_acked",
 			"sync_dropped",
 			"team_absence_streak",
+			"task_board",
 		)
 		for (k in mustWipe) assertTrue("$k must be wiped by clearProvisioning", k in wiped)
 	}

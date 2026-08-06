@@ -50,6 +50,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -112,6 +114,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -174,6 +178,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
+import com.atelier_nyaarium.switchboard.board.BoardEditScreen
+import com.atelier_nyaarium.switchboard.board.BoardGroup
+import com.atelier_nyaarium.switchboard.board.BoardLiveLine
+import com.atelier_nyaarium.switchboard.board.BoardScreen
+import com.atelier_nyaarium.switchboard.board.BoardSource
+import com.atelier_nyaarium.switchboard.board.GroupKey
+import com.atelier_nyaarium.switchboard.board.flattenBoard
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.TappedLink
 import com.atelier_nyaarium.switchboard.plugins.Plugins
@@ -309,6 +320,12 @@ fun App(
 	var showApproval by remember { mutableStateOf(false) }
 	// The board's "Running Gateway Setup" opens the host-setup manual.
 	var showHostHelp by remember { mutableStateOf(false) }
+	// The open task-board entry's full-screen editor, as (gatewayId, entryId).
+	var editEntry by remember { mutableStateOf<Pair<String, String>?>(null) }
+	// Why a board-gated forget did not happen. App-level, so it reaches the owner from the thread as
+	// well as the sessions list - the thread hosts no snackbar, and a silent refusal reads as a
+	// forget that worked.
+	var forgetHeld by remember { mutableStateOf<String?>(null) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
 	var showUsers by remember { mutableStateOf(false) }
@@ -511,6 +528,7 @@ fun App(
 			hostTenant = null
 			adminCeremonyCtx = null
 			enrolleeCeremonyCtx = null
+			editEntry = null
 			openTeam = opened
 			// A genuine open gesture - re-snap to the first unread row even if this thread is
 			// already the one on screen (openTeam unchanged does not recompose ThreadWebView).
@@ -540,9 +558,10 @@ fun App(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway || showHostHelp ||
 			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
 			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null ||
-			showYourDevices || showApproval,
+			showYourDevices || showApproval || editEntry != null,
 	) {
 		when {
+			editEntry != null -> editEntry = null
 			adminCeremonyCtx != null -> adminCeremonyCtx = null
 			enrolleeCeremonyCtx != null -> enrolleeCeremonyCtx = null
 			showLinkWizard -> showLinkWizard = false
@@ -559,6 +578,19 @@ fun App(
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
 			showSettings -> showSettings = false
 		}
+	}
+
+	// Outside the screen switch, so it reaches the owner whichever surface started the forget - the
+	// thread hosts no snackbar, and a silent refusal reads as a forget that worked. Nothing was
+	// changed when this shows, so Close is the only action it needs.
+	forgetHeld?.let { reason ->
+		ConfirmDialog(
+			title = "Forget postponed",
+			body = reason,
+			confirmText = "Close",
+			onConfirm = { forgetHeld = null },
+			onDismiss = { forgetHeld = null },
+		)
 	}
 
 	when {
@@ -694,6 +726,12 @@ fun App(
 				onProvision = { repo.command { provision(it) } },
 				onSettings = { showSettings = true },
 			)
+		// Ahead of openTeam: tapping an entry from the thread strip must show the editor, not the
+		// thread underneath it.
+		editEntry != null -> {
+			val (gw, id) = editEntry!!
+			BoardEditScreen(state = state, repo = repo, gatewayId = gw, entryId = id, onClose = { editEntry = null })
+		}
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
 			val session = state.sessions(state.localGatewayId).firstOrNull { it.name == openTeam }
@@ -713,6 +751,40 @@ fun App(
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
 				else -> statusWord(session.status)
 			}
+			// Everything a forget tears down BESIDE the repo's own record. Shared by the plain and the
+			// board-gated paths so the plugin sweep and the notification cancels cannot end up on only
+			// one of them; the gated path runs it from onForgotten, after the forget actually happened.
+			val forgetTeardown = { forgotten: String ->
+				pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
+				SwitchboardService.cancelTeamNotification(context, forgotten)
+				SwitchboardService.cancelScheduledSendFailedNotification(context, forgotten)
+				// Only if THIS thread is still the open one: a slow disposition can finish long after
+				// the owner has moved on, and closing whatever they opened since is not the ask.
+				if (openTeam == forgotten) openTeam = null
+			}
+			// This session's board slice for the strip. A non-route session's half is cadence-fresh
+			// through board_read, so entering its thread refreshes it (one of the three triggers).
+			val boardOn = pluginManager.isActive("taskboard")
+			val boardGateway = repo.boardGatewayOf(openTeam)
+			// Keyed on boardGateway too: opening from a notification composes the thread before the
+			// teams roster lands, and without that key the non-route read would never fire at all.
+			LaunchedEffect(openTeam, boardOn, boardGateway) {
+				if (boardOn && repo.isNonRouteSession(openTeam!!)) repo.refreshBoard()
+			}
+			val boardRevision by repo.board.revision
+			// boardGateway is a key here for the same reason the effect above takes it: it answers the
+			// route Gateway until the roster lands, and a failed read never bumps the revision.
+			val boardStripFor = remember(openTeam, boardRevision, boardOn, boardGateway) {
+				if (!boardOn) null
+				else {
+					val key = GroupKey(boardGateway, repo.board.sessionKeyOf(openTeam!!))
+					flattenBoard(listOf(BoardSource(boardGateway, repo.board.mergedEntries(boardGateway))))
+						.sessions.firstOrNull { it.key == key }
+				}
+			}
+			val boardLiveLineFor = remember(openTeam, boardRevision, boardOn, boardGateway) {
+				if (boardOn) repo.board.liveLine(boardGateway, openTeam!!) else null
+			}
 			ThreadScreen(
 				team = openTeam!!,
 				label = tabLabelFor(state, openTeam!!),
@@ -728,6 +800,8 @@ fun App(
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
 				openNonce = openNonce,
+				boardStrip = boardStripFor,
+				boardLiveLine = boardLiveLineFor,
 				revealAt = revealAt,
 				onRevealed = { revealAt = null },
 				unreadBoundary = repo::unreadBoundary,
@@ -779,11 +853,20 @@ fun App(
 				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
-					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 					repo.forget(forgotten)
-					SwitchboardService.cancelTeamNotification(context, forgotten)
-					SwitchboardService.cancelScheduledSendFailedNotification(context, forgotten)
-					openTeam = null
+					forgetTeardown(forgotten)
+				},
+				// The board gate. Plugin teardown rides onForgotten, so a disposition that never
+				// reached the Gateway leaves the thread and its state exactly as they were.
+				undoneTasks = if (boardOn) repo.board.undoneCount(boardGateway, openTeam!!) else 0,
+				onForgetWithTasks = { cancelThem ->
+					val forgotten = openTeam!!
+					repo.forgetWithBoardDisposition(
+						forgotten,
+						cancelThem,
+						onHeld = { forgetHeld = it },
+						onForgotten = { forgetTeardown(forgotten) },
+					)
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
 				// and the host machine's terminal is reached through the dedicated "host" target.
@@ -822,40 +905,96 @@ fun App(
 					snackbarHostState.showSnackbar(it)
 				}
 			}
-			SessionsScreen(
+			// Folded ONCE per board revision, not per card per recomposition: each call replays the
+			// whole pending queue over the whole snapshot, and the session list recomposes on every
+			// poll (unread, snippet, presence).
+			val boardOnHere = pluginManager.isActive("taskboard")
+			val boardRevisionForCards by repo.board.revision
+			val boardLines = remember(boardRevisionForCards, state.teams, boardOnHere) {
+				if (!boardOnHere) emptyMap()
+				else state.teams.associate { it.name to repo.board.liveLine(repo.boardGatewayOf(it.name), it.name) }
+			}
+			MainTabsScreen(
 				state = state,
+				boardEnabled = pluginManager.isActive("taskboard"),
 				snackbarHostState = snackbarHostState,
-				onRefresh = { repo.command { refreshTeams() } },
+				onRefresh = {
+					repo.command { refreshTeams() }
+					// The board's non-route columns have no live plane, so Refresh is their only
+					// manual retry.
+					repo.refreshBoard()
+				},
 				onSettings = {
 					settingsRoute = SettingsRoute.HUB
 					showSettings = true
 				},
 				queueState = queueState,
 				onQueue = { openQueueRequest.value = true },
-				onManage = { showManage = true },
-				onAddGateway = { showAddGateway = true },
-				onHostHelp = { showHostHelp = true },
-				onOpen = { team ->
-					openTeam = repo.openThread(team)
-					openNonce++
+				board = { modifier ->
+					BoardScreen(
+						state = state,
+						repo = repo,
+						onOpenEntry = { gw, id -> editEntry = gw to id },
+						modifier = modifier,
+					)
 				},
-				onRename = { team, name -> repo.command { rename(team, name) } },
-				onForget = { team ->
-					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
-					repo.forget(team)
-					SwitchboardService.cancelTeamNotification(context, team)
-					SwitchboardService.cancelScheduledSendFailedNotification(context, team)
+				sessions = { modifier ->
+					SessionsScreen(
+						state = state,
+						modifier = modifier,
+						onRefresh = { repo.command { refreshTeams() } },
+						onManage = { showManage = true },
+						onAddGateway = { showAddGateway = true },
+						onHostHelp = { showHostHelp = true },
+						onOpen = { team ->
+							openTeam = repo.openThread(team)
+							openNonce++
+						},
+						onRename = { team, name -> repo.command { rename(team, name) } },
+						onForget = { team ->
+							pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
+								it.onForget(context, team)
+							}
+							repo.forget(team)
+							SwitchboardService.cancelTeamNotification(context, team)
+							SwitchboardService.cancelScheduledSendFailedNotification(context, team)
+						},
+						// Fire the create and stay on the board: the gateway adopts the session's record
+						// synchronously and bumps the presence plane with it, so its own tile appears via
+						// this device's own next poll (spinner while it boots) with no separate refresh.
+						// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
+						onSpawn = { project, label, workdir -> repo.command { spawnSession(project, label, workdir) } },
+						onListDirs = { path -> repo.listDirs(path) },
+						// Launch the enrollee compare from the empty board when one is still owed (the
+						// device rooted an enroll invite but has not completed the in-person trust step).
+						onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
+							?.let { c -> { enrolleeCeremonyCtx = c } },
+						boardLine = { team -> boardLines[team.name] },
+						undoneFor = { team ->
+							if (pluginManager.isActive("taskboard")) {
+								repo.board.undoneCount(repo.boardGatewayOf(team.name), team.name)
+							} else 0
+						},
+						onForgetWithTasks = { team, cancelThem ->
+							// The disposition has to reach the Gateway before the forget does, so the
+							// repo owns the ordering and only calls back once the forget actually ran.
+							// Plugin state and notifications die THERE: a held forget must not destroy
+							// a session's design cards while the session itself survives.
+							repo.forgetWithBoardDisposition(
+								team,
+								cancelThem,
+								onHeld = { forgetHeld = it },
+								onForgotten = {
+									pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
+										it.onForget(context, team)
+									}
+									SwitchboardService.cancelTeamNotification(context, team)
+									SwitchboardService.cancelScheduledSendFailedNotification(context, team)
+								},
+							)
+						},
+					)
 				},
-				// Fire the create and stay on the board: the gateway adopts the session's record
-				// synchronously and bumps the presence plane with it, so its own tile appears via this
-				// device's own next poll (spinner while it boots) with no separate refresh. Tapping the
-				// tile opens its terminal view. A failure surfaces as a Snackbar.
-				onSpawn = { project, label, workdir -> repo.command { spawnSession(project, label, workdir) } },
-				onListDirs = { path -> repo.listDirs(path) },
-				// Launch the enrollee compare from the empty board when one is still owed (the device
-				// rooted an enroll invite but has not completed the in-person trust step).
-				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
-					?.let { c -> { enrolleeCeremonyCtx = c } },
 			)
 		}
 	}
@@ -1326,92 +1465,32 @@ internal fun tabLabelFor(state: ChatState, team: String): String {
 	return team
 }
 
+/** The main page: one Scaffold hosting the Sessions and Task Board tabs. Owns the top bar, the
+ * snackbar and the tab selection; each tab body is a plain Column that fills what it is given.
+ * Back on either tab exits the app, matching every other top-level Android surface. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionsScreen(
+fun MainTabsScreen(
 	state: ChatState,
+	boardEnabled: Boolean,
+	snackbarHostState: SnackbarHostState,
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	// What the queue is doing at a glance, and the way in. IDLE hides the control entirely, so the
 	// header never carries a button that does nothing.
 	queueState: QueueGlance,
 	onQueue: () -> Unit,
-	onManage: () -> Unit,
-	onAddGateway: () -> Unit,
-	onHostHelp: () -> Unit,
-	onOpen: (String) -> Unit,
-	onRename: (String, String) -> Unit,
-	onForget: (String) -> Unit,
-	onSpawn: (String, String, String?) -> Unit,
-	onListDirs: suspend (String) -> List<String> = { emptyList() },
-	onVerifyEnroll: (() -> Unit)? = null,
-	snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+	sessions: @Composable (Modifier) -> Unit,
+	board: @Composable (Modifier) -> Unit,
 ) {
-	// Long-press flow: action menu -> rename dialog or forget confirm.
-	var actionTeam by remember { mutableStateOf<Team?>(null) }
-	// Tapping a Gateway's Create button opens the new-session dialog with that Gateway's selectable
-	// projects (host first, then its catalog devcontainer projects).
-	var createDialogProjects by remember { mutableStateOf<List<String>?>(null) }
-	var renameTeam by remember { mutableStateOf<Team?>(null) }
-	var forgetTeam by remember { mutableStateOf<Team?>(null) }
-	// Per-Gateway accordion collapse state (default expanded).
-	val collapsedGateways = remember { mutableStateMapOf<String, Boolean>() }
-
-	actionTeam?.let { team ->
-		SessionActionsDialog(
-			label = state.label(team.name, state.localGatewayId),
-			canRename = team.kind != "devcontainer",
-			onRename = {
-				actionTeam = null
-				renameTeam = team
-			},
-			onForget = {
-				actionTeam = null
-				forgetTeam = team
-			},
-			onDismiss = { actionTeam = null },
-		)
-	}
-	renameTeam?.let { team ->
-		RenameDialog(
-			team = team.shortName,
-			current = state.label(team.name, state.localGatewayId),
-			onSave = {
-				onRename(team.name, it)
-				renameTeam = null
-			},
-			onDismiss = { renameTeam = null },
-		)
-	}
-	forgetTeam?.let { team ->
-		ConfirmDialog(
-			title = "Forget ${state.label(team.name, state.localGatewayId)}?",
-			body = "Drops this thread, its label, and unread state from this device.",
-			confirmText = "Forget",
-			onConfirm = {
-				onForget(team.name)
-				forgetTeam = null
-			},
-			onDismiss = { forgetTeam = null },
-		)
-	}
-	createDialogProjects?.let { projects ->
-		CreateSessionDialog(
-			projects = projects,
-			pendingSpawns = state.pendingSpawns,
-			onListDirs = onListDirs,
-			onSpawn = { project, session, workdir ->
-				onSpawn(project, session, workdir)
-				createDialogProjects = null
-			},
-			onDismiss = { createDialogProjects = null },
-		)
-	}
+	val tabs = if (boardEnabled) listOf("Sessions", "Task Board") else listOf("Sessions")
+	val pagerState = rememberPagerState(pageCount = { tabs.size })
+	val scope = rememberCoroutineScope()
 
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Agent Sessions") },
+				title = { Text(if (boardEnabled) "Switchboard" else "Agent Sessions") },
 				actions = {
 					// The queue's only IN-APP door. The bubble needs an overlay grant and the transport
 					// needs notifications, so a user who refuses both had no way to reach the list, the
@@ -1443,7 +1522,130 @@ fun SessionsScreen(
 		snackbarHost = { SnackbarHost(snackbarHostState) },
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
-			val sessions = state.sessions(state.localGatewayId)
+			if (tabs.size > 1) {
+				PrimaryTabRow(selectedTabIndex = pagerState.currentPage) {
+					tabs.forEachIndexed { index, title ->
+						Tab(
+							selected = pagerState.currentPage == index,
+							onClick = hapticClick { scope.launch { pagerState.animateScrollToPage(index) } },
+							text = { Text(title) },
+						)
+					}
+				}
+			}
+			HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+				if (page == 0) sessions(Modifier.fillMaxSize()) else board(Modifier.fillMaxSize())
+			}
+		}
+	}
+}
+
+@Composable
+fun SessionsScreen(
+	state: ChatState,
+	onRefresh: () -> Unit,
+	onManage: () -> Unit,
+	onAddGateway: () -> Unit,
+	onHostHelp: () -> Unit,
+	onOpen: (String) -> Unit,
+	onRename: (String, String) -> Unit,
+	onForget: (String) -> Unit,
+	onSpawn: (String, String, String?) -> Unit,
+	onListDirs: suspend (String) -> List<String> = { emptyList() },
+	onVerifyEnroll: (() -> Unit)? = null,
+	// The board's live line per session card; { null } keeps every card's ordinary ladder.
+	boardLine: (Team) -> BoardLiveLine? = { null },
+	// How many unfinished board entries this session holds, and the forget that first decides what
+	// becomes of them. Zero keeps the plain forget confirm.
+	undoneFor: (Team) -> Int = { 0 },
+	onForgetWithTasks: (String, Boolean) -> Unit = { _, _ -> },
+	modifier: Modifier = Modifier,
+) {
+	// Long-press flow: action menu -> rename dialog or forget confirm.
+	var actionTeam by remember { mutableStateOf<Team?>(null) }
+	// Tapping a Gateway's Create button opens the new-session dialog with that Gateway's selectable
+	// projects (host first, then its catalog devcontainer projects).
+	var createDialogProjects by remember { mutableStateOf<List<String>?>(null) }
+	var renameTeam by remember { mutableStateOf<Team?>(null) }
+	var forgetTeam by remember { mutableStateOf<Team?>(null) }
+	// Per-Gateway accordion collapse state (default expanded). rememberSaveable, not remember: the
+	// pager disposes this page whenever the board tab is showing, and a plain remember would
+	// silently re-expand every section on the way back.
+	val collapsedGateways = rememberSaveable { mutableStateOf(setOf<String>()) }
+
+	actionTeam?.let { team ->
+		SessionActionsDialog(
+			label = state.label(team.name, state.localGatewayId),
+			canRename = team.kind != "devcontainer",
+			onRename = {
+				actionTeam = null
+				renameTeam = team
+			},
+			onForget = {
+				actionTeam = null
+				forgetTeam = team
+			},
+			onDismiss = { actionTeam = null },
+		)
+	}
+	renameTeam?.let { team ->
+		RenameDialog(
+			team = team.shortName,
+			current = state.label(team.name, state.localGatewayId),
+			onSave = {
+				onRename(team.name, it)
+				renameTeam = null
+			},
+			onDismiss = { renameTeam = null },
+		)
+	}
+	forgetTeam?.let { team ->
+		// Forgetting a session with unfinished board work BLOCKS on a decision rather than offering
+		// an undo: an action button on a transient is too easy to double-tap into. Skipped entirely
+		// when nothing is undone, so the prompt always means something was actually at stake.
+		val undone = undoneFor(team)
+		if (undone > 0) {
+			BoardForgetDialog(
+				label = state.label(team.name, state.localGatewayId),
+				undone = undone,
+				onCancelTasks = {
+					onForgetWithTasks(team.name, true)
+					forgetTeam = null
+				},
+				onUnassign = {
+					onForgetWithTasks(team.name, false)
+					forgetTeam = null
+				},
+				onDismiss = { forgetTeam = null },
+			)
+		} else {
+			ConfirmDialog(
+				title = "Forget ${state.label(team.name, state.localGatewayId)}?",
+				body = "Drops this thread, its label, and unread state from this device.",
+				confirmText = "Forget",
+				onConfirm = {
+					onForget(team.name)
+					forgetTeam = null
+				},
+				onDismiss = { forgetTeam = null },
+			)
+		}
+	}
+	createDialogProjects?.let { projects ->
+		CreateSessionDialog(
+			projects = projects,
+			pendingSpawns = state.pendingSpawns,
+			onListDirs = onListDirs,
+			onSpawn = { project, session, workdir ->
+				onSpawn(project, session, workdir)
+				createDialogProjects = null
+			},
+			onDismiss = { createDialogProjects = null },
+		)
+	}
+
+	Column(modifier.fillMaxSize()) {
+		val sessions = state.sessions(state.localGatewayId)
 			// Computed here (rather than calling ChatRepository.confirmedDomainId(), which this
 			// Composable has no access to) so both linkedDomains and the local/peer session split below
 			// share one value.
@@ -1520,7 +1722,7 @@ fun SessionsScreen(
 				) {
 					for ((key, group) in byGateway) {
 						val composite = "${key.domainId}/${key.gatewayId}"
-						val collapsed = collapsedGateways[composite] == true
+						val collapsed = composite in collapsedGateways.value
 						// A peer Domain (a linked friend's) is labeled domain/gateway so a colliding
 						// gateway id reads distinctly; my own Domain shows the bare gateway id. Always
 						// false in practice now that `byGateway` groups `local` (peer rows already
@@ -1541,7 +1743,10 @@ fun SessionsScreen(
 								name = headerName,
 								online = group.any { it.isLive },
 								collapsed = collapsed,
-								onToggle = { collapsedGateways[composite] = !collapsed },
+								onToggle = {
+								val open = collapsedGateways.value
+								collapsedGateways.value = if (collapsed) open - composite else open + composite
+							},
 								showCreate = showCreate,
 								onCreate = {
 									// "host" first (the synthetic spawn point below), then catalog devcontainer
@@ -1574,6 +1779,7 @@ fun SessionsScreen(
 										team = team,
 										nested = true,
 										pulsePhase = pulsePhase,
+										boardLine = boardLine(team),
 										onClick = hapticClick { onOpen(team.name) },
 										onLongPress = { actionTeam = team },
 									)
@@ -1612,6 +1818,7 @@ fun SessionsScreen(
 									state = state,
 									team = team,
 									pulsePhase = pulsePhase,
+									boardLine = boardLine(team),
 									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)
@@ -1622,7 +1829,7 @@ fun SessionsScreen(
 						item(key = "linked-friends-label") { SectionLabel("Linked friends") }
 						for (friend in linkedDomains) {
 							val friendKey = "friend:${friend.domainId}"
-							val collapsed = collapsedGateways[friendKey] == true
+							val collapsed = friendKey in collapsedGateways.value
 							val entry = state.crossDomainPeerSessions[friend.domainId]
 							val freshness = crossDomainFreshness(entry?.lastRefreshedAt, freshnessNow)
 							val friendSessions = dedupedFriendSessions(entry?.sessions.orEmpty())
@@ -1631,7 +1838,10 @@ fun SessionsScreen(
 									name = friend.displayName ?: friend.domainId,
 									freshness = freshness,
 									collapsed = collapsed,
-									onToggle = { collapsedGateways[friendKey] = !collapsed },
+									onToggle = {
+										val open = collapsedGateways.value
+										collapsedGateways.value = if (collapsed) open - friendKey else open + friendKey
+									},
 								)
 							}
 							if (!collapsed) {
@@ -1658,7 +1868,6 @@ fun SessionsScreen(
 				}
 			}
 		}
-	}
 }
 
 /** The single status surface when the board has no sessions (the HealthHeader is hidden in this
@@ -2052,6 +2261,10 @@ fun SessionCard(
 	team: Team,
 	nested: Boolean = false,
 	pulsePhase: State<Float>,
+	// The board's live line, when this session has unfinished board work: it takes the preview
+	// ladder's top rung and displaces the relative time (a task title answers "is anything
+	// happening" better than a timestamp does). Null keeps the ordinary ladder.
+	boardLine: BoardLiveLine? = null,
 	onClick: () -> Unit,
 	onLongPress: () -> Unit,
 ) {
@@ -2133,11 +2346,35 @@ fun SessionCard(
 				if (unread > 0) Badge { Text("$unread") }
 			}
 			if (busy) PulseBar(pulsePhase)
+			// Unfinished board work takes the preview ladder's top rung, with the description and
+			// snippet beneath it. The rung carries the finished-over-total count in place of the
+			// relative time, which answers "is anything happening" less well than a task title does.
+			val liveBoardWork = boardLine?.takeIf { it.finished < it.total }
+			if (liveBoardWork != null) {
+				Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+					com.atelier_nyaarium.switchboard.board.StateMark(liveBoardWork.state)
+					Text(
+						liveBoardWork.title,
+						style = MaterialTheme.typography.bodySmall,
+						maxLines = 1,
+						overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+						modifier = Modifier.weight(1f),
+					)
+					Text(
+						"${liveBoardWork.finished}/${liveBoardWork.total}",
+						style = MaterialTheme.typography.labelSmall,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+					)
+				}
+			}
 			// The AI-managed vibe-check description outranks the last-message snippet as the card's
 			// preview line; a session with no description yet keeps the familiar last-message fallback.
 			val snippet = team.description ?: state.snippet(team.name)
 			val lastActivity = state.lastActivity(team.name)
-			if (snippet != null || lastActivity != null) {
+			// The rung above displaces the TIME, not this line: the description still says what the
+			// session is about, which the task title does not.
+			val timeShown = lastActivity?.takeIf { liveBoardWork == null }
+			if (snippet != null || timeShown != null) {
 				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 					if (snippet != null) {
 						Text(
@@ -2151,7 +2388,7 @@ fun SessionCard(
 					} else {
 						Spacer(Modifier.weight(1f))
 					}
-					lastActivity?.let {
+					timeShown?.let {
 						Text(
 							relativeTime(it),
 							style = MaterialTheme.typography.labelSmall,
@@ -2201,6 +2438,31 @@ fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: (
 		text = { Text(body) },
 		confirmButton = { TextButton(onClick = hapticClick(onConfirm)) { Text(confirmText) } },
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
+	)
+}
+
+/** Forgetting a session that still holds unfinished board work. Both ways out are explicit: cancel
+ * the tasks (they trash with the session) or unassign them (they return to the pile). Dismissing
+ * abandons the forget entirely rather than deciding by inaction. */
+@Composable
+private fun BoardForgetDialog(
+	label: String,
+	undone: Int,
+	onCancelTasks: () -> Unit,
+	onUnassign: () -> Unit,
+	onDismiss: () -> Unit,
+) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("Forget $label?") },
+		text = {
+			Text(
+				"It still holds $undone unfinished task${if (undone == 1) "" else "s"}. " +
+					"Finished ones go to the trash either way.",
+			)
+		},
+		confirmButton = { TextButton(onClick = hapticClick(onUnassign)) { Text("Back to the pile") } },
+		dismissButton = { TextButton(onClick = hapticClick(onCancelTasks)) { Text("Mark cancelled") } },
 	)
 }
 
@@ -2728,6 +2990,10 @@ fun ThreadScreen(
 	// App-scope openNonce); keys ThreadWebView's reveal effect so it re-snaps to the first unread
 	// row even when `team` itself is unchanged (re-tapping a notification for the open thread).
 	openNonce: Int,
+	// This session's board strip content: the tree rows when expanded, the live line collapsed.
+	// Null hides the strip entirely (plugin off, or no board entries for this session).
+	boardStrip: BoardGroup? = null,
+	boardLiveLine: BoardLiveLine? = null,
 	// (team, at) a queue tile asked to land on, or null. Passed straight through to ThreadWebView.
 	revealAt: Pair<String, Long>?,
 	// Cleared once the reveal has been handed to the renderer. Without it the request stays set and
@@ -2759,6 +3025,11 @@ fun ThreadScreen(
 	onClearDraft: () -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
+	// The board gate, same as the sessions list: unfinished tasks turn Forget into a decision the
+	// owner has to make. 0 (the default, and what an inactive board plugin reports) skips it, so the
+	// two surfaces cannot disagree about when a forget is safe.
+	undoneTasks: Int = 0,
+	onForgetWithTasks: (Boolean) -> Unit = {},
 	// At most one pending scheduled send for this team, null otherwise -
 	// drives the dock and gates the long-press menu's Schedule Send item.
 	scheduledSend: ScheduledSend?,
@@ -2874,7 +3145,21 @@ fun ThreadScreen(
 			onDismiss = { showRename = false },
 		)
 	}
-	if (confirmForget) {
+	if (confirmForget && undoneTasks > 0) {
+		BoardForgetDialog(
+			label = label,
+			undone = undoneTasks,
+			onCancelTasks = {
+				confirmForget = false
+				onForgetWithTasks(true)
+			},
+			onUnassign = {
+				confirmForget = false
+				onForgetWithTasks(false)
+			},
+			onDismiss = { confirmForget = false },
+		)
+	} else if (confirmForget) {
 		ConfirmDialog(
 			title = "Forget $label?",
 			body = "Drops this thread, its label, and unread state from this device.",
@@ -2998,6 +3283,11 @@ fun ThreadScreen(
 		// imePadding keeps the composer above the keyboard (adjustResize alone does
 		// not resize a Compose window on modern Android).
 		Column(Modifier.padding(pad).fillMaxSize().imePadding()) {
+			// The board strip sits ABOVE the tab row: it belongs to the bar (the pulse-as-bottom-edge
+			// treatment), and the tab row's own drag geometry stays untouched beneath it.
+			if (boardStrip != null && !terminalMode) {
+				com.atelier_nyaarium.switchboard.board.BoardStrip(group = boardStrip, liveLine = boardLiveLine)
+			}
 			if (tabs.size > 1) {
 				ReorderableTabRow(tabs = tabs, selected = team, tabLabel = tabLabel, onSelect = onGateway, onReorder = onReorderTabs)
 			}
