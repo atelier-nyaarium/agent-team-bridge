@@ -319,6 +319,14 @@ describe("what reaches a container", () => {
 		}
 	});
 
+	it("refuses a container-shaped id claiming to be a host target", () => {
+		// The container branch already re-derives its project from the id. Without the same check here,
+		// a mismatched pair runs on the host under the daemon's own user.
+		const mismatched: CodexResolvedTarget = { kind: "host", targetId: "container:app", cwd: "/tmp" };
+
+		expect(() => realLauncher.launch(mismatched, {})).toThrow();
+	});
+
 	it("refuses an unrecognized kind rather than falling through to an unsandboxed host spawn", () => {
 		const rogue = { kind: "sandbox", targetId: "host", cwd: "/" } as unknown as CodexResolvedTarget;
 

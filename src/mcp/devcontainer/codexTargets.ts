@@ -169,8 +169,15 @@ export const realLauncher: ExecutionTargetLauncher = {
 				];
 				return adoptProcess(spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] }));
 			}
-			case "host":
+			case "host": {
+				// The id has to agree with the kind in both directions. Without this, a container-shaped
+				// id paired with kind "host" runs on the host under the daemon's own user, which is the
+				// one direction the container branch already refuses.
+				if (parseCodexTargetId(target.targetId)?.kind !== "host") {
+					throw Object.assign(new Error("target is not a host id"), { code: "badTarget" });
+				}
 				return adoptProcess(spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "pipe"] }));
+			}
 			default:
 				// Never fall through to the host branch. An unrecognized kind reaching an unsandboxed
 				// spawn is the one mistake here that runs code somewhere it was never meant to.
