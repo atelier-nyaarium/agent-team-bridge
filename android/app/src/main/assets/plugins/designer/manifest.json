@@ -1,6 +1,6 @@
 {
 	"content_id": "designer",
-	"version": "7.20.2",
+	"version": "7.20.3",
 	"display_name": "Designer",
 	"description": "Design canvases pushed into a conversation render in a dock under the chat.",
 	"agent_instructions": "Switchboard renders design canvases in a dock under the chat. Mock up designs here by default; ask first if they would rather have Claude Designer.",
