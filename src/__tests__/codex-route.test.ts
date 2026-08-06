@@ -170,6 +170,23 @@ describe("Codex gateway route", () => {
 		return agentId;
 	}
 
+	it("carries a caller's model choice through to the daemon", async () => {
+		const context = setup();
+		await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION_ID,
+			prompt: "Audit",
+			awaitResponse: false,
+			model: "gpt-5.6-luna",
+		});
+
+		// The override path exists in the App Server client; without this it was unreachable.
+		expect(context.sent.find((message) => message.type === "codex_command")).toMatchObject({
+			kind: "start",
+			model: "gpt-5.6-luna",
+		});
+	});
+
 	it("calls a declined wait an acceptance, not a timeout", async () => {
 		const context = setup();
 		await working(context);

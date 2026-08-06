@@ -243,7 +243,9 @@ export class CodexDaemonService {
 		const session = await this.session(resolved);
 		if (!session) return this.reject(command, "execution target is unavailable");
 
-		const threadId = await session.client.startThread({ cwd: resolved.cwd });
+		// A caller-chosen model is checked against the App Server's own list inside startThread, so an
+		// unoffered one is refused rather than silently running a tier nobody asked for.
+		const threadId = await session.client.startThread({ cwd: resolved.cwd, model: command.model });
 		const binding: TurnBinding = { ownerKey: command.ownerKey, agentId: command.agentId, threadId };
 		session.threads.set(threadId, binding);
 		const turnId = await this.beginTurn(session, binding, command.prompt);

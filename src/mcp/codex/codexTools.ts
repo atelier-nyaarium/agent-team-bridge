@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	CodexAwaitAgentInputSchema,
+	CodexListAgentsInputSchema,
 	CodexMessageAgentInputSchema,
 	CodexStartAgentInputSchema,
 	CodexStopAgentInputSchema,
@@ -33,7 +34,11 @@ problem every time. Follow up with codexMessageAgent.
 
 awaitResponse (default true) waits up to about four minutes. A longer turn is not
 lost: it keeps running, and codexAwaitAgent picks it up. Pass false to return on
-durable acceptance and collect later the same way.
+durable acceptance and collect later the same way - and always pass false when
+you are running several at once.
+
+model is optional and belongs here only, since it is fixed for the thread's life.
+Leave it off unless you have a reason; an unoffered one is refused, not swapped.
 
 The agent belongs to this session, not to its caller. If the caller dies,
 codexListAgents still returns it with its full history.
@@ -114,16 +119,19 @@ export function registerCodexTools(mcpServer: McpServer): void {
 	const awaitSchema: any = CodexAwaitAgentInputSchema;
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const stopSchema: any = CodexStopAgentInputSchema;
+	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
+	const listSchema: any = CodexListAgentsInputSchema;
 
 	mcpServer.registerTool(
 		"codexStartAgent",
 		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
-		async (args: { prompt: string; awaitResponse?: boolean }) =>
+		async (args: { prompt: string; awaitResponse?: boolean; model?: string }) =>
 			post({
 				kind: "start",
 				operationId: operationId(),
 				prompt: args.prompt,
 				awaitResponse: args.awaitResponse ?? true,
+				...(args.model ? { model: args.model } : {}),
 			}),
 	);
 
@@ -154,7 +162,9 @@ export function registerCodexTools(mcpServer: McpServer): void {
 
 	mcpServer.registerTool(
 		"codexListAgents",
-		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: {} },
+		// The strict schema rather than a bare `{}`: an empty literal registers in strip mode, so unknown
+		// fields would be silently dropped where every sibling tool refuses them.
+		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: listSchema },
 		async () => post({ kind: "list" }),
 	);
 }

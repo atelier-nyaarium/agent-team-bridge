@@ -416,6 +416,10 @@ export const CodexStartAgentInputSchema = z
 	.object({
 		prompt: CodexPromptSchema,
 		awaitResponse: z.boolean().optional().default(true),
+		/** Belongs on start alone: a model is fixed for a thread's life. Verified against the App
+		 * Server's own `model/list` at the point of use, so an unoffered one is refused rather than
+		 * quietly falling back to a tier nobody asked for. */
+		model: z.string().min(1).max(128).optional(),
 	})
 	.strict();
 
@@ -1088,6 +1092,7 @@ export const CodexDaemonCommandSchema = z.discriminatedUnion("kind", [
 			operationId: OperationIdSchema,
 			target: CodexExecutionTargetSchema,
 			prompt: CodexPromptSchema,
+			model: z.string().min(1).max(128).optional(),
 		})
 		.strict(),
 	z

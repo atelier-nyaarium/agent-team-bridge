@@ -247,6 +247,7 @@ export class CodexRoute {
 				operationId: request.operationId,
 				target,
 				prompt: request.prompt,
+				model: request.model,
 			});
 		}
 		return this.settle(owner, agentId, request.operationId, request.awaitResponse);
@@ -405,7 +406,9 @@ export class CodexRoute {
 				const agent = this.current(owner, agentId);
 				// An agent that has fallen out of a working state settles the wait too: there is nothing
 				// left that could produce this turn's outcome until reconciliation runs.
-				if (!agent || agent.agentState === "unavailable") return true;
+				// `recovering` settles the wait too. describeAgent already reports it as unconfirmed, so
+				// waiting on past it only delays that same answer by the rest of the budget.
+				if (!agent || agent.agentState === "unavailable" || agent.agentState === "recovering") return true;
 				return turnOf(agent, turnId)?.state !== "inProgress";
 			},
 			deadline,
