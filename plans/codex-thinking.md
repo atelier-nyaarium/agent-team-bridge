@@ -341,7 +341,21 @@ Deliberately left for later phases, so a re-audit does not raise them again:
 - Give each daemon process a stable instance ID across WebSocket reconnects and each child a new App Server generation. A connection epoch admits only messages from the current authenticated socket; durable event validity is fenced separately by daemon instance, target, generation, thread, turn, and item/event IDs so reconnect replay is not discarded merely because the socket changed.
 - Scrub Switchboard credentials and unrelated daemon secrets from each child environment while retaining the target environment needed for Codex authentication and tools. Emit structured lifecycle logs containing only IDs, generations, state, and sanitized error class. Never log prompts, raw events, credentials, or tool payloads.
 
-## Phase 5 - Implement the App Server client fail-closed
+## Phase 5 - Implement the App Server client fail-closed ✅
+
+Shipped as `codexAppServer.ts` (transport plus client) and `codexTurnTracker.ts` (ingress). Verified against the real binary end to end: handshake, model check, thread, turn, and a selected answer.
+
+`initialize` advertises no version and no capabilities, so there is nothing to check compatibility against. `model/list` is the only capability source, and a model it does not offer refuses the thread. A per-call model override is verified against that same list, since it is the path Phase 7's optional input takes.
+
+Sandbox and network are deliberately not sent, leaving the App Server's ordinary workspace-write behavior, which is what the questionnaire chose.
+
+### Bug Classes
+
+- A parser that trusts its input's shape: `JSON.parse` accepts `null`, a bare array and a bare number, and reading a property off any of them throws inside a stream handler, where an uncaught throw reaches the daemon's `uncaughtException` guard and reaps every other target's App Server. This is the same blast radius as Phase 4's unlistened streams, from a different direction: anything parsed off a child's output needs its type checked before a field is read.
+- A lookup table exposed to attacker-chosen keys: the decline table was a plain object, so a request method named `constructor` or `toString` resolved to an inherited function, and the reply serialized to neither a result nor an error. A table keyed by anything a peer names has to be a Map or a null-prototype object.
+- Verification placed where it can be walked past: `open` checked the model, then `startThread` accepted a per-call override and sent it unchecked, so the guarantee held only for the default nobody would use. A check belongs at the point of use, not only at the point of construction.
+
+### Original spec
 
 - Build an injectable `AppServerTransport`/child factory around JSONL stdio. Perform `initialize`/`initialized` before any work and verify compatibility with the documented supported Codex CLI/App Server version.
 - Use stable operations only: thread start/resume/read/unsubscribe and turn start/steer/interrupt. Do not use experimental dynamic tools or experimental terminal-cleanup APIs.

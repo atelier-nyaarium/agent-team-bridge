@@ -52,12 +52,18 @@ interface TrackedTurn {
 	activityBytes: number;
 	truncated: boolean;
 	lastAgentMessage?: string;
+	lastUnphasedMessage?: string;
 	lastFinalAnswer?: string;
 	pendingTerminal?: { status: "completed" | "failed" | "interrupted"; error?: string };
 }
 
+// Turn ids of turns already reported. Bounded, because a late duplicate only ever arrives near its
+// own turn, so remembering the recent ones is enough to refuse one.
+const SETTLED_MEMORY = 256;
+
 export class CodexTurnTracker {
 	private readonly turns = new Map<string, TrackedTurn>();
+	private readonly settled = new Set<string>();
 
 	/** Feed one server event. Returns an outcome only when a turn is genuinely settled. */
 	accept(message: unknown): TurnOutcome | null {
@@ -84,6 +90,15 @@ export class CodexTurnTracker {
 
 	forget(turnId: string): void {
 		this.turns.delete(turnId);
+		this.remember(turnId);
+	}
+
+	private remember(turnId: string): void {
+		this.settled.add(turnId);
+		if (this.settled.size > SETTLED_MEMORY) {
+			const oldest = this.settled.values().next().value;
+			if (oldest !== undefined) this.settled.delete(oldest);
+		}
 	}
 
 	private entryFor(threadId: string, turnId: string): TrackedTurn {
@@ -95,15 +110,19 @@ export class CodexTurnTracker {
 	}
 
 	private onItemCompleted(params: { threadId: string; turnId: string; item: { text: string; phase?: unknown } }) {
+		if (this.settled.has(params.turnId)) return null;
 		const entry = this.entryFor(params.threadId, params.turnId);
-		// An item can only ever belong to the turn it names, so a late one from another turn updates
-		// that turn's own record and never this one's.
+		// A turn id belongs to one thread. An item naming a different one is not this turn's and is
+		// dropped rather than merged, which is what keeps an answer from crossing threads.
 		if (entry.threadId !== params.threadId) return null;
 
 		const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
 		entry.lastAgentMessage = params.item.text;
 		if (phase === FINAL_ANSWER_PHASE) entry.lastFinalAnswer = params.item.text;
-		if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params.item.text);
+		// Commentary is retained but never answers for the turn. Only an unphased message is a
+		// candidate, so a turn that produced nothing but commentary settles with no answer at all.
+		else if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params.item.text);
+		else if (phase === undefined) entry.lastUnphasedMessage = params.item.text;
 
 		// The terminal beat its own final item. Now that the item has landed, the turn can settle.
 		if (entry.pendingTerminal) return this.finish(params.turnId, entry.pendingTerminal);
@@ -114,7 +133,12 @@ export class CodexTurnTracker {
 		threadId: string;
 		turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message?: string } | null };
 	}) {
+		// A redelivered terminal for a turn already reported would otherwise fabricate a blank entry and
+		// answer a second time, with none of the first outcome's content.
+		if (this.settled.has(params.turn.id)) return null;
 		const entry = this.entryFor(params.threadId, params.turn.id);
+		if (entry.threadId !== params.threadId) return null;
+
 		const error = params.turn.error?.message ? sanitizeCodexErrorText(params.turn.error.message) : undefined;
 		const terminal = { status: params.turn.status, error };
 
@@ -136,14 +160,15 @@ export class CodexTurnTracker {
 			return { threadId: "", turnId, status: terminal.status, activities: [], truncated: false };
 		}
 		this.turns.delete(turnId);
+		this.remember(turnId);
 		return {
 			threadId: entry.threadId,
 			turnId,
 			status: terminal.status,
 			// Only a completed turn gets an answer, and only from its own items: the phased final if the
-			// server marked one, otherwise this exact turn's last completed message.
+			// server marked one, otherwise this turn's last unphased message. Commentary never answers.
 			finalResponse:
-				terminal.status === "completed" ? (entry.lastFinalAnswer ?? entry.lastAgentMessage) : undefined,
+				terminal.status === "completed" ? (entry.lastFinalAnswer ?? entry.lastUnphasedMessage) : undefined,
 			error: terminal.error,
 			activities: entry.activities,
 			truncated: entry.truncated,
