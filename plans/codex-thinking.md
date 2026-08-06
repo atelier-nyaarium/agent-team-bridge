@@ -459,7 +459,26 @@ by making a completed reconciliation the single thing that supersedes an agent's
 answers successfully either way, so every reconciliation read parsed cleanly and found nothing. Found
 only by running it against a real App Server; no test or type could have caught it.
 
-## Phase 7 - Expose session-scoped Claude tools
+## Phase 7 - Expose session-scoped Claude tools ✅
+
+Shipped: `codexRoute.ts` (one authenticated discriminated route behind all five tools) and
+`mcp/codex/codexTools.ts`. Released, reloaded, and dogfooded - the tools audited themselves, and the
+`switchboard:codex` agent drives them.
+
+Deviations from the spec text below, each deliberate:
+
+- **The wait budget is ~240s, not nine minutes.** Node's fetch abandons a silent connection at 300s
+  (measured: `UND_ERR_HEADERS_TIMEOUT` at 301s), so a longer hold could never deliver its answer.
+  A turn outliving the budget keeps running and `codexAwaitAgent` collects it.
+- **A refused REQUEST answers HTTP 400 with `CodexRequestErrorSchema`, carrying no `agentId`.** The
+  spec asks every result to return its agent id, but an agent RESULT may only carry an error when the
+  agent is genuinely unwell, so routing refusals through it produced three separate 500s.
+- **`awaitResponse: false` reports `accepted`**, not `waitTimedOut`. Nothing timed out.
+- **Reconciliation on await fires only for a record with no active turn.** Asking about a live turn
+  makes the daemon answer `recovering` when it cannot confirm that exact turn, which settled the wait
+  and reported running work as unconfirmed.
+
+### Bug Classes
 
 - Add one authenticated, discriminated gateway Codex route so validation and session authority cannot drift across five handlers.
 - Conditionally register only these tools when the cached capability contains `codex-thinking`:
@@ -522,6 +541,22 @@ has stopped being bad luck. This lap alone:
 The cheapest guard found so far remains one accessor owning a fact. The unguarded shape is a VALUE
 whose meaning is agreed by convention across modules - `recovering`, an `error` field that is
 sometimes a string and sometimes an object - rather than by a function both sides call.
+
+**Deferred redesign, ranked and left undone deliberately.** The architecture pass named one target
+above the two already recorded in Phase 6's crust: `CodexAgentState`'s five members are read by
+roughly fifteen inline predicates across three modules, forming at least six groupings that are named
+nowhere. The shipped `recovering` defect was two of those groupings colliding - the relay reads it as
+"still working, go ask", the route as "stop waiting, report unconfirmed" - and a third pair
+(`refuseDelivery`'s start-to-unavailable / message-to-recovering rule, rewritten independently in
+three places) is the same collision waiting to happen.
+
+The fix has a precedent in this repo rather than needing invention: `gateway/sessionAuthority.ts`
+plus its residue test solve exactly this for credentials, and say so in the test's own words. One
+owner module exporting a named question per grouping, plus a residue test that fails the build if a
+state literal appears outside it, converts the plan's discipline ("enumerate that decision's
+readers") into a compile-time fact. It is medium-sized, touches the surface that has broken on every
+repair, and wants to land alone with no behaviour change in the same commit - which is why it is
+recorded here rather than done in a lap that is also shipping features.
 
 **A refusal's reason is worth more than its existence.** `receipt.error` was stored nowhere and the
 caller was told "delivery was not confirmed within the wait budget" instead, which was both useless
