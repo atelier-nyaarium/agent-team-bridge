@@ -3311,7 +3311,7 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 	}
 }
 
-/** The baked-in plugin list, one row per catalog plugin with its opt-in toggle. A refused flip
+/** The baked-in plugin list, one row per catalog plugin with its on/off toggle. A refused flip
  * (dep gating, broken plugin) surfaces the manager's message instead of silently reverting. */
 @Composable
 private fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {

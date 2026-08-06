@@ -371,13 +371,12 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 	 * the voice creds: survives a re-provision by omission from PROVISIONING_KEYS, and is not
 	 * address-keyed so it never joins SCHEMA_WIPE_KEYS.
 	 *
-	 * A baked-in plugin is INSTALLED and normally opts in, so the default is off. [DEFAULT_ON_IDS] is
-	 * the exception list, and reading it through `getBoolean`'s default is what keeps an explicit
-	 * choice authoritative: once the user has toggled a plugin the stored value exists and wins, so a
-	 * default-on plugin can still be switched off and stay off.
+	 * A baked-in plugin is INSTALLED, so it is on until the user says otherwise. The toggle exists to
+	 * switch a feature OFF, not to opt into one. Reading the flag through `getBoolean`'s default is
+	 * what keeps an explicit choice authoritative: once toggled, the stored value exists and wins, so
+	 * a plugin switched off stays off.
 	 */
-	fun pluginEnabled(id: String): Boolean =
-		prefs.getBoolean(KEY_PLUGIN_ENABLED_PREFIX + id, id in DEFAULT_ON_IDS)
+	fun pluginEnabled(id: String): Boolean = prefs.getBoolean(KEY_PLUGIN_ENABLED_PREFIX + id, true)
 
 	fun setPluginEnabled(id: String, on: Boolean) {
 		prefs.edit().putBoolean(KEY_PLUGIN_ENABLED_PREFIX + id, on).apply()
@@ -413,17 +412,6 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_PLUGIN_ENABLED_PREFIX = "plugin_enabled."
-
-		/**
-		 * Plugins that are on until the user says otherwise.
-		 *
-		 * References earns it by being invisible when off in the worst way: an agent writes a ref, the
-		 * gateway's capability union may already have it from another device, so snapshots are attached
-		 * and sent, and the reader sees an inert red link that looks broken rather than a feature they
-		 * have not switched on. There is nothing to opt into either, since it renders code the reader
-		 * already asked for. Anything with a cost or a surface of its own stays opt-in.
-		 */
-		val DEFAULT_ON_IDS = setOf("references")
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_CHIME_URI = "stts_chime_uri"

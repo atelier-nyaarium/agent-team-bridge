@@ -9,7 +9,7 @@ data class PluginUiState(
 	val displayName: String,
 	val version: String,
 	val description: String,
-	/** The persisted opt-in flag. */
+	/** The persisted on/off flag, on unless the user switched it off. */
 	val enabled: Boolean,
 	/** Whether the plugin is actually loaded this process (enabled AND its load succeeded). */
 	val active: Boolean,
@@ -76,7 +76,7 @@ class PluginManager(
 	/** Load every enabled, satisfiable plugin. Passes repeat to a fixpoint so catalog order never
 	 * decides correctness: a dependent listed before its dependency simply loads on a later pass.
 	 * Within a pass, catalog order holds (deterministic). A genuinely unsatisfiable enabled plugin
-	 * is skipped with a log; its flag survives (the opt-in is the user's, never flipped behind
+	 * is skipped with a log; its flag survives (the choice is the user's, never flipped behind
 	 * their back) and it activates on a later boot once the dep is on. */
 	@Synchronized
 	fun boot() {

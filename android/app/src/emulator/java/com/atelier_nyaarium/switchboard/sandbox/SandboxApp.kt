@@ -27,12 +27,6 @@ import com.atelier_nyaarium.switchboard.plugins.designer.storedCardFrom
 class SandboxApp : Application() {
 	override fun onCreate() {
 		super.onCreate()
-		// An opt-in plugin is off by default, which is right for a real install and useless here: with
-		// a link-claiming plugin off, its scheme renders as an inert red unhandled protocol and looks
-		// broken. References is default-on now (AppStateStore.DEFAULT_ON_IDS) and deliberately NOT
-		// listed here, so a fresh install of this build is what verifies that default still holds.
-		for (id in SANDBOX_PLUGINS) AppStateStore(this).setPluginEnabled(id, true)
-
 		// The whole playback half of Voice & TTS is hidden until a key is present, so without one the
 		// screen this build exists to look at does not render at all. The key is a placeholder and
 		// nothing here can reach a real service; synthesis fails, which is fine for looking at layout.
@@ -54,9 +48,4 @@ class SandboxApp : Application() {
 		}
 	}
 
-	private companion object {
-		/** Switched on before anything boots, for plugins a real device leaves opt-in. Add or drop ids
-		 * freely; this is a convenience, not a statement about what a real device should have. */
-		val SANDBOX_PLUGINS = listOf("designer")
-	}
 }

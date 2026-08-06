@@ -51,6 +51,9 @@ export function isBlobId(value: string): boolean {
 }
 
 /**
+ * TODO: Re-home to dedicated storage. A blob lives on whichever Gateway received it, so one held by
+ * a switched-off machine is unreachable.
+ *
  * Content-addressed byte store.
  *
  * Two rules carry the design. A blob is named by the digest of its own contents, so the name is
