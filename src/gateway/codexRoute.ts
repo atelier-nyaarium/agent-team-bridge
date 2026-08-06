@@ -1,6 +1,7 @@
 import {
 	type CodexAgentResult,
 	CodexAgentResultSchema,
+	type CodexErrorCode,
 	CodexGatewayRequestSchema,
 	type CodexListAgentsResult,
 	type CodexPersistedAgent,
@@ -28,16 +29,24 @@ export interface CodexRouteDeps {
 
 const DEFAULT_WAIT_BUDGET_MS = 9 * 60_000;
 
-/** Transition failures mapped to the result envelope's own error vocabulary. */
-const ERROR_CODES: Record<CodexTransitionErrorCode, "not_found" | "invalid_input" | "conflict" | "daemon_unavailable"> =
-	{
-		invalid_input: "invalid_input",
-		not_found: "not_found",
-		operation_conflict: "conflict",
-		state_conflict: "conflict",
-		target_unavailable: "daemon_unavailable",
-		persistence_failed: "daemon_unavailable",
-	};
+/**
+ * Transition failures mapped to the envelope's own error vocabulary, with whether a caller may
+ * usefully try again.
+ *
+ * Keyed by the error union so a new transition code fails the build here rather than producing an
+ * envelope the schema rejects at runtime, which is how this table's first version shipped: it
+ * invented a `conflict` code the enum does not have, and every failing call answered HTML.
+ */
+const ERROR_CODES: Record<CodexTransitionErrorCode, { code: CodexErrorCode; retryable: boolean }> = {
+	invalid_input: { code: "invalid_input", retryable: false },
+	not_found: { code: "not_found", retryable: false },
+	// The operation ID was reused with different input, which no retry of the same call fixes.
+	operation_conflict: { code: "invalid_input", retryable: false },
+	// The agent cannot take this right now. Reconciliation may well make it possible.
+	state_conflict: { code: "indeterminate", retryable: true },
+	target_unavailable: { code: "daemon_unavailable", retryable: true },
+	persistence_failed: { code: "daemon_unavailable", retryable: true },
+};
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -45,15 +54,23 @@ function json(body: unknown, status = 200): Response {
 
 /** A result carrying nothing but a failure. Deliberately claims no agent activity, which is what the
  * envelope requires of a contextless error. */
-function unavailable(agentId: string, code: string, message: string): CodexAgentResult {
+function unavailable(
+	agentId: string,
+	error: { code: CodexErrorCode; retryable: boolean },
+	message: string,
+): CodexAgentResult {
 	return CodexAgentResultSchema.parse({
 		agentId,
 		agentState: "unavailable",
 		observation: "unavailable",
 		activities: [],
-		error: { code, message },
+		error: { code: error.code, message, retryable: error.retryable },
 	});
 }
+
+const TARGET_UNAVAILABLE = { code: "daemon_unavailable" as const, retryable: true };
+const AGENT_NOT_FOUND = { code: "not_found" as const, retryable: false };
+const DELIVERY_UNCONFIRMED = { code: "app_server_unavailable" as const, retryable: true };
 
 function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexStoredTurn | undefined {
 	return turnId ? agent.turns.find((turn) => turn.id === turnId) : undefined;
@@ -80,7 +97,7 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 				agent.agentState === "unavailable" || agent.agentState === "recovering" ? "unavailable" : "idle",
 			activities: [],
 			...(agent.agentState === "unavailable" || agent.agentState === "recovering"
-				? { error: { code: "app_server_unavailable", message: "codex agent state could not be confirmed" } }
+				? { error: { ...DELIVERY_UNCONFIRMED, message: "codex agent state could not be confirmed" } }
 				: {}),
 		});
 	}
@@ -103,7 +120,7 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 		delivery: exchange?.delivery,
 		activities,
 		...(turn.state === "completed" ? { finalResponse: turn.finalResponse } : {}),
-		...(turn.state === "failed" ? { error: { code: "turn_failed", message: turn.error } } : {}),
+		...(turn.state === "failed" ? { error: { code: "turn_failed", message: turn.error, retryable: false } } : {}),
 	});
 }
 
@@ -170,7 +187,7 @@ export class CodexRoute {
 		// replays instead of colliding.
 		const agentId = codexAgentIdForOperation(request.operationId);
 		const target = this.deps.service.resolveExecutionTarget(owner);
-		if (!target) return unavailable(agentId, "daemon_unavailable", "no trusted execution target for this session");
+		if (!target) return unavailable(agentId, TARGET_UNAVAILABLE, "no trusted execution target for this session");
 
 		const committed = this.deps.service.beginStart(req, {
 			agentId,
@@ -247,7 +264,7 @@ export class CodexRoute {
 
 	private async awaitAgent(req: Request, owner: SessionRecord, agentId: string): Promise<CodexAgentResult> {
 		const owned = this.deps.service.resolveOwnedAgent(req, agentId);
-		if (!owned) return unavailable(agentId, "not_found", "codex agent was not found");
+		if (!owned) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
 		// With no active turn there is nothing to wait for, so the latest settled state is the answer.
 		const waitedTurnId = owned.agent.activeTurnId;
 		if (!waitedTurnId) return describeAgent(owned.agent, lastSettledTurnId(owned.agent));
@@ -273,7 +290,7 @@ export class CodexRoute {
 	): Promise<CodexAgentResult> {
 		const accepted = await this.waitForAcceptance(owner, agentId, operationId);
 		const agent = this.current(owner, agentId);
-		if (!agent) return unavailable(agentId, "not_found", "codex agent was not found");
+		if (!agent) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
 		const turnId = accepted?.turnId;
 		if (!turnId) {
 			// Never accepted within the budget. Reporting a turn or a delivery here would describe work
@@ -285,7 +302,7 @@ export class CodexRoute {
 				activities: [],
 				...(agent.agentState === "creating"
 					? {}
-					: { error: { code: "app_server_unavailable", message: "codex delivery was not confirmed" } }),
+					: { error: { ...DELIVERY_UNCONFIRMED, message: "codex delivery was not confirmed" } }),
 			});
 		}
 		if (!awaitResponse) return describeAgent(agent, turnId);

@@ -1360,6 +1360,7 @@ export const CodexAppServerRequestSchema = z.looseObject({
 
 export type CodexAgentId = z.infer<typeof CodexAgentIdSchema>;
 export type CodexAgentResult = z.infer<typeof CodexAgentResultSchema>;
+export type CodexErrorCode = z.infer<typeof CodexErrorCodeSchema>;
 export type CodexGatewayRequest = z.infer<typeof CodexGatewayRequestSchema>;
 export type CodexExecutionTarget = z.infer<typeof CodexExecutionTargetSchema>;
 export type CodexResolvedTarget = z.infer<typeof CodexResolvedTargetSchema>;
