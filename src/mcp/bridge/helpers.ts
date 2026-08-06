@@ -103,6 +103,20 @@ function sessionTokenHeader(): Record<string, string> {
 	return token ? { "x-session-token": token } : {};
 }
 
+/**
+ * The readable part of a gateway `error`, which is a bare string on most routes and a structured
+ * object on the ones that answer a typed refusal.
+ *
+ * Reading only the string shape is not a smaller bug than it sounds: it turned every structured
+ * refusal into the literal text "[object Object]" at the caller, which is the one place the reason
+ * was needed.
+ */
+function routerErrorText(failure: unknown): string | undefined {
+	if (typeof failure === "string") return failure;
+	const message = (failure as { message?: unknown } | null)?.message;
+	return typeof message === "string" ? message : undefined;
+}
+
 export async function routerPost(
 	path: string,
 	body: unknown,
@@ -130,7 +144,7 @@ export async function routerPost(
 		}
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
-			throw new Error((json?.error as string) || `HTTP ${res.status}`);
+			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
 		}
 		return json;
 	}
@@ -175,7 +189,7 @@ export async function routerGet(
 		}
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
-			throw new Error((json?.error as string) || `HTTP ${res.status}`);
+			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
 		}
 		return json;
 	}

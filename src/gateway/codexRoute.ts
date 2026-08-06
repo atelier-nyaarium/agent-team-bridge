@@ -310,12 +310,13 @@ export class CodexRoute {
 	private async awaitAgent(req: Request, owner: SessionRecord, agentId: string): Promise<CodexAgentResult> {
 		const owned = this.deps.service.resolveOwnedAgent(req, agentId);
 		if (!owned) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
-		// An await is one of the two triggers the plan names for reconciling a stale record. Without it
-		// a recovering agent is only ever repaired by a daemon reconnect, so an owner who never restarts
-		// anything gets the unconfirmed answer forever.
-		this.deps.relay.reconcileStale(owner);
 		// With no active turn there is nothing to wait for, so the latest settled state is the answer.
 		const waitedTurnId = owned.agent.activeTurnId;
+		// Reconcile a STALE record, never the turn being waited on. Asking about a live turn makes the
+		// daemon answer `recovering` whenever it cannot confirm that exact turn, which settles this
+		// wait immediately and reports a running turn as unconfirmed - an await that breaks the very
+		// thing it was called to observe.
+		if (!waitedTurnId) this.deps.relay.reconcileStale(owner);
 		if (!waitedTurnId) return describeAgent(owned.agent, lastSettledTurnId(owned.agent));
 		await this.waitForTurn(owner, agentId, waitedTurnId, this.deadline());
 		return describeAgent(this.current(owner, agentId) ?? owned.agent, waitedTurnId);
@@ -371,7 +372,11 @@ export class CodexRoute {
 				error: {
 					code: "indeterminate",
 					retryable: true,
-					message: "codex delivery was not confirmed within the wait budget",
+					// A daemon that answered with a reason gets to keep it. Only a genuine silence is a
+					// budget expiry.
+					message:
+						this.deps.service.takeRefusalReason(operationId) ??
+						"codex delivery was not confirmed within the wait budget",
 				},
 			});
 		}

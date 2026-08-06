@@ -851,7 +851,26 @@ export class CodexAgentService {
 		});
 	}
 
+	/** Why the daemon last refused an operation, so a caller learns the cause instead of a generic
+	 * timeout. Bounded to the live operations it is about; an entry is dropped when its result is
+	 * reported. Kept off the persisted record deliberately: it is a diagnostic, not agent state. */
+	private readonly refusals = new Map<string, string>();
+
+	/** The daemon's own reason for refusing an operation, consumed once. */
+	takeRefusalReason(operationId: string): string | undefined {
+		const reason = this.refusals.get(operationId);
+		this.refusals.delete(operationId);
+		return reason;
+	}
+
 	private applyRejection(receipt: Extract<CodexDaemonReceipt, { kind: "rejected" }>, at: number): CodexApplication {
+		// The reason is the whole value of a refusal. Dropping it made "model not offered: <id>" reach
+		// a caller as "delivery was not confirmed within the wait budget", which is both useless and
+		// untrue.
+		if (receipt.operationId) {
+			this.refusals.set(receipt.operationId, receipt.error);
+			if (this.refusals.size > 256) this.refusals.delete(this.refusals.keys().next().value as string);
+		}
 		const located = this.locate(receipt.ownerKey, receipt.agentId);
 		if (!located) return ignore("rejection did not resolve to one managed agent");
 		const { owner, catalog, index, agent } = located;

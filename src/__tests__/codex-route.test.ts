@@ -170,6 +170,47 @@ describe("Codex gateway route", () => {
 		return agentId;
 	}
 
+	it("does not reconcile the very turn a caller is waiting on", async () => {
+		const context = setup();
+		const agentId = await working(context);
+		context.sent.length = 0;
+
+		await context.route.handle(post(context.token), { kind: "await", agentId });
+
+		// Asking the daemon about a live turn makes it answer `recovering` whenever it cannot confirm
+		// that exact turn, which settles this wait at once and reports running work as unconfirmed.
+		expect(context.sent.filter((message) => message.type === "codex_command")).toEqual([]);
+	});
+
+	it("reports the daemon's own reason for a refusal, not a wait-budget timeout", async () => {
+		const context = setup();
+		const OPERATION = "123e4567-e89b-42d3-a456-42661417400c";
+		const start = context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION,
+			prompt: "Audit",
+			awaitResponse: false,
+			model: "gpt-5-typo",
+		});
+		await Promise.resolve();
+		context.relay.handleHostMessage({
+			type: "codex_receipt",
+			kind: "rejected",
+			requestId: "123e4567-e89b-42d3-a456-4266141740aa",
+			ownerKey: context.sessionStore.teamOf(context.owner),
+			daemonInstanceId: "daemon-1",
+			eventId: 1,
+			agentId: codexAgentIdForOperation(OPERATION),
+			operationId: OPERATION,
+			error: "model not offered: gpt-5-typo",
+		});
+		const body = await (await start).json();
+
+		// The whole safety story for the model input is that an unoffered one is refused rather than
+		// swapped. That is worth nothing if the caller cannot learn which part was wrong.
+		expect(body.error?.message).toBe("model not offered: gpt-5-typo");
+	});
+
 	it("carries a caller's model choice through to the daemon", async () => {
 		const context = setup();
 		await context.route.handle(post(context.token), {
