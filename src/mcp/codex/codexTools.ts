@@ -31,8 +31,9 @@ Reuse an agent rather than starting one per attempt. A thread that already
 holds its own last three failures fixes the fourth; a fresh one relearns the
 problem every time. Follow up with codexMessageAgent.
 
-awaitResponse (default true) waits up to nine minutes. Pass false to return on
-durable acceptance and collect later with codexAwaitAgent.
+awaitResponse (default true) waits up to about four minutes. A longer turn is not
+lost: it keeps running, and codexAwaitAgent picks it up. Pass false to return on
+durable acceptance and collect later the same way.
 
 The agent belongs to this session, not to its caller. If the caller dies,
 codexListAgents still returns it with its full history.
@@ -49,7 +50,8 @@ If a turn is still running the prompt STEERS it, joining the work in flight
 rather than queueing behind it. If the agent is idle it starts a new turn.
 Guardrails do not carry over implicitly; restate any that still apply.
 
-awaitResponse (default true) waits up to nine minutes.
+awaitResponse (default true) waits up to about four minutes; a longer turn keeps
+running and codexAwaitAgent picks it up.
 `.trim();
 
 const AWAIT_DESCRIPTION = `

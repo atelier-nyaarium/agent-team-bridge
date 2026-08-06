@@ -7,6 +7,19 @@ export const CODEX_ACTIVITY_MAX_BYTES = 16 * 1024;
 export const CODEX_ACTIVITY_MAX_ITEMS = 32;
 export const CODEX_ERROR_MAX_BYTES = 16 * 1024;
 export const CODEX_AGENT_ID_RE = /^codex_[0-9a-f]{32}$/;
+/**
+ * How long a waiting Codex call holds its HTTP connection.
+ *
+ * Bounded by what the CLIENT survives, not by how long a turn might take. Node's fetch abandons a
+ * silent connection after 300s - measured, it throws UND_ERR_HEADERS_TIMEOUT at 301s - and
+ * `routerPost` reads that as a network failure and re-posts. Since a replayed operation is never
+ * re-dispatched, every retry just waits again, so a longer hold could never deliver its answer at
+ * all. Raising the client limit would mean an undici `Agent`, which is not a dependency of this
+ * package and resolves on the host only by accident, so the server holds for less instead.
+ *
+ * A turn outliving this budget is not lost: it keeps running and `codexAwaitAgent` collects it.
+ */
+export const CODEX_WAIT_BUDGET_MS = 240_000;
 /** Deliberately not the App Server's own default: a thread runs whatever tier this names, so leaving
  * the choice to the server would silently change what a delegated sub-task is worth. */
 export const CODEX_DEFAULT_MODEL = "gpt-5.6-luna";

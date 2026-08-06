@@ -1,4 +1,5 @@
 import {
+	CODEX_WAIT_BUDGET_MS,
 	type CodexAgentResult,
 	CodexAgentResultSchema,
 	type CodexErrorCode,
@@ -29,7 +30,7 @@ export interface CodexRouteDeps {
 ////////////////////////////////
 //  Functions & Helpers
 
-const DEFAULT_WAIT_BUDGET_MS = 9 * 60_000;
+const DEFAULT_WAIT_BUDGET_MS = CODEX_WAIT_BUDGET_MS;
 
 /**
  * How each transition failure is answered.
