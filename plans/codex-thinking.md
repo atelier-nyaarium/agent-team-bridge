@@ -408,6 +408,35 @@ Spiked on `codex-cli 0.146.0`, so these are observations rather than assumptions
   - Do not fall back to a new turn for unrelated steer errors, and do not steer while an interrupt is pending.
 - For stop, durably enter `interruptRequested`, dispatch one interrupt for the exact active turn, and return immediately. A repeated stop while pending does not redispatch; idle stop is a successful no-op. The authoritative later outcome may be `interrupted`, or `completed` if completion won the race. Stop does not promise cleanup of background subprocesses started by Codex.
 
+### Bug Classes
+
+**"Cannot say" collapsed into a definite answer.** Patched THREE times in one lap, in three different
+readers of external state, which makes it a design defect rather than three mistakes:
+
+- `isReliable` read "carries a generation" as "is reliable". An activity event carries one because a
+  fence ORDERS it, not because losing it matters, so commentary was retained in the durable outbox
+  and replayed forever.
+- `outcomeFromRead` returned `TerminalOutcome | null`, folding "settled", "still running" and "could
+  not read" into one absent value. The caller read absence as failure, so reconciliation reported a
+  completed turn as failed and a live turn as dead. Repaired with a three-way `ReadOutcome`.
+- `runningTurn` then repeated it exactly, folding "no turn" and "could not ask" into `undefined`. The
+  steer fallback read that as "the turn ended" and would start a second concurrent turn, with write
+  and network access, on a thread still working. Repaired with the same three-way shape.
+
+The rule this yields: **a reader of external state returns what it KNOWS, and "I could not find out"
+is one of the things it can know.** Any two-valued return from an I/O boundary is the defect forming.
+
+**Acknowledgement safety decided per return site.** An ack retires the daemon's only copy, so every
+refusal path has to answer "may this be retired?" — and each one answered independently. The accepted
+receipt acked an unpersisted commit; a foreign fence acked a receipt from a live newer child; the
+deferred-queue eviction released a receipt's hold without ever reading it. Repaired by making
+`unresolved` an explicit property of the result rather than a judgement each caller re-derives, and
+by making a completed reconciliation the single thing that supersedes an agent's undecided frames.
+
+**Also worth keeping:** `thread/read` returns `turns: []` unless `includeTurns: true` is passed. It
+answers successfully either way, so every reconciliation read parsed cleanly and found nothing. Found
+only by running it against a real App Server; no test or type could have caught it.
+
 ## Phase 7 - Expose session-scoped Claude tools
 
 - Add one authenticated, discriminated gateway Codex route so validation and session authority cannot drift across five handlers.

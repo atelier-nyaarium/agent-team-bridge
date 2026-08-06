@@ -11,6 +11,7 @@ import {
 
 export interface TrackedActivity {
 	kind: "commentary";
+	itemId: string;
 	text: string;
 }
 
@@ -70,6 +71,18 @@ export class CodexTurnTracker {
 	private readonly turns = new Map<string, TrackedTurn>();
 	private readonly settled = new Set<string>();
 
+	/** `onCommentary` streams what `retainActivity` just kept. It fires from the same classification
+	 * the stored copy is built from, so a relayed item and a recorded one cannot disagree about which
+	 * text was commentary. */
+	constructor(
+		private readonly onCommentary: (item: {
+			threadId: string;
+			turnId: string;
+			itemId: string;
+			text: string;
+		}) => void = () => {},
+	) {}
+
 	/** Feed one server event. Returns an outcome only when a turn is genuinely settled. */
 	accept(message: unknown): TurnOutcome | null {
 		const item = CodexAppServerAgentMessageCompletedSchema.safeParse(message);
@@ -114,7 +127,11 @@ export class CodexTurnTracker {
 		return created;
 	}
 
-	private onItemCompleted(params: { threadId: string; turnId: string; item: { text: string; phase?: unknown } }) {
+	private onItemCompleted(params: {
+		threadId: string;
+		turnId: string;
+		item: { id: string; text: string; phase?: unknown };
+	}) {
 		if (this.settled.has(params.turnId)) return null;
 		const entry = this.entryFor(params.threadId, params.turnId);
 		// A turn id belongs to one thread. An item naming a different one is not this turn's and is
@@ -125,7 +142,7 @@ export class CodexTurnTracker {
 		if (phase === FINAL_ANSWER_PHASE) entry.lastFinalAnswer = params.item.text;
 		// Commentary is retained but never answers for the turn. Everything else is a candidate,
 		// including a phase this build has not seen, since dropping agent text loses it entirely.
-		else if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params.item.text);
+		else if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params, params.item.id, params.item.text);
 		else entry.lastCandidate = params.item.text;
 
 		// The terminal beat its own answer. Release the hold only once an answer has actually landed,
@@ -183,6 +200,8 @@ export class CodexTurnTracker {
 
 	private retainActivity(
 		entry: { activities: TrackedActivity[]; activityBytes: number; truncated: boolean },
+		origin: { threadId: string; turnId: string },
+		itemId: string,
 		text: string,
 	) {
 		const size = byteLength(text);
@@ -193,7 +212,8 @@ export class CodexTurnTracker {
 			entry.truncated = true;
 			return;
 		}
-		entry.activities.push({ kind: "commentary", text });
+		entry.activities.push({ kind: "commentary", itemId, text });
 		entry.activityBytes += size;
+		this.onCommentary({ ...origin, itemId, text });
 	}
 }

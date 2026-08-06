@@ -7,6 +7,9 @@ export const CODEX_ACTIVITY_MAX_BYTES = 16 * 1024;
 export const CODEX_ACTIVITY_MAX_ITEMS = 32;
 export const CODEX_ERROR_MAX_BYTES = 16 * 1024;
 export const CODEX_AGENT_ID_RE = /^codex_[0-9a-f]{32}$/;
+/** Deliberately not the App Server's own default: a thread runs whatever tier this names, so leaving
+ * the choice to the server would silently change what a delegated sub-task is worth. */
+export const CODEX_DEFAULT_MODEL = "gpt-5.6-luna";
 
 const OpaqueIdSchema = z.string().min(1).max(512);
 export const CodexOperationIdSchema = z.string().uuid();
@@ -1217,6 +1220,39 @@ export const CodexDaemonReceiptSchema = z
 		}
 	});
 
+/**
+ * The gateway's cumulative commit point for one generation's reliable stream.
+ *
+ * Cumulative rather than per-event: a receipt only leaves the daemon's outbox once everything up to
+ * it is durable, so one number retires a run of them and a lost ack costs a replay rather than a
+ * gap. It is scoped to the generation that produced the ids, since a restarted App Server numbers
+ * from zero again and an ack carried across would retire receipts nobody has seen.
+ */
+export const CodexEventAckSchema = z
+	.object({
+		type: z.literal("codex_ack"),
+		daemonInstanceId: OpaqueIdSchema,
+		targetId: OpaqueIdSchema,
+		generation: z.number().int().nonnegative(),
+		throughEventId: z.number().int().nonnegative(),
+	})
+	.strict();
+
+/**
+ * What the daemon knows about its own App Servers, sent on each authenticated reconnect.
+ *
+ * The gateway, not the daemon, decides what needs reconciling: only the gateway knows which records
+ * a session still believes are working. This says which supervisor and which generations are live so
+ * the gateway can tell a survived child from a replaced one before it asks.
+ */
+export const CodexDaemonHelloSchema = z
+	.object({
+		type: z.literal("codex_hello"),
+		daemonInstanceId: OpaqueIdSchema,
+		targets: z.array(z.object({ targetId: OpaqueIdSchema, generation: z.number().int().nonnegative() }).strict()),
+	})
+	.strict();
+
 export const CodexAppServerResponseSchema = z
 	.looseObject({
 		id: z.union([z.string(), z.number()]),
@@ -1312,6 +1348,7 @@ export type CodexGatewayRequest = z.infer<typeof CodexGatewayRequestSchema>;
 export type CodexExecutionTarget = z.infer<typeof CodexExecutionTargetSchema>;
 export type CodexResolvedTarget = z.infer<typeof CodexResolvedTargetSchema>;
 export type CodexStoredTurn = z.infer<typeof CodexStoredTurnSchema>;
+export type CodexStoredActivity = z.infer<typeof CodexStoredActivitySchema>;
 export type CodexStoredExchange = z.infer<typeof CodexStoredExchangeSchema>;
 export type CodexStoredOperation = z.infer<typeof CodexStoredOperationSchema>;
 export type CodexPersistedAgent = z.infer<typeof CodexPersistedAgentSchema>;
@@ -1323,6 +1360,8 @@ export type CodexListAvailabilityError = z.infer<typeof CodexListAvailabilityErr
 export type CodexDaemonCommand = z.infer<typeof CodexDaemonCommandSchema>;
 export type CodexDaemonEvent = z.infer<typeof CodexDaemonEventSchema>;
 export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
+export type CodexEventAck = z.infer<typeof CodexEventAckSchema>;
+export type CodexDaemonHello = z.infer<typeof CodexDaemonHelloSchema>;
 
 function migrateCodexAgentRecoveryIntent(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;

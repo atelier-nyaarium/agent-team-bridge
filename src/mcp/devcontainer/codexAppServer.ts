@@ -127,7 +127,14 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			return;
 		}
 		if (typeof frame.method === "string") {
-			for (const listener of eventListeners) listener(frame as { method: string; params?: unknown });
+			// Queued, not called inline. Resolving a request only SCHEDULES its awaiting continuation, so
+			// a listener invoked synchronously here would run first and invert wire order whenever a reply
+			// and a notification arrive in one chunk. That is not rare: a steer's reply and its turn's own
+			// `turn/completed` routinely land together, and the inversion made the steer look undelivered.
+			const notification = frame as { method: string; params?: unknown };
+			queueMicrotask(() => {
+				for (const listener of eventListeners) listener(notification);
+			});
 		}
 	}
 
@@ -262,8 +269,11 @@ export class CodexAppServerClient {
 		await this.transport.request("thread/resume", { threadId });
 	}
 
+	/** `includeTurns` is load-bearing and NOT the default. Without it the App Server answers with an
+	 * empty `turns` array rather than an error, so reconciliation reads a well-formed reply, finds the
+	 * turn missing, and reports a completed turn as unrecoverable. */
 	async readThread(threadId: string): Promise<unknown> {
-		return this.transport.request("thread/read", { threadId });
+		return this.transport.request("thread/read", { threadId, includeTurns: true });
 	}
 
 	/** Only once the terminal is durably acknowledged, or a later follow-up has nothing to resume. */

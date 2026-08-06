@@ -25,6 +25,7 @@ import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../sh
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
 import { CodexAgentService } from "./codexAgentService.js";
+import { CodexRelay } from "./codexRelay.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -557,9 +558,24 @@ export async function startGateway(): Promise<void> {
 	// ChatRepositoryConstantsTest, not here; this comment is context, not a source of truth).
 	const HOST_OP_TIMEOUT_MS = 20_000;
 
-	async function relayToHost(op: HostOp): Promise<HostOpResult> {
+	function liveHostSocket() {
 		const hostSubs = registry.get("host");
-		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
+		return hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
+	}
+
+	const codexRelay = new CodexRelay({
+		service: codexAgentService,
+		sessionStore,
+		sendToHost: (message) => {
+			const hostWs = liveHostSocket();
+			if (!hostWs) return false;
+			hostWs.send(JSON.stringify(message));
+			return true;
+		},
+	});
+
+	async function relayToHost(op: HostOp): Promise<HostOpResult> {
+		const hostWs = liveHostSocket();
 		if (!hostWs) return { ok: false, error: "host daemon offline - terminal unavailable" };
 		const reqId = randomBytes(8).toString("hex");
 		hostWs.send(JSON.stringify({ type: "host_op", reqId, op }));
@@ -1016,6 +1032,7 @@ export async function startGateway(): Promise<void> {
 		},
 		onCatalogChange: () => presence.markDirty(),
 		onDaemonCapabilities: (capabilities) => daemonCapabilityStore.declare(capabilities),
+		onCodexHostMessage: (msg) => codexRelay.handleHostMessage(msg),
 		// A confirmed daemon derivation for one team; undefined means derivation became impossible for
 		// it (a peek-failure streak, or it dropped off the watch list) - a clear to unknown, distinct
 		// from observing it as not-working.

@@ -1,6 +1,10 @@
 import {
+	CODEX_ACTIVITY_MAX_ITEMS,
 	type CodexAgentCatalog,
 	CodexAgentIdSchema,
+	type CodexDaemonEvent,
+	CodexDaemonEventSchema,
+	type CodexDaemonReceipt,
 	type CodexExecutionTarget,
 	CodexExecutionTargetSchema,
 	CodexOperationIdSchema,
@@ -12,8 +16,11 @@ import {
 	CodexReconciliationFenceSchema,
 	type CodexResolvedTarget,
 	CodexResolvedTargetSchema,
+	type CodexStoredActivity,
 	type CodexStoredOperation,
+	type CodexStoredTurn,
 	codexOperationFingerprint,
+	sanitizeCodexErrorText,
 } from "../shared/codex-thinking.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
@@ -70,11 +77,33 @@ export interface CodexTransitionResult extends OwnedCodexOperation {
 	/** Only `committed` authorizes first dispatch. `indeterminate` is an existing unaccepted intent. */
 	disposition: "committed" | "replayed" | "indeterminate";
 	catalogRevision: number;
+	/** The gateway could not place or persist this, as opposed to deciding it does not belong. Only an
+	 * unresolved outcome may withhold a daemon acknowledgement. */
+	unresolved?: true;
 }
 
 export type CodexAcceptanceResult =
 	| CodexTransitionResult
-	| (OwnedCodexOperation & { disposition: "indeterminate"; catalogRevision: number });
+	| (OwnedCodexOperation & {
+			disposition: "indeterminate";
+			catalogRevision: number;
+			/** The gateway could not place this receipt, as opposed to deciding it does not belong. Set
+			 * when reconciliation could still resolve it, which is what keeps it out of the daemon's
+			 * acknowledgement. */
+			unresolved?: true;
+	  });
+
+/**
+ * What the gateway did with one daemon-sourced event or receipt, and therefore what it owes back.
+ *
+ * `applied` and `ignored` both mean the daemon may retire it: one changed state, the other never
+ * will. `reconcile` is the only outcome that withholds an acknowledgement, because the gateway
+ * cannot yet tell whether the event matters.
+ */
+export type CodexApplication =
+	| { disposition: "applied"; owner: SessionRecord; agent: CodexPersistedAgent; catalogRevision: number }
+	| { disposition: "ignored"; reason: string }
+	| { disposition: "reconcile"; owner: SessionRecord; agent: CodexPersistedAgent };
 
 export type CodexTransitionErrorCode =
 	| "invalid_input"
@@ -130,9 +159,82 @@ function advancesFence(current: CodexReconciliationFence | undefined, next: Code
 	);
 }
 
+/** Only a REQUESTED delivery blocks the next one. An indeterminate one is already settled as far as
+ * this gateway is concerned, and counting it would wedge the agent permanently: nothing ever
+ * transitions an indeterminate operation, so a single unprovable delivery would refuse every
+ * follow-up for the agent's whole life. Reconciliation, not this guard, is what restores truth. */
 function hasPendingPrompt(agent: CodexPersistedAgent): boolean {
 	return agent.operations.some(
-		(operation) => (operation.kind === "start" || operation.kind === "message") && operation.state !== "accepted",
+		(operation) => (operation.kind === "start" || operation.kind === "message") && operation.state === "requested",
+	);
+}
+
+/**
+ * Where a daemon-supplied fence sits relative to the one an agent already holds.
+ *
+ * `foreign` is the case that must not be treated as noise: a different supervisor or generation
+ * means the child that produced this event is not the one the record was fenced against, so nothing
+ * can be applied and nothing may be acknowledged until reconciliation re-establishes which child is
+ * speaking. Acknowledging it would retire an event the gateway never took.
+ */
+function classifyFence(
+	current: CodexReconciliationFence | undefined,
+	next: CodexReconciliationFence,
+): "advances" | "duplicate" | "foreign" {
+	if (!current) return "foreign";
+	if (current.daemonInstanceId !== next.daemonInstanceId || current.targetId !== next.targetId) return "foreign";
+	if (current.generation !== next.generation) return "foreign";
+	return next.lastEventId > current.lastEventId ? "advances" : "duplicate";
+}
+
+function ignore(reason: string): CodexApplication {
+	return { disposition: "ignored", reason };
+}
+
+/** The fence a fenced daemon message stands at. Its own event ID is the fence's high-water mark, so
+ * a receipt and the events around it order against one another by construction. */
+function fenceOf(message: {
+	daemonInstanceId: string;
+	targetId: string;
+	generation: number;
+	eventId: number;
+}): CodexReconciliationFence {
+	return {
+		daemonInstanceId: message.daemonInstanceId,
+		targetId: message.targetId,
+		generation: message.generation,
+		lastEventId: message.eventId,
+	};
+}
+
+/**
+ * The turn's activities with one more commentary item folded in, or null when it is already held.
+ *
+ * The retained window is the FIRST items rather than the most recent: a turn's opening commentary is
+ * what explains what it decided to do, and a late item can always be read from the final response.
+ */
+function appendActivity(
+	existing: readonly CodexStoredActivity[],
+	itemId: string,
+	text: string,
+): CodexStoredActivity[] | null {
+	const commentary = existing.filter((activity) => activity.kind === "commentary");
+	if (commentary.some((activity) => activity.itemId === itemId)) return null;
+	if (commentary.length < CODEX_ACTIVITY_MAX_ITEMS) return [...commentary, { kind: "commentary", itemId, text }];
+	const omitted = existing.find((activity) => activity.kind === "truncated")?.omitted ?? 0;
+	return [...commentary, { kind: "truncated", omitted: omitted + 1 }];
+}
+
+/** Clear the recovery flag Phase 2 sets on a delivery whose acceptance was never fenced. A
+ * reconciled agent has a live fence again, which is exactly what the flag stood in for. */
+function refenceUnverified(
+	operations: readonly CodexStoredOperation[],
+	fence: CodexReconciliationFence,
+): CodexStoredOperation[] {
+	return operations.map((operation) =>
+		operation.acceptanceUnverified
+			? { ...operation, acceptanceUnverified: undefined, acceptanceFence: fence }
+			: operation,
 	);
 }
 
@@ -385,7 +487,9 @@ export class CodexAgentService {
 		const exchange = current.exchanges[exchangeIndex]!;
 		if (operation.state === "accepted") {
 			if (operation.acceptanceUnverified) {
-				return this.indeterminate(owner, current, operation, catalog.revision);
+				// Accepted, but never fenced. Only reconciliation can say which child that acceptance came
+				// from, so this receipt is unplaceable rather than wrong.
+				return this.indeterminate(owner, current, operation, catalog.revision, true);
 			}
 			if (
 				operation.turnId !== input.turnId ||
@@ -397,17 +501,43 @@ export class CodexAgentService {
 				throw new CodexTransitionError("operation_conflict", "accepted delivery does not match its receipt");
 			}
 			if (!this.ensureCatalogDurable(owner, catalog.revision)) {
-				return this.indeterminate(owner, current, operation, catalog.revision);
+				return this.indeterminate(owner, current, operation, catalog.revision, true);
 			}
 			return { owner, agent: current, operation, disposition: "replayed", catalogRevision: catalog.revision };
 		}
-		const indeterminate = () => this.indeterminate(owner, current, operation, catalog.revision);
+		// A receipt the gateway refuses SETTLES its operation rather than leaving it requested: nothing
+		// else ever transitions one, the daemon has been told it may retire the receipt, and a requested
+		// prompt blocks every later message and stop for the agent's whole life.
+		const indeterminate = () => this.refuseDelivery(owner, catalog, index, operationIndex, exchangeIndex, at);
+		const unresolved = () => this.indeterminate(owner, current, operation, catalog.revision, true);
 		if (operation.kind === "stop" || exchange.kind !== operation.kind) return indeterminate();
 		if (operation.state !== "requested" || exchange.status !== "requested") return indeterminate();
 		if (operation.kind === "start" && input.delivery !== "started") return indeterminate();
+
+		// The turn this delivery was aimed at finished while the daemon was working on it. Both
+		// deliveries reach here: the daemon may have started a fresh turn after seeing the old one end,
+		// or it may have steered successfully and had its receipt overtaken by that turn's terminal.
+		const expectedTurn = operation.preDispatch.turnId
+			? current.turns.find((turn) => turn.id === operation.preDispatch.turnId)
+			: undefined;
+		const expectedSettled =
+			expectedTurn !== undefined &&
+			expectedTurn.state !== "inProgress" &&
+			current.activeTurnId !== expectedTurn.id;
+		const afterSettlement =
+			operation.kind === "message" && operation.preDispatch.agentState === "working" && expectedSettled;
+		const startedAfterSettlement = afterSettlement && input.delivery === "started";
+		// A steer that landed in the settled turn IS a delivery: the prompt reached Codex and that
+		// turn's answer is its answer. It must not reopen the turn, which is the one way recording it
+		// could do damage.
+		const steeredIntoSettledTurn =
+			afterSettlement && input.delivery === "steered" && input.turnId === expectedTurn?.id;
+
 		if (
 			operation.kind === "message" &&
-			((operation.preDispatch.agentState === "working" && input.delivery !== "steered") ||
+			((operation.preDispatch.agentState === "working" &&
+				input.delivery !== "steered" &&
+				!startedAfterSettlement) ||
 				(operation.preDispatch.agentState === "idle" && input.delivery !== "started"))
 		) {
 			return indeterminate();
@@ -419,17 +549,36 @@ export class CodexAgentService {
 		) {
 			return indeterminate();
 		}
-		if (
+		if (startedAfterSettlement || steeredIntoSettledTurn) {
+			// The record has necessarily moved: the terminal that settled the expected turn cleared the
+			// active turn and advanced the fence. Requiring nothing to have changed would refuse the very
+			// case these branches exist for, so the test is what the settlement itself must have produced.
+			if (
+				current.agentState !== "idle" ||
+				current.activeTurnId !== undefined ||
+				current.threadId !== operation.preDispatch.threadId ||
+				!advancesFence(current.fence, fence)
+			) {
+				return indeterminate();
+			}
+		} else if (
 			current.agentState !== operation.preDispatch.agentState ||
 			current.threadId !== operation.preDispatch.threadId ||
 			current.activeTurnId !== operation.preDispatch.turnId ||
-			!sameFence(current.fence, operation.preDispatch.fence) ||
-			!advancesFence(operation.preDispatch.fence, fence)
+			!sameFence(current.fence, operation.preDispatch.fence)
 		) {
 			return indeterminate();
+		} else if (!advancesFence(operation.preDispatch.fence, fence)) {
+			// A receipt from a different supervisor or generation is not a mismatch; it is a receipt this
+			// gateway cannot place yet. Acknowledging it would retire the daemon's only copy.
+			return unresolved();
 		}
 		const existingTurn = current.turns.find((turn) => turn.id === input.turnId);
-		if (input.delivery === "steered" && (current.activeTurnId !== input.turnId || !existingTurn)) {
+		if (
+			input.delivery === "steered" &&
+			!steeredIntoSettledTurn &&
+			(current.activeTurnId !== input.turnId || !existingTurn)
+		) {
 			return indeterminate();
 		}
 		if (input.delivery === "started" && existingTurn) {
@@ -437,12 +586,19 @@ export class CodexAgentService {
 		}
 		try {
 			const timestamp = Math.max(at, current.updatedAt);
-			const turns = existingTurn
-				? current.turns
-				: [
+			const turns = !existingTurn
+				? [
 						...current.turns,
 						{ id: input.turnId, state: "inProgress" as const, activities: [], updatedAt: timestamp },
-					];
+					]
+				: steeredIntoSettledTurn
+					? // The turn settled before this delivery was recorded against it, and a turn may not
+						// predate its own accepted delivery. Touching it keeps the ordering invariant true
+						// without changing what the turn is or what it answered.
+						current.turns.map((turn) =>
+							turn.id === input.turnId ? { ...turn, updatedAt: timestamp } : turn,
+						)
+					: current.turns;
 			const acceptedOperation = {
 				...operation,
 				state: "accepted" as const,
@@ -459,10 +615,12 @@ export class CodexAgentService {
 			};
 			const next = CodexPersistedAgentSchema.parse({
 				...current,
-				agentState: "working",
+				// A steer into an already-settled turn records the delivery and nothing else. Reopening
+				// that turn would resurrect a finished one as the agent's active work.
+				agentState: steeredIntoSettledTurn ? current.agentState : "working",
 				resolvedTarget,
 				threadId: input.threadId,
-				activeTurnId: input.turnId,
+				activeTurnId: steeredIntoSettledTurn ? current.activeTurnId : input.turnId,
 				turns,
 				exchanges: replaceAt(current.exchanges, exchangeIndex, acceptedExchange),
 				operations: replaceAt(current.operations, operationIndex, acceptedOperation),
@@ -471,8 +629,353 @@ export class CodexAgentService {
 			});
 			return this.commit(owner, catalog, replaceAt(catalog.agents, index, next), next, operationId);
 		} catch {
-			return indeterminate();
+			// The record could not be written. Nothing about the receipt was wrong, so it must stay with
+			// the daemon rather than being acknowledged away on a disk error.
+			return unresolved();
 		}
+	}
+
+	/**
+	 * Settle a delivery this gateway will not accept.
+	 *
+	 * The operation and its exchange become indeterminate, and the agent enters recovery so no second
+	 * prompt goes out on a thread whose state is now in doubt. A write failure here is reported as
+	 * unresolved, since an unpersisted refusal must not be acknowledged away either.
+	 */
+	private refuseDelivery(
+		owner: SessionRecord,
+		catalog: CodexAgentCatalog,
+		index: number,
+		operationIndex: number,
+		exchangeIndex: number,
+		at: number,
+	): CodexAcceptanceResult {
+		const current = catalog.agents[index]!;
+		const operation = current.operations[operationIndex]!;
+		if (operation.state !== "requested") {
+			return this.indeterminate(owner, current, operation, catalog.revision);
+		}
+		const timestamp = Math.max(at, current.updatedAt);
+		try {
+			const next = CodexPersistedAgentSchema.parse({
+				...current,
+				agentState: operation.kind === "start" ? "unavailable" : "recovering",
+				operations: replaceAt(current.operations, operationIndex, {
+					...operation,
+					state: "indeterminate" as const,
+					updatedAt: timestamp,
+				}),
+				exchanges: replaceAt(current.exchanges, exchangeIndex, {
+					...current.exchanges[exchangeIndex]!,
+					status: "indeterminate" as const,
+				}),
+				updatedAt: timestamp,
+			});
+			const committed = this.commit(
+				owner,
+				catalog,
+				replaceAt(catalog.agents, index, next),
+				next,
+				operation.operationId,
+			);
+			return { ...committed, disposition: "indeterminate" };
+		} catch {
+			return this.indeterminate(owner, current, operation, catalog.revision, true);
+		}
+	}
+
+	/** Fold one asynchronous App Server event into the record it belongs to. */
+	applyEvent(event: CodexDaemonEvent, at: number): CodexApplication {
+		const parsed = CodexDaemonEventSchema.safeParse(event);
+		if (!parsed.success) return ignore("event failed validation");
+		const located = this.locate(parsed.data.ownerKey, parsed.data.agentId);
+		if (!located) return ignore("event did not resolve to one managed agent");
+		const { owner, catalog, index, agent } = located;
+		if (agent.threadId !== parsed.data.threadId) return ignore("event names a different thread");
+
+		const fence = fenceOf(parsed.data);
+		const standing = classifyFence(agent.fence, fence);
+		if (standing === "duplicate") return ignore("event was already applied");
+		if (standing === "foreign") return { disposition: "reconcile", owner, agent };
+
+		const turnIndex = agent.turns.findIndex((turn) => turn.id === parsed.data.turnId);
+		const turn = turnIndex < 0 ? undefined : agent.turns[turnIndex]!;
+		// An event for a turn this record has never heard of is the one case that must not be dropped:
+		// the acceptance that would have created it may simply have been refused, and only App Server
+		// can say whether the turn is real.
+		if (!turn) return { disposition: "reconcile", owner, agent };
+		if (turn.state !== "inProgress") return ignore("turn is already settled");
+		if (agent.activeTurnId !== turn.id) return { disposition: "reconcile", owner, agent };
+
+		const timestamp = Math.max(at, agent.updatedAt);
+		let next: CodexPersistedAgent;
+		try {
+			next =
+				parsed.data.kind === "activity"
+					? this.withActivity(agent, turnIndex, parsed.data.itemId, parsed.data.text, timestamp, fence)
+					: this.withTerminal(agent, turnIndex, parsed.data, timestamp, fence);
+		} catch {
+			return ignore("event did not produce a valid record");
+		}
+		if (next === agent) return ignore("activity was already retained");
+		return this.applyAgent(owner, catalog, index, next);
+	}
+
+	/** Fold one authenticated daemon receipt into the record it belongs to. */
+	applyReceipt(receipt: CodexDaemonReceipt, at: number): CodexApplication {
+		switch (receipt.kind) {
+			case "accepted": {
+				try {
+					const result = this.acceptDeliveryFromDaemon({ ...receipt, fence: fenceOf(receipt), at });
+					if (result.disposition !== "indeterminate") {
+						return {
+							disposition: "applied",
+							owner: result.owner,
+							agent: result.agent,
+							catalogRevision: result.catalogRevision,
+						};
+					}
+					return result.unresolved
+						? { disposition: "reconcile", owner: result.owner, agent: result.agent }
+						: ignore("delivery could not be verified against its record");
+				} catch {
+					return ignore("delivery receipt did not resolve to one managed operation");
+				}
+			}
+			case "rejected":
+				return this.applyRejection(receipt, at);
+			case "interruptResult":
+			case "interruptFailed":
+				return this.applyInterruptOutcome(receipt, at);
+			case "reconciled":
+				return this.applyReconciliation(receipt, at);
+			default:
+				return ignore("unsupported receipt kind");
+		}
+	}
+
+	private withActivity(
+		agent: CodexPersistedAgent,
+		turnIndex: number,
+		itemId: string,
+		text: string,
+		at: number,
+		fence: CodexReconciliationFence,
+	): CodexPersistedAgent {
+		const turn = agent.turns[turnIndex]!;
+		const activities = appendActivity(turn.activities, itemId, text);
+		if (!activities) return agent;
+		return CodexPersistedAgentSchema.parse({
+			...agent,
+			turns: replaceAt(agent.turns, turnIndex, { ...turn, activities, updatedAt: at }),
+			fence,
+			updatedAt: at,
+		});
+	}
+
+	private withTerminal(
+		agent: CodexPersistedAgent,
+		turnIndex: number,
+		event: Extract<CodexDaemonEvent, { kind: "terminal" }>,
+		at: number,
+		fence: CodexReconciliationFence,
+	): CodexPersistedAgent {
+		const turn = agent.turns[turnIndex]!;
+		const base = { id: turn.id, activities: turn.activities, updatedAt: at };
+		let settled: CodexStoredTurn;
+		switch (event.state) {
+			case "completed":
+				settled = {
+					...base,
+					state: "completed",
+					finalItemId: event.finalItemId,
+					finalResponse: event.finalResponse,
+				};
+				break;
+			case "failed":
+				settled = { ...base, state: "failed", error: sanitizeCodexErrorText(event.error) };
+				break;
+			default:
+				settled = { ...base, state: "interrupted" };
+		}
+		// An interrupt that lost the race to completion is still a finished stop, so the ending the turn
+		// actually had settles it either way rather than only the interrupted one.
+		const operations = agent.operations.map((operation) =>
+			operation.kind === "stop" && operation.state === "requested" && operation.turnId === turn.id
+				? { ...operation, state: "accepted" as const, acceptanceFence: fence, updatedAt: at }
+				: operation,
+		);
+		return CodexPersistedAgentSchema.parse({
+			...agent,
+			agentState: "idle",
+			activeTurnId: undefined,
+			pendingInterrupt: undefined,
+			turns: replaceAt(agent.turns, turnIndex, settled),
+			operations,
+			fence,
+			updatedAt: at,
+		});
+	}
+
+	private applyRejection(receipt: Extract<CodexDaemonReceipt, { kind: "rejected" }>, at: number): CodexApplication {
+		const located = this.locate(receipt.ownerKey, receipt.agentId);
+		if (!located) return ignore("rejection did not resolve to one managed agent");
+		const { owner, catalog, index, agent } = located;
+		const operationIndex = agent.operations.findIndex((operation) => operation.operationId === receipt.operationId);
+		if (!receipt.operationId || operationIndex < 0) return ignore("rejection named no known operation");
+		const operation = agent.operations[operationIndex]!;
+		// A refusal is proof of NON-delivery, so it only ever settles something still in flight. Anything
+		// already accepted was delivered, whatever a late refusal says.
+		if (operation.state !== "requested") return ignore("operation is no longer awaiting delivery");
+
+		const at2 = Math.max(at, agent.updatedAt);
+		const exchangeIndex = agent.exchanges.findIndex((exchange) => exchange.operationId === receipt.operationId);
+		try {
+			const next = CodexPersistedAgentSchema.parse({
+				...agent,
+				// A refused start has no thread to reuse and nothing to reconcile, so it is unavailable
+				// rather than still being created. A refused MESSAGE does have a thread, and the daemon
+				// only ever proves non-delivery as far as it could read: it goes to recovering so no
+				// second prompt can be sent until reconciliation says what that thread is actually doing.
+				agentState:
+					operation.kind === "start"
+						? "unavailable"
+						: operation.kind === "message"
+							? "recovering"
+							: agent.agentState,
+				pendingInterrupt:
+					agent.pendingInterrupt?.operationId === receipt.operationId ? undefined : agent.pendingInterrupt,
+				exchanges:
+					exchangeIndex < 0
+						? agent.exchanges
+						: replaceAt(agent.exchanges, exchangeIndex, {
+								...agent.exchanges[exchangeIndex]!,
+								status: "indeterminate" as const,
+							}),
+				operations: replaceAt(agent.operations, operationIndex, {
+					...operation,
+					state: "indeterminate" as const,
+					updatedAt: at2,
+				}),
+				updatedAt: at2,
+			});
+			return this.applyAgent(owner, catalog, index, next);
+		} catch {
+			return ignore("rejection did not produce a valid record");
+		}
+	}
+
+	private applyInterruptOutcome(
+		receipt: Extract<CodexDaemonReceipt, { kind: "interruptResult" | "interruptFailed" }>,
+		at: number,
+	): CodexApplication {
+		const located = this.locate(receipt.ownerKey, receipt.agentId);
+		if (!located) return ignore("interrupt result did not resolve to one managed agent");
+		const { owner, catalog, index, agent } = located;
+		if (agent.threadId !== receipt.threadId) return ignore("interrupt result names a different thread");
+		const pending = agent.pendingInterrupt;
+		if (!pending || pending.operationId !== receipt.operationId || pending.turnId !== receipt.turnId) {
+			return ignore("interrupt result does not match the pending interrupt");
+		}
+		const fence = fenceOf(receipt);
+		const standing = classifyFence(agent.fence, fence);
+		if (standing === "duplicate") return ignore("interrupt result was already applied");
+		if (standing === "foreign") return { disposition: "reconcile", owner, agent };
+
+		const at2 = Math.max(at, agent.updatedAt);
+		const operationIndex = agent.operations.findIndex((operation) => operation.operationId === receipt.operationId);
+		if (operationIndex < 0) return ignore("interrupt result named no known operation");
+		const delivered = receipt.kind === "interruptResult";
+		try {
+			const next = CodexPersistedAgentSchema.parse({
+				...agent,
+				// A delivered interrupt is not an ending. The turn is still running until its own terminal
+				// lands, which is what clears this.
+				pendingInterrupt: delivered ? agent.pendingInterrupt : undefined,
+				operations: replaceAt(agent.operations, operationIndex, {
+					...agent.operations[operationIndex]!,
+					state: delivered ? ("accepted" as const) : ("indeterminate" as const),
+					acceptanceFence: delivered ? fence : undefined,
+					updatedAt: at2,
+				}),
+				fence,
+				updatedAt: at2,
+			});
+			return this.applyAgent(owner, catalog, index, next);
+		} catch {
+			return ignore("interrupt result did not produce a valid record");
+		}
+	}
+
+	private applyReconciliation(
+		receipt: Extract<CodexDaemonReceipt, { kind: "reconciled" }>,
+		at: number,
+	): CodexApplication {
+		const located = this.locate(receipt.ownerKey, receipt.agentId);
+		if (!located) return ignore("reconciliation did not resolve to one managed agent");
+		const { owner, catalog, index, agent } = located;
+		if (agent.threadId !== receipt.threadId) return ignore("reconciliation names a different thread");
+		if (!sameTarget(agent.resolvedTarget, receipt.resolvedTarget)) {
+			return ignore("reconciliation names a different execution target");
+		}
+		// The one path a foreign fence is legitimate on: this IS what re-establishes which supervisor
+		// and which child speak for this agent. Every other path refuses one.
+		const fence = fenceOf(receipt);
+		if (classifyFence(agent.fence, fence) === "duplicate") return ignore("reconciliation was already applied");
+
+		const active = agent.activeTurnId
+			? agent.turns.find((turn) => turn.id === agent.activeTurnId && turn.state === "inProgress")
+			: undefined;
+		const survives = active !== undefined && receipt.turnId === active.id && receipt.turnState === "inProgress";
+		const at2 = Math.max(at, agent.updatedAt);
+		try {
+			const next = CodexPersistedAgentSchema.parse({
+				...agent,
+				// A turn App Server no longer reports as running is over, but its outcome rides the terminal
+				// event that follows under this freshly installed fence. Recovering is what the record says
+				// in between; it is not a resting state.
+				agentState: active ? (survives ? "working" : "recovering") : "idle",
+				operations: refenceUnverified(agent.operations, fence),
+				fence,
+				updatedAt: at2,
+			});
+			return this.applyAgent(owner, catalog, index, next);
+		} catch {
+			return ignore("reconciliation did not produce a valid record");
+		}
+	}
+
+	private locate(
+		ownerKey: string,
+		agentId: string,
+	): { owner: SessionRecord; catalog: CodexAgentCatalog; index: number; agent: CodexPersistedAgent } | null {
+		if (!CodexOwnerKeySchema.safeParse(ownerKey).success) return null;
+		if (!CodexAgentIdSchema.safeParse(agentId).success) return null;
+		const owner = this.sessionStore.getByTeam(ownerKey);
+		if (!owner) return null;
+		const catalog = this.catalog(owner);
+		const matches = catalog.agents.flatMap((agent, index) => (agent.agentId === agentId ? [index] : []));
+		if (matches.length !== 1) return null;
+		return { owner, catalog, index: matches[0]!, agent: catalog.agents[matches[0]!]! };
+	}
+
+	private applyAgent(
+		owner: SessionRecord,
+		catalog: CodexAgentCatalog,
+		index: number,
+		next: CodexPersistedAgent,
+	): CodexApplication {
+		let committed;
+		try {
+			committed = this.catalogWriter.commit(owner, catalog.revision, replaceAt(catalog.agents, index, next));
+		} catch {
+			// Deliberately NOT ignored: an unpersisted event must not be acknowledged, or the daemon
+			// retires the only copy of it.
+			return { disposition: "reconcile", owner, agent: next };
+		}
+		if (!committed.committed) return { disposition: "reconcile", owner, agent: next };
+		const agent = committed.catalog.agents.find((candidate) => candidate.agentId === next.agentId)!;
+		return { disposition: "applied", owner, agent, catalogRevision: committed.catalog.revision };
 	}
 
 	private requireOwner(req: Request): SessionRecord {
@@ -491,13 +994,16 @@ export class CodexAgentService {
 		return matches[0]!;
 	}
 
+	/** `unresolved` marks the ones reconciliation could still make sense of, as opposed to a receipt
+	 * that genuinely does not describe this record. Only the first may withhold an acknowledgement. */
 	private indeterminate(
 		owner: SessionRecord,
 		agent: CodexPersistedAgent,
 		operation: CodexStoredOperation,
 		catalogRevision: number,
+		unresolved?: true,
 	): CodexAcceptanceResult {
-		return { owner, agent, operation, disposition: "indeterminate", catalogRevision };
+		return { owner, agent, operation, disposition: "indeterminate", catalogRevision, unresolved };
 	}
 
 	private replay(owner: SessionRecord, operationId: string, fingerprint: string): CodexTransitionResult | null {
@@ -521,6 +1027,9 @@ export class CodexAgentService {
 			operation: matches[0]!.operation,
 			disposition: replayable ? "replayed" : "indeterminate",
 			catalogRevision: catalog.revision,
+			// Not a mismatch: the operation exists and matches, the gateway just cannot confirm it is
+			// durable or fenced. Reconciliation is what settles it.
+			unresolved: replayable ? undefined : true,
 		};
 	}
 

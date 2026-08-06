@@ -25,6 +25,13 @@ export interface TargetLease {
 	child: CodexChild;
 }
 
+/** What a consumer of supervised children actually needs. Narrower than the manager on purpose: the
+ * daemon service must not be able to reach backoff or generation counters it does not own. */
+export interface TargetSupervisor {
+	acquire(target: CodexResolvedTarget): TargetAvailability;
+	release(targetId: string): void;
+}
+
 export type TargetAvailability =
 	| { state: "running"; lease: TargetLease }
 	| { state: "recovering"; retryInMs: number; errorClass: string }
@@ -213,7 +220,7 @@ function defaultLog(event: TargetLogEvent): void {
  * Every thread for a target multiplexes through that target's single child, so the process count
  * tracks targets rather than conversations. A child that dies takes only its own target with it.
  */
-export class ExecutionTargetManager {
+export class ExecutionTargetManager implements TargetSupervisor {
 	private readonly targets = new Map<
 		string,
 		{

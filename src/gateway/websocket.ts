@@ -55,6 +55,9 @@ export interface WebSocketDeps {
 	// Fired with the complete declaration from the register that actually holds the host slot, so
 	// neither a LAN peer nor a refused second daemon can announce a capability this way.
 	onDaemonCapabilities?: (capabilities: Capability[]) => void;
+	// Every Codex frame from the authenticated host socket. Gated on that slot for the same reason the
+	// terminal ops are: these frames mutate session-owned durable state.
+	onCodexHostMessage?: (msg: Record<string, unknown>) => void;
 	// The gateway's authoritative session store. The handshake confirm establishes/binds a record
 	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
 	// Absent in tests that do not exercise session recording.
@@ -205,6 +208,7 @@ export function createWebSocketHandlers({
 	onVirtualPeerEvicted,
 	onCatalogChange,
 	onDaemonCapabilities,
+	onCodexHostMessage,
 	onPresenceDerive,
 	sessionStore,
 	auth,
@@ -597,6 +601,13 @@ export function createWebSocketHandlers({
 				error: typeof msg.error === "string" ? msg.error : undefined,
 				errorKind: msg.errorKind === "absent" || msg.errorKind === "failure" ? msg.errorKind : undefined,
 			});
+		}
+
+		if (
+			ws.data.teamName === "host" &&
+			(msg.type === "codex_hello" || msg.type === "codex_receipt" || msg.type === "codex_event")
+		) {
+			onCodexHostMessage?.(msg);
 		}
 
 		if (msg.type === "catalog" && ws.data.teamName === "host") {

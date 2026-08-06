@@ -680,9 +680,13 @@ describe("Codex checked recovery transitions", () => {
 		});
 
 		expect(stale.disposition).toBe("indeterminate");
+		// The refusal SETTLES the delivery and puts the agent into recovery. Leaving it requested would
+		// block every later message and stop for this agent with nothing able to clear it.
 		expect(sessionStore.codexCatalog(owner)?.agents[0]).toMatchObject({
 			fence: { lastEventId: 4 },
-			operations: [{ state: "accepted" }, { state: "requested" }],
+			agentState: "recovering",
+			operations: [{ state: "accepted" }, { state: "indeterminate" }],
+			exchanges: [{ status: "accepted" }, { status: "indeterminate" }],
 		});
 	});
 

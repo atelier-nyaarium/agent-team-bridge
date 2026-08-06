@@ -5,6 +5,7 @@ import path from "node:path";
 import WebSocket from "ws";
 import type { LimitNotice } from "../../shared/agent-screen.js";
 import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
+import { CodexEventAckSchema } from "../../shared/codex-thinking.js";
 import {
 	classifyPeekError,
 	type HostOp,
@@ -14,6 +15,7 @@ import {
 } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
+import { CodexDaemonService } from "./codexDaemonService.js";
 import { ExecutionTargetManager } from "./codexTargets.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
@@ -51,6 +53,12 @@ const reconnector = createReconnector(() => connect());
 // valid across a reconnect that a socket-scoped epoch would have discarded.
 const daemonInstanceId = crypto.randomUUID();
 const codexTargets = new ExecutionTargetManager();
+const codexDaemon = new CodexDaemonService({
+	targets: codexTargets,
+	daemonInstanceId,
+	send: safeSend,
+	model: process.env.CODEX_THINKING_MODEL,
+});
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
 // second handleWake against a session the first is still bringing up - the reattach branch could
 // otherwise kill a session mid-startup.
@@ -69,6 +77,7 @@ function safeSend(payload: Record<string, unknown>): void {
 /** Reap every supervised App Server. A child outliving its supervisor would hold a thread nothing
  * can reach or stop. */
 export function stopSupervisedChildren(): void {
+	codexDaemon.shutdown();
 	codexTargets.shutdown();
 }
 
@@ -106,6 +115,11 @@ function connect(): void {
 			}),
 		);
 
+		// Which supervisor and which children are live, then everything the gateway never committed.
+		// A reconnect changes the socket, not what the children have already produced.
+		safeSend(codexDaemon.hello());
+		codexDaemon.replay();
+
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
 		console.error(`[host-wake] sent catalog with ${projects.length} projects`);
@@ -142,6 +156,15 @@ function connect(): void {
 			void handleHostOp(msg.reqId as string, msg.op as HostOp).catch((e) =>
 				console.error("[host-op] dispatch error:", e),
 			);
+		}
+
+		if (msg.type === "codex_command") {
+			codexDaemon.handleCommand(msg);
+		}
+
+		if (msg.type === "codex_ack") {
+			const ack = CodexEventAckSchema.safeParse(msg);
+			if (ack.success) codexDaemon.acknowledge(ack.data);
 		}
 
 		if (msg.type === "presence_watch" && Array.isArray(msg.watch)) {
