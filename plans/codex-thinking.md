@@ -307,7 +307,20 @@ This phase changes how every capability's guidance reaches every session, so it 
 - Confirm the block is absent entirely when no capability is enabled, and exercise the enabling flag in both directions against the running daemon.
 - The owner reads and approves the formatting. This is a blocking gate, and no later phase starts until it passes.
 
-## Phase 4 - Supervise App Server by execution target
+## Phase 4 - Supervise App Server by execution target ✅
+
+Shipped as `mcp/devcontainer/codexTargets.ts`: `ExecutionTargetManager` over an injectable `ExecutionTargetLauncher`, one child per target keyed by `targetId`, started on first use. A host child launches directly with a scrubbed environment; a container child goes through `docker exec -i -u vscode -w <cwd>`, the boundary the terminal ops already use, because `devcontainer exec` buffers to completion and cannot hold a conversation. Failures are bounded-backoff `recovering`, then `unavailable` after five fast failures, with a cooldown so a repaired target recovers without a daemon restart. The daemon mints one instance id per process and reaps every child on exit.
+
+Two things the environment work had to get right: `docker exec` does not forward the caller's environment, so container settings ride as explicit `-e` pairs and only `CODEX_*` is worth carrying, and the container name is slug-asserted before it reaches argv the way every other exec call site in the daemon does.
+
+Deliberately left for later phases, so a re-audit does not raise them again:
+
+- `acquire` has no production caller yet. Phase 6 routes Codex commands to it.
+- The daemon sends `daemonInstanceId` and nothing reads it. Phase 6 consumes it for reconciliation fences.
+- A failure class is derived from spawn errors and exit codes only. An auth failure or an incompatible handshake that does NOT exit the process is invisible here by construction, since this layer never speaks the protocol. Phase 5's client reports those.
+- Per-target reaping exists but has no trigger beyond daemon exit. It wants a container-stopped signal the daemon does not track yet.
+
+### Original spec
 
 - Add a daemon-owned execution-target manager that lazily runs:
   - One `codex app-server` JSONL/stdio child for host sessions.

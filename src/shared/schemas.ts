@@ -239,6 +239,9 @@ export const WsRegisterSchema = z.object({
 	// The host daemon's own configuration, honoured only on the token-gated "host" slot. Complete
 	// every time: present-but-empty affirms nothing enabled, absent leaves the last one standing.
 	daemonCapabilities: z.array(EnabledPluginSchema).max(64).optional(),
+	// Identifies the daemon PROCESS, not this connection. A reconnect changes which socket carries an
+	// event, not which supervisor produced it, so a durable event fenced by this survives one.
+	daemonInstanceId: z.string().max(64).optional(),
 });
 
 ////////////////////////////////

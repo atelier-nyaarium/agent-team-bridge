@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
 } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
+import { ExecutionTargetManager } from "./codexTargets.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { PresenceScheduler, type WatchEntry } from "./presenceScheduler.js";
@@ -44,6 +46,11 @@ let gatewayUrl = "ws://localhost:20000";
 let projectDirs: string[] = [path.join(HOME, "projects")];
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
+// Minted once per daemon process, deliberately NOT per socket. A reconnect changes which connection
+// carries an event, not which supervisor produced it, so a durable event fenced by this id stays
+// valid across a reconnect that a socket-scoped epoch would have discarded.
+const daemonInstanceId = crypto.randomUUID();
+const codexTargets = new ExecutionTargetManager();
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
 // second handleWake against a session the first is still bringing up - the reattach branch could
 // otherwise kill a session mid-startup.
@@ -57,6 +64,12 @@ function safeSend(payload: Record<string, unknown>): void {
 	} catch (err) {
 		console.error("[host-daemon] ws send failed:", err instanceof Error ? err.message : err);
 	}
+}
+
+/** Reap every supervised App Server. A child outliving its supervisor would hold a thread nothing
+ * can reach or stop. */
+export function stopSupervisedChildren(): void {
+	codexTargets.shutdown();
 }
 
 export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
@@ -89,6 +102,7 @@ function connect(): void {
 				team: "host",
 				...(hostToken ? { token: hostToken } : {}),
 				daemonCapabilities: daemonCapabilityDeclaration(process.env),
+				daemonInstanceId,
 			}),
 		);
 

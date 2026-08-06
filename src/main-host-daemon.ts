@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { startHostDaemon } from "./mcp/devcontainer/hostDaemon.js";
+import { startHostDaemon, stopSupervisedChildren } from "./mcp/devcontainer/hostDaemon.js";
 import { installRejectionGuard } from "./shared/process-guards.js";
 
 // The headless host daemon: it claims the gateway's reserved "host" WS slot and owns the host
@@ -15,8 +15,15 @@ import { installRejectionGuard } from "./shared/process-guards.js";
 installRejectionGuard("host-daemon");
 process.on("uncaughtException", (err) => {
 	console.error("[host-daemon] uncaughtException:", err);
+	stopSupervisedChildren();
 	process.exit(1);
 });
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+	process.on(signal, () => {
+		stopSupervisedChildren();
+		process.exit(0);
+	});
+}
 
 const projectDirs = [path.join(os.homedir(), "projects")];
 startHostDaemon(projectDirs);
