@@ -1,13 +1,18 @@
 import type { z } from "zod";
-import type { EnabledPluginSchema } from "./schemas.js";
+import type { CapabilityBundleSchema, CapabilitySnapshotSchema, EnabledPluginSchema } from "./schemas.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
 export type Capability = z.infer<typeof EnabledPluginSchema>;
+export type CapabilitySnapshot = z.infer<typeof CapabilitySnapshotSchema>;
+export type CapabilityBundle = z.infer<typeof CapabilityBundleSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
+
+/** A source that has never spoken. Distinct from one that spoke and declared nothing. */
+export const UNREPORTED_CAPABILITIES: CapabilitySnapshot = { known: false, capabilities: [], clientVersions: [] };
 
 export const CODEX_THINKING_CAPABILITY_ID = "codex-thinking";
 
@@ -48,4 +53,26 @@ export const CODEX_THINKING_INSTRUCTIONS = [
 export function daemonCapabilityDeclaration(env: Record<string, string | undefined>): Capability[] {
 	if (env.CODEX_THINKING_ENABLED !== "true") return [];
 	return [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: CODEX_THINKING_INSTRUCTIONS }];
+}
+
+/**
+ * The bundle flattened for a consumer that only needs the list.
+ *
+ * `known` is an AND: a source that has said nothing leaves the answer silent about the ids only it
+ * reports, and calling that complete is what lets one source's empty declaration answer for another.
+ * Ids are disjoint by ownership, so first-wins on a collision only settles a misconfiguration.
+ */
+export function unionCapabilities(bundle: CapabilityBundle): CapabilitySnapshot {
+	const sections = [bundle.console, bundle.daemon];
+	const byId = new Map<string, Capability>();
+	for (const section of sections) {
+		for (const capability of section.capabilities) {
+			if (!byId.has(capability.id)) byId.set(capability.id, capability);
+		}
+	}
+	return {
+		known: sections.every((s) => s.known),
+		capabilities: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
+		clientVersions: [...new Set(sections.flatMap((s) => s.clientVersions))].sort(),
+	};
 }

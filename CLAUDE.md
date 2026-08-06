@@ -17,8 +17,8 @@ code does not belong here; rationale lives in `git log`.
     fails the build if any other module reads the credential fields
   - `presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence plane, cross-device read
     anchors, host RPC correlation
-  - `daemonCapabilities.ts` - the daemon's half of the capability answer, and the union with the
-    console's half that `/capabilities` serves
+  - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
+    and served as its own section
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store
@@ -35,8 +35,8 @@ code does not belong here; rationale lives in `git log`.
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
-  - `capabilities.ts` - the capability ids and the guidance text each one carries, plus what the host
-    daemon's own configuration declares at register
+  - `capabilities.ts` - the capability ids and the guidance text each one carries, what the host
+    daemon's own configuration declares at register, and the fold from a per-source bundle to one list
   - `schemas.ts` - THE single zod truth for every wire shape. Every schema carries `.meta({id})`,
     which is its generated Kotlin class name
   - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
@@ -253,16 +253,24 @@ tree-sitter and attaches one file snapshot per referenced file. Lives in `mcp/re
 A session's tools are gated on what the owner's consoles can render and what the host daemon has
 configured. Consoles report loaded plugins at register into a durable `CapabilityStore` (14-day TTL,
 500-device cap); the daemon declares its own at register into a separate `DaemonCapabilityStore` with
-no TTL. `GET /capabilities` serves `unionCapabilitySnapshots` of the two, and a starting MCP reads
-that union before the McpServer exists.
+no TTL. A starting MCP reads both before the McpServer exists.
 
+- **`/capabilities` serves the two sources APART, never pre-merged.** The sources own disjoint id
+  spaces, so only a caller holding its own last answer can decide what to keep, and that decision
+  needs to know whether the source owning an id spoke this round. Flattening first cost two silent
+  capability outages: an OR'd `known` let the daemon's affirmative empty answer for console plugins,
+  and the id-blind repair for that resurrected withdrawn capabilities out of the cache.
+- The MCP carries forward PER SECTION: a source that spoke is taken as-is including an affirmative
+  empty, a silent one keeps what it last said, and the result is written back whole. That is safe
+  because every section in it is either a fresh answer or a byte-identical carry-forward of one.
 - An ABSENT `enabledPlugins` / `daemonCapabilities` means that source said nothing and its prior
   report stands; an EMPTY array is an affirmative "nothing enabled".
-- **`known` on the union means COMPLETE, not "somebody spoke".** The sources own disjoint id spaces,
-  so an OR would let the daemon's affirmative empty stand as an authoritative answer about console
-  plugins and strip them from every session with no error anywhere. An incomplete answer is MERGED
-  over the MCP's last-known one, since trusting it whole drops the silent source's ids and discarding
-  it drops the ids that did arrive.
+- `unionCapabilities` folds a bundle for consumers that only need the list. Its `known` is an AND,
+  meaning COMPLETE rather than "somebody spoke", and only the drift check reads it.
+- **Both sides tolerate the pre-split shape**, because the plugin and the gateway update on separate
+  triggers and the plugin usually leads. The MCP lifts a flat answer from either the wire or its own
+  cache file into the `console` section; the route serves the flat fields beside the sections. Retire
+  both once no pre-split gateway or plugin is still starting sessions.
 - A daemon declaration is honoured only past the `HOST_WS_TOKEN` gate, so reaching the register path
   is not enough to announce a capability.
 - Nothing is assumed when the gateway cannot answer. The fallback is the last answer that actually

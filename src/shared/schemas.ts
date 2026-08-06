@@ -163,6 +163,29 @@ export const EnabledPluginSchema = z
 	})
 	.meta({ id: "EnabledPlugin" });
 
+/** What one source says about the ids it alone owns. `known: false` is no opinion, which a consumer
+ * must not read as an assertion that the source has nothing. */
+export const CapabilitySnapshotSchema = z.object({
+	known: z.boolean(),
+	capabilities: z.array(EnabledPluginSchema),
+	clientVersions: z.array(z.string()),
+});
+
+/**
+ * What `/capabilities` serves: every source's answer, kept apart.
+ *
+ * Sections rather than one merged list, because a consumer deciding what to keep from its own last
+ * answer has to ask whether the source that owns an id spoke this round. A flattened list cannot
+ * answer that, and every attempt to work around it has silently dropped or resurrected a capability.
+ *
+ * Hand-named fields rather than a map: there are two sources, they are shaped differently, and a
+ * third costs one field.
+ */
+export const CapabilityBundleSchema = z.object({
+	console: CapabilitySnapshotSchema,
+	daemon: CapabilitySnapshotSchema,
+});
+
 ////////////////////////////////
 //  WS Register Schema
 //

@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Capability } from "../shared/capabilities.js";
+import { type Capability, unionCapabilities } from "../shared/capabilities.js";
 import { readCapabilities } from "./capabilities.js";
 
 ////////////////////////////////
@@ -65,10 +65,11 @@ export function registerCapabilitiesTool(mcpServer: McpServer, capabilities: Cap
 		{ title: "Switchboard Capabilities", description, inputSchema: capabilitiesSchema },
 		async () => {
 			const routerUrl = process.env.BRIDGE_ROUTER_URL;
-			const snapshot = routerUrl ? await readCapabilities(routerUrl) : null;
+			const bundle = routerUrl ? await readCapabilities(routerUrl) : null;
 			// An incomplete answer is unverifiable, not evidence of a change: the silent source owns ids
 			// it did not report, and comparing against it would name them as newly disabled.
-			const current = snapshot?.known ? snapshot.capabilities : null;
+			const fresh = bundle && unionCapabilities(bundle);
+			const current = fresh?.known ? fresh.capabilities : null;
 			return { content: [{ type: "text" as const, text: renderCapabilities(capabilities, current) }] };
 		},
 	);

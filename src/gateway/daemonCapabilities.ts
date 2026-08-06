@@ -1,13 +1,6 @@
-import type { Capability } from "../shared/capabilities.js";
+import type { Capability, CapabilitySnapshot } from "../shared/capabilities.js";
 import type { DurableStore } from "../shared/durable-store.js";
 import { EnabledPluginSchema } from "../shared/schemas.js";
-import type { CapabilitySnapshot } from "./console/capabilityStore.js";
-
-////////////////////////////////
-//  Functions & Helpers
-
-/** No source has spoken. Distinct from an affirmative empty declaration. */
-export const EMPTY_CAPABILITIES: CapabilitySnapshot = { known: false, capabilities: [], clientVersions: [] };
 
 ////////////////////////////////
 //  Class
@@ -44,29 +37,4 @@ export class DaemonCapabilityStore {
 		if (parsed.some((p) => !p.success)) return;
 		this.declaration = parsed.map((p) => p.data as Capability);
 	}
-}
-
-////////////////////////////////
-//  Functions & Helpers
-
-/**
- * `known` means COMPLETE, not "somebody spoke". Each source owns a disjoint id space, so a source
- * that has said nothing leaves the answer silent about ids only it can report. An OR here would let
- * the daemon's affirmative "nothing enabled" stand as an authoritative answer about console plugins,
- * and a consumer that trusts it drops every console capability with no error anywhere.
- *
- * Ids being disjoint by ownership is also why first-wins on a collision only settles a misconfiguration.
- */
-export function unionCapabilitySnapshots(...snapshots: CapabilitySnapshot[]): CapabilitySnapshot {
-	const byId = new Map<string, Capability>();
-	for (const snapshot of snapshots) {
-		for (const capability of snapshot.capabilities) {
-			if (!byId.has(capability.id)) byId.set(capability.id, capability);
-		}
-	}
-	return {
-		known: snapshots.length > 0 && snapshots.every((s) => s.known),
-		capabilities: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
-		clientVersions: [...new Set(snapshots.flatMap((s) => s.clientVersions))].sort(),
-	};
 }

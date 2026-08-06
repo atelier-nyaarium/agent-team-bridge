@@ -1,14 +1,9 @@
+import { type Capability, type CapabilitySnapshot, UNREPORTED_CAPABILITIES } from "../../shared/capabilities.js";
 import type { DurableStore } from "../../shared/durable-store.js";
 import { EnabledPluginSchema } from "../../shared/schemas.js";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-/** One plugin a device reports, plus the agent-facing guidance its manifest carries. */
-export interface Capability {
-	id: string;
-	instructions?: string;
-}
 
 interface DeviceRecord {
 	capabilities: Capability[];
@@ -22,17 +17,6 @@ interface DeviceRecord {
 	// The build this device last registered with. Absent from a device that did not say, which is
 	// not the same as an old one: a version-sensitive caller has to treat unknown as unknown.
 	clientVersion?: string;
-}
-
-/** What the endpoint serves. `known: false` means no device has ever reported, which a caller must
- * treat as "no opinion" rather than as an affirmative empty set. */
-export interface CapabilitySnapshot {
-	known: boolean;
-	capabilities: Capability[];
-	/** Every live device's reported build, deduped and sorted. A device that reported none is
-	 * absent rather than represented, so an empty list means nobody said, never "everybody is old".
-	 * Diagnostic today; this is the input a version gate would read. */
-	clientVersions: string[];
 }
 
 ////////////////////////////////
@@ -130,7 +114,7 @@ export class CapabilityStore {
 	 */
 	snapshot(): CapabilitySnapshot {
 		const live = [...this.devices.values()].filter((r) => this.now() - r.lastSeen < this.ttlMs);
-		if (live.length === 0) return { known: false, capabilities: [], clientVersions: [] };
+		if (live.length === 0) return UNREPORTED_CAPABILITIES;
 		const best = new Map<string, { cap: Capability; reportedAt: number }>();
 		for (const record of live) {
 			for (const cap of record.capabilities) {

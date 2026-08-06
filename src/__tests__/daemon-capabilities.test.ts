@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { CapabilityStore } from "../gateway/console/capabilityStore.js";
-import { DaemonCapabilityStore, EMPTY_CAPABILITIES, unionCapabilitySnapshots } from "../gateway/daemonCapabilities.js";
+import { DaemonCapabilityStore } from "../gateway/daemonCapabilities.js";
 import { capabilityInstructions } from "../mcp/capabilities.js";
 import { describeDrift, renderCapabilities } from "../mcp/capabilitiesTool.js";
-import { type Capability, CODEX_THINKING_CAPABILITY_ID, daemonCapabilityDeclaration } from "../shared/capabilities.js";
+import {
+	type Capability,
+	CODEX_THINKING_CAPABILITY_ID,
+	daemonCapabilityDeclaration,
+	UNREPORTED_CAPABILITIES,
+	unionCapabilities,
+} from "../shared/capabilities.js";
 import type { DurableStore } from "../shared/durable-store.js";
-import { WsRegisterSchema } from "../shared/schemas.js";
+import { CapabilityBundleSchema, WsRegisterSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -44,7 +50,7 @@ describe("what the daemon announces", () => {
 
 describe("the daemon capability store", () => {
 	it("has no opinion until a daemon has actually declared one", () => {
-		expect(new DaemonCapabilityStore(fakeDurable()).snapshot()).toEqual(EMPTY_CAPABILITIES);
+		expect(new DaemonCapabilityStore(fakeDurable()).snapshot()).toEqual(UNREPORTED_CAPABILITIES);
 	});
 
 	it("separates an affirmative empty declaration from never having heard one", () => {
@@ -76,19 +82,21 @@ describe("the daemon capability store", () => {
 	it("reverts to no-opinion on an unreadable file rather than serving half of it", () => {
 		const store = new DaemonCapabilityStore(fakeDurable({ capabilities: [CODEX, { id: "" }] }));
 
-		expect(store.snapshot()).toEqual(EMPTY_CAPABILITIES);
+		expect(store.snapshot()).toEqual(UNREPORTED_CAPABILITIES);
 	});
 });
 
-describe("the union the capabilities route serves", () => {
+describe("folding the bundle into one answer", () => {
 	const console_ = { known: true, capabilities: [{ id: "designer" }], clientVersions: ["1.2.3"] };
 	const daemon = { known: true, capabilities: [CODEX], clientVersions: [] };
 
 	it("is complete only once every source has spoken", () => {
-		expect(unionCapabilitySnapshots(console_, daemon).known).toBe(true);
-		expect(unionCapabilitySnapshots(EMPTY_CAPABILITIES, daemon).known).toBe(false);
-		expect(unionCapabilitySnapshots(console_, EMPTY_CAPABILITIES).known).toBe(false);
-		expect(unionCapabilitySnapshots(EMPTY_CAPABILITIES, EMPTY_CAPABILITIES)).toEqual(EMPTY_CAPABILITIES);
+		expect(unionCapabilities({ console: console_, daemon }).known).toBe(true);
+		expect(unionCapabilities({ console: UNREPORTED_CAPABILITIES, daemon }).known).toBe(false);
+		expect(unionCapabilities({ console: console_, daemon: UNREPORTED_CAPABILITIES }).known).toBe(false);
+		expect(unionCapabilities({ console: UNREPORTED_CAPABILITIES, daemon: UNREPORTED_CAPABILITIES })).toEqual(
+			UNREPORTED_CAPABILITIES,
+		);
 	});
 
 	it("does not let one source's empty declaration answer for the other's ids", () => {
@@ -97,11 +105,11 @@ describe("the union the capabilities route serves", () => {
 		// that reads as an authoritative "nothing is enabled" about capabilities it cannot see.
 		const daemonSaysNothing = { known: true, capabilities: [], clientVersions: [] };
 
-		expect(unionCapabilitySnapshots(EMPTY_CAPABILITIES, daemonSaysNothing).known).toBe(false);
+		expect(unionCapabilities({ console: UNREPORTED_CAPABILITIES, daemon: daemonSaysNothing }).known).toBe(false);
 	});
 
 	it("carries both sources and orders them by id", () => {
-		expect(unionCapabilitySnapshots(console_, daemon)).toEqual({
+		expect(unionCapabilities({ console: console_, daemon })).toEqual({
 			known: true,
 			capabilities: [CODEX, { id: "designer" }],
 			clientVersions: ["1.2.3"],
@@ -111,7 +119,9 @@ describe("the union the capabilities route serves", () => {
 	it("does not let one source's silence take the other's capability away", () => {
 		const daemonWentQuiet = { known: true, capabilities: [], clientVersions: [] };
 
-		expect(unionCapabilitySnapshots(console_, daemonWentQuiet).capabilities).toEqual([{ id: "designer" }]);
+		expect(unionCapabilities({ console: console_, daemon: daemonWentQuiet }).capabilities).toEqual([
+			{ id: "designer" },
+		]);
 	});
 });
 
@@ -173,8 +183,9 @@ describe("a declaration's whole journey to a session", () => {
 		daemon.declare(frame.daemonCapabilities ?? []);
 		const consoleStore = new CapabilityStore(fakeDurable());
 		consoleStore.report("phone-1", console_);
-		// Through JSON, because the route serializes before the MCP parses it back.
-		return JSON.parse(JSON.stringify(unionCapabilitySnapshots(consoleStore.snapshot(), daemon.snapshot())));
+		// Through JSON and the wire schema, because the route serializes before the MCP parses it back.
+		const wire = JSON.parse(JSON.stringify({ console: consoleStore.snapshot(), daemon: daemon.snapshot() }));
+		return unionCapabilities(CapabilityBundleSchema.parse(wire));
 	}
 
 	it("reaches a session as a name in the block and guidance in the tool", () => {

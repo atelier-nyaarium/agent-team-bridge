@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import { createBurstCache } from "../shared/burst-cache.js";
+import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import {
@@ -43,7 +44,6 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
-import { EMPTY_CAPABILITIES, unionCapabilitySnapshots } from "./daemonCapabilities.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -841,12 +841,17 @@ export function createRoutes({
 	/** Ungated on purpose: it serves non-secret capability ids and their own instruction text, and the
 	 * hand-launched host window this exists to serve carries no credential to present. */
 	function capabilities(): Response {
-		return jsonResponse(
-			unionCapabilitySnapshots(
-				capabilityStore?.snapshot() ?? EMPTY_CAPABILITIES,
-				daemonCapabilityStore?.snapshot() ?? EMPTY_CAPABILITIES,
-			),
-		);
+		// Kept apart rather than merged here: only the caller knows what it already holds, and a
+		// merged list cannot say which source spoke this round.
+		const consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
+		return jsonResponse({
+			// A session started by a plugin from before the split reads these flat fields and nothing
+			// else, so they carry exactly what it would have been served then. Retire them once no such
+			// plugin is still starting sessions.
+			...consoleSnapshot,
+			console: consoleSnapshot,
+			daemon: daemonCapabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES,
+		});
 	}
 
 	function pending(): Response {

@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCapability } from "../mcp/capabilities.js";
-import { CODEX_THINKING_CAPABILITY_ID, daemonCapabilityDeclaration } from "../shared/capabilities.js";
+import {
+	type Capability,
+	CODEX_THINKING_CAPABILITY_ID,
+	daemonCapabilityDeclaration,
+	UNREPORTED_CAPABILITIES,
+} from "../shared/capabilities.js";
 import { EnabledPluginSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -22,6 +27,14 @@ function cachePath(): string {
 function writeCache(body: unknown): void {
 	fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
 	fs.writeFileSync(cachePath(), JSON.stringify(body));
+}
+
+/** The wire shape, one section per source. `null` is a source that has not spoken; `[]` is one that
+ * spoke and declared nothing. */
+function bundle(sources: { console?: Capability[] | null; daemon?: Capability[] | null }) {
+	const section = (caps: Capability[] | null | undefined) =>
+		caps == null ? UNREPORTED_CAPABILITIES : { known: true, capabilities: caps, clientVersions: [] };
+	return { console: section(sources.console), daemon: section(sources.daemon) };
 }
 
 ////////////////////////////////
@@ -48,7 +61,7 @@ describe("fetchCapabilities", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () =>
-				jsonResponse({ known: true, capabilities: [{ id: "designer", instructions: "Use it." }] }),
+				jsonResponse(bundle({ console: [{ id: "designer", instructions: "Use it." }], daemon: [] })),
 			),
 		);
 
@@ -57,10 +70,10 @@ describe("fetchCapabilities", () => {
 		expect(capabilities).toEqual([{ id: "designer", instructions: "Use it." }]);
 	});
 
-	it("reports an affirmatively empty union as empty, removing a tool the owner turned off", async () => {
+	it("reports an affirmatively empty answer as empty, removing a tool the owner turned off", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: true, capabilities: [] })),
+			vi.fn(async () => jsonResponse(bundle({ console: [], daemon: [] }))),
 		);
 
 		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(false);
@@ -79,10 +92,10 @@ describe("fetchCapabilities", () => {
 		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
-	it("assumes nothing when the gateway has no opinion and nothing was ever cached", async () => {
+	it("assumes nothing when no source has spoken and nothing was ever cached", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: false, capabilities: [] })),
+			vi.fn(async () => jsonResponse(bundle({}))),
 		);
 
 		expect(await fetchCapabilities(ROUTER)).toEqual([]);
@@ -91,7 +104,7 @@ describe("fetchCapabilities", () => {
 	// The case a fail-open set was invented for, answered with evidence instead: a blip cannot strip a
 	// session's tools, because the last real answer is still on disk.
 	it("keeps the tool through an outage when the gateway had already answered once", async () => {
-		writeCache({ known: true, capabilities: [{ id: "designer", instructions: "Use it." }] });
+		writeCache(bundle({ console: [{ id: "designer", instructions: "Use it." }], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => {
@@ -103,7 +116,7 @@ describe("fetchCapabilities", () => {
 	});
 
 	it("falls back to the last answer it actually got, keeping that answer's guidance", async () => {
-		writeCache({ known: true, capabilities: [{ id: "designer", instructions: "Prefer Switchboard." }] });
+		writeCache(bundle({ console: [{ id: "designer", instructions: "Prefer Switchboard." }], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => jsonResponse({ oops: true })),
@@ -117,7 +130,7 @@ describe("fetchCapabilities", () => {
 	it("remembers a fresh answer for the next start that cannot reach the gateway", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: true, capabilities: [{ id: "notes" }] })),
+			vi.fn(async () => jsonResponse(bundle({ console: [{ id: "notes" }], daemon: [] }))),
 		);
 		await fetchCapabilities(ROUTER);
 
@@ -134,17 +147,17 @@ describe("fetchCapabilities", () => {
 	it("trusts a cache that recorded the owner turning everything off", async () => {
 		// This used to be floored back on by the fail-open set, which meant a guess overriding the one
 		// piece of evidence available: the owner's own last known choice.
-		writeCache({ known: true, capabilities: [] });
+		writeCache(bundle({ console: [], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: false, capabilities: [] })),
+			vi.fn(async () => jsonResponse(bundle({}))),
 		);
 
 		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(false);
 	});
 
 	it("carries a cached plugin the core set does not know about through an outage", async () => {
-		writeCache({ known: true, capabilities: [{ id: "notes", instructions: "Jot it down." }] });
+		writeCache(bundle({ console: [{ id: "notes", instructions: "Jot it down." }], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => {
@@ -158,49 +171,89 @@ describe("fetchCapabilities", () => {
 		expect(capabilities.find((c) => c.id === "notes")?.instructions).toBe("Jot it down.");
 	});
 
-	it("keeps a silent source's cached share when the gateway answers incompletely", async () => {
-		// One source going quiet says nothing about the ids another source owns. Trusting the partial
-		// answer whole drops them silently, and writing it back destroys the only record of them.
-		writeCache({ known: true, capabilities: [{ id: "designer" }, { id: "references" }] });
+	it("reads a gateway that has not been restarted since the sources were split", async () => {
+		// The plugin and the gateway update on separate triggers and the plugin usually leads, so this
+		// is the ordinary rollout order rather than an edge case.
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: false, capabilities: [{ id: CODEX_THINKING_CAPABILITY_ID }] })),
+			vi.fn(async () =>
+				jsonResponse({
+					known: true,
+					capabilities: [{ id: "designer" }, { id: "references" }],
+					clientVersions: [],
+				}),
+			),
 		);
 
-		const capabilities = await fetchCapabilities(ROUTER);
-
-		expect(capabilities.map((c) => c.id)).toEqual([CODEX_THINKING_CAPABILITY_ID, "designer", "references"]);
-		// The merge is not written back, so the cache still holds the last answer that was verified.
-		expect(JSON.parse(fs.readFileSync(cachePath(), "utf8")).capabilities).toHaveLength(2);
+		expect((await fetchCapabilities(ROUTER)).map((c) => c.id)).toEqual(["designer", "references"]);
 	});
 
-	it("lets a withdrawn capability settle even where an answer is never complete", async () => {
-		// An install with no console paired never reaches a complete answer, so a merge written back as
-		// a verified one would feed itself: the withdrawn id returns from the cache on every start.
-		const fetchMock = vi.fn(async () =>
-			jsonResponse({ known: false, capabilities: [{ id: CODEX_THINKING_CAPABILITY_ID }] }),
+	it("reads a cache file written before the sources were split", async () => {
+		// The old writer persisted two fields, so the legacy shape on disk differs from the legacy shape
+		// on the wire and a lift that only handles one of them still loses the fallback.
+		fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
+		fs.writeFileSync(cachePath(), JSON.stringify({ known: true, capabilities: [{ id: "designer" }] }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("gateway down");
+			}),
 		);
+
+		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(true);
+	});
+
+	it("keeps a silent source's last answer while taking the one that spoke", async () => {
+		writeCache(bundle({ console: [{ id: "designer" }, { id: "references" }], daemon: [] }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse(bundle({ console: null, daemon: [{ id: CODEX_THINKING_CAPABILITY_ID }] }))),
+		);
+
+		expect((await fetchCapabilities(ROUTER)).map((c) => c.id)).toEqual([
+			CODEX_THINKING_CAPABILITY_ID,
+			"designer",
+			"references",
+		]);
+	});
+
+	it("lets a source withdraw its own capability while another source is silent", async () => {
+		// The one an id-blind merge could never get right: the console dropped designer on purpose, and
+		// the daemon being unreachable that round says nothing about a console id.
+		writeCache(bundle({ console: [{ id: "designer" }], daemon: [{ id: CODEX_THINKING_CAPABILITY_ID }] }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse(bundle({ console: [], daemon: null }))),
+		);
+
+		expect((await fetchCapabilities(ROUTER)).map((c) => c.id)).toEqual([CODEX_THINKING_CAPABILITY_ID]);
+	});
+
+	it("keeps a withdrawal after the source that made it goes quiet too", async () => {
+		// The withdrawal was recorded as that source's own answer, so staying withdrawn does not depend
+		// on every source continuing to speak.
+		writeCache(bundle({ console: [{ id: "designer" }], daemon: [] }));
+		const fetchMock = vi.fn(async () => jsonResponse(bundle({ console: [], daemon: null })));
 		vi.stubGlobal("fetch", fetchMock);
-		expect(await fetchCapabilities(ROUTER)).toHaveLength(1);
-
-		fetchMock.mockImplementation(async () => jsonResponse({ known: false, capabilities: [] }));
-
 		expect(await fetchCapabilities(ROUTER)).toEqual([]);
+
+		fetchMock.mockImplementation(async () => jsonResponse(bundle({})));
+
 		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
 	it("still lets a complete answer take a capability away", async () => {
-		writeCache({ known: true, capabilities: [{ id: "designer" }] });
+		writeCache(bundle({ console: [{ id: "designer" }], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ known: true, capabilities: [] })),
+			vi.fn(async () => jsonResponse(bundle({ console: [], daemon: [] }))),
 		);
 
 		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
 	it("does not let a cached no-opinion answer stand in for a real one", async () => {
-		writeCache({ known: false, capabilities: [] });
+		writeCache(bundle({}));
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => new Response("nope", { status: 500 })),
@@ -220,7 +273,7 @@ describe("fetchCapabilities", () => {
 			),
 		);
 
-		writeCache({ known: true, capabilities: [{ id: "designer", instructions: "Use it." }] });
+		writeCache(bundle({ console: [{ id: "designer", instructions: "Use it." }], daemon: [] }));
 		const started = Date.now();
 		const capabilities = await fetchCapabilities(ROUTER);
 

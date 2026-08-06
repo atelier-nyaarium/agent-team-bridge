@@ -2,25 +2,49 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
-import { EnabledPluginSchema } from "../shared/schemas.js";
-
-////////////////////////////////
-//  Schemas
-
-const CapabilitySnapshotSchema = z.object({
-	known: z.boolean(),
-	capabilities: z.array(EnabledPluginSchema),
-});
+import {
+	type Capability,
+	type CapabilityBundle,
+	CODEX_THINKING_CAPABILITY_ID,
+	UNREPORTED_CAPABILITIES,
+	unionCapabilities,
+} from "../shared/capabilities.js";
+import { CapabilityBundleSchema, EnabledPluginSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-export type Capability = z.infer<typeof EnabledPluginSchema>;
-export type CapabilitySnapshot = z.infer<typeof CapabilitySnapshotSchema>;
+export type { Capability };
 
 ////////////////////////////////
 //  Functions & Helpers
+
+const NOTHING_REPORTED: CapabilityBundle = { console: UNREPORTED_CAPABILITIES, daemon: UNREPORTED_CAPABILITIES };
+
+/**
+ * An answer from before the sources were kept apart, from a gateway or a cache file.
+ *
+ * The plugin and the gateway update on their own triggers and the plugin usually leads, so a session
+ * regularly starts against a gateway several releases behind. Rejecting its answer costs that session
+ * every gated tool, silently and for its whole life.
+ *
+ * `clientVersions` is optional because the old cache file carried only two fields while the old wire
+ * response carried three. Lifting the list into `console` loses nothing, since a merged endpoint had
+ * already folded both sources into it, and leaving `daemon` unreported avoids claiming an answer no
+ * source gave. Retire this once no gateway below the split is still running.
+ */
+const LegacyCapabilitiesSchema = z.object({
+	known: z.boolean(),
+	capabilities: z.array(EnabledPluginSchema),
+	clientVersions: z.array(z.string()).optional().default([]),
+});
+
+function toBundle(raw: unknown): CapabilityBundle | null {
+	const bundle = CapabilityBundleSchema.safeParse(raw);
+	if (bundle.success) return bundle.data;
+	const legacy = LegacyCapabilitiesSchema.safeParse(raw);
+	return legacy.success ? { console: legacy.data, daemon: UNREPORTED_CAPABILITIES } : null;
+}
 
 // The gateway is on the same machine or the same docker network, so a healthy answer is immediate.
 // This bound exists so an unreachable one costs a beat rather than the session's whole startup.
@@ -36,68 +60,65 @@ function cacheFile(): string {
 	return path.join(os.homedir(), ".config", "switchboard", "capabilities-cache.json");
 }
 
-function readCache(): Capability[] | null {
+// What to assume when no answer arrived: the last one that DID arrive, and nothing else. Every gated
+// id is one the owner opts into, so a hardcoded assumed set would be guessing, and a cold start that
+// has never reached the gateway has no evidence to guess from at all.
+function readCache(): CapabilityBundle {
 	try {
-		const parsed = CapabilitySnapshotSchema.safeParse(JSON.parse(fs.readFileSync(cacheFile(), "utf8")));
-		return parsed.success && parsed.data.known ? parsed.data.capabilities : null;
+		return toBundle(JSON.parse(fs.readFileSync(cacheFile(), "utf8"))) ?? NOTHING_REPORTED;
 	} catch {
-		return null;
+		return NOTHING_REPORTED;
 	}
 }
 
-function writeCache(snapshot: unknown): void {
+function writeCache(bundle: CapabilityBundle): void {
 	try {
 		const file = cacheFile();
 		fs.mkdirSync(path.dirname(file), { recursive: true });
-		fs.writeFileSync(file, JSON.stringify(snapshot));
+		fs.writeFileSync(file, JSON.stringify(bundle));
 	} catch {
 		// A cache that cannot be written costs the next cold start its last-known answer, nothing more.
 	}
 }
 
-// What to assume when no answer arrived: the last answer that DID arrive, and nothing else. Every
-// gated id is one the owner opts into, so a hardcoded assumed set would be guessing, and a cold
-// start that has never reached the gateway has no evidence to guess from at all.
-function fallback(): Capability[] {
-	return readCache() ?? [];
-}
-
 /**
  * What this session should assume it can reach, from the gateway if it can answer.
  *
- * An INCOMPLETE answer is merged over the cache rather than trusted or discarded. One source going
- * quiet says nothing about the ids another source owns, so taking a partial answer whole would drop
- * every capability the silent source reports, while discarding it would drop the ids it did report.
+ * Carried forward PER SOURCE. A source that spoke this round is taken as-is for the ids it owns,
+ * including an affirmative empty, and one that stayed silent keeps whatever it last said. Deciding
+ * that across a merged list is what repeatedly dropped or resurrected a capability.
+ *
+ * Writing the result back is safe for the same reason: every section in it is either a fresh answer
+ * or a byte-identical carry-forward of one, so nothing inferred is ever stored as reported.
  *
  * Deliberately not `routerGet`: that retries past any deadline, cannot see a status code, and reads
  * a module-level URL that is only set once the bridge initializes, all three wrong for a call that
  * must answer before the server is built.
  */
 export async function fetchCapabilities(routerUrl: string): Promise<Capability[]> {
-	const snapshot = await readCapabilities(routerUrl);
-	if (!snapshot) return fallback();
+	const cached = readCache();
+	const fresh = await readCapabilities(routerUrl);
+	if (!fresh) return unionCapabilities(cached).capabilities;
 
-	if (snapshot.known) {
-		writeCache({ known: true, capabilities: snapshot.capabilities });
-		return snapshot.capabilities;
-	}
-
-	// The merge is NOT written back. Persisting it would restate a partial answer as a verified one,
-	// and on an install where a source is never known that compounds every start: a capability its own
-	// source has since withdrawn keeps being read back out of the cache with no way to settle.
-	const byId = new Map(snapshot.capabilities.map((c) => [c.id, c]));
-	for (const cached of fallback()) if (!byId.has(cached.id)) byId.set(cached.id, cached);
-	return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+	const carried: CapabilityBundle = {
+		console: fresh.console.known ? fresh.console : cached.console,
+		daemon: fresh.daemon.known ? fresh.daemon : cached.daemon,
+	};
+	writeCache(carried);
+	return unionCapabilities(carried).capabilities;
 }
 
 /** One bounded read, with no cache write and no fallback. `null` means no answer arrived at all,
  * which is distinct from the answer that arrived being incomplete. */
-export async function readCapabilities(routerUrl: string): Promise<CapabilitySnapshot | null> {
+export async function readCapabilities(routerUrl: string): Promise<CapabilityBundle | null> {
 	try {
 		const res = await fetch(`${routerUrl}/capabilities`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
 		if (!res.ok) return null;
-		const parsed = CapabilitySnapshotSchema.safeParse(await res.json());
-		return parsed.success ? parsed.data : null;
+		const bundle = toBundle(await res.json());
+		// Distinguishable from an unreachable gateway in the log, so version skew does not read as a
+		// dead one while a session quietly starts with nothing.
+		if (!bundle) console.error("[capabilities] gateway answered in an unrecognized shape");
+		return bundle;
 	} catch {
 		return null;
 	}
