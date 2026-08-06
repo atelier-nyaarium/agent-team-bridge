@@ -17,6 +17,8 @@ code does not belong here; rationale lives in `git log`.
     fails the build if any other module reads the credential fields
   - `presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence plane, cross-device read
     anchors, host RPC correlation
+  - `boardStore.ts` - the owner's task board: its own checked-write durable file, the per-owner
+    plane, and the enumerated refusals every board op resolves to (see Task board below)
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
   - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog and
@@ -65,6 +67,8 @@ code does not belong here; rationale lives in `git log`.
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
   - `session-store.ts` - the gateway's authoritative session records, keyed by `spawn.id`
+  - `board-rank.ts` - fractional ranks for task-board ordering: plain string order IS sibling order,
+    and `rebalanceRanks` asserts every rank it mints because an invalid one poisons the durable file
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
@@ -301,6 +305,32 @@ no TTL. A starting MCP reads both before the McpServer exists.
   fresh read only ever adds a drift warning; reporting it as the answer would describe tools the
   session does not have.
 - A running session never changes its tools; a toggle is picked up at the next session start.
+
+### Task board (gateway half; console and tools land later)
+
+The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by console ops and the
+`/task-board` route, shipped to the phone on the `task-board:${ownerId}` plane. Entries are FLAT
+(parent pointer + fractional `rank`); receivers rebuild the tree. Design record: `plans/task-board.md`.
+
+- **The store is the sole validator.** Every write path resolves to one of its enumerated refusals
+  (`BoardRefusal`), and a refusal is an ok=false INSIDE the sealed reply (`refused: ` prefix) - the
+  ONLY shape a client may retire a queued action on; every other failure retries.
+- **An invalid rank must never reach the durable file**: the wire schema would reject the whole file
+  on the next restore. Four layers hold the line - store refusal, `rebalanceRanks` self-assertion,
+  `endRank`'s re-check, and per-entry tolerant restore. Keep all four.
+- **Board mutations are absolute but NOT monotonic**, so they ride the DurableOpStore layer like
+  send/respond: a lost-reply retry surviving a restart replays the recorded reply instead of
+  re-running over newer state. `isBoardMutationKind` is the one predicate both gates derive from.
+- **A same-value write commits nothing.** Every setter reports unchanged, since a real commit fsyncs
+  the whole board file synchronously.
+- **claim/release are session-scoped and per-member**: claim refuses if ANY subtree member is held
+  elsewhere; release lets go of only the caller's own members. The owner-authority cascade is
+  `board_set_session` alone.
+- Session end (TTL sweep or console Forget) trashes done/cancelled and returns the rest to the pile,
+  via `sweep` returning the removed team keys - the hook must never live in `SessionStore.forget`,
+  whose rollback callers fire it for launches that never happened.
+- `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are the same 30 days for unrelated reasons and
+  must never share a constant.
 
 ### Codex delegation
 

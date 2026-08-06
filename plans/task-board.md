@@ -616,7 +616,10 @@ Three phases. The order is forced by two things: the deploy ritual puts the gate
 plugin bump, and the capability is CONSOLE-declared, so no session sees a tool until a console that
 ships and enables the plugin has registered.
 
-## Phase 1 - Wire and Gateway
+## Phase 1 - Wire and Gateway ✅
+
+Landed as `6a1331c` (all bullets, plus the red-team hardening below). Both gates green: 2162 vitest,
+Kotlin `:app:testDebugUnitTest` including the new fixture branches.
 
 The whole server half, landing together so it can deploy on its own.
 
@@ -790,4 +793,26 @@ its own slice; the edit screen's placement field covers moves until it lands.
 
 Follow-on, deliberately out of scope: the no-ack channel push, which the board is the first consumer
 of but which stands on its own.
+
+## Painpoints
+
+Collected during phase 1, not fixed here.
+
+- **`src/gateway/routes.ts` is past 2000 lines** and `taskBoard` joined it as yet another fat
+  function beside `pluginAction` and the blob routes. The whole per-feature route family wants a
+  split (a /framework-first-design pass); every new feature currently grows the one file.
+- **`routes.test.ts:makeCtx` hand-builds its return and silently DROPS unknown overrides.** Cost me
+  a round of mystery 503s when `boardStore` never reached `createRoutes`. Either spread the
+  overrides last or type the parameter so an unknown key fails to compile.
+- **Test fakes drift from `DurableStore`** because it is a class, not an interface:
+  `console-handler.test.ts:fakeDurable` lacked `saveChecked` until the board test needed it. One
+  shared, complete test fake (or an extracted interface) ends the per-file copies.
+- **`codegen-kotlin.ts`'s conversion-root-dependent `$ref` forms produce a MISLEADING error**: a
+  recursive schema that is both a root and nested dies as ".meta id collision", which reads as a
+  naming accident rather than the real rule (a recursive schema may appear in exactly one place in
+  the conversion graph). A comment beside the guard, or a specialized message, would have saved the
+  audit a reproduction.
+- **`MainActivity.kt:renderProject` has a pre-existing unguarded double-render path** for a project
+  literally named "host" (the create dialog filters it, the render loop does not) - the duplicate-
+  key crash class the board tab must also defend against. Flagged for an autonomous cleanup commit.
 
