@@ -268,6 +268,58 @@ describe("Codex gateway route", () => {
 		expect(context.service.listOwnedAgents(context.owner)[0]?.agentState).toBe("recovering");
 	});
 
+	it("never reports a previous turn's answer for an agent whose state is unconfirmed", async () => {
+		const context = setup();
+		const agentId = await working(context);
+		context.relay.handleHostMessage({
+			type: "codex_event",
+			kind: "terminal",
+			ownerKey: context.sessionStore.teamOf(context.owner),
+			daemonInstanceId: "daemon-1",
+			targetId: "container:recipe-app",
+			generation: 1,
+			eventId: 1,
+			agentId,
+			threadId: "thread-1",
+			turnId: "turn-1",
+			state: "completed",
+			finalResponse: "ANSWER TO THE FIRST PROMPT",
+		});
+		for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+
+		// A second prompt whose delivery is never proven puts the record into recovery.
+		await context.route.handle(post(context.token), {
+			kind: "message",
+			operationId: "123e4567-e89b-42d3-a456-42661417400b",
+			agentId,
+			prompt: "A DIFFERENT QUESTION",
+			awaitResponse: true,
+		});
+		expect(context.service.listOwnedAgents(context.owner)[0]?.agentState).toBe("recovering");
+
+		const body = await (await context.route.handle(post(context.token), { kind: "await", agentId })).json();
+
+		// Handing back the first prompt's answer here would tell the caller their second prompt
+		// succeeded, quoting a reply to a question it never asked.
+		expect(body.finalResponse).toBeUndefined();
+		expect(body.observation).toBe("unavailable");
+		expect(body.agentState).toBe("recovering");
+	});
+
+	it("asks the daemon about a stale record when a caller lists or awaits", async () => {
+		const context = setup();
+		await working(context);
+		context.sent.length = 0;
+
+		await context.route.handle(post(context.token), { kind: "list" });
+
+		// A daemon that never disconnects would otherwise never be asked, leaving the record stale for
+		// the rest of the session.
+		expect(context.sent.filter((message) => message.type === "codex_command")).toMatchObject([
+			{ kind: "reconcile" },
+		]);
+	});
+
 	it("rejects a malformed request before allocating anything", async () => {
 		const context = setup();
 		const response = await context.route.handle(post(context.token), {

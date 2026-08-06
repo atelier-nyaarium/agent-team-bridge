@@ -93,25 +93,31 @@ function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexSt
  * cannot claim an outcome the record does not hold.
  */
 function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefined): CodexAgentResult {
+	// An agent whose state could not be confirmed says exactly that, whatever turns it happens to
+	// hold. Checked FIRST and for every branch: reporting a settled turn's answer while the record is
+	// in recovery hands the caller a previous prompt's response as though it answered this one.
+	if (agent.agentState === "unavailable" || agent.agentState === "recovering") {
+		return CodexAgentResultSchema.parse({
+			agentId: agent.agentId,
+			agentState: agent.agentState,
+			observation: "unavailable",
+			activities: [],
+			error: { ...DELIVERY_UNCONFIRMED, message: "codex agent state could not be confirmed" },
+		});
+	}
 	const turn = turnOf(agent, waitedTurnId);
 	const activities = (turn?.activities ?? []).map((activity) =>
 		activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : activity,
 	);
 	if (!turn) {
-		// No turn to speak for. An agent that never got one reports its state and nothing else.
-		const unconfirmed = agent.agentState === "unavailable" || agent.agentState === "recovering";
 		// A `creating` agent has no turn by construction, so this is the branch an await on one always
 		// takes - which the tool descriptions actively send callers to after a start times out. It is
 		// still waiting for its first delivery, and `idle` is the one thing it is not.
-		const stillCreating = agent.agentState === "creating";
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: agent.agentState === "working" ? "idle" : agent.agentState,
-			observation: unconfirmed ? "unavailable" : stillCreating ? "waitTimedOut" : "idle",
+			observation: agent.agentState === "creating" ? "waitTimedOut" : "idle",
 			activities: [],
-			...(unconfirmed
-				? { error: { ...DELIVERY_UNCONFIRMED, message: "codex agent state could not be confirmed" } }
-				: {}),
 		});
 	}
 	const exchange = agent.exchanges.findLast((candidate) => candidate.turnId === turn.id);
@@ -295,6 +301,10 @@ export class CodexRoute {
 	private async awaitAgent(req: Request, owner: SessionRecord, agentId: string): Promise<CodexAgentResult> {
 		const owned = this.deps.service.resolveOwnedAgent(req, agentId);
 		if (!owned) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
+		// An await is one of the two triggers the plan names for reconciling a stale record. Without it
+		// a recovering agent is only ever repaired by a daemon reconnect, so an owner who never restarts
+		// anything gets the unconfirmed answer forever.
+		this.deps.relay.reconcileStale(owner);
 		// With no active turn there is nothing to wait for, so the latest settled state is the answer.
 		const waitedTurnId = owned.agent.activeTurnId;
 		if (!waitedTurnId) return describeAgent(owned.agent, lastSettledTurnId(owned.agent));
@@ -303,6 +313,9 @@ export class CodexRoute {
 	}
 
 	private list(owner: SessionRecord): CodexListAgentsResult {
+		// The other trigger. A list is how a caller picks work back up after its own agent died, so it
+		// is exactly when a stale record most needs asking about.
+		this.deps.relay.reconcileStale(owner);
 		return projectCodexListResult(this.deps.service.listOwnedAgents(owner));
 	}
 

@@ -105,6 +105,20 @@ export class CodexRelay {
 		return this.deps.sendToHost(message);
 	}
 
+	/**
+	 * Ask about every record of one owner that still believes work is outstanding.
+	 *
+	 * The second reconciliation trigger beside a daemon reconnect. Without it, an owner whose daemon
+	 * never disconnects keeps being told "could not confirm" forever, because a reconnect is the only
+	 * other thing that ever asks. Cheap and idempotent: the per-agent guard collapses repeats.
+	 */
+	reconcileStale(owner: SessionRecord): void {
+		const ownerKey = this.deps.sessionStore.teamOf(owner);
+		for (const agent of this.deps.sessionStore.listCodexAgents(owner)) {
+			if (needsReconciliation(agent)) this.requestReconciliation(ownerKey, agent);
+		}
+	}
+
 	/** Every Codex frame arriving on the authenticated host socket. */
 	handleHostMessage(raw: Record<string, unknown>): void {
 		switch (raw.type) {
@@ -361,10 +375,4 @@ export class CodexRelay {
 	private now(): number {
 		return this.deps.now?.() ?? Date.now();
 	}
-}
-
-/** Every agent an owner still believes is working, for the reconciliation a list or await triggers
- * outside the reconnect path. */
-export function staleCodexAgents(sessionStore: SessionStore, owner: SessionRecord): readonly CodexPersistedAgent[] {
-	return sessionStore.listCodexAgents(owner).filter(needsReconciliation);
 }
