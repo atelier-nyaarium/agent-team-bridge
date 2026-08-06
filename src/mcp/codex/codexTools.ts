@@ -97,6 +97,24 @@ function operationId(): string {
 	return crypto.randomUUID();
 }
 
+/** What a tool invocation actually sends, built separately from the sending so it can be checked
+ * without a server. An absent optional is OMITTED rather than sent as undefined, because the
+ * gateway's request schemas are strict. */
+export function codexRequestBody(
+	kind: "start" | "message" | "await" | "stop" | "list",
+	args: { agentId?: string; prompt?: string; awaitResponse?: boolean; model?: string } = {},
+): Record<string, unknown> {
+	const mutating = kind === "start" || kind === "message" || kind === "stop";
+	return {
+		kind,
+		...(mutating ? { operationId: operationId() } : {}),
+		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
+		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+		...(kind === "start" || kind === "message" ? { awaitResponse: args.awaitResponse ?? true } : {}),
+		...(kind === "start" && args.model ? { model: args.model } : {}),
+	};
+}
+
 async function post(body: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
 	try {
 		const result = await routerPost("/codex", body);
@@ -126,38 +144,26 @@ export function registerCodexTools(mcpServer: McpServer): void {
 		"codexStartAgent",
 		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
 		async (args: { prompt: string; awaitResponse?: boolean; model?: string }) =>
-			post({
-				kind: "start",
-				operationId: operationId(),
-				prompt: args.prompt,
-				awaitResponse: args.awaitResponse ?? true,
-				...(args.model ? { model: args.model } : {}),
-			}),
+			post(codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexMessageAgent",
 		{ title: "Codex Message Agent", description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
 		async (args: { agentId: string; prompt: string; awaitResponse?: boolean }) =>
-			post({
-				kind: "message",
-				operationId: operationId(),
-				agentId: args.agentId,
-				prompt: args.prompt,
-				awaitResponse: args.awaitResponse ?? true,
-			}),
+			post(codexRequestBody("message", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexAwaitAgent",
 		{ title: "Codex Await Agent", description: AWAIT_DESCRIPTION, inputSchema: awaitSchema },
-		async (args: { agentId: string }) => post({ kind: "await", agentId: args.agentId }),
+		async (args: { agentId: string }) => post(codexRequestBody("await", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexStopAgent",
 		{ title: "Codex Stop Agent", description: STOP_DESCRIPTION, inputSchema: stopSchema },
-		async (args: { agentId: string }) => post({ kind: "stop", operationId: operationId(), agentId: args.agentId }),
+		async (args: { agentId: string }) => post(codexRequestBody("stop", args)),
 	);
 
 	mcpServer.registerTool(
@@ -165,6 +171,6 @@ export function registerCodexTools(mcpServer: McpServer): void {
 		// The strict schema rather than a bare `{}`: an empty literal registers in strip mode, so unknown
 		// fields would be silently dropped where every sibling tool refuses them.
 		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: listSchema },
-		async () => post({ kind: "list" }),
+		async () => post(codexRequestBody("list")),
 	);
 }

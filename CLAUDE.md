@@ -668,6 +668,23 @@ invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fiel
 
 ## Deploying
 
+### The four components update on SEPARATE triggers
+
+Each path below is documented on its own, which hides the consequence: nothing here updates
+together, so any shared shape meets an older peer on both sides.
+
+| Component | Updates when |
+|-----------|--------------|
+| MCP plugin | a marketplace pull, i.e. any session restart under autoUpdate |
+| Gateway | a manual `./down.sh && ./start-gateway.sh` |
+| Host daemon | `./start-host-daemon.sh`, separately again |
+| Console | whenever the owner opens the app and takes the update |
+
+The plugin usually leads, because it is the only one that updates without anyone deciding to. So a
+new wire field must be OPTIONAL at the gateway and tolerated on both sides, and the deploy order is
+gateway first, then the version-bump push. Shipping the bump first opens a fleet-wide 400 window on
+every strict schema that gained a required field. This has caused a high-severity outage.
+
 ### Plugin
 
 1. Commit your source work. The build script refuses to start on a dirty tree.
