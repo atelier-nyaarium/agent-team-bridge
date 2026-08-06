@@ -415,6 +415,7 @@ The agent belongs to this session, not to its caller. If the caller dies,
 codexListAgents still returns it with its full history.
 ```
 - Pass Claude's prompt through without Switchboard-injected red-team/read-only prose and without Switchboard-authored workflow status/final tools.
+- First real use is this phase's own red-team audit, run on Codex. That needs the tools callable, which needs a release and a plugin reload, which needs a commit, so this lap commits and releases BEFORE its red-team step rather than after. Run the Claude-driven audit first as usual, then re-run it on Codex once released, and treat the second pass as the dogfood: a tool set that cannot audit itself is not ready to be trusted with anything else.
 
 ## Phase 8 - Verify races, recovery, isolation, and operability
 
