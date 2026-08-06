@@ -19,9 +19,9 @@ code does not belong here; rationale lives in `git log`.
     anchors, host RPC correlation
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
-  - `codexAgentService.ts` / `codexRelay.ts` - the session-owned Codex catalog and its reducers, and
-    the per-agent critical section that folds daemon receipts and events into them (see Codex
-    delegation below)
+  - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog and
+    its reducers, the per-agent critical section that folds daemon receipts and events into them, and
+    the one authenticated route behind all five tools (see Codex delegation below)
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store
@@ -44,6 +44,9 @@ code does not belong here; rationale lives in `git log`.
     - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
       per-agent serialization, and the outbox the gateway acknowledges against. `session()` shares one
       open per target, since commands serialize per AGENT and two agents share a child
+  - `codex/codexTools.ts` - the five Codex tools, registered only when the daemon announced
+    `codex-thinking`. Each mints a private operation id per invocation, which is what makes an HTTP
+    retry a replay rather than a second delegated task
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
@@ -332,6 +335,29 @@ Nothing catches that but a live server.
 **Notifications are dispatched in a microtask**, not inline. Resolving a request only SCHEDULES its
 continuation, so an inline listener runs first and inverts wire order whenever a reply and a
 notification arrive in one chunk - which is exactly what a steer and its own turn's completion do.
+
+**A waiting call holds for less than the CLIENT can survive.** Node's fetch abandons a silent
+connection at 300s, and `routerPost` reads that as a network failure and re-posts; since a replayed
+operation is never re-dispatched, a longer hold could never deliver its answer at all. Hence
+`CODEX_WAIT_BUDGET_MS`. A turn outliving it keeps running and `codexAwaitAgent` collects it.
+
+**A refused REQUEST is not an unwell AGENT.** The result envelope only permits an error when the
+agent is genuinely unavailable or recovering, so request-level failures answer HTTP 400 with
+`CodexRequestErrorSchema` instead. Routing them through the result envelope shipped three 500s.
+
+**The model is a parameter on start, never configuration.** It is fixed for a thread's life and one
+child serves threads that may each want a different one, so it belongs on the call. It is verified
+against the App Server's own `model/list` at the point of use, and an unoffered one is refused rather
+than swapped.
+
+**`ignored` and `failed` are not the same answer.** `ignored` means the frame will never apply and
+the daemon may retire it; `failed` means this gateway could not build a record from it, which is a
+fact about this code, so it is never acknowledged. Collapsing them let a reducer bug make the daemon
+delete the only copy of a terminal.
+
+**Reconciliation never touches the turn a caller is waiting on.** Asking about a live turn makes the
+daemon answer `recovering` whenever it cannot confirm that exact turn, which settles the wait and
+reports running work as unconfirmed.
 
 ### Android app
 
