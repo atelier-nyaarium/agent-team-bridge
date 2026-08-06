@@ -51,10 +51,15 @@ interface TrackedTurn {
 	activities: TrackedActivity[];
 	activityBytes: number;
 	truncated: boolean;
-	lastAgentMessage?: string;
-	lastUnphasedMessage?: string;
+	lastCandidate?: string;
 	lastFinalAnswer?: string;
 	pendingTerminal?: { status: "completed" | "failed" | "interrupted"; error?: string };
+}
+
+/** The one place an answer is chosen. Both the hold decision and the reported outcome read it, so
+ * they cannot disagree about whether this turn has produced one. */
+function answerOf(entry: TrackedTurn): string | undefined {
+	return entry.lastFinalAnswer ?? entry.lastCandidate;
 }
 
 // Turn ids of turns already reported. Bounded, because a late duplicate only ever arrives near its
@@ -117,15 +122,17 @@ export class CodexTurnTracker {
 		if (entry.threadId !== params.threadId) return null;
 
 		const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
-		entry.lastAgentMessage = params.item.text;
 		if (phase === FINAL_ANSWER_PHASE) entry.lastFinalAnswer = params.item.text;
-		// Commentary is retained but never answers for the turn. Only an unphased message is a
-		// candidate, so a turn that produced nothing but commentary settles with no answer at all.
+		// Commentary is retained but never answers for the turn. Everything else is a candidate,
+		// including a phase this build has not seen, since dropping agent text loses it entirely.
 		else if (phase === COMMENTARY_PHASE) this.retainActivity(entry, params.item.text);
-		else if (phase === undefined) entry.lastUnphasedMessage = params.item.text;
+		else entry.lastCandidate = params.item.text;
 
-		// The terminal beat its own final item. Now that the item has landed, the turn can settle.
-		if (entry.pendingTerminal) return this.finish(params.turnId, entry.pendingTerminal);
+		// The terminal beat its own answer. Release the hold only once an answer has actually landed,
+		// or commentary would release it and the real answer would arrive after the turn was reported.
+		if (entry.pendingTerminal && answerOf(entry) !== undefined) {
+			return this.finish(params.turnId, entry.pendingTerminal);
+		}
 		return null;
 	}
 
@@ -142,9 +149,10 @@ export class CodexTurnTracker {
 		const error = params.turn.error?.message ? sanitizeCodexErrorText(params.turn.error.message) : undefined;
 		const terminal = { status: params.turn.status, error };
 
-		// A successful turn with nothing completed yet is the terminal-before-final-item case. Hold it
-		// rather than settling on an answer that has not arrived.
-		if (params.turn.status === "completed" && entry.lastAgentMessage === undefined) {
+		// A successful turn with no answer yet is the terminal-before-final-item case. The test has to
+		// be the same value the answer is read from, or a turn that has only produced commentary looks
+		// finished and settles without the answer still in flight.
+		if (params.turn.status === "completed" && answerOf(entry) === undefined) {
 			entry.pendingTerminal = terminal;
 			return null;
 		}
@@ -165,10 +173,8 @@ export class CodexTurnTracker {
 			threadId: entry.threadId,
 			turnId,
 			status: terminal.status,
-			// Only a completed turn gets an answer, and only from its own items: the phased final if the
-			// server marked one, otherwise this turn's last unphased message. Commentary never answers.
-			finalResponse:
-				terminal.status === "completed" ? (entry.lastFinalAnswer ?? entry.lastUnphasedMessage) : undefined,
+			// Only a completed turn gets an answer, and only from its own items.
+			finalResponse: terminal.status === "completed" ? answerOf(entry) : undefined,
 			error: terminal.error,
 			activities: entry.activities,
 			truncated: entry.truncated,

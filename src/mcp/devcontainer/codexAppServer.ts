@@ -108,8 +108,17 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			return;
 		}
 
-		// Anything carrying an id that is not a response is a REQUEST, however malformed, and something
-		// is waiting on it. A well-formed method gets its decline; anything else still gets an answer.
+		// An id we minted is ours no matter how malformed the frame is. Treating it as a server request
+		// would answer the child using our own id and leave the real caller waiting out the timeout.
+		if (typeof frame.id === "number" && pending.has(frame.id)) {
+			const waiter = pending.get(frame.id);
+			pending.delete(frame.id);
+			waiter?.reject(new Error("unreadable response"));
+			return;
+		}
+
+		// Anything else carrying an id is a REQUEST, however malformed, and something is waiting on it.
+		// A well-formed method gets its decline; anything else still gets an answer.
 		if (frame.id !== undefined) {
 			answerServerRequest(
 				frame.id as string | number,
