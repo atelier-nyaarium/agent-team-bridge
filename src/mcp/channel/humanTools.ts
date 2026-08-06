@@ -35,12 +35,8 @@ const NOTIFY_DESCRIPTION = `
 Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), \`full\` the message body threaded under your team's name, and \`fullSpoken\` what the console speaks in full's place. All four are required. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
 `.trim();
 
-/**
- * `capabilities` carries a plugin's own guidance into the description, matching `registerChannelReply`.
- * These are the ONLY two tools whose body is scanned for refs, so they are the only two whose
- * descriptions need to say how to write one. A tool that scans but does not teach is how an agent ends
- * up writing a ref that silently lands somewhere it did not mean.
- */
+// This and `channel_reply` are the ONLY tools whose body is scanned for refs, so their descriptions
+// are where the pointer to `switchboard_capabilities` has to reach an agent mid-reply.
 export function registerHumanTools(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const notifySchema: any = NotifyHumanSchema;

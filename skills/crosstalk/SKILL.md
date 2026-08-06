@@ -97,8 +97,9 @@ attached, so the reader taps through to the real code as it was when you wrote a
   banner. No error does not mean the ref landed where you meant.
 - **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
 
-The full format, including the `#matcher` forms, is in this plugin's own `agent_instructions`, which
-your session already carries in its instructions when the capability is on.
+The full format, including the `#matcher` forms and worked examples, comes from the
+`switchboard_capabilities` tool. Your session's instructions name which capabilities are on but carry
+none of their guidance, so call that tool before writing a ref.
 
 ## Receiving a Request
 

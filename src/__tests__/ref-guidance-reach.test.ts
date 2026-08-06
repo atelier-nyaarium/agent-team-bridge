@@ -1,26 +1,43 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { capabilityInstructions } from "../mcp/capabilities.js";
+import { renderCapabilities } from "../mcp/capabilitiesTool.js";
 import { scanRefs } from "../mcp/references/refScanner.js";
 
 ////////////////////////////////
 //  Functions & Helpers
 
-/**
- * A tool whose body is scanned for refs has to say how to write one.
- *
- * `notify_human` scanned refs for as long as the feature existed and its description never mentioned
- * them, so an agent writing a notice had the grammar only in the server instructions, read once at
- * session start and far away by the time it matters. That is also the only copy a compaction cannot
- * re-present, since a tool description rides along with every request and a remembered rule does not.
- * This pins the pair: scan the body, teach the format.
- */
+// A tool whose body is scanned for refs has to reach an agent with where the ref grammar lives. Only
+// a tool description rides along with every request, so that is the surface the pointer belongs on.
 const MCP = path.join(import.meta.dirname, "..", "mcp");
 
 const SURFACES = [
 	["channel_reply", path.join(MCP, "channel", "channelReply.ts")],
 	["notify_human", path.join(MCP, "channel", "humanTools.ts")],
 ] as const;
+
+function referencesCapability(): { id: string; instructions: string } {
+	const manifest = JSON.parse(
+		fs.readFileSync(
+			path.join(
+				MCP,
+				"..",
+				"..",
+				"android",
+				"app",
+				"src",
+				"main",
+				"assets",
+				"plugins",
+				"references",
+				"manifest.json",
+			),
+			"utf8",
+		),
+	);
+	return { id: "references", instructions: String(manifest.agent_instructions) };
+}
 
 ////////////////////////////////
 //  Tests
@@ -30,38 +47,8 @@ describe("every tool whose body is scanned for refs", () => {
 		expect(fs.readFileSync(file, "utf8")).toContain("appendRefArtifacts");
 	});
 
-	it.each(SURFACES)("%s carries the plugin's own guidance in its description", (_name, file) => {
+	it.each(SURFACES)("%s appends the enabled-capability note to its description", (_name, file) => {
 		expect(fs.readFileSync(file, "utf8")).toContain("capabilityInstructions(capabilities)");
-	});
-
-	it("teaches examples the parser actually accepts", () => {
-		// The guidance IS the contract an agent writes against, so a worked example that no longer
-		// parses teaches a format the implementation rejects - and the agent finds out by having a send
-		// hard-fail, or worse by a near-miss that is skipped in silence.
-		const manifest = JSON.parse(
-			fs.readFileSync(
-				path.join(
-					MCP,
-					"..",
-					"..",
-					"android",
-					"app",
-					"src",
-					"main",
-					"assets",
-					"plugins",
-					"references",
-					"manifest.json",
-				),
-				"utf8",
-			),
-		);
-		// Scanned exactly as a real message body would be, so the examples are read by the same
-		// markdown parser and the same grammar that decide what an agent's own ref means.
-		const { refs, problems } = scanRefs(String(manifest.agent_instructions));
-
-		expect(problems).toEqual([]);
-		expect(refs.length).toBeGreaterThan(5);
 	});
 
 	it("registers both with the capabilities actually fetched, not a default", () => {
@@ -71,5 +58,43 @@ describe("every tool whose body is scanned for refs", () => {
 
 		expect(index).toContain("registerBridgeTools(mcpServer, capabilities)");
 		expect(index).toContain("registerHumanTools(mcpServer, capabilities)");
+		// The last hop of the chain. Passed an empty list, the tool answers that nothing is enabled
+		// while the descriptions still point an agent at it.
+		expect(index).toContain("registerCapabilitiesTool(mcpServer, capabilities)");
+		expect(index).toContain("capabilityInstructions(capabilities)");
+	});
+});
+
+describe("the path from a scanned tool to the ref grammar", () => {
+	// Each hop asserted on its own output rather than on source text, since a call site can keep
+	// calling the same helper after that helper has stopped carrying what the caller needs.
+	it("names the capability and sends the agent to the tool", () => {
+		const note = capabilityInstructions([referencesCapability()]);
+
+		expect(note).toContain("references");
+		expect(note).toContain("switchboard_capabilities");
+	});
+
+	it("ends at a tool that serves the grammar and its worked examples", () => {
+		const served = renderCapabilities([referencesCapability()], null);
+
+		expect(served).toContain("ref://src/cart.ts:Cart:add");
+		expect(served).toContain("percent-encode");
+	});
+
+	it("teaches examples the parser actually accepts", () => {
+		// The guidance IS the contract an agent writes against, so a worked example that no longer
+		// parses teaches a format the implementation rejects, and the agent finds out by having a send
+		// hard-fail, or worse by a near-miss that is skipped in silence.
+		const { refs, problems } = scanRefs(referencesCapability().instructions);
+
+		expect(problems).toEqual([]);
+		expect(refs.length).toBeGreaterThan(5);
+	});
+
+	it("still reaches the grammar when the guidance is the only thing served", () => {
+		// The note carries names alone, so an agent that never calls the tool has no grammar at all.
+		// That is the trade, and it only holds if the tool genuinely serves the whole manifest text.
+		expect(renderCapabilities([referencesCapability()], null)).toContain(referencesCapability().instructions);
 	});
 });

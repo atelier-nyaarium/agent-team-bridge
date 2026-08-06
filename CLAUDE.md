@@ -17,6 +17,8 @@ code does not belong here; rationale lives in `git log`.
     fails the build if any other module reads the credential fields
   - `presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence plane, cross-device read
     anchors, host RPC correlation
+  - `daemonCapabilities.ts` - the daemon's half of the capability answer, and the union with the
+    console's half that `/capabilities` serves
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store
@@ -31,8 +33,10 @@ code does not belong here; rationale lives in `git log`.
   - `devcontainer/` - host daemon plumbing (`hostDaemon.ts`, `hostOpRunner.ts`, `tmuxCore.ts`) plus
     the per-session tools every peer registers
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
-    exists so it can gate tool registration
+    exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
+  - `capabilities.ts` - the capability ids and the guidance text each one carries, plus what the host
+    daemon's own configuration declares at register
   - `schemas.ts` - THE single zod truth for every wire shape. Every schema carries `.meta({id})`,
     which is its generated Kotlin class name
   - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
@@ -240,20 +244,39 @@ tree-sitter and attaches one file snapshot per referenced file. Lives in `mcp/re
 - **Paths are shell-style:** bare is project-relative, `/` is filesystem root, `~/` is home.
 - **The file tier fails loudly; RESOLUTION always degrades.** A moved line ships with a banner,
   because refusing to send over a stale pointer is worse than opening roughly in the right place.
-- **Teaching lives in the plugin's own manifest** (`agent_instructions`), which the capability union
-  carries into the MCP instructions. `skills/crosstalk/SKILL.md` has the short version.
+- **Teaching lives in the plugin's own manifest** (`agent_instructions`), reached through
+  `switchboard_capabilities` rather than the always-on block, which names capabilities and carries no
+  guidance. `skills/crosstalk/SKILL.md` has the short version and points at the same tool.
 
 ### Capability union
 
-A session's tools are gated on what the owner's consoles can actually render. Consoles report loaded
-plugins at register, the gateway unions them in a durable `CapabilityStore` (14-day TTL, 500-device
-cap), and a starting MCP reads the union over `GET /capabilities` before the McpServer exists.
+A session's tools are gated on what the owner's consoles can render and what the host daemon has
+configured. Consoles report loaded plugins at register into a durable `CapabilityStore` (14-day TTL,
+500-device cap); the daemon declares its own at register into a separate `DaemonCapabilityStore` with
+no TTL. `GET /capabilities` serves `unionCapabilitySnapshots` of the two, and a starting MCP reads
+that union before the McpServer exists.
 
-- An ABSENT `enabledPlugins` means the device said nothing and its prior report stands; an EMPTY
-  array is an affirmative "nothing enabled". Zero live records serves `known: false`.
+- An ABSENT `enabledPlugins` / `daemonCapabilities` means that source said nothing and its prior
+  report stands; an EMPTY array is an affirmative "nothing enabled".
+- **`known` on the union means COMPLETE, not "somebody spoke".** The sources own disjoint id spaces,
+  so an OR would let the daemon's affirmative empty stand as an authoritative answer about console
+  plugins and strip them from every session with no error anywhere. An incomplete answer is MERGED
+  over the MCP's last-known one, since trusting it whole drops the silent source's ids and discarding
+  it drops the ids that did arrive.
+- A daemon declaration is honoured only past the `HOST_WS_TOKEN` gate, so reaching the register path
+  is not enough to announce a capability.
 - Nothing is assumed when the gateway cannot answer. The fallback is the last answer that actually
   arrived and nothing else. `GATED_CAPABILITY_IDS` is the single list the gates derive from, held
-  against the shipped manifests by a fixture test.
+  against the shipped manifests by a fixture test. The daemon's own id has no manifest to hold it
+  against, so it is pinned separately.
+- **The always-on block carries NAMES, never guidance.** Every surface `capabilityInstructions`
+  appends to is length-capped by the harness, and the guidance outgrew it: the assembled block ran
+  past the limit and the tail was cut with no error on either side, so a plugin's own examples
+  silently never arrived. `switchboard_capabilities` serves the guidance instead, charging its length
+  to a call rather than to every request.
+- That tool answers from the STARTUP snapshot, since that is what the tool set was gated on. Its one
+  fresh read only ever adds a drift warning; reporting it as the answer would describe tools the
+  session does not have.
 - A running session never changes its tools; a toggle is picked up at the next session start.
 
 ### Android app
@@ -526,6 +549,10 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 | `FEDERATION_DOMAIN_ID` | Domain id. NOT fail-closed; the enrollment-delivered `domain-id` file takes precedence |
 | `DATA_DIR` | All durable state (default `/app/data`), deliberately separate from the log volume so clearing logs cannot wipe federation identity |
 | `FEDERATION_DIR` | Keypair, allowlist, transport.json, domain-id (default: inside `DATA_DIR`) |
+
+**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_THINKING_ENABLED`.
+Set the last to exactly `true` in `.env` to announce the `codex-thinking` capability at register; any
+other value announces its absence. `start-host-daemon.sh` / `.ps1` read `.env` and pass both through.
 
 **MCP plugin (container):** `PROJECT_NAME` (required for crosstalk), `BRIDGE_ROUTER_URL` (default
 `http://switchboard:20000`), `AGENT_TYPE`, `PROJECT_HOST_PATH`, `MCP_CONNECTOR_PORT`,

@@ -23,9 +23,10 @@ data class PluginManifest(
 	val description: String = "",
 	val requires: List<PluginRequirement> = emptyList(),
 	@SerialName("entry_point") val entryPoint: String = "",
-	/** One line of guidance for an agent whose owner has this plugin on, reported at register and
-	 * appended to the session's MCP instructions. Owned by the plugin, so adding a plugin never
-	 * means editing the console's wire code or the gateway's. Empty means it has nothing to say. */
+	/** Guidance for an agent whose owner has this plugin on, reported at register and served by the
+	 * session's `switchboard_capabilities` tool rather than its instructions, so length here is not
+	 * charged to every request. Owned by the plugin, so adding one never means editing the console's
+	 * wire code or the gateway's. Empty means it has nothing to say. */
 	@SerialName("agent_instructions") val agentInstructions: String = "",
 ) {
 	/** Globally unique id: `<author>.<content_id>`, bare `<content_id>` when authorless

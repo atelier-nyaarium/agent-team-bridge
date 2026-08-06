@@ -39,6 +39,7 @@ import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
+import { DaemonCapabilityStore } from "./daemonCapabilities.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { type EvieTransport, evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
@@ -209,6 +210,9 @@ export async function startGateway(): Promise<void> {
 	// What plugins the owner's consoles have enabled. Starting empty costs only that tools fail open
 	// until a device re-registers, which is the same posture as a fresh install.
 	const capabilityStore = openDurable(DATA_DIR, "console-capabilities", (d) => new CapabilityStore(d));
+	// The host daemon's own configuration, kept apart from the console's so neither source can
+	// overwrite the other's answer. /capabilities serves the union.
+	const daemonCapabilityStore = openDurable(DATA_DIR, "daemon-capabilities", (d) => new DaemonCapabilityStore(d));
 
 	// Session records and the presence plane registry's own version identity (epoch/counter/hash/
 	// cleanShutdown) are ONE atomic file, written by the SAME save() call - an asymmetric loss
@@ -1011,6 +1015,7 @@ export async function startGateway(): Promise<void> {
 			}
 		},
 		onCatalogChange: () => presence.markDirty(),
+		onDaemonCapabilities: (capabilities) => daemonCapabilityStore.declare(capabilities),
 		// A confirmed daemon derivation for one team; undefined means derivation became impossible for
 		// it (a peek-failure streak, or it dropped off the watch list) - a clear to unknown, distinct
 		// from observing it as not-working.
@@ -1033,6 +1038,7 @@ export async function startGateway(): Promise<void> {
 			conversationRegistry,
 			store,
 			capabilityStore,
+			daemonCapabilityStore,
 			codexAgentService,
 			blobStore,
 			auth: sessionAuthority,

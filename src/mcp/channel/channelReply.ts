@@ -80,12 +80,8 @@ export async function handleChannelReplyStructured(args: ChannelReplyStructuredA
 ////////////////////////////////
 //  Functions & Helpers
 
-/**
- * `capabilities` is threaded in rather than read from a module global so the description can never be
- * composed before the answer arrives. A plugin's guidance stays owned by its own manifest and is only
- * appended when the owner's console actually has it enabled: the tool description is where an agent
- * is standing at the moment it writes a reply, which the server instructions are not.
- */
+// `capabilities` is threaded in rather than read from a module global, so the description can never
+// be composed before the answer arrives.
 export function registerChannelReply(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	const guidance = capabilityInstructions(capabilities);
 	mcpServer.registerTool(

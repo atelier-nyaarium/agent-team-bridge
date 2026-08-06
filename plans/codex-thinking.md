@@ -135,6 +135,38 @@ A: No. Run one App Server per execution target: one for host sessions and one la
 
 Running the server in the same execution target as the invoking Claude session gives Codex the correct project paths, toolchain, services, and environment without inventing host-to-container path emulation.
 
+## Question 18 - How does Claude learn how to delegate to Codex?
+
+Q: Where does the delegation guidance live, and how does a session re-read it?
+A: Not in the always-on block. That block is reduced to a list of enabled capability names plus one instruction to call `switchboard_capabilities`, which becomes the single source of guidance for every capability, Codex included. Both the block and the tool description say to call it again after a context compaction.
+
+This replaces the per-capability prose in the MCP server instructions rather than adding to it. Those instructions sit in the system prompt and are re-sent on every request, so the always-on copy was going to be the whole playbook on the grounds that a cached prompt makes its token cost negligible. Measurement overrode that: the harness caps the block near 2048 characters, it already overflows by roughly 931, and the cut is silent. Length is the binding constraint, not cost. A name list fits with room to spare and no capability has to compete for the budget.
+
+> "we use your idea because caching."
+
+> "Instead of giving full text prose for everything, just return a list of module names enabled."
+
+Q: Should the tool answer only from the startup snapshot?
+A: It stays authoritative about the startup snapshot, because the tool set was gated on it and a fresh answer could describe tools this session does not have. It additionally performs one fresh capability read and appends a drift warning, which is the only way a running session can learn that the owner toggled a plugin.
+
+> "sure drift check."
+
+## Question 19 - Which model does a Codex agent run?
+
+Q: What work tier should a managed Codex thread use?
+A: `gpt-5.6-luna` by default, overridable by `CODEX_THINKING_MODEL`. It is light to run while still turning over the rocks a heavier model skips.
+
+The id is verified against what `initialize` advertises, and an unoffered id refuses the thread rather than falling back to the server default. A silent fallback would leave a caller believing it had one tier while running another.
+
+> "It's light like Haiku, but as thoroough as Fable. Even Opus (you) gets lazy and leaves many critical rocks unturned."
+
+This is a Codex thread setting and has no bearing on Workflow subagents, whose `model` option accepts only Claude tiers.
+
+Q: Can Claude choose the model per agent?
+A: Only if the App Server turns out to support it. Phase 5 establishes whether thread configuration accepts a model at all. If it does, `codexStartAgent` takes an optional model defaulting to `gpt-5.6-luna`, fixed for that thread's life like every other thread setting, so `codexMessageAgent` gains nothing. If it does not, the default is the only value and no tool input is added.
+
+> "when you invent the codex start and messageing MCP tools, discover if we can specify model, slip it in then. otherwise gpt-5.6-luna permanent."
+
 # Plan
 
 ## Phase 1 - Lock the shared contract and ownership boundary ✅
@@ -185,11 +217,81 @@ Running the server in the same execution target as the invoking Claude session g
 
 - Read only `CODEX_THINKING_ENABLED=true` and pass it through the existing POSIX and PowerShell host-daemon launch paths.
 - Include a complete daemon capability declaration in every authenticated host-register frame: `codex-thinking` when enabled and an explicit absence when disabled. A subsequent register replaces the prior daemon declaration.
-- Accept daemon capability announcements only from the reserved authenticated host socket. Keep console and daemon capability sources separate internally, then expose their union through the existing `/capabilities` response with `known = console.known || daemon.known`.
+- Accept daemon capability announcements only from the reserved authenticated host socket. Keep console and daemon capability sources separate internally, then expose their union through the existing `/capabilities` response.
+- `known` on that union means COMPLETE, so every source must have spoken. An OR was specified here first and is wrong: the sources own disjoint id spaces, so the daemon's affirmative "nothing enabled" would stand as an authoritative answer about console plugins and silently strip them from every session. A consumer merges an incomplete answer over its own last-known one rather than trusting or discarding it.
 - Persist the last complete authenticated daemon declaration separately from console capabilities. Preserve it across disconnect and gateway restart, and atomically replace it on the next authenticated register, including an empty declaration when the feature is disabled. This intentionally favors the user's accepted last-known cache behavior over second-accurate advertising.
 - Add `codex-thinking` to the MCP's gated capability IDs. Capability controls tool discoverability, not health: each request for new work still checks current configuration/daemon/App Server availability, while already-registered control/read calls can operate on persisted agents during an outage.
 - Current enablement gates new work (`start` and `message`), not control of existing work. A stale registered `stop` may still interrupt an owned active turn after disablement; `stop`, `await`, and `list` report daemon/App Server unavailability when the target cannot be reached rather than reporting the feature disabled.
 - Do not add a second capabilities endpoint or attempt second-accurate tool removal. Document that enabling/disabling may require a Claude MCP reload before the advertised tool set changes.
+- Reduce `capabilityInstructions` to the enabled capability names plus one instruction to call `switchboard_capabilities`. No capability's prose rides the always-on block any more, which repairs the existing overflow instead of working around it and stops capabilities competing for a length budget. This needs no schema change: `Capability.instructions` is untouched and only its delivery moves.
+- Keep the existing behavior of emitting nothing at all when no capability is enabled, so a session with none is told nothing rather than pointed at an empty tool.
+- Word the instruction unconditionally. A conditional hint ("before using it") lets an agent decide it does not need the call, and everything the block used to say is now behind it.
+- Register an ungated `switchboard_capabilities` tool returning the enabled capabilities of this session's startup snapshot, each with its full `instructions`. Gating it would hide the one surface that explains which capabilities are absent, and it is now the only path to any guidance at all.
+- Have that tool also perform one bounded fresh capability read and append a drift warning when the current union differs from the startup snapshot. The startup snapshot remains the authoritative answer for which tools exist, so a drift line only ever advises restarting the session.
+- Say when that read could not be made at all. Silence has to mean "checked and unchanged" alone, or the one surface that exists to be authoritative gives the same answer whether or not it knows.
+- Carry the Codex playbook below as the `instructions` of the daemon's `codex-thinking` declaration, as one exported constant in shared code since the daemon has no manifest to read it from. It reaches an agent only through the tool.
+- State the after-a-compaction instruction in the always-on block and in the tool description, so an agent can reach it from the tool list alone.
+- Verify the assembled block against a live session's own instructions once the names-only form is in, and keep a test asserting it stays under the cap as capabilities are added.
+
+The always-on block:
+
+```
+Switchboard capabilities enabled: codex-thinking, designer, references.
+Call switchboard_capabilities once to understand their features. If your
+context has just been compacted, call it again.
+```
+
+The Codex `instructions`, reachable only through the tool:
+
+```
+Codex agents are enabled. A Codex agent is a second-model-family thread
+this session owns, for handing off a self-contained sub-task.
+
+Choosing the engine:
+- Before fanning out parallel work, ask whether the branches should be
+  Codex or Claude. If it is left to you, choose Codex.
+- Codex suits self-contained branches: an audit of one subsystem, an
+  adversarial second read, an isolated repro. Claude branches suit work
+  needing this repo's conventions and your own session context.
+
+Structuring a fan-out:
+- You decide the splits. Each branch is one agent() call in a Workflow
+  script, or one Agent tool call, driving a single Codex agent through
+  codexStartAgent and codexMessageAgent.
+- Give the branch a schema and have it return Codex's response in a
+  schema field; do not ask it to summarize what Codex said. For output
+  too large for a field, have Codex write a scratch file and return the
+  path.
+- Put constraints in the prompt you delegate. A Codex thread keeps
+  workspace-write and web access for its whole life, and GPT-family
+  agents pursue a goal through unexpected or suspect actions.
+
+Budget and recovery:
+- A waiting call blocks up to nine minutes and holds a concurrency slot.
+  Size the fan-out for that, or pass awaitResponse: false and collect
+  with codexAwaitAgent.
+- Codex agents belong to this session, not to the branch that started
+  one. If a branch dies, codexListAgents returns every agent with its
+  full history, so re-run the collection, not the work.
+
+Call this tool again after your next context compaction.
+```
+
+### Bug Classes
+
+- Source-scoped truth handled as whole-answer truth, twice in the same mechanism. Round one: the union's `known` was an OR across two sources owning disjoint id spaces, so the daemon's affirmative "nothing enabled" answered for the console's ids and stripped them from every session. `known` now means complete. Round two: the repair merged an incomplete answer over the MCP cache but wrote the merge back as verified, so on an install where a source is never known (no console paired, no daemon) a withdrawn capability was read back out of the cache forever. A merge is no longer written back. The residue both rounds patched around is that neither the wire nor the cache records WHICH source owns an id, so a merge cannot be scoped to the silent source: a capability withdrawn by a source that did speak is still masked by the cache while another source is quiet, until every source speaks again. Carrying source attribution is the real repair and belongs to `architecture-fan-out`, not to another patch here.
+- State mutated before a request is accepted: the daemon's declaration was applied after the token gate but before the reserved-name gate, so a second daemon refused for the slot still replaced the live declaration on its way out. Every register-time side effect belongs after the last rejection, not after the first.
+- One guarantee asserted in several places with no owner: reducing the always-on block falsified the same claim in `skills/crosstalk/SKILL.md`, a CLAUDE.md cross-reference, a `humanTools.ts` docstring, and a reach test that passed on a source substring while what it guaranteed had gone. The test now asserts each hop's real output, which is the only one of the four that can fail.
+
+### Human Acceptance
+
+This phase changes how every capability's guidance reaches every session, so it does not end at a green test suite. The owner cannot see the assembled system prompt from any surface, which is exactly why the defect this phase repairs stayed invisible. Only a live session can report what actually arrived.
+
+- Complete the real ritual before the gate: commit, `bun run build patch`, push, `reload_plugins` on the target, set `CODEX_THINKING_ENABLED=true`, restart the host daemon, then start a FRESH Claude session. A running one picks up neither the tool set nor the block.
+- In that session, report the loaded Switchboard MCP server instructions verbatim: every field, value, and line exactly as received, with no summarizing, reformatting, or silent repair. Report the `switchboard_capabilities` output the same way.
+- Report any truncation marker verbatim and name what it cut. No marker anywhere in the block is the pass condition for the overflow repair.
+- Confirm the block is absent entirely from a session with no capability enabled.
+- The owner reads and approves the formatting. This is a blocking gate, and no later phase starts until it passes.
 
 ## Phase 4 - Supervise App Server by execution target
 
@@ -208,6 +310,8 @@ Running the server in the same execution target as the invoking Claude session g
 - Build an injectable `AppServerTransport`/child factory around JSONL stdio. Perform `initialize`/`initialized` before any work and verify compatibility with the documented supported Codex CLI/App Server version.
 - Use stable operations only: thread start/resume/read/unsubscribe and turn start/steer/interrupt. Do not use experimental dynamic tools or experimental terminal-cleanup APIs.
 - Configure every thread with its trusted canonical cwd, normal App Server workspace-write, network/web access, and `approvalPolicy: "never"`. Keep the ordinary workspace-write/temp behavior selected in the questionnaire; do not add a custom per-platform read-root policy.
+- Request `gpt-5.6-luna` on every thread, overridable by `CODEX_THINKING_MODEL`. Verify the id against what `initialize` advertises and refuse the thread with an explicit unavailable when it is not offered. Never fall back to the server's own default, since a caller would then believe it is getting one tier while receiving another. Report the model actually in use on every agent record so a list call can show it.
+- Establish here whether thread configuration accepts a model at all, and record the answer in the questionnaire. It decides whether Phase 7 exposes a per-agent choice or ships the configured default as the only value.
 - Implement every App Server server-initiated JSON-RPC request explicitly and fail closed:
   - Decline/cancel command, file-change, user-input, elicitation, and app/tool approval requests.
   - Grant no additional permission roots.
@@ -238,7 +342,7 @@ Running the server in the same execution target as the invoking Claude session g
 
 - Add one authenticated, discriminated gateway Codex route so validation and session authority cannot drift across five handlers.
 - Conditionally register only these tools when the cached capability contains `codex-thinking`:
-  - `codexStartAgent(prompt, awaitResponse = true)`.
+  - `codexStartAgent(prompt, awaitResponse = true, model?)`. The model input exists only if Phase 5 found the App Server accepts one, and belongs on start alone since it is fixed for a thread's life.
   - `codexMessageAgent(agentId, prompt, awaitResponse = true)`.
   - `codexAwaitAgent(agentId)`.
   - `codexStopAgent(agentId)`.
@@ -260,15 +364,24 @@ Running the server in the same execution target as the invoking Claude session g
 - Test strict session authority on every operation, including unbound/manual sessions and forged/cross-session IDs with indistinguishable not-found responses. Test trusted host/container target resolution and rejection of bridge-poisoned or unresolved paths.
 - Test immediate checked persistence, failure before/after dispatch, restore/migration, malformed nested records, full large histories, and catalog removal with the owner session.
 - Test capability source union and `known` transitions, explicit empty daemon announcements, reconnect replacement, stale MCP cache behavior, conditional registration, and runtime-unavailable responses.
+- Test that `switchboard_capabilities` registers with no capability present, reports the startup snapshot rather than the fresh read, warns only on real drift, and stays silent when the fresh read fails or matches. Assert the always-on block carries names only, and that it stays under the length cap as capabilities are added.
 - Inject a fake checked-commit result, scheduler/clock, `ExecutionTargetLauncher`, `AppServerTransport`, child factory, and redacted logger. Cover host/container root selection, launch failure, partial/multiple JSONL frames, initialize incompatibility, server-initiated request denial, target multiplexing, generation fencing, and child backoff without Docker or Codex service usage.
 - Fault-inject gateway, host socket, daemon, execution target, App Server, and persistence loss before/after intent, dispatch, acceptance, reliable-event commit/ACK, completion, and interrupt. Verify replay of unacknowledged reliable receipts and no blind replay of ambiguous prompts.
 - Test duplicate, delayed, reordered, and stale events; connection-epoch changes; daemon crash before/after ACK; terminal-before-final-item with a stale first read; concurrent messages; completion-versus-steer; message-versus-stop; repeated stop; exact-turn wait isolation/unavailability; and completion immediately before/at/after the nine-minute boundary.
 - Add end-to-end tool tests for immediate completion, background start/message, repeated await, list after simulated Claude compaction, daemon/gateway restart recovery, stop then follow-up, unavailable App Server, and host versus devcontainer target selection.
 - Keep a real logged-in App Server smoke test opt-in and separate from deterministic CI. Run lint, type checking, unit/integration tests, and build.
-- Document only `CODEX_THINKING_ENABLED=true`, the five tools, wait/stop/recovery semantics, execution-target placement, the caution statement, capability cache/reload behavior, and the residual risk that Codex can mutate its workspace and start subprocesses. Ship no Switchboard red-team skill.
+- Document only `CODEX_THINKING_ENABLED=true`, the five tools, wait/stop/recovery semantics, execution-target placement, the caution statement, capability cache/reload behavior, `switchboard_capabilities` and its drift warning, and the residual risk that Codex can mutate its workspace and start subprocesses. Ship no Switchboard red-team skill.
+
+### Human Acceptance
+
+Run Phase 3's gate again, same ritual and same verbatim reporting, now that the five Codex tools exist and their playbook is what the tool serves rather than a constant nothing reads yet. Report the five registered tool descriptions in full as well, since each is its own always-on text subject to the same limit.
+
+The owner approves before merge. What is being checked is not the wording, which is readable in source, but how the union, the assembly, and the harness's limits render it, which is readable nowhere else.
 
 ## Painpoints
 
 - `src/shared/codex-thinking.ts` intentionally exposes one compatibility import today, but its public, persistence, daemon, and App Server boundaries now occupy one high-conflict module. Preserve the barrel import and split the implementation by trust boundary when later phases add their consumers.
 - `src/gateway/codexAgentService.ts:CodexAgentService` is the correct single transition owner, but its begin and acceptance branches already hand-build state changes. Introduce the planned pure per-agent reducer before Phase 6 adds terminal, reconciliation, interrupt, and activity transitions.
 - The Codex contract and persistence tests have strong mutation coverage but now repeat several valid histories, receipts, and restored-service setups. Introduce canonical creating, working, settled, and receipt builders before the Phase 6 race matrix multiplies them further.
+- The assembled Switchboard MCP server instructions ALREADY arrive truncated in a live session, which is a shipped defect rather than a Codex concern. The block assembles to 2979 characters and approximately 2048 arrive, cutting the last 931: the tail of the `references` guidance plus all ten of its worked `ref://` examples have never reached any session. That the delivered length lands on 2048 exactly points at a fixed harness limit rather than a token budget, so prompt caching buys no room. Phase 3's names-only block is the repair, and it should be confirmed by reading a live session's own instructions rather than by arithmetic.
+- The same `ref://` prose is duplicated into the `channel_reply` and `notify_human` tool descriptions, and both are truncated at their own limit too. Moving guidance behind `switchboard_capabilities` is the same repair for all three surfaces, but those descriptions sit outside Phase 3 as scoped.

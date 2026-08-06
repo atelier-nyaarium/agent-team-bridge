@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
+import type { Capability } from "../shared/capabilities.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { SessionStore } from "../shared/session-store.js";
@@ -51,6 +52,9 @@ export interface WebSocketDeps {
 	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
+	// Fired with the complete declaration from the register that actually holds the host slot, so
+	// neither a LAN peer nor a refused second daemon can announce a capability this way.
+	onDaemonCapabilities?: (capabilities: Capability[]) => void;
 	// The gateway's authoritative session store. The handshake confirm establishes/binds a record
 	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
 	// Absent in tests that do not exercise session recording.
@@ -200,6 +204,7 @@ export function createWebSocketHandlers({
 	onTeamDisconnect,
 	onVirtualPeerEvicted,
 	onCatalogChange,
+	onDaemonCapabilities,
 	onPresenceDerive,
 	sessionStore,
 	auth,
@@ -463,6 +468,12 @@ export function createWebSocketHandlers({
 					ws.close();
 					return;
 				}
+			}
+
+			// After every rejection gate, so a second daemon carrying the token cannot replace the live
+			// declaration on its way out.
+			if (team === "host" && reg.data.daemonCapabilities) {
+				onDaemonCapabilities?.(reg.data.daemonCapabilities);
 			}
 
 			let subs = registry.get(team);

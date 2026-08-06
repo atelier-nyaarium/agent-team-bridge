@@ -24,12 +24,12 @@ if (Test-Path $pidFile) {
 	Remove-Item $pidFile -ErrorAction SilentlyContinue
 }
 
-# Pass the host-daemon WS token start-gateway provisioned into .env so the daemon authenticates to
-# the gateway's reserved "host" slot. Start-Process inherits this shell's environment.
+# Daemon settings from .env. Start-Process inherits this shell's environment.
 $envFile = Join-Path $PSScriptRoot '.env'
 if (Test-Path $envFile) {
 	foreach ($line in Get-Content $envFile) {
-		if ($line -match '^HOST_WS_TOKEN=(.*)$') { $env:HOST_WS_TOKEN = $Matches[1]; break }
+		if ($line -match '^HOST_WS_TOKEN=(.*)$') { $env:HOST_WS_TOKEN = $Matches[1] }
+		elseif ($line -match '^CODEX_THINKING_ENABLED=(.*)$') { $env:CODEX_THINKING_ENABLED = $Matches[1] }
 	}
 }
 

@@ -137,6 +137,33 @@ export const BlobGetOpSchema = z.object({
 export { ChannelFileSchema, ChannelFilesSchema } from "./channel-file.js";
 
 ////////////////////////////////
+//  Capability Schema
+//
+//  One capability a console or the host daemon has enabled. Declared above the
+//  register schemas because both of them carry a list of these.
+
+export const EnabledPluginSchema = z
+	.object({
+		// The manifest's own composite id: `<author>.<content_id>`, or a bare `<content_id>` when
+		// authorless (first-party). Dotted, so this cannot reuse the dotless slug field.
+		id: z
+			.string()
+			.min(1)
+			.max(129)
+			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
+			.describe("The plugin's globally unique id, as its manifest declares it."),
+		// A plugin's guidance is a whole section of an agent's instructions, not a sentence. The
+		// first real one shipped at 2304 characters against an earlier 2000 cap, which the wire
+		// then refused and the store discarded, so the capability vanished with no error anywhere.
+		instructions: z
+			.string()
+			.max(16_000)
+			.optional()
+			.describe("Agent-facing usage guidance for this capability, surfaced to the session."),
+	})
+	.meta({ id: "EnabledPlugin" });
+
+////////////////////////////////
 //  WS Register Schema
 //
 //  Validates the register message at the bridge WebSocket boundary, the one
@@ -186,6 +213,9 @@ export const WsRegisterSchema = z.object({
 	// sent as false (a worker that answered false is evicted and does not reconnect). A malformed
 	// value degrades to absent (the normal handshake-prompt path) rather than failing the register.
 	isMainOrLead: z.boolean().optional().catch(undefined),
+	// The host daemon's own configuration, honoured only on the token-gated "host" slot. Complete
+	// every time: present-but-empty affirms nothing enabled, absent leaves the last one standing.
+	daemonCapabilities: z.array(EnabledPluginSchema).max(64).optional(),
 });
 
 ////////////////////////////////
@@ -400,28 +430,6 @@ export const CrossDomainShareTargetSchema = z
 // REJECTS a larger holdMs outright, not silently truncated). Pinned against the Android client's
 // own LONG_POLL_HOLD_MS in ChatRepositoryConstantsTest and consoleHandler.test.ts.
 export const MAX_POLL_HOLD_MS = 45_000;
-
-/** One plugin a console has enabled, plus the guidance it wants surfaced to an agent session. */
-export const EnabledPluginSchema = z
-	.object({
-		// The manifest's own composite id: `<author>.<content_id>`, or a bare `<content_id>` when
-		// authorless (first-party). Dotted, so this cannot reuse the dotless slug field.
-		id: z
-			.string()
-			.min(1)
-			.max(129)
-			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
-			.describe("The plugin's globally unique id, as its manifest declares it."),
-		// A plugin's guidance is a whole section of an agent's instructions, not a sentence. The
-		// first real one shipped at 2304 characters against an earlier 2000 cap, which the wire
-		// then refused and the store discarded, so the capability vanished with no error anywhere.
-		instructions: z
-			.string()
-			.max(16_000)
-			.optional()
-			.describe("Agent-facing usage guidance for this capability, surfaced to the session."),
-	})
-	.meta({ id: "EnabledPlugin" });
 
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [

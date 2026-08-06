@@ -43,6 +43,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import { EMPTY_CAPABILITIES, unionCapabilitySnapshots } from "./daemonCapabilities.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -77,6 +78,7 @@ export interface RoutesDeps {
 	// test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
 	capabilityStore?: Pick<import("./console/capabilityStore.js").CapabilityStore, "snapshot">;
+	daemonCapabilityStore?: Pick<import("./daemonCapabilities.js").DaemonCapabilityStore, "snapshot">;
 	// The Codex route boundary, constructed with the checked session-resume writer.
 	codexAgentService?: import("./codexAgentService.js").CodexAgentService;
 	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
@@ -344,6 +346,7 @@ export function createRoutes({
 	conversationRegistry,
 	store,
 	capabilityStore,
+	daemonCapabilityStore,
 	tryWakeTeam,
 	isWakeInFlight,
 	offlineCatalog,
@@ -835,11 +838,15 @@ export function createRoutes({
 		});
 	}
 
-	/** What the owner's consoles can render, so a starting session knows which tools to register.
-	 * Ungated on purpose: it serves non-secret plugin ids and their own instruction text, and the
+	/** Ungated on purpose: it serves non-secret capability ids and their own instruction text, and the
 	 * hand-launched host window this exists to serve carries no credential to present. */
 	function capabilities(): Response {
-		return jsonResponse(capabilityStore?.snapshot() ?? { known: false, capabilities: [] });
+		return jsonResponse(
+			unionCapabilitySnapshots(
+				capabilityStore?.snapshot() ?? EMPTY_CAPABILITIES,
+				daemonCapabilityStore?.snapshot() ?? EMPTY_CAPABILITIES,
+			),
+		);
 	}
 
 	function pending(): Response {

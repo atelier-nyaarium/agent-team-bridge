@@ -7,6 +7,7 @@ import { parseSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { capabilityInstructions, fetchCapabilities, hasCapability } from "./capabilities.js";
+import { registerCapabilitiesTool } from "./capabilitiesTool.js";
 import { registerHumanTools } from "./channel/humanTools.js";
 import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
@@ -67,6 +68,7 @@ export async function startMcp(): Promise<void> {
 	);
 
 	registerBridgeTools(mcpServer, capabilities);
+	registerCapabilitiesTool(mcpServer, capabilities);
 	registerReloadPlugins(mcpServer);
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);

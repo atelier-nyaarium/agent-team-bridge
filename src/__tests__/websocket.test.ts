@@ -63,6 +63,7 @@ describe("createWebSocketHandlers", () => {
 			offlineCatalog?: Map<string, string>;
 			wakeCoordinator?: WakeCoordinator;
 			hostWsToken?: string;
+			onDaemonCapabilities?: (capabilities: { id: string; instructions?: string }[]) => void;
 			hostOpCoordinator?: { settle: ReturnType<typeof vi.fn>; failAll: ReturnType<typeof vi.fn> };
 			onPresenceDerive?: (
 				team: string,
@@ -98,6 +99,7 @@ describe("createWebSocketHandlers", () => {
 				  }
 				| undefined,
 			onPresenceDerive: overrides.onPresenceDerive,
+			onDaemonCapabilities: overrides.onDaemonCapabilities,
 		});
 		intervals.push(handlers.heartbeatInterval);
 		return {
@@ -149,6 +151,100 @@ describe("createWebSocketHandlers", () => {
 		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: "anything" }));
 		expect(registry.get("host")).toBeUndefined();
 		expect(ws.close).toHaveBeenCalled();
+	});
+
+	it("takes a capability declaration from the authenticated daemon", () => {
+		const onDaemonCapabilities = vi.fn();
+		const { handlers } = setup({ onDaemonCapabilities });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(
+			ws,
+			JSON.stringify({
+				type: "register",
+				team: "host",
+				subId: "h1",
+				token: HOST_TOKEN,
+				daemonCapabilities: [{ id: "codex-thinking", instructions: "Delegate like so." }],
+			}),
+		);
+		expect(onDaemonCapabilities).toHaveBeenCalledWith([
+			{ id: "codex-thinking", instructions: "Delegate like so." },
+		]);
+	});
+
+	it("takes an empty declaration, which is how a daemon says the feature went off", () => {
+		const onDaemonCapabilities = vi.fn();
+		const { handlers } = setup({ onDaemonCapabilities });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(
+			ws,
+			JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN, daemonCapabilities: [] }),
+		);
+		expect(onDaemonCapabilities).toHaveBeenCalledWith([]);
+	});
+
+	it("leaves the last declaration standing when a register carries none", () => {
+		const onDaemonCapabilities = vi.fn();
+		const { handlers } = setup({ onDaemonCapabilities });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		expect(onDaemonCapabilities).not.toHaveBeenCalled();
+	});
+
+	it("does not let a refused second daemon replace the live declaration on its way out", () => {
+		const onDaemonCapabilities = vi.fn();
+		const { handlers } = setup({ onDaemonCapabilities });
+		const live = createMockWs();
+		const second = createMockWs();
+		handlers.open(live);
+		handlers.open(second);
+
+		const withCodex = {
+			type: "register",
+			team: "host",
+			subId: "h1",
+			token: HOST_TOKEN,
+			daemonCapabilities: [{ id: "codex-thinking" }],
+		};
+		handlers.message(live, JSON.stringify(withCodex));
+		handlers.message(
+			second,
+			JSON.stringify({ type: "register", team: "host", subId: "h2", token: HOST_TOKEN, daemonCapabilities: [] }),
+		);
+
+		expect(second.close).toHaveBeenCalled();
+		expect(onDaemonCapabilities).toHaveBeenCalledTimes(1);
+		expect(onDaemonCapabilities).toHaveBeenCalledWith([{ id: "codex-thinking" }]);
+	});
+
+	it("ignores a capability declaration from anyone but the host slot", () => {
+		const onDaemonCapabilities = vi.fn();
+		const { handlers } = setup({ onDaemonCapabilities });
+		const rogue = createMockWs();
+		const badToken = createMockWs();
+		handlers.open(rogue);
+		handlers.open(badToken);
+		const declaration = [{ id: "codex-thinking" }];
+
+		handlers.message(
+			rogue,
+			JSON.stringify({ type: "register", team: "myproject", subId: "r1", daemonCapabilities: declaration }),
+		);
+		handlers.message(
+			badToken,
+			JSON.stringify({
+				type: "register",
+				team: "host",
+				subId: "h1",
+				token: "wrong",
+				daemonCapabilities: declaration,
+			}),
+		);
+
+		expect(onDaemonCapabilities).not.toHaveBeenCalled();
 	});
 
 	it("a host_op_reply from the host socket settles the coordinator by reqId", () => {

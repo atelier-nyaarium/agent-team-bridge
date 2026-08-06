@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
 import type { LimitNotice } from "../../shared/agent-screen.js";
+import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
 import {
 	classifyPeekError,
 	type HostOp,
@@ -82,7 +83,14 @@ function connect(): void {
 		// the register unless it has HOST_WS_TOKEN set AND this token matches it, so
 		// start-gateway.sh and start-host-daemon.sh wire the same value from .env.
 		const hostToken = process.env.HOST_WS_TOKEN;
-		ws!.send(JSON.stringify({ type: "register", team: "host", ...(hostToken ? { token: hostToken } : {}) }));
+		ws!.send(
+			JSON.stringify({
+				type: "register",
+				team: "host",
+				...(hostToken ? { token: hostToken } : {}),
+				daemonCapabilities: daemonCapabilityDeclaration(process.env),
+			}),
+		);
 
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));

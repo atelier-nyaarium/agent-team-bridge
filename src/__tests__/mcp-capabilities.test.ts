@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCapability } from "../mcp/capabilities.js";
+import { CODEX_THINKING_CAPABILITY_ID, daemonCapabilityDeclaration } from "../shared/capabilities.js";
 import { EnabledPluginSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -154,7 +155,48 @@ describe("fetchCapabilities", () => {
 		const capabilities = await fetchCapabilities(ROUTER);
 
 		expect(capabilities.map((c) => c.id)).toContain("notes");
-		expect(capabilityInstructions(capabilities)).toContain("Jot it down.");
+		expect(capabilities.find((c) => c.id === "notes")?.instructions).toBe("Jot it down.");
+	});
+
+	it("keeps a silent source's cached share when the gateway answers incompletely", async () => {
+		// One source going quiet says nothing about the ids another source owns. Trusting the partial
+		// answer whole drops them silently, and writing it back destroys the only record of them.
+		writeCache({ known: true, capabilities: [{ id: "designer" }, { id: "references" }] });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ known: false, capabilities: [{ id: CODEX_THINKING_CAPABILITY_ID }] })),
+		);
+
+		const capabilities = await fetchCapabilities(ROUTER);
+
+		expect(capabilities.map((c) => c.id)).toEqual([CODEX_THINKING_CAPABILITY_ID, "designer", "references"]);
+		// The merge is not written back, so the cache still holds the last answer that was verified.
+		expect(JSON.parse(fs.readFileSync(cachePath(), "utf8")).capabilities).toHaveLength(2);
+	});
+
+	it("lets a withdrawn capability settle even where an answer is never complete", async () => {
+		// An install with no console paired never reaches a complete answer, so a merge written back as
+		// a verified one would feed itself: the withdrawn id returns from the cache on every start.
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ known: false, capabilities: [{ id: CODEX_THINKING_CAPABILITY_ID }] }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		expect(await fetchCapabilities(ROUTER)).toHaveLength(1);
+
+		fetchMock.mockImplementation(async () => jsonResponse({ known: false, capabilities: [] }));
+
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
+	});
+
+	it("still lets a complete answer take a capability away", async () => {
+		writeCache({ known: true, capabilities: [{ id: "designer" }] });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ known: true, capabilities: [] })),
+		);
+
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
 	it("does not let a cached no-opinion answer stand in for a real one", async () => {
@@ -190,15 +232,31 @@ describe("fetchCapabilities", () => {
 });
 
 describe("capabilityInstructions", () => {
-	it("says nothing when nothing enabled has guidance to give", () => {
-		expect(capabilityInstructions([{ id: "designer" }])).toBe("");
+	it("says nothing at all when nothing is enabled", () => {
+		expect(capabilityInstructions([])).toBe("");
 	});
 
-	it("carries each plugin's own guidance through to the session", () => {
+	it("names a capability that carries no guidance of its own", () => {
+		expect(capabilityInstructions([{ id: "designer" }])).toContain("designer");
+	});
+
+	it("names what is enabled and leaves the guidance to the tool", () => {
 		const text = capabilityInstructions([{ id: "designer", instructions: "Prefer Switchboard." }, { id: "notes" }]);
 
-		expect(text).toContain("Prefer Switchboard.");
-		expect(text.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
+		expect(text).toContain("designer, notes");
+		expect(text).not.toContain("Prefer Switchboard.");
+		expect(text).toContain("switchboard_capabilities");
+	});
+
+	it("stays far enough under the harness cap that a new capability cannot overflow it", () => {
+		// The block is bounded by id length, not by how much guidance a capability carries, so no
+		// capability can push another's text past the harness cap and have it silently cut.
+		const many = Array.from({ length: 12 }, (_, i) => ({
+			id: `capability-${i}`,
+			instructions: "x".repeat(4_000),
+		}));
+
+		expect(capabilityInstructions(many).length).toBeLessThan(600);
 	});
 });
 
@@ -223,7 +281,18 @@ describe("the gated capability ids", () => {
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
 		// the old id, the gate stops matching, and the surface vanishes from every session while the
 		// gate still holds the old name, so the outage looks intermittent.
-		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining([...GATED_CAPABILITY_IDS]));
+		const consoleGated = GATED_CAPABILITY_IDS.filter((id) => id !== CODEX_THINKING_CAPABILITY_ID);
+
+		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining(consoleGated));
+	});
+
+	it("holds the daemon's own capability, which no console manifest can vouch for", () => {
+		// Announced by the host daemon's configuration rather than by a device, so the manifest check
+		// above cannot see it. Naming it here keeps a rename from silently un-gating the Codex tools.
+		expect(GATED_CAPABILITY_IDS).toContain(CODEX_THINKING_CAPABILITY_ID);
+		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
+			CODEX_THINKING_CAPABILITY_ID,
+		]);
 	});
 });
 
