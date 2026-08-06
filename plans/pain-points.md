@@ -1,5 +1,87 @@
 # Pain points
 
+## Codex delegation (`plans/codex-thinking.md`, deleted, shipped - 2026-08-06)
+
+All 8 phases shipped and deployed. Architecture is in CLAUDE.md's "Codex delegation" section; the
+deploy-trigger painpoint this plan surfaced became CLAUDE.md's "The four components update on
+SEPARATE triggers" subsection and is closed. What follows is what stayed open.
+
+### Uncovered by tests, recorded rather than rushed
+
+A coverage pass mapped the plan's own checklist to named tests: 41 requirements are covered, these
+are not.
+
+- [high] `src/mcp/devcontainer/codexTurnTracker.ts : settlePending` - **bug-class** - never called in
+  production, and that is a HANG. It exists, it is exported, and only its own unit test invokes it.
+  So a turn whose `turn/completed` arrives with `status: "completed"` but whose final-answer item
+  never arrives is held forever: the tracker waits for an item that is not coming, no terminal is
+  emitted, and the record stays `working`. `codexAwaitAgent` cannot rescue it, because reconciliation
+  deliberately skips a record with an active turn. The caller's only escape is guessing to call
+  `codexStopAgent`. The fix is a bounded timer in the daemon that settles a held terminal with
+  whatever it actually holds, which is exactly what `settlePending` was written for. It needs an
+  injectable clock and an `onHeld` callback to stay testable.
+- [medium] No large-history test. Exchanges, operations and turns are uncapped and unpaginated by
+  design. Nothing builds an agent with hundreds of entries and checks that persistence, restore and
+  the list projection still behave. A cost that only appears at scale would land on a long-lived
+  session, which is exactly the session that most needs its history.
+- [medium] `src/mcp/index.ts` - the conditional registration line is untested.
+  `if (hasCapability(...)) registerCodexTools(...)` is one line whose inversion would either expose
+  the tools to every session or hide them from every session, and no test would go red.
+- [low] `src/mcp/devcontainer/codexAppServer.ts : initialize` - incompatibility is untested. The
+  handshake advertises no version, so there is nothing to check against; a future App Server that
+  rejects or reshapes it surfaces as an opaque unavailable target rather than a clear signal.
+- [low] `registerTool`'s wiring of an MCP input schema to a handler is still uncovered. The body
+  building below it now is (`codexRequestBody`, checked against the gateway's own request schema,
+  plus `routerPost` driven against a real socket), but the registration itself needs an MCP client.
+
+### Structural, surfaced during the build
+
+- [medium] `src/shared/codex-thinking.ts` - its public, persistence, daemon, and App Server
+  boundaries occupy one high-conflict module. It intentionally exposes one compatibility import
+  today; preserve that barrel and split the implementation by trust boundary when a next consumer
+  arrives.
+- [medium] `src/shared/codex-thinking.ts : OpaqueIdSchema` - **misalignment** - used for ids that
+  have real internal structure. `CodexResolvedTarget.targetId` carries a grammar
+  (`container:<project>`), but its schema says only "a string up to 512 chars", so neither zod nor
+  tsc can catch a mismatch. Where an id has a grammar, the schema should carry it.
+- [medium] The Codex contract and persistence tests repeat several valid histories, receipts, and
+  restored-service setups. Canonical creating / working / settled / receipt builders would collapse
+  them.
+- [medium] `src/mcp/channel/channelReply.ts` + `humanTools.ts` - the same `ref://` prose is
+  duplicated into the `channel_reply` and `notify_human` tool DESCRIPTIONS, and both are truncated at
+  their own harness limit the same way the server instructions were. Moving guidance behind
+  `switchboard_capabilities` is the same repair for all three surfaces; only the instructions block
+  got it.
+
+### Lessons that cost real rounds
+
+- **A session cannot see its own instructions, and will confidently tell you it can.** Asking one
+  what its system prompt says returns the copy the transcript started with, so a resumed session
+  reports pre-deploy text as current with no way to notice. This cost several rounds of wrong
+  conclusions in BOTH directions. The instrument that works is spawning `dist/main-mcp.js` and
+  reading the `instructions` field from its `initialize` reply. Any future "what does an agent
+  actually see" question wants that probe, never an agent's self-report.
+- **The harness length cap is unobservable from the code.** Nothing errors, nothing logs, and no unit
+  test can reach it, because the limit lives in the client rather than in anything this repo runs.
+  That is exactly how 931 characters of `ref://` guidance went missing for an unknown length of time,
+  including all ten worked examples. The delivered length landing on 2048 exactly is what identified
+  it as a fixed limit rather than a token budget. The `capabilityInstructions` length test is a proxy
+  at best; the real check is the probe above, and it belongs in the release ritual rather than CI.
+- **A test fixture inventing its own shape is worse than no test.** Two separate times, a fixture
+  used a shape the real system never produces and the suite passed against code that could not work:
+  a launcher read `targetId` as a bare slug while the rest of the repo writes `container:<project>`
+  (25 tests green against code that would reject every real target), and an item id did the same.
+  Any field whose shape is agreed by CONVENTION rather than by a function both sides call is one
+  fixture away from this. Fixtures for wire shapes want to come from the schema or a recorded
+  response, never from a helper's imagination.
+- **Every fix round introduced a new defect in the code it repaired, seven times running.** Not bad
+  luck at that point, it is the shape of the work: a fix moves a decision, and the other readers of
+  that decision do not move with it. The cheapest guard found was making ONE accessor the sole reader
+  of a fact, which is what `answerOf` and `parseCodexTargetId` now are, backed by a residue test.
+- **`git stash` can corrupt a file with null bytes, and every gate stays green.** Stripping them
+  deleted four separator spaces inside two key-building template literals, making distinct pairs
+  collide. tsc, biome and 2084 tests all passed. `file <path>` is what found it.
+
 ## Grepping `SYNC-HASH` lies about which files are synced leaves (2026-08-02)
 
 The obvious way to answer "is this file a synced leaf, so must I re-stamp it after editing?" is to
