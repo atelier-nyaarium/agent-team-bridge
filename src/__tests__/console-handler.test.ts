@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
+import { BoardStore } from "../gateway/boardStore.js";
 import {
 	type ConsoleHandlerDeps,
 	type ConsoleRoutes,
@@ -33,6 +34,9 @@ function fakeDurable(): DurableStore {
 	return {
 		load: () => state,
 		save: (s: unknown) => {
+			state = s;
+		},
+		saveChecked: (s: unknown) => {
 			state = s;
 		},
 	} as unknown as DurableStore;
@@ -906,6 +910,41 @@ describe("createConsoleDispatcher", () => {
 			const r2 = await h2.handleFrame(f);
 			expect(r2).toEqual(r1);
 			expect(sendCalls).toBe(1);
+		});
+
+		it("a board retry across a restart replays the recorded reply instead of regressing a newer write", async () => {
+			const opsDurable = fakeDurable();
+			const boardStore = new BoardStore(fakeDurable(), new PlaneRegistry(), undefined);
+			const deps = {
+				registry: new Map() as TeamRegistry,
+				conversationRegistry: new Map() as ConversationRegistry,
+				mailboxStore: new DeviceMailboxStore(),
+				localGatewayId: "test-host",
+				localDomainId: "test-domain",
+				routes: {
+					send: async () => jsonRes({}),
+					respond: () => jsonRes({}),
+					teams: () => jsonRes([]),
+					discover: async () => jsonRes([]),
+				} as ConsoleRoutes,
+				boardStore,
+			};
+			const h1 = createConsoleDispatcher({ ...deps, durableOpStore: new DurableOpStore(opsDurable) });
+			await h1.handleFrame(
+				frame({ kind: "board_upsert", entries: [{ id: "e1", title: "t", state: "open", rank: "m" }] }, "op-up"),
+			);
+			const setDone = frame({ kind: "board_set_state", id: "e1", state: "done" }, "op-done");
+			expect((await h1.handleFrame(setDone)).ok).toBe(true);
+
+			// The agent moves the entry on AFTER the console's reply was lost...
+			boardStore.setState(OWNER, "e1", "in_progress");
+
+			// ...and the console's retry lands on a RESTARTED gateway: fresh dispatcher, fresh
+			// DurableOpStore over the same durable snapshot. The recorded reply replays; the newer
+			// write survives.
+			const h2 = createConsoleDispatcher({ ...deps, durableOpStore: new DurableOpStore(opsDurable) });
+			expect((await h2.handleFrame(setDone)).ok).toBe(true);
+			expect(boardStore.entry(OWNER, "e1")?.state).toBe("in_progress");
 		});
 
 		it("a backgrounded send stays in-flight until the background push actually lands, not when the running reply goes out", async () => {

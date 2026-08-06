@@ -23,7 +23,7 @@ import {
 	pickTiers,
 } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { ChannelFilesSchema, TeamInfoSchema } from "../shared/schemas.js";
+import { BOARD_BODY_MAX, ChannelFilesSchema, TeamInfoSchema } from "../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
@@ -44,6 +44,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import { type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -156,6 +157,8 @@ export interface RoutesDeps {
 	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do
 	// not exercise the identity gates, which then behave as an ungated gateway does.
 	auth?: SessionAuthority;
+	// The owner's task board (boardStore.ts). Absent when not wired; the board route then 503s.
+	boardStore?: BoardStore;
 }
 
 const SendRequestSchema = z.object({
@@ -305,6 +308,31 @@ const HumanNotifySchema = z
 // only possible target. pluginId/actionType are slug-constrained (matching every other identifier
 // that feeds a composite key in this codebase) so a colon inside either half can never collide the
 // composite "pluginId:actionType" claim key with a different, distinct pair.
+// The one board route's request: `action` dispatches, `from` is the caller's own session (hardcoded
+// MCP-side, same trust story as PluginActionRequestSchema below) and is the ONLY scoping key -
+// claim/release/update/clear act as that session, never as a client-suppliable one. Never fed to
+// the Kotlin codegen; this is an HTTP-side shape only, so `.nullable()` is expressible (update's
+// parent: absent = leave placement alone, null = move to root).
+const BoardRouteRequestSchema = z
+	.object({
+		from: z.string().min(1).max(128),
+		action: z.enum(["list", "claim", "release", "create", "update", "clear"]),
+		// list only. Defaults to "all"; never returns another session's entries at any scope.
+		scope: z.enum(["unclaimed", "session", "all"]).optional(),
+		// claim / release / update.
+		id: z.string().min(1).max(64).optional(),
+		// create only: the entry id derives from this, so an HTTP retry replays the same entry.
+		operationId: z.string().min(1).max(128).optional(),
+		// create only, REQUIRED there, deliberately without a default: whichever way one pointed
+		// is where nearly everything would land.
+		assignTo: z.enum(["self", "backlog"]).optional(),
+		title: z.string().min(1).max(500).optional(),
+		body: z.string().max(BOARD_BODY_MAX).nullable().optional(),
+		state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]).optional(),
+		parent: z.string().min(1).max(64).nullable().optional(),
+	})
+	.strict();
+
 const PluginActionRequestSchema = z
 	.object({
 		from: z.string().min(1).max(128),
@@ -372,6 +400,7 @@ export function createRoutes({
 	repushHandshake,
 	ownerId,
 	vibeCheck,
+	boardStore,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
@@ -1833,6 +1862,110 @@ export function createRoutes({
 		return jsonResponse({ delivered: true });
 	}
 
+	/** The one task-board route behind all six taskBoard* tools. `from` (hardcoded MCP-side) is both
+	 * the impersonation gate's claim and the only scoping key, so a session touches the backlog plus
+	 * its own entries and nothing else. A refusal answers 200 with `applied:false` + `refused` (a
+	 * normal outcome the tool relays); non-200 is reserved for transport, auth and validation. A
+	 * multi-field update applies field-by-field and reports the first refusal - each field was its
+	 * own absolute intent, so what landed before it stays. */
+	function taskBoard(req: Request, body: Record<string, unknown>): Response {
+		const parsed = BoardRouteRequestSchema.safeParse(body);
+		if (!parsed.success) {
+			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
+		}
+		const r = parsed.data;
+		const refused = refuseImpersonation(req, r.from);
+		if (refused) return refused;
+		if (!boardStore) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
+		const owner = ownerId?.();
+		if (!owner) return jsonResponse({ error: "not yet enrolled; no owner board exists" }, 503);
+		// refuseImpersonation already resolved the name when auth is wired; the bare fallback only
+		// exists for authless harnesses.
+		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
+		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
+
+		const answer = (
+			result: { applied: true } | { applied: false; refused: string },
+			extra?: Record<string, unknown>,
+		) =>
+			result.applied
+				? jsonResponse({ applied: true, ...extra })
+				: jsonResponse({ applied: false, refused: result.refused });
+
+		switch (r.action) {
+			case "list": {
+				const scope = r.scope ?? "all";
+				const projection = boardStore.projection(owner);
+				const entries = projection.entries.filter((e) => {
+					if (e.trashedAt !== undefined) return false;
+					if (scope === "unclaimed") return e.sessionId === undefined;
+					if (scope === "session") return e.sessionId === sessionKey;
+					return e.sessionId === undefined || e.sessionId === sessionKey;
+				});
+				return jsonResponse({ entries, ...(projection.truncated ? { truncated: true } : {}) });
+			}
+			case "claim": {
+				if (!r.id) return jsonResponse({ error: "claim requires an id" }, 400);
+				return answer(boardStore.claim(owner, r.id, sessionKey));
+			}
+			case "release": {
+				if (!r.id) return jsonResponse({ error: "release requires an id" }, 400);
+				return answer(boardStore.release(owner, r.id, sessionKey));
+			}
+			case "create": {
+				if (!r.operationId || !r.title || !r.assignTo) {
+					return jsonResponse({ error: "create requires operationId, title, and assignTo" }, 400);
+				}
+				const id = boardEntryIdForOperation(r.operationId);
+				// Insert-if-absent, never re-upsert: a retried POST whose entry already landed must not
+				// revert edits made since, nor re-rank it to the end.
+				if (boardStore.entry(owner, id)) return jsonResponse({ applied: true, id });
+				const parent = r.parent ?? undefined;
+				const entry = {
+					id,
+					title: r.title,
+					...(typeof r.body === "string" ? { body: r.body } : {}),
+					state: "open" as const,
+					...(parent !== undefined ? { parent } : {}),
+					rank: boardStore.endRank(owner, parent),
+					...(r.assignTo === "self" ? { sessionId: sessionKey } : {}),
+				};
+				return answer(boardStore.upsert(owner, [entry]), { id });
+			}
+			case "update": {
+				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
+				const entry = boardStore.entry(owner, r.id);
+				if (!entry) return jsonResponse({ applied: false, refused: "entry_missing" });
+				if (entry.sessionId !== sessionKey) return jsonResponse({ applied: false, refused: "held" });
+				if (r.title !== undefined) {
+					const res = boardStore.setTitle(owner, r.id, r.title);
+					if (!res.applied) return answer(res);
+				}
+				if (r.body !== undefined) {
+					const res = boardStore.setBody(owner, r.id, r.body === null ? undefined : r.body);
+					if (!res.applied) return answer(res);
+				}
+				if (r.state !== undefined) {
+					const res = boardStore.setState(owner, r.id, r.state);
+					if (!res.applied) return answer(res);
+				}
+				if (r.parent !== undefined) {
+					const parent = r.parent === null ? undefined : r.parent;
+					// An unchanged parent skips placement entirely - a retried update must not re-rank
+					// the entry to the end of a group it never left.
+					if (parent !== entry.parent) {
+						const res = boardStore.setParent(owner, r.id, parent, boardStore.endRank(owner, parent));
+						if (!res.applied) return answer(res);
+					}
+				}
+				return jsonResponse({ applied: true });
+			}
+			case "clear": {
+				return jsonResponse({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });
+			}
+		}
+	}
+
 	/** Land a generic plugin-action envelope (pluginId/actionType/payload) into the owner's mailbox
 	 * as a `plugin_action` entry, threaded under the CALLING agent's own address - never a
 	 * client-suppliable target - so a caller can only ever act on its own conversation.
@@ -1889,6 +2022,7 @@ export function createRoutes({
 		humanNotify,
 		consolePush,
 		pluginAction,
+		taskBoard,
 		presenceForDomain,
 		landCrossDomainPresence,
 		pushPresenceToDomain,

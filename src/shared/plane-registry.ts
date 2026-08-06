@@ -167,6 +167,7 @@ class Plane<T> {
 export class PlaneRegistry {
 	private readonly planes = new Map<string, Plane<unknown>>();
 	private waiters: Waiter[] = [];
+	private readonly coalesceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	/** Register a plane once. `identityOf` must be a pure function of `snapshot()`'s return value,
 	 * and must canonically order any collection inside it whose iteration order is not itself
@@ -192,6 +193,11 @@ export class PlaneRegistry {
 	 * name is not currently registered. */
 	unregisterPlane(name: string): void {
 		if (!this.planes.delete(name)) return;
+		const pending = this.coalesceTimers.get(name);
+		if (pending) {
+			clearTimeout(pending);
+			this.coalesceTimers.delete(name);
+		}
 		for (const waiter of [...this.waiters]) {
 			if (waiter.presentedMap.has(name)) waiter.settle(true);
 		}
@@ -206,6 +212,24 @@ export class PlaneRegistry {
 		if (!plane) return;
 		plane.markDirty();
 		if (plane.recompute()) this.wake(name);
+	}
+
+	/** markDirty, coalesced: the recompute + wake run ONCE at the end of `windowMs`, folding a write
+	 * burst into one bump (each bump ships a whole snapshot). Lives on the registry rather than as a
+	 * call-site debounce so a mutator cannot forget the flush; the tripwire catches any leftover. */
+	markDirtyCoalesced(name: string, windowMs: number): void {
+		const plane = this.planes.get(name);
+		if (!plane) return;
+		plane.markDirty();
+		if (this.coalesceTimers.has(name)) return;
+		this.coalesceTimers.set(
+			name,
+			setTimeout(() => {
+				this.coalesceTimers.delete(name);
+				const p = this.planes.get(name);
+				if (p?.recompute()) this.wake(name);
+			}, windowMs),
+		);
 	}
 
 	version(name: string): PlaneVersion | undefined {

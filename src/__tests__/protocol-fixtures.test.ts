@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { SPOKEN_TIER_FIELDS } from "../shared/notice.js";
 import {
+	ConsoleBoardReadResultSchema,
 	ConsoleCloseSessionResultSchema,
 	ConsoleCreateSessionResultSchema,
 	ConsoleListDirsResultSchema,
@@ -47,6 +48,7 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	ConsoleCloseSessionResult: ConsoleCloseSessionResultSchema,
 	ConsolePeekResult: ConsolePeekResultSchema,
 	ConsoleListDirsResult: ConsoleListDirsResultSchema,
+	ConsoleBoardReadResult: ConsoleBoardReadResultSchema,
 };
 
 interface ManifestEntry {

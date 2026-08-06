@@ -24,6 +24,7 @@ import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
+import { BoardStore } from "./boardStore.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
 import { CodexRoute } from "./codexRoute.js";
@@ -323,6 +324,20 @@ export async function startGateway(): Promise<void> {
 	// friend actually pushes; nothing calls its methods until then.
 	const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, restoredPlanes);
 	crossDomainPresenceConsumer.restore(restoredCrossDomainPresence);
+
+	// The owner's task board, in its OWN durable file with synchronous checked writes - a trash op
+	// the owner watched succeed must survive a crash, unlike readAnchors' low-stakes tick cadence.
+	const boardStore = openDurable(DATA_DIR, "task-board", (d) => new BoardStore(d, planeRegistry, restoredPlanes));
+	// End-of-life for a session's board entries, identical for the sweep and the console Forget:
+	// done/cancelled trash, the rest return to the pile. Own catch: board trouble must never take
+	// down the persist tick (whose uncaught throw exits the gateway) or block a forget.
+	const boardSessionEnded = (team: string) => {
+		try {
+			boardStore.sessionEnded(team);
+		} catch (err) {
+			console.error(`[task-board] session-ended hook failed for ${team}:`, err);
+		}
+	};
 	const sessionResumeSnapshot = (cleanShutdown: boolean) => ({
 		sessions: sessionStore.snapshot(),
 		planes: planeRegistry.persistedState(cleanShutdown),
@@ -360,7 +375,16 @@ export async function startGateway(): Promise<void> {
 		// produces it), so calling this every 3 seconds regardless of sweep's own result would cost a
 		// full presence rebuild forever for a cutoff (SESSION_RESUME_TTL_MS, 30 days) that removes
 		// something roughly once per record per month.
-		if (sessionStore.sweep(SESSION_RESUME_TTL_MS)) presence.markDirty();
+		const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
+		if (sweptTeams.length > 0) {
+			presence.markDirty();
+			for (const team of sweptTeams) boardSessionEnded(team);
+		}
+		try {
+			boardStore.sweepTrash();
+		} catch (err) {
+			console.error("[task-board] trash sweep failed:", err);
+		}
 		// Actively removes TTL-expired op records rather than leaving them as dead weight only
 		// masked at read time - see durableOpStore.ts's own sweep() doc for why this matters (every
 		// OTHER conversation's persist() call re-serializes the whole store, so idle dead weight
@@ -1111,6 +1135,7 @@ export async function startGateway(): Promise<void> {
 				? () => (allowlistForConsole!.ownerSignPub ? ownerKeyId(allowlistForConsole!.ownerSignPub) : null)
 				: null,
 			vibeCheck,
+			boardStore,
 		});
 	}
 
@@ -1184,9 +1209,13 @@ export async function startGateway(): Promise<void> {
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
 			isProjectName: isCatalogProject,
-			// Forget drops the session's durable resume record so it stops listing as available.
+			// Forget drops the session's durable resume record so it stops listing as available. The
+			// board hook rides HERE - the deliberate forget - and on the TTL sweep, never inside
+			// SessionStore.forget itself, whose failed-wake/failed-create rollback callers would
+			// otherwise apply the session-ended policy to a launch that never happened.
 			dropSessionResume: (team) => {
 				presence.forget(team);
+				boardSessionEnded(team);
 			},
 			sessionStore: presence,
 			capabilityStore,
@@ -1201,6 +1230,7 @@ export async function startGateway(): Promise<void> {
 			presence,
 			intentTracker,
 			readAnchors,
+			boardStore,
 			crossDomainPresenceConsumer,
 			linkedDomainIds: () => [...new Set(crossDomainPeersForConsole?.all().map((p) => p.friendDomainId) ?? [])],
 			relayToHost,
@@ -1443,6 +1473,7 @@ export async function startGateway(): Promise<void> {
 		if (method === "GET" && url.pathname === "/health") return routes.health();
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(req, body);
 		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(req, body);
+		if (method === "POST" && url.pathname === "/task-board") return routes.taskBoard(req, body);
 		// One door for all five Codex tools, so session authority and validation cannot drift apart
 		// across them.
 		if (method === "POST" && url.pathname === "/codex") return codexRoute.handle(req, body);

@@ -389,17 +389,17 @@ describe("SessionStore TTL", () => {
 
 		clock = 100;
 		store.touchLive("host.live01");
-		expect(store.sweep(50)).toBe(true); // removed the stale record
+		expect(store.sweep(50)).toEqual(["host.stale1"]); // names exactly what it removed
 		expect(store.getByTeam("host.live01")).toBeDefined();
 		expect(store.getByTeam("host.stale1")).toBeUndefined();
 	});
 
-	it("sweep returns false when nothing was old enough to remove", () => {
+	it("sweep returns nothing when nothing was old enough to remove", () => {
 		let clock = 0;
 		const store = new SessionStore({ now: () => clock, idGen: scriptedIds("fresh1") });
 		store.mint({ spawn: "host", sessionLabel: "fresh" });
 		clock = 10;
-		expect(store.sweep(1_000)).toBe(false);
+		expect(store.sweep(1_000)).toEqual([]);
 		expect(store.getByTeam("host.fresh1")).toBeDefined();
 	});
 

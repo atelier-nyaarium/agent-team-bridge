@@ -58,7 +58,7 @@ const HEALTH_URL = "http://localhost:20000/health";
 const ENROLL_URL = "http://localhost:20000/enroll";
 const ADMIT_PAYLOAD_URL = "http://localhost:20000/admit-payload";
 // The gateway's federation dir on the host (bind-mounted from FED_DIR_IN inside the container).
-const FED_DIR_HOST = "volumes/gateway/federation";
+const FED_DIR_HOST = "volumes/gateway-data/federation";
 const TRANSPORT_FILE_HOST = `${FED_DIR_HOST}/transport.json`; // enrollment writes this once a bundle installs
 const EVIE_DEPLOY = "deploy/evie-bot-deployment";
 const FED_SECRET = "evie-federation";
@@ -66,7 +66,7 @@ const BRIDGE_YAML = "../evie-bot/deploy/console-bridge.yaml";
 const GATEWAY_BRIDGE_YAML = "../evie-bot/deploy/gateway-bridge.yaml";
 const SERVICE = "evie-console-bridge";
 const PORT = 20004;
-const FED_DIR_IN = "/app/log/federation"; // the gateway's federation dir (allowlist + keypair)
+const FED_DIR_IN = "/app/data/federation"; // the gateway's federation dir (allowlist + keypair)
 const SECRETS_DIR = path.join(os.homedir(), ".config", "switchboard"); // host-local admin secrets (0700)
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
@@ -147,14 +147,17 @@ async function waitHealth(): Promise<boolean> {
 	return false;
 }
 
-/** Erase volumes/gateway. The gateway writes it as the in-container user, so a host-side rm is
- * denied; a root container with the same mount clears it. */
+/** Erase both gateway volumes: volumes/gateway-data (all durable state) and volumes/gateway (logs).
+ * The gateway writes them as the in-container user, so a host-side rm is denied; a root container
+ * with the same mount clears them. */
 async function wipeState(): Promise<void> {
-	if (!dirExists("volumes/gateway")) return;
-	const mount = `${process.cwd()}/volumes/gateway:/w`;
-	const sh = "cd /w && rm -rf -- ..?* .[!.]* * 2>/dev/null; true";
-	if ((await $`docker run --rm -u 0 -v ${mount} busybox sh -c ${sh}`.quiet().nothrow()).exitCode !== 0) {
-		throw new Error("could not erase volumes/gateway (is docker running?)");
+	for (const dir of ["volumes/gateway-data", "volumes/gateway"]) {
+		if (!dirExists(dir)) continue;
+		const mount = `${process.cwd()}/${dir}:/w`;
+		const sh = "cd /w && rm -rf -- ..?* .[!.]* * 2>/dev/null; true";
+		if ((await $`docker run --rm -u 0 -v ${mount} busybox sh -c ${sh}`.quiet().nothrow()).exitCode !== 0) {
+			throw new Error(`could not erase ${dir} (is docker running?)`);
+		}
 	}
 }
 
@@ -165,7 +168,7 @@ async function wipeState(): Promise<void> {
  * install-wait starts clean. */
 async function clearTransport(): Promise<void> {
 	if (!(await Bun.file(TRANSPORT_FILE_HOST).exists())) return;
-	const mount = `${process.cwd()}/volumes/gateway:/w`;
+	const mount = `${process.cwd()}/volumes/gateway-data:/w`;
 	await $`docker run --rm -u 0 -v ${mount} busybox rm -f /w/federation/transport.json`.quiet().nothrow();
 }
 
@@ -425,10 +428,43 @@ async function setupGateway(): Promise<void> {
 	}
 }
 
-/** Wipe this machine's gateway setup (.env + volumes/gateway) back to nothing. */
+/** Count live (non-trashed) task-board entries in the gateway's durable state. Shape mirrors
+ * src/gateway/boardStore.ts's snapshot; a non-empty file this cannot read counts as UNKNOWN
+ * (null), never as zero - a shape drift must not silently defeat the purge guard. */
+async function boardEntryCount(): Promise<number | null> {
+	const raw = await Bun.file("volumes/gateway-data/task-board.json")
+		.text()
+		.catch(() => "");
+	if (raw.trim() === "") return 0;
+	const parsed = jparse<{ owners?: Record<string, { entries?: { trashedAt?: number }[] }> }>(raw);
+	if (!parsed?.owners) return null;
+	let n = 0;
+	for (const owner of Object.values(parsed.owners)) {
+		if (!Array.isArray(owner.entries)) return null;
+		for (const e of owner.entries) if (e.trashedAt === undefined) n++;
+	}
+	return n;
+}
+
+/** A purge takes the task board with the volume. Refuse to proceed on a silent yes when live
+ * entries exist: the admin must type the count they are destroying (or DELETE when the file is
+ * unreadable and the count unknowable). */
+async function confirmBoardLoss(): Promise<boolean> {
+	const n = await boardEntryCount();
+	if (n === 0) return true;
+	if (n === null) {
+		console.log("A task-board file exists but could not be read. Purging deletes it.");
+		return ask("Type DELETE to confirm: ").trim() === "DELETE";
+	}
+	console.log(`The task board holds ${n} live entr${n === 1 ? "y" : "ies"}. Purging deletes them.`);
+	return ask(`Type ${n} to confirm: `).trim() === String(n);
+}
+
+/** Wipe this machine's gateway setup (.env + both gateway volumes) back to nothing. */
 async function purgeGateway(): Promise<void> {
-	console.log("Wipes .env + volumes/gateway.");
+	console.log("Wipes .env + volumes/gateway-data + volumes/gateway.");
 	if (!confirm("Purge everything?")) return;
+	if (!(await confirmBoardLoss())) return;
 	// Drop this Gateway's admission from evie's Domain first (the admission stores the SANITIZED
 	// slug, so use it not the raw env), then erase the local state.
 	const domain = await envGet("FEDERATION_DOMAIN_ID");
@@ -748,8 +784,9 @@ async function provision(): Promise<void> {
 /** Clean break: delete this owner's whole Domain from evie, then erase the local state with the
  * same full wipe as Purge gateway so a re-provision starts fresh. A hosted friend tenant survives. */
 async function purgeFederation(): Promise<void> {
-	console.log("Wipes the network from evie, plus .env + volumes/gateway + the host blob.");
+	console.log("Wipes the network from evie, plus .env + both gateway volumes + the host blob.");
 	if (!confirm("Purge everything?")) return;
+	if (!(await confirmBoardLoss())) return;
 
 	const domain = await envGet("FEDERATION_DOMAIN_ID");
 	await evieDelete((fed) => removeDomain(fed, domain));

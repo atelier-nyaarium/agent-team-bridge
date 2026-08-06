@@ -184,6 +184,7 @@ sealed class ConsoleOp {
 		val focus: FocusIntent? = null,
 		val knownLinkedPeersVersion: LinkedPeersVersion? = null,
 		val knownReadAnchorsVersion: ReadAnchorsVersion? = null,
+		val knownTaskBoardVersion: TaskBoardVersion? = null,
 		val knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion>? = null,
 	) : ConsoleOp()
 
@@ -194,6 +195,65 @@ sealed class ConsoleOp {
 		val epoch: Long,
 		val seq: Long,
 	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_upsert")
+	data class BoardUpsert(
+		val entries: List<BoardEntry>,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_state")
+	data class BoardSetState(
+		val id: String,
+		val state: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_title")
+	data class BoardSetTitle(
+		val id: String,
+		val title: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_body")
+	data class BoardSetBody(
+		val id: String,
+		val body: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_parent")
+	data class BoardSetParent(
+		val id: String,
+		val parent: String? = null,
+		val rank: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_trashed")
+	data class BoardSetTrashed(
+		val id: String,
+		val trashed: Boolean,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_session")
+	data class BoardSetSession(
+		val id: String,
+		val sessionId: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_remove")
+	data class BoardRemove(
+		val ids: List<String>,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_read")
+	data object BoardRead : ConsoleOp()
 
 	@Serializable
 	@SerialName("peek")
@@ -419,6 +479,9 @@ data class ConsolePollResult(
 	val linkedPeersVersion: LinkedPeersVersion? = null,
 	val readAnchors: List<ReadAnchorWireEntry>? = null,
 	val readAnchorsVersion: ReadAnchorsVersion? = null,
+	val taskBoard: List<BoardEntry>? = null,
+	val taskBoardVersion: TaskBoardVersion? = null,
+	val taskBoardTruncated: Boolean? = null,
 	val crossDomainPresence: List<CrossDomainPresenceEntry>? = null,
 	val settled: String? = null,
 )
@@ -862,10 +925,28 @@ data class ReadAnchorsVersion(
 )
 
 @Serializable
+data class TaskBoardVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
 data class CrossDomainPresenceKnownVersion(
 	val domainId: String,
 	val epoch: Long,
 	val version: Long,
+)
+
+@Serializable
+data class BoardEntry(
+	val id: String,
+	val title: String,
+	val body: String? = null,
+	val state: String,
+	val parent: String? = null,
+	val rank: String,
+	val sessionId: String? = null,
+	val trashedAt: Long? = null,
 )
 
 @Serializable
@@ -1004,6 +1085,17 @@ data class ConsoleBlobPutResult(
 data class ConsoleBlobGetResult(
 	val chunk: String? = null,
 	val eof: Boolean,
+)
+
+@Serializable
+data class ConsoleBoardWriteResult(
+	val applied: Boolean,
+)
+
+@Serializable
+data class ConsoleBoardReadResult(
+	val entries: List<BoardEntry>,
+	val truncated: Boolean? = null,
 )
 
 @Serializable

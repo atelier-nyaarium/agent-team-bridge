@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.ConsoleBoardReadResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCloseSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
@@ -54,6 +55,7 @@ class ProtocolFixturesTest {
 			"ConsoleCloseSessionResult" -> json.decodeFromString<ConsoleCloseSessionResult>(body)
 			"ConsolePeekResult" -> json.decodeFromString<ConsolePeekResult>(body)
 			"ConsoleListDirsResult" -> json.decodeFromString<ConsoleListDirsResult>(body)
+			"ConsoleBoardReadResult" -> json.decodeFromString<ConsoleBoardReadResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}
@@ -90,6 +92,7 @@ class ProtocolFixturesTest {
 			"op-envelope-blob-put.json" to ConsoleOp.BlobPut::class,
 			"op-envelope-rename-session.json" to ConsoleOp.RenameSession::class,
 			"op-envelope-close-session.json" to ConsoleOp.CloseSession::class,
+			"op-envelope-board-upsert.json" to ConsoleOp.BoardUpsert::class,
 		)
 		for ((name, expected) in ops) {
 			val envelope = json.decodeFromString<ConsoleOpEnvelope>(fixture(name))
@@ -209,6 +212,23 @@ class ProtocolFixturesTest {
 		assertNull(result.kind)
 		assertNull(result.text)
 		assertTrue(result.ansi!!.isNotEmpty())
+	}
+
+	@Test
+	fun boardEntriesCarryLongTrashedAtAndSurviveTheTreeFields() {
+		// trashedAt is epoch-ms: overflows Int, and a Double decodes without throwing, so the value
+		// is asserted exactly (the same Long bait decodesEveryMailboxKindAndLongAt uses for `at`).
+		val read = json.decodeFromString<ConsoleBoardReadResult>(fixture("board-read-result.json"))
+		assertEquals(1785179969544L, read.entries[0].trashedAt)
+		assertEquals(true, read.truncated)
+
+		val poll = json.decodeFromString<ConsolePollResult>(fixture("poll-result-task-board.json"))
+		assertEquals("taskBoard", poll.settled)
+		assertEquals(1785179969544L, poll.taskBoard!![1].trashedAt)
+		assertNull("a live entry must keep trashedAt absent, never 0", poll.taskBoard!![0].trashedAt)
+
+		val upsert = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-board-upsert.json")).op
+		assertEquals("e-parent", (upsert as ConsoleOp.BoardUpsert).entries[1].parent)
 	}
 
 	@Test

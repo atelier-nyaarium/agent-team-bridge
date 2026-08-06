@@ -1,10 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { BoardStore } from "../gateway/boardStore.js";
 import { EVIE_WS_MAX_PAYLOAD_BYTES } from "../gateway/evie/evieClient.js";
 import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { DurableStore } from "../shared/durable-store.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -94,6 +99,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		sharesFor: overrides.sharesFor,
 		crossDomainPresenceConsumer: overrides.crossDomainPresenceConsumer,
 		ownerId: overrides.ownerId,
+		boardStore: overrides.boardStore,
 		resolveHandshake: overrides.resolveHandshake,
 		findPendingHandshake: overrides.findPendingHandshake,
 		repushHandshake: overrides.repushHandshake,
@@ -425,6 +431,192 @@ describe("routes", () => {
 
 			expect(() => humanNotify(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" })).not.toThrow();
 			expect(humanNotify(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" }).status).toBe(500);
+		});
+	});
+
+	describe("/task-board", () => {
+		function makeBoardCtx(): { ctx: RoutesDeps; board: BoardStore } {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-route-"));
+			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
+			const ctx = makeCtx({ boardStore: board, ownerId: () => "owner-1" });
+			return { ctx, board };
+		}
+
+		async function call(taskBoard: ReturnType<typeof createRoutes>["taskBoard"], body: Record<string, unknown>) {
+			const res = taskBoard(new Request("http://localhost/task-board", { method: "POST" }), body);
+			return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+		}
+
+		it("create derives the entry id from the operation id, so a retried POST replays one entry", async () => {
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const first = await call(taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "op-abc",
+				title: "Fix the drift check",
+				assignTo: "self",
+			});
+			const second = await call(taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "op-abc",
+				title: "Fix the drift check",
+				assignTo: "self",
+			});
+			expect(first.body).toMatchObject({ applied: true });
+			expect(second.body.id).toBe(first.body.id);
+			const list = await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" });
+			expect(list.body.entries).toHaveLength(1);
+		});
+
+		it("a create replayed after an edit reverts nothing", async () => {
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const create = {
+				from: "recipe-app",
+				action: "create",
+				operationId: "op-r",
+				title: "orig",
+				assignTo: "self",
+			};
+			const id = (await call(taskBoard, create)).body.id as string;
+			await call(taskBoard, { from: "recipe-app", action: "update", id, state: "done", title: "edited" });
+
+			await call(taskBoard, create);
+			const after = (
+				(await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" })).body.entries as {
+					title: string;
+					state: string;
+				}[]
+			)[0];
+			expect(after).toMatchObject({ title: "edited", state: "done" });
+		});
+
+		it("never returns another session's entries at any scope, and a claim of held work refuses", async () => {
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			await call(taskBoard, {
+				from: "other-app",
+				action: "create",
+				operationId: "o1",
+				title: "theirs",
+				assignTo: "self",
+			});
+			await call(taskBoard, {
+				from: "other-app",
+				action: "create",
+				operationId: "o2",
+				title: "pile",
+				assignTo: "backlog",
+			});
+			const theirs = (await call(taskBoard, { from: "other-app", action: "list", scope: "session" })).body
+				.entries as { id: string }[];
+
+			for (const scope of ["unclaimed", "session", "all"]) {
+				const seen = (await call(taskBoard, { from: "recipe-app", action: "list", scope })).body.entries as {
+					title: string;
+				}[];
+				expect(seen.map((e) => e.title)).not.toContain("theirs");
+			}
+
+			const claim = await call(taskBoard, { from: "recipe-app", action: "claim", id: theirs[0].id });
+			expect(claim.status).toBe(200);
+			expect(claim.body).toEqual({ applied: false, refused: "held" });
+		});
+
+		it("claiming from the pile moves it into the session scope, and release returns it", async () => {
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "o3",
+				title: "a thought",
+				assignTo: "backlog",
+			});
+			const id = created.body.id as string;
+
+			expect((await call(taskBoard, { from: "recipe-app", action: "claim", id })).body).toEqual({
+				applied: true,
+			});
+			const mine = (await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" })).body
+				.entries as {
+				id: string;
+			}[];
+			expect(mine.map((e) => e.id)).toContain(id);
+
+			expect((await call(taskBoard, { from: "recipe-app", action: "release", id })).body).toEqual({
+				applied: true,
+			});
+			// A lost-reply retry of the release stays a no-op success, never a refusal.
+			expect((await call(taskBoard, { from: "recipe-app", action: "release", id })).body).toEqual({
+				applied: true,
+			});
+		});
+
+		it("update touches only the caller's own entries and clear trashes only its finished ones", async () => {
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			await call(taskBoard, {
+				from: "other-app",
+				action: "create",
+				operationId: "o4",
+				title: "theirs",
+				assignTo: "self",
+			});
+			const theirsId = (
+				(await call(taskBoard, { from: "other-app", action: "list", scope: "session" })).body.entries as {
+					id: string;
+				}[]
+			)[0].id;
+			const mineId = (
+				await call(taskBoard, {
+					from: "recipe-app",
+					action: "create",
+					operationId: "o5",
+					title: "mine",
+					assignTo: "self",
+				})
+			).body.id as string;
+
+			expect(
+				(await call(taskBoard, { from: "recipe-app", action: "update", id: theirsId, state: "done" })).body,
+			).toEqual({
+				applied: false,
+				refused: "held",
+			});
+			expect(
+				(
+					await call(taskBoard, {
+						from: "recipe-app",
+						action: "update",
+						id: mineId,
+						state: "done",
+						body: "long form",
+					})
+				).body,
+			).toEqual({ applied: true });
+
+			const cleared = await call(taskBoard, { from: "recipe-app", action: "clear" });
+			expect(cleared.body).toEqual({ applied: true, cleared: 1 });
+			const after = (await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" })).body
+				.entries as [];
+			expect(after).toHaveLength(0);
+			const theirsAfter = (await call(taskBoard, { from: "other-app", action: "list", scope: "session" })).body
+				.entries as [];
+			expect(theirsAfter).toHaveLength(1);
+		});
+
+		it("503s with no board wired and 400s a create missing its required fields", async () => {
+			const bare = createRoutes(makeCtx({ ownerId: () => "owner-1" }));
+			expect((await call(bare.taskBoard, { from: "recipe-app", action: "list" })).status).toBe(503);
+
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			expect((await call(taskBoard, { from: "recipe-app", action: "create", title: "no op id" })).status).toBe(
+				400,
+			);
 		});
 	});
 

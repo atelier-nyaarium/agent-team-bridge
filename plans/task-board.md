@@ -642,7 +642,11 @@ The whole server half, landing together so it can deploy on its own.
   skipped dedup regresses fields under retry.
 - **Server-side refusals, enumerated** (not "cycle rejection only"): cycle on a parent change,
   claim when another session holds the entry (the theft-safety the tool description promises),
-  and the existence checks behind Q11's list - entry gone, parent gone, session gone.
+  the existence checks behind Q11's list - entry gone, parent gone, session gone - plus two the
+  implementation added: `would_orphan` (a remove batch must ship the whole subtree) and
+  `board_full` (a per-owner entry cap; the byte budget only bounds the PROJECTION, so without a
+  store cap a runaway writer grows the durable file without limit). Both retire the queued action
+  with the refusal flag like any other; neither resolves by retrying.
 - The console-forget hook's DEFAULT for undone entries is return-to-pile, same as the auto sweep
   and same as an old console's behavior. The Phase 2 blocking prompt expresses its decision as
   ordinary queued single-field ops SENT BEFORE the forget, so no forget-op wire change ever exists.
@@ -683,6 +687,37 @@ The whole server half, landing together so it can deploy on its own.
 - **Fix `wipeState()` to target `volumes/gateway-data`** - today `9) Purge Gateway` wipes the LOG
   volume and strands every store, and `FED_DIR_HOST` mispoints the same way (breaks `clearTransport`
   and `installState`). THEN the board-count guard before the wipe. Check `purgeFederation()` too.
+
+### Bug Classes
+
+- **Mechanism: rank minting/validation. Class: an unvalidated rank reaching the durable store,
+  where the wire schema then poisons the file on restore.** Round 1: `rankAtEnd` minted unbounded
+  ranks with the rebalance uncalled (red team, blocker). Round 2: the fix's own rebalance fallback
+  minted invalid ranks past 62^2-1 siblings and `endRank` committed them unvalidated (verify pass).
+  Closed at the mechanism: the STORE is the sole validator (`upsert`/`setParent` refuse `bad_rank`),
+  `rebalanceRanks` asserts every output and sizes its digit width to the count, `endRank` re-checks
+  before committing, and restore is per-entry tolerant - four independent layers, any one of which
+  now stops the class.
+
+### Phase 1 red-team outcomes
+
+Fixed: the rank-overflow file-poisoning blocker (`endRank` rebalances, the store refuses `bad_rank`,
+restore is per-entry tolerant and loud); claim/release no longer cascade over another session's
+subtree members; board mutations joined the DurableOpStore layer (the in-memory FIFO alone cannot
+defend a non-monotonic op across a restart); the MCP create is insert-if-absent so a replay reverts
+nothing; same-value ops commit nothing; the purge guard treats an unreadable board file as UNKNOWN
+and demands a typed DELETE.
+
+Accepted residuals, knowingly:
+
+- **Every real mutation still fsyncs the whole board file synchronously.** Bounded by the same-value
+  gate, the 5000-entry cap and single-owner scale; the writers are the owner's own admitted console
+  and same-uid sessions, which is the already-accepted trust boundary. Revisit only if boards grow
+  past that shape.
+- **`projection()` re-sorts per read** (bounded at 1 MB); fine at this scale.
+- **A disk error on the exact tick a session ages out** strands that session's entries assigned to a
+  dead name (logged, recoverable by hand via assign). The clean fix needs a pending end-of-life
+  queue; not worth it for the window.
 
 ## Phase 2 - Console
 

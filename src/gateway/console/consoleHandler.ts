@@ -50,6 +50,7 @@ import {
 import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
+import { type BoardProjection, type BoardResult, type BoardStore, taskBoardPlaneName } from "../boardStore.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
 import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
@@ -168,6 +169,10 @@ export interface ConsoleHandlerDeps {
 	 * another owner's). Absent when not wired (report_read then errors; the poll piggyback is
 	 * simply skipped, matching every other plane's own opt-in shape). */
 	readAnchors?: ReadAnchors;
+	/** The owner's task board (boardStore.ts): the board ops write through here, and the poll case
+	 * piggybacks this OWNER's own plane the way readAnchors does. Absent when not wired (board ops
+	 * then error; the poll piggyback is simply skipped). */
+	boardStore?: BoardStore;
 	/** The landed side of a linked friend's `presence_push` (crossDomainPresence.ts): the poll case
 	 * eagerly ensures a plane for every currently-linked Domain (via `linkedDomainIds` below) before
 	 * racing `waitForBump` - a plane that does not exist yet cannot wake an in-flight held poll on
@@ -316,6 +321,12 @@ const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 // durableOpStore.ts's own per-conversation cap, since a durable op can never outnumber the
 // mutating ops that pass through this cache above it.
 
+/** The one predicate both the opCache membership and the durable-layer branch derive the board
+ * mutation set from, so a future board op cannot join one and silently miss the other. */
+function isBoardMutationKind(kind: string): boolean {
+	return kind.startsWith("board_") && kind !== "board_read";
+}
+
 function isMutatingOp(op: ConsoleOp): boolean {
 	// Ops with a side effect are cached so a retried opId replays the cached reply rather than
 	// re-running: tmux_send re-injecting keys, create_session/reload_plugins re-launching, the
@@ -325,6 +336,10 @@ function isMutatingOp(op: ConsoleOp): boolean {
 	return (
 		op.kind === "send" ||
 		op.kind === "respond" ||
+		// Board mutations are absolute but NOT monotonic: a retry replayed after a newer write
+		// would regress the field, so the opCache must answer a lost-reply retry with the cached
+		// reply rather than re-running it (board_read stays out - reads run fresh).
+		isBoardMutationKind(op.kind) ||
 		op.kind === "tmux_send" ||
 		op.kind === "create_session" ||
 		op.kind === "reload_plugins" ||
@@ -361,6 +376,7 @@ export function createConsoleDispatcher({
 	presence,
 	intentTracker,
 	readAnchors,
+	boardStore,
 	crossDomainPresenceConsumer,
 	linkedDomainIds,
 	blobStore,
@@ -603,6 +619,16 @@ export function createConsoleDispatcher({
 			mailboxStore.get(ownerId)?.forgetConsumer(conversationId);
 			if (!ownerDevices.has(ownerId)) mailboxStore.delete(ownerId);
 		}
+	}
+
+	function requireBoard(): BoardStore {
+		if (!boardStore) throw new Error("task board is not available on this Gateway");
+		return boardStore;
+	}
+
+	function boardWrite(result: BoardResult): { applied: true } {
+		if (!result.applied) throw new Error(`refused: ${result.refused}`);
+		return { applied: true };
 	}
 
 	async function dispatch(
@@ -910,6 +936,22 @@ export function createConsoleDispatcher({
 					}
 				}
 
+				// This owner's task-board plane: same per-owner, lazily-registered, single-scalar shape
+				// as read-anchors above.
+				const tbr = boardStore ? planeRegistry : undefined;
+				const taskBoardPlane = taskBoardPlaneName(ownerId);
+				const taskBoardScope = tbr ? new Set([taskBoardPlane]) : undefined;
+				const presentedTaskBoard = new Map<string, PlaneVersion>();
+				if (tbr) {
+					boardStore?.ensureRegistered(ownerId);
+					if (op.knownTaskBoardVersion) {
+						presentedTaskBoard.set(taskBoardPlane, {
+							epoch: op.knownTaskBoardVersion.epoch,
+							counter: op.knownTaskBoardVersion.version,
+						});
+					}
+				}
+
 				// Cross-Domain presence: genuinely N independently-versioned planes, one per linked
 				// Domain (crossDomainPresence.ts) - unlike linked-peers/read-anchors' single scalar, so
 				// this ALSO gates on the op field's own presence (an absent knownCrossDomainPresenceVersions
@@ -939,6 +981,7 @@ export function createConsoleDispatcher({
 					if (pr) waits.push(pr.waitForBump(presentedPresence, hold, presenceScope));
 					if (lpr) waits.push(lpr.waitForBump(presentedLinkedPeers, hold, linkedPeersScope));
 					if (rar) waits.push(rar.waitForBump(presentedReadAnchors, hold, readAnchorsScope));
+					if (tbr) waits.push(tbr.waitForBump(presentedTaskBoard, hold, taskBoardScope));
 					if (cdpr)
 						waits.push(cdpr.waitForBump(presentedCrossDomainPresence, hold, crossDomainPresenceScope));
 					await Promise.race(waits);
@@ -970,6 +1013,9 @@ export function createConsoleDispatcher({
 				const readAnchorsVersion = rar?.version(readAnchorsPlane);
 				const readAnchorsChanged =
 					rar != null && rar.changedSince(presentedReadAnchors, readAnchorsScope).length > 0;
+				// Same generalization again, for this owner's task-board plane.
+				const taskBoardVersion = tbr?.version(taskBoardPlane);
+				const taskBoardChanged = tbr != null && tbr.changedSince(presentedTaskBoard, taskBoardScope).length > 0;
 				// Same generalization again, for cross-Domain presence - EXCEPT this plane FAMILY has no
 				// single version of its own; changedSince returns the SUBSET of plane names that moved,
 				// each mapped back to its domainId via cdpPlaneToDomain.
@@ -990,6 +1036,7 @@ export function createConsoleDispatcher({
 					| "crossDomainPresence"
 					| "linkedPeers"
 					| "readAnchors"
+					| "taskBoard"
 					| "domain"
 					| "timeout" =
 					snap.entries.length > 0
@@ -1002,14 +1049,25 @@ export function createConsoleDispatcher({
 									? "linkedPeers"
 									: readAnchorsChanged
 										? "readAnchors"
-										: domainChanged
-											? "domain"
-											: "timeout";
+										: taskBoardChanged
+											? "taskBoard"
+											: domainChanged
+												? "domain"
+												: "timeout";
 
 				// Builds only the linked Domains whose plane actually changed - never a full resend of
 				// every linked Domain (each is independently versioned, unlike presence's single plane
 				// above). Calls crossDomainPresenceConsumer.snapshot() at most once per poll, regardless
 				// of how many Domains changed.
+				function buildTaskBoard(version: PlaneVersion) {
+					const projection = planeRegistry?.snapshot<BoardProjection>(taskBoardPlane);
+					return {
+						taskBoard: projection?.entries ?? [],
+						taskBoardVersion: { epoch: version.epoch, version: version.counter },
+						...(projection?.truncated ? { taskBoardTruncated: true } : {}),
+					};
+				}
+
 				function buildCrossDomainPresenceEntries(): CrossDomainPresenceEntry[] {
 					const landedSnapshot = crossDomainPresenceConsumer?.snapshot();
 					const out: CrossDomainPresenceEntry[] = [];
@@ -1062,6 +1120,7 @@ export function createConsoleDispatcher({
 								},
 							}
 						: {}),
+					...(taskBoardChanged && taskBoardVersion ? buildTaskBoard(taskBoardVersion) : {}),
 					settled,
 				};
 			}
@@ -1071,6 +1130,46 @@ export function createConsoleDispatcher({
 				const advanced = readAnchors.report(ownerId, op.team, { epoch: op.epoch, seq: op.seq, at: Date.now() });
 				if (advanced) planeRegistry?.markDirty(readAnchorsPlaneName(ownerId));
 				return { advanced };
+			}
+
+			// Task board ops. A REFUSAL throws with the "refused: " prefix, landing as ok=false inside
+			// the sealed reply - the one shape the console's queue may retire an action on. Any other
+			// throw (disk trouble included) carries no prefix and the queue retries it.
+			case "board_upsert": {
+				return boardWrite(requireBoard().upsert(ownerId, op.entries));
+			}
+			case "board_set_state": {
+				return boardWrite(requireBoard().setState(ownerId, op.id, op.state));
+			}
+			case "board_set_title": {
+				return boardWrite(requireBoard().setTitle(ownerId, op.id, op.title));
+			}
+			case "board_set_body": {
+				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body));
+			}
+			case "board_set_parent": {
+				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank));
+			}
+			case "board_set_trashed": {
+				return boardWrite(requireBoard().setTrashed(ownerId, op.id, op.trashed));
+			}
+			case "board_set_session": {
+				// The one existence check the store cannot make itself: an assign must name a session
+				// this Gateway knows (a cross-Gateway assign MOVES the entry first, so the target is
+				// always local). Unassign (absent sessionId) needs no such check.
+				if (op.sessionId !== undefined && sessionStore && !sessionStore.getByTeam(op.sessionId)) {
+					throw new Error("refused: session_missing");
+				}
+				return boardWrite(requireBoard().setSession(ownerId, op.id, op.sessionId));
+			}
+			case "board_remove": {
+				return boardWrite(requireBoard().remove(ownerId, op.ids));
+			}
+			case "board_read": {
+				const board = requireBoard();
+				board.ensureRegistered(ownerId);
+				const projection = board.projection(ownerId);
+				return { entries: projection.entries, ...(projection.truncated ? { truncated: true } : {}) };
 			}
 
 			case "peek": {
@@ -1639,9 +1738,13 @@ export function createConsoleDispatcher({
 		const cached = opCache.get(conv)?.get(frame.opId);
 		if (cached) return cached;
 
-		// send/respond additionally get a DURABLE idempotency layer, consulted only on this
-		// opCache miss (a fresh process, or an evicted/torn-down entry) - see durableOpStore.ts.
-		const isDurableOp = frame.op.kind === "send" || frame.op.kind === "respond";
+		// send/respond and the board mutations additionally get a DURABLE idempotency layer,
+		// consulted only on this opCache miss (a fresh process, or an evicted/torn-down entry) - see
+		// durableOpStore.ts. For a board op the in-memory FIFO alone cannot be the replay defense:
+		// absolute ops are not monotonic, so a retry surviving a gateway restart (or 256 intervening
+		// mutating ops) would re-execute and regress a field somebody already advanced.
+		const isBoardMutation = isBoardMutationKind(frame.op.kind);
+		const isDurableOp = frame.op.kind === "send" || frame.op.kind === "respond" || isBoardMutation;
 		let generation = 0;
 		if (isDurableOp && durableOpStore) {
 			const key = durableOpKey(frame.op.kind, frame.opId);
@@ -1669,7 +1772,15 @@ export function createConsoleDispatcher({
 		// cases). This handler only ever needs to react to failure.
 		void promise
 			.then((reply) => {
-				if (reply.ok) return;
+				if (reply.ok) {
+					// A board mutation's settle point IS this resolution (the store commit was
+					// synchronous), so its durable completion is marked centrally here - unlike
+					// send/respond, whose true settlement can land long after (see above).
+					if (isBoardMutation && reply.result) {
+						durableOpStore?.markComplete(conv, durableOpKey(frame.op.kind, frame.opId), reply.result);
+					}
+					return;
+				}
 				if (isDurableOp) evictOpCacheIfStillOwned(conv, frame.opId, frame.op.kind, generation);
 				else opCache.get(conv)?.delete(frame.opId);
 			})

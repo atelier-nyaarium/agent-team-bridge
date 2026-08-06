@@ -351,7 +351,7 @@ describe("session-owned Codex catalog", () => {
 		catalogWriter!.commit(owner, 0, [requestedAgent()]);
 		clock = 1_000;
 
-		expect(store.sweep(500)).toBe(true);
+		expect(store.sweep(500)).toEqual([store.teamOf(owner)]);
 		expect(store.codexCatalog(owner)).toBeUndefined();
 	});
 });

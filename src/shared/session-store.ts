@@ -535,17 +535,18 @@ export class SessionStore {
 	/** Drop records not seen inside the TTL. Live records survive via touchLive refreshes.
 	 * Deliberately caller-driven (the TTL is a per-call arg, unlike the self-timer sibling stores)
 	 * so the gateway can sweep immediately BEFORE snapshot() on the persist tick - the persisted
-	 * file then never carries a just-expired record. Returns whether anything was actually removed,
-	 * so a caller that announces this change elsewhere (the presence plane) can skip that
-	 * announcement on the overwhelming majority of ticks where the TTL cutoff removed nothing. */
-	sweep(ttlMs: number): boolean {
+	 * file then never carries a just-expired record. Returns the removed team keys (empty on the
+	 * overwhelming majority of ticks), so a caller can both skip its presence announcement and run
+	 * the per-session end-of-life hooks (the task board's trash-and-unassign) against exactly the
+	 * sessions the cutoff took. */
+	sweep(ttlMs: number): string[] {
 		const cutoff = this.now() - ttlMs;
-		let removed = false;
+		const removed: string[] = [];
 		for (const [team, record] of this.records) {
 			if (record.lastSeen < cutoff) {
 				this.releaseLabel(record);
 				this.records.delete(team);
-				removed = true;
+				removed.push(team);
 			}
 		}
 		return removed;

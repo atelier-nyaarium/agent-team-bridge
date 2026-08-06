@@ -378,6 +378,15 @@ export const ReadAnchorsVersionSchema = z
 	})
 	.meta({ id: "ReadAnchorsVersion" });
 
+/** The task-board plane's version, one scalar per owner - same shape and reasoning as
+ * ReadAnchorsVersion above (per-owner plane, no multi-source concept). */
+export const TaskBoardVersionSchema = z
+	.object({
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "TaskBoardVersion" });
+
 /** A single linked Domain's cross-Domain-presence plane version - unlike linked-peers/read-anchors
  * (one scalar for the whole plane), cross-Domain presence is genuinely N independently-versioned
  * planes, one per linked Domain (crossDomainPresence.ts), so this is nested inside
@@ -432,6 +441,43 @@ export const ReadAnchorWireEntrySchema = z
 		at: z.number().int().nonnegative(),
 	})
 	.meta({ id: "ReadAnchorWireEntry" });
+
+////////////////////////////////
+//  Task Board Schemas
+//
+//  One entry of the owner's gateway-homed task board. FLAT: a parent pointer, never a children
+//  array (the codegen cannot emit a recursive root); consoles and sessions rebuild the tree.
+
+/** Body rides every plane snapshot and board_read reply, so its bound is what keeps a board under
+ * the 8 MB sealed-frame cap alongside the mailbox. */
+export const BOARD_BODY_MAX = 8192;
+
+/** Mirrors board-rank.ts's RANK_MAX_LENGTH; the rank module rebalances instead of minting past it. */
+export const BOARD_RANK_MAX = 64;
+
+/** How many entries one upsert/remove may carry: a move ships a whole subtree as ONE linked pair,
+ * so the bound is per-op, not per-entry. */
+export const BOARD_BATCH_MAX = 200;
+
+export const BoardEntrySchema = z
+	.object({
+		// Writer-minted (console: random; MCP create: derived from the operation id), which is what
+		// makes a replayed create the same entry and lets a cross-Gateway move keep its id.
+		id: z.string().min(1).max(64),
+		title: z.string().min(1).max(500),
+		// Absent means no long-form text; an absolute set-body op with body absent CLEARS it.
+		body: z.string().max(BOARD_BODY_MAX).optional(),
+		state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]),
+		// Absent means top-level. An absolute set-parent op with parent absent means root - the op
+		// always sets placement, it never leaves it unchanged.
+		parent: z.string().min(1).max(64).optional(),
+		rank: z.string().min(1).max(BOARD_RANK_MAX),
+		// The session this entry is assigned to; absent means the unassigned pile.
+		sessionId: z.string().min(1).max(128).optional(),
+		// Server-stamped when trashed; absent means live. The 30-day trash sweep runs off it.
+		trashedAt: z.number().int().nonnegative().optional(),
+	})
+	.meta({ id: "BoardEntry" });
 
 ////////////////////////////////
 //  Console Relay Frame Schema
@@ -524,6 +570,8 @@ export const ConsoleOpSchema = z
 			// This owner's read-anchors plane version already held - same absent-ships-unconditionally
 			// shape as knownLinkedPeersVersion (one scalar per owner, no multi-source concept).
 			knownReadAnchorsVersion: ReadAnchorsVersionSchema.optional(),
+			// This owner's task-board plane version already held - same scalar shape again.
+			knownTaskBoardVersion: TaskBoardVersionSchema.optional(),
 			// Every linked Domain's cross-Domain-presence plane version this Console already holds -
 			// an array like knownPresenceVersions (genuinely many independently-versioned sources, one
 			// per linked Domain), never a single scalar. ABSENT means a legacy client: no cross-Domain-
@@ -552,6 +600,62 @@ export const ConsoleOpSchema = z
 			epoch: z.number().int().nonnegative().max(0x7fffffff),
 			seq: z.number().int().nonnegative(),
 		}),
+		// Task board ops. Every mutation is ABSOLUTE (states the value wanted, never a change to
+		// make) and joins isMutatingOp so the opCache replays a lost reply instead of letting a
+		// retry regress a newer write. A refusal is an ok=false inside the sealed reply.
+
+		// Insert-or-replace whole entries by their writer-minted ids: creation, and the write half
+		// of a cross-Gateway move (which ships a subtree in one op, hence the array).
+		z.object({
+			kind: z.literal("board_upsert"),
+			entries: z.array(BoardEntrySchema).min(1).max(BOARD_BATCH_MAX),
+		}),
+		z.object({
+			kind: z.literal("board_set_state"),
+			id: z.string().min(1).max(64),
+			state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]),
+		}),
+		z.object({
+			kind: z.literal("board_set_title"),
+			id: z.string().min(1).max(64),
+			title: z.string().min(1).max(500),
+		}),
+		// Absent body CLEARS it: this op always sets the body, it never leaves it unchanged.
+		z.object({
+			kind: z.literal("board_set_body"),
+			id: z.string().min(1).max(64),
+			body: z.string().max(BOARD_BODY_MAX).optional(),
+		}),
+		// One PLACEMENT intent: parent and rank land together. Absent parent means root.
+		z.object({
+			kind: z.literal("board_set_parent"),
+			id: z.string().min(1).max(64),
+			parent: z.string().min(1).max(64).optional(),
+			rank: z.string().min(1).max(BOARD_RANK_MAX),
+		}),
+		// trashed:true stamps trashedAt server-side (the sweep clock is the gateway's); false clears
+		// it, which is Restore.
+		z.object({
+			kind: z.literal("board_set_trashed"),
+			id: z.string().min(1).max(64),
+			trashed: z.boolean(),
+		}),
+		// Assign / unassign. Applies to the entry AND its subtree (assigning a parent assigns the
+		// whole branch; unassign is the undo). Absent sessionId returns the branch to the pile.
+		z.object({
+			kind: z.literal("board_set_session"),
+			id: z.string().min(1).max(64),
+			sessionId: z.string().min(1).max(128).optional(),
+		}),
+		// TRUE removal by id - the delete half of a cross-Gateway move only, since a trashed
+		// tombstone on the origin would let Restore fork a moved entry into two.
+		z.object({
+			kind: z.literal("board_remove"),
+			ids: z.array(z.string().min(1).max(64)).min(1).max(BOARD_BATCH_MAX),
+		}),
+		// The union's read half: a non-route Gateway's entries arrive through this (routed by the
+		// frame's targetGateway), since the plane rides only the route Gateway's poll. Runs fresh.
+		z.object({ kind: z.literal("board_read") }),
 		// Capture an agent's visible tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own tmux
 		// or a devcontainer and relays to the host daemon. `sinceHash` lets the console skip an
@@ -944,6 +1048,11 @@ export const ConsolePollResultSchema = z
 		// (see knownReadAnchorsVersion) and the full per-team snapshot on any real change.
 		readAnchors: z.array(ReadAnchorWireEntrySchema).optional(),
 		readAnchorsVersion: ReadAnchorsVersionSchema.optional(),
+		// This owner's task-board plane, same piggyback shape. `taskBoardTruncated` marks a
+		// byte-budgeted projection that shipped a subset rather than failing the whole poll.
+		taskBoard: z.array(BoardEntrySchema).optional(),
+		taskBoardVersion: TaskBoardVersionSchema.optional(),
+		taskBoardTruncated: z.boolean().optional(),
 		// Cross-Domain presence: unlike every plane above, genuinely N independently-versioned
 		// planes (one per linked Domain), so this carries only the SUBSET of linked Domains whose
 		// plane actually changed relative to knownCrossDomainPresenceVersions - never a full resend
@@ -954,7 +1063,16 @@ export const ConsolePollResultSchema = z
 		// signal) reads this so a plane-only settle - empty mailbox entries, no gap - is never
 		// misread as a broken gateway and does not trip its backoff.
 		settled: z
-			.enum(["mailbox", "presence", "crossDomainPresence", "linkedPeers", "readAnchors", "domain", "timeout"])
+			.enum([
+				"mailbox",
+				"presence",
+				"crossDomainPresence",
+				"linkedPeers",
+				"readAnchors",
+				"taskBoard",
+				"domain",
+				"timeout",
+			])
 			.optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
@@ -1228,6 +1346,22 @@ export const CrossDomainUnlinkResultSchema = z
 	})
 	.meta({ id: "CrossDomainUnlinkResult" });
 
+/** Shared by every board mutation: the op landed. A refusal never reaches here - it is an
+ * ok=false + error on the reply body, so the console's queue can tell "retire" from "retry". */
+export const ConsoleBoardWriteResultSchema = z
+	.object({
+		applied: z.boolean(),
+	})
+	.meta({ id: "ConsoleBoardWriteResult" });
+
+export const ConsoleBoardReadResultSchema = z
+	.object({
+		entries: z.array(BoardEntrySchema),
+		// True when the byte budget forced a subset; the console keeps its prior cache for the rest.
+		truncated: z.boolean().optional(),
+	})
+	.meta({ id: "ConsoleBoardReadResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -1246,6 +1380,8 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleBlobStatResultSchema,
 	ConsoleBlobPutResultSchema,
 	ConsoleBlobGetResultSchema,
+	ConsoleBoardWriteResultSchema,
+	ConsoleBoardReadResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

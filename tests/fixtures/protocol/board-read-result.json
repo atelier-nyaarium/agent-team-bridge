@@ -1,0 +1,14 @@
+{
+	"entries": [
+		{
+			"id": "e-remote",
+			"title": "Voice drift check fails on cold cache",
+			"body": "Second machine's entry, fetched by board_read.",
+			"state": "paused",
+			"rank": "m",
+			"sessionId": "story.a31b90",
+			"trashedAt": 1785179969544
+		}
+	],
+	"truncated": true
+}
