@@ -163,7 +163,7 @@ The id is verified against what `initialize` advertises, and an unoffered id ref
 This is a Codex thread setting and has no bearing on Workflow subagents, whose `model` option accepts only Claude tiers.
 
 Q: Can Claude choose the model per agent?
-A: Only if the App Server turns out to support it. Phase 5 establishes whether thread configuration accepts a model at all. If it does, `codexStartAgent` takes an optional model defaulting to `gpt-5.6-luna`, fixed for that thread's life like every other thread setting, so `codexMessageAgent` gains nothing. If it does not, the default is the only value and no tool input is added.
+A: Yes, confirmed against a live App Server. `thread/start` accepts `model` and echoes it back, so `codexStartAgent` takes an optional model defaulting to `gpt-5.6-luna`, fixed for that thread's life like every other thread setting. `codexMessageAgent` gains nothing from it.
 
 > "when you invent the codex start and messageing MCP tools, discover if we can specify model, slip it in then. otherwise gpt-5.6-luna permanent."
 
@@ -319,8 +319,21 @@ This phase changes how every capability's guidance reaches every session, so it 
 - Build an injectable `AppServerTransport`/child factory around JSONL stdio. Perform `initialize`/`initialized` before any work and verify compatibility with the documented supported Codex CLI/App Server version.
 - Use stable operations only: thread start/resume/read/unsubscribe and turn start/steer/interrupt. Do not use experimental dynamic tools or experimental terminal-cleanup APIs.
 - Configure every thread with its trusted canonical cwd, normal App Server workspace-write, network/web access, and `approvalPolicy: "never"`. Keep the ordinary workspace-write/temp behavior selected in the questionnaire; do not add a custom per-platform read-root policy.
-- Request `gpt-5.6-luna` on every thread, overridable by `CODEX_THINKING_MODEL`. Verify the id against what `initialize` advertises and refuse the thread with an explicit unavailable when it is not offered. Never fall back to the server's own default, since a caller would then believe it is getting one tier while receiving another. Report the model actually in use on every agent record so a list call can show it.
-- Establish here whether thread configuration accepts a model at all, and record the answer in the questionnaire. It decides whether Phase 7 exposes a per-agent choice or ships the configured default as the only value.
+- Request `gpt-5.6-luna` on every thread, overridable by `CODEX_THINKING_MODEL`. Verify the id against `model/list` and refuse the thread with an explicit unavailable when it is not offered. Never fall back to the server's own default, since a caller would then believe it is getting one tier while receiving another. Report the model actually in use on every agent record so a list call can show it.
+
+### Confirmed against a live App Server
+
+Spiked on `codex-cli 0.146.0`, so these are observations rather than assumptions:
+
+- `initialize` returns only `userAgent`, `codexHome`, `platformFamily`, `platformOs`. It advertises NO capabilities and NO model list, so the version and model checks must come from elsewhere. `model/list` is the model source.
+- `model/list` offers `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Luna is real and reads as "Fast and affordable agentic coding model".
+- `thread/start` accepts `cwd`, `model`, and `approvalPolicy: "never"`, and echoes the model back.
+- `turn/start` takes `{ threadId, input: [{ type: "text", text }] }`.
+- Every method the plan relies on exists: `thread/start`, `thread/resume`, `thread/read`, `thread/unsubscribe`, `turn/start`, `turn/steer`, `turn/interrupt`.
+- The terminal is `turn/completed`, carrying `turn.status` and its items. A completed answer arrives as an `item/completed` whose item has `phase: "final_answer"`, exactly the selector Phase 5 assumes.
+- `item/agentMessage/delta` streams token deltas, which is the traffic Phase 2 refuses to persist.
+- Also seen and ignorable: `thread/started`, `turn/started`, `item/started`, `thread/status/changed`, `thread/tokenUsage/updated`, `account/rateLimits/updated`, `configWarning`, `mcpServer/startupStatus/updated`, `remoteControl/status/changed`.
+- An untrusted cwd logs a `configWarning` and continues with project-local config disabled. It is not an error, so do not treat it as one.
 - Implement every App Server server-initiated JSON-RPC request explicitly and fail closed:
   - Decline/cancel command, file-change, user-input, elicitation, and app/tool approval requests.
   - Grant no additional permission roots.
