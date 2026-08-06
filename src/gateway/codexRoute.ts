@@ -5,9 +5,11 @@ import {
 	CodexGatewayRequestSchema,
 	type CodexListAgentsResult,
 	type CodexPersistedAgent,
+	CodexRequestErrorSchema,
 	type CodexStoredTurn,
 	codexAgentIdForOperation,
 	projectCodexListResult,
+	sanitizeCodexErrorText,
 } from "../shared/codex-thinking.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { type CodexAgentService, CodexTransitionError, type CodexTransitionErrorCode } from "./codexAgentService.js";
@@ -30,22 +32,29 @@ export interface CodexRouteDeps {
 const DEFAULT_WAIT_BUDGET_MS = 9 * 60_000;
 
 /**
- * Transition failures mapped to the envelope's own error vocabulary, with whether a caller may
- * usefully try again.
+ * How each transition failure is answered.
  *
- * Keyed by the error union so a new transition code fails the build here rather than producing an
- * envelope the schema rejects at runtime, which is how this table's first version shipped: it
- * invented a `conflict` code the enum does not have, and every failing call answered HTML.
+ * The split is not cosmetic. An agent RESULT is a report about an agent, and the schema only lets one
+ * carry an error when the agent is genuinely unavailable or recovering. A refused REQUEST says
+ * nothing about the agent's health, so it answers with the request-error shape instead. Routing
+ * those through the result envelope is how three separate 500s shipped: the envelope rejected them
+ * and the throw escaped the handler's own catch.
+ *
+ * Keyed by the error union, so a new transition code fails the build rather than at runtime.
  */
-const ERROR_CODES: Record<CodexTransitionErrorCode, { code: CodexErrorCode; retryable: boolean }> = {
-	invalid_input: { code: "invalid_input", retryable: false },
-	not_found: { code: "not_found", retryable: false },
+const FAILURE_ANSWERS: Record<
+	CodexTransitionErrorCode,
+	{ kind: "request" } | { kind: "agent"; code: CodexErrorCode; retryable: boolean }
+> = {
+	invalid_input: { kind: "request" },
 	// The operation ID was reused with different input, which no retry of the same call fixes.
-	operation_conflict: { code: "invalid_input", retryable: false },
-	// The agent cannot take this right now. Reconciliation may well make it possible.
-	state_conflict: { code: "indeterminate", retryable: true },
-	target_unavailable: { code: "daemon_unavailable", retryable: true },
-	persistence_failed: { code: "daemon_unavailable", retryable: true },
+	operation_conflict: { kind: "request" },
+	// The agent cannot take this right now. That is about the REQUEST being wrong for the moment, not
+	// about the agent being broken, and the caller's remedy is to await or stop first.
+	state_conflict: { kind: "request" },
+	not_found: { kind: "agent", code: "not_found", retryable: false },
+	target_unavailable: { kind: "agent", code: "daemon_unavailable", retryable: true },
+	persistence_failed: { kind: "agent", code: "daemon_unavailable", retryable: true },
 };
 
 function json(body: unknown, status = 200): Response {
@@ -90,25 +99,33 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 	);
 	if (!turn) {
 		// No turn to speak for. An agent that never got one reports its state and nothing else.
+		const unconfirmed = agent.agentState === "unavailable" || agent.agentState === "recovering";
+		// A `creating` agent has no turn by construction, so this is the branch an await on one always
+		// takes - which the tool descriptions actively send callers to after a start times out. It is
+		// still waiting for its first delivery, and `idle` is the one thing it is not.
+		const stillCreating = agent.agentState === "creating";
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: agent.agentState === "working" ? "idle" : agent.agentState,
-			observation:
-				agent.agentState === "unavailable" || agent.agentState === "recovering" ? "unavailable" : "idle",
+			observation: unconfirmed ? "unavailable" : stillCreating ? "waitTimedOut" : "idle",
 			activities: [],
-			...(agent.agentState === "unavailable" || agent.agentState === "recovering"
+			...(unconfirmed
 				? { error: { ...DELIVERY_UNCONFIRMED, message: "codex agent state could not be confirmed" } }
 				: {}),
 		});
 	}
 	const exchange = agent.exchanges.findLast((candidate) => candidate.turnId === turn.id);
 	if (turn.state === "inProgress") {
+		const interrupting = agent.pendingInterrupt !== undefined;
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: "working",
-			observation: agent.pendingInterrupt ? "interruptRequested" : "waitTimedOut",
+			observation: interrupting ? "interruptRequested" : "waitTimedOut",
 			turn: { id: turn.id, state: turn.state },
-			delivery: exchange?.delivery,
+			// An interrupt request reports the turn it is stopping, never how that turn was delivered:
+			// the delivery already happened and is no longer what the caller is being told about. Sending
+			// both is what made every stop of a working agent answer a 500.
+			delivery: interrupting ? undefined : exchange?.delivery,
 			activities,
 		});
 	}
@@ -163,6 +180,19 @@ export class CodexRoute {
 			}
 		} catch (error) {
 			if (error instanceof CodexTransitionError) {
+				const answer = FAILURE_ANSWERS[error.code];
+				if (answer.kind === "request") {
+					return json(
+						CodexRequestErrorSchema.parse({
+							error: {
+								code: "invalid_input",
+								retryable: false,
+								message: sanitizeCodexErrorText(error.message),
+							},
+						}),
+						400,
+					);
+				}
 				// Every failing kind names its agent one way or the other: an existing one carries the ID,
 				// and a start derives it from the operation it would have created.
 				const agentId =
@@ -172,7 +202,7 @@ export class CodexRoute {
 							? codexAgentIdForOperation(request.operationId)
 							: undefined;
 				if (!agentId) throw error;
-				return json(unavailable(agentId, ERROR_CODES[error.code], error.message));
+				return json(unavailable(agentId, answer, error.message));
 			}
 			throw error;
 		}
@@ -268,7 +298,7 @@ export class CodexRoute {
 		// With no active turn there is nothing to wait for, so the latest settled state is the answer.
 		const waitedTurnId = owned.agent.activeTurnId;
 		if (!waitedTurnId) return describeAgent(owned.agent, lastSettledTurnId(owned.agent));
-		await this.waitForTurn(owner, agentId, waitedTurnId);
+		await this.waitForTurn(owner, agentId, waitedTurnId, this.deadline());
 		return describeAgent(this.current(owner, agentId) ?? owned.agent, waitedTurnId);
 	}
 
@@ -288,25 +318,43 @@ export class CodexRoute {
 		operationId: string,
 		awaitResponse: boolean,
 	): Promise<CodexAgentResult> {
-		const accepted = await this.waitForAcceptance(owner, agentId, operationId);
+		// ONE deadline for the whole call. Acceptance and the turn are two phases of a single wait, and
+		// giving each its own fresh budget let a documented nine-minute call block for eighteen.
+		const deadline = this.deadline();
+		const accepted = await this.waitForAcceptance(owner, agentId, operationId, deadline);
 		const agent = this.current(owner, agentId);
 		if (!agent) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
 		const turnId = accepted?.turnId;
 		if (!turnId) {
 			// Never accepted within the budget. Reporting a turn or a delivery here would describe work
 			// that was never proven to have started.
+			if (agent.agentState === "creating") {
+				return CodexAgentResultSchema.parse({
+					agentId,
+					agentState: "creating",
+					observation: "waitTimedOut",
+					activities: [],
+				});
+			}
+			// An unproven delivery against an existing agent is exactly the condition the rest of the
+			// system calls recovery, and the envelope will not carry an error for an agent it is still
+			// calling idle. So the record is moved to match what is being reported, rather than the report
+			// being bent to match a record that has not caught up.
+			const recovering = this.deps.service.abandonDelivery(owner, agentId, operationId, this.now());
 			return CodexAgentResultSchema.parse({
 				agentId,
-				agentState: agent.agentState === "creating" ? "creating" : agent.agentState,
-				observation: agent.agentState === "creating" ? "waitTimedOut" : "unavailable",
+				agentState: recovering?.agentState === "unavailable" ? "unavailable" : "recovering",
+				observation: "indeterminate",
 				activities: [],
-				...(agent.agentState === "creating"
-					? {}
-					: { error: { ...DELIVERY_UNCONFIRMED, message: "codex delivery was not confirmed" } }),
+				error: {
+					code: "indeterminate",
+					retryable: true,
+					message: "codex delivery was not confirmed within the wait budget",
+				},
 			});
 		}
 		if (!awaitResponse) return describeAgent(agent, turnId);
-		await this.waitForTurn(owner, agentId, turnId);
+		await this.waitForTurn(owner, agentId, turnId, deadline);
 		return describeAgent(this.current(owner, agentId) ?? agent, turnId);
 	}
 
@@ -315,6 +363,7 @@ export class CodexRoute {
 		owner: SessionRecord,
 		agentId: string,
 		operationId: string,
+		deadline: number,
 	): Promise<{ turnId: string } | undefined> {
 		const accepted = () => {
 			const operation = this.current(owner, agentId)?.operations.find(
@@ -322,12 +371,12 @@ export class CodexRoute {
 			);
 			return operation?.state === "requested" ? undefined : operation;
 		};
-		await this.deps.relay.waitFor(this.ownerKey(owner), agentId, () => accepted() !== undefined, this.deadline());
+		await this.deps.relay.waitFor(this.ownerKey(owner), agentId, () => accepted() !== undefined, deadline);
 		const settled = accepted();
 		return settled?.turnId ? { turnId: settled.turnId } : undefined;
 	}
 
-	private async waitForTurn(owner: SessionRecord, agentId: string, turnId: string): Promise<void> {
+	private async waitForTurn(owner: SessionRecord, agentId: string, turnId: string, deadline: number): Promise<void> {
 		await this.deps.relay.waitFor(
 			this.ownerKey(owner),
 			agentId,
@@ -338,7 +387,7 @@ export class CodexRoute {
 				if (!agent || agent.agentState === "unavailable") return true;
 				return turnOf(agent, turnId)?.state !== "inProgress";
 			},
-			this.deadline(),
+			deadline,
 		);
 	}
 

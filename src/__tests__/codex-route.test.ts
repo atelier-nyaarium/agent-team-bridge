@@ -49,7 +49,7 @@ function setup(options: { project?: string } = {}) {
 	sessionStore.confirm(sessionStore.teamOf(owner));
 	// Short budget so a non-waiting assertion does not sit on the real nine minutes.
 	const route = new CodexRoute({ service, relay, waitBudgetMs: 20 });
-	return { route, sent, token, owner, sessionStore, service };
+	return { route, relay, sent, token, owner, sessionStore, service };
 }
 
 function post(token: string): Request {
@@ -138,6 +138,134 @@ describe("Codex gateway route", () => {
 
 		expect(body.agents).toHaveLength(1);
 		expect(body.agents[0].exchanges[0]).toMatchObject({ kind: "start", prompt: "Audit" });
+	});
+
+	/** Drive an agent to accepted-and-working, the state every stop and await has to survive. */
+	async function working(context: ReturnType<typeof setup>) {
+		await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION_ID,
+			prompt: "Audit",
+			awaitResponse: false,
+		});
+		const agentId = codexAgentIdForOperation(OPERATION_ID);
+		const command = context.sent.find((message) => message.type === "codex_command") as Record<string, unknown>;
+		context.relay.handleHostMessage({
+			type: "codex_receipt",
+			kind: "accepted",
+			requestId: command.requestId,
+			ownerKey: context.sessionStore.teamOf(context.owner),
+			daemonInstanceId: "daemon-1",
+			targetId: "container:recipe-app",
+			generation: 1,
+			eventId: 0,
+			agentId,
+			operationId: OPERATION_ID,
+			resolvedTarget: { kind: "devcontainer", targetId: "container:recipe-app", cwd: "/workspace/recipe-app" },
+			threadId: "thread-1",
+			turnId: "turn-1",
+			delivery: "started",
+		});
+		for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+		return agentId;
+	}
+
+	it("answers a stop on a working agent instead of crashing on its own envelope", async () => {
+		const context = setup();
+		const agentId = await working(context);
+
+		const response = await context.route.handle(post(context.token), {
+			kind: "stop",
+			operationId: "123e4567-e89b-42d3-a456-426614174009",
+			agentId,
+		});
+		const body = await response.json();
+
+		// The whole point of stop is to halt runaway work, so this must not be the one call that 500s.
+		expect(response.status).toBe(200);
+		expect(() => CodexAgentResultSchema.parse(body)).not.toThrow();
+		expect(body.observation).toBe("interruptRequested");
+		expect(body.delivery).toBeUndefined();
+	});
+
+	it("answers an await on an agent still being created", async () => {
+		const context = setup();
+		await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION_ID,
+			prompt: "Audit",
+			awaitResponse: false,
+		});
+
+		// Exactly what the await tool's own description tells a caller to do after a start times out.
+		const response = await context.route.handle(post(context.token), {
+			kind: "await",
+			agentId: codexAgentIdForOperation(OPERATION_ID),
+		});
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(() => CodexAgentResultSchema.parse(body)).not.toThrow();
+		expect(body).toMatchObject({ agentState: "creating", observation: "waitTimedOut" });
+	});
+
+	it("answers a state conflict as a refused request, not as a broken agent", async () => {
+		const context = setup();
+		await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION_ID,
+			prompt: "Audit",
+			awaitResponse: false,
+		});
+
+		// Messaging an agent that is still creating is an ordinary conflict, not an outage.
+		const response = await context.route.handle(post(context.token), {
+			kind: "message",
+			operationId: "123e4567-e89b-42d3-a456-426614174009",
+			agentId: codexAgentIdForOperation(OPERATION_ID),
+			prompt: "Continue",
+			awaitResponse: false,
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ error: { code: "invalid_input", retryable: false } });
+	});
+
+	it("settles an unproven delivery into recovery rather than an unparseable result", async () => {
+		const context = setup();
+		const agentId = await working(context);
+		// Settle the first turn so the agent is idle and can take a message.
+		context.relay.handleHostMessage({
+			type: "codex_event",
+			kind: "terminal",
+			ownerKey: context.sessionStore.teamOf(context.owner),
+			daemonInstanceId: "daemon-1",
+			targetId: "container:recipe-app",
+			generation: 1,
+			eventId: 1,
+			agentId,
+			threadId: "thread-1",
+			turnId: "turn-1",
+			state: "completed",
+			finalResponse: "done",
+		});
+		for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+
+		// A message whose acceptance never arrives, waited out to the (tiny) budget.
+		const response = await context.route.handle(post(context.token), {
+			kind: "message",
+			operationId: "123e4567-e89b-42d3-a456-42661417400a",
+			agentId,
+			prompt: "Continue",
+			awaitResponse: true,
+		});
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(() => CodexAgentResultSchema.parse(body)).not.toThrow();
+		expect(body.observation).toBe("indeterminate");
+		// The record moved with the report: a later prompt is refused until reconciliation runs.
+		expect(context.service.listOwnedAgents(context.owner)[0]?.agentState).toBe("recovering");
 	});
 
 	it("rejects a malformed request before allocating anything", async () => {

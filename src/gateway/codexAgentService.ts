@@ -694,6 +694,30 @@ export class CodexAgentService {
 		}
 	}
 
+	/**
+	 * Give up on a delivery whose acceptance never arrived, settling it the way a refusal would.
+	 *
+	 * A caller that has spent its whole wait budget with nothing proven is in the same position as one
+	 * holding a refusal: the prompt may or may not have landed. Leaving the operation `requested` would
+	 * block every later message and stop for the agent with nothing able to clear it.
+	 */
+	abandonDelivery(
+		owner: SessionRecord,
+		agentId: string,
+		operationId: string,
+		at: number,
+	): CodexPersistedAgent | undefined {
+		const catalog = this.catalog(owner);
+		const index = catalog.agents.findIndex((agent) => agent.agentId === agentId);
+		if (index < 0) return undefined;
+		const agent = catalog.agents[index]!;
+		const operationIndex = agent.operations.findIndex((operation) => operation.operationId === operationId);
+		const exchangeIndex = agent.exchanges.findIndex((exchange) => exchange.operationId === operationId);
+		if (operationIndex < 0 || exchangeIndex < 0) return agent;
+		const result = this.refuseDelivery(owner, catalog, index, operationIndex, exchangeIndex, at);
+		return result.agent;
+	}
+
 	/** Fold one asynchronous App Server event into the record it belongs to. */
 	applyEvent(event: CodexDaemonEvent, at: number): CodexApplication {
 		const parsed = CodexDaemonEventSchema.safeParse(event);
