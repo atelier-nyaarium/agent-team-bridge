@@ -21,11 +21,14 @@ fi
 # would not inherit this shell's environment.
 HOST_WS_TOKEN="$(sed -n 's/^HOST_WS_TOKEN=//p' "${SCRIPT_DIR}/.env" 2>/dev/null | head -1)"
 CODEX_THINKING_ENABLED="$(sed -n 's/^CODEX_THINKING_ENABLED=//p' "${SCRIPT_DIR}/.env" 2>/dev/null | head -1)"
+# The default model every Codex thread opens on. Documented as a daemon variable but never forwarded,
+# so setting it in .env did nothing until now. Empty is fine: the daemon falls back to its own default.
+CODEX_THINKING_MODEL="$(sed -n 's/^CODEX_THINKING_MODEL=//p' "${SCRIPT_DIR}/.env" 2>/dev/null | head -1)"
 
 echo "Starting host daemon..."
 # run-host-daemon.sh is the supervisor: bounded-backoff restarts, then an inspectable shell after
 # repeated fast crashes. bun is on PATH via ~/.bashrc.
-tmux new-session -d -s "$TMUX_SESSION" "bash -c 'cd ${SCRIPT_DIR} && source ~/.bashrc && export HOST_WS_TOKEN=${HOST_WS_TOKEN} && export CODEX_THINKING_ENABLED=${CODEX_THINKING_ENABLED} && exec ./run-host-daemon.sh'"
+tmux new-session -d -s "$TMUX_SESSION" "bash -c 'cd ${SCRIPT_DIR} && source ~/.bashrc && export HOST_WS_TOKEN=${HOST_WS_TOKEN} && export CODEX_THINKING_ENABLED=${CODEX_THINKING_ENABLED} && export CODEX_THINKING_MODEL=${CODEX_THINKING_MODEL} && exec ./run-host-daemon.sh'"
 
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
 	echo "Host daemon running in background."

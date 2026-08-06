@@ -507,6 +507,27 @@ codexListAgents still returns it with its full history.
 - Pass Claude's prompt through without Switchboard-injected red-team/read-only prose and without Switchboard-authored workflow status/final tools.
 - First real use is this phase's own red-team audit, run on Codex. That needs the tools callable, which needs a release and a plugin reload, which needs a commit, so this lap commits and releases BEFORE its red-team step rather than after. Run the Claude-driven audit first as usual, then re-run it on Codex once released, and treat the second pass as the dogfood: a tool set that cannot audit itself is not ready to be trusted with anything else.
 
+### Bug Classes
+
+**A fix moves a decision; the readers of that decision do not move with it.** Now SIX rounds, and it
+has stopped being bad luck. This lap alone:
+
+- Splitting request refusals into a typed 400 left `routerPost` still reading `error` as a string, so
+  every structured refusal reached a caller as the literal text `[object Object]`.
+- Three separate repairs, each correct alone, combined so that `codexAwaitAgent` broke the turn it was
+  asked about: await reconciles, reconciliation writes `recovering` when it cannot confirm that exact
+  turn, the waiter settles on `recovering`, and the reporter treats `recovering` as unconfirmed. The
+  service's own comment calls `recovering` transient; the waiter treated it as terminal.
+
+The cheapest guard found so far remains one accessor owning a fact. The unguarded shape is a VALUE
+whose meaning is agreed by convention across modules - `recovering`, an `error` field that is
+sometimes a string and sometimes an object - rather than by a function both sides call.
+
+**A refusal's reason is worth more than its existence.** `receipt.error` was stored nowhere and the
+caller was told "delivery was not confirmed within the wait budget" instead, which was both useless
+and false. It defeated the entire safety story of the model input, whose value is that a bad model is
+refused rather than swapped - information that only exists in the reason.
+
 ## Phase 8 - Verify races, recovery, isolation, and operability
 
 - Unit-test shared schema projections, exhaustive reducer transitions, result envelopes, hidden operation-ID replay, native final selection, truncation markers, and sanitized logging.
