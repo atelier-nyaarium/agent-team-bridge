@@ -315,6 +315,13 @@ Two things the environment work had to get right: `docker exec` does not forward
 
 The targetId grammar now has one owner in `shared/codex-thinking.ts`: `host`, or `container:<project-slug>`. It was implied only by test fixtures before, and the launcher had read the field its own way, which would have rejected every real container target while its own fixtures passed. A cache hit also re-checks kind and cwd rather than trusting the id alone, matching the gateway's own target comparison, since a child's cwd is fixed for its whole life.
 
+A working directory is NOT a target property. A thread carries its own cwd, so the child only needs a sane one for its target, and taking a per-session path would have split one target across several children and handed an arbitrary absolute path to `docker exec -w`. Every host session shares one child; each thread points itself.
+
+### Bug Classes
+
+- A failure path that takes down more than its own target: child streams were handed out with no `error` listener, so one broken pipe would have thrown, hit the daemon's `uncaughtException` guard, and killed every other target's App Server with it. Any stream this daemon adopts needs its error sink attached at the point of adoption.
+- A type-narrowing gap that fails OPEN: the launcher branched on `kind === "devcontainer"` and let everything else reach the unsandboxed host spawn, so an unrecognized kind would have run on the host rather than being refused. A dispatch whose branches differ in privilege has to be exhaustive with an explicit refusal, never an else.
+
 Deliberately left for later phases, so a re-audit does not raise them again:
 
 - `acquire` has no production caller yet. Phase 6 routes Codex commands to it.

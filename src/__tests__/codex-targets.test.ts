@@ -140,13 +140,23 @@ describe("one App Server per execution target", () => {
 		expect(h.launched.map((l) => l.target.targetId)).toEqual(["host", "container:app"]);
 	});
 
-	it("refuses to serve a running child to a caller asking for a different cwd", () => {
-		// A child's cwd is fixed for its life, so handing this one over would point the caller at the
-		// wrong tree while reporting success.
+	it("shares one child across sessions with different working directories", () => {
+		// Every host session resolves to the same targetId while carrying its own workdir. A thread
+		// supplies its own cwd, so splitting on it here would lock out every session after the first.
 		const h = harness();
-		h.manager.acquire(CONTAINER);
+		const first = h.manager.acquire(HOST);
 
-		const collided = h.manager.acquire({ ...CONTAINER, cwd: "/workspace/other" });
+		const second = h.manager.acquire({ ...HOST, cwd: "/home/dev/projects/other" });
+
+		expect(h.launched).toHaveLength(1);
+		expect(second.state === "running" && second.lease.child).toBe(first.state === "running" && first.lease.child);
+	});
+
+	it("refuses an id that arrives claiming a different launch mechanism", () => {
+		const h = harness();
+		h.manager.acquire(HOST);
+
+		const collided = h.manager.acquire({ ...HOST, kind: "devcontainer" });
 
 		expect(collided.state).toBe("unavailable");
 		expect(collided.state === "unavailable" && collided.errorClass).toBe("targetIdCollision");
@@ -307,6 +317,12 @@ describe("what reaches a container", () => {
 
 			expect(() => realLauncher.launch(bad, {})).toThrow();
 		}
+	});
+
+	it("refuses an unrecognized kind rather than falling through to an unsandboxed host spawn", () => {
+		const rogue = { kind: "sandbox", targetId: "host", cwd: "/" } as unknown as CodexResolvedTarget;
+
+		expect(() => realLauncher.launch(rogue, {})).toThrow();
 	});
 });
 

@@ -11,7 +11,8 @@ export interface CodexChild {
 	readonly stdin: Writable;
 	readonly stdout: Readable;
 	kill(): void;
-	onExit(listener: (info: { code: number | null; signal: string | null }) => void): void;
+	/** `reason` is a class derived from the child's stderr, never its text. */
+	onExit(listener: (info: { code: number | null; signal: string | null; reason?: string }) => void): void;
 }
 
 export interface ExecutionTargetLauncher {
@@ -92,15 +93,38 @@ export function containerEnvArgs(source: Record<string, string | undefined>): st
 
 // The project comes from the shared targetId grammar rather than from reading the field directly, so
 // this cannot drift from whatever else builds one. The name is an argv element, never a shell string.
-function containerName(targetId: string): string {
+function containerProject(targetId: string): string {
 	const parsed = parseCodexTargetId(targetId);
 	if (parsed?.kind !== "devcontainer") {
 		throw Object.assign(new Error("target is not a container id"), { code: "badTarget" });
 	}
-	return `${parsed.project}_devcontainer-dev-1`;
+	return parsed.project;
 }
 
+// Enough of the child's stderr to tell one failure apart from another. Never logged raw, since it
+// can name a path; it is only read to derive a class.
+const STDERR_KEEP_BYTES = 2_000;
+
+const STDERR_CLASSES: Array<[RegExp, string]> = [
+	[/no such container/i, "noSuchContainer"],
+	[/is not running/i, "containerStopped"],
+	[/permission denied|cannot connect to the docker daemon/i, "dockerDenied"],
+	[/not found|no such file/i, "binaryMissing"],
+	[/unauthor|not logged in|auth/i, "authFailed"],
+];
+
 function adoptProcess(proc: ReturnType<typeof spawn>): CodexChild {
+	let stderrTail = "";
+	proc.stderr?.on("data", (chunk: Buffer) => {
+		stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_KEEP_BYTES);
+	});
+
+	// A stream error with no listener is thrown, and an unhandled throw here would take the daemon
+	// down over one target's broken pipe. Every failure has to arrive through onExit instead.
+	proc.stdin?.on("error", () => {});
+	proc.stderr?.on("error", () => {});
+	proc.stdout?.on("error", () => {});
+
 	return {
 		stdin: proc.stdin as Writable,
 		stdout: proc.stdout as Readable,
@@ -108,34 +132,50 @@ function adoptProcess(proc: ReturnType<typeof spawn>): CodexChild {
 			proc.kill();
 		},
 		onExit: (listener) => {
-			proc.once("exit", (code, signal) => listener({ code, signal }));
-			proc.once("error", () => listener({ code: null, signal: null }));
+			const fire = (info: { code: number | null; signal: string | null }) => {
+				const matched = STDERR_CLASSES.find(([pattern]) => pattern.test(stderrTail));
+				listener({ ...info, reason: matched?.[1] });
+			};
+			proc.once("exit", (code, signal) => fire({ code, signal }));
+			proc.once("error", () => fire({ code: null, signal: null }));
 		},
 	};
 }
 
-// A container child goes through `docker exec -i`, the boundary the terminal ops already use,
-// because `devcontainer exec` buffers to completion and cannot carry a long-lived conversation.
+/**
+ * A container child goes through `docker exec -i`, the boundary the terminal ops already use,
+ * because `devcontainer exec` buffers to completion and cannot carry a long-lived conversation.
+ *
+ * Neither branch takes a working directory from the caller. A thread carries its own cwd, so the
+ * process only needs a sane one for its target, and accepting a per-session path here would both
+ * split one target across several children and hand an arbitrary absolute path to `-w`.
+ */
 export const realLauncher: ExecutionTargetLauncher = {
 	launch(target, env) {
-		if (target.kind === "devcontainer") {
-			const args = [
-				"exec",
-				"-i",
-				"-u",
-				"vscode",
-				"-w",
-				target.cwd,
-				...containerEnvArgs(env),
-				containerName(target.targetId),
-				"codex",
-				"app-server",
-			];
-			return adoptProcess(spawn("docker", args, { stdio: ["pipe", "pipe", "ignore"] }));
+		switch (target.kind) {
+			case "devcontainer": {
+				const project = containerProject(target.targetId);
+				const args = [
+					"exec",
+					"-i",
+					"-u",
+					"vscode",
+					"-w",
+					`/workspace/${project}`,
+					...containerEnvArgs(env),
+					`${project}_devcontainer-dev-1`,
+					"codex",
+					"app-server",
+				];
+				return adoptProcess(spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] }));
+			}
+			case "host":
+				return adoptProcess(spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "pipe"] }));
+			default:
+				// Never fall through to the host branch. An unrecognized kind reaching an unsandboxed
+				// spawn is the one mistake here that runs code somewhere it was never meant to.
+				throw Object.assign(new Error("unknown execution target kind"), { code: "badTarget" });
 		}
-		return adoptProcess(
-			spawn("codex", ["app-server"], { cwd: target.cwd, env, stdio: ["pipe", "pipe", "ignore"] }),
-		);
 	},
 };
 
@@ -146,11 +186,8 @@ function classify(err: unknown): string {
 	return typeof code === "string" ? code : "launchFailed";
 }
 
-function sameTarget(left: CodexResolvedTarget | undefined, right: CodexResolvedTarget): boolean {
-	return left?.kind === right.kind && left.targetId === right.targetId && left.cwd === right.cwd;
-}
-
-function describeExit(info: { code: number | null; signal: string | null }): string {
+function describeExit(info: { code: number | null; signal: string | null; reason?: string }): string {
+	if (info.reason) return info.reason;
 	if (info.signal) return `signal:${info.signal}`;
 	return info.code === null ? "spawnError" : `exit:${info.code}`;
 }
@@ -204,10 +241,10 @@ export class ExecutionTargetManager {
 		};
 		this.targets.set(target.targetId, entry);
 
-		// A child's cwd and launch mechanism are fixed for its whole life, so serving one to a caller
-		// asking for a different kind or cwd would hand back a process pointed somewhere else. Target
-		// sameness is kind + id + cwd here, matching what the gateway's own comparison already requires.
-		if (entry.lease && !sameTarget(entry.launchedFor, target)) {
+		// Every host session shares one targetId while carrying its own workdir, so cwd deliberately
+		// does NOT take part: a thread supplies its own, and comparing it here would let the first
+		// session lock out every later one. Only the launch mechanism has to match.
+		if (entry.launchedFor && entry.launchedFor.kind !== target.kind) {
 			return { state: "unavailable", errorClass: "targetIdCollision" };
 		}
 		if (entry.lease) return { state: "running", lease: entry.lease };
