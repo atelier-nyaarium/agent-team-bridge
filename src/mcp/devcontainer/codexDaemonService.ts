@@ -41,6 +41,9 @@ export interface CodexDaemonDeps {
 	daemonInstanceId: string;
 	send(message: Record<string, unknown>): void;
 	openClient?(child: CodexChild, model: string): Promise<AppServerSession>;
+	/** Turns a host session's workdir HINT into a real directory. Injected because the rule lives in
+	 * the host daemon, and a hint may be a console-picked path or a bare human label. */
+	resolveHostCwd(hint: string | undefined): string;
 	model?: string;
 	now?(): number;
 }
@@ -75,13 +78,22 @@ export function codexTargetIdFor(target: CodexExecutionTarget): string {
 	return target.kind === "host" ? CODEX_HOST_TARGET_ID : codexContainerTargetId(target.project);
 }
 
-/** A requested target resolved to the one a child actually runs under. The cwd rides the thread, so
- * it is the only per-agent part of this. */
-export function resolveCodexTarget(target: CodexExecutionTarget): CodexResolvedTarget {
+/**
+ * A requested target resolved to the one a child actually runs under. The cwd rides the thread, so
+ * it is the only per-agent part of this.
+ *
+ * A host session's hint is NOT a path. It may be a console-picked directory or a bare human label,
+ * and `resolveHostWorkdir` is the one place that knows which is which. Passing the hint through as a
+ * cwd made every host start fail its own schema and be refused as an unavailable target.
+ */
+export function resolveCodexTarget(
+	target: CodexExecutionTarget,
+	resolveHostCwd: (hint: string | undefined) => string,
+): CodexResolvedTarget {
 	return CodexResolvedTargetSchema.parse({
 		kind: target.kind,
 		targetId: codexTargetIdFor(target),
-		cwd: target.kind === "host" ? target.workdirHint : `/workspace/${target.project}`,
+		cwd: target.kind === "host" ? resolveHostCwd(target.workdirHint) : `/workspace/${target.project}`,
 	});
 }
 
@@ -227,7 +239,7 @@ export class CodexDaemonService {
 	}
 
 	private async runStart(command: Extract<CodexDaemonCommand, { kind: "start" }>): Promise<void> {
-		const resolved = resolveCodexTarget(command.target);
+		const resolved = resolveCodexTarget(command.target, this.deps.resolveHostCwd);
 		const session = await this.session(resolved);
 		if (!session) return this.reject(command, "execution target is unavailable");
 
@@ -604,6 +616,10 @@ export class CodexDaemonService {
 			operationId: command.kind === "reconcile" ? undefined : command.operationId,
 			error: sanitizeCodexErrorText(error) || "codex command failed",
 		};
+		// Logged as well as sent. A refusal is the daemon's whole explanation for why an owner's agent
+		// went unavailable, and without a local trace the only symptom is a result envelope naming no
+		// cause; that cost a full debugging round the first time it fired.
+		console.error(`[codex-daemon] refused ${command.kind} for ${command.agentId}: ${message.error}`);
 		if (!CodexDaemonReceiptSchema.safeParse(message).success) return;
 		this.deps.send(message);
 	}

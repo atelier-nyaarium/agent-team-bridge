@@ -57,6 +57,7 @@ const codexDaemon = new CodexDaemonService({
 	targets: codexTargets,
 	daemonInstanceId,
 	send: safeSend,
+	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
 	model: process.env.CODEX_THINKING_MODEL,
 });
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a

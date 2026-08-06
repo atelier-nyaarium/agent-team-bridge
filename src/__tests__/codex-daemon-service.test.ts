@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
-import { CodexDaemonService } from "../mcp/devcontainer/codexDaemonService.js";
+import { CodexDaemonService, resolveCodexTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
 import type { CodexResolvedTarget } from "../shared/codex-thinking.js";
 
@@ -85,6 +85,7 @@ function setup(options: { availability?: TargetAvailability } = {}) {
 		daemonInstanceId: "daemon-1",
 		send: (message) => sent.push(message),
 		openClient: async () => session,
+		resolveHostCwd: () => "/home/agent",
 	});
 	return { service, session, sent, released };
 }
@@ -107,6 +108,30 @@ function startCommand() {
 		prompt: "Audit the parser",
 	};
 }
+
+describe("Codex execution targets", () => {
+	it("resolves a host workdir hint through the daemon's own rule", () => {
+		// A host hint is NOT a path: it can be a bare human label. Passing one straight through as a cwd
+		// makes the resolved target fail its own schema, which the daemon reports as an unavailable
+		// target and an owner sees as a start that refused itself for no stated reason.
+		expect(resolveCodexTarget({ kind: "host", workdirHint: "Codex Support" }, () => "/home/agent")).toEqual({
+			kind: "host",
+			targetId: "host",
+			cwd: "/home/agent",
+		});
+	});
+
+	it("resolves a container target to its workspace without consulting the host rule", () => {
+		expect(
+			resolveCodexTarget(
+				{ kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
+				() => {
+					throw new Error("host rule must not be consulted for a container");
+				},
+			),
+		).toEqual({ kind: "devcontainer", targetId: TARGET_ID, cwd: "/workspace/recipe-app" });
+	});
+});
 
 describe("Codex daemon commands", () => {
 	it("starts a thread and reports the accepted delivery", async () => {
