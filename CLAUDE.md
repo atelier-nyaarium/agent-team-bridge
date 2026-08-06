@@ -34,6 +34,10 @@ code does not belong here; rationale lives in `git log`.
     the per-session tools every peer registers
     - `codexTargets.ts` - one supervised `codex app-server` per execution target. A working directory
       is NOT a target property: a thread carries its own, so every host session shares one child
+    - `codexAppServer.ts` - the JSONL transport and fail-closed client. Every server-initiated request
+      is refused, and a model is checked against `model/list` at each point of use, not just at open
+    - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
+      have an answer yet", so the hold decision and the reported outcome cannot disagree
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/shared/` - wire truth and utilities used by both sides
