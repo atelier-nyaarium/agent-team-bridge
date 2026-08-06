@@ -111,7 +111,7 @@ function sessionTokenHeader(): Record<string, string> {
  * refusal into the literal text "[object Object]" at the caller, which is the one place the reason
  * was needed.
  */
-function routerErrorText(failure: unknown): string | undefined {
+export function routerErrorText(failure: unknown): string | undefined {
 	if (typeof failure === "string") return failure;
 	const message = (failure as { message?: unknown } | null)?.message;
 	return typeof message === "string" ? message : undefined;

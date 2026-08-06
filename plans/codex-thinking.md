@@ -583,6 +583,35 @@ Run Phase 3's gate again, same ritual and same verbatim reporting, now that the 
 
 The owner approves before merge. What is being checked is not the wording, which is readable in source, but how the union, the assembly, and the harness's limits render it, which is readable nowhere else.
 
+### Known gaps, left open deliberately
+
+A coverage pass mapped Phase 8's checklist to named tests: 41 requirements are covered, and these are
+not. Recorded rather than rushed, because each wants more care than the end of a lap affords.
+
+- **`CodexTurnTracker.settlePending` is never called in production, and that is a HANG.** It exists,
+  it is exported, and only its own unit test invokes it. So a turn whose `turn/completed` arrives
+  with `status: "completed"` but whose final-answer item never arrives is held forever: the tracker
+  waits for an item that is not coming, no terminal is emitted, and the record stays `working`.
+  `codexAwaitAgent` cannot rescue it, because Phase 7 deliberately skips reconciliation for a record
+  with an active turn. The caller's only escape is guessing to call `codexStopAgent`. The fix is a
+  bounded timer in the daemon that settles a held terminal with whatever it actually holds, which is
+  exactly what `settlePending` was written for and what Phase 5's spec called a "bounded
+  scheduler-driven reconciliation". It needs an injectable clock to stay testable.
+- **Nothing exercises `mcp/codex/codexTools.ts` end to end.** Every "end-to-end" test stops one layer
+  down at `CodexRoute.handle`, called with a pre-built body, so the tool registration, its schemas
+  and `routerPost` are all untested. That seam already shipped one regression - the `[object Object]`
+  refusal - and `routerErrorText` now has a direct test, but the tool layer above it does not.
+- **No large-history test.** Exchanges, operations and turns are uncapped and unpaginated by design.
+  Nothing builds an agent with hundreds of entries and checks that persistence, restore and the list
+  projection still behave. A cost that only appears at scale would land on a long-lived session,
+  which is exactly the session that most needs its history.
+- **The conditional registration line is untested.** `if (hasCapability(...)) registerCodexTools(...)`
+  in `mcp/index.ts` is one line whose inversion would either expose the tools to every session or
+  hide them from every session, and no test would go red.
+- **`initialize` incompatibility is untested.** Phase 5 found the handshake advertises no version, so
+  there is nothing to check compatibility against; a future App Server that rejects or reshapes it
+  would surface as an opaque unavailable target rather than a clear signal.
+
 ## Painpoints
 
 - `src/shared/codex-thinking.ts` intentionally exposes one compatibility import today, but its public, persistence, daemon, and App Server boundaries now occupy one high-conflict module. Preserve the barrel import and split the implementation by trust boundary when later phases add their consumers.
