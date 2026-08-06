@@ -845,9 +845,8 @@ export function createRoutes({
 		// merged list cannot say which source spoke this round.
 		const consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
 		return jsonResponse({
-			// A session started by a plugin from before the split reads these flat fields and nothing
-			// else, so they carry exactly what it would have been served then. Retire them once no such
-			// plugin is still starting sessions.
+			// LEGACY, remove after 2026-11-01. A session started by a plugin from before the split reads
+			// these flat fields and nothing else, so they carry exactly what it would have been served then.
 			...consoleSnapshot,
 			console: consoleSnapshot,
 			daemon: daemonCapabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES,

@@ -22,7 +22,8 @@ export type { Capability };
 const NOTHING_REPORTED: CapabilityBundle = { console: UNREPORTED_CAPABILITIES, daemon: UNREPORTED_CAPABILITIES };
 
 /**
- * An answer from before the sources were kept apart, from a gateway or a cache file.
+ * LEGACY, remove after 2026-11-01. An answer from before the sources were kept apart, from a gateway
+ * or a cache file.
  *
  * The plugin and the gateway update on their own triggers and the plugin usually leads, so a session
  * regularly starts against a gateway several releases behind. Rejecting its answer costs that session
@@ -31,7 +32,7 @@ const NOTHING_REPORTED: CapabilityBundle = { console: UNREPORTED_CAPABILITIES, d
  * `clientVersions` is optional because the old cache file carried only two fields while the old wire
  * response carried three. Lifting the list into `console` loses nothing, since a merged endpoint had
  * already folded both sources into it, and leaving `daemon` unreported avoids claiming an answer no
- * source gave. Retire this once no gateway below the split is still running.
+ * source gave.
  */
 const LegacyCapabilitiesSchema = z.object({
 	known: z.boolean(),
