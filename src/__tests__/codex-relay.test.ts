@@ -558,6 +558,26 @@ describe("Codex daemon receipt application", () => {
 	});
 });
 
+describe("Codex relay keying", () => {
+	it("keeps two agents whose names concatenate identically apart", async () => {
+		const context = working(setup());
+		// "recipe-app.work" + "codex_aa..." vs "recipe-app.workcodex_aa..." + "" is the collision a bare
+		// join allows. A separator that cannot appear inside either field is what rules it out.
+		const shifted = `${context.ownerKey}x`;
+		context.relay.handleHostMessage({
+			...eventBase(shifted, 1),
+			kind: "terminal",
+			state: "completed",
+			finalResponse: "not mine",
+		} as unknown as CodexDaemonEvent);
+		await settleRelay();
+
+		// The real agent is untouched: the event named an owner that does not exist.
+		expect(currentAgent(context).agentState).toBe("working");
+		expect(currentAgent(context).turns[0]?.state).toBe("inProgress");
+	});
+});
+
 describe("Codex relay acknowledgement", () => {
 	function frame(context: ReturnType<typeof setup>, eventId: number, extra: Record<string, unknown>) {
 		return { ...eventBase(context.ownerKey, eventId), ...extra } as unknown as CodexDaemonEvent;

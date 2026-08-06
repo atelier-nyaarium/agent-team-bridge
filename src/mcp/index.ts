@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
+import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
 import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
@@ -9,6 +10,7 @@ import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeToo
 import { capabilityInstructions, fetchCapabilities, hasCapability } from "./capabilities.js";
 import { registerCapabilitiesTool } from "./capabilitiesTool.js";
 import { registerHumanTools } from "./channel/humanTools.js";
+import { registerCodexTools } from "./codex/codexTools.js";
 import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
 import { registerProjectTools } from "./connector/projectTools.js";
@@ -77,6 +79,9 @@ export async function startMcp(): Promise<void> {
 	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
 	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
 	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
+	// Gated on the HOST DAEMON's declaration rather than a console plugin: these tools reach a
+	// supervised `codex app-server`, which only exists where the daemon was configured to allow one.
+	if (hasCapability(capabilities, CODEX_THINKING_CAPABILITY_ID)) registerCodexTools(mcpServer);
 	// Ref snapshotting is not a tool of its own: it rides the reply path, so it is switched on here
 	// rather than registered. A session whose owner has no console able to render a code viewer never
 	// pays to build one.

@@ -26,6 +26,7 @@ import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
+import { CodexRoute } from "./codexRoute.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -573,6 +574,8 @@ export async function startGateway(): Promise<void> {
 			return true;
 		},
 	});
+
+	const codexRoute = new CodexRoute({ service: codexAgentService, relay: codexRelay });
 
 	async function relayToHost(op: HostOp): Promise<HostOpResult> {
 		const hostWs = liveHostSocket();
@@ -1440,6 +1443,9 @@ export async function startGateway(): Promise<void> {
 		if (method === "GET" && url.pathname === "/health") return routes.health();
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(req, body);
 		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(req, body);
+		// One door for all five Codex tools, so session authority and validation cannot drift apart
+		// across them.
+		if (method === "POST" && url.pathname === "/codex") return codexRoute.handle(req, body);
 
 		// Blob transfer for agent callers. The console reaches the same store through its sealed
 		// ops; this is the plain-HTTP door for an in-process MCP, which has no relay to ride.

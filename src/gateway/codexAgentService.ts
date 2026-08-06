@@ -257,6 +257,16 @@ export class CodexAgentService {
 		return this.auth.resolveConfirmedManagedSession(req);
 	}
 
+	/** The canonical key the daemon echoes on every command and receipt. Never accepted from a caller;
+	 * this is the only place it is produced. */
+	ownerKeyOf(owner: SessionRecord): string {
+		return this.sessionStore.teamOf(owner);
+	}
+
+	listOwnedAgents(owner: SessionRecord): readonly CodexPersistedAgent[] {
+		return this.sessionStore.listCodexAgents(owner);
+	}
+
 	resolveExecutionTarget(owner: SessionRecord): CodexExecutionTarget | null {
 		let target: CodexExecutionTarget;
 		if (owner.spawn === "host") {

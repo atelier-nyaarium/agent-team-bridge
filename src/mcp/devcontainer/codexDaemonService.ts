@@ -191,7 +191,9 @@ export class CodexDaemonService {
 		const parsed = CodexDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
 		const command = parsed.data;
-		const key = `${command.ownerKey}${command.agentId}`;
+		// Separated, not concatenated: a bare join lets one owner/agent pair collide with another that
+		// merely splits at a different point, and colliding here serializes two unrelated agents.
+		const key = `${command.ownerKey} ${command.agentId}`;
 		const previous = this.inflight.get(key) ?? Promise.resolve();
 		const next = previous
 			.then(() => this.dispatch(command))

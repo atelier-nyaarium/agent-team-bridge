@@ -56,12 +56,14 @@ const MAX_DEFERRED_PER_AGENT = 128;
 ////////////////////////////////
 //  Functions & Helpers
 
+// Both keys join fields with a separator that cannot occur inside any of them. Concatenating bare
+// would let one pair collide with another that merely splits at a different point.
 function streamKey(message: { daemonInstanceId: string; targetId: string; generation: number }): string {
-	return `${message.daemonInstanceId}${message.targetId}${message.generation}`;
+	return `${message.daemonInstanceId} ${message.targetId} ${message.generation}`;
 }
 
 function agentKey(ownerKey: string, agentId: string): string {
-	return `${ownerKey}${agentId}`;
+	return `${ownerKey} ${agentId}`;
 }
 
 /** Whether there is anything to ask the daemon ABOUT. A record with no thread names nothing a
@@ -131,6 +133,29 @@ export class CodexRelay {
 			set.delete(listener);
 			if (set.size === 0) this.listeners.delete(key);
 		};
+	}
+
+	/**
+	 * Block until `settled` says the agent has reached what the caller is waiting for, or the deadline
+	 * passes. Resolves true when settled, false on expiry.
+	 *
+	 * `settled` is re-read on every committed change and once up front, so a turn that finished before
+	 * the wait began returns immediately rather than waiting out the whole budget for a change that
+	 * has already happened.
+	 */
+	waitFor(ownerKey: string, agentId: string, settled: () => boolean, deadlineMs: number): Promise<boolean> {
+		if (settled()) return Promise.resolve(true);
+		return new Promise((resolve) => {
+			const finish = (value: boolean) => {
+				clearTimeout(timer);
+				unsubscribe();
+				resolve(value);
+			};
+			const timer = setTimeout(() => finish(false), Math.max(0, deadlineMs - this.now()));
+			const unsubscribe = this.onAgentChange(ownerKey, agentId, () => {
+				if (settled()) finish(true);
+			});
+		});
 	}
 
 	private onHello(raw: Record<string, unknown>): void {

@@ -65,6 +65,22 @@ export const CodexPromptSchema = z
 		message: `prompt must be at most ${CODEX_PROMPT_MAX_BYTES} UTF-8 bytes`,
 	});
 
+/**
+ * The agent ID a start operation will use, derived from the operation ID rather than minted fresh.
+ *
+ * This is what makes a start retry idempotent. The stored fingerprint covers the agent ID, so a
+ * retry that minted a new one would fingerprint differently and be refused as a conflicting reuse of
+ * the operation ID instead of replaying the committed result. Deriving it means the same invocation
+ * always names the same agent, however many times its HTTP call is retried.
+ *
+ * Predictability costs nothing here: an operation ID is private to the gateway and never reaches
+ * Claude, and ownership is enforced by session authority rather than by the ID being unguessable.
+ */
+export function codexAgentIdForOperation(operationId: string): string {
+	const digest = crypto.createHash("sha256").update(`CODEX_AGENT_V1\n${operationId}`).digest("hex");
+	return `codex_${digest.slice(0, 32)}`;
+}
+
 export function codexOperationFingerprint(
 	kind: "start" | "message" | "stop",
 	agentId: string,
