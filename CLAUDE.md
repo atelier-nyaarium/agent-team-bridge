@@ -355,6 +355,14 @@ the daemon may retire it; `failed` means this gateway could not build a record f
 fact about this code, so it is never acknowledged. Collapsing them let a reducer bug make the daemon
 delete the only copy of a terminal.
 
+**Enabling it:** set `CODEX_THINKING_ENABLED=true` in `.env` and restart the host daemon. That is the
+only switch. A session picks the tools up at its next start, never mid-session.
+
+**Residual risk, stated plainly:** a Codex thread holds workspace-write and network access for its
+whole life, whatever its prompt says, and Switchboard enforces none of it. It can modify the
+workspace and start subprocesses that outlive its turn; stopping a turn does not reach them. The
+prompt is the only boundary, which is why the start tool's description is the safety story.
+
 **Reconciliation never touches the turn a caller is waiting on.** Asking about a live turn makes the
 daemon answer `recovering` whenever it cannot confirm that exact turn, which settles the wait and
 reports running work as unconfirmed.
