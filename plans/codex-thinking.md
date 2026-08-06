@@ -349,6 +349,8 @@ Shipped as `codexAppServer.ts` (transport plus client) and `codexTurnTracker.ts`
 
 Sandbox and network are deliberately not sent, leaving the App Server's ordinary workspace-write behavior, which is what the questionnaire chose.
 
+Two spec items are deliberately left to Phase 6, which owns durability and scheduling. The tracker HOLDS a terminal that beat its final item and exposes `settlePending`, but the bounded scheduler-driven `thread/read` reconciliation that decides when to stop waiting is the caller's. Likewise `unsubscribeThread` exists, but "only after the terminal is durably acknowledged" is an ordering only the side that acknowledges can enforce.
+
 ### Bug Classes
 
 - A parser that trusts its input's shape: `JSON.parse` accepts `null`, a bare array and a bare number, and reading a property off any of them throws inside a stream handler, where an uncaught throw reaches the daemon's `uncaughtException` guard and reaps every other target's App Server. This is the same blast radius as Phase 4's unlistened streams, from a different direction: anything parsed off a child's output needs its type checked before a field is read.
