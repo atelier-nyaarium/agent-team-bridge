@@ -965,7 +965,7 @@ its own slice; the edit screen's placement field covers moves until it lands.
 separately useful once the surfaces were written in the same pass, and the Kotlin gate is local, so
 splitting bought no safety it does not already have.
 
-## Phase 3 - Tools, guidance, rollout
+## Phase 3 - Tools, guidance, rollout ✅
 
 **Prerequisite, landed before the tools** (from phase 2's architecture pass - cheaper before six
 callers exist than after). Both shipped in `a20b47e`:
@@ -1117,6 +1117,15 @@ Collected during phase 2. `makeCtx` above is now fixed; the rest still stand.
   caller. Every MCP tool inherits it. A disk failure on the board file is indistinguishable to an
   agent from a bug in its own request, which is the opposite of what `BoardStore.commit` carefully
   preserves when it rethrows.
+
+- **Idempotency is re-invented per surface, and each one learns the same lesson late.** The console
+  ops have `opCache` plus `DurableOpStore`. Codex mints a private operation id. The board route now
+  has a third mechanism, in memory, keyed differently from both. All three exist because the same
+  fact is true of all three (a lost reply plus a retry re-applies an absolute write), and all three
+  were built separately after somebody noticed. `DurableOpStore` is typed to `ConsoleOpResult` and
+  keyed by conversation, which is what stopped the board from just using it - the concept is general
+  and the implementation is not. A gateway-wide "settled reply for an operation id" primitive would
+  have made this phase's record two lines instead of a judgement call.
 
 - **`gradlew` invocations are fragile in a shell whose cwd persists across calls.** Half my Kotlin
   gate runs failed with `cd: android: No such file or directory` because a previous command had

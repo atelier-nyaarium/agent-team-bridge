@@ -37,6 +37,7 @@ code does not belong here; rationale lives in `git log`.
     escaped-newline lint
   - `channel/` - `channel_reply`, `channel_reply_structured`, `notify_human`, channel push
   - `references/` - `ref://` resolution: lexer, grammar, tree-sitter resolver, artifact builder
+  - `board/` - the six `taskBoard*` tools, registered only when the console announced `taskboard`
   - `designer/` / `connector/` - designer cards; game-client connector
   - `devcontainer/` - host daemon plumbing (`hostDaemon.ts`, `hostOpRunner.ts`, `tmuxCore.ts`) plus
     the per-session tools every peer registers
@@ -309,7 +310,7 @@ no TTL. A starting MCP reads both before the McpServer exists.
   session does not have.
 - A running session never changes its tools; a toggle is picked up at the next session start.
 
-### Task board (gateway and console; the agent tools land later)
+### Task board
 
 The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by console ops and the
 `/task-board` route, shipped to the phone on the `task-board:${ownerId}` plane. Entries are FLAT
@@ -357,6 +358,15 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
 - **A queued console edit retires on a gateway refusal and on nothing else.** No attempt ceiling
   discards it. A lane may step PAST an action that keeps failing, but never onto another write to the
   same entry, because these ops are absolute and reordering would apply the older value last.
+- **A session's authority is a VALUE, never an absence.** Every mutating store method takes a
+  `BoardActor`, and `mayWrite` is the ONE predicate behind subject scope, parent scope and the trash
+  rule alike. Required rather than defaulted, so a new call site is a compile error instead of a
+  silent permit. The console acts as `OWNER_ACTOR`; the `/task-board` route always as the session.
+- **The six `taskBoard*` tools** (`mcp/board/boardTools.ts`, modelled on `codex/codexTools.ts`) are
+  gated on the console plugin, since without it nothing the agent writes is visible to anyone. Each
+  mutating call mints a private operation id: `create` derives its entry id from `(from,
+  operationId)` so its replay is structural, and the route records settled replies for the rest.
+  That record is in memory - see the route's own comment for what it does not cover.
 - **A truncated projection is an id-sorted PREFIX**, so the console's cache carries forward only what
   lies past the cut. Merging the whole prior cache resurrects every deletion, forever.
 - `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are the same 30 days for unrelated reasons and

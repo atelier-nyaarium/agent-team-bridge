@@ -101,6 +101,24 @@ The full format, including the `#matcher` forms and worked examples, comes from 
 `switchboard_capabilities` tool. Your session's instructions name which capabilities are on but carry
 none of their guidance, so call that tool before writing a ref.
 
+## The owner's task board
+
+When the `taskBoard*` tools are present, the owner shares a live task list with you and watches it on
+their phone. Prefer it over Claude's built-in task tools for anything worth surviving the turn; those
+stay useful for scratch steps inside one.
+
+- **`taskBoardList`** the backlog plus your own entries, **`taskBoardClaim`** to take one,
+  **`taskBoardCreate`** to add one (`assignTo: "self"` or `"backlog"`, no default on purpose),
+  **`taskBoardUpdate`** to change what you hold, **`taskBoardRelease`** to hand it back, and
+  **`taskBoardClear`** to trash your finished entries.
+- **Claim a backlog entry before working it or nesting under it.** A claim on one another session
+  holds refuses, so repeating a claim whose reply you lost is safe.
+- **Break work down as children of the entry it belongs to** and tick them as you go. That tree is
+  the only progress the owner can see.
+- **A follow-up you will not do goes to the backlog**, or it dies with your session.
+
+The full guidance comes from `switchboard_capabilities`, the same as refs above.
+
 ## Receiving a Request
 
 How you receive requests depends on which agent is running:
