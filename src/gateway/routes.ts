@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createBurstCache } from "../shared/burst-cache.js";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
+import type { BoardEntry } from "../shared/console-protocol.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import {
@@ -320,13 +321,20 @@ const HumanNotifySchema = z
 // claim/release/update/clear act as that session, never as a client-suppliable one. Never fed to
 // the Kotlin codegen; this is an HTTP-side shape only, so `.nullable()` is expressible (update's
 // parent: absent = leave placement alone, null = move to root).
+/** An entry as an AGENT sees it: attachments carry the display facts and none of the fetch plumbing.
+ * A distinct type rather than a mutated `BoardEntry`, so dropping the ids cannot be mistaken for
+ * blanking them and the compiler keeps the two views apart. */
+type AgentBoardEntry = Omit<BoardEntry, "attachments"> & {
+	attachments?: { filename: string; mime: string; size: number }[];
+};
+
 const BoardRouteRequestSchema = z
 	.object({
 		from: z.string().min(1).max(128),
-		action: z.enum(["list", "claim", "release", "create", "update", "clear"]),
+		action: z.enum(["list", "claim", "release", "create", "update", "clear", "attachments"]),
 		// list only. Defaults to "all"; never returns another session's entries at any scope.
 		scope: z.enum(["unclaimed", "session", "all"]).optional(),
-		// claim / release / update.
+		// claim / release / update / attachments.
 		id: z.string().min(1).max(64).optional(),
 		// create only: the entry id derives from this, so an HTTP retry replays the same entry.
 		operationId: z.string().min(1).max(128).optional(),
@@ -1873,6 +1881,22 @@ export function createRoutes({
 	 * normal outcome the tool relays); non-200 is reserved for transport, auth and validation. A
 	 * multi-field update applies field-by-field and reports the first refusal - each field was its
 	 * own absolute intent, so what landed before it stays. */
+	/**
+	 * What an agent sees of an entry: its attachments as FILENAMES only.
+	 *
+	 * The list case used to return the store's projection objects verbatim, so without this the
+	 * moment `attachments` landed on the schema every visible session would receive `blobId` and
+	 * `blobGateway` with no code change and no review step. A blobId is a bearer token, and this is
+	 * the only place an agent could otherwise obtain one: ids are content digests and no enumeration
+	 * op exists. The plumbing lives on the `attachments` action instead, which the tool handler calls
+	 * and whose answer never reaches the model's context.
+	 */
+	function projectForAgent(entry: BoardEntry): AgentBoardEntry {
+		if (!entry.attachments) return entry;
+		const attachments = entry.attachments.map((a) => ({ filename: a.filename, mime: a.mime, size: a.size }));
+		return { ...entry, attachments };
+	}
+
 	function taskBoard(req: Request, body: Record<string, unknown>): Response {
 		const parsed = BoardRouteRequestSchema.safeParse(body);
 		if (!parsed.success) {
@@ -1918,14 +1942,29 @@ export function createRoutes({
 			case "list": {
 				const scope = r.scope ?? "all";
 				const projection = boardStore.projection(owner);
-				const entries = projection.entries.filter((e) => {
-					if (!visibleTo(e, sessionKey)) return false;
-					if (scope === "unclaimed") return e.sessionId === undefined;
-					if (scope === "session") return e.sessionId === sessionKey;
-					return true;
-				});
+				const entries = projection.entries
+					.filter((e) => {
+						if (!visibleTo(e, sessionKey)) return false;
+						if (scope === "unclaimed") return e.sessionId === undefined;
+						if (scope === "session") return e.sessionId === sessionKey;
+						return true;
+					})
+					.map(projectForAgent);
 				// Reads are not recorded: a list re-run is a fresher answer, not a replayed one.
 				return jsonResponse({ entries, ...(projection.truncated ? { truncated: true } : {}) });
+			}
+			case "attachments": {
+				// Hop one of a fetch: names to blobIds. Its own action because the list deliberately
+				// cannot serve them, and route-side rather than in the plugin because during the
+				// gateway-first deploy window an older plugin would relay whole records into an agent's
+				// context. Same `visibleTo` gate the list applies, checked here since that filter lives
+				// per-case rather than at the route.
+				if (!r.id) return jsonResponse({ error: "attachments requires an id" }, 400);
+				const entry = boardStore.projection(owner).entries.find((e) => e.id === r.id);
+				if (!entry || !visibleTo(entry, sessionKey)) return jsonResponse({ error: "no such entry" }, 404);
+				// A read like the list: never recorded, so a re-run cannot replay blobIds for pictures
+				// the owner has since swapped.
+				return jsonResponse({ attachments: entry.attachments ?? [] });
 			}
 			case "claim": {
 				if (!r.id) return jsonResponse({ error: "claim requires an id" }, 400);

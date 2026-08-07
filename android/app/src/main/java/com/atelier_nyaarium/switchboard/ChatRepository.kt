@@ -13,6 +13,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
@@ -4023,6 +4024,168 @@ class ChatRepository(
 	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
 		board.enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
 
+	/**
+	 * Set an entry's attachments to exactly this list, staging any newly picked file first.
+	 *
+	 * Absolute like every other board write: adding and removing are the same call, which is why the
+	 * caller passes the whole list rather than a delta. A picked file is COPIED into the entry's own
+	 * bucket before anything is queued - `admitPicked` stages a bare File with no src, and the copy is
+	 * what mints one, which the gallery thumbnail needs anyway.
+	 *
+	 * Off the caller's thread, always. This arrives from a Compose click and does three full passes
+	 * over a file the wire allows to be 500 MB: the content-resolver stage, the hash, and the copy.
+	 * On the main thread that is an ANR on any real attachment.
+	 */
+	fun boardSetAttachments(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) =
+		command { boardSetAttachmentsNow(gatewayId, id, keep, add) }
+
+	private fun boardSetAttachmentsNow(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) {
+		val bucket = Attachments.boardBucket(id)
+		// Staged somewhere OTHER than the destination bucket: keepBuckets pins that bucket for the
+		// entry's whole life, so a staged-N left in it would never be swept.
+		val (staged, refused) =
+			if (add.isEmpty()) emptyList<OutgoingFile>() to null else admitPicked(add, "pick-${UUID.randomUUID()}")
+		if (refused != null) {
+			_state.update { it.copy(error = refused.message()) }
+			return
+		}
+		// Count only. Size is NOT bounded here: a board attachment rides the same chunked plane as any
+		// other file and may be as large as the wire allows. What size decides is whether a device
+		// fetches it unprompted, which is the gallery's business, not the picker's.
+		if (keep.size + staged.size > Protocol.BOARD_ATTACHMENTS_MAX) {
+			staged.forEach { it.source.delete() }
+			_state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
+			return
+		}
+		val sources = mutableMapOf<String, String>()
+		val added = staged.mapNotNull { picked ->
+			// Landed under its BLOB name, not its display name: a device that downloads this later
+			// knows only the blobId, and the owner can pick two files called screenshot.png.
+			val blobId = client?.blobIdOf(picked.source) ?: return@mapNotNull null
+			val target = Attachments.boardFile(filesDir, id, blobId)
+			target.parentFile?.mkdirs()
+			picked.source.copyTo(target, overwrite = true)
+			picked.source.delete()
+			sources[blobId] = target.absolutePath
+			BoardAttachment(
+				blobId = blobId,
+				blobGateway = gatewayId,
+				filename = picked.name,
+				mime = picked.mime,
+				size = picked.size,
+			)
+		}
+		// Every member this device can supply, not just the new picks. The op is absolute, so it
+		// re-states the survivors too, and a survivor the Gateway does not hold is unsatisfiable
+		// forever otherwise: after a move the destination never ingested it, and a second device
+		// editing from a stale list can name one the owner has already removed. The bytes are usually
+		// right here, because Question 4 keeps a copy on the device that opened the entry.
+		for (a in keep) {
+			val local = Attachments.boardFile(filesDir, id, a.blobId)
+			if (local.isFile) sources[a.blobId] = local.absolutePath
+		}
+		// Bytes this entry no longer names, dropped from the device now. The orphan sweep keeps or
+		// takes a whole BUCKET, so it can never reclaim one file out of an entry that still holds
+		// others - a removed picture would sit there for the entry's whole life.
+		val stays = (keep + added).mapTo(mutableSetOf()) { it.blobId }
+		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach { if (it.name !in stays) it.delete() }
+
+		board.enqueue(ConsoleOp.BoardSetAttachments(id, keep + added), gatewayId, sources = sources)
+		// Outside the drain, which is single-flight: a multi-minute transfer inside it would stall every
+		// board write on every Gateway. repoScope so it survives the Activity going away mid-upload.
+		// Cheap for a survivor the Gateway already holds - uploadBlob short-circuits on its stat.
+		for ((_, source) in sources) kickBoardUpload(source, gatewayId)
+	}
+
+	/**
+	 * The local file for one attachment, downloading it if this device does not have it yet.
+	 *
+	 * Question 4's "on open, and keep": the attaching device already holds the bytes, so its own peek
+	 * is instant, and a second device or a reinstall pays once. Null while a fetch is running or after
+	 * one gave up, which is what lets a tile show three states rather than a spinner that never ends.
+	 */
+	fun boardAttachmentFile(entryId: String, a: BoardAttachment): File? {
+		val landed = Attachments.boardFile(filesDir, entryId, a.blobId)
+		if (landed.isFile) return landed
+		// Only small ones come down on their own. A large attachment is legitimate - the plane carries
+		// it in chunks like anything else - but opening an entry must not spend hundreds of megabytes
+		// of someone's data before they have asked for the file.
+		if (a.size <= Protocol.BOARD_AUTO_DOWNLOAD_MAX_BYTES) kickBoardDownload(entryId, a)
+		return null
+	}
+
+	/** The owner asking for a file the gallery would not fetch on its own. */
+	fun boardDownloadAttachment(entryId: String, a: BoardAttachment) {
+		boardFetchFailures.remove(a.blobId)
+		kickBoardDownload(entryId, a)
+	}
+
+	/** Which attachments this device is fetching or has given up on, so a tile can say which. Plain
+	 * maps rather than snapshot state: this class holds no Compose types, and the board's own
+	 * revision is what the tiles already recompose on. */
+	private val boardFetchFailures = java.util.Collections.synchronizedMap(mutableMapOf<String, Int>())
+	private val boardDownloadsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+	fun boardAttachmentState(a: BoardAttachment): String = when {
+		a.blobId in boardDownloadsInFlight -> "downloading"
+		(boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP -> "failed"
+		a.size > Protocol.BOARD_AUTO_DOWNLOAD_MAX_BYTES -> "manual"
+		else -> "pending"
+	}
+
+	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
+		if ((boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
+		if (!boardDownloadsInFlight.add(a.blobId)) return
+		repoScope.launch {
+			try {
+				val target = Attachments.boardFile(filesDir, entryId, a.blobId)
+				val c = client() ?: return@launch
+				val staged = c.downloadBlob(a.blobId, a.blobGateway)
+				target.parentFile?.mkdirs()
+				staged.copyTo(target, overwrite = true)
+				// The blob store is a transfer buffer; holding the landed copy too would keep every
+				// attachment twice on the device with the least room for it.
+				c.forgetBlob(a.blobId)
+				boardFetchFailures.remove(a.blobId)
+				board.revision.longValue++
+			} catch (e: Exception) {
+				e.rethrowIfCancellation()
+				// Bounded like a message's own fetch: a picture whose bytes are gone must stop asking.
+				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
+				DebugLog.log("Board", "attachment fetch failed: ${e.message?.take(80)}")
+				// So the tile repaints as "could not download" rather than sitting on the last state.
+				board.revision.longValue++
+			} finally {
+				boardDownloadsInFlight.remove(a.blobId)
+			}
+		}
+	}
+
+	/** Restart the transfers whose kick died with the process, or with a failure that only logged.
+	 * The queued action survived either way, so without this the drain would check forever and the
+	 * picture would never go up. Cheap to repeat: an upload resumes from the Gateway's own cursor. */
+	private fun resumeBoardUploads() {
+		for ((_, source, gatewayId) in board.pendingSources()) kickBoardUpload(source, gatewayId)
+	}
+
+	/** One transfer per source at a time. Without the guard the poll cadence would start a second
+	 * upload of the same file every pass, each racing the last for the same offsets. */
+	private val boardUploadsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+	private fun kickBoardUpload(source: String, gatewayId: String) {
+		if (!boardUploadsInFlight.add(source)) return
+		repoScope.launch {
+			try {
+				client?.uploadBlob(File(source), gatewayId)
+			} catch (e: Exception) {
+				e.rethrowIfCancellation()
+				DebugLog.log("Board", "attachment upload failed: ${e.message?.take(80)}")
+			} finally {
+				boardUploadsInFlight.remove(source)
+			}
+		}
+	}
+
 	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the backlog. A
 	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
 	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
@@ -4644,6 +4807,9 @@ class ChatRepository(
 					// the right rate foreground and follows the pushback ladder backgrounded, and each
 					// action is its own relay carrying its own targetGateway.
 					launch { runCatching { board.drain(client()) } }
+					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
+					// against a second transfer of the same file, and a no-op when nothing is queued.
+					resumeBoardUploads()
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
@@ -4910,6 +5076,9 @@ class ChatRepository(
 	 * if the send actually landed, so this can never double-deliver. A row whose
 	 * send never landed re-fails to the tap-to-retry badge. */
 	suspend fun reconcilePending() = withContext(Dispatchers.IO) {
+		// Board attachment transfers are stranded the same way and recover the same way: the queued
+		// action survived, but the coroutine carrying its bytes did not.
+		resumeBoardUploads()
 		// Unlike forgottenUntil's time-based self-expiry, a reconciled key's liveness is tied to
 		// its message's own status: once a row leaves "pending" it can never be looked at again
 		// (the loop below skips non-pending rows outright), so retaining only currently-pending
@@ -4986,7 +5155,10 @@ class ChatRepository(
 			.mapNotNull { VideoThumbs.keyFor(it) }
 			.map { VideoThumbs.bucketFor(it) }
 			.toSet()
-		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, frameBuckets)
+		// Board buckets are named by their entry rather than pointed at by a src, so they need the keep
+		// set: a committed attachment has no queued action left to reference it, and Question 4 says the
+		// attaching device holds its copy so the peek stays instant.
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, frameBuckets + board.attachmentBuckets())
 		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
 		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
 		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs
@@ -6016,6 +6188,10 @@ class ChatRepository(
 		// past any real transfer, since the cost of being early is a re-fetch of something a live
 		// upload was still using.
 		internal const val STALE_BLOB_MAX_AGE_MS = 24 * 60 * 60 * 1000L
+
+		/** Fetches after which a board attachment tile stops asking and says so. A picture whose bytes
+		 * are genuinely gone must not re-request on every open forever. */
+		private const val BOARD_FETCH_GIVE_UP = 3
 
 		// A scheduled send's own bounded failure recovery: reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire

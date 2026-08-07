@@ -4,10 +4,11 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { BlobStore } from "../shared/blob-store.js";
+import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
+import { MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import { ownerKeyId } from "../shared/owner-id.js";
@@ -17,7 +18,7 @@ import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/sc
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
-import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
+import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
 import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
@@ -95,6 +96,9 @@ export async function startGateway(): Promise<void> {
 	// Byte store. Lives under DATA_DIR (a real docker volume) rather than the log volume, so
 	// clearing logs cannot destroy attachments a message still references.
 	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
+	// Task board attachments, beside the cache but deliberately NOT part of it: nothing sweeps this,
+	// which is what makes an entry's pictures survive the eviction that would otherwise take them.
+	const boardAttachments = new BoardAttachmentStore(`${DATA_DIR}/board-attachments`);
 	// Ceiling for the whole store, swept on the persist tick. A MULTIPLE of the largest single
 	// attachment, deliberately: a store only a few max-size blobs deep starts evicting live
 	// transfers to make room for each other, so the sweep would thrash instead of reclaiming. It
@@ -326,7 +330,13 @@ export async function startGateway(): Promise<void> {
 	const boardStore = openDurable(
 		DATA_DIR,
 		"task-board",
-		(d) => new BoardStore(d, planeRegistry, restoredPlanes, (notices) => noAckPush?.bank(notices)),
+		(d) =>
+			new BoardStore(d, planeRegistry, restoredPlanes, (notices) => noAckPush?.bank(notices), {
+				released: (ownerId, entryId, blobIds) => {
+					for (const blobId of blobIds) boardAttachments.remove(ownerId, entryId, blobId);
+				},
+				releasedAll: (ownerId, entryId) => boardAttachments.removeEntry(ownerId, entryId),
+			}),
 	);
 	// End-of-life for a session's board entries. Done/cancelled trash either way; the disposition
 	// decides the rest, and every caller states it rather than inheriting one. Own catch: board
@@ -1187,6 +1197,7 @@ export async function startGateway(): Promise<void> {
 
 		const consoleHandler = createConsoleDispatcher({
 			blobStore,
+			boardAttachments,
 			fetchBlobFromGateway: routes.fetchBlobFromGateway,
 			registry,
 			conversationRegistry,
@@ -1345,8 +1356,11 @@ export async function startGateway(): Promise<void> {
 			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
 			// Serving a peer a range of a blob THIS Gateway holds. The read path only, never a write:
 			// a peer may take bytes it can already name, and nothing else.
+			// Through the shared read, so a peer reaches a board attachment whose cached copy has been
+			// swept. This door is neither of answerBlobOp's two, and it is the ONLY one a second device
+			// or another machine's agent can reach an off-route entry's bytes through.
 			serveBlobRange: (blobId, offset, length) => {
-				const r = blobStore.read(blobId, offset, Math.min(length, BLOB_CHUNK_BYTES));
+				const r = readBlobRange(blobStore, boardAttachments, blobId, offset, length);
 				return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };
 			},
 		});
@@ -1486,7 +1500,9 @@ export async function startGateway(): Promise<void> {
 				);
 			}
 			try {
-				return Response.json(await answerBlobOp(blobStore, parsed.data, routes.fetchBlobFromGateway));
+				return Response.json(
+					await answerBlobOp(blobStore, parsed.data, routes.fetchBlobFromGateway, boardAttachments),
+				);
 			} catch (err) {
 				if (!(err instanceof BlobTooLarge)) throw err;
 				return Response.json({ error: err.message }, { status: 413 });

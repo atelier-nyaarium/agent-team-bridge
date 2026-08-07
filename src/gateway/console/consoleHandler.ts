@@ -1,5 +1,6 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
 import type { BlobStore } from "../../shared/blob-store.js";
+import type { BoardAttachmentStore } from "../../shared/board-attachment-store.js";
 import { capFifo } from "../../shared/cap-fifo.js";
 import {
 	type ConsoleOp,
@@ -196,6 +197,9 @@ export interface ConsoleHandlerDeps {
 	/** The gateway's byte store. Absent only in tests that never exercise a blob op; the three
 	 * blob cases refuse rather than inventing a location to write to. */
 	blobStore?: BlobStore;
+	/** Task board attachment bytes, which outlive the cache. Read by the blob ops so the gallery can
+	 * still open a picture after the cached copy is swept, and written by board_set_attachments. */
+	boardAttachments?: BoardAttachmentStore;
 	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
 	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */
 	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<boolean>;
@@ -388,6 +392,7 @@ export function createConsoleDispatcher({
 	crossDomainPresenceConsumer,
 	linkedDomainIds,
 	blobStore,
+	boardAttachments,
 	fetchBlobFromGateway,
 	relayToHost,
 	tryWakeTeam,
@@ -646,6 +651,11 @@ export function createConsoleDispatcher({
 	function requireBoard(): BoardStore {
 		if (!boardStore) throw new Error("task board is not available on this Gateway");
 		return boardStore;
+	}
+
+	function requireBoardAttachments(): BoardAttachmentStore {
+		if (!boardAttachments) throw new Error("task board attachments are not available on this Gateway");
+		return boardAttachments;
 	}
 
 	function boardWrite(result: BoardResult): { applied: true } {
@@ -1180,6 +1190,28 @@ export function createConsoleDispatcher({
 			case "board_set_body": {
 				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body, OWNER_ACTOR));
 			}
+			case "board_set_attachments": {
+				// Presence is checked DURABLE-FIRST, and that order is the whole correctness of this op.
+				// The list is absolute, so every write re-states the SURVIVORS: months after their cache
+				// copies were swept, removing one picture still names the others. A cache-only check
+				// would find nothing, and since missing bytes are a retryable error rather than a
+				// refusal, the console's queue would retry that action forever and close the whole
+				// Gateway lane behind it. It would pass every warm-cache test.
+				const attachments = requireBoardAttachments();
+				// Refuse BEFORE adopting. Bytes copied under an entry the board does not hold are
+				// reachable by neither reclaim site (the diff reads a stored list, the sweep reclaims
+				// entries it swept), so they would sit there for good.
+				if (!requireBoard().entry(ownerId, op.id)) throw refusalError("entry_missing");
+				for (const a of op.attachments) {
+					if (attachments.has(ownerId, op.id, a.blobId)) continue;
+					const cached = blobStore?.path(a.blobId);
+					// Plain error, never a refusal: the upload is racing this write, and a refusal is the
+					// one signal that would discard the owner's edit.
+					if (!cached) throw new Error(`attachment ${a.blobId} has not finished uploading`);
+					attachments.adopt(ownerId, op.id, a.blobId, cached);
+				}
+				return boardWrite(requireBoard().setAttachments(ownerId, op.id, op.attachments, OWNER_ACTOR));
+			}
 			case "board_set_parent": {
 				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank, OWNER_ACTOR));
 			}
@@ -1268,7 +1300,7 @@ export function createConsoleDispatcher({
 			case "blob_get":
 				// The console asks its ROUTE Gateway for everything, which is regularly not the one
 				// holding the bytes; the fetcher closes that gap behind this call.
-				return answerBlobOp(blobStore, op, fetchBlobFromGateway);
+				return answerBlobOp(blobStore, op, fetchBlobFromGateway, boardAttachments);
 
 			case "create_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");

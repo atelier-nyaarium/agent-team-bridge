@@ -326,6 +326,13 @@ private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, onLongPress: () ->
 			overflow = TextOverflow.Ellipsis,
 			modifier = Modifier.weight(1f),
 		)
+		if (!entry.attachments.isNullOrEmpty()) {
+			Text(
+				"📎",
+				style = MaterialTheme.typography.labelSmall,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+			)
+		}
 		if (struggling) {
 			Text(
 				"not synced",

@@ -14,6 +14,12 @@ export type BlobOp =
  * elsewhere simply unavailable rather than pretending otherwise. */
 export type BlobFetcher = (blobId: string, fromGateway: string) => Promise<boolean>;
 
+/** Bytes a board entry owns, which outlive the cache. Null when no entry holds this blob. */
+export type DurableBlobSource = {
+	hasAny(blobId: string): boolean;
+	readAny(blobId: string, offset: number, length: number): { bytes: Buffer; eof: boolean } | null;
+};
+
 export type BlobOpResult = { have: number; complete: boolean } | { chunk?: string; eof: boolean };
 
 /** A put refused on size: either the chunk is over the per-request cap, or the blob it would grow
@@ -23,6 +29,28 @@ export class BlobTooLarge extends Error {}
 
 ////////////////////////////////
 //  Functions & Helpers
+
+/**
+ * One bounded range, cache first and then the entry-owned durable store.
+ *
+ * Every byte reader on this Gateway goes through here, because there are THREE doors and not two:
+ * the HTTP route and the console's sealed plane both arrive via [answerBlobOp], but a PEER Gateway's
+ * `blob_fetch` is answered by `serveBlobRange`, which is neither. A board attachment is by
+ * construction the coldest object in the cache, so its cached copy will be evicted; a fallthrough
+ * wired into only the first two would leave the durable bytes on disk and unreachable from any other
+ * machine, which is the silent disappearance this whole feature exists to prevent.
+ */
+export function readBlobRange(
+	store: BlobStore,
+	durable: DurableBlobSource | undefined,
+	blobId: string,
+	offset: number,
+	length: number,
+): { bytes: Buffer; eof: boolean } {
+	const want = Math.min(length, BLOB_CHUNK_BYTES);
+	if (store.path(blobId)) return store.read(blobId, offset, want);
+	return durable?.readAny(blobId, offset, want) ?? store.read(blobId, offset, want);
+}
 
 /**
  * Answer one blob op against the gateway's byte store.
@@ -47,6 +75,7 @@ export async function answerBlobOp(
 	store: BlobStore | undefined,
 	op: BlobOp,
 	fetch?: BlobFetcher,
+	durable?: DurableBlobSource,
 ): Promise<BlobOpResult> {
 	if (!store) throw new Error("blob transfer unavailable on this Gateway");
 
@@ -54,7 +83,9 @@ export async function answerBlobOp(
 	// committing to a transfer, so pulling a whole blob across the mesh to answer it inverts its
 	// cost by four orders of magnitude. Nothing legitimate sets `fromGateway` on a stat, which is
 	// exactly why a hand-crafted one must not become an amplifier.
-	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId)) {
+	// A locally-held board attachment counts as held: pulling it across the mesh would re-fetch bytes
+	// this Gateway already owns, and after the cache sweeps that is EVERY read of an entry's picture.
+	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId) && !durable?.hasAny(op.blobId)) {
 		await fetch(op.blobId, op.fromGateway);
 	}
 
@@ -74,7 +105,7 @@ export async function answerBlobOp(
 		}
 
 		case "blob_get": {
-			const r = store.read(op.blobId, op.offset, Math.min(op.length, BLOB_CHUNK_BYTES));
+			const r = readBlobRange(store, durable, op.blobId, op.offset, op.length);
 			// An absent chunk, not an empty string: reading at or past the end has no bytes to report,
 			// and "" would read as a zero-length chunk that landed.
 			return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };

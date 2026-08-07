@@ -49,6 +49,8 @@ import {
 } from "../src/shared/federation-lifecycle.js";
 import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
 import {
+	BOARD_ATTACHMENTS_MAX,
+	BOARD_AUTO_DOWNLOAD_MAX_BYTES,
 	ChannelFileSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
@@ -431,6 +433,14 @@ ${INDENT}const val BLOB_CHUNK_BYTES: Int = ${BLOB_CHUNK_BYTES}
 ${INDENT}/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
 ${INDENT} * are described, since a message's stated size is the sender's own claim. */
 ${INDENT}const val MAX_BLOB_BYTES: Long = ${MAX_BLOB_BYTES}
+
+${INDENT}/** Above this a console waits to be asked before fetching a board attachment. NOT a cap on what
+${INDENT} * may be attached - the wire carries up to MAX_BLOB_BYTES in chunks either way. It only decides
+${INDENT} * what a device pulls down unprompted. */
+${INDENT}const val BOARD_AUTO_DOWNLOAD_MAX_BYTES: Long = ${BOARD_AUTO_DOWNLOAD_MAX_BYTES}
+
+${INDENT}/** Attachments one board entry may hold. */
+${INDENT}const val BOARD_ATTACHMENTS_MAX: Int = ${BOARD_ATTACHMENTS_MAX}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

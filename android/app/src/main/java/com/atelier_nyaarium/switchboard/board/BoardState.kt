@@ -20,6 +20,10 @@ data class PendingBoardAction(
 	// Failed sends so far. Drives the row's "not synced" marker, and lets the lane step PAST this
 	// action so one that cannot currently send does not block every later one.
 	val attempts: Int = 0,
+	// Local files this action's bytes come from, by blobId. Lives HERE and never on the ConsoleOp,
+	// which is generated from the wire schema: a device path names a user and a folder layout, and
+	// these cross a Gateway. The drain uploads each before sending, so an attach survives a restart.
+	val sources: Map<String, String> = emptyMap(),
 )
 
 /** One Gateway's cached board half. `lastSyncedAt` is CACHE metadata (deliberately outside the
@@ -96,6 +100,7 @@ fun boardEntryIdsOf(op: ConsoleOp): Set<String> = when (op) {
 	is ConsoleOp.BoardSetParent -> setOf(op.id)
 	is ConsoleOp.BoardSetTrashed -> setOf(op.id)
 	is ConsoleOp.BoardSetSession -> setOf(op.id)
+	is ConsoleOp.BoardSetAttachments -> setOf(op.id)
 	is ConsoleOp.BoardUpsert -> op.entries.mapTo(mutableSetOf()) { it.id }
 	is ConsoleOp.BoardRemove -> op.ids.toSet()
 	else -> emptySet()
@@ -156,8 +161,15 @@ fun applyBoardOp(entries: List<BoardEntry>, op: ConsoleOp, now: Long): List<Boar
 
 	return when (op) {
 		is ConsoleOp.BoardUpsert -> {
+			// Attachments are dropped here exactly as the gateway's own upsert drops them, because a
+			// move ships a subtree VERBATIM. Keeping them locally would show the destination holding
+			// pictures it has no bytes for, and the console writes off this view: the next absolute
+			// attachment write would re-state a blobId that Gateway can never satisfy, and that op
+			// retries forever rather than refusing.
 			val byId = op.entries.associateBy { it.id }
-			entries.map { byId[it.id] ?: it } + op.entries.filter { e -> entries.none { it.id == e.id } }
+			val kept = { e: BoardEntry -> (byId[e.id] ?: e).copy(attachments = e.attachments) }
+			entries.map(kept) + op.entries.filter { e -> entries.none { it.id == e.id } }
+				.map { it.copy(attachments = null) }
 		}
 		is ConsoleOp.BoardSetState -> entries.map { if (it.id == op.id) it.copy(state = op.state) else it }
 		is ConsoleOp.BoardSetTitle -> entries.map { if (it.id == op.id) it.copy(title = op.title) else it }
@@ -173,6 +185,8 @@ fun applyBoardOp(entries: List<BoardEntry>, op: ConsoleOp, now: Long): List<Boar
 			val members = subtreeIds(op.id)
 			entries.map { if (it.id in members) it.copy(sessionId = op.sessionId) else it }
 		}
+		is ConsoleOp.BoardSetAttachments ->
+			entries.map { if (it.id == op.id) it.copy(attachments = op.attachments) else it }
 		is ConsoleOp.BoardRemove -> entries.filter { it.id !in op.ids }
 		else -> entries
 	}

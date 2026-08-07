@@ -1,8 +1,12 @@
 import crypto from "node:crypto";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { BOARD_BODY_MAX } from "../../shared/schemas.js";
+import { sweepStaging } from "../blobTransfer.js";
 import { postBoard } from "../bridge/helpers.js";
+import { EVIE_FILES_DIR, materializeFiles, safeFilename } from "../channel/evieFiles.js";
 
 ////////////////////////////////
 //  Schemas
@@ -53,6 +57,14 @@ const UpdateInputSchema = {
 };
 
 const ClearInputSchema = {};
+
+const FetchAttachmentsInputSchema = {
+	id: ID.describe("Entry whose attachments to fetch."),
+	filenames: z
+		.array(z.string().min(1).max(255))
+		.optional()
+		.describe("Only these files, by the names the list showed. Omit for all of them."),
+};
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -106,6 +118,19 @@ Trash your taskboard's done and cancelled entries. The owner can restore them
 for 30 days.
 `.trim();
 
+const FETCH_ATTACHMENTS_DESCRIPTION = `
+Download an entry's attachments and return the paths they landed at.
+
+The owner attaches these from their phone; you can read them but never add,
+change or remove one. taskBoardList shows each entry's filenames, so name the
+ones you want ("mellisa-render.png") or omit filenames for all of them.
+
+Two things the list cannot tell you. A "changed" notice carries the entry id
+alone, so a new picture looks exactly like an edited title - re-read the entry
+to find out. And an entry nobody holds announces nothing at all, so a picture
+the owner adds to a backlog item arrives silently: look when you claim it.
+`.trim();
+
 /**
  * One private ID per MUTATING tool invocation, minted before the call and reused across its HTTP
  * retries. This is what makes a retry a replay rather than a second write.
@@ -127,7 +152,7 @@ const MUTATING = new Set(["claim", "release", "create", "update", "clear"]);
  * schema is strict. `from` is NOT here: postBoard supplies this process's own identity, so no tool
  * can name a different session. */
 export function boardRequestBody(
-	action: "list" | "claim" | "release" | "create" | "update" | "clear",
+	action: "list" | "claim" | "release" | "create" | "update" | "clear" | "attachments",
 	args: {
 		id?: string;
 		scope?: string;
@@ -149,6 +174,55 @@ export function boardRequestBody(
 		...(args.parent === undefined ? {} : { parent: args.parent }),
 		...(args.assignTo === undefined ? {} : { assignTo: args.assignTo }),
 	};
+}
+
+/**
+ * A fetch is TWO hops, and neither needs a gate of its own.
+ *
+ * Hop one resolves filenames to blobIds on `/task-board`, which already refuses an impersonated
+ * sender and filters on what this session may see. Hop two moves the bytes through `/blob/get`,
+ * already chunked, resumable and digest-verified. The blobIds live only in here: what comes back is
+ * paths, so the plumbing never reaches the model's context and cannot be replayed out of it.
+ */
+async function fetchAttachments(args: { id: string; filenames?: string[] }): Promise<string> {
+	// Through the same builder as every other action, so "not in MUTATING" is what keeps this read
+	// from minting an operation id. A minted one would have the route record this answer and replay
+	// it verbatim, handing back blobIds for pictures the owner has since swapped.
+	const answer = (await postBoard(boardRequestBody("attachments", { id: args.id }))) as {
+		attachments?: Array<{ blobId: string; blobGateway: string; filename: string; mime: string; size: number }>;
+	};
+	const all = answer.attachments ?? [];
+	const wanted = args.filenames ? all.filter((a) => args.filenames?.includes(a.filename)) : all;
+
+	if (all.length === 0) return `Entry ${args.id} has no attachments.`;
+	if (wanted.length === 0) {
+		return `None of those names are on entry ${args.id}. It has: ${all.map((a) => a.filename).join(", ")}`;
+	}
+
+	// Before the transfer, not after: the staging root is byte-bounded and this is the first download
+	// path that sweeps it at all, so a big fetch would otherwise land on whatever the last one left.
+	sweepStaging();
+	// The entry's folder is REPLACED, not added to. Collision-free naming is right for a message,
+	// where each one's files are distinct, and wrong here: re-reading an entry would otherwise land
+	// shot-2.png, shot-3.png and so on, and leave behind files the owner has since removed.
+	rmSync(join(EVIE_FILES_DIR, safeFilename(args.id)), { recursive: true, force: true });
+	const landed = await materializeFiles({
+		discordMessageId: args.id,
+		files: wanted.map((a) => ({
+			filename: a.filename,
+			mime: a.mime,
+			size: a.size,
+			descriptiveKey: a.filename,
+			blobId: a.blobId,
+			blobGateway: a.blobGateway,
+			role: "attachment" as const,
+		})),
+	});
+
+	const lines = landed.map((f) =>
+		f.path ? `${f.descriptiveKey} -> ${f.path}` : `${f.descriptiveKey} (could not be fetched)`,
+	);
+	return lines.join("\n");
 }
 
 async function post(
@@ -206,5 +280,25 @@ export function registerBoardTools(mcpServer: McpServer): void {
 		"taskBoardClear",
 		{ title: "Task Board Clear", description: CLEAR_DESCRIPTION, inputSchema: ClearInputSchema },
 		async () => post(boardRequestBody("clear")),
+	);
+
+	mcpServer.registerTool(
+		"taskBoardFetchAttachments",
+		{
+			title: "Task Board Fetch Attachments",
+			description: FETCH_ATTACHMENTS_DESCRIPTION,
+			inputSchema: FetchAttachmentsInputSchema,
+		},
+		async (args: { id: string; filenames?: string[] }) => {
+			try {
+				return { content: [{ type: "text" as const, text: await fetchAttachments(args) }] };
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				// Safe to re-run, unlike the mutating tools: this mints no operation id, so a retry is a
+				// fresh read rather than a replay of a stale one.
+				const text = `Could not fetch attachments for ${args.id}: ${message}. Retrying is safe.`;
+				return { content: [{ type: "text" as const, text }], isError: true };
+			}
+		},
 	);
 }

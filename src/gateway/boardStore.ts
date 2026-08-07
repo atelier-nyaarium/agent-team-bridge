@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { isValidRank, rankBetween, rebalanceRanks } from "../shared/board-rank.js";
-import type { BoardEntry } from "../shared/console-protocol.js";
+import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js";
 import { type DurableStore, DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BoardEntrySchema } from "../shared/schemas.js";
@@ -32,6 +32,23 @@ export type BoardDisposition = "release" | "cancel";
  * into: omitting a session id used to mean "no scope check", so a route that forgot one wrote
  * unconditionally. The `sessionAuthority.ts` rule, applied to the board. */
 export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: string };
+
+/**
+ * Where attachment bytes go when an entry stops naming them. Behind an interface because the store
+ * is otherwise free of the filesystem, and the two reclaim sites are the only ones there are:
+ * `setAttachments`'s membership diff, and the trash sweep's permanent delete.
+ *
+ * NOT called from `restore`'s per-entry drop, which is corruption recovery: reclaiming there would
+ * turn this store's one tolerant path into its one irrecoverable one. NOT called from `remove`
+ * either, whose only caller is the delete half of a cross-Gateway move; leaking a directory per move
+ * is the deliberate trade until a move learns to carry its bytes.
+ */
+export interface BoardAttachmentSink {
+	/** Bytes the entry no longer names. */
+	released(ownerId: string, entryId: string, blobIds: readonly string[]): void;
+	/** Everything the entry held, because the entry itself is gone for good. */
+	releasedAll(ownerId: string, entryId: string): void;
+}
 
 /** The owner's own authority, for the console (their device) and the sweeps. Named rather than
  * spelled out at each site, so grepping it lists every place owner authority is claimed. */
@@ -264,17 +281,20 @@ export class BoardStore {
 	private readonly planeRegistry: PlaneRegistry;
 	private readonly restoredPlanes: Record<string, PlanePersistedState> | undefined;
 	private readonly onNotices: ((notices: readonly BoardNotice[]) => void) | undefined;
+	private readonly attachmentSink: BoardAttachmentSink | undefined;
 
 	constructor(
 		durable: DurableStore,
 		planeRegistry: PlaneRegistry,
 		restoredPlanes: Record<string, PlanePersistedState> | undefined,
 		onNotices?: (notices: readonly BoardNotice[]) => void,
+		attachmentSink?: BoardAttachmentSink,
 	) {
 		this.durable = durable;
 		this.planeRegistry = planeRegistry;
 		this.restoredPlanes = restoredPlanes;
 		this.onNotices = onNotices;
+		this.attachmentSink = attachmentSink;
 		this.restore(durable.load());
 	}
 
@@ -366,13 +386,26 @@ export class BoardStore {
 			}
 			for (const e of entries) {
 				const current = board.entries.get(e.id);
+				// Attachments are NOT part of an upsert, whatever the incoming entry carries.
+				// `setAttachments` is their sole committer, and that is what guarantees every stored
+				// member's bytes are durable under the entry. A cross-Gateway move upserts a subtree
+				// verbatim, so honouring the field here would land members nothing ever ingested: the
+				// owner's next attachment write on that entry would then find no bytes, and since a
+				// missing-bytes op is retryable rather than refused, the action would retry forever
+				// and close the whole Gateway lane behind it.
+				// Dropped FIRST and restored second. Spreading the stored value over the incoming one
+				// only overwrites a list that already exists, so an entry with none - the destination of
+				// a move, which is the case this exists for - kept whatever the incoming entry carried.
+				const merged = { ...e };
+				delete merged.attachments;
+				if (current?.attachments) merged.attachments = current.attachments;
 				// Key-order-insensitive compare: the in-place setters can reorder a stored entry's
 				// keys, and a value-identical re-send must still gate as unchanged.
-				if (!current || stableHash(current) !== stableHash(e)) {
+				if (!current || stableHash(current) !== stableHash(merged)) {
 					changed = true;
 					touch(e.id);
 				}
-				board.entries.set(e.id, { ...e });
+				board.entries.set(e.id, merged);
 			}
 			for (const e of entries) {
 				if (this.wouldCycle(board, e.id)) return "cycle";
@@ -402,6 +435,39 @@ export class BoardStore {
 			if (body === undefined) delete e.body;
 			else e.body = body;
 		});
+	}
+
+	/**
+	 * The SOLE committer of an entry's attachments. Absolute like every other setter, so attaching
+	 * and removing are one op: whatever list arrives is the list stored.
+	 *
+	 * Sorted by blobId before it lands. `stableStringify` maps arrays POSITIONALLY, and that one hash
+	 * is the plane identity, `upsert`'s did-it-change gate and `noticesFor`'s changed test all at
+	 * once, so an unordered rebuild would ship the whole board, report a false "applied", and push a
+	 * spurious awareness notice, together, every time.
+	 *
+	 * Reclaim is the membership DIFF, never a count comparison: a same-count swap has to release the
+	 * picture that left. The caller has already made every incoming member's bytes durable.
+	 */
+	setAttachments(
+		ownerId: string,
+		id: string,
+		attachments: readonly BoardAttachment[],
+		actor: BoardActor,
+	): BoardResult {
+		const next = [...attachments].sort((a, b) => (a.blobId < b.blobId ? -1 : a.blobId > b.blobId ? 1 : 0));
+		let released: string[] = [];
+		const result = this.mutateEntry(ownerId, id, actor, (e) => {
+			const before = e.attachments ?? [];
+			if (stableHash(before) === stableHash(next)) return "unchanged";
+			const incoming = new Set(next.map((a) => a.blobId));
+			released = before.filter((a) => !incoming.has(a.blobId)).map((a) => a.blobId);
+			if (next.length === 0) delete e.attachments;
+			else e.attachments = next;
+		});
+		// After the commit, so bytes are never dropped for a write that refused or did not change.
+		if (result.applied && released.length > 0) this.attachmentSink?.released(ownerId, id, released);
+		return result;
 	}
 
 	/** One placement intent: parent and rank land together. Absent parent means root. The PARENT is
@@ -683,17 +749,33 @@ export class BoardStore {
 	 * permanent delete, refuses `would_orphan` because its caller can still ship the whole subtree. */
 	sweepTrash(now = Date.now()): void {
 		for (const ownerId of [...this.owners.keys()]) {
+			let swept: string[] = [];
 			// Announces nothing either: the take-away already happened at the trash, 30 days earlier.
-			this.mutate(ownerId, OWNER_ACTOR, (board) => {
+			const result = this.mutate(ownerId, OWNER_ACTOR, (board) => {
 				const dead: string[] = [];
 				for (const e of board.entries.values()) {
 					if (e.trashedAt !== undefined && now - e.trashedAt > BOARD_TRASH_TTL_MS) dead.push(e.id);
 				}
 				if (dead.length === 0) return "unchanged";
+				// EVERY dead entry, not just those whose stored list named bytes. A partial adopt commits
+				// files the metadata never mentions, and this is the last moment anything can reach them:
+				// the membership diff reads a stored list, and the entry is about to stop existing.
+				swept = dead;
 				for (const id of dead) board.entries.delete(id);
 				promoteOrphans(board.entries);
 				return undefined;
 			});
+			// The entry is gone for good, so its whole directory goes with it. After the commit: bytes
+			// outliving a failed write are reclaimable, bytes dropped for one that never landed are not.
+			if (result.applied) {
+				for (const id of swept) {
+					try {
+						this.attachmentSink?.releasedAll(ownerId, id);
+					} catch (err) {
+						console.error(`[task-board] could not reclaim attachments for ${id}:`, err);
+					}
+				}
+			}
 		}
 	}
 

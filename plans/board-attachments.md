@@ -400,9 +400,11 @@ the lap that attacked it. The Plan section references these and adds nothing of 
   returns `projection.entries` verbatim after the `visibleTo` filter, so the moment `attachments`
   lands on the schema, every visible session receives `blobId` and `blobGateway` with no code change.
   The names-only projection is therefore the one genuinely new security seam in this plan: the ROUTE
-  projects `filename` (and nothing else) per entry. Plugin-side stripping is the wrong side: during
-  the gateway-first deploy window an old plugin would relay full records into the agent's context.
-  It is also the context rule: fetch plumbing stays out of the agent's window.
+  projects the DISPLAY facts per entry (`filename`, `mime`, `size`) and never `blobId` or
+  `blobGateway`. The rule is what is stripped, not what is kept: the ids are the fetch plumbing and a
+  blobId is a bearer token, while size and mime are what let an agent decide whether a 400 MB binary
+  is worth fetching at all. Plugin-side stripping is the wrong side: during the gateway-first deploy
+  window an old plugin would relay full records into the agent's context.
 - **The route gains ONE new read action, `attachments`**, taking an entry id and answering that
   entry's attachment records (blobId, blobGateway, filename, size). This is hop 1; no existing
   action can serve it once the list projects names only. It sits behind the route-level
@@ -416,10 +418,24 @@ the lap that attacked it. The Plan section references these and adds nothing of 
 - The fetch tool takes an entry id and an optional list of names (the owner says "look at
   mellisa-render.png"; all-or-nothing contradicts the reason the filename ships). Sweep the staging
   root BEFORE the transfer; `sweepStaging` is upload-only today and the download path has never
-  swept. Cap per-attachment bytes at ATTACH time, where the owner can act on the error; a fetch
-  costs 2x on the agent's disk, and only the staged half is SIZE-bounded (the materialized half is
-  TTL-swept at 1h by the machinery below), so pick a cap well under `MAX_STAGING_BYTES / 10`, not
-  the 500 MB wire cap.
+  swept. That optional list IS the byte control: an agent asks for the file it wants rather than
+  pulling everything an entry holds.
+- **There is NO cap on how large a board attachment may be.** An earlier draft of this plan said to
+  cap per-attachment bytes at attach time, well under `MAX_STAGING_BYTES / 10`. The owner corrected
+  it and was right twice over:
+
+  > "By design, Switchboard allows up to 500mb files. Transferred in chunks. what is this 25 you just
+  > invented? / the auto download should probably be restricted to files under 25, and over will be
+  > manual tap to download"
+  >
+  > "500mb files, up to 10 per turn (for ease of LLM enumeration)"
+
+  A board attachment rides the same chunked plane as any other file and gets the same 500 MB ceiling;
+  refusing the owner's own picture at 25 MB was inventing a limit the system does not have. The real
+  concern was never what may be STORED, it was what a device fetches WITHOUT BEING ASKED. So the
+  number moves to `BOARD_AUTO_DOWNLOAD_MAX_BYTES`: at or under it a console fetches on open, above it
+  the tile says the size and waits for a tap. The count cap of 10 per entry stays, and its reason is
+  now stated too - it bounds what one fetch enumerates.
 - Materialize through the `evieFiles` machinery with the entry id as the bucket key: `cleanupTmpDir`
   sweeping, `safeFilename`, `resolveCollisionFreePath`, `landAtomic`, and the per-file `fetchFailed`
   marker distinguishing "bytes failed" from "never had bytes". Nothing bespoke.
@@ -455,6 +471,37 @@ attachment and without the tool nothing can read one. Build order inside the pha
 order: gateway first (store, op, serving, the route's names-only projection and its new `attachments`
 read action), then the plugin's fetch tool, then the
 console. Every constraint above applies here except the two Phase 2 items below.
+
+### Bug Classes
+
+**Mechanism:** the console's queued board action, drained per Gateway lane.
+**Defect class:** a lane wedged by a queued op whose precondition the queue cannot itself guarantee.
+
+Patched three times in three different places, which is what makes it a design bug rather than three
+mistakes:
+
+1. **Lap 6, before any code.** A cross-Gateway move upserts a subtree verbatim, so the destination
+   would store attachment records naming bytes it never ingested; the owner's next attachment write
+   there could never be satisfied. Patched by making the gateway's `upsert` ignore the field.
+2. **Implementation.** The drain grew a branch that did NOT charge an attempt while bytes were still
+   moving, to avoid marking a healthy transfer as struggling. That guaranteed the wedge instead: a
+   head below the struggling threshold holds `laneClosed`, so an action that can never reach the
+   threshold blocks every other entry's writes on that Gateway, permanently and with no marker.
+   Patched by deleting the branch.
+3. **Red team.** Two more doors onto the same class. The console's own optimistic `applyBoardOp` kept
+   the attachments the gateway drops, so the console wrote lists off a view the gateway would refuse
+   forever; and `sources` held only newly picked files, so an absolute write re-stating a SURVIVOR
+   the Gateway lacked had no path to supply it. Patched by mirroring upsert-ignores on the console and
+   by putting every locally-held member in `sources`.
+
+The shared root: **`board_set_attachments` is absolute, so every write re-states members whose bytes
+must already be somewhere, and "somewhere" is a different machine than the queue lives on.** Every
+patch above is a different way of keeping those two facts in step. A design that removed the class
+rather than patching it would make the op carry its own byte precondition - for instance a member the
+Gateway cannot resolve being a REFUSAL the queue can retire on, rather than a retryable error - so no
+console-side rule has to predict what the Gateway holds. Raised for `architecture-fan-out`; not
+attempted here, because a refusal is the one signal that discards an owner's edit and choosing it
+needs its own pass.
 
 ## Phase 2 - Moving between machines
 

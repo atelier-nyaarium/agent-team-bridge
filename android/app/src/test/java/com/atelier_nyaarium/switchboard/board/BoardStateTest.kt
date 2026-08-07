@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard.board
 
+import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import org.junit.Assert.assertEquals
@@ -108,5 +109,42 @@ class BoardStateTest {
 	fun anOpForAVanishedEntryIsSkippedNotInvented() {
 		val merged = applyBoardOp(emptyList(), ConsoleOp.BoardSetState("ghost", "done"), now = 0)
 		assertTrue(merged.isEmpty())
+	}
+
+	@Test
+	fun upsertDropsAttachments_soAMoveNeverShowsBytesTheDestinationLacks() {
+		// Mirrors the gateway's own upsert rule. A move ships a subtree VERBATIM, so keeping the list
+		// here would paint the destination holding pictures it never ingested - and the console WRITES
+		// off this view, producing an absolute attachment op that Gateway can never satisfy.
+		val picture = BoardAttachment("sha256-${"a".repeat(64)}", "gw-a", "shot.png", "image/png", 3)
+		val moved = entry("m1").copy(attachments = listOf(picture))
+
+		val landed = applyBoardOp(emptyList(), ConsoleOp.BoardUpsert(listOf(moved)), now = 0)
+		assertNull("a moved entry arrives with no attachments", landed.single().attachments)
+	}
+
+	@Test
+	fun upsertLeavesAnExistingEntrysAttachmentsAlone() {
+		// The other half of the same rule: an upsert is not how attachments change, so one that
+		// touches an entry already holding some must not clear them either.
+		val picture = BoardAttachment("sha256-${"b".repeat(64)}", "gw-a", "kept.png", "image/png", 3)
+		val existing = listOf(entry("m1").copy(attachments = listOf(picture)))
+
+		val landed = applyBoardOp(existing, ConsoleOp.BoardUpsert(listOf(entry("m1").copy(title = "renamed"))), now = 0)
+		assertEquals("renamed", landed.single().title)
+		assertEquals(listOf(picture), landed.single().attachments)
+	}
+
+	@Test
+	fun aQueuedHeadUnderTheStrugglingThresholdClosesItsLaneForEveryOtherEntry() {
+		// Why an unfinished upload MUST charge an attempt. A head below the threshold holds the lane,
+		// so an action that can never reach the threshold blocks unrelated work forever and silently.
+		val stuck = action("a1", "gw-a", ConsoleOp.BoardSetAttachments("e1", emptyList()), attempts = 0)
+		val other = action("a2", "gw-a", ConsoleOp.BoardSetState("e2", "done"))
+
+		assertEquals(listOf(stuck), eligibleBoardActions(listOf(stuck, other), strugglingAfter = 8))
+		// Once it is charged past the threshold the lane serves the other entry as well.
+		val charged = stuck.copy(attempts = 8)
+		assertTrue(eligibleBoardActions(listOf(charged, other), strugglingAfter = 8).contains(other))
 	}
 }

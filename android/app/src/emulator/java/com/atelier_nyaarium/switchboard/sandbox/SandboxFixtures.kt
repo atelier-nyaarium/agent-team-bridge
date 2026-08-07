@@ -9,16 +9,22 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo.CodecCapabilities
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.Draft
 import com.atelier_nyaarium.switchboard.Message
 import com.atelier_nyaarium.switchboard.MessageFile
 import com.atelier_nyaarium.switchboard.OutgoingFile
 import com.atelier_nyaarium.switchboard.Team
+import com.atelier_nyaarium.switchboard.board.BoardBlob
+import com.atelier_nyaarium.switchboard.board.GatewayBoard
+import com.atelier_nyaarium.switchboard.proto.BoardAttachment
+import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.RefFileMeta
 import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.serialization.json.Json
 
 /**
  * The canned board and threads the sandbox opens into.
@@ -343,5 +349,60 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 
 			A label that does not follow the rule is left exactly as written: [the joinability check](ref://src/mcp/references/refFile.ts:isJoinable)
 		""".trimIndent()
+	}
+
+	/**
+	 * One board entry carrying attachments, which is the only way to look at the gallery.
+	 *
+	 * Both halves are seeded: the entry's metadata AND real bytes at the path the reader derives. The
+	 * gallery's whole job is finding the second from the first, and the first version of it could not
+	 * (it built a path shape the resolver rejects), which nothing but a screen or that seam's own test
+	 * would show. One attachment is small enough to open on tap, one is over the auto-download
+	 * threshold so its row asks to be tapped instead, and one names bytes that are simply absent.
+	 */
+	fun seedBoard(store: AppStateStore) {
+		// A real id, not whatever a cleared install has: sourceGatewayIds drops empty ones, so a board
+		// keyed by "" renders as an empty backlog with no hint that anything was seeded.
+		val gatewayId = store.loadGatewayId().ifEmpty { "sandbox-gw".also { store.saveGatewayId(it) } }
+		val entryId = "b".repeat(32)
+		val present = writeBoardBytes(entryId, "shot", 4_000)
+		val huge = BoardAttachment(
+			blobId = "sha256-${"c".repeat(64)}",
+			blobGateway = gatewayId,
+			filename = "capture.bin",
+			mime = "application/octet-stream",
+			size = 340_000_000,
+		)
+		val missing = huge.copy(blobId = "sha256-${"d".repeat(64)}", filename = "gone.png", mime = "image/png", size = 900)
+
+		val entry = BoardEntry(
+			id = entryId,
+			title = "An entry with pictures",
+			body = "Tap a row to open it. The big one waits to be asked.",
+			state = "open",
+			rank = "m",
+			attachments = listOf(present, huge, missing),
+		)
+		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry))))
+		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
+	}
+
+	/** Real bytes where the gallery will look for them, so a row can actually open. */
+	private fun writeBoardBytes(entryId: String, label: String, bytes: Int): BoardAttachment {
+		val png = ByteArrayOutputStream().also { out ->
+			Bitmap.createBitmap(240, 160, Bitmap.Config.ARGB_8888).also { bmp ->
+				Canvas(bmp).apply {
+					drawColor(Color.parseColor("#2f6f4f"))
+					drawText(label, 20f, 90f, Paint().apply { color = Color.WHITE; textSize = 34f })
+				}
+				bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+			}
+		}.toByteArray()
+		val blobId = "sha256-${"a".repeat(64)}"
+		Attachments.boardFile(filesDir, entryId, blobId).also {
+			it.parentFile?.mkdirs()
+			it.writeBytes(png)
+		}
+		return BoardAttachment(blobId, "sandbox-gw", "$label.png", "image/png", png.size.toLong())
 	}
 }

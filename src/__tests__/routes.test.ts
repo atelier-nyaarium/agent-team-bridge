@@ -489,6 +489,7 @@ describe("routes", () => {
 
 			for (const body of [
 				boardRequestBody("list", { scope: "unclaimed" }),
+				boardRequestBody("attachments", { id }),
 				boardRequestBody("update", { id, state: "in_progress", title: "Renamed", body: null }),
 				boardRequestBody("release", { id }),
 				boardRequestBody("claim", { id }),
@@ -498,6 +499,43 @@ describe("routes", () => {
 				expect(res.status, `${body.action} was rejected: ${JSON.stringify(res.body)}`).toBe(200);
 				expect(res.body.error).toBeUndefined();
 			}
+		});
+
+		it("a fetch mints no operation id, so it is never recorded for replay", () => {
+			// The route replays a recorded reply BEFORE it consults the store, so an operation id here
+			// would hand back blobIds for pictures the owner has since swapped. Nothing in the route
+			// scopes replay to writes; this one Set is the whole protection.
+			expect(boardRequestBody("attachments", { id: "bd_x" }).operationId).toBeUndefined();
+			expect(boardRequestBody("list").operationId).toBeUndefined();
+			expect(boardRequestBody("update", { id: "bd_x" }).operationId).toBeDefined();
+		});
+
+		it("the agent's list carries attachment names and never the ids that fetch them", async () => {
+			// A blobId is a bearer token and the list is the only place an agent could otherwise get
+			// one. Stripping happens ROUTE-side, so an older plugin cannot leak them during a deploy.
+			const { ctx, board } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				...boardRequestBody("create", { title: "With a picture", assignTo: "self" }),
+			});
+			const id = created.body.id as string;
+			const blobId = `sha256-${"a".repeat(64)}`;
+			board.setAttachments(
+				"owner-1",
+				id,
+				[{ blobId, blobGateway: "gw-1", filename: "shot.png", mime: "image/png", size: 3 }],
+				OWNER_ACTOR,
+			);
+
+			const listed = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("list") });
+			const entry = (listed.body.entries as Array<Record<string, unknown>>).find((e) => e.id === id);
+			expect(entry?.attachments).toEqual([{ filename: "shot.png", mime: "image/png", size: 3 }]);
+			expect(JSON.stringify(listed.body)).not.toContain(blobId);
+
+			// The plumbing lives on its own action, which the tool handler calls and the model never sees.
+			const fetched = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("attachments", { id }) });
+			expect(fetched.body.attachments).toMatchObject([{ blobId, blobGateway: "gw-1" }]);
 		});
 
 		it("a retried backlog create replays instead of refusing the caller its own entry", async () => {

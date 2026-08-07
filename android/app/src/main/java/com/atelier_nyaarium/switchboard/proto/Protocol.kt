@@ -52,6 +52,14 @@ object Protocol {
 	/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
 	 * are described, since a message's stated size is the sender's own claim. */
 	const val MAX_BLOB_BYTES: Long = 500000000
+
+	/** Above this a console waits to be asked before fetching a board attachment. NOT a cap on what
+	 * may be attached - the wire carries up to MAX_BLOB_BYTES in chunks either way. It only decides
+	 * what a device pulls down unprompted. */
+	const val BOARD_AUTO_DOWNLOAD_MAX_BYTES: Long = 25000000
+
+	/** Attachments one board entry may hold. */
+	const val BOARD_ATTACHMENTS_MAX: Int = 10
 }
 
 @Serializable
@@ -221,6 +229,13 @@ sealed class ConsoleOp {
 	data class BoardSetBody(
 		val id: String,
 		val body: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("board_set_attachments")
+	data class BoardSetAttachments(
+		val id: String,
+		val attachments: List<BoardAttachment>,
 	) : ConsoleOp()
 
 	@Serializable
@@ -948,6 +963,16 @@ data class BoardEntry(
 	val rank: String,
 	val sessionId: String? = null,
 	val trashedAt: Long? = null,
+	val attachments: List<BoardAttachment>? = null,
+)
+
+@Serializable
+data class BoardAttachment(
+	val blobId: String,
+	val blobGateway: String,
+	val filename: String,
+	val mime: String,
+	val size: Long,
 )
 
 @Serializable

@@ -192,6 +192,27 @@ object Attachments {
 	 * or null for a metadata-only file or an unresolvable src. */
 	fun bucketOf(src: String?): String? = relOf(src)?.substringBefore('/', "")?.takeIf { it.isNotEmpty() }
 
+	/** One bucket per board entry, so an entry's pictures live together and the keep set is a name
+	 * the board can derive without walking its own srcs. */
+	fun boardBucket(entryId: String): String = "board-$entryId"
+
+	/**
+	 * Where a board attachment's bytes live on THIS device, named by the blob rather than by the
+	 * display filename.
+	 *
+	 * Content-addressed on purpose: the attaching device and one that downloads later have only the
+	 * blobId in common, and the filename is metadata the owner can pick twice. Returns the File
+	 * whether or not it exists yet, unlike [resolve], because the download path needs a destination.
+	 * Safe without a traversal check by construction - both segments are minted here or are a sha256
+	 * name, so neither can carry a separator.
+	 */
+	fun boardFile(filesDir: File, entryId: String, blobId: String): File =
+		File(boardBucketDir(filesDir, entryId), blobId)
+
+	/** The directory [boardFile] lands in. Needed on its own to reclaim ONE attachment: the orphan
+	 * sweep keeps or takes a whole bucket, so it can never drop a single file from a live entry. */
+	fun boardBucketDir(filesDir: File, entryId: String): File = File(root(filesDir), boardBucket(entryId))
+
 	/** Delete the given files by their `src`, then remove any bucket dir left empty afterward.
 	 * Deletes per-file, never a bucket wholesale - a row's own bucket can have some files
 	 * superseded (deletable) and others retained via a merge that keeps the old src (see

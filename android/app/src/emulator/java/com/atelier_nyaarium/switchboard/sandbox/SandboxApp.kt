@@ -34,8 +34,11 @@ class SandboxApp : Application() {
 			if (store.sttsKey.isEmpty()) store.sttsKey = "sandbox-placeholder-key"
 		}
 
-		val repo = Repo.get(this)
 		val fixtures = SandboxFixtures(filesDir, assets)
+		// BEFORE the repository exists. BoardManager reads its durable blob once at construction and
+		// never re-reads, so a board seeded afterwards is written to disk and then ignored.
+		fixtures.seedBoard(AppStateStore(this))
+		val repo = Repo.get(this)
 		val threads = fixtures.threads()
 		repo.seedSandbox(fixtures.teams(), threads, fixtures.dirs(), fixtures.drafts())
 		// Seeding writes rows straight into state, bypassing the mailbox drain where the inbound

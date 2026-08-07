@@ -461,6 +461,34 @@ export const BOARD_RANK_MAX = 64;
  * so the bound is per-op, not per-entry. */
 export const BOARD_BATCH_MAX = 200;
 
+/** Attachments one entry may hold, matching `ChannelFilesSchema`. Bounds the fetching, not the bytes:
+ * a few dozen entries at a handful of files each is noise against the projection budget. */
+export const BOARD_ATTACHMENTS_MAX = 10;
+
+/** Above this, a console does not fetch an attachment on its own; the owner taps to download.
+ *
+ * NOT a limit on what may be attached: the wire carries up to MAX_BLOB_BYTES in chunks and a board
+ * attachment is no different. This only decides who pays for the transfer without being asked, which
+ * matters because a second device opening an entry would otherwise pull hundreds of megabytes over
+ * whatever connection it happens to be on. */
+export const BOARD_AUTO_DOWNLOAD_MAX_BYTES = 25_000_000;
+
+/** One attachment on a board entry. Field names mirror `ChannelFile` because every console path this
+ * reuses is typed on it, and `blobId` is already the `sha256-<64 hex>` shape both stores demand. */
+export const BoardAttachmentSchema = z
+	.object({
+		blobId: z.string().min(1).max(128),
+		// The Gateway holding the bytes. A blob lives only where it landed, and an entry can be homed
+		// on a different machine than the console's route, so a reference without a WHERE is dead.
+		blobGateway: z.string().min(1).max(64),
+		// Carried for CONTEXT, never for keying: it is how the owner says "look at mellisa-render.png"
+		// and how an agent asks which of two screenshots is meant. The stored path is the content hash.
+		filename: z.string().min(1).max(255),
+		mime: z.string().max(255),
+		size: z.number().int().nonnegative(),
+	})
+	.meta({ id: "BoardAttachment" });
+
 export const BoardEntrySchema = z
 	.object({
 		// Writer-minted (console: random; MCP create: derived from the operation id), which is what
@@ -478,6 +506,9 @@ export const BoardEntrySchema = z
 		sessionId: z.string().min(1).max(128).optional(),
 		// Server-stamped when trashed; absent means live. The 30-day trash sweep runs off it.
 		trashedAt: z.number().int().nonnegative().optional(),
+		// Written ONLY by board_set_attachments; every other writer preserves what is stored. See
+		// BoardStore.setAttachments for why that is what keeps the bytes durable.
+		attachments: z.array(BoardAttachmentSchema).max(BOARD_ATTACHMENTS_MAX).optional(),
 	})
 	.meta({ id: "BoardEntry" });
 
@@ -627,6 +658,15 @@ export const ConsoleOpSchema = z
 			kind: z.literal("board_set_body"),
 			id: z.string().min(1).max(64),
 			body: z.string().max(BOARD_BODY_MAX).optional(),
+		}),
+		// The SOLE committer of an entry's attachments, and absolute like every other setter: the
+		// list sent is the list stored, so adding and removing a picture are the same op. An empty
+		// array clears. Every member's bytes must already be durable under the entry or reachable in
+		// the blob cache, or the op does not commit.
+		z.object({
+			kind: z.literal("board_set_attachments"),
+			id: z.string().min(1).max(64),
+			attachments: z.array(BoardAttachmentSchema).max(BOARD_ATTACHMENTS_MAX),
 		}),
 		// One PLACEMENT intent: parent and rank land together. Absent parent means root.
 		z.object({

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard.board
 
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.BoardRefused
 import com.atelier_nyaarium.switchboard.ConsoleClient
 import com.atelier_nyaarium.switchboard.DebugLog
@@ -10,6 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.rethrowIfCancellation
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -30,6 +32,11 @@ interface BoardStore {
 /** The one call the drain makes, narrow enough for a test to stand in for the client. */
 interface BoardWriter {
 	suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String = UUID.randomUUID().toString())
+
+	/** Whether the Gateway holding the entry already has these bytes in full. A CHECK, never the
+	 * transfer itself: the drain is single-flight, so moving megabytes inside it would stall every
+	 * board write on every Gateway for the duration. */
+	suspend fun boardBytesReady(blobId: String, gatewayId: String): Boolean = true
 }
 
 /** One refused action's residue: the row marker's content, and the draft restore for an edit. */
@@ -141,10 +148,36 @@ class BoardManager(private val store: BoardStore) {
 	fun truncatedGateways(): List<String> = blob.gateways.filterValues { it.truncated }.keys.toList()
 
 	/** Queue one mutation. The UI's next [mergedEntries] read already shows it applied. */
-	fun enqueue(op: ConsoleOp, gatewayId: String, dependsOn: String? = null): String {
+	fun enqueue(
+		op: ConsoleOp,
+		gatewayId: String,
+		dependsOn: String? = null,
+		sources: Map<String, String> = emptyMap(),
+	): String {
 		val opId = UUID.randomUUID().toString()
-		mutate { it.copy(queue = it.queue + PendingBoardAction(opId, gatewayId, op, dependsOn)) }
+		mutate { it.copy(queue = it.queue + PendingBoardAction(opId, gatewayId, op, dependsOn, sources = sources)) }
 		return opId
+	}
+
+	/** Every attachment bucket the board still needs on this device, for the orphan sweep's keep set.
+	 *
+	 * Queue sources only cover an action still in flight. Question 4 says the attaching device KEEPS
+	 * its copy so the peek stays instant, so the buckets a committed entry names have to be kept
+	 * explicitly or the next cold-start sweep takes them and the owner re-downloads their own picture. */
+	fun attachmentBuckets(): Set<String> {
+		// MERGED, not the raw snapshot: a just-attached picture lives only in the queue until the
+		// gateway's next snapshot lands, and a cold-start sweep in that window would delete the bytes
+		// the queued action is still trying to upload.
+		val fromEntries = blob.gateways.keys
+			.flatMap { mergedEntries(it) }
+			.filter { !it.attachments.isNullOrEmpty() }
+			.map { Attachments.boardBucket(it.id) }
+		// By entry rather than by parsing the stored paths: sources hold absolute paths for the upload,
+		// which are not the src shape bucketOf reads.
+		val fromQueue = blob.queue.filter { it.sources.isNotEmpty() }
+			.mapNotNull { entryIdOf(it.op) }
+			.map { Attachments.boardBucket(it) }
+		return (fromEntries + fromQueue).toSet()
 	}
 
 	/** The cross-Gateway move: the write half upserts the subtree on the target, and the delete
@@ -221,6 +254,13 @@ class BoardManager(private val store: BoardStore) {
 			// this one, so a lane cannot spin over the same failing op inside a single drain.
 			if (!tried.add(action.opId)) return
 			try {
+				// Bytes first, and an unfinished upload CHARGES an attempt like any other retry. Not
+				// charging looks kinder and is the opposite: a head under the struggling threshold holds
+				// `laneClosed`, so an action that never reaches it blocks every other entry's writes on
+				// this Gateway forever, with no marker, and nothing can time it out. Charging is what
+				// lets `eligibleBoardActions` step past a slow transfer to unrelated work, and "not
+				// synced" is honest while a picture is still going up.
+				uploadSources(client, action)
 				client.boardWrite(action.op, action.gatewayId, action.opId)
 				mutate { it.copy(queue = retireBoardAction(it.queue, action.opId)) }
 			} catch (e: BoardRefused) {
@@ -244,6 +284,37 @@ class BoardManager(private val store: BoardStore) {
 			}
 		}
 	}
+
+	/**
+	 * Get this action's bytes onto its Gateway. True when every source is up and the op may send.
+	 *
+	 * A source file that is GONE can never succeed, so it is abandoned locally rather than retried:
+	 * nothing else could ever retire it, and a queued action nothing retires eventually closes the
+	 * whole lane. That is a console-minted refusal, using the two calls the wire's own refusal branch
+	 * already makes - the console's [BoardRefusal] is a UI row with a free-form reason, not the
+	 * gateway's closed union, so this needs no wire shape.
+	 */
+	private suspend fun uploadSources(client: BoardWriter, action: PendingBoardAction) {
+		for ((blobId, source) in action.sources) {
+			if (client.boardBytesReady(blobId, action.gatewayId)) continue
+			// Not up yet, and the local copy is gone, so no transfer can ever finish it. Nothing else
+			// would retire this action, and a queued action nothing retires eventually closes the lane.
+			if (!File(source).exists()) {
+				DebugLog.log("Board", "action ${action.opId} abandoned: ${source.substringAfterLast('/')} is gone")
+				refusals.add(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
+				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
+			}
+			// Throwing is how the lane stops here without sending. The attempt the catch charges is
+			// meaningless for an action just abandoned (the queue no longer holds it) and is exactly
+			// right for one still transferring.
+			error("attachment $blobId is not on the Gateway yet")
+		}
+	}
+
+	/** Local sources for everything still queued, so a cold start can restart the transfers whose
+	 * in-memory kick died with the process. Keyed blobId to path, per Gateway. */
+	fun pendingSources(): List<Triple<String, String, String>> =
+		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }
 
 	/** Refresh one Gateway's half through board_read (the non-route path; the route Gateway's half
 	 * arrives on the plane). Any failure leaves the cache as-is - the column just reads stale. */
@@ -293,6 +364,7 @@ class BoardManager(private val store: BoardStore) {
 		is ConsoleOp.BoardSetParent -> op.id
 		is ConsoleOp.BoardSetTrashed -> op.id
 		is ConsoleOp.BoardSetSession -> op.id
+		is ConsoleOp.BoardSetAttachments -> op.id
 		is ConsoleOp.BoardUpsert -> op.entries.firstOrNull()?.id
 		is ConsoleOp.BoardRemove -> op.ids.firstOrNull()
 		else -> null

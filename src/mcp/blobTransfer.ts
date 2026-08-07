@@ -27,7 +27,7 @@ const MAX_STAGING_BYTES = MAX_BLOB_BYTES * 4;
 /** Keep the staging store bounded. Called on every transfer rather than on a timer, because an MCP
  * process has no tick of its own, and the cost is one directory walk against work that just moved
  * megabytes. Content addressing makes eviction free: anything swept can be fetched again. */
-function sweepStaging(): void {
+export function sweepStaging(): void {
 	try {
 		localBlobStore().sweep({ maxBytes: MAX_STAGING_BYTES });
 	} catch {

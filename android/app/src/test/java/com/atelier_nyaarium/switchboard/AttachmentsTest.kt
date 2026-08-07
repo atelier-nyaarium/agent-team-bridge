@@ -288,4 +288,37 @@ class AttachmentsTest {
 		assertEquals(7L, files[0].size)
 		assertNull(files[0].modifiedAt)
 	}
+
+	@Test
+	fun boardFile_landsInTheBucketTheKeepSetNames() {
+		// The writer, the reader and the sweep's keep set all have to agree on one path. They did not:
+		// the reader built a bare "board-<id>/<blob>" and fed it to fileFor, which needs a full
+		// /attachments/ src and answered null for every attachment on every device, forever.
+		val blobId = "sha256-${"a".repeat(64)}"
+		val landed = Attachments.boardFile(filesDir, "entry1", blobId)
+		landed.parentFile?.mkdirs()
+		landed.writeBytes(ByteArray(3))
+
+		assertEquals(Attachments.boardBucket("entry1"), landed.parentFile?.name)
+		assertTrue("the reader must find what the writer wrote", Attachments.boardFile(filesDir, "entry1", blobId).isFile)
+	}
+
+	@Test
+	fun boardBucket_survivesTheSweepWhenKept_andIsReclaimedWhenNot() {
+		// Nothing points a src at a board attachment, so the keep set is the only thing standing
+		// between the owner's picture and the orphan sweep.
+		val blobId = "sha256-${"b".repeat(64)}"
+		val kept = Attachments.boardFile(filesDir, "keepme", blobId)
+		val dropped = Attachments.boardFile(filesDir, "dropme", blobId)
+		for (f in listOf(kept, dropped)) {
+			f.parentFile?.mkdirs()
+			f.writeBytes(ByteArray(3))
+			f.parentFile?.setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L)
+		}
+
+		Attachments.sweepOrphanBuckets(filesDir, emptyList(), setOf(Attachments.boardBucket("keepme")))
+
+		assertTrue("a kept bucket keeps its bytes", kept.isFile)
+		assertFalse("an unreferenced bucket is reclaimed", dropped.isFile)
+	}
 }

@@ -37,6 +37,7 @@
 		{ "file": "poll-result-read-anchors.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "poll-result-cross-domain-presence.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "op-envelope-board-upsert.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-board-set-attachments.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "poll-result-task-board.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "board-read-result.json", "schema": "ConsoleBoardReadResult", "expect": "pass" },
 		{ "file": "op-envelope-forget-cancel.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },

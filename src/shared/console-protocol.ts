@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type {
+	BoardAttachmentSchema,
 	BoardEntrySchema,
 	ConsoleListDirsResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -65,6 +66,7 @@ export type CrossDomainPeerEntry = z.infer<typeof CrossDomainPeerEntrySchema>;
 export type ReadAnchorWireEntry = z.infer<typeof ReadAnchorWireEntrySchema>;
 export type CrossDomainPresenceEntry = z.infer<typeof CrossDomainPresenceEntrySchema>;
 export type BoardEntry = z.infer<typeof BoardEntrySchema>;
+export type BoardAttachment = z.infer<typeof BoardAttachmentSchema>;
 export type ConsoleReportReadOp = Extract<ConsoleOp, { kind: "report_read" }>;
 export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
 export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;

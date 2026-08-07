@@ -7,7 +7,16 @@
 			"state": "paused",
 			"rank": "m",
 			"sessionId": "story.a31b90",
-			"trashedAt": 1785179969544
+			"trashedAt": 1785179969544,
+			"attachments": [
+				{
+					"blobId": "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+					"blobGateway": "story",
+					"filename": "cold-cache.png",
+					"mime": "image/png",
+					"size": 91244
+				}
+			]
 		}
 	],
 	"truncated": true

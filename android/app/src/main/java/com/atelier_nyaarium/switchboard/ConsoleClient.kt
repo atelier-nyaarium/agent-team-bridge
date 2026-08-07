@@ -897,12 +897,22 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** How much of a blob the gateway already holds. `have` is the contiguous prefix, so it is also
 	 * the offset to resume from - no separate progress bookkeeping to get out of step. */
-	suspend fun blobStat(blobId: String): ConsoleBlobStatResult =
-		resultOf(relay(ConsoleOp.BlobStat(blobId = blobId)), "blob_stat")
+	suspend fun blobStat(blobId: String, targetGateway: String? = null): ConsoleBlobStatResult =
+		resultOf(relay(ConsoleOp.BlobStat(blobId = blobId), targetGateway = targetGateway), "blob_stat")
 
 	/** Send one bounded chunk. Re-sending an offset already held is a no-op at the store, because
-	 * the blob is named by its own digest, so a retry needs no idempotency key of its own. */
-	suspend fun blobPut(blobId: String, offset: Long, chunk: ByteArray, final: Boolean): ConsoleBlobPutResult =
+	 * the blob is named by its own digest, so a retry needs no idempotency key of its own.
+	 *
+	 * `targetGateway` is which Gateway the bytes must LAND on. A board attachment belongs to the
+	 * Gateway holding its entry, which is regularly not this device's route Gateway; without it the
+	 * metadata would name bytes only another machine holds. */
+	suspend fun blobPut(
+		blobId: String,
+		offset: Long,
+		chunk: ByteArray,
+		final: Boolean,
+		targetGateway: String? = null,
+	): ConsoleBlobPutResult =
 		resultOf(
 			relay(
 				ConsoleOp.BlobPut(
@@ -911,6 +921,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 					chunk = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP),
 					final = final,
 				),
+				targetGateway = targetGateway,
 				// callTimeoutMs = null: this is the op that carries bytes. A sealed chunk is a couple of
 				// MB, and a whole-call deadline on a slow link would fail every chunk alike, leaving the
 				// transfer unable to advance at all. Progress is bounded by writeTimeout's per-write
@@ -944,11 +955,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * connection continues instead of restarting, and a re-sent chunk is free because a blob is named
 	 * by its own digest.
 	 */
-	suspend fun uploadBlob(source: File): String {
+	suspend fun uploadBlob(source: File, targetGateway: String? = null): String {
 		val blobId = blobs.ingestFile(source)
 
 		// Skip anything the Gateway already holds: a resend, or the same file from another device.
-		val remote = blobStat(blobId)
+		val remote = blobStat(blobId, targetGateway)
 		if (remote.complete) return blobId
 
 		var offset = remote.have
@@ -956,7 +967,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		while (true) {
 			val read = blobs.read(blobId, offset, Protocol.BLOB_CHUNK_BYTES)
 			val final = read.eof || offset + read.bytes.size >= total
-			val ack = blobPut(blobId, offset, read.bytes, final)
+			val ack = blobPut(blobId, offset, read.bytes, final, targetGateway)
 			if (final) {
 				if (!ack.complete) error("blob $blobId failed verification at the Gateway")
 				return blobId
@@ -968,6 +979,22 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			offset = ack.have
 		}
 	}
+
+	/** Stage a local file and return the name its bytes will have. Lets a caller record the blobId
+	 * alongside its own metadata before any transfer starts, since the name IS the digest. */
+	fun blobIdOf(source: File): String = blobs.ingestFile(source)
+
+	/**
+	 * Whether the entry's Gateway holds these bytes in full. One cheap stat, called from the board
+	 * drain, which must never carry a transfer itself.
+	 *
+	 * A failure THROWS rather than answering false. "Could not find out" is not "not ready": the
+	 * drain charges no attempt for a transfer still running, so collapsing the two would park a
+	 * permanently failing stat at the lane head with attempts stuck at zero, where it never reaches
+	 * the struggling threshold, never shows a marker, and blocks every later write to that Gateway.
+	 */
+	override suspend fun boardBytesReady(blobId: String, gatewayId: String): Boolean =
+		blobStat(blobId, gatewayId).complete
 
 	/** Drop a staged blob once its bytes are safely somewhere durable. The store is a transfer
 	 * buffer on this device, so keeping a landed blob would mean holding every attachment twice. */

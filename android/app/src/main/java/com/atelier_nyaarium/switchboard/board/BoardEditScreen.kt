@@ -33,8 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.atelier_nyaarium.switchboard.AttachmentViewer
 import com.atelier_nyaarium.switchboard.ChatRepository
 import com.atelier_nyaarium.switchboard.ChatState
+import com.atelier_nyaarium.switchboard.OpenAttachment
 
 private val STATES = listOf("open", "in_progress", "paused", "done", "cancelled")
 
@@ -66,6 +68,7 @@ fun BoardEditScreen(
 	val baseline = remember(entryId) { entry.title to entry.body.orEmpty() }
 	var title by remember(entryId) { mutableStateOf(baseline.first) }
 	var body by remember(entryId) { mutableStateOf(baseline.second) }
+	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
 	val changedElsewhere = entry.title != baseline.first || entry.body.orEmpty() != baseline.second
 	val children = remember(revision, entryId) {
 		repo.board.mergedEntries(gatewayId).filter { it.parent == entryId && it.trashedAt == null }.sortedBy { it.rank }
@@ -127,6 +130,26 @@ fun BoardEditScreen(
 				}
 			}
 
+			// Commits on TAP like the state chips, not on Save: an absolute set of the whole list is
+			// non-clobbering, so making the owner press Save would only add a step - and Save exists to
+			// protect the title and body a refused write has to hand back to a composer.
+			FieldLabel("Attachments")
+			BoardAttachments(
+				attachments = entry.attachments ?: emptyList(),
+				repo = repo,
+				entryId = entryId,
+				onPick = { picked -> repo.boardSetAttachments(gatewayId, entryId, entry.attachments ?: emptyList(), picked) },
+				onRemove = { gone ->
+					repo.boardSetAttachments(
+						gatewayId,
+						entryId,
+						(entry.attachments ?: emptyList()).filter { it.blobId != gone.blobId },
+						emptyList(),
+					)
+				},
+				onOpen = { viewer = it },
+			)
+
 			FieldLabel("Placement")
 			PlacementRow(
 			"Session",
@@ -170,6 +193,12 @@ fun BoardEditScreen(
 				)
 			}
 		}
+	}
+
+	// After the Scaffold, so it overlays the screen and its own back handler wins. Composed inside the
+	// scrolling column instead, it lays out inline and shows a strip of controls with no picture.
+	viewer?.let { att ->
+		AttachmentViewer(att = att, onOpenWith = { viewer = null }, onDismiss = { viewer = null })
 	}
 }
 
