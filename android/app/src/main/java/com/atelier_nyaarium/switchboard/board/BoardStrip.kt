@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.atelier_nyaarium.switchboard.oneLine
 
 /**
  * The in-thread board strip, pinned under the top bar: this session's tree, reading only - no
@@ -57,7 +58,7 @@ fun BoardStrip(group: BoardGroup?, liveLine: BoardLiveLine?) {
 				} else {
 					StateMark(liveLine.state)
 					Text(
-						liveLine.title,
+						oneLine(liveLine.title).orEmpty(),
 						style = MaterialTheme.typography.bodySmall,
 						maxLines = 1,
 						overflow = TextOverflow.Ellipsis,
@@ -99,7 +100,9 @@ private fun StripRow(row: BoardRow) {
 	) {
 		StateMark(entry.state)
 		Text(
-			entry.title,
+			// Collapsed because this row cannot show a second line. The board tab renders the same title
+			// at maxLines = 2 and leaves it alone, since there it has somewhere to go.
+			oneLine(entry.title).orEmpty(),
 			style = MaterialTheme.typography.bodySmall,
 			textDecoration = if (entry.state == "cancelled") TextDecoration.LineThrough else null,
 			maxLines = 1,

@@ -1296,20 +1296,18 @@ live there or in residue tests. What follows is what stayed open.
   like a bad request - the opposite of what `BoardStore.commit` preserves when it rethrows. Now
   marked KNOWN GAP at the line itself.
 
-## A newline in a title reads three ways one tap apart (2026-08-07)
+## One-line display strings on the console (2026-08-07, closed)
 
-Found while relabelling the session card. The session card's headline and the notification shade
-collapse whitespace through `oneLine`; `BoardStrip`'s collapsed line, its expanded rows and
-`BoardScreen`'s entry rows render `entry.title` raw. `BoardEntry.title` is `z.string().min(1).max(500)`
-with no character rule and `boardStore.setTitle` normalizes nothing, so one task title shows collapsed
-on the session card, truncated at the break on the board strip, and wrapped over two lines on the board
-tab. Fixing it is `oneLine` at those three render sites.
+`oneLine` collapses ASCII whitespace for a row that cannot show a second line, and every such row now
+calls it: the session card's three rungs, the notification shade, and `BoardStrip`'s collapsed live
+line and expanded rows. `BoardScreen`'s entry rows and `BoardEditScreen`'s child rows deliberately do
+NOT, because they wrap and the whole title is already visible.
 
 **Invisible-character sanitizing was attempted here and is NOT wanted.** A hand-listed strip drew four
 audit findings in one round, in both directions at once, and the owner ruled the whole class out: an
 agent authoring a title of only zero-width characters is not a real case, and neither is one spaced
-with U+2028 or U+00A0. `oneLine` collapses ASCII whitespace and nothing else. Do not reintroduce a
-category strip, a bidi rule, or a Unicode whitespace set on the strength of an audit finding.
+with U+2028 or U+00A0. Do not reintroduce a category strip, a bidi rule, or a Unicode whitespace set on
+the strength of an audit finding.
 
 ### Structural, not board-specific
 

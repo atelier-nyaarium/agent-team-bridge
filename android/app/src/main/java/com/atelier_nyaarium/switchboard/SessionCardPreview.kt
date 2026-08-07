@@ -50,9 +50,8 @@ fun sessionCardPreview(state: ChatState, team: String, boardLine: BoardLiveLine?
 		// headline a thread-wide time reads as when that reply landed, and would say "1m" for an
 		// hour-old headline just because the owner had since sent something.
 		headlineAt = reply?.at?.takeIf { headline != null && timeAllowed },
-		// Passed through raw. Cleaning it HERE would make this card disagree with the board strip and
-		// the board tab, which render the same title from the same producer one tap away.
-		boardWork = boardWork,
+		// Collapsed like the board strip's own single-line rows, which render this same title.
+		boardWork = boardWork?.let { it.copy(title = oneLine(it.title).orEmpty()) },
 		snippet = snippet,
 		// The thread's newest time, which is also what sessionOrder sorts on, so the card's LOWEST time
 		// is its sort key and the column reads in order down the list. Never shown alone: a bare time

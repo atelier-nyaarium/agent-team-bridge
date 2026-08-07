@@ -133,12 +133,10 @@ class ChatStateCardPreviewTest {
 	}
 
 	@Test
-	fun theBoardRungPassesItsTitleThroughUntouched() {
-		// The board strip and the board tab render this same value from the same producer, so cleaning
-		// it here alone would make one card disagree with the screen a tap away from it.
+	fun theBoardRungCollapsesLikeTheBoardStripsOwnSingleLineRows() {
 		val messy = BoardLiveLine(title = "Fix the login bug\nand the logout one", state = "open", finished = 0, total = 2)
 		val p = preview(inbound("reply", title = "The headline"), board = messy)
-		assertEquals(messy, p.boardWork)
+		assertEquals("Fix the login bug and the logout one", p.boardWork?.title)
 	}
 
 	@Test

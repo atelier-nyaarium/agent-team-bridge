@@ -342,18 +342,37 @@ Two phases. Each ships alone and is separately useful; neither half of phase 2 i
 Gateway and console together, because the label's producer and its consumer are on opposite sides and
 a gap between them is a blank card.
 
-- Delete `vibeCheck.ts`, its `index.ts` wiring, its two `routes.ts` hooks and its test. Move the
-  `isPromptEmpty` coverage to an `agent-screen` test, or delete `isPromptEmpty` with it. Also drop
-  the `presence.setDescription` coverage in `presence.test.ts`.
-- Stop writing `description`: drop `presence.setDescription` and `SessionStore.setDescription`.
-  **Keep the field on `TeamInfo` and `CrossDomainPresenceSession`** purely to avoid a codegen run and
-  a staggered-deploy window - NOT to save the friend row, which goes blank regardless once friends
-  update. Accepted.
-- Console: add a `lastAgentReplyTitle`-style derivation beside `snippet` (filter `fromMe`, decide
-  `isPeer` explicitly), and rebuild `SessionCard`'s ladder as title -> board line -> snippet
-  fallback. Re-decide where the relative time sits now that the board rung is not the top one.
-- Kotlin gate locally, and `assembleEmulator` - `SandboxFixtures.teams()` sets a description and only
-  compiles in the emulator build type, which CI never touches.
+SHIPPED as `9e2f3f5` and `ddb4ea4`. What landed, where it differs from the intent above:
+
+- `vibeCheck.ts`, its `index.ts` wiring, its two `routes.ts` hooks and its test are gone.
+  `isPromptEmpty` went with it, and so did `isAtPrompt` and `FULL_RULE_RE`, whose only remaining caller
+  was the vibe check's tick. Both were deleted from `AgentScreen.kt` in the same change, since a
+  classifier here costs a matching one there whether or not anything calls it.
+- `description` is gone further than planned. `SessionRecord.description`, `setDescription` on both
+  sides, and `PresenceFacade.snapshot`'s emit are all deleted, because with no writer left the emit was
+  unreachable and read as the field's live producer. **`TeamInfoSchema.description` stays**, now marked
+  INBOUND ONLY: a friend's not-yet-updated Gateway still sends one and `toCrossDomainPresenceSession`
+  still lands it. That converter is the field's one surviving producer and had no coverage, so
+  `routes.test.ts` gained a case for it.
+- The card derivation is `sessionCardPreview` in its own file, a pure function over `ChatState` plus the
+  board line, NOT a getter beside `snippet`. The inline version was patched twice in two rounds with no
+  test able to reach it; the extraction is what made the rules pinnable. `ChatState.lastReplyTitle` was
+  added and then deleted once the preview derived the headline from the reply it already held.
+- The ladder is headline, then board line, then the thread's newest row. The time rides the rung it
+  belongs to: the headline carries its own reply's stamp, the bottom rung carries `lastActivity`, which
+  is what `sessionOrder` sorts on, so the column reads in order down the list. Live board work takes
+  the time off every rung.
+- The snippet rung shows whenever the thread's newest row is not the headlined reply, which is what
+  keeps the owner's own send visible. A file-only row stands in as `(attachment)`, one constant shared
+  with the notification shade.
+- `oneLine` collapses ASCII whitespace for every row that cannot show a second line, including
+  `BoardStrip`'s two. `BoardScreen` and `BoardEditScreen` wrap and are left alone.
+
+The change removes a cross-Domain data flow rather than adding one: the vibe check had an LLM write a
+phrase about what a session was doing, and that phrase was published to every linked friend's console.
+Nothing generates or publishes one now, and `restore` dropping the field clears the stored phrases on
+the next gateway restart instead of republishing them indefinitely. The card's headline is the
+session's own reply title, which the console already holds and never sends anywhere.
 
 ### Bug Classes
 
