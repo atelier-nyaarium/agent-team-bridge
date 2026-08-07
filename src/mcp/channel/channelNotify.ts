@@ -67,7 +67,12 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 		},
 	});
 
-	console.error(`[channel] pushed from ${payload.from} [${payload.session_id.slice(0, 8)}...]`);
+	// This logs the EMIT, not the delivery: the harness silently drops the notification when this
+	// plugin is not in the session's --channels list (a manual launch without the daemon's flags).
+	// That state is visible only as "Channel notifications skipped" in the harness's own mcp-logs.
+	console.error(
+		`[channel] emitted from ${payload.from} [${payload.session_id.slice(0, 8)}...]${payload.no_ack === true ? " no_ack" : ""}`,
+	);
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {

@@ -47,7 +47,13 @@ export async function startMcp(): Promise<void> {
 	// resolveSessionNaming (see team-name.ts for the composition rules). Peers reach the gateway on
 	// the docker network inside a container or the forwarded localhost port elsewhere. The host
 	// plumbing (wake + terminal view) lives in the headless host daemon, not here.
+	const envPinned = Boolean(process.env.PROJECT_NAME);
 	process.env.PROJECT_NAME = resolveSessionNaming(process.env.PROJECT_NAME, process.env.CLAUDE_CODE_SESSION_ID);
+	// The one line that makes an identity split diagnosable: a session launched without the daemon's
+	// env pin registers under a DERIVED name, and the phone thread keeps addressing the old one.
+	console.error(
+		`[bridge] identity ${process.env.PROJECT_NAME} (${envPinned ? "env-pinned" : "derived - manual launch?"})`,
+	);
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
 	}

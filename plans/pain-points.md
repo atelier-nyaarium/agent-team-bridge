@@ -1,5 +1,25 @@
 # Pain points
 
+## Manual host session start is broken in two silent ways (2026-08-07)
+
+Found live, when the owner could not restart the primary session and a hand launch produced a deaf
+stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host session by hand".
+
+- [high] **A bare `claude --resume` on the host is deaf and misnamed.** Without the daemon's
+  `--dangerously-load-development-channels` flag the harness silently skips every channel push
+  (handshake included, so the session sits "verifying" forever), and without `PROJECT_NAME` the MCP
+  derives a fresh name from the forked harness session id, so the phone thread and board claims keep
+  addressing the old name. Neither failure produces an error anywhere; the only traces are the
+  harness's "Channel notifications skipped" line in mcp-logs and the gateway's unanswered handshake.
+  A guard worth considering: the MCP refusing to register (or loudly warning) when it derived a
+  `host.*` name AND the harness skipped its channel subscription, if the harness ever exposes that.
+- [medium] **`down.sh` kills the host daemon and `start-gateway.sh` does not restart it.** The
+  restart ritual has a missable third step whose omission is silent until wake/peek/spawn fail. It
+  bit twice in one day, once during a release and once during the resulting debugging.
+- [low] **Stray minted records accumulate.** Each broken manual start left a `host.<hash>` record
+  (`host.e70c13`, `host.5357e4`) that shows on the board's session list as available for 30 days.
+  Forgettable from the console; nothing sweeps them sooner.
+
 ## Codex delegation (`plans/codex-thinking.md`, deleted, shipped - 2026-08-06)
 
 All 8 phases shipped and deployed. Architecture is in CLAUDE.md's "Codex delegation" section; the

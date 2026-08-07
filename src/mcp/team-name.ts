@@ -10,9 +10,11 @@ export function randomTeamId(): string {
 }
 
 /**
- * The stable per-session team name: a 6-hex digest of the Claude Code harness's
- * `CLAUDE_CODE_SESSION_ID`, so a plugin reload or a restart + `/resume` re-registers the SAME name
- * and the phone thread (keyed `conv.<phoneId>.<domain>.<gateway>.<spawn>.<session>`) resumes.
+ * The per-session team name: a 6-hex digest of the Claude Code harness's `CLAUDE_CODE_SESSION_ID`.
+ * Stable across a plugin reload (same process, same id), but NOT across a process restart: a
+ * `--resume` forks a fresh session id, so the derived name changes and the phone thread (keyed on
+ * the old name) keeps addressing a session that no longer registers. Only the daemon's
+ * PROJECT_NAME env pin survives a restart; this fallback exists for launches that have no pin.
  *
  * Returns null - the caller falls back to `randomTeamId()` - only when there is no session id
  * (older harness, `--no-session-persistence`, or the `-p --continue` throwaway id).

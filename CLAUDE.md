@@ -780,6 +780,27 @@ KUBECONFIG=~/projects/evie-bot/kubeconfig.yaml kubectl -n evie-bot \
 is never private:** it ships off-device and stays on logcat, so never embed a bearer credential,
 invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fields.
 
+### Restart ritual, and starting a host session by hand
+
+`./down.sh` kills the host-daemon tmux along with the gateway, and `./start-gateway.sh` does NOT
+bring it back. Always run `./start-host-daemon.sh` after. A forgotten daemon is silent until wake,
+peek, and session spawn all fail with `host daemon offline`; this cost a full outage once.
+
+A session's identity and its channel hearing BOTH ride the daemon's launch command, so a bare
+`claude --resume` on the host comes up broken in two silent ways: it registers under a fresh derived
+name (the phone thread and board claims stay keyed on the old one), and the harness drops every
+channel push because the plugin is not in the session's channels list. The working manual form is:
+
+```bash
+PROJECT_NAME=host.<id> claude --resume <transcript-uuid> \
+  --dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium
+```
+
+Prefer waking the session from the console once the daemon is up; the daemon composes all of this.
+The MCP's own stderr (its `[bridge]`/`[channel]` lines, and the harness's "Channel notifications
+skipped" line that is the deafness signature) lands in
+`~/.cache/claude-cli-nodejs/<project-dir>/mcp-logs-plugin-switchboard-switchboard/`.
+
 ## Deploying
 
 ### The four components update on SEPARATE triggers
