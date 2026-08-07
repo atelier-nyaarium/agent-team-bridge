@@ -55,6 +55,13 @@ data class BoardLiveLine(val title: String, val state: String, val finished: Int
  */
 class BoardManager(private val store: BoardStore) {
 	private val json = Json { ignoreUnknownKeys = true }
+
+	/** False when a STORED board could not be decoded, as opposed to there being none yet. An empty
+	 * board and an unreadable one look identical afterwards, and one of them must not drive a delete.
+	 *
+	 * Declared ABOVE [blob] on purpose: properties initialize in declaration order, so below it this
+	 * field's own initializer would run after [load] and overwrite what load recorded. */
+	@Volatile private var loadedCleanly = true
 	@Volatile private var blob: BoardBlob = load()
 	private val drainMutex = Mutex()
 
@@ -80,10 +87,17 @@ class BoardManager(private val store: BoardStore) {
 
 	private fun routeGatewayId(): String = store.loadGatewayId()
 
-	private fun load(): BoardBlob =
-		store.loadTaskBoard()?.let { raw ->
-			runCatching { json.decodeFromString<BoardBlob>(raw) }.getOrNull()
-		} ?: BoardBlob()
+	val boardIsKnown: Boolean
+		get() = loadedCleanly
+
+	private fun load(): BoardBlob {
+		val raw = store.loadTaskBoard() ?: return BoardBlob()
+		return runCatching { json.decodeFromString<BoardBlob>(raw) }.getOrNull()
+			?: BoardBlob().also {
+				loadedCleanly = false
+				DebugLog.log("Board", "stored board could not be decoded; starting empty")
+			}
+	}
 
 	private fun persist(next: BoardBlob) {
 		if (next == blob) return
@@ -168,9 +182,14 @@ class BoardManager(private val store: BoardStore) {
 		// MERGED, not the raw snapshot: a just-attached picture lives only in the queue until the
 		// gateway's next snapshot lands, and a cold-start sweep in that window would delete the bytes
 		// the queued action is still trying to upload.
+		// Every KNOWN entry, not only those whose list currently names files. The list is gateway
+		// metadata and the bytes are the phone's own copy, so tying one to the other means a gateway
+		// that loses or strips the field - a rollback, a truncated projection - takes the device's
+		// copy with it on the next sweep, which for a picture nothing else still holds is the silent
+		// disappearance this whole feature exists to prevent. A bucket whose files were legitimately
+		// removed is already emptied at the write, so keeping its name costs nothing.
 		val fromEntries = blob.gateways.keys
 			.flatMap { mergedEntries(it) }
-			.filter { !it.attachments.isNullOrEmpty() }
 			.map { Attachments.boardBucket(it.id) }
 		// By entry rather than by parsing the stored paths: sources hold absolute paths for the upload,
 		// which are not the src shape bucketOf reads.

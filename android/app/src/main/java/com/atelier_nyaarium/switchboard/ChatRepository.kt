@@ -4161,6 +4161,13 @@ class ChatRepository(
 		}
 	}
 
+	/** Every board bucket already on disk, for the one case where the board cannot say which are live. */
+	private fun existingBoardBuckets(): Set<String> =
+		Attachments.root(filesDir).listFiles()
+			?.filter { it.isDirectory && it.name.startsWith("board-") }
+			?.mapTo(mutableSetOf()) { it.name }
+			?: emptySet()
+
 	/** Restart the transfers whose kick died with the process, or with a failure that only logged.
 	 * The queued action survived either way, so without this the drain would check forever and the
 	 * picture would never go up. Cheap to repeat: an upload resumes from the Gateway's own cursor. */
@@ -5158,7 +5165,17 @@ class ChatRepository(
 		// Board buckets are named by their entry rather than pointed at by a src, so they need the keep
 		// set: a committed attachment has no queued action left to reference it, and Question 4 says the
 		// attaching device holds its copy so the peek stays instant.
-		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, frameBuckets + board.attachmentBuckets())
+		//
+		// A board that could not be DECODED answers the empty set, which would turn this into "delete
+		// what the live board does not reference" over a board that restored empty - the reclaim shape
+		// the gateway explicitly refuses, and here it would take every picture on the device in one
+		// pass. Unknown is not empty: skip the board's share of the sweep entirely.
+		val keep = frameBuckets + board.attachmentBuckets()
+		if (board.boardIsKnown) {
+			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep)
+		} else {
+			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep + existingBoardBuckets())
+		}
 		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
 		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
 		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs

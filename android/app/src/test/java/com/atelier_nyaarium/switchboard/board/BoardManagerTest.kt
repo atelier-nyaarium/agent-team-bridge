@@ -12,9 +12,7 @@ import org.junit.Test
 
 class BoardManagerTest {
 	/** In-memory storage: the manager's whole persistence surface (see BoardStore). */
-	private class FakeStore : BoardStore {
-		private var blob: String? = null
-
+	private class FakeStore(private var blob: String? = null) : BoardStore {
 		override fun loadTaskBoard(): String? = blob
 
 		override fun saveTaskBoard(json: String) {
@@ -185,5 +183,15 @@ class BoardManagerTest {
 			fail?.invoke()
 			sent.add(op)
 		}
+	}
+
+	@Test
+	fun anUndecodableBoardIsNotAnEmptyOne() {
+		// The keep set is the only thing between every board picture on the device and the orphan
+		// sweep. A board that failed to decode answers the same empty set a genuinely empty one does,
+		// so without this distinction one bad prefs blob deletes every attachment in a single pass -
+		// the reclaim shape the gateway explicitly refuses, rebuilt on the console.
+		assertTrue("a fresh install has simply not stored one yet", BoardManager(FakeStore()).boardIsKnown)
+		assertFalse("a stored board that will not parse is UNKNOWN", BoardManager(FakeStore("{not json")).boardIsKnown)
 	}
 }
