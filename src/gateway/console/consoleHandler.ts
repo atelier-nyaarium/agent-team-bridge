@@ -1191,26 +1191,62 @@ export function createConsoleDispatcher({
 				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body, OWNER_ACTOR));
 			}
 			case "board_set_attachments": {
-				// Presence is checked DURABLE-FIRST, and that order is the whole correctness of this op.
-				// The list is absolute, so every write re-states the SURVIVORS: months after their cache
-				// copies were swept, removing one picture still names the others. A cache-only check
-				// would find nothing, and since missing bytes are a retryable error rather than a
-				// refusal, the console's queue would retry that action forever and close the whole
-				// Gateway lane behind it. It would pass every warm-cache test.
+				// Resolve EVERY member before adopting any, and store only what resolved.
+				//
+				// Presence is checked DURABLE-FIRST: the list is absolute, so every write re-states the
+				// survivors, and months after their cached copies were swept a cache-only check would
+				// find nothing.
+				//
+				// A member that resolves nowhere is DROPPED rather than failing the op, which is what
+				// keeps this op always satisfiable. Making it an error instead means the console retries
+				// forever (only a refusal retires a queued action) and eventually closes that Gateway's
+				// whole lane; making it a refusal instead discards the owner's good attach along with
+				// the dead one. Dropping keeps the plan's invariant - every STORED member is durable
+				// under its entry - true by construction rather than by a precondition the caller has to
+				// meet. The one exception is a member the sender says it is still uploading, which is a
+				// genuine race and stays retryable.
 				const attachments = requireBoardAttachments();
-				// Refuse BEFORE adopting. Bytes copied under an entry the board does not hold are
-				// reachable by neither reclaim site (the diff reads a stored list, the sweep reclaims
-				// entries it swept), so they would sit there for good.
+				// Before adopting anything: bytes copied under an entry the board does not hold are
+				// reachable by neither reclaim site, so they would sit there for good.
 				if (!requireBoard().entry(ownerId, op.id)) throw refusalError("entry_missing");
+				const supplied = op.supplied;
+				const resolved: Array<{ a: (typeof op.attachments)[number]; cached?: string }> = [];
+				const dropped: string[] = [];
 				for (const a of op.attachments) {
-					if (attachments.has(ownerId, op.id, a.blobId)) continue;
+					if (attachments.has(ownerId, op.id, a.blobId)) {
+						resolved.push({ a });
+						continue;
+					}
 					const cached = blobStore?.path(a.blobId);
-					// Plain error, never a refusal: the upload is racing this write, and a refusal is the
-					// one signal that would discard the owner's edit.
-					if (!cached) throw new Error(`attachment ${a.blobId} has not finished uploading`);
-					attachments.adopt(ownerId, op.id, a.blobId, cached);
+					if (cached) {
+						resolved.push({ a, cached });
+						continue;
+					}
+					// Absent `supplied` is an older console that cannot declare, so every member is
+					// treated as possibly-arriving and the op stays retryable, as it was before.
+					if (!supplied || supplied.includes(a.blobId)) {
+						throw new Error(`attachment ${a.blobId} has not finished uploading`);
+					}
+					dropped.push(a.filename);
 				}
-				return boardWrite(requireBoard().setAttachments(ownerId, op.id, op.attachments, OWNER_ACTOR));
+				// Adopt only once every member is accounted for, so a partial pass cannot leave bytes
+				// under an entry whose stored list never names them.
+				for (const r of resolved) {
+					if (r.cached) attachments.adopt(ownerId, op.id, r.a.blobId, r.cached);
+				}
+				if (dropped.length > 0) {
+					console.warn(
+						`[task-board] ${op.id}: dropped ${dropped.length} attachment(s) with no bytes anywhere`,
+					);
+				}
+				const result = requireBoard().setAttachments(
+					ownerId,
+					op.id,
+					resolved.map((r) => r.a),
+					OWNER_ACTOR,
+				);
+				boardWrite(result);
+				return { applied: true, ...(dropped.length > 0 ? { dropped } : {}) };
 			}
 			case "board_set_parent": {
 				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank, OWNER_ACTOR));

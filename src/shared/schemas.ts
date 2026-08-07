@@ -667,6 +667,11 @@ export const ConsoleOpSchema = z
 			kind: z.literal("board_set_attachments"),
 			id: z.string().min(1).max(64),
 			attachments: z.array(BoardAttachmentSchema).max(BOARD_ATTACHMENTS_MAX),
+			// Which members the SENDER still has bytes for and is uploading. A fact about the sender's
+			// own disk, never a prediction about the Gateway's, which is what lets the Gateway decide
+			// whether a member it cannot find is racing an upload or is gone from every machine.
+			// Absent means a client that cannot say, which is treated as "any of them might arrive".
+			supplied: z.array(z.string().min(1).max(128)).max(BOARD_ATTACHMENTS_MAX).optional(),
 		}),
 		// One PLACEMENT intent: parent and rank land together. Absent parent means root.
 		z.object({

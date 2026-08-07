@@ -496,12 +496,32 @@ mistakes:
 
 The shared root: **`board_set_attachments` is absolute, so every write re-states members whose bytes
 must already be somewhere, and "somewhere" is a different machine than the queue lives on.** Every
-patch above is a different way of keeping those two facts in step. A design that removed the class
-rather than patching it would make the op carry its own byte precondition - for instance a member the
-Gateway cannot resolve being a REFUSAL the queue can retire on, rather than a retryable error - so no
-console-side rule has to predict what the Gateway holds. Raised for `architecture-fan-out`; not
-attempted here, because a refusal is the one signal that discards an owner's edit and choosing it
-needs its own pass.
+patch above is a different way of keeping those two facts in step.
+
+**Resolved: the op no longer has a precondition to violate.** Three shapes were evaluated and all
+three rejected, which is what pointed at the fourth:
+
+- *A `bytes_missing` refusal.* Rejected: every other `BoardRefusal` member is a total, deterministic
+  statement about BOARD state, and this one would be a statement about a transfer. It also discards
+  the owner's whole absolute list, so the ordinary "keep X, add Y" edit loses the good new picture
+  along with the dead one.
+- *The Gateway pulling missing bytes from `blobGateway`.* Rejected: inert where it is needed, since a
+  member minted by this console names the handling Gateway itself and the federated fetch
+  short-circuits on that. It also adds an `await` between the entry check and the adopt, reopening
+  the orphan-bytes hole that ordering exists to close.
+- *Changing the lane rules.* Rejected: every variant only moves WHEN the lane steps past a doomed
+  action, never WHETHER it can, because the same-entry ordering rule the fix must preserve is itself
+  what closes the lane. The console also cannot tell a dead member from a Gateway that has not
+  restarted yet, so any local ceiling would discard real edits during ordinary deploy skew.
+
+What landed instead: **the sender declares what it can supply, and the Gateway stores what it can
+resolve.** `board_set_attachments` carries an optional `supplied` list, which is a fact about the
+sender's own disk rather than a prediction about the Gateway's. A member that resolves nowhere and is
+not declared as still uploading is DROPPED and reported, not failed. Neither side predicts the other,
+the op is always satisfiable, and the invariant "every stored member is durable under its entry" holds
+by construction rather than as a precondition a caller has to meet. A member the sender says it is
+still uploading stays retryable, which is the one genuine race. An older console omits the field and
+gets exactly the previous behaviour, so the deploy window is safe.
 
 ## Phase 2 - Moving between machines
 

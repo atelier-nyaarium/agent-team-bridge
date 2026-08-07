@@ -4090,7 +4090,14 @@ class ChatRepository(
 		val stays = (keep + added).mapTo(mutableSetOf()) { it.blobId }
 		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach { if (it.name !in stays) it.delete() }
 
-		board.enqueue(ConsoleOp.BoardSetAttachments(id, keep + added), gatewayId, sources = sources)
+		// `supplied` is a claim about THIS device's disk, nothing more: these are the members whose
+		// bytes are here and going up. A member outside it that the Gateway also cannot find exists on
+		// no machine, and the Gateway drops it instead of failing the write forever.
+		board.enqueue(
+			ConsoleOp.BoardSetAttachments(id, keep + added, supplied = sources.keys.toList()),
+			gatewayId,
+			sources = sources,
+		)
 		// Outside the drain, which is single-flight: a multi-minute transfer inside it would stall every
 		// board write on every Gateway. repoScope so it survives the Activity going away mid-upload.
 		// Cheap for a survivor the Gateway already holds - uploadBlob short-circuits on its stat.

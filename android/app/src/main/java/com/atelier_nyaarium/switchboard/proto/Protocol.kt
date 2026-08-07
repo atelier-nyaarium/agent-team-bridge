@@ -236,6 +236,7 @@ sealed class ConsoleOp {
 	data class BoardSetAttachments(
 		val id: String,
 		val attachments: List<BoardAttachment>,
+		val supplied: List<String>? = null,
 	) : ConsoleOp()
 
 	@Serializable
