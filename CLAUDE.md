@@ -453,6 +453,17 @@ reports running work as unconfirmed.
   PAYLOAD and can change while the row is on screen has to be folded in, or the row keeps stale
   content forever. State pushed over the JS bridge instead (`window.thread.*` mutating in place) is
   outside it by design and needs no fold.
+- **Session card rungs** (`SessionCardPreview.kt`): a PURE function decides which of the headline,
+  board line and snippet show and what each is stamped with; the composable paints what it is handed
+  and derives nothing. It lives outside `SessionCard` because the inline version was patched twice
+  with no test able to reach the rules. The headline is the session's own last reply, so the owner's
+  sends and peer mirrors cannot take it; the snippet shows whenever the newest row is not that reply,
+  which is what makes a send visibly change the card. Each rung carries its OWN row's time, and the
+  bottom one is `lastActivity`, which is what `sessionOrder` ranks on, so the column reads in order.
+- **One-line rows** (`oneLine`): ASCII whitespace collapse for a row that cannot show a second line,
+  which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
+  Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
+  `plans/pain-points.md` before reintroducing one.
 - **Designer plugin:** docks a `design-card` file from its declared title/group/dimensions the
   moment the message lands, and resolves the bytes at RENDER from the live row (content-keyed, so an
   older revision cannot lend its bytes). A card therefore exists before its bytes and says whether
