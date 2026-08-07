@@ -155,6 +155,42 @@ function holds(entry: BoardEntry | undefined, sessionId: string): boolean {
  * sweep and a tolerant restore. The write paths REFUSE instead (`parent_missing`, `would_orphan`),
  * because a caller that can still fix its own batch should be told rather than quietly corrected.
  */
+/**
+ * Which entries can be set aside without breaking the tree: those `eligible` accepts whose every live
+ * child is also going. A parent whose child survives is KEPT, so no pass can leave a survivor pointing
+ * at an entry that is no longer in any list.
+ *
+ * Eligibility alone is not enough, and that is the whole point: a done parent can easily own a child
+ * that is unfinished, or finished but held by another session, and either one has to keep its parent.
+ * Bad data with a parent cycle resolves to not-prunable rather than hanging.
+ */
+function prunableSubtrees(entries: Map<string, BoardEntry>, eligible: (entry: BoardEntry) => boolean): Set<string> {
+	const kids = new Map<string, BoardEntry[]>();
+	for (const e of entries.values()) {
+		if (e.parent === undefined || e.trashedAt !== undefined) continue;
+		const list = kids.get(e.parent);
+		if (list) list.push(e);
+		else kids.set(e.parent, [e]);
+	}
+	const memo = new Map<string, boolean>();
+	const visiting = new Set<string>();
+	const canPrune = (e: BoardEntry): boolean => {
+		const seen = memo.get(e.id);
+		if (seen !== undefined) return seen;
+		if (visiting.has(e.id)) return false;
+		visiting.add(e.id);
+		const result = eligible(e) && (kids.get(e.id) ?? []).every(canPrune);
+		visiting.delete(e.id);
+		memo.set(e.id, result);
+		return result;
+	};
+	const out = new Set<string>();
+	for (const e of entries.values()) {
+		if (e.trashedAt === undefined && canPrune(e)) out.add(e.id);
+	}
+	return out;
+}
+
 function promoteOrphans(entries: Map<string, BoardEntry>): number {
 	let promoted = 0;
 	for (const e of entries.values()) {
@@ -481,26 +517,24 @@ export class BoardStore {
 		});
 	}
 
-	/** Trash a session's done and cancelled entries (taskBoardClear). Returns how many.
+	/** Trash a session's finished entries (taskBoardClear), pruning whole finished subtrees and keeping
+	 * every parent that still owns a survivor. Returns how many.
 	 *
-	 * An entry with a LIVE child stays: trashing it alone would leave that child pointing at a parent
-	 * no list returns, and every other path here keeps that from happening - setTrashed takes the
-	 * whole subtree, restore and the sweep promote an orphan. Its own turn comes once the child is
-	 * finished or moved. */
+	 * The survivor may be unfinished, or finished and held by ANOTHER session, and either keeps its
+	 * parent: a kept parent is the only thing that stops the child ending up under an entry no list
+	 * returns. Its own turn comes once that child is finished or moved. */
 	clearDone(ownerId: string, sessionId: string, now = Date.now()): number {
 		let cleared = 0;
 		this.mutate(ownerId, { kind: "session", sessionId }, (board, touch) => {
-			const liveParents = new Set<string>();
-			for (const e of board.entries.values()) {
-				if (e.parent === undefined || e.trashedAt !== undefined) continue;
-				if (e.state !== "done" && e.state !== "cancelled") liveParents.add(e.parent);
-			}
-			for (const e of board.entries.values()) {
-				if (e.sessionId !== sessionId || e.trashedAt !== undefined) continue;
-				if (e.state !== "done" && e.state !== "cancelled") continue;
-				if (liveParents.has(e.id)) continue;
+			const prunable = prunableSubtrees(
+				board.entries,
+				(e) => e.sessionId === sessionId && (e.state === "done" || e.state === "cancelled"),
+			);
+			for (const id of prunable) {
+				const e = board.entries.get(id);
+				if (!e) continue;
 				e.trashedAt = now;
-				touch(e.id);
+				touch(id);
 				cleared++;
 			}
 			return cleared > 0 ? undefined : "unchanged";
@@ -611,16 +645,31 @@ export class BoardStore {
 			// Announces nothing: a notice would name a session the send edge is about to find gone.
 			this.mutate(ownerId, OWNER_ACTOR, (board) => {
 				let touched = false;
+				// The disposition first, so the prune below sees the states this pass actually leaves.
 				for (const e of board.entries.values()) {
 					if (e.sessionId !== sessionKey) continue;
 					// Already trashed means the owner set it aside before this. The forget prompt did
 					// not count it, so the disposition does not restate it; it still loses its session.
 					const finished = e.state === "done" || e.state === "cancelled";
 					if (disposition === "cancel" && !finished && e.trashedAt === undefined) e.state = "cancelled";
-					if ((e.state === "done" || e.state === "cancelled") && e.trashedAt === undefined) e.trashedAt = now;
-					delete e.sessionId;
 					touched = true;
 					count++;
+				}
+				// Same rule as clearDone: a finished entry is set aside only when its whole subtree goes
+				// with it, so a child left behind by another session keeps its parent.
+				const ending = new Set(
+					[...board.entries.values()].filter((e) => e.sessionId === sessionKey).map((e) => e.id),
+				);
+				for (const id of prunableSubtrees(
+					board.entries,
+					(e) => ending.has(e.id) && (e.state === "done" || e.state === "cancelled"),
+				)) {
+					const e = board.entries.get(id);
+					if (e) e.trashedAt = now;
+				}
+				// After the prune, or an entry would no longer look like the session's own to it.
+				for (const e of board.entries.values()) {
+					if (ending.has(e.id)) delete e.sessionId;
 				}
 				return touched ? undefined : "unchanged";
 			});

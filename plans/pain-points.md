@@ -1327,13 +1327,11 @@ fixed there; the notice framework only made them visible.
   takes the owner's trashed children. `release` is the same hole outward. The owner untrashes their
   own set-aside item and it lands under a session that never held it. Both loops need the same trash
   test `mayWrite` and `visibleTo` already apply.
-- [low] **`clearDone` and `sessionEnded` can trash a parent out from under a surviving child.**
-  `clearDone` builds `liveParents` from children that are not done or cancelled, so a done child held
-  by ANOTHER session neither protects its parent nor gets trashed with it. `sessionEnded` has no guard
-  at all. `liveParents` should be "has any child this pass will not trash". Downgraded from medium:
-  the owner ruled the trash window acceptable, since the parent is still visible in the trash, and
-  `promoteOrphans` provably clears the pointer when the sweep finally deletes it (pinned by a test
-  that walks this exact path).
+- CLOSED. **`clearDone` and `sessionEnded` could trash a parent out from under a surviving child.**
+  `clearDone`'s guard counted only unfinished children, so a done child held by ANOTHER session
+  neither protected its parent nor went with it; `sessionEnded` had no guard at all. Both now use
+  `prunableSubtrees`: an entry is set aside only when its whole subtree goes with it, so a parent with
+  any survivor is kept. `promoteOrphans` stays as the backstop for the one delete that cannot refuse.
 - [low] **An assign to a session that is not confirmed-live announces nothing**, and the console offers
   exactly those sessions as targets with no visual distinction. The entry lands, the board plane
   confirms it, and the notice is dropped at the send edge. Either the board should wake the target, or

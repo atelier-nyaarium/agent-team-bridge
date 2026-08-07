@@ -249,21 +249,37 @@ describe("trash and sweeps", () => {
 		expect(store.entry(OWNER, "fresh")).toBeDefined();
 	});
 
-	it("the sweep clears a parent pointer no delete path could have refused", () => {
-		// clearDone can trash a parent while a child held by ANOTHER session survives: its liveParents
-		// guard counts only unfinished children. The trash window is the recoverable part; what must not
-		// survive it is a survivor pointing at an entry that is gone.
+	it("clearDone keeps a done parent whose child is another session's, so the tree stays whole", () => {
+		// The survivor is finished, so an unfinished-children guard misses it entirely, and trashing the
+		// parent would leave it under an entry no list returns.
 		upsert([
 			entry("p", { sessionId: "s1", state: "done" }),
 			entry("c", { parent: "p", sessionId: "s2", state: "done" }),
 		]);
-		expect(store.clearDone(OWNER, "s1", 1000)).toBe(1);
+		expect(store.clearDone(OWNER, "s1", 1000)).toBe(0);
+		expect(store.entry(OWNER, "p")?.trashedAt).toBeUndefined();
 		expect(store.entry(OWNER, "c")?.parent).toBe("p");
+	});
 
-		store.sweepTrash(1000 + BOARD_TRASH_TTL_MS + 1);
-		expect(store.entry(OWNER, "p")).toBeUndefined();
-		expect(store.entry(OWNER, "c")).toBeDefined();
-		expect(store.entry(OWNER, "c")?.parent).toBeUndefined();
+	it("clearDone prunes a wholly finished subtree, parent and children together", () => {
+		upsert([
+			entry("p", { sessionId: "s1", state: "done" }),
+			entry("c", { parent: "p", sessionId: "s1", state: "cancelled" }),
+			entry("g", { parent: "c", sessionId: "s1", state: "done" }),
+		]);
+		expect(store.clearDone(OWNER, "s1", 1000)).toBe(3);
+		for (const id of ["p", "c", "g"]) expect(store.entry(OWNER, id)?.trashedAt).toBe(1000);
+	});
+
+	it("sessionEnded keeps a parent whose child belongs to a session that is not ending", () => {
+		upsert([
+			entry("p", { sessionId: "s1", state: "done" }),
+			entry("c", { parent: "p", sessionId: "s2", state: "open" }),
+		]);
+		store.sessionEnded("s1", "cancel", 1000);
+		expect(store.entry(OWNER, "p")?.trashedAt).toBeUndefined();
+		expect(store.entry(OWNER, "p")?.sessionId).toBeUndefined();
+		expect(store.entry(OWNER, "c")?.parent).toBe("p");
 	});
 
 	it("clearDone trashes exactly the session's finished entries", () => {
