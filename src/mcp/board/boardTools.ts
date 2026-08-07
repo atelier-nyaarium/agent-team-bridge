@@ -67,6 +67,13 @@ Take an unassigned entry, and everything under it, for this session.
 
 Refuses when another session holds it, so repeating a claim whose reply you lost
 is safe rather than a theft.
+
+When what you just claimed is one entry whose BODY is a list of subtasks, explode
+it: create each item as a nested entry under it, then clear the body you took them
+from. A list living in prose cannot be given a state, held by anyone, or counted,
+so leaving it there costs the owner every one of those. Word each title better
+than the source line rather than copying it verbatim, and keep any detail that
+does not fit a title in that child's own body.
 `.trim();
 
 const RELEASE_DESCRIPTION = `

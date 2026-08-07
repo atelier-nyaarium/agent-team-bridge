@@ -67,6 +67,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
@@ -77,7 +78,6 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Hub
@@ -908,11 +908,12 @@ fun App(
 				},
 				queueState = queueState,
 				onQueue = { openQueueRequest.value = true },
-				board = { modifier ->
+				board = { modifier, goToSessions ->
 					BoardScreen(
 						state = state,
 						repo = repo,
 						onOpenEntry = { gw, id -> editEntry = gw to id },
+						onSaved = goToSessions,
 						modifier = modifier,
 					)
 				},
@@ -1453,7 +1454,9 @@ fun MainTabsScreen(
 	queueState: QueueGlance,
 	onQueue: () -> Unit,
 	sessions: @Composable (Modifier) -> Unit,
-	board: @Composable (Modifier) -> Unit,
+	// The second argument moves to the Sessions tab, which is where the board sends the owner after a
+	// save. The pager state lives here, so the board cannot reach it any other way.
+	board: @Composable (Modifier, () -> Unit) -> Unit,
 ) {
 	val tabs = if (boardEnabled) listOf("Sessions", "Task Board") else listOf("Sessions")
 	val pagerState = rememberPagerState(pageCount = { tabs.size })
@@ -1506,7 +1509,8 @@ fun MainTabsScreen(
 				}
 			}
 			HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-				if (page == 0) sessions(Modifier.fillMaxSize()) else board(Modifier.fillMaxSize())
+				if (page == 0) sessions(Modifier.fillMaxSize())
+				else board(Modifier.fillMaxSize()) { scope.launch { pagerState.animateScrollToPage(0) } }
 			}
 		}
 	}
@@ -2052,9 +2056,10 @@ private fun CollapsibleSectionHeader(
 			.padding(horizontal = 4.dp, vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		// The caret points down when open and up when collapsed.
+		// Down when open, right when collapsed: the chevron points at where the content is, or at
+		// where it would appear. Auto-mirrored so it points left in an RTL layout.
 		Icon(
-			if (collapsed) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+			if (collapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Default.ExpandMore,
 			contentDescription = if (collapsed) "Expand" else "Collapse",
 			tint = MaterialTheme.colorScheme.onSurfaceVariant,
 		)

@@ -2,6 +2,8 @@ package com.atelier_nyaarium.switchboard.board
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -58,6 +60,9 @@ fun BoardScreen(
 	state: ChatState,
 	repo: ChatRepository,
 	onOpenEntry: (String, String) -> Unit,
+	// Where a saved entry leaves the owner. Saving is the end of a thought, and the session list is
+	// where they act on it, so the board tab is the one place they do NOT want to land.
+	onSaved: () -> Unit = {},
 	modifier: Modifier = Modifier,
 ) {
 	// Opening the tab refreshes every non-route Gateway's column (the route one rides the plane).
@@ -90,30 +95,48 @@ fun BoardScreen(
 	// Gateway in many attempts is worth saying out loud, even though it is still retrying.
 	val struggling = remember(revision) { repo.board.strugglingEntries() }
 
-	var capture by rememberSaveable { mutableStateOf("") }
 	var sheet by remember { mutableStateOf<BoardSheet?>(null) }
 	var trashOpen by rememberSaveable { mutableStateOf(false) }
-	// Which groups have their bottom gather open. Hoisted out of the LazyColumn: an item's own state
-	// dies when the row scrolls out of the viewport, so a gather would silently re-collapse.
-	var openGathers by rememberSaveable { mutableStateOf(setOf<String>()) }
+	// The compose form REPLACES the list rather than floating over it, so the owner can leave for the
+	// session list, copy something, and come back to it still filled in. All three are saveable
+	// because a tab swipe disposes this page, and typed-but-unsaved text is the one thing here that
+	// cannot be got back.
+	var composing by rememberSaveable { mutableStateOf(false) }
+	var draftTitle by rememberSaveable { mutableStateOf("") }
+	var draftBody by rememberSaveable { mutableStateOf("") }
+
+	if (composing) {
+		BoardComposeForm(
+			title = draftTitle,
+			body = draftBody,
+			onTitle = { draftTitle = it },
+			onBody = { draftBody = it },
+			onCancel = { composing = false },
+			onSave = {
+				repo.boardCapture(draftTitle.trim(), draftBody.trim().takeIf { it.isNotEmpty() })
+				draftTitle = ""
+				draftBody = ""
+				composing = false
+				onSaved()
+			},
+			modifier = modifier,
+		)
+		return
+	}
 
 	LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-		item(key = "capture") {
-			OutlinedTextField(
-				value = capture,
-				onValueChange = { capture = it },
-				placeholder = { Text("Capture a thought") },
-				trailingIcon = {
-					if (capture.isNotBlank()) {
-						TextButton(onClick = {
-							repo.boardCapture(capture.trim(), body = null)
-							capture = ""
-						}) { Text("Add") }
-					}
-				},
-				singleLine = true,
-				modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-			)
+		item(key = "new") {
+			Row(
+				Modifier.fillMaxWidth().padding(top = 10.dp),
+				horizontalArrangement = Arrangement.End,
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				// Says "Resume" when a draft is waiting: the button is the only trace of it once the
+				// form is closed, and a bare "New" would read as discarding what is still there.
+				TextButton(onClick = { composing = true }) {
+					Text(if (draftTitle.isBlank() && draftBody.isBlank()) "New" else "Resume draft")
+				}
+			}
 		}
 
 		// A refused action never lands, so the row snapped back to Gateway truth without saying so.
@@ -159,16 +182,10 @@ fun BoardScreen(
 		val toggleFold = { id: String ->
 			expandedFolds = if (id in expandedFolds) expandedFolds - id else expandedFolds + id
 		}
-		val toggleGather = { key: String ->
-			openGathers = if (key in openGathers) openGathers - key else openGathers + key
-		}
-
 		item(key = "sect:backlog") { BoardSectionLabel("Backlog", rows.unassigned.rows.size) }
 		boardGroupItems(
 			this,
 			rows.unassigned,
-			gatherOpen = "backlog" in openGathers,
-			onToggleGather = { toggleGather("backlog") },
 			onOpen = onOpenEntry,
 			onToggleFold = toggleFold,
 			onLongPress = { sheet = BoardSheet.Actions(it) },
@@ -182,8 +199,6 @@ fun BoardScreen(
 			boardGroupItems(
 				this,
 				group,
-				gatherOpen = sid in openGathers,
-				onToggleGather = { toggleGather(sid) },
 				onOpen = onOpenEntry,
 				onToggleFold = toggleFold,
 				onLongPress = { sheet = BoardSheet.Actions(it) },
@@ -279,8 +294,6 @@ fun BoardScreen(
 private fun boardGroupItems(
 	scope: androidx.compose.foundation.lazy.LazyListScope,
 	group: BoardGroup,
-	gatherOpen: Boolean,
-	onToggleGather: () -> Unit,
 	onOpen: (String, String) -> Unit,
 	onToggleFold: (String) -> Unit,
 	onLongPress: (BoardRow) -> Unit,
@@ -302,25 +315,16 @@ private fun boardGroupItems(
 				)
 			}
 		}
-		if (group.gatheredRows.isNotEmpty()) {
-			item(key = "gather:${group.key?.let { "${it.gatewayId}/${it.sessionId}" } ?: "backlog"}") {
-				BoardFoldRow(
-					label = "${group.gatheredRows.size} done",
-					expanded = gatherOpen,
-					onToggle = onToggleGather,
+		// Finished rows sit at the bottom of their group and read as finished on their own, so they need
+		// no counted header to hide behind. One less line, and one less thing to open.
+		for (row in group.gatheredRows) {
+			item(key = "done:${row.gatewayId}/${row.entry.id}") {
+				BoardEntryRow(
+					row,
+					onClick = { onOpen(row.gatewayId, row.entry.id) },
+					onLongPress = { onLongPress(row) },
+					struggling = row.entry.id in struggling,
 				)
-				if (gatherOpen) {
-					Column {
-						for (row in group.gatheredRows) {
-							BoardEntryRow(
-								row,
-								onClick = { onOpen(row.gatewayId, row.entry.id) },
-								onLongPress = { onLongPress(row) },
-								struggling = row.entry.id in struggling,
-							)
-						}
-					}
-				}
 			}
 		}
 	}
@@ -429,6 +433,48 @@ private fun SessionGroupHeader(state: ChatState, key: GroupKey) {
 	}
 }
 
+/** The new-entry form, in place of the list. Save is disabled on a blank title, since a titleless
+ * entry renders as an empty row everywhere the board is drawn. */
+@Composable
+private fun BoardComposeForm(
+	title: String,
+	body: String,
+	onTitle: (String) -> Unit,
+	onBody: (String) -> Unit,
+	onCancel: () -> Unit,
+	onSave: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	Column(
+		modifier.fillMaxSize().padding(horizontal = 12.dp).verticalScroll(rememberScrollState()),
+		verticalArrangement = Arrangement.spacedBy(10.dp),
+	) {
+		Row(
+			Modifier.fillMaxWidth().padding(top = 10.dp),
+			horizontalArrangement = Arrangement.spacedBy(8.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Text("New entry", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+			TextButton(onClick = onCancel) { Text("Cancel") }
+			TextButton(onClick = onSave, enabled = title.isNotBlank()) { Text("Save") }
+		}
+		OutlinedTextField(
+			value = title,
+			onValueChange = onTitle,
+			label = { Text("Title") },
+			singleLine = true,
+			modifier = Modifier.fillMaxWidth(),
+		)
+		OutlinedTextField(
+			value = body,
+			onValueChange = onBody,
+			label = { Text("Body") },
+			minLines = 6,
+			modifier = Modifier.fillMaxWidth(),
+		)
+	}
+}
+
 @Composable
 private fun BoardFoldRow(label: String, expanded: Boolean, onToggle: () -> Unit) {
 	Row(
@@ -436,7 +482,7 @@ private fun BoardFoldRow(label: String, expanded: Boolean, onToggle: () -> Unit)
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		Icon(
-			if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+			if (expanded) Icons.Default.ExpandMore else Icons.AutoMirrored.Filled.KeyboardArrowRight,
 			contentDescription = if (expanded) "Collapse" else "Expand",
 			tint = MaterialTheme.colorScheme.onSurfaceVariant,
 			modifier = Modifier.size(20.dp),

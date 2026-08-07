@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +48,7 @@ fun BoardStrip(group: BoardGroup?, liveLine: BoardLiveLine?) {
 				verticalAlignment = Alignment.CenterVertically,
 			) {
 				Icon(
-					if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+					if (expanded) Icons.Default.ExpandMore else Icons.AutoMirrored.Filled.KeyboardArrowRight,
 					contentDescription = if (expanded) "Collapse" else "Expand",
 					tint = MaterialTheme.colorScheme.onSurfaceVariant,
 					modifier = Modifier.size(18.dp),
@@ -76,14 +76,9 @@ fun BoardStrip(group: BoardGroup?, liveLine: BoardLiveLine?) {
 			if (expanded) {
 				Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
 					for (row in group.rows) StripRow(row)
-					if (group.gatheredRows.isNotEmpty()) {
-						Text(
-							"${group.gatheredRows.size} done",
-							style = MaterialTheme.typography.bodySmall,
-							color = MaterialTheme.colorScheme.onSurfaceVariant,
-							modifier = Modifier.padding(start = 37.dp, top = 4.dp),
-						)
-					}
+					// Finished rows render like any other, struck through by their own state. A counted
+					// summary line said less than the rows themselves and cost a line of its own.
+					for (row in group.gatheredRows) StripRow(row)
 				}
 			}
 		}
