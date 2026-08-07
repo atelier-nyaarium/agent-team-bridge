@@ -2,7 +2,7 @@
 
 Attachments on task board entries. The OWNER attaches supplementing pictures from the console's edit
 screen; agents only READ them, through an MCP tool that fetches the bytes to disk. The board list
-answer carries a count so an agent knows to look. A paperclip marks an entry that has some.
+answer carries the names so an agent knows to look. A paperclip marks an entry that has some.
 
 ## Settled before any question was asked
 
@@ -59,7 +59,9 @@ gives that question one owner - the entry.
 
 **Bytes stay on the Gateway for the entry's whole life.** The MCP fetch is a COPY to the agent's disk,
 not a hand-off; fetching does not move or free anything. Agents are disposable, the owner can reopen
-the gallery whenever, and the console deliberately keeps no copy of its own.
+the gallery whenever, and the console's own copy is best-effort and non-authoritative (Question 4 has
+it keep one for instant peeks; the Gateway is the holder of record, and `Admission.Reason.GONE` exists
+because a device copy can vanish).
 
 ## Question 2 - What rides the board plane per entry?
 
@@ -150,50 +152,320 @@ one, and at a few dozen entries not one worth machinery.
 
 ## Decided without asking
 
-- **The fetch tool writes to a per-invocation directory** under the system temp dir, one folder per
-  entry, files under their real names. Same shape as the refs system's own materialization, so an agent
-  gets ordinary paths to Read rather than a new access idiom.
-- **An attachment id is the sha256 of its bytes.** An interrupted upload retries into the same id, and
-  the same picture attached twice costs one copy. The `boardEntryIdForOperation` trick applied to
-  bytes, which makes the attach op absolute for free.
+- **The fetch tool materializes through the `evieFiles` machinery**, one folder per entry, files under
+  their real names, so an agent gets ordinary paths to Read rather than a new access idiom. That
+  machinery already carries the sweeper, the filename sanitizer, collision-free naming, atomic landing
+  and per-file failure marking; nothing there is designed twice.
+- **An attachment id is the sha256 of its bytes.** An interrupted upload retries into the same id.
+  Dedup is PER ENTRY: the store keys bytes under the entry, so the same picture attached to two entries
+  costs two copies. That is the price of a reclaim that can never reach across entries.
 - **Ten attachments per entry**, per the scale note above.
+
+# How this plan got here
+
+Six audit laps before any code existed: 3 blockers, then 5, then 13, then a lap that mostly deleted,
+then a verification lap, then a narrow confirmation. The rising count was not the feature getting
+harder. Each lap added MECHANISM to fix the previous lap's findings, and the next lap found the
+mechanism wrong. The rule that ended the spiral, and that governs any further lap: **prefer deleting
+a mechanism to adding one.**
+
+What each lap left behind, kept because the reasoning is the reusable part:
+
+- **Lap 1** found the real structural hazards that survive today: the entry id is not a safe path
+  segment, the attach needs a durable intent and bytes may never ride the queue, and the drain mutex
+  cannot host a transfer.
+- **Lap 2** invented a claim-then-fetch byte gate, then retired it for a WRONG reason: it claimed
+  `/blob/get` was the weaker door when it is the stronger one (`mayUseLocalPlane` demands a credential
+  whenever any session is bound; `refuseImpersonation` is name-keyed and admits an UNBOUND claim).
+  Lap 2 also added preserve-when-omitted, a detach op, a remove-refusal with an acknowledgment field,
+  and drop-the-cache-copy. All four are now deleted; see the constraints for why each guards nothing
+  or breaks something.
+- **Lap 3** caught the door inversion, killed the cache drop, shrank the transfer phase, and found the
+  pre-existing LAN hole recorded below.
+- **Lap 4** ran deletion-biased and removed the transfer phase entirely (the requirement it served is
+  already met by shipped code), collapsed the byte-gate section (a fetch is two hops and each hop's
+  existing door already carries the right predicate), and deleted lap 2's remaining three mechanisms. It also
+  found five places where one lap's text contradicted another's, which is why the layered lap-by-lap
+  record was consolidated into the single constraint set below. Every deletion was re-verified against
+  the code by hand before it landed here.
+- **Lap 5** verified the consolidated plan: one auditor re-checked roughly forty file-level claims at
+  HEAD and every one held. Three structural items surfaced and were folded: the byte reader has a
+  THIRD door (`serveBlobRange`, the federation export, cache-only), so the durable fallthrough moved
+  into the shared read below all three; hop 1 needed the route's new `attachments` read action named
+  explicitly, with the projection pinned ROUTE-side; and the op handler's presence check was pinned
+  durable-first, or the owner's own remove would wedge weeks later on a swept cache.
+- **Lap 6** confirmed all three folds clean and caught the bypass under the third: `BoardUpsert` was
+  a second committer of attachment lists (a move upserts entries verbatim), which re-opened the
+  wedge and, under Phase 2 as then written, destroyed the only durable copy. Closed the
+  deletion-shaped way: upsert ignores the field entirely, `board_set_attachments` is the sole
+  committer, and Phase 2's move gains an explicit set step before the origin delete.
+
+## Why there is no "safe transfers" phase
+
+> "I might upload a bin that takes a few min. It needs to be safe for an alt tab."
+> "in fact, safe uploads should be implemented anywhere there's a file upload. like message sending."
+
+The requirement is real and it is ALREADY MET for the case named, verified line by line:
+
+- An alt-tab cancels nothing. A send runs on `repoScope`, which is documented "Never cancelled ...
+  lives for the process's lifetime", and `onBackground` only sets a flag and resets the pushback
+  clock.
+- The CPU is already held. Both the FOREGROUND and MINUTE tiers call `exitDeepSleep`, which holds the
+  untimed poll wakelock, and the MINUTE tier covers the first TEN minutes of background silence
+  (`SILENCE_MINUTE_MAX_MS`), with the clock reset at the moment of backgrounding. "A few min" sits
+  inside that window with room to spare.
+- Past the window, a wakelock is the wrong instrument anyway: the repo records twice that deep Doze
+  cuts NETWORK even for a foreground service, and the real lever, the battery-optimization exemption,
+  already ships as a self-service settings row ("Background delivery").
+- The failure mode past all of that is a resumable retry, not a loss: `uploadBlob` short-circuits on
+  `blobStat().complete` and resumes from the gateway's cursor, and `reconcilePending` re-delivers on
+  every foreground and service start. The download half of this exact feature
+  (`fetchPendingAttachments`) has shipped for a long time on a CANCELLED-scope design whose own doc
+  calls interruption normal: "a fetch cut off by a process death is simply still pending on the next
+  pass."
+
+Along the way the phase collected three reversals worth keeping: owning transfers on the service's
+scope is a REGRESSION (that scope is cancelled in `onDestroy`); `FOREGROUND_SERVICE_TYPE_DATA_SYNC` is
+a 6h/24h platform cap plus a boot-receiver refusal at targetSdk 36, a daily self-kill for a service
+meant to be permanently up; and a pushback pin would have frozen the ladder in exactly the tier that
+releases the wakelock.
+
+One real residual, a status choice rather than a phase: a plain send that exhausts its retry settles
+to a tap-to-retry error, while the board queue below retries forever. That asymmetry is worth knowing,
+not worth machinery here.
+
+# Constraints
+
+The single authoritative set. Every item was verified against the code in the lap that produced it or
+the lap that attacked it. The Plan section references these and adds nothing of its own.
+
+## The durable store
+
+- Path: `DATA_DIR/board-attachments/<ownerId>/<entryId>/<blobId>`. Assert ALL THREE segments at the
+  store boundary, `assertId`-style, before any path is built: `blobId` is `sha256-<64hex>` (the
+  existing `assertId` shape), `ownerId` is 64 lowercase hex BUT the durable board file types it as a
+  bare string, so assert what comes off disk rather than trusting the derivation, and `entryId` needs
+  its own pattern gate because `BoardEntrySchema.id` is `z.string().min(1).max(64)` with NO pattern
+  and `board_upsert` accepts client-authored entries. Today's ids are all 32 hex or `bd_` + 32 hex, so
+  a tight gate refuses nothing legitimate.
+- **The FILENAME is never a path segment.** The stored path is the content hash; the display name is
+  metadata beside it, bounded on the wire. No filename validation at the store, because nothing there
+  reads it.
+- **No sweep is wired = durable.** `BlobStore.sweep` is caller-driven from exactly one site, so a
+  store nothing sweeps needs zero new eviction code.
+- **Reclaim fires at exactly two sites**: `sweepTrash` (the normal end of every entry), and the
+  MEMBERSHIP DIFF of every committed `board_set_attachments`: any blobId in the stored list and not
+  in the incoming one is deleted from the entry's durable directory. Not a count comparison; a
+  same-count swap reclaims the replaced file too. The commonest trigger is the owner removing one
+  picture.
+  Explicitly NOT at `restore`'s per-entry drop: that is corruption recovery, and reclaiming there
+  turns the store's one tolerant path into its one irrecoverable one. Explicitly NOT at `remove` in
+  Phase 1: `remove` is only ever the delete half of a cross-Gateway move, and reclaiming there lets an
+  old console's move destroy the pictures; leaving it leaks one directory per move, bounded by a rare
+  owner action, and "leaking a directory is fixable later; deleted bytes are not." Phase 2 adds the
+  `remove` reclaim in the same change that makes the move carry bytes. NEVER implement reclaim as
+  "delete what the live board does not reference": a shell-level parse failure restores an empty
+  board, and that sweep would then delete everything.
+- **Do NOT drop the blob-cache copy after the durable copy lands.** Deleting it destroys the
+  `blobStat` short-circuit that makes a retried attach cheap, and it deletes by CONTENT HASH from a
+  store shared with message attachments, taking an unrelated message's only copy. The cache is a
+  cache; its own sweep handles it.
+
+## The wire
+
+- `BoardEntrySchema` gains `attachments?: BoardAttachment[]`: field names aligned with `ChannelFile`
+  (`filename`, `mime`, `size`, `blobId`, `blobGateway`), `.meta({id: "BoardAttachment"})`, capped at
+  10, filename length-bounded. One codegen run covers all three roots; update the three
+  `tests/fixtures/protocol/` fixtures that carry `BoardEntry`, since both runtimes iterate the
+  manifest. Verified precedent for a nested `.meta`'d array: `RefFileMeta.keys`.
+- **Sort the stored list by `blobId` at every write.** `stableStringify` preserves ARRAY order, and
+  that one hash is three gates at once: the plane identity, `upsert`'s did-it-change test, and
+  `noticesFor`'s changed test. An unordered rebuild produces a spurious full-board ship, a false
+  "applied", and a spurious awareness push, all three together.
+- Identical bytes under two names: first-write-wins, since the id is the content hash and the name is
+  display metadata.
+- Deploy order: gateway first, then plugin, then APK. A ROLLED-BACK gateway strips the field on
+  restore (plain `z.object`) and writes it away on its next commit; the bytes survive on disk (no
+  reclaim path runs), so the exposure is metadata loss during a rollback window. Accepted and stated.
+- **`board_set_attachments` is the SOLE committer of the field: `upsert` IGNORES `attachments` on
+  every incoming entry**, present or absent, preserving whatever the store holds. This is stronger
+  than the earlier "no preserve-when-omitted" argument (no writer can upsert over an
+  attachment-bearing entry today; both producers mint fresh ids or target a gateway with no stored
+  entry, and `createAtEnd` never overwrites) because lap 6 found the case that argument misses: once
+  the field exists on the wire, `enqueueMove` upserts subtree entries VERBATIM to the destination,
+  landing an attachments list nothing ingested. That list's members are durable-absent at the
+  destination, so the owner's next `set_attachments` on the moved entry hits the durable-first
+  presence check with nothing to find, no upload racing, and no refusal permitted: the lane-close
+  wedge, arriving through the one door the presence check cannot see. Upsert-ignores makes the
+  invariant total: **every blobId in a STORED attachments list is durable under that entry's
+  directory**, because the only committer enforces it. Stated consequence: a Phase 1 cross-Gateway
+  move drops the attachment records from the moved entry (the bytes leak on the origin, recoverable
+  by hand, matching the deliberate `remove` leak); Phase 2 is what makes a move carry them.
+
+## The op
+
+- **ONE op: `board_set_attachments(id, attachments[])`, absolute.** `setBody`'s exact shape: always
+  sets, never merges. Attach is the full new list; removing one picture is the full list minus one.
+  No detach op, so absent-versus-empty is never load-bearing (and the codegen renders an optional
+  list as `List<T>? = null`, verified, so the distinction survives anyway). Last-write-wins between
+  two devices editing one entry's attachments concurrently: the winner's list stands, and the
+  membership diff reclaims the loser's bytes along with its metadata. Accepted at this scale.
+- The `board_` name prefix is load-bearing: `isBoardMutationKind` is a prefix test feeding both the
+  opCache and the durable replay layer.
+- Committed through `BoardStore.mutate`, which bumps the plane and banks the `changed` notice for the
+  holding session for free. The gateway's op handler checks presence DURABLE-FIRST: a blobId already
+  under the entry's durable directory is present, full stop; otherwise copy it from the blob cache,
+  digest-checked; only if neither holds is the op a plain retryable error (the console's queue
+  retries and the upload is racing it). Durable-first matters because the absolute op names the
+  SURVIVORS on every write: a cache-only check turns the owner removing one picture, weeks later
+  when the cache has swept the others, into a forever-retrying action that closes the entry's lane.
+  It would pass every warm-cache test. **No new `BoardRefusal` member anywhere in this plan.**
+
+## The console
+
+- The local `src` rides `PendingBoardAction` (hand-written, `@Serializable`, defaulted field is
+  additive), NEVER `ConsoleOp` (codegen'd wire; a src there ships a device path to the gateway,
+  against `draft-location-residue.test.ts`). The op is the natural-looking home, which is how the
+  wrong one gets built.
+- At tap: copy the staged pick into a stable board bucket (`admitPicked` stages a bare `File` with no
+  src; only a copy mints one, and the gallery thumbnail needs the copy anyway), then enqueue ONE
+  `board_set_attachments` action. Bytes never ride the queue: `BoardBlob.queue` persists as one
+  SharedPreferences string rewritten on every mutation.
+- **A new queued op kind has THREE silent fallthrough registries**, each needing exactly one new case:
+  `applyBoardOp` (`else -> entries`; missing it, the optimistic tile VANISHES on the next poll
+  snapshot and returns only when the upload finishes), `boardEntryIdsOf` (`else -> emptySet()`;
+  missing it, same-entry ordering and `dropQueuedForSession` cannot see the action), and `entryIdOf`
+  (`else -> null`; missing it, the struggling marker never shows).
+- **The upload runs on `repoScope`, kicked at enqueue, outside the drain mutex.** `drainLane` has
+  three outcomes (accept, sealed refusal, charge-an-attempt) and none means "bytes still moving", so
+  it gains ONE branch: a `board_set_attachments` whose upload has not finished returns without
+  charging an attempt. Without that branch, eight poll passes mark a healthy slow upload as
+  struggling, and a struggling head closes the WHOLE Gateway lane: verified in
+  `eligibleBoardActions`, a skipped entry's later write does `laneClosed.add`, which drops every
+  other entry's writes on that Gateway too. This wedge is the single worst failure in the plan.
+- **A local file gone before upload completes is a local abandon, using two calls that already exist
+  adjacent in `drainLane`'s refusal branch**: `refusals.add(BoardRefusal(entryId, reason))` (the
+  console's `BoardRefusal` is a UI data class with a free-form reason string, NOT the gateway's
+  closed union) plus `abandonBoardAction` (already called locally by `dropQueuedForSession` with no
+  wire refusal). No new machinery; do not build a local producer of the wire's `refused:` prefix.
+- The board buckets feed `sweepOrphanBuckets`'s existing `keepBuckets` parameter, derived from the
+  merged board entries, the same seam video frames use. Queue srcs only protect the bucket while the
+  action is QUEUED; `keepBuckets` is what honors Question 4's "and keep" after it retires.
+- **The upload targets the ENTRY's Gateway, not the route Gateway.** `relay` already takes
+  `targetGateway` and most sealed ops already pass it; `blobStat`/`blobPut` just do not yet. One
+  threaded parameter. Without it, attaching to an entry homed on Gateway B while routed through A
+  writes metadata on B naming bytes only A holds; no move required, just a second Gateway. The
+  console's `blob_get` needs NO threading: fetch-on-open keeps its existing `fromGateway` federation
+  idiom, which works because the durable fallthrough lives below `serveBlobRange` too (see Serving
+  bytes).
+- Gallery: reuse `AttachmentViewer` through its three named seams; paperclip beside `StateMark`;
+  attach commits on TAP (the state-chip precedent; Save protects title and body only). A tile is one
+  of three states (bytes present, downloading, gave up) with a bounded failure count, like messages.
+  Fetch-on-open rides the console's existing sealed `blob_get`. Known niggle, accepted: refusals
+  render on the board list, not the edit screen.
+
+## Serving bytes: one read, three doors
+
+- **The byte reader has THREE doors, not two, and the durable fallthrough lives in the shared read
+  below all of them.** `answerBlobOp` is "The SOLE implementation" behind the HTTP route and the
+  console's sealed op plane, but the FEDERATION export is a third surface it does not cover:
+  `serveBlobRange` (gateway `index.ts`) reads `blobStore` directly and is what a peer Gateway's
+  `blob_fetch` hits. Every cross-Gateway read the plan promises rides that third door: a second
+  device opening the gallery for an entry homed off its route Gateway, an agent fetching through its
+  own Gateway with `fromGateway` set, and Phase 2's download-from-origin. A board attachment is by
+  construction the coldest object in the blob cache, so the holder's cache copy WILL sweep, and a
+  fallthrough wired only into `answerBlobOp` leaves the durable bytes on disk but unreachable from
+  any other machine. So: one read function, cache then durable board store, called by
+  `answerBlobOp`'s local read AND by `serveBlobRange`. At dozens of entries the durable lookup can
+  be an index or a scan; either is fine.
+- **There is no new gate anywhere.** A fetch is necessarily two hops. Hop 1 resolves names to
+  blobIds through a NEW read action on `/task-board` (next section); the route-level
+  `refuseImpersonation` covers it, and the new case applies `visibleTo` itself, since that filter
+  lives INSIDE the list case rather than at the route level. Hop 2 moves bytes on `/blob/get`, which
+  already runs `mayUseLocalPlane` and is already chunked, resumable and digest-verified. Four laps
+  of gate design end in zero new predicates; the federation door's own gate is unchanged too (a
+  sealed peer relay).
+- Residuals, stated where they can be judged: `mayUseLocalPlane` returns true for EVERYONE on a
+  gateway where no session is bound, so the byte door is only as strong as the deployment's binding
+  posture. A hand-launched session with no token is refused at `/blob/get` once any bound session
+  exists; that is the pre-existing posture of every blob transfer (channel attachments included), not
+  new here, but it means the manual-start runbook session can list names and not fetch bytes. A
+  session that once resolved a blobId keeps byte access to it after the entry is reassigned. And
+  every host MCP shares `/tmp/switchboard-blobs`, so on the host, anything one agent fetches is
+  readable by all of them; the doors govern who can FETCH, not what survives a fetch.
+
+## The agent's half
+
+- **The list route needs a projection layer that does not exist today, ROUTE-side.** The `list` case
+  returns `projection.entries` verbatim after the `visibleTo` filter, so the moment `attachments`
+  lands on the schema, every visible session receives `blobId` and `blobGateway` with no code change.
+  The names-only projection is therefore the one genuinely new security seam in this plan: the ROUTE
+  projects `filename` (and nothing else) per entry. Plugin-side stripping is the wrong side: during
+  the gateway-first deploy window an old plugin would relay full records into the agent's context.
+  It is also the context rule: fetch plumbing stays out of the agent's window.
+- **The route gains ONE new read action, `attachments`**, taking an entry id and answering that
+  entry's attachment records (blobId, blobGateway, filename, size). This is hop 1; no existing
+  action can serve it once the list projects names only. It sits behind the route-level
+  `refuseImpersonation`, applies `visibleTo` itself in its own case, and follows the list case's
+  reads-are-not-recorded rule: it never mints or accepts an operation id. Its whole answer stays in
+  the TOOL HANDLER, which returns file paths; blobIds never reach the model's context.
+- **The fetch action stays OUT of `MUTATING` in `boardTools.ts`.** The route records every settled
+  reply under `(from, operationId)` and replays it verbatim BEFORE consulting the store; a fetch that
+  minted an operation id would replay stale blobIds for attachments the owner has since swapped. The
+  read exemption is entirely caller-side, one Set literal.
+- The fetch tool takes an entry id and an optional list of names (the owner says "look at
+  mellisa-render.png"; all-or-nothing contradicts the reason the filename ships). Sweep the staging
+  root BEFORE the transfer; `sweepStaging` is upload-only today and the download path has never
+  swept. Cap per-attachment bytes at ATTACH time, where the owner can act on the error; a fetch
+  costs 2x on the agent's disk, and only the staged half is SIZE-bounded (the materialized half is
+  TTL-swept at 1h by the machinery below), so pick a cap well under `MAX_STAGING_BYTES / 10`, not
+  the 500 MB wire cap.
+- Materialize through the `evieFiles` machinery with the entry id as the bucket key: `cleanupTmpDir`
+  sweeping, `safeFilename`, `resolveCollisionFreePath`, `landAtomic`, and the per-file `fetchFailed`
+  marker distinguishing "bytes failed" from "never had bytes". Nothing bespoke.
+- Guidance lives in the TOOL DESCRIPTION: how to fetch, that a `changed` notice may mean a new
+  attachment (the notice carries the entry id alone), and that an UNASSIGNED entry produces no notice
+  at all, since `noticesFor` builds addressees from holders; a picture added to backlog work is never
+  announced to anyone.
+- Fetch failures (bytes gone, wrong name, holding Gateway unreachable) are ERRORS, never refusals: a
+  route may only relay a member of `BoardRefusal`, and none of these is one.
+
+# Pre-existing holes, separately scoped
+
+Found while auditing, not caused by this feature, each worth its own fix outside this plan:
+
+- **The board door admits invented names from the LAN.** `docker-compose.yml` publishes
+  `"20000:20000"` on all interfaces; `/task-board` has no gate above `refuseImpersonation`;
+  `localTeamKey` never checks the named session exists, so a bare slug expands to a default session
+  key with no record, `toClaim` answers UNBOUND, and `satisfies` admits it. `visibleTo` then passes
+  every unassigned entry, and its `entry.sessionId === sessionId` clause means naming a real unbound
+  session's key exposes that session's ASSIGNED entries too. Anyone who can reach the port can list
+  the owner's backlog today. Owner has been told; awaiting the word to scope it.
+- The board door being weaker than the blob door is the same hole seen from the other side: the fix
+  for one is the fix for the other.
 
 # Plan
 
-Two phases. Each ships alone and is separately useful.
+Two phases.
 
-## Phase 1 - Attach, peek, and read
+## Phase 1 - The feature
 
-The whole feature end to end. It does not split: without the console there is nothing that can create
-an attachment, and without the tool nothing an agent can do with one.
-
-### The owner's half
-
-- **Durable store on the Gateway**, its own directory under `DATA_DIR`, keyed by entry id. NOT the blob
-  cache; no eviction. Reclaimed from `sweepTrash` when an entry is permanently deleted, which is the
-  hook `promoteOrphans` just proved correct.
-- **`BoardEntrySchema` gains `attachments?: BoardAttachment[]`** carrying `{id, name, mime, size,
-  gateway}`, `.meta({id: "BoardAttachment"})`, capped at 10. One codegen run. Gateway deploys FIRST,
-  then the plugin, then the APK.
-- **Upload op**: the console streams bytes over the existing chunked blob transfer, and the gateway
-  copies them into the durable store and records the metadata on the entry.
-- **Console**: an attach button on the edit screen (reusing `admitPicked` and the SAF picker), the
-  gallery reusing `AttachmentViewer`, a paperclip on rows whose `attachments` is non-empty, and
-  fetch-on-open that lands bytes the way a message attachment lands.
-- Optimistic echo is a set-union by attachment id, so a replayed attach is idempotent.
-
-### The agent's half
-
-- **`/task-board` list projects NAMES ONLY** per entry. No ids, gateways or sizes: that is fetch
-  plumbing, and an agent's cost model is its context window.
-- **A fetch tool**, registered only when the taskboard capability is announced, like the other six.
-  Takes an entry id, copies every attachment to a temp directory, returns the paths. Read-only: agents
-  never upload and never delete.
-- The "how to get these" guidance lives in the TOOL DESCRIPTION, where it costs one read, rather than
-  riding every list answer.
+The whole thing end to end: it does not split, since without the console nothing can create an
+attachment and without the tool nothing can read one. Build order inside the phase follows the deploy
+order: gateway first (store, op, serving, the route's names-only projection and its new `attachments`
+read action), then the plugin's fetch tool, then the
+console. Every constraint above applies here except the two Phase 2 items below.
 
 ## Phase 2 - Moving between machines
 
-- Console-mediated move per Question 3: upload to destination, upsert there, delete from origin, with a
-  download from the origin when the local copy is gone.
-- Until this ships, a move of a subtree carrying attachments is refused rather than half-completed.
+- The console-mediated move per Question 3 learns to carry bytes: download from the origin when the
+  local copy is gone, upload to the destination (the `targetGateway` threading already landed in
+  Phase 1), upsert there, then **`board_set_attachments` on the destination entry**, and only then
+  delete from the origin. The explicit set step exists because upsert ignores the field (sole
+  committer rule), and it is what establishes durable presence at the destination: its handler
+  copies the just-uploaded cache bytes into the entry's durable directory before the metadata
+  commits. Order is load-bearing; a failure at any point leaves the entry where it was, and the
+  origin delete never runs before the destination's durable copy exists.
+- `remove()` becomes a reclaim site in the SAME change, closing the deliberate Phase 1 leak. Safe
+  now precisely because of the step above: by the time the origin delete fires, the destination
+  holds the bytes durably, not merely in its sweepable cache.
