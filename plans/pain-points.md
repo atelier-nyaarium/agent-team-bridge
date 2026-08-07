@@ -16,9 +16,10 @@ stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host sessio
 - [medium] **`down.sh` kills the host daemon and `start-gateway.sh` does not restart it.** The
   restart ritual has a missable third step whose omission is silent until wake/peek/spawn fail. It
   bit twice in one day, once during a release and once during the resulting debugging.
-- [low] **Stray minted records accumulate.** Each broken manual start left a `host.<hash>` record
-  (`host.e70c13`, `host.5357e4`) that shows on the board's session list as available for 30 days.
-  Forgettable from the console; nothing sweeps them sooner.
+- [low] **A deaf manual session lingers as "verifying" while it lives.** It never answers its
+  handshake, so it never becomes a record (confirm is what creates one, verified against the durable
+  file) and vanishes on exit. The cost is confusion, not residue: the owner sees a session they
+  cannot interact with beside the asleep card they meant to revive.
 
 ## Codex delegation (`plans/codex-thinking.md`, deleted, shipped - 2026-08-06)
 
