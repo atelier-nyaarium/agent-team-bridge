@@ -103,6 +103,10 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		resolveHandshake: overrides.resolveHandshake,
 		findPendingHandshake: overrides.findPendingHandshake,
 		repushHandshake: overrides.repushHandshake,
+		// Last, so a dep this builder does not yet name still reaches createRoutes. Forgetting to
+		// forward one cost a round of mystery 503s; the spread makes that impossible rather than
+		// remembered. The named fields above stay, because several are COMPUTED from other overrides.
+		...overrides,
 	};
 }
 

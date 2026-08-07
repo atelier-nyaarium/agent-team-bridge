@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleBoardReadResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleForgetResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCloseSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
@@ -56,6 +57,7 @@ class ProtocolFixturesTest {
 			"ConsolePeekResult" -> json.decodeFromString<ConsolePeekResult>(body)
 			"ConsoleListDirsResult" -> json.decodeFromString<ConsoleListDirsResult>(body)
 			"ConsoleBoardReadResult" -> json.decodeFromString<ConsoleBoardReadResult>(body)
+			"ConsoleForgetResult" -> json.decodeFromString<ConsoleForgetResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}

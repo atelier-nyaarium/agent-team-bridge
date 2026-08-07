@@ -39,6 +39,8 @@
 		{ "file": "op-envelope-board-upsert.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "poll-result-task-board.json", "schema": "ConsolePollResult", "expect": "pass" },
 		{ "file": "board-read-result.json", "schema": "ConsoleBoardReadResult", "expect": "pass" },
+		{ "file": "op-envelope-forget-cancel.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "forget-result-release.json", "schema": "ConsoleForgetResult", "expect": "pass" },
 		{ "file": "reply-body.json", "schema": "ConsoleReplyBody", "expect": "pass" },
 		{ "file": "relay-reply.json", "schema": "ConsoleRelayReply", "expect": "pass" },
 		{ "file": "relay-reply-error.json", "schema": "ConsoleRelayReply", "expect": "pass" },

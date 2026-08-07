@@ -706,15 +706,26 @@ The whole server half, landing together so it can deploy on its own.
   Gateway before the forget does.** Round 1: the disposition rode the ordinary pending queue, which
   drains one op per Gateway per pass, so a session with two unfinished tasks could never flush in
   time. Round 2: the queue-based `hasQueuedFor` check was blind to the unassign disposition, and the
-  drain still postponed whenever more than one op was pending. Round 3 (rewrite): sent inline and
-  awaited, which fixed the ordering against the forget but left an ORTHOGONAL race - a state edit
-  already in the queue sent afterwards and overwrote the owner's choice, since these ops are absolute
-  rather than monotonic. Patched by flushing the queue first and holding if anything survives.
-  **Not closed at the mechanism.** The real shape is that two writers (the queue and the inline
-  sender) target the same entries with no ordering between them, and every round has been a fresh
-  way for them to interleave. Raise at `architecture-fan-out`: either the disposition becomes a
-  single gateway-side op the console asks for by name, or the queue grows a per-entry barrier. A
-  fourth patch here should not be attempted.
+  drain still postponed whenever more than one op was pending. Round 3: sent inline and awaited,
+  which fixed the ordering against the forget but left an ORTHOGONAL race - a state edit already in
+  the queue sent afterwards and overwrote the owner's choice. Round 4: the flush that was supposed
+  to prevent that silently no-ops under contention, and the queue check ran AFTER the disposition
+  had already gone out.
+  **Closed in two halves, and the second one was nearly missed.** `boardDisposition` is a field of
+  the `forget` op, so the session's end and its work's end are one gateway-side mutation inside
+  `sessionEnded` - atomic, and set-valued server-side (every entry the store holds for that session,
+  not a list the console enumerated from a snapshot it may not have refreshed). That retires the
+  disposition as a writer. **It does NOT retire the pending queue**, which is the other writer to
+  the same entries and was still unordered against the forget: an absolute edit draining afterwards
+  overwrote the choice. The refactor's own red team caught this, having read the first draft of this
+  entry claiming the class was closed. The queue is now handled by SUPERSESSION rather than ordering
+  - `dropQueuedForSession` drops that session's queued writes when the owner forgets it, since the
+  disposition IS their last word on those entries - and a dropped write takes its linked delete, so
+  an in-flight move cannot lose its destination half.
+  Net-deleting even so: `sendDispositionBeforeForget`, `hasQueuedOn`, `drain`'s Boolean return, the
+  flush/hold block and the held-forget dialog all went. `sessionEnded` takes the disposition as a
+  required VALUE at every call site including the TTL sweep, and skips an already-trashed entry,
+  which is what the forget prompt's count already excluded.
 
 - **Mechanism: the session identifier crossing the console/gateway boundary. Class: one side's key
   space silently used as the other's.** Round 1 (phase 2 red team): the console sent a chat's
@@ -804,6 +815,72 @@ is why the re-audit was run rather than advancing:
 - The shared teardown closed whatever thread was open when a slow disposition finished, not the one
   that was forgotten.
 
+### Phase 2 architecture outcomes
+
+Four angles. Two converged independently on the same shape for the forget, which is what made it the
+one to do; the rest are ranked below with what was and was not taken.
+
+**Taken:**
+
+- **The forget disposition folded into the forget op** (see Bug Classes above). The required target.
+- **The forget op gained the local-Address guard every sibling op already had.** Its only
+  domain/gateway check lived inside the `try` that the tmux kill deliberately swallows, so a target
+  naming another Domain whose gateway id merely COLLIDES with a local one reduced to a bare local
+  field and forgot the same-named LOCAL session - now taking that session's board work with it,
+  since the disposition rides the same op. A red-team agent proved it with a throwaway dispatcher
+  test. `close_session` and `rename_session` reject a foreign address outright; `forget` did not.
+  Pre-existing, but folding the disposition in enlarged the blast radius, and widening the console's
+  send from the route Gateway to every keyring Gateway enlarged the aperture.
+- **One producer for the refusal vocabulary.** A refusal is the ONLY signal that retires a queued
+  console action, which is to say the only thing that permanently discards the owner's edit, and it
+  travelled as an untyped substring with four hand-written producers - two of which raised
+  `session_missing`, a value not even in the enum. Now `BoardRefusal` includes it, `refusalError` is
+  the one constructor, `answer()` takes a `BoardResult` instead of a widened `refused: string`, and
+  `board-refusal-residue.test.ts` fails the build if any other module writes the marker. The guard
+  strips comments first, so the contract can still be explained in prose where it lives.
+- **`makeCtx` spreads its overrides last**, so a dependency it does not yet name still reaches
+  `createRoutes`. This is the painpoint that cost a round of mystery 503s on this very feature.
+
+**Deferred, with the shape recorded so nothing is lost:**
+
+- **A `BoardActor` value on every store method.** The plan says "the store is the sole validator" and
+  the first consumer already breaks it: `routes.ts` reads the entry, compares `sessionId` by hand,
+  and answers `held` itself - and because the check is subject-only, `setParent` lets a session graft
+  its subtree into ANOTHER session's tree, and `create` never scope-checks its parent at all. The fix
+  is `{kind:"owner"} | {kind:"session", sessionId}` as a required argument, one private `mayWrite`
+  answering subject, object and list scope alike. Deliberately at the START of phase 3, not here:
+  phase 3 puts six tools behind this route, and the actor is far cheaper to land before six callers
+  exist than after. Recorded as a phase 3 prerequisite.
+- **`endRank` made private, placement minted inside the write.** `setParent(owner, id, parent,
+  boardStore.endRank(owner, parent))` evaluates a COMMITTING read as an argument, so a refused
+  `setParent` can still have rebalanced every sibling and shipped the whole board. It is the last
+  public seam of the rank bug class. `createAtEnd` / `setParentAtEnd` minting inside the same
+  `mutate` closes it; a dozen lines, but it belongs with the actor work above since both change the
+  same six signatures.
+- **The team roster's two writers** - see below.
+- **One `BoardView` producer** for the board's derived reads, replacing six hand-keyed `remember`
+  blocks. Real alignment with the codebase's answer-don't-accumulate rule, but the forcing function
+  is the drag slice, which will be a seventh consumer of exactly those rows. Do it then.
+- **An overlay declaration table** in MainActivity, replacing four lists that must agree. A genuine
+  defect generator with a recorded victim, but it predates the board and wants its own PR on a
+  surface with no tests.
+- **A descriptor table for the poll's plane piggyback.** The board is the fifth hand-written copy of
+  a seven-step ritual, two steps of which fail silently when forgotten. No sixth plane is queued, so
+  the moment to do it is when one is.
+
+**Explicitly not doing:**
+
+- **Splitting `BoardManager` into cache / queue / reads.** The pure/impure split this codebase asks
+  for is already made and already paying: `BoardState`, `BoardRows`, `BoardDragMath` and
+  `board-rank` are dependency-free with four test files over them. A three-way split would give one
+  durable blob three owners and break the single-key atomicity the plan chose deliberately.
+- **Moving `BoardManager`'s revision off Compose state.** The residue rule `PlaybackResidueTest`
+  enforces is about imports that END unit-testability; Compose runtime state is plain JVM and
+  `BoardManagerTest` already runs without an Android environment.
+- **Extracting the board route out of `routes.ts`.** Churn. The board route is not the problem;
+  `createRoutes`' closure-over-forty-deps is, and extracting one member without deciding the
+  family's contract makes the file less uniform rather than smaller.
+
 **Deferred, deliberately.** `applyPresence` and `refreshDiscovery` both write the whole team roster,
 but the presence plane carries only the route Gateway's rows while discovery carries the mesh - so
 between a presence bump and the next discovery pull, non-route sessions are absent from `state.teams`
@@ -832,7 +909,7 @@ Accepted residuals, knowingly:
   dead name (logged, recoverable by hand via assign). The clean fix needs a pending end-of-life
   queue; not worth it for the window.
 
-## Phase 2 - Console
+## Phase 2 - Console ✅
 
 Everything the owner touches. Kotlin gate is local: `cd android && ./gradlew :app:testDebugUnitTest`.
 
@@ -879,10 +956,33 @@ its own slice; the edit screen's placement field covers moves until it lands.
 - The top strip in a thread: above `ReorderableTabRow` when tabs exist, expanded height capped with
   internal scroll. Plus the blocking forget prompt (skipped when nothing is undone).
 - The entry edit screen wired into all THREE navigation places: the App `when`, both `BackHandler`
-  halves, and the notification-tap clear list. `BoardDraft(entryId, title, body)` as its own type
-  and store key - `Draft`'s loader would drop a board key on restart.
+  halves, and the notification-tap clear list. **`BoardDraft` was not needed and does not exist**:
+  the editor commits state and placement on tap and holds title/body only until Save, comparing
+  against the values it OPENED with so an agent's concurrent write is not reverted. There is no
+  draft to persist, so there is no key for `Draft`'s loader to drop.
+
+**Shipped as one commit each**, not the two PRs the plan sketched: the invisible half was never
+separately useful once the surfaces were written in the same pass, and the Kotlin gate is local, so
+splitting bought no safety it does not already have.
 
 ## Phase 3 - Tools, guidance, rollout
+
+**Prerequisite, before the tools land** (from phase 2's architecture pass - cheaper before six
+callers exist than after):
+
+- **`BoardActor` as a required argument on every mutating store method**, `{kind:"owner"} |
+  {kind:"session", sessionId}`, with one private `mayWrite` inside the store answering subject scope,
+  object scope and list scope from the same predicate. Today `routes.ts` hand-rolls the subject check
+  and answers `held` itself, and because nothing checks the OBJECT, a session can reparent its
+  subtree under another session's entry (`setParent` validates existence and cycles only) and
+  `create` never scope-checks its parent at all. Owner-authority must be a VALUE a caller supplies,
+  not an absence it falls into - the `sessionAuthority.ts` rule. Cross-session reparenting starts
+  refusing, so say so in the tool descriptions.
+- **`endRank` private; `createAtEnd` / `setParentAtEnd` mint inside the write's own `mutate`.** As
+  written, `setParent(owner, id, parent, boardStore.endRank(owner, parent))` commits a rebalance
+  before `setParent` can refuse, so a refused op can permanently rewrite every sibling's rank and
+  ship the whole board. Last public seam of the rank bug class; same six signatures as the actor
+  work, so do them together.
 
 - The six `taskBoard*` tools in `src/mcp/board/`, after `codex/codexTools.ts`: one authenticated
   route behind `refuseImpersonation`, `from` hardcoded in the MCP helper, a private per-invocation
@@ -928,4 +1028,34 @@ Collected during phase 1, not fixed here.
 - **`MainActivity.kt:renderProject` has a pre-existing unguarded double-render path** for a project
   literally named "host" (the create dialog filters it, the render loop does not) - the duplicate-
   key crash class the board tab must also defend against. Flagged for an autonomous cleanup commit.
+
+Collected during phase 2. `makeCtx` above is now fixed; the rest still stand.
+
+- **Nothing in the type system separates a qualified address from a bare local field.** Both are
+  `String`, and the phase-2 blocker was exactly that confusion: the console sent one where the
+  Gateway indexes by the other, and every assign was refused. The follow-on collision (a bare key is
+  unique only per Gateway) was the same class again. `shared/session-id.ts` already owns `Address`
+  and `SpawnPoint`; a value type for the local field, or a Kotlin value class, would have made both
+  rounds compile errors. This is the single highest-value type change I would make here.
+- **`MainActivity.kt` is past 3000 lines and its composables are indistinguishable while editing.**
+  I added a state variable to `ProvisionScreen` while intending `App`, and only the compiler caught
+  it. The overlay flags compound it: ~15 booleans across four lists (the `BackHandler` predicate, the
+  back `when`, the render `when`, the notification-tap clear list) that must agree by hand, with the
+  plan already recording one bug from missing the third. The architecture pass wrote the shape of a
+  fix (an ordered overlay declaration list) but it wants its own PR.
+- **`ChatRepository.kt` is past 5000 lines** and the board added roughly a dozen more methods to it.
+  Nothing is wrong with any one of them; the problem is that "where does board behaviour live" has no
+  answer beyond grep. Same family as the `routes.ts` note above.
+- **A comment that asserts behaviour nobody implemented is worse than no comment.** I wrote, in four
+  places including `CLAUDE.md`, that the console could detect a Gateway downgrading its disposition -
+  while `ConsoleClient.forget` discarded the reply body. The red team spent real effort disproving
+  prose I had written confidently. Where an invariant matters, a residue test costs about as much as
+  the paragraph and cannot go stale (`board-refusal-residue.test.ts` is the pattern).
+- **The Kotlin gate being local-only bites every single lap.** It is documented in `CLAUDE.md` and it
+  still cost time twice this phase, because the TS suite going green reads as done. A CI job that
+  merely COMPILES Kotlin on a PR would catch the whole class; it does not need the unit tests.
+- **`gradlew` invocations are fragile in a shell whose cwd persists across calls.** Half my Kotlin
+  gate runs failed with `cd: android: No such file or directory` because a previous command had
+  already left me there. Not the codebase's fault, but a `scripts/kotlin-gate.sh` that resolves the
+  repo root itself would remove it.
 

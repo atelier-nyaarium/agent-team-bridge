@@ -44,7 +44,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
-import { type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
+import { type BoardResult, type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -1884,10 +1884,9 @@ export function createRoutes({
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
 
-		const answer = (
-			result: { applied: true } | { applied: false; refused: string },
-			extra?: Record<string, unknown>,
-		) =>
+		// BoardResult, not a widened `refused: string`: the refusal vocabulary is the one signal that
+		// discards an owner's edit, so a route may only relay a member of it.
+		const answer = (result: BoardResult, extra?: Record<string, unknown>) =>
 			result.applied
 				? jsonResponse({ applied: true, ...extra })
 				: jsonResponse({ applied: false, refused: result.refused });
@@ -1935,8 +1934,8 @@ export function createRoutes({
 			case "update": {
 				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
 				const entry = boardStore.entry(owner, r.id);
-				if (!entry) return jsonResponse({ applied: false, refused: "entry_missing" });
-				if (entry.sessionId !== sessionKey) return jsonResponse({ applied: false, refused: "held" });
+				if (!entry) return answer({ applied: false, refused: "entry_missing" });
+				if (entry.sessionId !== sessionKey) return answer({ applied: false, refused: "held" });
 				if (r.title !== undefined) {
 					const res = boardStore.setTitle(owner, r.id, r.title);
 					if (!res.applied) return answer(res);

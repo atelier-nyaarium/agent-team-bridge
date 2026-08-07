@@ -26,6 +26,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleBlobPutResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBlobStatResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
+import com.atelier_nyaarium.switchboard.proto.ConsoleForgetResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRenameSessionResult
@@ -847,9 +848,20 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
 	 * rejects a bare spawn-point (a composite session is required). */
-	suspend fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
-		val body = relay(ConsoleOp.Forget(target = target), opId, targetGateway = targetGatewayOf(target))
+	/** Returns the disposition the Gateway actually APPLIED, or null when it did not say. Null means
+	 * a Gateway that predates the field: it stripped the request's copy and released the session's
+	 * work, so a caller that asked to cancel has to be told its choice did not happen. */
+	suspend fun forget(
+		target: String,
+		boardDisposition: String? = null,
+		opId: String = UUID.randomUUID().toString(),
+	): String? {
+		val op = ConsoleOp.Forget(target = target, boardDisposition = boardDisposition)
+		val body = relay(op, opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
+		return body.result
+			?.let { runCatching { wireJson.decodeFromJsonElement<ConsoleForgetResult>(it) }.getOrNull() }
+			?.boardDisposition
 	}
 
 	/** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays

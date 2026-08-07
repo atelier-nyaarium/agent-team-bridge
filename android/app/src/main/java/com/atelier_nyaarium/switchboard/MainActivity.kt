@@ -322,10 +322,6 @@ fun App(
 	var showHostHelp by remember { mutableStateOf(false) }
 	// The open task-board entry's full-screen editor, as (gatewayId, entryId).
 	var editEntry by remember { mutableStateOf<Pair<String, String>?>(null) }
-	// Why a board-gated forget did not happen. App-level, so it reaches the owner from the thread as
-	// well as the sessions list - the thread hosts no snackbar, and a silent refusal reads as a
-	// forget that worked.
-	var forgetHeld by remember { mutableStateOf<String?>(null) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
 	var showUsers by remember { mutableStateOf(false) }
@@ -580,19 +576,6 @@ fun App(
 		}
 	}
 
-	// Outside the screen switch, so it reaches the owner whichever surface started the forget - the
-	// thread hosts no snackbar, and a silent refusal reads as a forget that worked. Nothing was
-	// changed when this shows, so Close is the only action it needs.
-	forgetHeld?.let { reason ->
-		ConfirmDialog(
-			title = "Forget postponed",
-			body = reason,
-			confirmText = "Close",
-			onConfirm = { forgetHeld = null },
-			onDismiss = { forgetHeld = null },
-		)
-	}
-
 	when {
 		// Lock wins over everything (a provisioned + locked session must show the lock, never a
 		// leftover overlay underneath it). An unprovisioned session is never locked.
@@ -751,9 +734,9 @@ fun App(
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
 				else -> statusWord(session.status)
 			}
-			// Everything a forget tears down BESIDE the repo's own record. Shared by the plain and the
-			// board-gated paths so the plugin sweep and the notification cancels cannot end up on only
-			// one of them; the gated path runs it from onForgotten, after the forget actually happened.
+			// Everything a forget tears down BESIDE the repo's own record. Shared by both forget paths so
+			// the plugin sweep and the notification cancels cannot end up on only one of them. The repo
+			// calls it once the forget has landed, never before.
 			val forgetTeardown = { forgotten: String ->
 				pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 				SwitchboardService.cancelTeamNotification(context, forgotten)
@@ -856,17 +839,12 @@ fun App(
 					repo.forget(forgotten)
 					forgetTeardown(forgotten)
 				},
-				// The board gate. Plugin teardown rides onForgotten, so a disposition that never
-				// reached the Gateway leaves the thread and its state exactly as they were.
+				// The board gate: the same decision the sessions list asks for, so the two surfaces
+				// cannot disagree about when a forget is safe.
 				undoneTasks = if (boardOn) repo.board.undoneCount(boardGateway, openTeam!!) else 0,
 				onForgetWithTasks = { cancelThem ->
 					val forgotten = openTeam!!
-					repo.forgetWithBoardDisposition(
-						forgotten,
-						cancelThem,
-						onHeld = { forgetHeld = it },
-						onForgotten = { forgetTeardown(forgotten) },
-					)
+					repo.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
 				// and the host machine's terminal is reached through the dedicated "host" target.
@@ -976,22 +954,16 @@ fun App(
 							} else 0
 						},
 						onForgetWithTasks = { team, cancelThem ->
-							// The disposition has to reach the Gateway before the forget does, so the
-							// repo owns the ordering and only calls back once the forget actually ran.
-							// Plugin state and notifications die THERE: a held forget must not destroy
-							// a session's design cards while the session itself survives.
-							repo.forgetWithBoardDisposition(
-								team,
-								cancelThem,
-								onHeld = { forgetHeld = it },
-								onForgotten = {
-									pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
-										it.onForget(context, team)
-									}
-									SwitchboardService.cancelTeamNotification(context, team)
-									SwitchboardService.cancelScheduledSendFailedNotification(context, team)
-								},
-							)
+							// Plugin state and notifications die only once the forget has landed: a
+							// session whose forget never reached its Gateway still exists, and it must
+							// not come back with its design cards already destroyed.
+							repo.forgetWithBoardDisposition(team, cancelThem) {
+								pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
+									it.onForget(context, team)
+								}
+								SwitchboardService.cancelTeamNotification(context, team)
+								SwitchboardService.cancelScheduledSendFailedNotification(context, team)
+							}
 						},
 					)
 				},

@@ -706,6 +706,10 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("forget"),
 			target: z.string().min(1).max(128),
+			// What becomes of the session's unfinished board work, applied in the SAME store pass
+			// that ends the session. Absent means "release", which is what the TTL sweep does and
+			// what every forget did before the field existed, so an older console changes nothing.
+			boardDisposition: z.enum(["release", "cancel"]).optional(),
 		}),
 		// Close a session: kill its running tmux but KEEP its durable resume record, so it stays
 		// listed as available and can be re-woken (a restart / mop-up, distinct from forget's
@@ -1147,6 +1151,10 @@ export const ConsoleForgetResultSchema = z
 		// The session's tmux was torn down and its resume record dropped (idempotent: also true
 		// when the session was already gone).
 		killed: z.boolean(),
+		// The disposition this Gateway actually applied. A gateway without the field strips the
+		// request's copy and answers without this one, so a console that asked for "cancel" can
+		// tell it was downgraded rather than assuming its choice landed.
+		boardDisposition: z.enum(["release", "cancel"]).optional(),
 	})
 	.meta({ id: "ConsoleForgetResult" });
 

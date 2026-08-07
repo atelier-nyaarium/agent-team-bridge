@@ -3932,43 +3932,20 @@ class ChatRepository(
 		}
 	}
 
-	/** Forget a session that still holds unfinished board work. The disposition must REACH the
-	 * gateway before the forget does: the gateway's session-end hook unassigns everything it finds,
-	 * so a cancel arriving after it lands on an entry already back in the pile. A queued edit for one
-	 * of these entries would likewise send AFTER the disposition and overwrite it, since these ops
-	 * are absolute rather than monotonic, so the queue must be EMPTY for this Gateway before anything
-	 * is sent. Both checks happen first: a disposition that has already gone out cannot be recalled
-	 * when a later check decides to hold, and the owner would be left with cancelled tasks under a
-	 * session that still exists. */
-	fun forgetWithBoardDisposition(
-		team: String,
-		cancelThem: Boolean,
-		onHeld: (String) -> Unit,
-		onForgotten: () -> Unit,
-	) {
-		val gw = boardGatewayOf(team)
-		repoScope.launch {
-			// The caller reports a hold, not a transientMessage: this can be started from a thread,
-			// where nothing consumes that field, and the owner would be told nothing at all.
-			val flushed = runCatchingCancellable { board.drain(client()) }.getOrDefault(false)
-			if (!flushed || board.hasQueuedOn(gw)) {
-				DebugLog.log("Board", "forget held: $team still has queued edits")
-				withContext(Dispatchers.Main) { onHeld("Edits are still syncing. Try again in a moment.") }
-				return@launch
-			}
-			val landed = runCatchingCancellable {
-				board.sendDispositionBeforeForget(client(), gw, team, cancelThem)
-			}.getOrDefault(false)
-			if (!landed) {
-				DebugLog.log("Board", "forget held: $team's disposition did not land")
-				withContext(Dispatchers.Main) { onHeld("Could not reach the Gateway. Nothing was changed.") }
-				return@launch
-			}
-			forget(team)
-			// Only now is the session genuinely gone, so this is where its per-team plugin state and
-			// notifications may be destroyed - a held forget must leave them intact.
-			withContext(Dispatchers.Main) { onForgotten() }
-		}
+	/** Forget a session that still holds unfinished board work. The disposition is a FIELD of the
+	 * forget op, so the session's end and its work's end are one gateway-side mutation, and the
+	 * gateway disposes of every entry it holds for that session rather than the subset this device
+	 * happens to have polled.
+	 *
+	 * The pending queue is the other writer to those entries, so its actions for them are DROPPED
+	 * first: an absolute write draining afterwards would overwrite the choice the owner just made.
+	 * `onForgotten` runs only once the forget has actually landed - a session whose forget never
+	 * reached its Gateway still exists, so destroying its design cards and notifications would strand
+	 * the session with none of its history. */
+	fun forgetWithBoardDisposition(team: String, cancelThem: Boolean, onForgotten: () -> Unit) {
+		val asked = if (cancelThem) "cancel" else "release"
+		board.dropQueuedForSession(boardGatewayOf(team), team)
+		forget(team, asked, onForgotten)
 	}
 
 	/** Whether a session's thread belongs to a non-route Gateway (its board half is cadence-fresh
@@ -5468,7 +5445,7 @@ class ChatRepository(
 		}
 	}
 
-	fun forget(team: String) {
+	fun forget(team: String, boardDisposition: String? = null, onForgotten: (() -> Unit)? = null) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
 		val key = canonicalTarget(team)
@@ -5513,18 +5490,35 @@ class ChatRepository(
 		scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
 		priorDraft?.let { scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
-		// stops listing as available. Local addressable sessions only (a remote thread or a non-address
-		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
+		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
+		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
+		// gating this on the route Gateway left its record alive to return when the tombstone expired.
+		// Best-effort, the gateway no-ops an absent session.
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-		if (t is Address && t.gateway == _state.value.localGatewayId) {
+		val reachable = (otherKeyringGateways(localGatewayId) + localGatewayId).toSet()
+		if (t is Address && t.domain == localDomain() && t.gateway in reachable) {
 			pollScope?.launch(Dispatchers.IO) {
-				runCatchingCancellable { client().forget(team) }
+				runCatchingCancellable { client().forget(team, boardDisposition) }
 					// The record drop already bumps the presence plane server-side, which wakes this
 					// device's own currently-held poll for free (same as closeTab/wakeSession/
 					// spawnSession, none of which nudge the poll loop either) - no client-side action
 					// needed on success.
+					.onSuccess { applied ->
+						// A Gateway that predates the field strips the request's copy and answers
+						// without one, so it RELEASED work the owner asked to cancel. Say so; the
+						// session is gone either way and there is nothing left to retry against.
+						if (boardDisposition != null && applied != boardDisposition) {
+							_state.update {
+								it.copy(transientMessage = "Gateway needs an update; that session's tasks went back to the pile.")
+							}
+						}
+						withContext(Dispatchers.Main) { onForgotten?.invoke() }
+					}
 					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
 			}
+		} else {
+			// Nothing to send it to, so the local drop IS the whole forget.
+			onForgotten?.invoke()
 		}
 	}
 

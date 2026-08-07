@@ -981,7 +981,7 @@ describe("createConsoleDispatcher", () => {
 			expect(boardStore.entry(OWNER, "e1")?.sessionId).toBe("recipe-app.a1b2c3");
 
 			// And the session-end hook, which speaks that same bare key, can therefore find it.
-			boardStore.sessionEnded("recipe-app.a1b2c3");
+			boardStore.sessionEnded("recipe-app.a1b2c3", "release");
 			expect(boardStore.entry(OWNER, "e1")?.sessionId).toBeUndefined();
 		});
 
@@ -3310,7 +3310,9 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			dropSessionResume: (team) => dropped.push(team),
 		});
 		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f1"));
-		expect(reply.result).toEqual({ killed: true });
+		// The disposition is echoed even when the request omitted it, so a console can tell an
+		// applied "release" from a Gateway that stripped the field it did not know.
+		expect(reply.result).toEqual({ killed: true, boardDisposition: "release" });
 		expect(h.hostOps[0]).toMatchObject({ kind: "killSession" });
 		expect(dropped).toEqual(["recipe-app.scratch"]);
 	});
@@ -3323,7 +3325,9 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		});
 		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f2"));
 		// A failed kill must never block the record drop - that's forget's actual contract.
-		expect(reply.result).toEqual({ killed: true });
+		// The disposition is echoed even when the request omitted it, so a console can tell an
+		// applied "release" from a Gateway that stripped the field it did not know.
+		expect(reply.result).toEqual({ killed: true, boardDisposition: "release" });
 		expect(dropped).toEqual(["recipe-app.scratch"]);
 	});
 
@@ -3335,7 +3339,9 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			{ dropSessionResume: (team) => dropped.push(team) },
 		);
 		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f3"));
-		expect(reply.result).toEqual({ killed: true });
+		// The disposition is echoed even when the request omitted it, so a console can tell an
+		// applied "release" from a Gateway that stripped the field it did not know.
+		expect(reply.result).toEqual({ killed: true, boardDisposition: "release" });
 		expect(h.hostOps).toHaveLength(0);
 		expect(dropped).toEqual(["recipe-app.scratch"]);
 	});

@@ -9,6 +9,10 @@ import { BoardEntrySchema } from "../shared/schemas.js";
 ////////////////////////////////
 //  Interfaces & Types
 
+/** Every way a board write can be told it will NEVER apply. This vocabulary is load-bearing: it is
+ * the one signal that retires a queued console action, which means it permanently discards the
+ * owner's edit. `session_missing` is detectable only at the console edge, but it is a refusal in
+ * exactly the same sense, so it lives here rather than as a loose string there. */
 export type BoardRefusal =
 	| "entry_missing"
 	| "parent_missing"
@@ -16,9 +20,23 @@ export type BoardRefusal =
 	| "held"
 	| "would_orphan"
 	| "board_full"
-	| "bad_rank";
+	| "bad_rank"
+	| "session_missing";
 
 export type BoardResult = { applied: true } | { applied: false; refused: BoardRefusal };
+
+/** What becomes of a session's unfinished entries when it ends. */
+export type BoardDisposition = "release" | "cancel";
+
+/** The wire marker the console retires an action on. Declared once, beside the vocabulary it
+ * prefixes; a residue test keeps it that way, because any other throw whose message happens to
+ * start with it would silently discard an owner's edit. */
+export const BOARD_REFUSED_PREFIX = "refused: ";
+
+/** The one way to raise a refusal from a throwing path. */
+export function refusalError(refused: BoardRefusal): Error {
+	return new Error(`${BOARD_REFUSED_PREFIX}${refused}`);
+}
 
 export interface BoardProjection {
 	entries: BoardEntry[];
@@ -369,22 +387,34 @@ export class BoardStore {
 		});
 	}
 
-	/** A session ended, by sweep or by forget - one behavior: done and cancelled are trashed (30
-	 * recoverable days), everything else returns to the pile. The console's forget prompt sends its
-	 * choices as ordinary ops BEFORE the forget, so no mode flag exists here. */
-	sessionEnded(sessionKey: string, now = Date.now()): void {
+	/** A session ended. Done and cancelled entries are trashed (30 recoverable days); what happens to
+	 * the REST is the caller's `disposition` - released back to the pile, or cancelled first and so
+	 * trashed by the same pass. Required at every call site rather than defaulted, so a caller cannot
+	 * fall into a disposition it did not choose.
+	 *
+	 * The whole end-of-life is this one pass, which is what makes it atomic with the forget that
+	 * triggers it. It is also SET-VALUED here - every entry the store holds for that session, not a
+	 * list a client enumerated from a snapshot it may not have refreshed. */
+	sessionEnded(sessionKey: string, disposition: BoardDisposition, now = Date.now()): number {
+		let count = 0;
 		for (const ownerId of [...this.owners.keys()]) {
 			this.mutate(ownerId, (board) => {
 				let touched = false;
 				for (const e of board.entries.values()) {
 					if (e.sessionId !== sessionKey) continue;
+					// Already trashed means the owner set it aside before this. The forget prompt did
+					// not count it, so the disposition does not restate it; it still loses its session.
+					const finished = e.state === "done" || e.state === "cancelled";
+					if (disposition === "cancel" && !finished && e.trashedAt === undefined) e.state = "cancelled";
 					if ((e.state === "done" || e.state === "cancelled") && e.trashedAt === undefined) e.trashedAt = now;
 					delete e.sessionId;
 					touched = true;
+					count++;
 				}
 				return touched ? undefined : "unchanged";
 			});
 		}
+		return count;
 	}
 
 	/** Drop entries trashed longer than the retention window; a survivor whose parent was swept is

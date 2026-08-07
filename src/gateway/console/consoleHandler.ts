@@ -50,7 +50,14 @@ import {
 import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
-import { type BoardProjection, type BoardResult, type BoardStore, taskBoardPlaneName } from "../boardStore.js";
+import {
+	type BoardDisposition,
+	type BoardProjection,
+	type BoardResult,
+	type BoardStore,
+	refusalError,
+	taskBoardPlaneName,
+} from "../boardStore.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
 import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
@@ -123,7 +130,7 @@ export interface ConsoleHandlerDeps {
 	isProjectName?: (name: string) => boolean;
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
-	dropSessionResume?: (team: string) => void;
+	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
 	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
 	capabilityStore?: Pick<CapabilityStore, "report" | "touch">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
@@ -412,7 +419,7 @@ export function createConsoleDispatcher({
 	 * by the time this runs the target is always local. */
 	function localSessionKey(named: string): string {
 		const t = parseTarget(named, localDomain, localGatewayId);
-		if (t.domain !== localDomain || t.gateway !== localGatewayId) throw new Error("refused: session_missing");
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) throw refusalError("session_missing");
 		return t instanceof SpawnPoint
 			? composeSessionName(t.spawn, DEFAULT_SESSION)
 			: composeSessionName(t.spawn, t.session);
@@ -641,7 +648,7 @@ export function createConsoleDispatcher({
 	}
 
 	function boardWrite(result: BoardResult): { applied: true } {
-		if (!result.applied) throw new Error(`refused: ${result.refused}`);
+		if (!result.applied) throw refusalError(result.refused);
 		return { applied: true };
 	}
 
@@ -1180,7 +1187,7 @@ export function createConsoleDispatcher({
 				// always local). Unassign (absent sessionId) needs no such check.
 				const sessionId = op.sessionId === undefined ? undefined : localSessionKey(op.sessionId);
 				if (sessionId !== undefined && sessionStore && !sessionStore.getByTeam(sessionId)) {
-					throw new Error("refused: session_missing");
+					throw refusalError("session_missing");
 				}
 				return boardWrite(requireBoard().setSession(ownerId, op.id, sessionId));
 			}
@@ -1475,6 +1482,14 @@ export function createConsoleDispatcher({
 				if (t instanceof SpawnPoint) {
 					throw new Error(`cannot forget "${op.target}": name a specific project.session, not a spawn-point`);
 				}
+				// Its OWN check rather than resolveTmuxTarget's, which the kill below deliberately
+				// swallows: without it a foreign address whose gateway segment happens to match this
+				// one reduces to a bare local field and forgets the SAME-NAMED LOCAL session, now
+				// taking that session's board work with it. close_session and rename_session already
+				// reject a foreign address outright; forget was the one that did not.
+				if (t.domain !== localDomain || t.gateway !== localGatewayId) {
+					throw new Error(`cannot forget "${op.target}": that session lives on another Gateway`);
+				}
 				const name = composeSessionName(t.spawn, t.session);
 				const dedupKey = `${conversationId}:${opId}`;
 				// The tmux kill is best-effort: forget's actual contract is "stop listing this session",
@@ -1491,9 +1506,14 @@ export function createConsoleDispatcher({
 				} catch (e) {
 					console.log(`[console] forget "${name}": kill failed - ${(e as Error).message}`);
 				}
-				// Drop the durable resume record so the session stops listing as available.
-				dropSessionResume?.(name);
-				return { killed: true };
+				// Drop the durable resume record so the session stops listing as available. The board
+				// disposition rides this one call, applied in the same store pass, so the session's
+				// end and its work's end cannot be ordered wrongly against each other.
+				const disposition: BoardDisposition = op.boardDisposition ?? "release";
+				dropSessionResume?.(name, disposition);
+				// Echoed, not assumed: a console asking for "cancel" against a Gateway that predates
+				// the field gets no answer here and knows its choice was downgraded.
+				return { killed: true, boardDisposition: disposition };
 			}
 
 			case "close_session": {

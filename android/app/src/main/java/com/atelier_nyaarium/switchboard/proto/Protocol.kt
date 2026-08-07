@@ -290,6 +290,7 @@ sealed class ConsoleOp {
 	@SerialName("forget")
 	data class Forget(
 		val target: String,
+		val boardDisposition: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -1049,6 +1050,7 @@ data class ConsoleReloadPluginsResult(
 @Serializable
 data class ConsoleForgetResult(
 	val killed: Boolean,
+	val boardDisposition: String? = null,
 )
 
 @Serializable

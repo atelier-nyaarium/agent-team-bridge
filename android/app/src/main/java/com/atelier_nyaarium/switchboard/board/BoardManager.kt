@@ -27,7 +27,7 @@ interface BoardStore {
 	fun loadGatewayId(): String
 }
 
-/** The one call the forget disposition makes, narrow enough for a test to stand in for the client. */
+/** The one call the drain makes, narrow enough for a test to stand in for the client. */
 interface BoardWriter {
 	suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String = UUID.randomUUID().toString())
 }
@@ -163,24 +163,45 @@ class BoardManager(private val store: BoardStore) {
 		enqueue(ConsoleOp.BoardRemove(subtree.map { it.id }), fromGateway, dependsOn = writeId)
 	}
 
-	/** Whether one Gateway's lane still holds work. The forget gate reads it after a drain: an op
-	 * left behind would send after the disposition and overwrite the choice the owner just made. */
-	fun hasQueuedOn(gatewayId: String): Boolean = blob.queue.any { it.gatewayId == gatewayId }
+	/** Drop queued writes for a session's entries, because the owner has just forgotten it.
+	 *
+	 * The disposition rides the forget op, so it is no longer a writer to race. The queue still is:
+	 * a queued edit is absolute, so draining it afterwards would overwrite the choice the gateway
+	 * just applied. Superseded by construction - the disposition is the owner's last word on those
+	 * entries - so it is dropped rather than ordered.
+	 *
+	 * Bounded by what this device can see, which is the honest limit: an entry it never polled has no
+	 * queued action here either. */
+	fun dropQueuedForSession(gatewayId: String, team: String): Int {
+		val key = sessionKeyOf(team)
+		val mine = mergedEntries(gatewayId).filter { it.sessionId == key }.mapTo(mutableSetOf()) { it.id }
+		if (mine.isEmpty()) return 0
+		var dropped = 0
+		mutate { blob ->
+			var queue = blob.queue
+			for (action in blob.queue) {
+				if (action.gatewayId != gatewayId) continue
+				if (boardEntryIdsOf(action.op).none { it in mine }) continue
+				if (queue.none { it.opId == action.opId }) continue
+				queue = abandonBoardAction(queue, action.opId)
+				dropped++
+			}
+			blob.copy(queue = queue)
+		}
+		return dropped
+	}
 
 	/** Fire every eligible queued action once. Runs on the poll loop's cadence; single-flight so a
-	 * slow lane cannot stack drains.
-	 *
-	 * Returns whether this call actually ran the lanes. False means a concurrent drain held them, so
-	 * a caller that needs the queue FLUSHED (rather than merely poked) learns it did not happen -
-	 * without that answer, ordering a send after this call would be ordering it after nothing. */
-	suspend fun drain(client: ConsoleClient): Boolean {
-		if (blob.queue.isEmpty()) return true
+	 * slow lane cannot stack drains. Takes the narrow [BoardWriter] rather than the client, so the
+	 * drain is unit-testable without a live transport. */
+	suspend fun drain(client: BoardWriter) {
+		if (blob.queue.isEmpty()) return
 		// Skip rather than queue: a drain already in flight will pick up whatever this one would
 		// have sent, and stacking them behind a slow lane only multiplies the timeouts.
-		if (!drainMutex.tryLock()) return false
+		if (!drainMutex.tryLock()) return
 		try {
-			// Each Gateway's lane runs to exhaustion, so a session's whole disposition can flush in
-			// one pass; lanes are independent, so a dead Gateway never delays a live one.
+			// Each Gateway's lane runs to exhaustion; lanes are independent, so a dead Gateway never
+			// delays a live one.
 			coroutineScope {
 				for (gatewayId in blob.queue.map { it.gatewayId }.distinct()) {
 					launch { drainLane(client, gatewayId) }
@@ -189,10 +210,9 @@ class BoardManager(private val store: BoardStore) {
 		} finally {
 			drainMutex.unlock()
 		}
-		return true
 	}
 
-	private suspend fun drainLane(client: ConsoleClient, gatewayId: String) {
+	private suspend fun drainLane(client: BoardWriter, gatewayId: String) {
 		val tried = mutableSetOf<String>()
 		while (true) {
 			val action = eligibleBoardActions(blob.queue, STRUGGLING_AFTER).firstOrNull { it.gatewayId == gatewayId }
@@ -250,40 +270,6 @@ class BoardManager(private val store: BoardStore) {
 		return mergedEntries(gatewayId).count {
 			it.sessionId == key && it.trashedAt == null && it.state != "done" && it.state != "cancelled"
 		}
-	}
-
-	/** The forget prompt's decision, sent INLINE and awaited rather than queued: the gateway's
-	 * session-end hook unassigns everything it finds, so a disposition arriving afterwards lands on
-	 * entries already back in the pile. Returns true only when every op was accepted, which is the
-	 * caller's permission to proceed with the forget.
-	 *
-	 * Deliberately not the pending queue: that drains one op per Gateway per pass, so a session with
-	 * two unfinished tasks could never flush its disposition in one go. */
-	suspend fun sendDispositionBeforeForget(
-		client: BoardWriter,
-		gatewayId: String,
-		team: String,
-		cancelThem: Boolean,
-	): Boolean {
-		val key = sessionKeyOf(team)
-		val undone = mergedEntries(gatewayId).filter {
-			it.sessionId == key && it.trashedAt == null && it.state != "done" && it.state != "cancelled"
-		}
-		for (e in undone) {
-			val op = if (cancelThem) ConsoleOp.BoardSetState(e.id, "cancelled") else ConsoleOp.BoardSetSession(e.id, null)
-			try {
-				client.boardWrite(op, gatewayId)
-			} catch (err: BoardRefused) {
-				// The gateway will never apply it, so waiting changes nothing; the forget proceeds
-				// and the session-end hook decides that entry's fate.
-				DebugLog.log("Board", "disposition for ${e.id} refused: ${err.reason}")
-			} catch (err: Exception) {
-				err.rethrowIfCancellation()
-				DebugLog.log("Board", "disposition for ${e.id} did not land: ${err.message?.take(80)}")
-				return false
-			}
-		}
-		return true
 	}
 
 	/** One session's live line for the session card and thread strip: the task it is on (first

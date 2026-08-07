@@ -24,7 +24,7 @@ import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
-import { BoardStore } from "./boardStore.js";
+import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
 import { CodexRoute } from "./codexRoute.js";
@@ -328,14 +328,16 @@ export async function startGateway(): Promise<void> {
 	// The owner's task board, in its OWN durable file with synchronous checked writes - a trash op
 	// the owner watched succeed must survive a crash, unlike readAnchors' low-stakes tick cadence.
 	const boardStore = openDurable(DATA_DIR, "task-board", (d) => new BoardStore(d, planeRegistry, restoredPlanes));
-	// End-of-life for a session's board entries, identical for the sweep and the console Forget:
-	// done/cancelled trash, the rest return to the pile. Own catch: board trouble must never take
-	// down the persist tick (whose uncaught throw exits the gateway) or block a forget.
-	const boardSessionEnded = (team: string) => {
+	// End-of-life for a session's board entries. Done/cancelled trash either way; the disposition
+	// decides the rest, and every caller states it rather than inheriting one. Own catch: board
+	// trouble must never take down the persist tick (whose uncaught throw exits the gateway) or
+	// block a forget.
+	const boardSessionEnded = (team: string, disposition: BoardDisposition): number => {
 		try {
-			boardStore.sessionEnded(team);
+			return boardStore.sessionEnded(team, disposition);
 		} catch (err) {
 			console.error(`[task-board] session-ended hook failed for ${team}:`, err);
+			return 0;
 		}
 	};
 	const sessionResumeSnapshot = (cleanShutdown: boolean) => ({
@@ -378,7 +380,9 @@ export async function startGateway(): Promise<void> {
 		const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
 		if (sweptTeams.length > 0) {
 			presence.markDirty();
-			for (const team of sweptTeams) boardSessionEnded(team);
+			// A swept session is one nobody decided about, so its work returns to the pile rather
+			// than being cancelled on its behalf.
+			for (const team of sweptTeams) boardSessionEnded(team, "release");
 		}
 		try {
 			boardStore.sweepTrash();
@@ -1213,9 +1217,9 @@ export async function startGateway(): Promise<void> {
 			// board hook rides HERE - the deliberate forget - and on the TTL sweep, never inside
 			// SessionStore.forget itself, whose failed-wake/failed-create rollback callers would
 			// otherwise apply the session-ended policy to a launch that never happened.
-			dropSessionResume: (team) => {
+			dropSessionResume: (team, disposition) => {
 				presence.forget(team);
-				boardSessionEnded(team);
+				boardSessionEnded(team, disposition);
 			},
 			sessionStore: presence,
 			capabilityStore,

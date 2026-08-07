@@ -27,6 +27,9 @@ code does not belong here; rationale lives in `git log`.
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store
+- `android/.../board/` - the console's board half. `BoardState.kt` and `BoardRows.kt` are the pure
+  reducers (queue, snapshot merge, row flattening); `BoardManager.kt` owns the durable blob and is
+  the only thing that mutates it
   - `federation/` - cross-Gateway routing (`gatewayRelay.ts`), identity, allowlist, sealer, replay
     guard, cross-Domain presence
 - `src/mcp/` - the tools registered into Claude Code
@@ -306,7 +309,7 @@ no TTL. A starting MCP reads both before the McpServer exists.
   session does not have.
 - A running session never changes its tools; a toggle is picked up at the next session start.
 
-### Task board (gateway half; console and tools land later)
+### Task board (gateway and console; the agent tools land later)
 
 The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by console ops and the
 `/task-board` route, shipped to the phone on the `task-board:${ownerId}` plane. Entries are FLAT
@@ -314,7 +317,26 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
 
 - **The store is the sole validator.** Every write path resolves to one of its enumerated refusals
   (`BoardRefusal`), and a refusal is an ok=false INSIDE the sealed reply (`refused: ` prefix) - the
-  ONLY shape a client may retire a queued action on; every other failure retries.
+  ONLY shape a client may retire a queued action on; every other failure retries. That prefix is the
+  one signal that DISCARDS an owner's edit, so `refusalError` is its single producer and
+  `board-refusal-residue.test.ts` fails the build if another module writes it.
+- **A session's end is one mutation.** `sessionEnded` trashes done/cancelled and applies the caller's
+  `boardDisposition` to the rest, and that disposition rides the `forget` op itself, so a session's
+  end and its work's end cannot be ordered wrongly against each other. Required as a VALUE at every
+  call site (the TTL sweep passes `release` explicitly), and set-valued server-side: everything the
+  store holds for that session, never a list a client enumerated. The reply echoes what was applied
+  and the console READS that echo, so a stale Gateway downgrading a `cancel` is reported rather than
+  assumed away. The hook rides the deliberate forget and the sweep, never `SessionStore.forget`
+  itself, whose rollback callers fire it for launches that never happened.
+- **The pending queue is the OTHER writer to those entries**, and folding the disposition in does not
+  order it. The console drops that session's queued writes when it forgets (`dropQueuedForSession`),
+  because the disposition is the owner's last word on them; a dropped write takes its linked delete.
+  Four console-side designs raced this before it was handled by supersession - read the plan's Bug
+  Classes before reintroducing one.
+- **`forget` needs its OWN local-Address check.** Its `resolveTmuxTarget` call sits inside a `try`
+  the kill deliberately swallows, so without the explicit guard a foreign-Domain address whose
+  gateway id collides with a local one forgets the same-named LOCAL session and disposes of its
+  board work.
 - **An invalid rank must never reach the durable file**: the wire schema would reject the whole file
   on the next restore. Four layers hold the line - store refusal, `rebalanceRanks` self-assertion,
   `endRank`'s re-check, and per-entry tolerant restore. Keep all four.
@@ -326,9 +348,17 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
 - **claim/release are session-scoped and per-member**: claim refuses if ANY subtree member is held
   elsewhere; release lets go of only the caller's own members. The owner-authority cascade is
   `board_set_session` alone.
-- Session end (TTL sweep or console Forget) trashes done/cancelled and returns the rest to the pile,
-  via `sweep` returning the removed team keys - the hook must never live in `SessionStore.forget`,
-  whose rollback callers fire it for launches that never happened.
+- **A board session is `(gatewayId, sessionId)`.** The stored `sessionId` is the bare local field,
+  unique only within its Gateway, while a chat's `Team.name` is the qualified address. The conversion
+  is one-directional and has exactly one owner per side: `consoleHandler.localSessionKey` inbound
+  (which refuses a foreign Gateway rather than folding it onto a same-named local session) and
+  `BoardManager.sessionKeyOf` on the console. Both resolvers answer NULL for an unknown session; a
+  plausible wrong answer is what merged two machines' boards under one header.
+- **A queued console edit retires on a gateway refusal and on nothing else.** No attempt ceiling
+  discards it. A lane may step PAST an action that keeps failing, but never onto another write to the
+  same entry, because these ops are absolute and reordering would apply the older value last.
+- **A truncated projection is an id-sorted PREFIX**, so the console's cache carries forward only what
+  lies past the cut. Merging the whole prior cache resurrects every deletion, forever.
 - `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are the same 30 days for unrelated reasons and
   must never share a constant.
 

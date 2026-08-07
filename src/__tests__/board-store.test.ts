@@ -103,12 +103,45 @@ describe("trash and sweeps", () => {
 			entry("open1", { sessionId: "s", state: "in_progress" }),
 			entry("other", { sessionId: "other-session" }),
 		]);
-		store.sessionEnded("s", 5000);
+		expect(store.sessionEnded("s", "release", 5000)).toBe(2);
 		expect(store.entry(OWNER, "done1")).toMatchObject({ trashedAt: 5000 });
 		expect(store.entry(OWNER, "done1")?.sessionId).toBeUndefined();
 		expect(store.entry(OWNER, "open1")).not.toHaveProperty("trashedAt");
 		expect(store.entry(OWNER, "open1")?.sessionId).toBeUndefined();
 		expect(store.entry(OWNER, "other")?.sessionId).toBe("other-session");
+	});
+
+	it("the cancel disposition finishes the session's unfinished work in the same pass that trashes it", () => {
+		store.upsert(OWNER, [
+			entry("open1", { sessionId: "s", state: "open" }),
+			entry("busy", { sessionId: "s", state: "in_progress" }),
+			entry("done1", { sessionId: "s", state: "done" }),
+		]);
+		store.sessionEnded("s", "cancel", 5000);
+		// Cancelled, and therefore trashed by the same rule that trashes an already-finished entry -
+		// one pass, so a crash cannot leave the two halves disagreeing.
+		for (const id of ["open1", "busy"]) {
+			expect(store.entry(OWNER, id)).toMatchObject({ state: "cancelled", trashedAt: 5000 });
+		}
+		expect(store.entry(OWNER, "done1")).toMatchObject({ state: "done", trashedAt: 5000 });
+		expect(store.entry(OWNER, "busy")?.sessionId).toBeUndefined();
+	});
+
+	it("cancel leaves an already-trashed entry's state alone, matching what the prompt counted", () => {
+		// The forget prompt counts live unfinished work. An entry the owner trashed earlier was never
+		// in that count, so restating it would change something they were not asked about.
+		store.upsert(OWNER, [entry("binned", { sessionId: "s", state: "in_progress" })]);
+		store.setTrashed(OWNER, "binned", true);
+		store.sessionEnded("s", "cancel", 5000);
+		expect(store.entry(OWNER, "binned")?.state).toBe("in_progress");
+		expect(store.entry(OWNER, "binned")?.sessionId).toBeUndefined();
+	});
+
+	it("the disposition covers every entry the STORE holds, not a set a client enumerated", () => {
+		// The console can only name entries it has polled. The gateway sees all of them.
+		store.upsert(OWNER, [entry("seen", { sessionId: "s" }), entry("unpolled", { sessionId: "s" })]);
+		expect(store.sessionEnded("s", "cancel", 5000)).toBe(2);
+		expect(store.entry(OWNER, "unpolled")?.state).toBe("cancelled");
 	});
 
 	it("the trash sweep deletes only past the window and promotes a swept parent's survivor to root", () => {

@@ -99,55 +99,83 @@ class BoardManagerTest {
 	}
 
 	@Test
-	fun theForgetDispositionCancelsOnlyUnfinishedLiveWork() = runBlocking {
+	fun anAcceptedActionRetiresAndTheLaneCarriesOn() = runBlocking {
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-route", listOf(entry("a"), entry("b")), null, false)
+		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
+		board.enqueue(ConsoleOp.BoardSetState("b", "done"), "gw-route")
+
+		val writer = RecordingWriter()
+		board.drain(writer)
+		assertEquals(
+			listOf<ConsoleOp>(ConsoleOp.BoardSetState("a", "done"), ConsoleOp.BoardSetState("b", "done")),
+			writer.sent,
+		)
+		// Both applied, so the snapshot alone is the truth again.
+		board.applySnapshot("gw-route", listOf(entry("a", state = "done"), entry("b", state = "done")), null, false)
+		assertTrue(board.mergedEntries("gw-route").all { it.state == "done" })
+	}
+
+	@Test
+	fun aTransportFailureKeepsTheEditQueuedForALaterDrain() = runBlocking {
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-route", listOf(entry("a")), null, false)
+		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
+
+		board.drain(RecordingWriter(fail = { error("offline") }))
+		// Still applied optimistically, and still queued - only a gateway refusal may discard it.
+		assertEquals("done", board.mergedEntries("gw-route").single().state)
+		val retry = RecordingWriter()
+		board.drain(retry)
+		assertEquals(listOf<ConsoleOp>(ConsoleOp.BoardSetState("a", "done")), retry.sent)
+	}
+
+	@Test
+	fun aRefusedActionIsRetiredAndTheRowRevertsWithAMarker() = runBlocking {
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-route", listOf(entry("a")), null, false)
+		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
+
+		board.drain(RecordingWriter(fail = { throw BoardRefused("entry_missing") }))
+		assertEquals("open", board.mergedEntries("gw-route").single().state)
+		assertEquals(listOf("entry_missing"), board.refusals.map { it.reason })
+	}
+
+	@Test
+	fun forgettingASessionDropsItsQueuedEditsSoNoneCanOutliveTheDisposition() = runBlocking {
 		val board = BoardManager(storeStub())
 		board.applySnapshot(
 			"gw-route",
-			listOf(
-				entry("a", sessionId = "s1", state = "open"),
-				entry("b", sessionId = "s1", state = "in_progress"),
-				entry("c", sessionId = "s1", state = "done"),
-				entry("gone", sessionId = "s1", state = "open", trashedAt = 5L),
-			),
+			listOf(entry("mine", sessionId = "s1"), entry("theirs", sessionId = "s2")),
 			null,
 			false,
 		)
-		assertEquals(2, board.undoneCount("gw-route", "s1"))
+		board.enqueue(ConsoleOp.BoardSetState("mine", "in_progress"), "gw-route")
+		board.enqueue(ConsoleOp.BoardSetState("theirs", "in_progress"), "gw-route")
 
+		assertEquals(1, board.dropQueuedForSession("gw-route", "s1"))
+
+		// The forgotten session's edit is gone; an unrelated session's still drains.
 		val writer = RecordingWriter()
-		assertTrue(board.sendDispositionBeforeForget(writer, "gw-route", "s1", cancelThem = true))
-		assertEquals(
-			listOf<ConsoleOp>(ConsoleOp.BoardSetState("a", "cancelled"), ConsoleOp.BoardSetState("b", "cancelled")),
-			writer.sent,
-		)
+		board.drain(writer)
+		assertEquals(listOf<ConsoleOp>(ConsoleOp.BoardSetState("theirs", "in_progress")), writer.sent)
 	}
 
 	@Test
-	fun unassigningBeforeForgetReturnsUnfinishedWorkToThePile() = runBlocking {
+	fun forgettingAMovesDESTINATIONDropsBothHalvesOfTheInFlightMove() = runBlocking {
 		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a", sessionId = "s1"), entry("d", sessionId = "s1", state = "done")), null, false)
+		board.applySnapshot("gw-a", listOf(entry("m1")), null, false)
+		// A move to session s2 on gw-b: the write lands there, the delete on gw-a waits for it.
+		val subtree = board.mergedEntries("gw-a").map { it.copy(sessionId = "s2") }
+		board.enqueueMove(subtree, fromGateway = "gw-a", toGateway = "gw-b")
 
+		// Forgetting s2 supersedes the move. Dropping the write takes its linked delete, so the entry
+		// cannot be removed from the origin with nothing written at the destination.
+		assertEquals(1, board.dropQueuedForSession("gw-b", "s2"))
 		val writer = RecordingWriter()
-		assertTrue(board.sendDispositionBeforeForget(writer, "gw-route", "s1", cancelThem = false))
-		assertEquals(listOf<ConsoleOp>(ConsoleOp.BoardSetSession("a", null)), writer.sent)
-	}
-
-	@Test
-	fun aDispositionThatDidNotLandReportsFailureSoTheForgetCanHold() = runBlocking {
-		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a", sessionId = "s1")), null, false)
-
-		val writer = RecordingWriter(fail = { error("offline") })
-		assertFalse(board.sendDispositionBeforeForget(writer, "gw-route", "s1", cancelThem = true))
-	}
-
-	@Test
-	fun aRefusedDispositionDoesNotBlockTheForget() = runBlocking {
-		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a", sessionId = "s1")), null, false)
-
-		val writer = RecordingWriter(fail = { throw BoardRefused("entry_missing") })
-		assertTrue(board.sendDispositionBeforeForget(writer, "gw-route", "s1", cancelThem = true))
+		board.drain(writer)
+		assertTrue(writer.sent.isEmpty())
+		assertEquals(listOf("m1"), board.mergedEntries("gw-a").map { it.id })
 	}
 
 	private class RecordingWriter(private val fail: (() -> Unit)? = null) : BoardWriter {

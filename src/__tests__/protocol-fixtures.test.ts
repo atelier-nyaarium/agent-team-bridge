@@ -7,6 +7,7 @@ import {
 	ConsoleBoardReadResultSchema,
 	ConsoleCloseSessionResultSchema,
 	ConsoleCreateSessionResultSchema,
+	ConsoleForgetResultSchema,
 	ConsoleListDirsResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
@@ -49,6 +50,7 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	ConsolePeekResult: ConsolePeekResultSchema,
 	ConsoleListDirsResult: ConsoleListDirsResultSchema,
 	ConsoleBoardReadResult: ConsoleBoardReadResultSchema,
+	ConsoleForgetResult: ConsoleForgetResultSchema,
 };
 
 interface ManifestEntry {
