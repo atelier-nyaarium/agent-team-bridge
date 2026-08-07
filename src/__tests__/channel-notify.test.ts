@@ -31,8 +31,15 @@ describe("what a channel push asks the agent to do", () => {
 	});
 
 	it("marks an awareness push structurally, not only in the instructions prose", async () => {
-		expect((await metaFor({ no_ack: true })).no_ack).toBe(true);
+		expect((await metaFor({ no_ack: true })).no_ack).toBe("true");
 		expect((await metaFor({})).no_ack).toBeUndefined();
+	});
+
+	it("keeps every meta value a string, since they are rendered as tag attributes", async () => {
+		// A boolean here took the whole notification down with no error on either side.
+		for (const value of Object.values(await metaFor({ no_ack: true, replyJsonSchema: "{}" }))) {
+			expect(typeof value).toBe("string");
+		}
 	});
 
 	it("keeps asking for a reply on an ordinary push", async () => {

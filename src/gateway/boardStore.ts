@@ -700,6 +700,9 @@ export class BoardStore {
 	/** The write already committed, so a throwing sink is logged rather than propagated. */
 	private announce(notices: readonly BoardNotice[]): void {
 		try {
+			console.error(
+				`[task-board] ${notices.length} notice(s): ${notices.map((n) => `${n.kind}/${n.entryId}`).join(" ")}`,
+			);
 			this.onNotices?.(notices);
 		} catch (err) {
 			console.error("[task-board] notice sink failed:", err);

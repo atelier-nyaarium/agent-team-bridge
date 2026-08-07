@@ -58,9 +58,10 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				session_id: payload.session_id,
 				from: payload.from,
 				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
-				// Snake_case because the harness drops a meta key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/,
-				// silently. Structural, so a reader is not left string-matching the instructions prose.
-				...(payload.no_ack === true ? { no_ack: true } : {}),
+				// A STRING, like every other value here: meta is rendered as tag attributes, and a boolean
+				// took the whole notification down silently. Snake_case for the same reason, since the
+				// harness drops a key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/ without a word either.
+				...(payload.no_ack === true ? { no_ack: "true" } : {}),
 				instructions,
 			},
 		},

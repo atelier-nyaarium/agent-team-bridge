@@ -111,16 +111,22 @@ export function createNoAckPush(deps: NoAckPushDeps): NoAckPush {
 	function flush(sessionKey: string, bank: Bank, now: number): void {
 		const liveness = deps.liveness(sessionKey);
 		if (liveness === "gone") {
+			console.error(`[task-board] dropped ${bank.notices.size} notice(s) for ${sessionKey}: no live session`);
 			banks.delete(sessionKey);
 			return;
 		}
 		if (liveness === "waking") {
-			if (now - bank.heldSince >= MAX_HOLD_MS) banks.delete(sessionKey);
-			else bank.dueAt = now + FLUSH_WINDOW_MS;
+			if (now - bank.heldSince >= MAX_HOLD_MS) {
+				console.error(
+					`[task-board] dropped ${bank.notices.size} notice(s) for ${sessionKey}: wake never landed`,
+				);
+				banks.delete(sessionKey);
+			} else bank.dueAt = now + FLUSH_WINDOW_MS;
 			return;
 		}
 		banks.delete(sessionKey);
-		send(sessionKey, [...bank.notices.values()]);
+		const sent = send(sessionKey, [...bank.notices.values()]);
+		console.error(`[task-board] ${sent ? "pushed" : "LOST"} ${bank.notices.size} notice(s) to ${sessionKey}`);
 	}
 
 	return {
