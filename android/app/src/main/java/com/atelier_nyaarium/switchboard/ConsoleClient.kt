@@ -200,10 +200,6 @@ data class Team(
 	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
 	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
 	val sessionLabel: String? = null,
-	// The AI-managed vibe-check description ("what is this session about, as a short phrase"). The
-	// board card shows it as the preview line in place of the last message. Null until the session's
-	// first vibe check answers, and for gateways without the feature.
-	val description: String? = null,
 	// Daemon-derived working/needs-login, from the presence plane (2-frame-hysteresis confirmed
 	// server-side). Null means unknown (never observed, or derivation just became impossible), never
 	// false - a tile shows no pulse rather than a stale frozen one. Distinct from
@@ -259,7 +255,6 @@ internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
 		displayName = it.displayName,
 		isAdminDomain = it.isAdminDomain ?: false,
 		sessionLabel = it.sessionLabel,
-		description = it.description,
 		working = it.working,
 		needsLogin = it.needsLogin,
 		limitBlocked = it.limitBlocked,

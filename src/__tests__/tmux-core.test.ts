@@ -48,7 +48,6 @@ import {
 	hasSession,
 	isAgentReady,
 	isAgentWorking,
-	isAtPrompt,
 	isLoggedOut,
 	killSession,
 	peekPane,
@@ -439,34 +438,6 @@ describe("tmuxCore isLoggedOut", () => {
 		const ruleAnsi = `${esc}[2m${rule}${esc}[0m`;
 		const screen = `❯ \n${ruleAnsi}\n  ⏵⏵ for agents  ${esc}[33mNot logged in${esc}[0m · ${esc}[1mRun /login${esc}[0m`;
 		expect(isLoggedOut(screen)).toBe(true);
-	});
-});
-
-describe("tmuxCore isAtPrompt", () => {
-	const rule = "─".repeat(40);
-
-	it("is true whether the composer is idle or mid-turn - the box border renders either way", () => {
-		expect(isAtPrompt(`❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`)).toBe(true);
-		expect(isAtPrompt(`❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt`)).toBe(
-			true,
-		);
-	});
-
-	it("is false with no full-width rule row at all (raw shell, boot screen, menu)", () => {
-		expect(isAtPrompt("")).toBe(false);
-		expect(isAtPrompt("root@host ~ $ ")).toBe(false);
-		expect(isAtPrompt("Loading development channels...")).toBe(false);
-		expect(isAtPrompt("  ❯ 1. I am using this for local development\n    2. Exit")).toBe(false);
-	});
-
-	it("ignores a partial rule that merely contains dashes rather than being all dashes", () => {
-		expect(isAtPrompt("-- 3 dashes inline, not a full rule row --")).toBe(false);
-		expect(isAtPrompt(`some text ${rule} trailing text`)).toBe(false);
-	});
-
-	it("strips the SGR escapes a real -e capture wraps the rule in", () => {
-		const esc = String.fromCharCode(27);
-		expect(isAtPrompt(`❯ \n${esc}[2m${rule}${esc}[0m\n  ⏵⏵ for agents`)).toBe(true);
 	});
 });
 

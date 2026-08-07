@@ -166,7 +166,7 @@ describe("PresenceFacade rows are sorted by team", () => {
 });
 
 describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => {
-	it("mint/adoptById, rename, setDescription, forget, clearLive, wake/create start+end, setWorking, clearWorkingFor, clearAllWorking each advance the counter", () => {
+	it("mint/adoptById, rename, forget, clearLive, wake/create start+end, setWorking, clearWorkingFor, clearAllWorking each advance the counter", () => {
 		const { facade, planeRegistry } = makeFacade();
 		let last = planeRegistry.version("presence")!.counter;
 		const expectBumped = () => {
@@ -180,8 +180,6 @@ describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => 
 		facade.mint({ spawn: "proj" });
 		expectBumped();
 		facade.rename("proj.main", "renamed");
-		expectBumped();
-		facade.setDescription("proj.main", "doing a thing");
 		expectBumped();
 		facade.adoptById("other", { spawn: "proj" }); // exists first, so its wake-in-flight flip is visible
 		expectBumped();

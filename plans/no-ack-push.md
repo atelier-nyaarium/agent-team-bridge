@@ -22,8 +22,18 @@ Research, not decisions. Each of these killed a design that looked obvious.
   call's context. Nothing can ENFORCE no-reply; that stays a convention in the instructions text.
 - **`send()` cannot be reused with a flag.** Its channel branch inlines wake/mint (`tryWakeTeam`),
   persistent job creation, vibe-check counting (`noteInbound`) and console mirroring (`mirrorPeer` ->
-  `fanOutConsolePush`). Four separate reasons. The shape to copy is `vibeCheck`: `resolveLead` +
-  `lead.send`, which creates no job entry and is not counted, because it never goes through `send()`.
+  `fanOutConsolePush`). Four separate reasons. The shape to copy is the vibe check's own `resolveLead`
+  plus `lead.send`, which creates no job entry and is not counted, because it never goes through
+  `send()`. Phase 1 deleted the only definition, so it is transcribed here verbatim - it was a
+  `createVibeCheck` dep built in `gateway/index.ts`, and nothing else composes it:
+
+  ```ts
+  resolveLead: (team) => {
+      const live = resolveLiveIncarnation(registry, sessionStore, team);
+      if (!live?.data.handshakeConfirmed) return undefined;
+      return { send: (payload: string) => live.send(payload), binding: sessionAuthority.toAnswerFor(live) };
+  }
+  ```
 - **The signal must be minted inside `BoardStore`'s mutate closures.** `PlaneDefinition.onBump`
   receives only a `PlaneVersion`, so a plane bump can only ever say "the board moved". `index.ts`
   already records the identical limit for linked-peers.
@@ -208,8 +218,9 @@ holding across the merely-unconfirmed window.
   false when it lands.
 - **Refinement 1: do not key the drop on `onTeamDisconnect`.** It fires with the socket's registered
   `teamName`, which for a `claude --resume` alias is NOT the record key a board `sessionId` names -
-  `vibeCheck` has this bug latent today. Check `resolveLead(addressee)` at flush time instead.
-- **Refinement 2: `resolveLead` flattens three states into one `undefined`** (asleep / mid-wake /
+  `vibeCheck` had this bug latent. Check the addressee's live incarnation at flush time instead.
+- **Refinement 2: `resolveLead` (transcribed under Settled, above) flattens three states into one
+  `undefined`** (asleep / mid-wake /
   registered-but-unconfirmed). The unconfirmed window is explicitly sized for a slow
   `claude --resume`. Dropping there discards notices for a session that never left.
   **`resolveLiveIncarnation` alone is NOT the three-valued answer** - it is two-valued, and asleep
@@ -344,13 +355,61 @@ a gap between them is a blank card.
 - Kotlin gate locally, and `assembleEmulator` - `SandboxFixtures.teams()` sets a description and only
   compiles in the emulator build type, which CI never touches.
 
+### Bug Classes
+
+**Mechanism:** the session card's rung derivation, while it lived inline in the `SessionCard`
+composable.
+
+**Defect class:** a display rule written as an approximation of its own stated justification, with no
+test able to reach it. Both rounds shipped a comment that named the right condition beside code that
+checked a looser one.
+
+- Round 1 (alignment pass): the time beside the headline was `lastActivity`, so an hour-old headline
+  read "1m" whenever the owner had since sent something. Patched to the reply's own time.
+- Round 2 (red team): the snippet rung was suppressed on "a headline exists" while its comment said
+  "it would repeat the same row back to itself". After the owner sent, the card was byte-identical to
+  before, and the one test covering round 1's fix asserted only the two `ChatState` getters, so it
+  passed against the reverted fix.
+
+- Round 3 (re-audit): the one-line cleaning was written out per call site, and `snippet` applied it
+  after choosing title-over-text rather than to each. Consolidated into `oneLine`, which every rung
+  now falls through.
+- Round 4 (re-audit): round 3's justification was wrong and its test proved nothing. The failure it
+  claimed - a whitespace-only title cleaning to nothing and taking the body with it - cannot happen,
+  because `tierOrNull` nulls a blank title at both `Message` construction sites, and the test that
+  caught it built a row neither boundary can produce. Patched anyway, by adding an invisible-character
+  strip to `oneLine`.
+- Round 5 (re-audit): that strip drew four findings by itself, in both directions at once, and a fifth
+  for the board title it was extended to. REVERTED rather than patched a third time.
+
+### Accepted, not fixed
+
+- A reply whose body is only whitespace and carries no files leaves the card showing its name alone.
+  It also retires any existing headline, since `lastReply` takes the newest inbound row unconditionally.
+  The alternative considered was letting the timestamp render by itself, which an earlier round
+  reported as its own defect: a bare relative time against blank space.
+- The `(attachment)` stand-in is count-blind, and counts files a plugin may hide from the transcript
+  (a `ref-snapshot` is hidden, so a snapshot-only row would advertise an attachment that renders
+  nowhere). `DraftStrip` already computes the count-aware form for the composer's own file list.
+
+**The chase, not the characters, was the defect.** Rounds 4 and 5 both came from treating an audit
+finding about exotic input as a requirement. The owner ruled the class out: an agent does not author a
+title of only zero-width characters, and does not space one with U+2028, so there is nothing there to
+protect against. `oneLine` collapses ASCII whitespace, which is what a one-line rung actually needs.
+A future audit will raise it again; `plans/pain-points.md` records that the answer is no.
+
+**Repair, not a third patch:** the derivation moved out to `sessionCardPreview`, a pure function over
+`ChatState` plus the board line, and the rules are pinned there. Round 2's condition is now the row
+identity its comment always claimed. A future rung change is a unit test away rather than an
+emulator screenshot away.
+
 ## Phase 2 - The no-ack push, end to end
 
 The envelope, the board producer and the delivery. Split any smaller and nothing works.
 
 - **Envelope:** optional `no_ack` on `ChannelPushPayload` (a plain interface - no zod, no codegen, no
   deploy window), branching `channelNotify`'s `instructions` to awareness-only. Test for exactly
-  `true`. Mint an unroutable session id under its own prefix, the way `vc-` was.
+  `true`. Mint an unroutable session id under its own prefix, the way the vibe check's `vc-` was.
 - **Voice:** the body is prose that states facts and adds nothing - no suggested next step, no
   interpretation. See Question 6.
 - **Producer, inside `BoardStore`:** make the writer a required value on `mutate` (`OWNER_ACTOR` at
@@ -363,9 +422,10 @@ The envelope, the board producer and the delivery. Split any smaller and nothing
 - **Delivery:** a per-session in-memory bank of ids, flushed on a few-second window sized to the
   console's drain, plus an early flush on the session's own next `/task-board` call. Resolve the
   addressee at the SEND edge, not from a close hook (`onTeamDisconnect` fires under the socket's
-  registered name, which is not the record key a board `sessionId` names - `vibeCheck` has that bug
-  latent today). Ask `resolveLiveIncarnation` for a three-valued answer: send when confirmed, retry
+  registered name, which is not the record key a board `sessionId` names - `vibeCheck` had that bug
+  latent). Ask `resolveLiveIncarnation` for a three-valued answer: send when confirmed, retry
   under a short cap while unconfirmed, drop when gone. Invalidate inside `sessionEnded`'s existing
   pass, which already walks exactly the right set.
-- Copy `vibeCheck`'s delivery shape before it goes: `resolveLead` + `lead.send`, never `send()`.
-  After phase 1 this becomes the only gateway-authored push besides the handshake.
+- Rebuild the vibe check's delivery shape from the `resolveLead` transcription under Settled: resolve
+  the live incarnation, then send on it directly, never through `send()`. This is the only
+  gateway-authored push besides the handshake.

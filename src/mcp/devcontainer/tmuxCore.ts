@@ -12,9 +12,9 @@ import {
 } from "../../shared/host-op.js";
 import { parseSessionName } from "../../shared/session-id.js";
 
-// The pane-screen classifiers live in shared/agent-screen.ts (the gateway's vibe-check idle gate needs them too);
+// The pane-screen classifiers live in shared/agent-screen.ts, beside their Kotlin twin;
 // re-exported here so the daemon and existing tests can use this import path.
-export { isAgentReady, isAgentWorking, isAtPrompt, isLoggedOut, limitNotice } from "../../shared/agent-screen.js";
+export { isAgentReady, isAgentWorking, isLoggedOut, limitNotice } from "../../shared/agent-screen.js";
 
 ////////////////////////////////
 //  Constants

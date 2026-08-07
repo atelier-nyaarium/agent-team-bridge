@@ -549,9 +549,9 @@ export interface CrossDomainPresenceReconciler {
  * recovery mechanism instead of two competing ones). Runs on its OWN cadence, fully decoupled from
  * the console's own message poll loop, so a hung/unreachable linked peer can never stall it.
  *
- * Each destination peer is guarded by an in-flight generation token (mirrors vibeCheck.ts's
- * `peekInFlight` / `PresenceFacade`'s own `wakeInFlight` for the SKIP-if-already-attempting half,
- * and `CoalescedPusher`'s own token for the CANCEL-a-stale-attempt half): a peer still mid-attempt
+ * Each destination peer is guarded by an in-flight generation token (mirrors `PresenceFacade`'s own
+ * `wakeInFlight` for the SKIP-if-already-attempting half, and `CoalescedPusher`'s own token for the
+ * CANCEL-a-stale-attempt half): a peer still mid-attempt
  * from a prior tick is skipped, not piled onto - without this, a persistently hung peer (the
  * scenario motivating this whole feature) would accumulate one MORE overlapping relay attempt every
  * tick for as long as the underlying relay call takes to time out, reproducing the original stall

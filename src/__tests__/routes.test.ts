@@ -2178,6 +2178,32 @@ describe("routes", () => {
 			expect(snapshotCalls).toBe(2);
 		});
 
+		it("carries a row's description across, since a friend's older Gateway still sends one", () => {
+			// Nothing local writes a description any more, so from a local snapshot alone this conversion
+			// looks dead and sweeps cleanly. It is not: pullPresenceFromDomain runs a NOT-YET-UPDATED
+			// friend's rows through this same converter, and dropping the line costs their session rows
+			// the description subtitle on the owner's console with no gate anywhere to catch it. This
+			// drives the converter through its outbound caller, which is the reachable one from a test;
+			// what it pins is the field surviving the conversion, not the pull path's own routing.
+			const presence = {
+				snapshot: () => [
+					{
+						team: "proj.main",
+						gatewayId: "test-host",
+						domainId: "alice",
+						status: "online" as const,
+						kind: "loose" as const,
+						description: "wiring the relay",
+						queue_depth: 0,
+					},
+				],
+			} as unknown as RoutesDeps["presence"];
+			const { presenceForDomain } = createRoutes(
+				makeCtx({ presence, sharesFor: () => ["alice.test-host.proj.main"] }),
+			);
+			expect(presenceForDomain("bob-domain")[0]?.description).toBe("wiring the relay");
+		});
+
 		it("pullPresenceFromDomain resolves null for a Domain with no linked gateway at all", async () => {
 			const { pullPresenceFromDomain } = createRoutes(makeCtx({}));
 			await expect(pullPresenceFromDomain("bob-domain")).resolves.toBeNull();

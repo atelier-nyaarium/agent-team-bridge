@@ -48,7 +48,6 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			queueDepth = 0,
 			kind = "loose",
 			sessionLabel = "Sandbox",
-			description = "Canned state, no gateway",
 		),
 	)
 
@@ -132,9 +131,11 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		)
 
 		// A card the console never opened to classify: declared, docked, and rendered from its own
-		// fields, which is the byte-free ingest path the dock now takes.
+		// fields, which is the byte-free ingest path the dock now takes. Titled, because this is the
+		// thread's last inbound row and so the one the session card leads with.
 		rows += Message(
 			fromMe = false,
+			title = "Docked a design card from its own fields",
 			text = "A design card, docked from its declared fields.",
 			at = now - 30_000,
 			id = id++,

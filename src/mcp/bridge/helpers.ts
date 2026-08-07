@@ -273,9 +273,9 @@ export function connectToRouter(): void {
 		}
 
 		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide.
-		// Scoped to hs-* ids: the vibe check (from "vibe-check", vc-*) also rides a gateway-authored
-		// reply_schema push and must reach the LLM, never be swallowed by this cache - the hs- check
-		// is belt-and-suspenders for any future gateway question that forgets to change `from`.
+		// Scoped to hs-* ids on purpose. Any OTHER gateway-authored push must reach the LLM rather
+		// than be swallowed by this cached answer, and a future one may well forget to change `from`,
+		// so the id prefix rather than the sender is what this gate turns on.
 		if (
 			msg.type === "channel_push" &&
 			msg.from === "gateway" &&

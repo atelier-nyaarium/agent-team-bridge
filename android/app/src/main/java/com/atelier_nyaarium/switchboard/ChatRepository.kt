@@ -623,6 +623,13 @@ internal fun teamsNeedingReadReport(readAnchors: Map<String, ReadAnchor>, lastRe
 		already == null || already.epoch != anchor.epoch || already.seq != anchor.seq
 	}.keys.toList()
 
+private val ONE_LINE_WS = Regex("\\s+")
+
+/** Collapse a value for a single ellipsized line: a newline in a title would otherwise render as
+ * everything before it and nothing after. Null when nothing is left, which lets a caller fall through
+ * to another field rather than paint a blank rung. */
+internal fun oneLine(raw: String?): String? = raw?.replace(ONE_LINE_WS, " ")?.trim()?.takeIf { it.isNotEmpty() }
+
 data class ChatState(
 	val provisioned: Boolean = false,
 	val teams: List<Team> = emptyList(),
@@ -802,10 +809,26 @@ data class ChatState(
 	/** Last local activity time for a thread, for the session card subtitle. */
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
 
+	/** The thread's newest row, whatever its origin. */
+	fun lastRow(team: String): Message? = threads[team]?.lastOrNull()
+
 	/** One-line preview from the thread tail. Prefers a notice's title over its long report
-	 * body, the same as the notification line. */
-	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
-		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
+	 * body, the same as the notification line.
+	 *
+	 * Takes the last row of ANY origin, unlike [lastReply], and that difference is deliberate: this
+	 * answers "what happened here last", so the owner's own send and an agent-to-agent mirror both
+	 * belong. Only the headline rung claims to be the session's word to the owner, and only it filters. */
+	fun snippet(team: String): String? = lastRow(team)?.let { oneLine(it.title) ?: oneLine(it.text) }
+
+	/** The session's LATEST word to the owner: its most recent reply, whatever that was.
+	 *
+	 * Deliberately not [snippet], which takes the thread's last row of any origin - the owner's own
+	 * sends are not news to them, and a peer mirror is one agent talking to another. Scanning back
+	 * past a newer reply to find an older TITLED one would be worse still: the card would headline
+	 * something the session has already moved on from and hide what it actually said last. So this
+	 * answers about one row, and a reply with no title (a structured answer, a status-only row)
+	 * yields null and lets the snippet rung show instead. */
+	fun lastReply(team: String): Message? = threads[team]?.lastOrNull { !it.fromMe && !it.isPeer }
 
 	/** A team's label without address disambiguation: a local rename wins, then the gateway's
 	 * sessionLabel. Null when neither exists (an older gateway, or a thread-only ended peer). The

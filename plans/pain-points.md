@@ -1296,6 +1296,21 @@ live there or in residue tests. What follows is what stayed open.
   like a bad request - the opposite of what `BoardStore.commit` preserves when it rethrows. Now
   marked KNOWN GAP at the line itself.
 
+## A newline in a title reads three ways one tap apart (2026-08-07)
+
+Found while relabelling the session card. The session card's headline and the notification shade
+collapse whitespace through `oneLine`; `BoardStrip`'s collapsed line, its expanded rows and
+`BoardScreen`'s entry rows render `entry.title` raw. `BoardEntry.title` is `z.string().min(1).max(500)`
+with no character rule and `boardStore.setTitle` normalizes nothing, so one task title shows collapsed
+on the session card, truncated at the break on the board strip, and wrapped over two lines on the board
+tab. Fixing it is `oneLine` at those three render sites.
+
+**Invisible-character sanitizing was attempted here and is NOT wanted.** A hand-listed strip drew four
+audit findings in one round, in both directions at once, and the owner ruled the whole class out: an
+agent authoring a title of only zero-width characters is not a real case, and neither is one spaced
+with U+2028 or U+00A0. `oneLine` collapses ASCII whitespace and nothing else. Do not reintroduce a
+category strip, a bidi rule, or a Unicode whitespace set on the strength of an audit finding.
+
 ### Structural, not board-specific
 
 - [high] **Nothing in the type system separates a qualified address from a bare local field.** Both

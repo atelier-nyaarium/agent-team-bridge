@@ -2233,9 +2233,8 @@ fun SessionCard(
 	team: Team,
 	nested: Boolean = false,
 	pulsePhase: State<Float>,
-	// The board's live line, when this session has unfinished board work: it takes the preview
-	// ladder's top rung and displaces the relative time (a task title answers "is anything
-	// happening" better than a timestamp does). Null keeps the ordinary ladder.
+	// The board's live line, when this session has unfinished board work. sessionCardPreview decides
+	// what it does to the ladder; null means this session has no board work to show.
 	boardLine: BoardLiveLine? = null,
 	onClick: () -> Unit,
 	onLongPress: () -> Unit,
@@ -2318,10 +2317,29 @@ fun SessionCard(
 				if (unread > 0) Badge { Text("$unread") }
 			}
 			if (busy) PulseBar(pulsePhase)
-			// Unfinished board work takes the preview ladder's top rung, with the description and
-			// snippet beneath it. The rung carries the finished-over-total count in place of the
-			// relative time, which answers "is anything happening" less well than a task title does.
-			val liveBoardWork = boardLine?.takeIf { it.finished < it.total }
+			// The ladder, top down: the session's own last reply headline, then its unfinished board
+			// work, then the thread's newest row. sessionCardPreview owns which of those show and what
+			// each is stamped with; this only paints what it answered.
+			val preview = sessionCardPreview(state, team.name, boardLine)
+			preview.headline?.let { headline ->
+				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+					Text(
+						headline,
+						style = MaterialTheme.typography.bodySmall,
+						maxLines = 1,
+						overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+						modifier = Modifier.weight(1f),
+					)
+					preview.headlineAt?.let {
+						Text(
+							relativeTime(it),
+							style = MaterialTheme.typography.labelSmall,
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+						)
+					}
+				}
+			}
+			val liveBoardWork = preview.boardWork
 			if (liveBoardWork != null) {
 				Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
 					com.atelier_nyaarium.switchboard.board.StateMark(liveBoardWork.state)
@@ -2339,13 +2357,8 @@ fun SessionCard(
 					)
 				}
 			}
-			// The AI-managed vibe-check description outranks the last-message snippet as the card's
-			// preview line; a session with no description yet keeps the familiar last-message fallback.
-			val snippet = team.description ?: state.snippet(team.name)
-			val lastActivity = state.lastActivity(team.name)
-			// The rung above displaces the TIME, not this line: the description still says what the
-			// session is about, which the task title does not.
-			val timeShown = lastActivity?.takeIf { liveBoardWork == null }
+			val snippet = preview.snippet
+			val timeShown = preview.snippetAt
 			if (snippet != null || timeShown != null) {
 				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 					if (snippet != null) {

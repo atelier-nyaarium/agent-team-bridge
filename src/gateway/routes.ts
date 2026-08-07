@@ -53,7 +53,6 @@ import {
 	mayWrite,
 } from "./boardStore.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
-import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
 import {
 	type ConversationRegistry,
@@ -157,10 +156,6 @@ export interface RoutesDeps {
 	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
 	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
 	ownerId?: (() => string | null) | null;
-	// The vibe check (AI-managed session descriptions, gateway/vibeCheck.ts): noteInbound counts each
-	// message delivered INTO a session toward its next check; resolve intercepts a vc-* answer in
-	// respond() exactly the way resolveHandshake intercepts hs-*. Absent in test harnesses.
-	vibeCheck?: Pick<VibeCheck, "noteInbound" | "resolve">;
 	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do
 	// not exercise the identity gates, which then behave as an ungated gateway does.
 	auth?: SessionAuthority;
@@ -409,7 +404,6 @@ export function createRoutes({
 	findPendingHandshake,
 	repushHandshake,
 	ownerId,
-	vibeCheck,
 	boardStore,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
@@ -1431,11 +1425,6 @@ export function createRoutes({
 					`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
 				);
 
-				// Count this delivery toward the target's next vibe check: a console send is a "user"
-				// message; agent crosstalk and a federated inbound send both count as "agent". Counted
-				// once per send regardless of sub-session fan-out.
-				vibeCheck?.noteInbound(localName, opts.consoleSender ? "user" : "agent");
-
 				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL
 				// participant's own thread. Never for a console sender (opts.consoleSender). The
 				// `!virtual` check is defense-in-depth, not independently reachable today: targetWs is
@@ -1522,14 +1511,6 @@ export function createRoutes({
 			resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined, responderToken)
 		) {
 			return jsonResponse({ delivered: true, handshake: true });
-		}
-
-		// A vibe-check answer (vc-*): store the description on the session record and stop - it is a
-		// gateway question, never a store delivery.
-		if (
-			vibeCheck?.resolve(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined, responderToken)
-		) {
-			return jsonResponse({ delivered: true, vibeCheck: true });
 		}
 
 		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is
@@ -1720,12 +1701,6 @@ export function createRoutes({
 					console.log(
 						`[respond] pushed to ${deliverResult.from} via conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
 					);
-					// The reply landing back in the asker's session is an inbound message too - from
-					// the responding agent (covers a federated response_push, which also lands here),
-					// or from the user when the console answers a thread delivered to it.
-					if (senderWs.data.teamName) {
-						vibeCheck?.noteInbound(senderWs.data.teamName, opts.consoleSender ? "user" : "agent");
-					}
 				} else {
 					console.log(
 						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,

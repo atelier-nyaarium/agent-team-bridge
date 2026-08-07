@@ -31,10 +31,6 @@ export interface SessionRecord {
 	// over workdirHint. Only ever set from the owner-sealed create_session op, never from a register,
 	// so path separators are safe here where the label rules forbid them.
 	workdirPath?: string;
-	// The AI-managed session description: the session's own agent's answer to the gateway's periodic
-	// vibe check ("what is this session about, as a short phrase"). Written only by setDescription
-	// (the vibe-check resolve path), never user-typed - sessionLabel stays the human-owned name.
-	description?: string;
 	// The harness resume id, bound at handshake-confirm; the one-record-per-transcript dedup key.
 	claudeSessionId?: string;
 	// The (conversationId, opId) that minted this id, set only when the id itself was gateway-minted
@@ -153,7 +149,7 @@ const DESCRIPTION_MAX = 120;
 // still stripped so an LLM answer cannot render blank or spoofed on the board.
 const DESCRIPTION_STRIP = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu;
 
-/** Normalize an agent-authored session description (the vibe-check answer): controls/invisibles
+/** Normalize a session description arriving from a friend's Gateway: controls/invisibles
  * STRIPPED rather than rejected (an LLM phrase with a stray newline should survive as one line, not
  * vanish), whitespace collapsed, capped on code points. Returns null when nothing remains. */
 export function sanitizeDescription(raw: string | undefined | null): string | null {
@@ -480,18 +476,6 @@ export class SessionStore {
 		return this.confirm(this.teamOf(record), live);
 	}
 
-	/** Apply an AI-authored description (the vibe-check answer). Returns the description actually
-	 * stored after sanitization, or null when the record is gone or nothing safe remained. Unlike
-	 * rename, no dedup: two sessions may legitimately be about the same thing. */
-	setDescription(team: string, raw: string): string | null {
-		const record = this.records.get(team);
-		const clean = sanitizeDescription(raw);
-		if (!record || !clean) return null;
-		record.description = clean;
-		record.lastSeen = this.now();
-		return clean;
-	}
-
 	/** Apply a new label (sealed rename op). Returns the label actually applied after sanitization
 	 * + per-spawn dedup, or null when the record is gone or nothing safe remained. */
 	rename(team: string, label: string): string | null {
@@ -605,10 +589,6 @@ export class SessionStore {
 				spawn,
 				workdirHint: persisted ? (sanitizeLabel(v.workdirHint) ?? undefined) : segment,
 				workdirPath: persisted ? (sanitizeWorkdirPath(v.workdirPath) ?? undefined) : undefined,
-				description:
-					persisted && typeof v.description === "string"
-						? (sanitizeDescription(v.description) ?? undefined)
-						: undefined,
 				claudeSessionId: typeof v.claudeSessionId === "string" ? v.claudeSessionId : undefined,
 				mintedFrom: persisted && typeof v.mintedFrom === "string" ? v.mintedFrom : undefined,
 				// Never re-minted here: a record restored without one belongs to a session already

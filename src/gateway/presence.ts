@@ -185,12 +185,6 @@ export class PresenceFacade {
 		return r;
 	}
 
-	setDescription(team: string, raw: string): string | null {
-		const r = this.sessionStore.setDescription(team, raw);
-		this.markDirty();
-		return r;
-	}
-
 	rename(team: string, label: string): string | null {
 		const r = this.sessionStore.rename(team, label);
 		this.markDirty();
@@ -315,7 +309,6 @@ export class PresenceFacade {
 				...(live ? { mode: live.data.mode, version: live.data.version } : { lastActive: record.lastSeen }),
 				kind: "loose",
 				sessionLabel: record.sessionLabel,
-				...(record.description ? { description: record.description } : {}),
 				...(w?.working !== undefined ? { working: w.working } : {}),
 				...(w?.needsLogin !== undefined ? { needsLogin: w.needsLogin } : {}),
 				...(w?.limitBlocked !== undefined ? { limitBlocked: w.limitBlocked } : {}),

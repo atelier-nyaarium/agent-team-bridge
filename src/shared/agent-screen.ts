@@ -11,10 +11,11 @@ export interface LimitNotice {
 ////////////////////////////////
 //  Functions & Helpers
 
-// Pure classifiers over a captured tmux pane: what state the agent's REPL screen shows. Shared
-// between the host daemon's wake/readiness logic (via tmuxCore.ts, which re-exports them) and the
-// gateway (the vibe-check idle gate evaluates peek results itself). The Kotlin twin lives in
-// android/.../AgentScreen.kt - keep the markers in lockstep.
+// Pure classifiers over a captured tmux pane: what state the agent's REPL screen shows. The daemon's
+// wake/readiness path reaches them through tmuxCore.ts's re-export; presenceScheduler.ts imports this
+// module directly, so a consumer sweep has to check both. The Kotlin twin lives in
+// android/.../AgentScreen.kt - keep the markers in lockstep, and delete on both sides together: a
+// classifier here costs a matching one there whether or not anything calls it.
 
 // The ready composer prompt "❯" anchored at column 0. The dev-channels / folder-trust /
 // resume-picker menus show an INDENTED cursor ("  ❯ 1."), so the line-start anchor matches the real
@@ -30,10 +31,6 @@ const WORKING_CIRCLE_HINT = "◯";
 // the composer, or printed in the transcript above, from tripping it.
 const TOOLBAR_RULE = "───";
 const LOGGED_OUT_RE = /Not logged in|Run \/login/;
-// A row that IS the rule, not merely containing it: the composer's box border spans the full pane
-// width with no other content, so this is a stricter test than TOOLBAR_RULE's .includes() - it can't
-// false-positive on a stray few dashes inside transcript/tool-output text.
-const FULL_RULE_RE = /^─+$/;
 
 // A rule row for the usage-limit check, as any run of box-drawing characters rather than the specific
 // glyph: that dialog's divider is heavier than the composer's U+2500 border, and a restyle must not
@@ -111,51 +108,6 @@ export function isLoggedOut(screen: string): boolean {
 	const lastRule = lines.findLastIndex((line) => line.includes(TOOLBAR_RULE));
 	const footer = lines.slice(lastRule + 1).join("\n");
 	return LOGGED_OUT_RE.test(footer);
-}
-
-/** Whether the captured pane shows the composer box border at all: a row that (once trimmed) is
- * ENTIRELY the rule character, the same top/bottom border isAgentWorking/isLoggedOut anchor their
- * footer search on. Present whether idle or mid-turn (the box is always drawn once the REPL is up),
- * so this does not distinguish working from idle - it distinguishes "a real composer is rendered" from
- * a raw shell / boot screen / menu that has none. The Kotlin twin lives in AgentScreen.kt. */
-export function isAtPrompt(screen: string): boolean {
-	return stripAnsi(screen)
-		.split("\n")
-		.some((line) => FULL_RULE_RE.test(line.trim()));
-}
-
-/** Whether the LIVE composer box (the region between the last two full-width rule rows) is empty: a
- * bare "❯" with nothing staged. The gateway's vibe-check rename injection requires this - typing
- * into a composer holding a human's staged draft would corrupt it and submit the mangled line.
- * Scoped to the box deliberately: past slash commands echo in the transcript as "❯ /model" lines
- * ABOVE the box, which must not read as staged text.
- *
- * The box content is NOT reliable on its own: Claude Code fills an idle composer with a
- * greyed-out placeholder/suggested-command ghost text (e.g. "❯ keep going"), which renders
- * identically to real staged input by content alone - confirmed on-device, the box is never
- * actually bare in practice. The toolbar line directly below the box is the real tell: it carries
- * extra " · <hint>" segments (e.g. "· ← for agents", "· ? for shortcuts") only while the box is
- * empty; real staged text collapses it down to the bare mode phrase ("bypass permissions on
- * (shift+tab to cycle)") with no trailing dot. Confirmed by live capture (typing "jjjj" made the
- * hint segment vanish immediately; clearing it brought the hint back). Excludes the "esc to
- * interrupt" working hint specifically, since that marks a busy turn rather than an empty box -
- * moot at the one real call site (already gated on !isAgentWorking) but kept so the function is
- * correct standing alone. Gateway-only; no Kotlin twin. */
-export function isPromptEmpty(screen: string): boolean {
-	const lines = stripAnsi(screen).split("\n");
-	const ruleIdxs: number[] = [];
-	lines.forEach((line, i) => {
-		if (FULL_RULE_RE.test(line.trim())) ruleIdxs.push(i);
-	});
-	if (ruleIdxs.length < 2) return false;
-	const inner = lines.slice(ruleIdxs[ruleIdxs.length - 2] + 1, ruleIdxs[ruleIdxs.length - 1]);
-	// Require a rendered prompt inside the box (a rule-bounded region with no ❯ is not a composer),
-	// then accept a bare prompt outright - any other content might be a real draft OR just the
-	// placeholder ghost text, so fall through to the toolbar hint to tell those apart.
-	if (!inner.some((line) => line.startsWith("❯"))) return false;
-	if (inner.every((line) => /^❯?\s*$/.test(line))) return true;
-	const toolbarLine = lines[ruleIdxs[ruleIdxs.length - 1] + 1] ?? "";
-	return toolbarLine.includes("·") && !toolbarLine.includes(WORKING_HINT);
 }
 
 /** The usage-limit dialog, i.e. the agent has stopped and cannot progress until the choice is answered.

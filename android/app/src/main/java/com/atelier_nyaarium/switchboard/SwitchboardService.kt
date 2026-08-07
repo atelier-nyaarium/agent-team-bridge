@@ -601,8 +601,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		for (m in rows.takeLast(5)) {
 			// A notice carries a purpose-written notification line; its body may be
 			// a long report that would truncate uselessly here.
-			val line = peerFramed(state, m, (m.title ?: m.text).replace(Regex("\\s+"), " ").trim())
-			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
+			val line = peerFramed(state, m, oneLine(m.title) ?: oneLine(m.text) ?: "")
+			style.addLine(if (line.isEmpty()) ATTACHMENT_STANDIN else line.take(120))
 		}
 		val builder = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
