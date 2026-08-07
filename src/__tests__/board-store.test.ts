@@ -249,6 +249,23 @@ describe("trash and sweeps", () => {
 		expect(store.entry(OWNER, "fresh")).toBeDefined();
 	});
 
+	it("the sweep clears a parent pointer no delete path could have refused", () => {
+		// clearDone can trash a parent while a child held by ANOTHER session survives: its liveParents
+		// guard counts only unfinished children. The trash window is the recoverable part; what must not
+		// survive it is a survivor pointing at an entry that is gone.
+		upsert([
+			entry("p", { sessionId: "s1", state: "done" }),
+			entry("c", { parent: "p", sessionId: "s2", state: "done" }),
+		]);
+		expect(store.clearDone(OWNER, "s1", 1000)).toBe(1);
+		expect(store.entry(OWNER, "c")?.parent).toBe("p");
+
+		store.sweepTrash(1000 + BOARD_TRASH_TTL_MS + 1);
+		expect(store.entry(OWNER, "p")).toBeUndefined();
+		expect(store.entry(OWNER, "c")).toBeDefined();
+		expect(store.entry(OWNER, "c")?.parent).toBeUndefined();
+	});
+
 	it("clearDone trashes exactly the session's finished entries", () => {
 		upsert([
 			entry("d", { sessionId: "s", state: "done" }),

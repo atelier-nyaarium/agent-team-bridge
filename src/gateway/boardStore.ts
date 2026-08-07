@@ -147,6 +147,26 @@ function holds(entry: BoardEntry | undefined, sessionId: string): boolean {
 }
 
 /**
+ * Promote every entry whose parent is gone, and answer how many. The ONE owner of "no entry points
+ * at a parent that is not there", which every consumer relies on: the route's list ships entries flat
+ * and receivers rebuild the tree from parent pointers, so a dangling one silently regroups a row.
+ *
+ * Called after each of the two paths that can delete a parent out from under a survivor - the trash
+ * sweep and a tolerant restore. The write paths REFUSE instead (`parent_missing`, `would_orphan`),
+ * because a caller that can still fix its own batch should be told rather than quietly corrected.
+ */
+function promoteOrphans(entries: Map<string, BoardEntry>): number {
+	let promoted = 0;
+	for (const e of entries.values()) {
+		if (e.parent && !entries.has(e.parent)) {
+			delete e.parent;
+			promoted++;
+		}
+	}
+	return promoted;
+}
+
+/**
  * Classified per entry from pre/post against `mayWrite` and `visibleTo`, never from which method ran,
  * so a method gaining a caller cannot change what is announced.
  *
@@ -239,15 +259,9 @@ export class BoardStore {
 				if (entry.success) entries.set(entry.data.id, entry.data);
 				else dropped++;
 			}
-			// A survivor whose parent was dropped promotes to root, or it would be unreachable from
-			// every live root and refuse upserts forever.
-			let promoted = 0;
-			for (const e of entries.values()) {
-				if (e.parent && !entries.has(e.parent)) {
-					delete e.parent;
-					promoted++;
-				}
-			}
+			// A survivor whose parent was dropped would otherwise be unreachable from every live root
+			// and refuse upserts forever.
+			const promoted = promoteOrphans(entries);
 			if (dropped > 0 || promoted > 0) {
 				console.error(
 					`[task-board] owner ${ownerId}: dropped ${dropped} invalid entries, promoted ${promoted}`,
@@ -614,8 +628,10 @@ export class BoardStore {
 		return count;
 	}
 
-	/** Drop entries trashed longer than the retention window; a survivor whose parent was swept is
-	 * promoted to root rather than orphaned. */
+	/** Drop entries trashed longer than the retention window. This is the ONE permanent delete that
+	 * cannot refuse - the window is up and the entry goes - so it reconciles instead: a survivor whose
+	 * parent went with it is promoted rather than left pointing at nothing. `remove`, the other
+	 * permanent delete, refuses `would_orphan` because its caller can still ship the whole subtree. */
 	sweepTrash(now = Date.now()): void {
 		for (const ownerId of [...this.owners.keys()]) {
 			// Announces nothing either: the take-away already happened at the trash, 30 days earlier.
@@ -626,9 +642,7 @@ export class BoardStore {
 				}
 				if (dead.length === 0) return "unchanged";
 				for (const id of dead) board.entries.delete(id);
-				for (const e of board.entries.values()) {
-					if (e.parent && !board.entries.has(e.parent)) delete e.parent;
-				}
+				promoteOrphans(board.entries);
 				return undefined;
 			});
 		}
