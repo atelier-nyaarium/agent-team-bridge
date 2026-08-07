@@ -70,12 +70,10 @@ fun BoardScreen(
 
 	// The revision read is what re-derives rows when the cache, queue or a plane snapshot moves.
 	val revision by repo.board.revision
-	// Fold points the owner has re-opened. Saveable: a tab switch disposes this page.
-	var expandedFolds by rememberSaveable { mutableStateOf(setOf<String>()) }
-	val rows = remember(revision, state.teams, expandedFolds) {
+	val rows = remember(revision, state.teams) {
 		val sessionGateway = { sessionKey: String -> repo.boardGatewayOfKey(sessionKey) }
 		val sources = repo.board.sourceGatewayIds().map { gw -> BoardSource(gw, repo.board.mergedEntries(gw)) }
-		flattenBoard(sources, sessionGateway, expandedFolds)
+		flattenBoard(sources, sessionGateway)
 	}
 
 	// A Gateway whose column could not be refreshed says HOW stale it is: a silently old column is
@@ -88,8 +86,6 @@ fun BoardScreen(
 			.filter { System.currentTimeMillis() - it.second > STALE_AFTER_MS }
 	}
 
-	// Saveable for the same reason as expandedFolds: a tab swipe disposes this page, and typed-but-
-	// uncaptured text is the one thing here the owner cannot get back.
 	val truncatedColumns = remember(revision) { repo.board.truncatedGateways() }
 	// Entries whose queued write keeps failing. A row that looks applied but has not reached the
 	// Gateway in many attempts is worth saying out loud, even though it is still retrying.
@@ -179,15 +175,11 @@ fun BoardScreen(
 			}
 		}
 
-		val toggleFold = { id: String ->
-			expandedFolds = if (id in expandedFolds) expandedFolds - id else expandedFolds + id
-		}
 		item(key = "sect:backlog") { BoardSectionLabel("Backlog", rows.unassigned.rows.size) }
 		boardGroupItems(
 			this,
 			rows.unassigned,
 			onOpen = onOpenEntry,
-			onToggleFold = toggleFold,
 			onLongPress = { sheet = BoardSheet.Actions(it) },
 			struggling = struggling,
 		)
@@ -200,7 +192,6 @@ fun BoardScreen(
 				this,
 				group,
 				onOpen = onOpenEntry,
-				onToggleFold = toggleFold,
 				onLongPress = { sheet = BoardSheet.Actions(it) },
 				struggling = struggling,
 			)
@@ -288,37 +279,19 @@ fun BoardScreen(
 ////////////////////////////////
 //  Rows
 
-/** Emit one group's rows plus its bottom gather. Every LazyColumn key is an entry id (unique by
- * flattenBoard's construction) or a static section key. */
+/** Emit one group's rows. Every LazyColumn key is an entry id (unique by flattenBoard's
+ * construction) or a static section key. */
 @OptIn(ExperimentalMaterial3Api::class)
 private fun boardGroupItems(
 	scope: androidx.compose.foundation.lazy.LazyListScope,
 	group: BoardGroup,
 	onOpen: (String, String) -> Unit,
-	onToggleFold: (String) -> Unit,
 	onLongPress: (BoardRow) -> Unit,
 	struggling: Set<String>,
 ) {
 	with(scope) {
 		for (row in group.rows) {
 			item(key = row.entry.id) {
-				BoardEntryRow(
-					row,
-					// A fold point's own row is the affordance that opens AND re-closes it; every
-					// other row opens the editor.
-					onClick = {
-						if (row.foldedCount > 0 || row.foldExpanded) onToggleFold(row.entry.id)
-						else onOpen(row.gatewayId, row.entry.id)
-					},
-					onLongPress = { onLongPress(row) },
-					struggling = row.entry.id in struggling,
-				)
-			}
-		}
-		// Finished rows sit at the bottom of their group and read as finished on their own, so they need
-		// no counted header to hide behind. One less line, and one less thing to open.
-		for (row in group.gatheredRows) {
-			item(key = "done:${row.gatewayId}/${row.entry.id}") {
 				BoardEntryRow(
 					row,
 					onClick = { onOpen(row.gatewayId, row.entry.id) },
@@ -358,13 +331,6 @@ private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, onLongPress: () ->
 				"not synced",
 				style = MaterialTheme.typography.labelSmall,
 				color = MaterialTheme.colorScheme.error,
-			)
-		}
-		if (row.foldedCount > 0) {
-			Text(
-				"${row.foldedCount}",
-				style = MaterialTheme.typography.labelSmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
 		entry.trashedAt?.let {

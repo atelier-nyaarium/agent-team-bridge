@@ -37,7 +37,7 @@ import com.atelier_nyaarium.switchboard.oneLine
  */
 @Composable
 fun BoardStrip(group: BoardGroup?, liveLine: BoardLiveLine?) {
-	if (group == null || (group.rows.isEmpty() && group.gatheredRows.isEmpty())) return
+	if (group == null || group.rows.isEmpty()) return
 	var expanded by rememberSaveable { mutableStateOf(true) }
 
 	Surface(tonalElevation = 2.dp) {
@@ -76,9 +76,6 @@ fun BoardStrip(group: BoardGroup?, liveLine: BoardLiveLine?) {
 			if (expanded) {
 				Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
 					for (row in group.rows) StripRow(row)
-					// Finished rows render like any other, struck through by their own state. A counted
-					// summary line said less than the rows themselves and cost a line of its own.
-					for (row in group.gatheredRows) StripRow(row)
 				}
 			}
 		}
@@ -104,12 +101,5 @@ private fun StripRow(row: BoardRow) {
 			overflow = TextOverflow.Ellipsis,
 			modifier = Modifier.weight(1f),
 		)
-		if (row.foldedCount > 0) {
-			Text(
-				"${row.foldedCount}",
-				style = MaterialTheme.typography.labelSmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
-		}
 	}
 }

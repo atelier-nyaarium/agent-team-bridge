@@ -17,7 +17,7 @@ class BoardRowsTest {
 
 	private fun allIds(rows: BoardRows): List<String> {
 		val groups = listOf(rows.unassigned) + rows.sessions
-		return groups.flatMap { g -> (g.rows + g.gatheredRows).map { it.entry.id } } + rows.trash.map { it.entry.id }
+		return groups.flatMap { g -> g.rows.map { it.entry.id } } + rows.trash.map { it.entry.id }
 	}
 
 	@Test
@@ -106,7 +106,9 @@ class BoardRowsTest {
 	}
 
 	@Test
-	fun aFinishedBranchFoldsOntoItsParentRowWithTheHiddenCount() {
+	fun aFinishedBranchStaysInPlaceWithEveryDescendantShown() {
+		// Nothing collapses and nothing moves to the bottom: a finished entry reads as finished from
+		// its own state mark, and hiding the shape of the work behind a tap is what this replaced.
 		val rows = flattenBoard(
 			listOf(
 				BoardSource(
@@ -116,51 +118,30 @@ class BoardRowsTest {
 						entry("doneParent", state = "done", sessionId = "s1", rank = "b"),
 						entry("d1", state = "done", parent = "doneParent", sessionId = "s1", rank = "a"),
 						entry("d2", state = "cancelled", parent = "doneParent", sessionId = "s1", rank = "b"),
+						entry("loneDone", state = "done", sessionId = "s1", rank = "c"),
 					),
 				),
 			),
 		)
 		val group = rows.sessions.single()
-		val fold = group.rows.single { it.entry.id == "doneParent" }
-		assertEquals(2, fold.foldedCount)
-		assertTrue(group.rows.none { it.entry.id == "d1" || it.entry.id == "d2" })
-		assertTrue(group.gatheredRows.isEmpty())
+		assertEquals(listOf("root", "doneParent", "d1", "d2", "loneDone"), group.rows.map { it.entry.id })
+		assertEquals(listOf(0, 0, 1, 1, 0), group.rows.map { it.depth })
 	}
 
 	@Test
-	fun oneOpenDescendantKeepsTheWholeBranchOpen() {
+	fun aParentCycleTerminatesRatherThanHangingTheList() {
 		val rows = flattenBoard(
 			listOf(
 				BoardSource(
 					"gw-a",
 					listOf(
-						entry("doneParent", state = "done", sessionId = "s1"),
-						entry("stillOpen", state = "open", parent = "doneParent", sessionId = "s1"),
+						entry("a", parent = "b", sessionId = "s1"),
+						entry("b", parent = "a", sessionId = "s1"),
 					),
 				),
 			),
 		)
-		val group = rows.sessions.single()
-		assertEquals(listOf("doneParent", "stillOpen"), group.rows.map { it.entry.id })
-		assertEquals(0, group.rows[0].foldedCount)
-	}
-
-	@Test
-	fun aChildlessFinishedLeafGathersAtTheBottomAndAnExpandedFoldShowsItInPlace() {
-		val entries = listOf(
-			entry("live", state = "in_progress", sessionId = "s1", rank = "a"),
-			entry("loneDone", state = "done", sessionId = "s1", rank = "b"),
-			entry("doneParent", state = "done", sessionId = "s1", rank = "c"),
-			entry("dKid", state = "done", parent = "doneParent", sessionId = "s1"),
-		)
-		val folded = flattenBoard(listOf(BoardSource("gw-a", entries)))
-		val group = folded.sessions.single()
-		assertEquals(listOf("loneDone"), group.gatheredRows.map { it.entry.id })
-
-		val expanded = flattenBoard(listOf(BoardSource("gw-a", entries)), expandedFolds = setOf("doneParent"))
-		val expandedGroup = expanded.sessions.single()
-		assertTrue(expandedGroup.rows.any { it.entry.id == "dKid" })
-		assertEquals(listOf("loneDone"), expandedGroup.gatheredRows.map { it.entry.id })
+		assertTrue(rows.sessions.sumOf { it.rows.size } <= 2)
 	}
 
 	@Test
