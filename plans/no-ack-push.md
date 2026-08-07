@@ -337,7 +337,7 @@ This is the same rule the board's own capability text already follows - describe
 
 Two phases. Each ships alone and is separately useful; neither half of phase 2 is.
 
-## Phase 1 - Retire the vibe check, relabel the card
+## Phase 1 - Retire the vibe check, relabel the card ✅
 
 Gateway and console together, because the label's producer and its consumer are on opposite sides and
 a gap between them is a blank card.
@@ -448,3 +448,26 @@ The envelope, the board producer and the delivery. Split any smaller and nothing
 - Rebuild the vibe check's delivery shape from the `resolveLead` transcription under Settled: resolve
   the live incarnation, then send on it directly, never through `send()`. This is the only
   gateway-authored push besides the handshake.
+
+## Painpoints
+
+Collected while building phase 1. Not fixed here.
+
+- **`ChatState` is a shared bag of display getters, and that is what let two surfaces disagree.**
+  Every screen holds the same `ChatState` and can call any getter on it, so the card and the shade each
+  grew their own answer to "what line represents this thread". `sessionCardPreview` fixed it for the
+  card by owning the derivation, but the getters it uses are still public on a data class every surface
+  holds, so a second consumer can call `state.snippet(team)` tomorrow and derive a rung by a different
+  rule. The seam wants the getters private to their preview.
+- **`ChatRepository.kt` is over 5000 lines and holds unrelated things.** `oneLine` had to live there
+  because `ChatState` does, which then made `BoardStrip` import a text helper out of the chat
+  repository to render a task title. Finding anything means grepping; three separate times this session
+  I searched it for a symbol I had read twenty minutes earlier. A split along its actual seams (thread
+  state, playback, board, persistence) would pay for itself.
+- **Nothing tells you a Kotlin rule is untested.** Four rules shipped in this phase that a mutation
+  would have left green, and only a red-team agent running the mutation by hand found them. The TS side
+  has residue tests for exactly this class of "someone will delete this and nothing will notice";
+  Kotlin has no equivalent and no pre-merge gate to hang one on.
+
+The rest went cleanly. The gateway deletions were mechanical, `sessionAuthority` and `boardStore` were
+not in the way once, and the emulator build answered every visual question without costing a screenshot.
