@@ -2414,7 +2414,7 @@ fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: (
 }
 
 /** Forgetting a session that still holds unfinished board work. Both ways out are explicit: cancel
- * the tasks (they trash with the session) or unassign them (they return to the pile). Dismissing
+ * the tasks (they trash with the session) or unassign them (they return to the backlog). Dismissing
  * abandons the forget entirely rather than deciding by inaction. */
 @Composable
 private fun BoardForgetDialog(
@@ -2433,7 +2433,7 @@ private fun BoardForgetDialog(
 					"Finished ones go to the trash either way.",
 			)
 		},
-		confirmButton = { TextButton(onClick = hapticClick(onUnassign)) { Text("Back to the pile") } },
+		confirmButton = { TextButton(onClick = hapticClick(onUnassign)) { Text("Back to the backlog") } },
 		dismissButton = { TextButton(onClick = hapticClick(onCancelTasks)) { Text("Mark cancelled") } },
 	)
 }

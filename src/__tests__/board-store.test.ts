@@ -48,7 +48,7 @@ describe("claim contention", () => {
 		expect(store.claim(OWNER, "a", "sess-2")).toEqual({ applied: false, refused: "held" });
 	});
 
-	it("release refuses a non-holder and returns the subtree to the pile for the holder", () => {
+	it("release refuses a non-holder and returns the subtree to the backlog for the holder", () => {
 		store.claim(OWNER, "a", "sess-1");
 		expect(store.release(OWNER, "a", "sess-2")).toEqual({ applied: false, refused: "held" });
 		expect(store.release(OWNER, "a", "sess-1")).toEqual({ applied: true });
@@ -82,7 +82,7 @@ describe("write scope", () => {
 	it("a session writes what it holds and nothing else", () => {
 		expect(store.setTitle(OWNER, "mine", "renamed", MINE)).toEqual({ applied: true });
 		expect(store.setTitle(OWNER, "theirs", "renamed", MINE)).toEqual({ applied: false, refused: "held" });
-		// Unassigned is not the same as unowned - the pile is the owner's, not up for grabs.
+		// Unassigned is not the same as unowned - the backlog is the owner's, not up for grabs.
 		expect(store.setState(OWNER, "loose", "done", MINE)).toEqual({ applied: false, refused: "held" });
 		expect(store.entry(OWNER, "theirs")?.title).toBe("t-theirs");
 	});
@@ -101,7 +101,7 @@ describe("write scope", () => {
 	});
 
 	it("a session reaches the backlog through claim, which is the whole point of the backlog", () => {
-		// Scope is not a wall around the pile: a session puts follow-ups there and takes work from
+		// Scope is not a wall around the backlog: a session puts follow-ups there and takes work from
 		// there. It just cannot edit what it has not taken.
 		expect(store.createAtEnd(OWNER, { id: "note", title: "for later", state: "open" }, MINE)).toEqual({
 			applied: true,
@@ -172,7 +172,7 @@ describe("trash and sweeps", () => {
 		expect(store.entry(OWNER, "a1")?.parent).toBe("a");
 	});
 
-	it("a session ending trashes its finished work and returns the rest to the pile", () => {
+	it("a session ending trashes its finished work and returns the rest to the backlog", () => {
 		upsert([
 			entry("done1", { sessionId: "s", state: "done" }),
 			entry("open1", { sessionId: "s", state: "in_progress" }),

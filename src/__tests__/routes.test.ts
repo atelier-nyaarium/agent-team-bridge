@@ -602,7 +602,7 @@ describe("routes", () => {
 				from: "other-app",
 				action: "create",
 				operationId: "o2",
-				title: "pile",
+				title: "backlog item",
 				assignTo: "backlog",
 			});
 			const theirs = (await call(taskBoard, { from: "other-app", action: "list", scope: "session" })).body
@@ -620,7 +620,7 @@ describe("routes", () => {
 			expect(claim.body).toEqual({ applied: false, refused: "held" });
 		});
 
-		it("claiming from the pile moves it into the session scope, and release returns it", async () => {
+		it("claiming from the backlog moves it into the session scope, and release returns it", async () => {
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {

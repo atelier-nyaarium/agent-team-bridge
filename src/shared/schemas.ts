@@ -472,7 +472,7 @@ export const BoardEntrySchema = z
 		// always sets placement, it never leaves it unchanged.
 		parent: z.string().min(1).max(64).optional(),
 		rank: z.string().min(1).max(BOARD_RANK_MAX),
-		// The session this entry is assigned to; absent means the unassigned pile.
+		// The session this entry is assigned to; absent means the backlog.
 		sessionId: z.string().min(1).max(128).optional(),
 		// Server-stamped when trashed; absent means live. The 30-day trash sweep runs off it.
 		trashedAt: z.number().int().nonnegative().optional(),
@@ -641,7 +641,7 @@ export const ConsoleOpSchema = z
 			trashed: z.boolean(),
 		}),
 		// Assign / unassign. Applies to the entry AND its subtree (assigning a parent assigns the
-		// whole branch; unassign is the undo). Absent sessionId returns the branch to the pile.
+		// whole branch; unassign is the undo). Absent sessionId returns the branch to the backlog.
 		z.object({
 			kind: z.literal("board_set_session"),
 			id: z.string().min(1).max(64),

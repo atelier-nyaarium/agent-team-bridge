@@ -4000,7 +4000,7 @@ class ChatRepository(
 	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
 		board.enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
 
-	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the pile. A
+	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the backlog. A
 	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
 	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
 	fun boardAssign(fromGateway: String, id: String, team: String?) {
@@ -5509,7 +5509,7 @@ class ChatRepository(
 						// session is gone either way and there is nothing left to retry against.
 						if (boardDisposition != null && applied != boardDisposition) {
 							_state.update {
-								it.copy(transientMessage = "Gateway needs an update; that session's tasks went back to the pile.")
+								it.copy(transientMessage = "Gateway needs an update; that session's tasks went back to the backlog.")
 							}
 						}
 						withContext(Dispatchers.Main) { onForgotten?.invoke() }

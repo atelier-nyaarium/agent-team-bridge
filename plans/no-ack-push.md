@@ -31,13 +31,22 @@ Research, not decisions. Each of these killed a design that looked obvious.
   against a working copy and discards it on a refusal returned AFTER the mutation (`setParent`
   writes parent and rank then returns `cycle`; `upsert` writes every entry then checks cycles).
   Sending from the closure announces changes that never happened.
+  **`mutate` must own the stage's whole lifetime, not `commit`.** There are FOUR non-committing
+  exits - an `unchanged` outcome, a refusal, a `placeAtEnd` throw that unwinds the call, and a
+  `commit` rollback that rethrows. A store-level stage would keep whatever those left behind and ship
+  it on the next successful commit for that owner, announcing a change that was refused. Stage into a
+  buffer local to the invocation, hand it to `commit` on success, drop it on every other exit.
 - **`no_ack`, never `no-ack`.** The harness meta-key regex is `/^[a-zA-Z_][a-zA-Z0-9_]*$/` and a
   non-matching key is SILENTLY DROPPED. Every existing meta key is already snake_case.
 - **The field costs no wire schema.** `ChannelPushPayload` is a plain TypeScript interface, not zod,
   so no codegen, no Kotlin, and no strict-schema 400 window against an older gateway.
 - **`emitChannelNotification` dereferences `payload.session_id` unconditionally**, so a no-ack push
-  must still carry one - and it must be deliberately unroutable, the way `vibeCheck` uses a `vc-`
-  prefix, or it invites the reply it is trying not to ask for.
+  must still carry one. **There is no unroutable-id precedent** - `vc-` is not unroutable, it is
+  INTERCEPTED in `respond()` ahead of delivery. An id with neither a job entry nor an interceptor
+  falls through to `store.deliver`, misses, and returns HTTP 404, which `channel_reply` surfaces to
+  the agent as a tool error. So the push needs its own prefix AND its own interceptor that absorbs a
+  stray reply with a 200 - and phase 1 deletes the only existing interception site, so phase 2 adds
+  one rather than reusing it.
 - **The writes most worth announcing erase the addressee in the same pass.** `sessionEnded`,
   `setSession(.., undefined)` and `release` all delete `sessionId`. The addressee must be read from
   the PRE-state.
@@ -120,7 +129,7 @@ re-reads.
 
 Q: How many notice kinds, and does a take-away differ from an edit?
 A: **Two kinds, and the take-away says which.** `changed` carries ids only; the agent re-reads.
-`taken` carries the fact and distinguishes *back in the pile* (re-claimable) from *gone* (stop).
+`taken` carries the fact and distinguishes *back in the backlog* (re-claimable) from *gone* (stop).
 Classified per ENTRY from pre/post state, never by which method ran.
 
 Folded in without objection: `sweepTrash` announces nothing, and session-end is ONE notice rather
@@ -155,7 +164,7 @@ Every mutating `BoardStore` method has exactly ONE caller surface, and they are 
 - **The agent's correct next action differs in kind.** On an edit it re-reads and continues - the
   entry is still writable. On a take-away it must STOP and must not retry, because every subsequent
   write refuses permanently and a refusal is never retryable.
-- **There are THREE post-states, not two.** Still mine (readable, writable). Unassigned to the pile
+- **There are THREE post-states, not two.** Still mine (readable, writable). Unassigned to the backlog
   (still readable - the default `all` scope includes unassigned - and re-claimable, but writes refuse
   `held`). Gone from view (reassigned, trashed, removed). Only the middle one leaves the agent an
   action, so collapsing it into "gone" loses "you may take this back".
@@ -163,8 +172,11 @@ Every mutating `BoardStore` method has exactly ONE caller surface, and they are 
   own list filter (`trashedAt === undefined && (sessionId === me || sessionId === undefined)`) and
   writability is exactly `mayWrite`. A per-method taxonomy needs re-auditing every time a method
   gains a caller; these predicates are already the contract the agent experiences.
-- **`sessionEnded` is ONE fact about the session, not N about entries.** Fanning it into the
-  per-entry bank would emit the system's largest burst to the addressee guaranteed to be going away.
+- **`sessionEnded` stages NOTHING**, like `sweepTrash`. Its two call sites are the deliberate console
+  `forget` (which kills the tmux in the same op) and the 30-day TTL sweep (a session dead for a
+  month). Combined with the drop-when-not-live rule, any notice it minted would be dropped in the
+  same breath. An earlier draft said "one notice, not N per entry"; the audit showed that is work
+  producing nothing observable, and the only way to make it land would be to weaken the drop rule.
 - **`sweepTrash` should announce nothing.** `setTrashed` never clears `sessionId`, so a trashed entry
   keeps naming its holder and the sweep fires 30 days later at a long-dead session. The take-away
   already happened at the trash.
@@ -199,16 +211,30 @@ holding across the merely-unconfirmed window.
   `vibeCheck` has this bug latent today. Check `resolveLead(addressee)` at flush time instead.
 - **Refinement 2: `resolveLead` flattens three states into one `undefined`** (asleep / mid-wake /
   registered-but-unconfirmed). The unconfirmed window is explicitly sized for a slow
-  `claude --resume`. Dropping there discards notices for a session that never left. Ask
-  `resolveLiveIncarnation` for the three-valued answer and retry the middle case under a short cap.
+  `claude --resume`. Dropping there discards notices for a session that never left.
+  **`resolveLiveIncarnation` alone is NOT the three-valued answer** - it is two-valued, and asleep
+  versus mid-wake both come back `undefined`, mid-wake being the longer window of the two. Ask the
+  same two questions `Presence.snapshot` already composes: `resolveLiveIncarnation` (then read
+  `handshakeConfirmed` to split confirmed from verifying) PLUS `isWakeInFlight`, which
+  `gateway/index.ts` already exposes as a dep. Send when confirmed, retry under a short cap while
+  verifying or waking, drop only when neither.
 
 ## Question 5 - Retire the vibe check; what labels a session card instead?
 
 Q: Delete all the vibe-check code and show the last agent reply's title tier, with the board line
 under it. What does a card show when there is no titled reply?
 A: **Fall through to the last message, whatever it was** - drop `description` from the card's ladder
-and keep today's `snippet()` behaviour behind the new title rung. **Keep `description` on the wire
-for the linked-friend row alone**, which has no local substitute.
+and keep today's `snippet()` behaviour behind the new title rung. **Keep `description` on the wire**,
+but only to avoid a codegen and staggered-deploy change.
+
+> **CORRECTION, from the plan audit.** This answer was originally recommended on the grounds that
+> keeping the field preserved the linked-friend row's subtitle. **It does not.** A friend's row is
+> fed by the FRIEND's Gateway, which runs this same codebase - `crossDomainPresence.land` only
+> sanitizes what arrived. Once the fleet is on the new build, no Gateway writes a description at all,
+> so the friend row goes blank whether the field stays or goes. The deploy-safety half of the
+> argument stands on its own; the friend-row half was wrong. **The friend row losing its subtitle is
+> an accepted cost of retiring the vibe check, not something the field rescues.** All the receiving
+> side can show is the label and status it already has.
 
 > "delete all the code handling for vibe check. Let's simplify it to be the title tier of last agent
 > reply, and under it, the small task list as it is now."
@@ -236,9 +262,9 @@ its two `noteInbound` sites and the `vc-` interception in `respond()`; `src/__te
 
 ### What the replacement cannot answer
 
-- **A linked friend's session row.** Display-only with no click-through, so this device has no thread
-  for it and never will. `description` was the only thing describing it. This is why the field stays
-  on the wire.
+- **A linked friend's session row, permanently.** Display-only with no click-through, so this device
+  has no thread for it and never will - and keeping the field does not help, because the friend's own
+  Gateway stops writing one too. Accepted cost; the row falls back to label plus status.
 - **Any session this device has no thread rows for**: a fresh install, a second device, a session
   woken but never messaged, or one that only ever did work (terminal, Codex, board writes, no
   `channel_reply`). The description was GATEWAY state riding presence; a title is LOCAL to one
@@ -290,7 +316,7 @@ An earlier draft ended a take-away line with "you can claim it again". That is t
 agent what to do, and it is wrong twice over: it presumes the agent should want the entry back, and
 it turns an awareness signal into an instruction. Say what happened and stop.
 
-- Good: `"Ship the board" went back to the pile.`
+- Good: `"Ship the board" went back to the backlog.`
 - Good: `"Purge the old ranks" was trashed.`
 - Wrong: anything appending a suggestion, a next step, or an interpretation.
 
@@ -306,10 +332,12 @@ Gateway and console together, because the label's producer and its consumer are 
 a gap between them is a blank card.
 
 - Delete `vibeCheck.ts`, its `index.ts` wiring, its two `routes.ts` hooks and its test. Move the
-  `isPromptEmpty` coverage to an `agent-screen` test, or delete `isPromptEmpty` with it.
+  `isPromptEmpty` coverage to an `agent-screen` test, or delete `isPromptEmpty` with it. Also drop
+  the `presence.setDescription` coverage in `presence.test.ts`.
 - Stop writing `description`: drop `presence.setDescription` and `SessionStore.setDescription`.
-  **Keep the field on `TeamInfo` and `CrossDomainPresenceSession`** so the linked-friend row keeps
-  its subtitle. No codegen run, no wire break, no deploy ordering.
+  **Keep the field on `TeamInfo` and `CrossDomainPresenceSession`** purely to avoid a codegen run and
+  a staggered-deploy window - NOT to save the friend row, which goes blank regardless once friends
+  update. Accepted.
 - Console: add a `lastAgentReplyTitle`-style derivation beside `snippet` (filter `fromMe`, decide
   `isPeer` explicitly), and rebuild `SessionCard`'s ladder as title -> board line -> snippet
   fallback. Re-decide where the relative time sits now that the board rung is not the top one.
@@ -330,8 +358,8 @@ The envelope, the board producer and the delivery. Split any smaller and nothing
   `(entryId, preAddressee, postAddressee, writer)` inside each closure, and release from `commit()` -
   never from the closure, which can still refuse after mutating. Classify per entry from pre/post
   against the route's own list filter and `mayWrite`: `changed` (ids only) versus `taken`,
-  distinguishing pile from gone. Suppress per entry when the writer is either addressee. `sweepTrash`
-  announces nothing; `sessionEnded` is one notice; skip rank-only rebalances from `placeAtEnd`.
+  distinguishing backlog from gone. Suppress per entry when the writer is either addressee. Neither
+  `sweepTrash` nor `sessionEnded` stages anything; skip rank-only rebalances from `placeAtEnd`.
 - **Delivery:** a per-session in-memory bank of ids, flushed on a few-second window sized to the
   console's drain, plus an early flush on the session's own next `/task-board` call. Resolve the
   addressee at the SEND edge, not from a close hook (`onTeamDisconnect` fires under the socket's

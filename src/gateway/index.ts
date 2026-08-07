@@ -380,7 +380,7 @@ export async function startGateway(): Promise<void> {
 		const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
 		if (sweptTeams.length > 0) {
 			presence.markDirty();
-			// A swept session is one nobody decided about, so its work returns to the pile rather
+			// A swept session is one nobody decided about, so its work returns to the backlog rather
 			// than being cancelled on its behalf.
 			for (const team of sweptTeams) boardSessionEnded(team, "release");
 		}

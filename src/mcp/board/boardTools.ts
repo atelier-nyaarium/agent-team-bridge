@@ -34,7 +34,7 @@ const CreateInputSchema = {
 	title: z.string().min(1).max(500).describe("One line naming the work."),
 	assignTo: z
 		.enum(["self", "backlog"])
-		.describe("self = you work it now. backlog = the owner's pile, for work you are not doing."),
+		.describe("self = you work it now. backlog = the owner's backlog, for work you are not doing."),
 	body: z.string().max(BOARD_BODY_MAX).optional().describe("Longer detail. The owner reads this."),
 	parent: ID.optional().describe(PARENT_TEXT),
 };
@@ -78,7 +78,7 @@ const CREATE_DESCRIPTION = `
 Add an entry to the owner's board.
 
 assignTo has no default on purpose: say whether this is work you are doing now
-or work for the pile.
+or work for the backlog.
 `.trim();
 
 const UPDATE_DESCRIPTION = `

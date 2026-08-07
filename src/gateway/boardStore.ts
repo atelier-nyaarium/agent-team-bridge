@@ -366,7 +366,7 @@ export class BoardStore {
 	}
 
 	/** A session hands back what it holds within the entry's subtree - only ITS members unassign, so
-	 * releasing a shared ancestor never dumps a sibling session's work to the pile. Already-released
+	 * releasing a shared ancestor never dumps a sibling session's work to the backlog. Already-released
 	 * applies as a no-op; an entry held by another session refuses. */
 	release(ownerId: string, id: string, sessionId: string): BoardResult {
 		return this.mutate(ownerId, (board) => {
@@ -495,7 +495,7 @@ export class BoardStore {
 	}
 
 	/** A session ended. Done and cancelled entries are trashed (30 recoverable days); what happens to
-	 * the REST is the caller's `disposition` - released back to the pile, or cancelled first and so
+	 * the REST is the caller's `disposition` - released back to the backlog, or cancelled first and so
 	 * trashed by the same pass. Required at every call site rather than defaulted, so a caller cannot
 	 * fall into a disposition it did not choose.
 	 *

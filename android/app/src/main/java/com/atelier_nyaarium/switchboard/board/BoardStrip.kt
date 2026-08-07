@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The in-thread board strip, pinned under the top bar: this session's tree, reading only - no
- * drag, no assign, no trash, since those need the pile beside them and the pile lives on the
+ * drag, no assign, no trash, since those need the backlog beside them and it lives on the
  * board tab. Opens EXPANDED, since the strip exists to show the session's work and hiding it by
  * default costs a tap for nothing; the height is capped so a busy session cannot bury the transcript.
  */

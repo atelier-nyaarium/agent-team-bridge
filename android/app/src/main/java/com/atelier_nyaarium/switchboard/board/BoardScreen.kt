@@ -163,12 +163,12 @@ fun BoardScreen(
 			openGathers = if (key in openGathers) openGathers - key else openGathers + key
 		}
 
-		item(key = "sect:pile") { BoardSectionLabel("Unassigned", rows.unassigned.rows.size) }
+		item(key = "sect:backlog") { BoardSectionLabel("Backlog", rows.unassigned.rows.size) }
 		boardGroupItems(
 			this,
 			rows.unassigned,
-			gatherOpen = "pile" in openGathers,
-			onToggleGather = { toggleGather("pile") },
+			gatherOpen = "backlog" in openGathers,
+			onToggleGather = { toggleGather("backlog") },
 			onOpen = onOpenEntry,
 			onToggleFold = toggleFold,
 			onLongPress = { sheet = BoardSheet.Actions(it) },
@@ -234,7 +234,7 @@ fun BoardScreen(
 							}
 						}
 						if (entry.sessionId != null) {
-							SheetAction("Back to the pile") {
+							SheetAction("Back to the backlog") {
 								repo.boardAssign(gw, entry.id, null)
 								sheet = null
 							}
@@ -303,7 +303,7 @@ private fun boardGroupItems(
 			}
 		}
 		if (group.gatheredRows.isNotEmpty()) {
-			item(key = "gather:${group.key?.let { "${it.gatewayId}/${it.sessionId}" } ?: "pile"}") {
+			item(key = "gather:${group.key?.let { "${it.gatewayId}/${it.sessionId}" } ?: "backlog"}") {
 				BoardFoldRow(
 					label = "${group.gatheredRows.size} done",
 					expanded = gatherOpen,
