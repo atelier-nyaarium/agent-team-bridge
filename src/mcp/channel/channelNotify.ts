@@ -41,9 +41,14 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	// response. The full how-to-reply guidance in the MCP `instructions` sits at the top of the
 	// context and loses salience to fresher injections (skills, compaction summaries), which has
 	// produced real missed replies; this attribute keeps the reply route in the freshest content.
-	const instructions = payload.replyJsonSchema
-		? "Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema."
-		: "Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.";
+	// Exactly true, not truthy: this arrives off the wire, where a stray string would otherwise turn a
+	// question into an announcement the agent never answers.
+	const instructions =
+		payload.no_ack === true
+			? "Awareness only. Nobody is waiting on a reply, so do not send one."
+			: payload.replyJsonSchema
+				? "Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema."
+				: "Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.";
 
 	await server.notification({
 		method: "notifications/claude/channel",
@@ -53,6 +58,9 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				session_id: payload.session_id,
 				from: payload.from,
 				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
+				// Snake_case because the harness drops a meta key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/,
+				// silently. Structural, so a reader is not left string-matching the instructions prose.
+				...(payload.no_ack === true ? { no_ack: true } : {}),
 				instructions,
 			},
 		},

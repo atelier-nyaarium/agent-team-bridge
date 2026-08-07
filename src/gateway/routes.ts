@@ -51,7 +51,9 @@ import {
 	type BoardStore,
 	boardEntryIdForOperation,
 	mayWrite,
+	visibleTo,
 } from "./boardStore.js";
+import { isNoAckSessionId } from "./noAckPush.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { WakeResult } from "./wake.js";
 import {
@@ -1513,6 +1515,14 @@ export function createRoutes({
 			return jsonResponse({ delivered: true, handshake: true });
 		}
 
+		// Nothing can ENFORCE no-reply, so a reply that comes anyway would miss at store.deliver and
+		// reach the agent as a 404 for doing nothing wrong. Gated on there being NO job: a federated
+		// peer names its own return-route key, so the prefix alone would let it park a real job here
+		// and have this swallow the answer while the agent is told it was sent.
+		if (isNoAckSessionId(respondSessionId) && !store.has(respondSessionId)) {
+			return jsonResponse({ delivered: true, noAck: true });
+		}
+
 		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is
 		// still unconfirmed, bounce it rather than silently deliver: without this, a session that
 		// answers a real conversation before its own handshake sits confirmed-looking on the board
@@ -1909,10 +1919,10 @@ export function createRoutes({
 				const scope = r.scope ?? "all";
 				const projection = boardStore.projection(owner);
 				const entries = projection.entries.filter((e) => {
-					if (e.trashedAt !== undefined) return false;
+					if (!visibleTo(e, sessionKey)) return false;
 					if (scope === "unclaimed") return e.sessionId === undefined;
 					if (scope === "session") return e.sessionId === sessionKey;
-					return e.sessionId === undefined || e.sessionId === sessionKey;
+					return true;
 				});
 				// Reads are not recorded: a list re-run is a fresher answer, not a replayed one.
 				return jsonResponse({ entries, ...(projection.truncated ? { truncated: true } : {}) });

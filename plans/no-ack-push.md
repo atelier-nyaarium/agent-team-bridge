@@ -422,7 +422,27 @@ A future audit will raise it again; `plans/pain-points.md` records that the answ
 identity its comment always claimed. A future rung change is a unit test away rather than an
 emulator screenshot away.
 
-## Phase 2 - The no-ack push, end to end
+## Phase 2 - The no-ack push, end to end ✅
+
+SHIPPED. Architecture is CLAUDE.md's "Awareness pushes". Where it differs from the intent below:
+
+- **A fourth kind, `arrived`.** The plan named `changed` and `taken` and staged
+  `(entryId, preAddressee, postAddressee, writer)`, but only ever described telling the PRE holder.
+  Reading one side left a session silent about work it just gained, and stranded a take-away whenever
+  the owner immediately undid one, since the corrective write no longer named that session. Both
+  holders are addressees now and the arrival supersedes on the same bank key.
+- **No `how` on an arrival.** A reassign made while the entry sat in the trash leaves the pre-state
+  already naming the new session, so "came back" and "was handed to you" are not separable from
+  pre/post alone. One wording that is true either way.
+- **The early flush on the session's own board call is GONE.** It fired on the agent's own re-read of
+  a notice, turning each owner tap back into its own push. The window is the only trigger.
+- **The `na-` intercept is gated on the store holding no job for that id.** A federated peer names its
+  own return-route key, so the prefix alone let it park a real job and have the intercept eat the
+  answer while the agent was told it was sent.
+- **The body is capped** (20 ids, 20 named lines, 80-char titles). One tap walks a whole subtree, and
+  the board's own ceiling made a 2.5 MB single push reachable.
+- **`MAX_HOLD_MS` matches `WAKE_TIMEOUT_MS`,** not a guessed 30s, which discarded notices for wakes
+  that went on to succeed.
 
 The envelope, the board producer and the delivery. Split any smaller and nothing works.
 

@@ -38,6 +38,10 @@ export interface ChannelPushPayload {
 	replyJsonSchema?: string;
 	message_id?: string;
 	files?: ChannelFile[];
+	// Awareness only: the push asks for no reply and its session_id routes nowhere. Nothing can
+	// ENFORCE no-reply, so this only changes the instructions the harness renders; the gateway still
+	// has to absorb a reply that comes anyway.
+	no_ack?: boolean;
 }
 
 // Extends the spoken-tier trio (notice.ts NoticeTierWire): title (notification-bar line +

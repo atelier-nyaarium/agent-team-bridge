@@ -19,6 +19,8 @@ code does not belong here; rationale lives in `git log`.
     anchors, host RPC correlation
   - `boardStore.ts` - the owner's task board: its own checked-write durable file, the per-owner
     plane, and the enumerated refusals every board op resolves to (see Task board below)
+  - `noAckPush.ts` - the reply-less awareness push: the bank, its window, and the three-valued
+    liveness read at the send edge (see Awareness pushes below)
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
   - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog and
@@ -371,6 +373,37 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
   lies past the cut. Merging the whole prior cache resurrects every deletion, forever.
 - `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are the same 30 days for unrelated reasons and
   must never share a constant.
+
+### Awareness pushes
+
+A gateway-authored `channel_push` carrying `no_ack: true` tells a session something and asks for
+nothing back. The envelope is general; its one producer is the board (`gateway/noAckPush.ts`).
+
+- **`no_ack` is a plain field on `ChannelPushPayload`**, not zod, so it costs no codegen and opens no
+  deploy window. `channelNotify` branches `instructions` on exactly `true` and passes the key through
+  to `meta`, where the harness renders it as a tag attribute. Snake_case is load-bearing: a meta key
+  failing `/^[a-zA-Z_][a-zA-Z0-9_]*$/` is dropped silently.
+- **Nothing can ENFORCE no-reply.** The id carries its own `na-` prefix and names no job, so
+  `respond()` absorbs a reply to it rather than letting one reach the agent as a 404 for doing nothing
+  wrong. Gated on the store holding NO job for that id: a federated peer picks its own return-route
+  key, so the prefix alone would let it park a real job and have the intercept eat the answer.
+- **The instruction says do not reply, never "this is not a task".** One of the four kinds hands the
+  session work, and the envelope flag cannot see which kinds a body carries.
+- **BOTH holders of a touched entry are addressees.** Reading only the pre-state leaves a session
+  silent about work it just gained, and strands a take-away when the owner immediately undoes one -
+  the arrival supersedes it on the same bank key, which is why the bank keys on entry id.
+- **Classified per entry from pre/post against `mayWrite` and `visibleTo`**, never from which method
+  ran, so a method gaining a caller cannot change what is announced. An edit carries the id alone
+  since a re-read resolves it; everything else carries the title, which the id no longer will.
+- **`mutate` stages ids for ONE invocation and releases after `commit` returns.** Four exits never
+  commit, and a store-level buffer would ship what they left behind on the owner's next write.
+  `sessionEnded` and `sweepTrash` announce nothing; a rank-only reorder announces nothing.
+- **The body is bounded and the liveness read is three-valued.** One console tap walks a whole subtree,
+  and an uncapped body lands megabytes in a session that asked for nothing. Waking and gone are
+  separate answers, or a session that never left is reported as dead, and the hold matches
+  `WAKE_TIMEOUT_MS` rather than guessing lower.
+- **The window is the only trigger.** An early flush on the session's own board call was tried and
+  removed: it fired on the agent's own re-read of a notice, so every owner tap became its own push.
 
 ### Codex delegation
 

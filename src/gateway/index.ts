@@ -22,6 +22,7 @@ import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
 import { CodexRoute } from "./codexRoute.js";
+import { createNoAckPush, type NoAckPush } from "./noAckPush.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -320,14 +321,23 @@ export async function startGateway(): Promise<void> {
 
 	// The owner's task board, in its OWN durable file with synchronous checked writes - a trash op
 	// the owner watched succeed must survive a crash, unlike readAnchors' low-stakes tick cadence.
-	const boardStore = openDurable(DATA_DIR, "task-board", (d) => new BoardStore(d, planeRegistry, restoredPlanes));
+	// Built further down, once wake tracking exists; until then a board write announces nothing.
+	let noAckPush: NoAckPush | null = null;
+	const boardStore = openDurable(
+		DATA_DIR,
+		"task-board",
+		(d) => new BoardStore(d, planeRegistry, restoredPlanes, (notices) => noAckPush?.bank(notices)),
+	);
 	// End-of-life for a session's board entries. Done/cancelled trash either way; the disposition
 	// decides the rest, and every caller states it rather than inheriting one. Own catch: board
 	// trouble must never take down the persist tick (whose uncaught throw exits the gateway) or
 	// block a forget.
 	const boardSessionEnded = (team: string, disposition: BoardDisposition): number => {
 		try {
-			return boardStore.sessionEnded(team, disposition);
+			const count = boardStore.sessionEnded(team, disposition);
+			// After the store, so a throw leaves the bank naming work the session provably still holds.
+			noAckPush?.dropFor(team);
+			return count;
 		} catch (err) {
 			console.error(`[task-board] session-ended hook failed for ${team}:`, err);
 			return 0;
@@ -434,6 +444,10 @@ export async function startGateway(): Promise<void> {
 	// host-op's own near-instant tmux-spawn ack). Tracked separately (rather than folded into
 	// inflightWakes) so it never interferes with tryWakeTeam's own dedup-by-team join semantics.
 	const inflightCreates = new Set<string>();
+	/** Either half of "a launch is under way for this team". Named once so its three readers cannot
+	 * drift; deliberately NOT presence's own wakeInFlight, which tracks the same thing on its own
+	 * lifecycle for the presence plane. */
+	const isWakeInFlight = (team: string): boolean => inflightWakes.has(team) || inflightCreates.has(team);
 
 	function tryWakeTeam(
 		team: string,
@@ -632,6 +646,32 @@ export async function startGateway(): Promise<void> {
 	// matches the board's own fastest cadence tier.
 	const presenceWatchTimer = setInterval(() => pushPresenceWatch(), 2_000);
 	presenceWatchTimer.unref?.();
+
+	// Liveness is composed here rather than inside the push, which then needs no registry.
+	// resolveLiveIncarnation is two-valued, so the wake signal is what separates waking from gone.
+	noAckPush = createNoAckPush({
+		liveness: (sessionKey) => {
+			const live = resolveLiveIncarnation(registry, sessionStore, sessionKey);
+			if (live?.data.handshakeConfirmed) return "live";
+			if (live || isWakeInFlight(sessionKey)) return "waking";
+			return "gone";
+		},
+		deliver: (sessionKey, payload) => {
+			const live = resolveLiveIncarnation(registry, sessionStore, sessionKey);
+			if (!live?.data.handshakeConfirmed) return false;
+			live.send(JSON.stringify(payload));
+			return true;
+		},
+	});
+	// Own catch: an uncaught throw in a timer exits the gateway, and no board notice is worth that.
+	const noAckTimer = setInterval(() => {
+		try {
+			noAckPush?.tick();
+		} catch (err) {
+			console.error("[task-board] awareness push tick failed:", err);
+		}
+	}, 1_000);
+	noAckTimer.unref?.();
 
 	// Start evie-bot bridge if config is present
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
@@ -1035,7 +1075,7 @@ export async function startGateway(): Promise<void> {
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
-			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
+			isWakeInFlight,
 			offlineCatalog,
 			knownTeamPaths,
 			sessionStore,
@@ -1181,7 +1221,7 @@ export async function startGateway(): Promise<void> {
 			linkedDomainIds: () => [...new Set(crossDomainPeersForConsole?.all().map((p) => p.friendDomainId) ?? [])],
 			relayToHost,
 			tryWakeTeam,
-			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
+			isWakeInFlight,
 			markCreateInFlight: (team) => {
 				inflightCreates.add(team);
 				presence.createStart(team);

@@ -983,6 +983,32 @@ describe("routes", () => {
 			expect(res.status).toBe(404);
 		});
 
+		it("absorbs a reply to an awareness push instead of 404ing an agent that did nothing wrong", () => {
+			// Nothing can ENFORCE no-reply, and an id with no job entry falls through to store.deliver,
+			// misses, and reaches the agent as a tool error for answering a message that asked for none.
+			const { respond } = createRoutes(makeCtx());
+			const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "na-0123456789abcdef",
+				response: "ok",
+			});
+			expect(res.status).toBe(200);
+		});
+
+		it("does not absorb a reply to a REAL job that merely looks like an awareness push", () => {
+			// A federated peer names its own return-route key, so the prefix alone would let it park a
+			// job here and have the intercept swallow the answer while the agent is told it was sent.
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("na-hijack", "friend.session", "proj.main", { persistent: true });
+			const { respond } = createRoutes(makeCtx({ store }));
+			const waiting = store.waitForResult("na-hijack", 10_000);
+			respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "na-hijack",
+				status: "completed",
+				response: "the answer",
+			});
+			return expect(waiting).resolves.toMatchObject({ result: { response: "the answer" } });
+		});
+
 		it("delivers result to waiting job and returns delivered", async () => {
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("sess-1", "a", "b");
