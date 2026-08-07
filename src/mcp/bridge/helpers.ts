@@ -142,6 +142,10 @@ export async function routerPost(
 			}
 			continue;
 		}
+		// KNOWN GAP (plans/pain-points.md): this parse is OUTSIDE the try above, so a non-JSON error
+		// body rejects out of the retry loop entirely - no retry, and the status never reaches the
+		// caller. A gateway throw becomes exactly that, since Bun.serve declares no `error` handler,
+		// so a disk failure reads to a tool's caller like a bad request rather than something to retry.
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
 			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
@@ -197,6 +201,10 @@ export async function routerGet(
 			}
 			continue;
 		}
+		// KNOWN GAP (plans/pain-points.md): this parse is OUTSIDE the try above, so a non-JSON error
+		// body rejects out of the retry loop entirely - no retry, and the status never reaches the
+		// caller. A gateway throw becomes exactly that, since Bun.serve declares no `error` handler,
+		// so a disk failure reads to a tool's caller like a bad request rather than something to retry.
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
 			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);

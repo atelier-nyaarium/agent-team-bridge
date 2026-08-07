@@ -1274,3 +1274,72 @@ Both phases shipped. The residue is process rather than code, and all of it outl
   reliable fix both times, more so than escaping it.
 - Its fourth painpoint, not knowing the `~/android-dev` toolchain existed, is already recorded in
   CLAUDE.md and is not repeated here.
+
+## Task board (`plans/task-board.md`, deleted, shipped 7.21.0 - 2026-08-07)
+
+All 3 phases shipped. The architecture is CLAUDE.md's "Task board" section; the rules that must hold
+live there or in residue tests. What follows is what stayed open.
+
+### Two known gaps, deliberate
+
+- [medium] **The `/task-board` route's replay record is in memory.** An MCP operation id outlives the
+  gateway process, so a restart between committing a write and flushing its reply loses the record
+  and the caller's retry re-applies an absolute set. `create` is unaffected - its replay is
+  structural, derived from `(from, operationId)` and stored in the board file. Closing it wants this
+  route's own durable file: `DurableOpStore` is typed to `ConsoleOpResult` and keyed by conversation,
+  so it cannot be borrowed. The comment on `boardOperationReplies` says so rather than claiming
+  safety.
+- [medium] **`routerPost` cannot report a 500 usefully.** `await res.json()` sits outside the try
+  that guards the fetch, so a non-JSON error body rejects OUTSIDE the retry loop: no retry, and the
+  status never reaches the caller. A gateway throw becomes exactly that, since `Bun.serve` is
+  declared with no `error` handler. Every MCP tool inherits it, so a disk failure reads to an agent
+  like a bad request - the opposite of what `BoardStore.commit` preserves when it rethrows. Now
+  marked KNOWN GAP at the line itself.
+
+### Structural, not board-specific
+
+- [high] **Nothing in the type system separates a qualified address from a bare local field.** Both
+  are `String`, and the phase-2 blocker was exactly that confusion: the console sent one where the
+  Gateway indexes by the other, so every assign was refused. The follow-on collision (a bare key is
+  unique only per Gateway) was the same class again. `shared/session-id.ts` already owns `Address`
+  and `SpawnPoint`; a value type for the local field, or a Kotlin value class, would have made both
+  rounds compile errors. The single highest-value type change in this codebase.
+- [medium] **Idempotency is re-invented per surface.** Console ops have `opCache` plus
+  `DurableOpStore`; Codex mints a private operation id; the board route now has a third mechanism,
+  keyed differently from both. All three exist because the same fact is true of all three, and each
+  was built separately after somebody noticed. A gateway-wide "settled reply for an operation id"
+  primitive would have made this phase's record two lines instead of a judgement call.
+- [medium] **`MainActivity.kt` is past 3000 lines and its composables are indistinguishable while
+  editing.** I added a state variable to `ProvisionScreen` while intending `App`; only the compiler
+  caught it. The overlay flags compound it: ~15 booleans across four lists (the `BackHandler`
+  predicate, the back `when`, the render `when`, the notification-tap clear list) that must agree by
+  hand, with one recorded bug already from missing the third. An ordered overlay declaration list is
+  the shape; it wants its own PR on a surface with no tests.
+- [medium] **The Kotlin gate is local-only and bites every lap.** `ci.yml` never compiles Kotlin, so
+  a green TS suite reads as done. It cost time twice more this run despite being documented. A CI job
+  that merely COMPILES Kotlin on a PR closes the whole class; it does not need the unit tests.
+- [low] **`src/gateway/routes.ts` is past 2000 lines** and `taskBoard` joined it as another fat
+  function. The real problem is `createRoutes`' closure-over-forty-deps shape, so extracting one
+  route without deciding the family's contract makes the file less uniform, not smaller.
+- [low] **`ChatRepository.kt` is past 5000 lines** and the board added a dozen more methods. Nothing
+  is wrong with any one; "where does board behaviour live" just has no answer beyond grep.
+- [low] **Test fakes drift from `DurableStore`** because it is a class, not an interface:
+  `console-handler.test.ts:fakeDurable` lacked `saveChecked` until a board test needed it. One
+  shared, complete fake ends the per-file copies. (`routes.test.ts:makeCtx` silently dropping unknown
+  overrides is FIXED - it spreads them last now, after costing a round of mystery 503s.)
+- [low] **`codegen-kotlin.ts` reports a conversion-root `$ref` problem as a `.meta` id collision**,
+  which reads as a naming accident rather than the real rule (a recursive schema may appear in
+  exactly one place in the conversion graph).
+- [low] **`MainActivity.kt:renderProject` has a pre-existing unguarded double-render path** for a
+  project literally named "host" - the duplicate-key crash class. Still open.
+- [low] **`gradlew` needs the repo root resolved for it.** Half my Kotlin gate runs failed with
+  `cd: android: No such file or directory` because a previous command had left the shell there. A
+  `scripts/kotlin-gate.sh` would remove it.
+
+### The lesson worth keeping
+
+**A comment asserting behaviour nobody implemented is worse than no comment.** I wrote, in four
+places including CLAUDE.md, that the console could detect a Gateway downgrading its disposition -
+while `ConsoleClient.forget` discarded the reply body. A red team spent real effort disproving prose
+I had written confidently. Where an invariant matters, a residue test costs about what the paragraph
+does and cannot go stale; `board-refusal-residue.test.ts` is the pattern.
