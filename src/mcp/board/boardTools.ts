@@ -19,7 +19,7 @@ const ListInputSchema = {
 	scope: z
 		.enum(["unclaimed", "session", "all"])
 		.optional()
-		.describe("unclaimed = the backlog only, session = yours only, all = both. Default all."),
+		.describe("unclaimed = the backlog only, session = your taskboard only, all = both. Default all."),
 };
 
 const ClaimInputSchema = {
@@ -27,14 +27,14 @@ const ClaimInputSchema = {
 };
 
 const ReleaseInputSchema = {
-	id: ID.describe("Entry to hand back, along with its whole subtree."),
+	id: ID.describe("Entry to give up, along with its whole subtree. Only for work you are not going to do."),
 };
 
 const CreateInputSchema = {
 	title: z.string().min(1).max(500).describe("One line naming the work."),
 	assignTo: z
 		.enum(["self", "backlog"])
-		.describe("self = you work it now. backlog = the owner's backlog, for work you are not doing."),
+		.describe("self = onto your taskboard, you work it. backlog = the owner's backlog, work you are not doing."),
 	body: z.string().max(BOARD_BODY_MAX).optional().describe("Longer detail. The owner reads this."),
 	parent: ID.optional().describe(PARENT_TEXT),
 };
@@ -58,12 +58,14 @@ const ClearInputSchema = {};
 //  Functions & Helpers
 
 const LIST_DESCRIPTION = `
-The owner's backlog and your own entries. Flat, with parent pointers - rebuild
-the tree from those.
+Two halves, and the names matter when you talk about them: entries assigned to
+this session are YOUR TASKBOARD ("my taskboard"), and unassigned ones are THE
+BACKLOG (the owner's, not yours). Flat, with parent pointers - rebuild the tree
+from those.
 `.trim();
 
 const CLAIM_DESCRIPTION = `
-Take an unassigned entry, and everything under it, for this session.
+Move an entry, and everything under it, from the backlog onto your taskboard.
 
 Refuses when another session holds it, so repeating a claim whose reply you lost
 is safe rather than a theft.
@@ -77,25 +79,31 @@ does not fit a title in that child's own body.
 `.trim();
 
 const RELEASE_DESCRIPTION = `
-Hand an entry and its subtree back to the backlog, keeping its state, body and
-place in the tree.
+Give an entry and its subtree up, back to the backlog, keeping its state, body
+and place in the tree.
+
+Only for work you are NOT going to do. Finishing a plan, writing entries up, or
+handing a report to the owner are none of them a reason to release: the work is
+still yours, so it stays on your taskboard. If in doubt, keep it.
 `.trim();
 
 const CREATE_DESCRIPTION = `
-Add an entry to the owner's board.
+Add an entry to the board.
 
-assignTo has no default on purpose: say whether this is work you are doing now
-or work for the backlog.
+assignTo has no default on purpose: say whether this lands on your taskboard
+because you are doing it, or in the backlog because you are not. Breaking your
+own work into steps is "self" every time, including the steps you have not
+started.
 `.trim();
 
 const UPDATE_DESCRIPTION = `
-Change an entry you hold. Omitted fields are left alone. Claim a backlog entry
-before updating it.
+Change an entry on your taskboard. Omitted fields are left alone. Claim a
+backlog entry before updating it.
 `.trim();
 
 const CLEAR_DESCRIPTION = `
-Trash this session's done and cancelled entries. The owner can restore them for
-30 days.
+Trash your taskboard's done and cancelled entries. The owner can restore them
+for 30 days.
 `.trim();
 
 /**
