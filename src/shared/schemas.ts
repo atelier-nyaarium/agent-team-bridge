@@ -1406,6 +1406,10 @@ export const CrossDomainUnlinkResultSchema = z
 export const ConsoleBoardWriteResultSchema = z
 	.object({
 		applied: z.boolean(),
+		// Attachments the Gateway could not resolve on ANY machine and therefore did not store, by
+		// filename. The write still applied; these are gone. Reported because dropping is a normal
+		// outcome, and an unreported drop is indistinguishable from a picture vanishing on its own.
+		dropped: z.array(z.string().min(1).max(255)).optional(),
 	})
 	.meta({ id: "ConsoleBoardWriteResult" });
 

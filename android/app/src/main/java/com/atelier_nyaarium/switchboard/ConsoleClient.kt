@@ -20,6 +20,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBoardReadResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleBoardWriteResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBlobGetResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleBlobPutResult
@@ -805,9 +806,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * will never apply (retire it and flag the row), while a thrown error - transport, cleartext,
 	 * unseal, anything - means retry. Only a sealed, signature-verified reply can carry a refusal,
 	 * which the relay path already guarantees before this sees `ok`. */
-	override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String) {
+	override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String): List<String> {
 		val body = relay(op, opId, targetGateway = gatewayId)
-		if (body.ok) return
+		// An applied write can still have dropped attachments the Gateway could not resolve anywhere.
+		// Returned rather than swallowed: dropping is a normal outcome, so an unreported one is
+		// indistinguishable from a picture disappearing on its own.
+		if (body.ok) {
+			// Tolerant: an older Gateway answers without the field, and a decode hiccup must not turn a
+			// write that APPLIED into a retry.
+			return runCatching { resultOf<ConsoleBoardWriteResult>(body, "board_write").dropped }
+				.getOrNull()
+				.orEmpty()
+		}
 		val error = body.error ?: ""
 		// A refusal is marked by its PREFIX, never by ok=false alone: the gateway answers ok=false
 		// for its own throws too (a Gateway not yet restarted says the board is unavailable), and

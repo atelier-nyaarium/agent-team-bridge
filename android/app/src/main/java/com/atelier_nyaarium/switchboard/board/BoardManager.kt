@@ -31,7 +31,12 @@ interface BoardStore {
 
 /** The one call the drain makes, narrow enough for a test to stand in for the client. */
 interface BoardWriter {
-	suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String = UUID.randomUUID().toString())
+	/** Returns the attachment filenames the Gateway could not resolve and therefore did not store. */
+	suspend fun boardWrite(
+		op: ConsoleOp,
+		gatewayId: String,
+		opId: String = UUID.randomUUID().toString(),
+	): List<String>
 
 	/** Whether the Gateway holding the entry already has these bytes in full. A CHECK, never the
 	 * transfer itself: the drain is single-flight, so moving megabytes inside it would stall every
@@ -87,8 +92,17 @@ class BoardManager(private val store: BoardStore) {
 
 	private fun routeGatewayId(): String = store.loadGatewayId()
 
+	/**
+	 * Whether this device knows enough about the board to let it DELETE attachment bytes.
+	 *
+	 * A board with no entries is not evidence that no entry has attachments. It is what a failed local
+	 * decode looks like, and equally what a Gateway that lost its own board file answers over the
+	 * wire - and in that second case the phone's copies are the last ones anywhere, since the
+	 * Gateway's bytes survive with nothing left to name them. An empty board also has nothing to
+	 * reclaim, so refusing to sweep on one costs exactly nothing.
+	 */
 	val boardIsKnown: Boolean
-		get() = loadedCleanly
+		get() = loadedCleanly && blob.gateways.values.any { it.entries.isNotEmpty() }
 
 	private fun load(): BoardBlob {
 		val raw = store.loadTaskBoard() ?: return BoardBlob()
@@ -280,8 +294,13 @@ class BoardManager(private val store: BoardStore) {
 				// lets `eligibleBoardActions` step past a slow transfer to unrelated work, and "not
 				// synced" is honest while a picture is still going up.
 				uploadSources(client, action)
-				client.boardWrite(action.op, action.gatewayId, action.opId)
+				val dropped = client.boardWrite(action.op, action.gatewayId, action.opId)
 				mutate { it.copy(queue = retireBoardAction(it.queue, action.opId)) }
+				// Shown on the same row the owner already reads for a refused edit. The write applied,
+				// but these pictures existed on no machine and are gone, which they have to be told.
+				if (dropped.isNotEmpty()) {
+					refusals.add(BoardRefusal(entryIdOf(action.op), "could not find ${dropped.joinToString(", ")}"))
+				}
 			} catch (e: BoardRefused) {
 				DebugLog.log("Board", "action ${action.opId} refused: ${e.reason}")
 				refusals.add(BoardRefusal(entryIdOf(action.op), e.reason))

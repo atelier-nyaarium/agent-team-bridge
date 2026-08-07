@@ -176,13 +176,40 @@ class BoardManagerTest {
 		assertEquals(listOf("m1"), board.mergedEntries("gw-a").map { it.id })
 	}
 
-	private class RecordingWriter(private val fail: (() -> Unit)? = null) : BoardWriter {
+	private class RecordingWriter(
+		private val fail: (() -> Unit)? = null,
+		private val dropped: List<String> = emptyList(),
+	) : BoardWriter {
 		val sent = mutableListOf<ConsoleOp>()
 
-		override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String) {
+		override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String): List<String> {
 			fail?.invoke()
 			sent.add(op)
+			return dropped
 		}
+	}
+
+	@Test
+	fun aDroppedAttachmentIsReportedToTheOwner() = runBlocking {
+		// Dropping is a normal outcome now, so an unreported one is indistinguishable from a picture
+		// vanishing on its own. It lands on the same row the owner already reads for a refused edit.
+		val manager = BoardManager(storeStub())
+		manager.enqueue(ConsoleOp.BoardSetAttachments("e1", emptyList()), "gw-route")
+
+		manager.drain(RecordingWriter(dropped = listOf("gone.png")))
+
+		assertEquals(1, manager.refusals.size)
+		assertTrue(manager.refusals.single().reason.contains("gone.png"))
+		// The write APPLIED, so the action retires rather than retrying.
+		assertTrue(manager.strugglingEntries().isEmpty())
+	}
+
+	@Test
+	fun anEmptyBoardCannotDriveAByteDelete() {
+		// An empty board is what a failed decode looks like, and equally what a Gateway that lost its
+		// own board file answers over the wire. In that second case the phone holds the last copies.
+		val manager = BoardManager(storeStub())
+		assertFalse("nothing known yet is not permission to delete", manager.boardIsKnown)
 	}
 
 	@Test
@@ -191,7 +218,6 @@ class BoardManagerTest {
 		// sweep. A board that failed to decode answers the same empty set a genuinely empty one does,
 		// so without this distinction one bad prefs blob deletes every attachment in a single pass -
 		// the reclaim shape the gateway explicitly refuses, rebuilt on the console.
-		assertTrue("a fresh install has simply not stored one yet", BoardManager(FakeStore()).boardIsKnown)
 		assertFalse("a stored board that will not parse is UNKNOWN", BoardManager(FakeStore("{not json")).boardIsKnown)
 	}
 }

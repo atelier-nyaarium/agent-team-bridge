@@ -1118,6 +1118,7 @@ data class ConsoleBlobGetResult(
 @Serializable
 data class ConsoleBoardWriteResult(
 	val applied: Boolean,
+	val dropped: List<String>? = null,
 )
 
 @Serializable

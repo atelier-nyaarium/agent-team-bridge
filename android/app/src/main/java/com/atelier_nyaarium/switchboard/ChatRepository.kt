@@ -4149,7 +4149,16 @@ class ChatRepository(
 				val c = client() ?: return@launch
 				val staged = c.downloadBlob(a.blobId, a.blobGateway)
 				target.parentFile?.mkdirs()
-				staged.copyTo(target, overwrite = true)
+				// Through a temp and a rename. A direct overwrite deletes the good copy first and leaves
+				// a TRUNCATED file if the process dies mid-copy, which nothing would ever correct: the
+				// gallery renders the partial bytes forever, and `supplied` would then assert a blobId
+				// this device cannot actually produce, putting the write into an unsatisfiable retry.
+				val tmp = File(target.parentFile, "${target.name}.landing")
+				staged.copyTo(tmp, overwrite = true)
+				if (!tmp.renameTo(target)) {
+					tmp.delete()
+					error("could not land ${a.filename}")
+				}
 				// The blob store is a transfer buffer; holding the landed copy too would keep every
 				// attachment twice on the device with the least room for it.
 				c.forgetBlob(a.blobId)
