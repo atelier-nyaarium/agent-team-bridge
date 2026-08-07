@@ -37,11 +37,19 @@ export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: strin
  * spelled out at each site, so grepping it lists every place owner authority is claimed. */
 export const OWNER_ACTOR: BoardActor = { kind: "owner" };
 
-/** The one scope predicate. The owner writes anything; a session writes only what it holds. Used
- * for the entry being written AND for a parent it is being attached to, so an entry cannot be
- * grafted into a tree its writer does not own. */
-export function mayWrite(entry: BoardEntry, actor: BoardActor): "held" | undefined {
+/**
+ * May this actor touch this entry? The owner anything; a session only what it holds, and never
+ * anything in the trash - that is the owner's own set-aside, and a session's list has already
+ * stopped showing it.
+ *
+ * The SAME rule answers the entry being written and any parent it is attached to. Nesting was
+ * briefly looser, allowing a session to hang work off a BACKLOG entry: that left the entry
+ * advertised as unclaimed while `claim`'s subtree rule refused every other session, with nothing in
+ * any list explaining why. A session breaking a backlog item down claims it first.
+ */
+export function mayWrite(entry: BoardEntry, actor: BoardActor): BoardRefusal | undefined {
 	if (actor.kind === "owner") return undefined;
+	if (entry.trashedAt !== undefined) return "entry_missing";
 	return entry.sessionId === actor.sessionId ? undefined : "held";
 }
 
@@ -101,9 +109,14 @@ export function taskBoardPlaneName(ownerId: string): string {
 }
 
 /** The MCP create's entry id, derived from its private per-invocation operation id (the
- * codexAgentIdForOperation pattern), so an HTTP retry upserts the SAME entry instead of doubling. */
-export function boardEntryIdForOperation(operationId: string): string {
-	const digest = crypto.createHash("sha256").update(`BOARD_ENTRY_V1\n${operationId}`).digest("hex");
+ * codexAgentIdForOperation pattern), so an HTTP retry upserts the SAME entry instead of doubling.
+ *
+ * The SENDER is in the preimage because the id alone decides the replay: `createAtEnd` answers
+ * "already there" on a matching id without a scope check, which is only sound while an id can come
+ * from one caller. `operationId` is an ordinary wire field, so two senders presenting the same one
+ * would otherwise converge on one entry and the second be told it created another's. */
+export function boardEntryIdForOperation(from: string, operationId: string): string {
+	const digest = crypto.createHash("sha256").update(`BOARD_ENTRY_V2\n${from}\n${operationId}`).digest("hex");
 	return `bd_${digest.slice(0, 32)}`;
 }
 
@@ -331,7 +344,11 @@ export class BoardStore {
 	 * the entry or any member - claiming an ancestor must never seize a sibling session's work. */
 	claim(ownerId: string, id: string, sessionId: string): BoardResult {
 		return this.mutate(ownerId, (board) => {
-			if (!board.entries.has(id)) return "entry_missing";
+			const target = board.entries.get(id);
+			if (!target) return "entry_missing";
+			// The trash is the owner's alone. A session holds ids from before it was trashed, and
+			// without this it could take and rewrite something no list will ever show it again.
+			if (target.trashedAt !== undefined) return "entry_missing";
 			let changed = false;
 			const members = this.subtree(board, id);
 			for (const memberId of members) {
@@ -367,13 +384,24 @@ export class BoardStore {
 		});
 	}
 
-	/** Trash a session's done and cancelled entries (taskBoardClear). Returns how many. */
+	/** Trash a session's done and cancelled entries (taskBoardClear). Returns how many.
+	 *
+	 * An entry with a LIVE child stays: trashing it alone would leave that child pointing at a parent
+	 * no list returns, and every other path here keeps that from happening - setTrashed takes the
+	 * whole subtree, restore and the sweep promote an orphan. Its own turn comes once the child is
+	 * finished or moved. */
 	clearDone(ownerId: string, sessionId: string, now = Date.now()): number {
 		let cleared = 0;
 		this.mutate(ownerId, (board) => {
+			const liveParents = new Set<string>();
+			for (const e of board.entries.values()) {
+				if (e.parent === undefined || e.trashedAt !== undefined) continue;
+				if (e.state !== "done" && e.state !== "cancelled") liveParents.add(e.parent);
+			}
 			for (const e of board.entries.values()) {
 				if (e.sessionId !== sessionId || e.trashedAt !== undefined) continue;
 				if (e.state !== "done" && e.state !== "cancelled") continue;
+				if (liveParents.has(e.id)) continue;
 				e.trashedAt = now;
 				cleared++;
 			}
@@ -388,20 +416,17 @@ export class BoardStore {
 	 * then refused. Here both land in one mutate or neither does. */
 	createAtEnd(ownerId: string, entry: Omit<BoardEntry, "rank">, actor: BoardActor): BoardResult {
 		return this.mutate(ownerId, (board) => {
-			if (!board.entries.has(entry.id) && board.entries.size + 1 > MAX_ENTRIES_PER_OWNER) return "board_full";
+			// The replay answer comes FIRST and is not scope-checked. The id derives from the caller's
+			// own private operation id, so an id that already exists IS this caller's earlier create -
+			// and a backlog create leaves the entry unassigned, which a scope check would then refuse,
+			// telling a caller its landed create will never apply.
+			if (board.entries.has(entry.id)) return "unchanged";
+			if (board.entries.size + 1 > MAX_ENTRIES_PER_OWNER) return "board_full";
 			if (entry.parent !== undefined) {
 				const parent = board.entries.get(entry.parent);
 				if (!parent) return "parent_missing";
 				const denied = mayWrite(parent, actor);
 				if (denied) return denied;
-			}
-			const current = board.entries.get(entry.id);
-			if (current) {
-				const denied = mayWrite(current, actor);
-				if (denied) return denied;
-				// A retry of the same create: the id is derived from the operation id, so re-minting a
-				// rank would move an entry the caller believes it already placed.
-				return "unchanged";
 			}
 			board.entries.set(entry.id, { ...entry, rank: this.placeAtEnd(board, entry.parent) });
 			return this.wouldCycle(board, entry.id) ? "cycle" : undefined;

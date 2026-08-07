@@ -2,12 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { BoardStore } from "../gateway/boardStore.js";
+import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import { EVIE_WS_MAX_PAYLOAD_BYTES } from "../gateway/evie/evieClient.js";
 import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation } from "../gateway/websocket.js";
+import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
@@ -472,6 +473,96 @@ describe("routes", () => {
 			expect(second.body.id).toBe(first.body.id);
 			const list = await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" });
 			expect(list.body.entries).toHaveLength(1);
+		});
+
+		it("every tool's request body is one the route accepts", async () => {
+			// The tools build their bodies and the route validates them strictly, but nothing else
+			// holds the two together - a field renamed on either side would only show on a device.
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				...boardRequestBody("create", { title: "Ship the board", assignTo: "self", body: "detail" }),
+			});
+			expect(created.body).toMatchObject({ applied: true });
+			const id = created.body.id as string;
+
+			for (const body of [
+				boardRequestBody("list", { scope: "unclaimed" }),
+				boardRequestBody("update", { id, state: "in_progress", title: "Renamed", body: null }),
+				boardRequestBody("release", { id }),
+				boardRequestBody("claim", { id }),
+				boardRequestBody("clear"),
+			]) {
+				const res = await call(taskBoard, { from: "recipe-app", ...body });
+				expect(res.status, `${body.action} was rejected: ${JSON.stringify(res.body)}`).toBe(200);
+				expect(res.body.error).toBeUndefined();
+			}
+		});
+
+		it("a retried backlog create replays instead of refusing the caller its own entry", async () => {
+			// The id derives from the operation id, so the second POST finds the entry already there.
+			// A backlog create leaves it UNASSIGNED, which a scope check would refuse - telling the
+			// caller a create that landed will never apply, whose only recovery is a duplicate.
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const body = { from: "recipe-app", ...boardRequestBody("create", { title: "later", assignTo: "backlog" }) };
+			const first = await call(taskBoard, body);
+			const retry = await call(taskBoard, body);
+			expect(first.body).toMatchObject({ applied: true });
+			expect(retry.body).toMatchObject({ applied: true, id: first.body.id });
+			const list = await call(taskBoard, { from: "recipe-app", action: "list", scope: "unclaimed" });
+			expect(list.body.entries).toHaveLength(1);
+		});
+
+		it("a retried update replays its recorded reply instead of re-applying an absolute set", async () => {
+			// These writes are absolute, so re-running one after a newer write regresses the field.
+			const { ctx, board } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				...boardRequestBody("create", { title: "t", assignTo: "self" }),
+			});
+			const id = created.body.id as string;
+			const update = { from: "recipe-app", ...boardRequestBody("update", { id, state: "paused" }) };
+			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
+
+			// The reply was lost; meanwhile the owner moved it on from their console. The retry must
+			// not revert that.
+			board.setState("owner-1", id, "done", OWNER_ACTOR);
+			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
+			expect(board.entry("owner-1", id)?.state).toBe("done");
+		});
+
+		it("an update naming no changed field still refuses an entry this session cannot see", async () => {
+			// Otherwise applied:true for a held entry and entry_missing for an unknown one is an
+			// oracle telling a session which ids exist - the one thing list is built never to leak.
+			const { ctx, board } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			board.upsert("owner-1", [{ id: "theirs", title: "t", state: "open", rank: "m", sessionId: "other" }], {
+				kind: "owner",
+			});
+			for (const args of [{ id: "theirs" }, { id: "theirs", parent: null }]) {
+				const res = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("update", args) });
+				expect(res.body).toEqual({ applied: false, refused: "held" });
+			}
+		});
+
+		it("a session cannot reparent onto another session's entry through the route", async () => {
+			const { ctx, board } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const mine = await call(taskBoard, {
+				from: "recipe-app",
+				...boardRequestBody("create", { title: "mine", assignTo: "self" }),
+			});
+			board.upsert("owner-1", [{ id: "theirs", title: "t", state: "open", rank: "m", sessionId: "other" }], {
+				kind: "owner",
+			});
+			const moved = await call(taskBoard, {
+				from: "recipe-app",
+				...boardRequestBody("update", { id: mine.body.id as string, parent: "theirs" }),
+			});
+			expect(moved.body).toEqual({ applied: false, refused: "held" });
 		});
 
 		it("a create replayed after an edit reverts nothing", async () => {

@@ -5,6 +5,7 @@ import packageJson from "../../package.json";
 import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
 import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
+import { registerBoardTools } from "./board/boardTools.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { capabilityInstructions, fetchCapabilities, hasCapability } from "./capabilities.js";
@@ -82,6 +83,10 @@ export async function startMcp(): Promise<void> {
 	// Gated on the HOST DAEMON's declaration rather than a console plugin: these tools reach a
 	// supervised `codex app-server`, which only exists where the daemon was configured to allow one.
 	if (hasCapability(capabilities, CODEX_THINKING_CAPABILITY_ID)) registerCodexTools(mcpServer);
+	// Gated on the console plugin that renders the board: without it the owner has no way to see or
+	// answer anything a session writes, so the tools would be a one-way channel into a surface nobody
+	// is looking at.
+	if (hasCapability(capabilities, "taskboard")) registerBoardTools(mcpServer);
 	// Ref snapshotting is not a tool of its own: it rides the reply path, so it is switched on here
 	// rather than registered. A session whose owner has no console able to render a code viewer never
 	// pays to build one.

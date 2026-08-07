@@ -170,6 +170,16 @@ export async function postPluginAction(
 	})) as { delivered?: boolean };
 }
 
+/** POST a task-board request, self-scoped to THIS container's own identity for the same reason
+ * postPluginAction is: `from` decides which session's entries the gateway will let the call touch,
+ * so a tool that could set it could write as another session. Board tools call this rather than
+ * routerPost("/task-board", ...) directly. */
+export async function postBoard(body: Record<string, unknown>): Promise<unknown> {
+	// `from` LAST, so it overwrites rather than defaults. Spreading it first would make the identity
+	// something a body could name, which is the smuggling this exists to prevent.
+	return routerPost("/task-board", { ...body, from: PROJECT_NAME });
+}
+
 export async function routerGet(
 	path: string,
 	{ retries = 2, retryDelayMs = 1000 }: RouterPostOptions = {},

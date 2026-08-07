@@ -967,28 +967,32 @@ splitting bought no safety it does not already have.
 
 ## Phase 3 - Tools, guidance, rollout
 
-**Prerequisite, before the tools land** (from phase 2's architecture pass - cheaper before six
-callers exist than after):
+**Prerequisite, landed before the tools** (from phase 2's architecture pass - cheaper before six
+callers exist than after). Both shipped in `a20b47e`:
 
-- **`BoardActor` as a required argument on every mutating store method**, `{kind:"owner"} |
-  {kind:"session", sessionId}`, with one private `mayWrite` inside the store answering subject scope,
-  object scope and list scope from the same predicate. Today `routes.ts` hand-rolls the subject check
-  and answers `held` itself, and because nothing checks the OBJECT, a session can reparent its
-  subtree under another session's entry (`setParent` validates existence and cycles only) and
-  `create` never scope-checks its parent at all. Owner-authority must be a VALUE a caller supplies,
-  not an absence it falls into - the `sessionAuthority.ts` rule. Cross-session reparenting starts
-  refusing, so say so in the tool descriptions.
-- **`endRank` private; `createAtEnd` / `setParentAtEnd` mint inside the write's own `mutate`.** As
-  written, `setParent(owner, id, parent, boardStore.endRank(owner, parent))` commits a rebalance
-  before `setParent` can refuse, so a refused op can permanently rewrite every sibling's rank and
-  ship the whole board. Last public seam of the rank bug class; same six signatures as the actor
-  work, so do them together.
+- **`BoardActor` is a required argument on every mutating store method**, `{kind:"owner"} |
+  {kind:"session", sessionId}`. `mayWrite` is the ONE predicate, answering the entry being written
+  and any parent it is attached to. Before it, `routes.ts` hand-rolled the subject check and nothing
+  checked the OBJECT at all, so a session could reparent its subtree under another session's entry
+  and `create` never scope-checked its parent. Owner-authority is now a VALUE a caller supplies, not
+  an absence it falls into - the `sessionAuthority.ts` rule. Every call site became a compile error
+  rather than a silent permit, which is the whole reason the argument is required rather than
+  defaulted.
+- **`endRank` is private; `createAtEnd` / `setParentAtEnd` mint inside the write's own `mutate`.**
+  `setParent(owner, id, parent, boardStore.endRank(owner, parent))` evaluated a COMMITTING read as
+  an argument, so a refused `setParent` could still have rebalanced every sibling and shipped the
+  whole board. Last public seam of the rank bug class, closed.
+- `mayWrite` also refuses anything TRASHED for a session actor, which the red team proved was
+  reachable: a session holds ids from before the owner trashed them.
 
 - The six `taskBoard*` tools in `src/mcp/board/`, after `codex/codexTools.ts`: one authenticated
-  route behind `refuseImpersonation`, `from` hardcoded in the MCP helper, a private per-invocation
-  operation id, and create's entry id derived from it so a retry replays rather than doubles.
+  route behind `refuseImpersonation`, `from` supplied by `postBoard` (LAST in the object, so it
+  overwrites rather than defaults), a private per-invocation operation id on EVERY mutating action,
+  and create's entry id derived from `(from, operationId)` so a retry replays rather than doubles.
   `taskBoardUpdate.parent` is `.nullable().optional()` (absent = don't touch, null = root) - legal
   here because MCP inputs never pass through the Kotlin codegen.
+  The route keeps a bounded per-`createRoutes` record of settled replies, since `create` is the only
+  action whose replay is structural; see the deferred note below for what that record does not cover.
 - Capability wired per the corrected recipe: `GATED_CAPABILITY_IDS`, the `mcp/index.ts` gate, the
   manifest, the catalog entry - NOTHING in `shared/capabilities.ts` - with all three test gates run,
   the Kotlin one locally.
@@ -1003,6 +1007,59 @@ callers exist than after):
   closed against an undeclared console, NOT against a stale gateway.
 - Phase 2's console change (capability report to every keyring gateway) rides the same console
   build, so machine B gains the tools the first time the updated console reports to it.
+
+### Phase 3 audit outcomes
+
+An alignment pass and a red team, both of which found real gaps, several proved by running probes
+against the live store and route.
+
+**Alignment:**
+
+- **BLOCKER, mine: a retried backlog create was refused `held` rather than replaying.** The scope
+  check ran before the insert-if-absent branch, and a backlog create leaves the entry unassigned, so
+  the caller was told a create that HAD landed would never apply - whose only recovery is the
+  duplicate the derived id exists to prevent. The replay answer now comes first: a matching id is by
+  construction this caller's own earlier create.
+- The operation id was minted for `create` alone, and the route kept no record of one. Every
+  mutating action now carries one, and the route replays a settled reply for it. `update` is the one
+  that needed it: an absolute set re-applied after a newer write regresses the field.
+- `postBoard` spread the body AFTER `from`, making the identity a default a caller could overwrite
+  rather than the hardcode the plan called for.
+- The tool text said nothing about parent scope, which the phase 3 prerequisite required.
+
+**Red team:**
+
+- **A session could claim and rewrite a TRASHED entry.** It holds ids from before the owner trashed
+  them, and `mayWrite` knew nothing about `trashedAt` - so it could take and edit something no list
+  would ever show it again, and the owner's restore would return somebody else's title. The trash is
+  the owner's alone; both `claim` and `mayWrite` now answer `entry_missing` for it.
+- **My own `mayParentUnder` loosening was reverted.** Letting a session nest under a BACKLOG entry
+  left that entry advertised as unclaimed while `claim`'s subtree rule refused every other session,
+  with nothing in any list explaining why - a worse bug than the ergonomic wrinkle it fixed. Claim
+  first, which is what the guidance already says.
+- An `update` naming no CHANGED field answered `applied: true` on another session's entry, because
+  every scope check lived in a setter the route never called. Paired with `entry_missing` for an
+  unknown id that is an existence oracle for ids `list` is built never to leak. Scope is answered up
+  front now.
+- `clearDone` trashed entries one at a time, leaving a live child pointing at a parent no list
+  returns. A finished entry with live children now waits its turn.
+- The derived entry id had no sender in its preimage, so two callers presenting one operation id
+  would converge on a single entry and the second be told it created another's.
+- A failed tool call could not say whether the write landed, and retrying mints a fresh operation
+  id. It now says so and sets `isError`.
+
+**Deferred, stated plainly:**
+
+- **The route's replay record is IN MEMORY**, which is weaker than the rule CLAUDE.md states for
+  board mutations. An MCP operation id outlives the gateway process, so a restart between committing
+  a write and flushing its reply loses the record and the retry re-applies an absolute set. `create`
+  is unaffected (its replay is structural, in the board file). Closing it wants this route's own
+  durable file: `DurableOpStore` is typed to console results and keyed by conversation, so it cannot
+  be borrowed. Narrow but real, and the comment in `routes.ts` says so rather than claiming safety.
+- **`routerPost` reads `res.json()` outside its try**, so a non-JSON 500 (what a store throw becomes,
+  since the gateway has no Bun `error` handler) escapes the retry loop entirely and reaches the agent
+  as a bare "HTTP 500". That erases the retryable-versus-refusal distinction the store takes care to
+  preserve. Shared by every route, so out of scope here; see Painpoints.
 
 Follow-on, deliberately out of scope: the no-ack channel push, which the board is the first consumer
 of but which stands on its own.
@@ -1054,6 +1111,13 @@ Collected during phase 2. `makeCtx` above is now fixed; the rest still stand.
 - **The Kotlin gate being local-only bites every single lap.** It is documented in `CLAUDE.md` and it
   still cost time twice this phase, because the TS suite going green reads as done. A CI job that
   merely COMPILES Kotlin on a PR would catch the whole class; it does not need the unit tests.
+- **`routerPost` cannot report a 500 usefully.** `await res.json()` sits outside the try that guards
+  the fetch, so a non-JSON error body (what a gateway throw becomes, since `Bun.serve` is declared
+  with no `error` handler) rejects OUTSIDE the retry loop: no retry, and the status never reaches the
+  caller. Every MCP tool inherits it. A disk failure on the board file is indistinguishable to an
+  agent from a bug in its own request, which is the opposite of what `BoardStore.commit` carefully
+  preserves when it rethrows.
+
 - **`gradlew` invocations are fragile in a shell whose cwd persists across calls.** Half my Kotlin
   gate runs failed with `cd: android: No such file or directory` because a previous command had
   already left me there. Not the codebase's fault, but a `scripts/kotlin-gate.sh` that resolves the

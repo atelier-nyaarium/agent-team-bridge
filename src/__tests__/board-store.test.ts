@@ -100,6 +100,38 @@ describe("write scope", () => {
 		expect(store.entry(OWNER, "new")).toBeUndefined();
 	});
 
+	it("a session reaches the backlog through claim, which is the whole point of the backlog", () => {
+		// Scope is not a wall around the pile: a session puts follow-ups there and takes work from
+		// there. It just cannot edit what it has not taken.
+		expect(store.createAtEnd(OWNER, { id: "note", title: "for later", state: "open" }, MINE)).toEqual({
+			applied: true,
+		});
+		expect(store.setState(OWNER, "note", "done", MINE)).toEqual({ applied: false, refused: "held" });
+		expect(store.claim(OWNER, "note", "sess-1")).toEqual({ applied: true });
+		expect(store.setState(OWNER, "note", "done", MINE)).toEqual({ applied: true });
+	});
+
+	it("the trash is the owner's alone: a session can neither claim nor edit what is in it", () => {
+		// A session holds ids from before the owner trashed them. Without this it could take and
+		// rewrite something no list will ever show it again, and the owner's restore would return
+		// somebody else's title.
+		store.setTrashed(OWNER, "mine", true, 1000);
+		expect(store.claim(OWNER, "mine", "sess-1")).toEqual({ applied: false, refused: "entry_missing" });
+		expect(store.setTitle(OWNER, "mine", "rewritten", MINE)).toEqual({
+			applied: false,
+			refused: "entry_missing",
+		});
+		expect(store.entry(OWNER, "mine")?.title).toBe("t-mine");
+	});
+
+	it("nesting follows the same rule as writing, so a backlog entry cannot be locked out from under a claim", () => {
+		// Allowing this left the parent advertised as unclaimed while claim's subtree rule refused
+		// every other session, with nothing in any list saying why.
+		const created = store.createAtEnd(OWNER, { id: "sub", title: "s", state: "open", parent: "loose" }, MINE);
+		expect(created).toEqual({ applied: false, refused: "held" });
+		expect(store.claim(OWNER, "loose", "sess-2")).toEqual({ applied: true });
+	});
+
 	it("the owner is scoped out of nothing", () => {
 		expect(store.setTitle(OWNER, "theirs", "renamed", OWNER_ACTOR)).toEqual({ applied: true });
 		expect(store.setParentAtEnd(OWNER, "mine", "theirs", OWNER_ACTOR)).toEqual({ applied: true });
@@ -178,6 +210,24 @@ describe("trash and sweeps", () => {
 		store.sessionEnded("s", "cancel", 5000);
 		expect(store.entry(OWNER, "binned")?.state).toBe("in_progress");
 		expect(store.entry(OWNER, "binned")?.sessionId).toBeUndefined();
+	});
+
+	it("clear leaves a finished entry that still has live children, so no pointer dangles", () => {
+		// The list drops trashed entries, so trashing the parent alone hands a reader a parent id
+		// that is not in the result - the invariant every other trash path here maintains.
+		upsert([
+			entry("p", { sessionId: "s", state: "done" }),
+			entry("kid", { parent: "p", sessionId: "s", state: "open" }),
+			entry("solo", { sessionId: "s", state: "done" }),
+		]);
+		expect(store.clearDone(OWNER, "s", 5000)).toBe(1);
+		expect(store.entry(OWNER, "solo")?.trashedAt).toBe(5000);
+		expect(store.entry(OWNER, "p")?.trashedAt).toBeUndefined();
+
+		// Once the child is finished, the parent's turn comes.
+		setState("kid", "done");
+		expect(store.clearDone(OWNER, "s", 6000)).toBe(2);
+		expect(store.entry(OWNER, "p")?.trashedAt).toBe(6000);
 	});
 
 	it("the disposition covers every entry the STORE holds, not a set a client enumerated", () => {

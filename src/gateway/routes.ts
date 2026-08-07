@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import { createBurstCache } from "../shared/burst-cache.js";
+import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
@@ -44,7 +45,13 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
-import { type BoardActor, type BoardResult, type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
+import {
+	type BoardActor,
+	type BoardResult,
+	type BoardStore,
+	boardEntryIdForOperation,
+	mayWrite,
+} from "./boardStore.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -234,6 +241,9 @@ export const POST_WAKE_SETTLE_MS = 3_000;
 // nested payload reaching the mailbox (and the durable-store snapshot written on a timer).
 const MAX_PLUGIN_ACTION_PAYLOAD_BYTES = 32_768;
 
+/** Roughly a session's working set of recent board writes, times a handful of sessions. */
+const MAX_BOARD_REPLIES = 512;
+
 /** The total a payload's files CLAIM to be. Sender-stated and never re-measured here, because the
  * bytes are not here: they travel the blob plane, where the write path counts what actually lands
  * against MAX_BLOB_BYTES. This stays as the cheap sanity check on an obviously absurd manifest, not
@@ -403,6 +413,16 @@ export function createRoutes({
 	boardStore,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
+	/** Settled replies for the board route's mutating operations, keyed `from:operationId`.
+	 *
+	 * IN MEMORY, which is weaker than the console's durable equivalent and weaker than the rule
+	 * CLAUDE.md states for board mutations. The gap is real and narrow: an MCP operation id outlives
+	 * this process, so a gateway restart between committing a write and flushing its reply loses the
+	 * record, and the caller's retry re-applies an absolute set. `create` is unaffected - its replay
+	 * is structural, in the board file itself. Closing it wants this route's own durable file;
+	 * DurableOpStore is typed to console results and keyed by conversation, so it cannot just be
+	 * borrowed. Tracked in the plan. */
+	const boardOperationReplies = new Map<string, Record<string, unknown>>();
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
 	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
 	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
@@ -1876,6 +1896,13 @@ export function createRoutes({
 		const r = parsed.data;
 		const refused = refuseImpersonation(req, r.from);
 		if (refused) return refused;
+		// Replay before anything else. These writes are ABSOLUTE, so re-running one after a newer
+		// write regresses the field - an update whose reply was lost would set the value back on
+		// retry, and routerPost retries four times. Keyed per sender so two sessions cannot collide,
+		// and only after impersonation is refused, or an unauthenticated caller could read a reply.
+		const replayKey = r.operationId ? `${r.from}:${r.operationId}` : undefined;
+		const recorded = replayKey ? boardOperationReplies.get(replayKey) : undefined;
+		if (recorded) return jsonResponse(recorded);
 		if (!boardStore) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
 		const owner = ownerId?.();
 		if (!owner) return jsonResponse({ error: "not yet enrolled; no owner board exists" }, 503);
@@ -1887,12 +1914,20 @@ export function createRoutes({
 		// never the owner here: reassigning and untrashing stay owner-only, through the console.
 		const actor: BoardActor = { kind: "session", sessionId: sessionKey };
 
+		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes
+		// through jsonResponse directly: a malformed request is not an operation that happened.
+		const done = (bodyOut: Record<string, unknown>): Response => {
+			if (replayKey) {
+				boardOperationReplies.set(replayKey, bodyOut);
+				capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
+			}
+			return jsonResponse(bodyOut);
+		};
+
 		// BoardResult, not a widened `refused: string`: the refusal vocabulary is the one signal that
 		// discards an owner's edit, so a route may only relay a member of it.
 		const answer = (result: BoardResult, extra?: Record<string, unknown>) =>
-			result.applied
-				? jsonResponse({ applied: true, ...extra })
-				: jsonResponse({ applied: false, refused: result.refused });
+			result.applied ? done({ applied: true, ...extra }) : done({ applied: false, refused: result.refused });
 
 		switch (r.action) {
 			case "list": {
@@ -1904,6 +1939,7 @@ export function createRoutes({
 					if (scope === "session") return e.sessionId === sessionKey;
 					return e.sessionId === undefined || e.sessionId === sessionKey;
 				});
+				// Reads are not recorded: a list re-run is a fresher answer, not a replayed one.
 				return jsonResponse({ entries, ...(projection.truncated ? { truncated: true } : {}) });
 			}
 			case "claim": {
@@ -1918,7 +1954,7 @@ export function createRoutes({
 				if (!r.operationId || !r.title || !r.assignTo) {
 					return jsonResponse({ error: "create requires operationId, title, and assignTo" }, 400);
 				}
-				const id = boardEntryIdForOperation(r.operationId);
+				const id = boardEntryIdForOperation(sessionKey, r.operationId);
 				// createAtEnd is insert-if-absent and mints inside its own write, so a retried POST
 				// neither reverts later edits nor re-ranks, and a refusal cannot leave a rebalance
 				// committed behind it.
@@ -1940,9 +1976,13 @@ export function createRoutes({
 			}
 			case "update": {
 				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
-				// No hand-rolled scope check: every setter answers `held` for an entry this session
-				// does not hold, and setParent checks the TARGET parent by the same rule.
+				// Scope is answered up front, not left to the setters: a request naming no CHANGED
+				// field reaches none of them, and would answer applied:true on an entry this session
+				// cannot see - a true/entry_missing pair that tells it which ids exist.
 				const entry = boardStore.entry(owner, r.id);
+				if (!entry) return answer({ applied: false, refused: "entry_missing" });
+				const denied = mayWrite(entry, actor);
+				if (denied) return answer({ applied: false, refused: denied });
 				if (r.title !== undefined) {
 					const res = boardStore.setTitle(owner, r.id, r.title, actor);
 					if (!res.applied) return answer(res);
@@ -1959,17 +1999,15 @@ export function createRoutes({
 					const parent = r.parent === null ? undefined : r.parent;
 					// An unchanged parent skips placement entirely - a retried update must not re-rank
 					// the entry to the end of a group it never left.
-					if (parent !== entry?.parent) {
+					if (parent !== entry.parent) {
 						const res = boardStore.setParentAtEnd(owner, r.id, parent, actor);
 						if (!res.applied) return answer(res);
 					}
 				}
-				// Nothing named, so nothing to refuse - but an id that does not exist still should.
-				if (!entry) return answer({ applied: false, refused: "entry_missing" });
-				return jsonResponse({ applied: true });
+				return done({ applied: true });
 			}
 			case "clear": {
-				return jsonResponse({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });
+				return done({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });
 			}
 		}
 	}
