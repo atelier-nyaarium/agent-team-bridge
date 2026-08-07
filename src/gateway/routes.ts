@@ -44,7 +44,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
-import { type BoardResult, type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
+import { type BoardActor, type BoardResult, type BoardStore, boardEntryIdForOperation } from "./boardStore.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -1883,6 +1883,9 @@ export function createRoutes({
 		// exists for authless harnesses.
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
+		// A session's authority, carried into every write so the STORE decides scope. An agent is
+		// never the owner here: reassigning and untrashing stay owner-only, through the console.
+		const actor: BoardActor = { kind: "session", sessionId: sessionKey };
 
 		// BoardResult, not a widened `refused: string`: the refusal vocabulary is the one signal that
 		// discards an owner's edit, so a route may only relay a member of it.
@@ -1916,47 +1919,53 @@ export function createRoutes({
 					return jsonResponse({ error: "create requires operationId, title, and assignTo" }, 400);
 				}
 				const id = boardEntryIdForOperation(r.operationId);
-				// Insert-if-absent, never re-upsert: a retried POST whose entry already landed must not
-				// revert edits made since, nor re-rank it to the end.
-				if (boardStore.entry(owner, id)) return jsonResponse({ applied: true, id });
-				const parent = r.parent ?? undefined;
-				const entry = {
-					id,
-					title: r.title,
-					...(typeof r.body === "string" ? { body: r.body } : {}),
-					state: "open" as const,
-					...(parent !== undefined ? { parent } : {}),
-					rank: boardStore.endRank(owner, parent),
-					...(r.assignTo === "self" ? { sessionId: sessionKey } : {}),
-				};
-				return answer(boardStore.upsert(owner, [entry]), { id });
+				// createAtEnd is insert-if-absent and mints inside its own write, so a retried POST
+				// neither reverts later edits nor re-ranks, and a refusal cannot leave a rebalance
+				// committed behind it.
+				return answer(
+					boardStore.createAtEnd(
+						owner,
+						{
+							id,
+							title: r.title,
+							...(typeof r.body === "string" ? { body: r.body } : {}),
+							state: "open" as const,
+							...(r.parent !== undefined && r.parent !== null ? { parent: r.parent } : {}),
+							...(r.assignTo === "self" ? { sessionId: sessionKey } : {}),
+						},
+						actor,
+					),
+					{ id },
+				);
 			}
 			case "update": {
 				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
+				// No hand-rolled scope check: every setter answers `held` for an entry this session
+				// does not hold, and setParent checks the TARGET parent by the same rule.
 				const entry = boardStore.entry(owner, r.id);
-				if (!entry) return answer({ applied: false, refused: "entry_missing" });
-				if (entry.sessionId !== sessionKey) return answer({ applied: false, refused: "held" });
 				if (r.title !== undefined) {
-					const res = boardStore.setTitle(owner, r.id, r.title);
+					const res = boardStore.setTitle(owner, r.id, r.title, actor);
 					if (!res.applied) return answer(res);
 				}
 				if (r.body !== undefined) {
-					const res = boardStore.setBody(owner, r.id, r.body === null ? undefined : r.body);
+					const res = boardStore.setBody(owner, r.id, r.body === null ? undefined : r.body, actor);
 					if (!res.applied) return answer(res);
 				}
 				if (r.state !== undefined) {
-					const res = boardStore.setState(owner, r.id, r.state);
+					const res = boardStore.setState(owner, r.id, r.state, actor);
 					if (!res.applied) return answer(res);
 				}
 				if (r.parent !== undefined) {
 					const parent = r.parent === null ? undefined : r.parent;
 					// An unchanged parent skips placement entirely - a retried update must not re-rank
 					// the entry to the end of a group it never left.
-					if (parent !== entry.parent) {
-						const res = boardStore.setParent(owner, r.id, parent, boardStore.endRank(owner, parent));
+					if (parent !== entry?.parent) {
+						const res = boardStore.setParentAtEnd(owner, r.id, parent, actor);
 						if (!res.applied) return answer(res);
 					}
 				}
+				// Nothing named, so nothing to refuse - but an id that does not exist still should.
+				if (!entry) return answer({ applied: false, refused: "entry_missing" });
 				return jsonResponse({ applied: true });
 			}
 			case "clear": {

@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { BoardStore } from "../gateway/boardStore.js";
+import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import {
 	type ConsoleHandlerDeps,
 	type ConsoleRoutes,
@@ -937,7 +937,7 @@ describe("createConsoleDispatcher", () => {
 			expect((await h1.handleFrame(setDone)).ok).toBe(true);
 
 			// The agent moves the entry on AFTER the console's reply was lost...
-			boardStore.setState(OWNER, "e1", "in_progress");
+			boardStore.setState(OWNER, "e1", "in_progress", OWNER_ACTOR);
 
 			// ...and the console's retry lands on a RESTARTED gateway: fresh dispatcher, fresh
 			// DurableOpStore over the same durable snapshot. The recorded reply replays; the newer

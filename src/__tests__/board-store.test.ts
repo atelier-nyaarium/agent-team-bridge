@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BOARD_TRASH_TTL_MS, BoardStore } from "../gateway/boardStore.js";
+import { BOARD_TRASH_TTL_MS, type BoardActor, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -27,9 +27,18 @@ afterEach(() => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// These cases are about the STORE's rules, which the owner is never scoped out of, so they write as
+// the owner. Session scope has its own describe block below. Arrow functions rather than a captured
+// object, because beforeEach installs a fresh store for every case.
+const upsert = (entries: BoardEntry[]) => store.upsert(OWNER, entries, OWNER_ACTOR);
+const setState = (id: string, state: BoardEntry["state"]) => store.setState(OWNER, id, state, OWNER_ACTOR);
+const setBody = (id: string, body: string | undefined) => store.setBody(OWNER, id, body, OWNER_ACTOR);
+const setParent = (id: string, parent: string | undefined, rank: string) =>
+	store.setParent(OWNER, id, parent, rank, OWNER_ACTOR);
+
 describe("claim contention", () => {
 	beforeEach(() => {
-		store.upsert(OWNER, [entry("a"), entry("a1", { parent: "a" })]);
+		upsert([entry("a"), entry("a1", { parent: "a" })]);
 	});
 
 	it("a claim takes the subtree, and a lost-reply repeat is a no-op instead of a theft", () => {
@@ -48,7 +57,7 @@ describe("claim contention", () => {
 	});
 
 	it("claiming an ancestor never seizes a member another session holds", () => {
-		store.upsert(OWNER, [entry("a2", { parent: "a", sessionId: "sess-2" })]);
+		upsert([entry("a2", { parent: "a", sessionId: "sess-2" })]);
 		expect(store.claim(OWNER, "a", "sess-1")).toEqual({ applied: false, refused: "held" });
 		expect(store.entry(OWNER, "a2")?.sessionId).toBe("sess-2");
 		expect(store.entry(OWNER, "a")?.sessionId).toBeUndefined();
@@ -63,23 +72,57 @@ describe("claim contention", () => {
 	});
 });
 
+describe("write scope", () => {
+	const MINE: BoardActor = { kind: "session", sessionId: "sess-1" };
+
+	beforeEach(() => {
+		upsert([entry("mine", { sessionId: "sess-1" }), entry("theirs", { sessionId: "sess-2" }), entry("loose")]);
+	});
+
+	it("a session writes what it holds and nothing else", () => {
+		expect(store.setTitle(OWNER, "mine", "renamed", MINE)).toEqual({ applied: true });
+		expect(store.setTitle(OWNER, "theirs", "renamed", MINE)).toEqual({ applied: false, refused: "held" });
+		// Unassigned is not the same as unowned - the pile is the owner's, not up for grabs.
+		expect(store.setState(OWNER, "loose", "done", MINE)).toEqual({ applied: false, refused: "held" });
+		expect(store.entry(OWNER, "theirs")?.title).toBe("t-theirs");
+	});
+
+	it("a session cannot graft its subtree under another session's entry", () => {
+		// The OBJECT of the write is scope-checked, not just the subject. Without this, holding one
+		// entry was enough to attach it anywhere on the owner's board.
+		expect(store.setParentAtEnd(OWNER, "mine", "theirs", MINE)).toEqual({ applied: false, refused: "held" });
+		expect(store.entry(OWNER, "mine")?.parent).toBeUndefined();
+	});
+
+	it("a session cannot create a child under another session's entry", () => {
+		const created = store.createAtEnd(OWNER, { id: "new", title: "t", state: "open", parent: "theirs" }, MINE);
+		expect(created).toEqual({ applied: false, refused: "held" });
+		expect(store.entry(OWNER, "new")).toBeUndefined();
+	});
+
+	it("the owner is scoped out of nothing", () => {
+		expect(store.setTitle(OWNER, "theirs", "renamed", OWNER_ACTOR)).toEqual({ applied: true });
+		expect(store.setParentAtEnd(OWNER, "mine", "theirs", OWNER_ACTOR)).toEqual({ applied: true });
+	});
+});
+
 describe("tree rules", () => {
 	it("a parent change that would loop refuses and leaves the board untouched", () => {
-		store.upsert(OWNER, [entry("a"), entry("b", { parent: "a" }), entry("c", { parent: "b" })]);
-		expect(store.setParent(OWNER, "a", "c", "m")).toEqual({ applied: false, refused: "cycle" });
+		upsert([entry("a"), entry("b", { parent: "a" }), entry("c", { parent: "b" })]);
+		expect(setParent("a", "c", "m")).toEqual({ applied: false, refused: "cycle" });
 		expect(store.entry(OWNER, "a")?.parent).toBeUndefined();
 	});
 
 	it("an upsert may nest under a parent arriving in the same batch, but not under a ghost", () => {
-		expect(store.upsert(OWNER, [entry("p"), entry("k", { parent: "p" })])).toEqual({ applied: true });
-		expect(store.upsert(OWNER, [entry("x", { parent: "ghost" })])).toEqual({
+		expect(upsert([entry("p"), entry("k", { parent: "p" })])).toEqual({ applied: true });
+		expect(upsert([entry("x", { parent: "ghost" })])).toEqual({
 			applied: false,
 			refused: "parent_missing",
 		});
 	});
 
 	it("remove refuses a batch that would orphan a survivor, so a move must ship its whole subtree", () => {
-		store.upsert(OWNER, [entry("a"), entry("a1", { parent: "a" })]);
+		upsert([entry("a"), entry("a1", { parent: "a" })]);
 		expect(store.remove(OWNER, ["a"])).toEqual({ applied: false, refused: "would_orphan" });
 		expect(store.remove(OWNER, ["a", "a1"])).toEqual({ applied: true });
 		expect(store.entry(OWNER, "a")).toBeUndefined();
@@ -88,7 +131,7 @@ describe("tree rules", () => {
 
 describe("trash and sweeps", () => {
 	it("trash flags the subtree, restore brings it back where it was", () => {
-		store.upsert(OWNER, [entry("a"), entry("a1", { parent: "a", state: "done" })]);
+		upsert([entry("a"), entry("a1", { parent: "a", state: "done" })]);
 		store.setTrashed(OWNER, "a", true, 1000);
 		expect(store.entry(OWNER, "a1")?.trashedAt).toBe(1000);
 		expect(store.entry(OWNER, "a1")?.state).toBe("done");
@@ -98,7 +141,7 @@ describe("trash and sweeps", () => {
 	});
 
 	it("a session ending trashes its finished work and returns the rest to the pile", () => {
-		store.upsert(OWNER, [
+		upsert([
 			entry("done1", { sessionId: "s", state: "done" }),
 			entry("open1", { sessionId: "s", state: "in_progress" }),
 			entry("other", { sessionId: "other-session" }),
@@ -112,7 +155,7 @@ describe("trash and sweeps", () => {
 	});
 
 	it("the cancel disposition finishes the session's unfinished work in the same pass that trashes it", () => {
-		store.upsert(OWNER, [
+		upsert([
 			entry("open1", { sessionId: "s", state: "open" }),
 			entry("busy", { sessionId: "s", state: "in_progress" }),
 			entry("done1", { sessionId: "s", state: "done" }),
@@ -130,7 +173,7 @@ describe("trash and sweeps", () => {
 	it("cancel leaves an already-trashed entry's state alone, matching what the prompt counted", () => {
 		// The forget prompt counts live unfinished work. An entry the owner trashed earlier was never
 		// in that count, so restating it would change something they were not asked about.
-		store.upsert(OWNER, [entry("binned", { sessionId: "s", state: "in_progress" })]);
+		upsert([entry("binned", { sessionId: "s", state: "in_progress" })]);
 		store.setTrashed(OWNER, "binned", true);
 		store.sessionEnded("s", "cancel", 5000);
 		expect(store.entry(OWNER, "binned")?.state).toBe("in_progress");
@@ -139,13 +182,13 @@ describe("trash and sweeps", () => {
 
 	it("the disposition covers every entry the STORE holds, not a set a client enumerated", () => {
 		// The console can only name entries it has polled. The gateway sees all of them.
-		store.upsert(OWNER, [entry("seen", { sessionId: "s" }), entry("unpolled", { sessionId: "s" })]);
+		upsert([entry("seen", { sessionId: "s" }), entry("unpolled", { sessionId: "s" })]);
 		expect(store.sessionEnded("s", "cancel", 5000)).toBe(2);
 		expect(store.entry(OWNER, "unpolled")?.state).toBe("cancelled");
 	});
 
 	it("the trash sweep deletes only past the window and promotes a swept parent's survivor to root", () => {
-		store.upsert(OWNER, [entry("old"), entry("kid", { parent: "old" }), entry("fresh")]);
+		upsert([entry("old"), entry("kid", { parent: "old" }), entry("fresh")]);
 		store.setTrashed(OWNER, "old", true, 1000);
 		store.setTrashed(OWNER, "kid", false);
 		const sweepAt = 1000 + BOARD_TRASH_TTL_MS + 1;
@@ -157,7 +200,7 @@ describe("trash and sweeps", () => {
 	});
 
 	it("clearDone trashes exactly the session's finished entries", () => {
-		store.upsert(OWNER, [
+		upsert([
 			entry("d", { sessionId: "s", state: "done" }),
 			entry("c", { sessionId: "s", state: "cancelled" }),
 			entry("o", { sessionId: "s", state: "open" }),
@@ -171,31 +214,31 @@ describe("trash and sweeps", () => {
 
 describe("durability and the plane", () => {
 	it("a committed board survives a process restart byte-identically", () => {
-		store.upsert(OWNER, [entry("a", { body: "long form" }), entry("b", { parent: "a" })]);
+		upsert([entry("a", { body: "long form" }), entry("b", { parent: "a" })]);
 		store.claim(OWNER, "a", "sess-1");
 		const reborn = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
 		expect(reborn.projection(OWNER)).toEqual(store.projection(OWNER));
 	});
 
 	it("a refusal leaves the file untouched", () => {
-		store.upsert(OWNER, [entry("a")]);
+		upsert([entry("a")]);
 		const before = fs.readFileSync(path.join(dir, "task-board.json"), "utf8");
-		store.setParent(OWNER, "a", "ghost", "m");
+		setParent("a", "ghost", "m");
 		expect(fs.readFileSync(path.join(dir, "task-board.json"), "utf8")).toBe(before);
 	});
 
 	it("a same-value op neither rewrites the file nor bumps the revision", () => {
-		store.upsert(OWNER, [entry("a", { body: "text" })]);
+		upsert([entry("a", { body: "text" })]);
 		const file = path.join(dir, "task-board.json");
 		const before = fs.readFileSync(file, "utf8");
-		expect(store.setState(OWNER, "a", "open")).toEqual({ applied: true });
-		expect(store.setBody(OWNER, "a", "text")).toEqual({ applied: true });
-		expect(store.upsert(OWNER, [entry("a", { body: "text" })])).toEqual({ applied: true });
+		expect(setState("a", "open")).toEqual({ applied: true });
+		expect(setBody("a", "text")).toEqual({ applied: true });
+		expect(upsert([entry("a", { body: "text" })])).toEqual({ applied: true });
 		expect(fs.readFileSync(file, "utf8")).toBe(before);
 	});
 
 	it("one invalid entry on disk drops alone instead of emptying the board", () => {
-		store.upsert(OWNER, [entry("good", { body: "keep me" }), entry("other")]);
+		upsert([entry("good", { body: "keep me" }), entry("other")]);
 		const file = path.join(dir, "task-board.json");
 		const raw = JSON.parse(fs.readFileSync(file, "utf8"));
 		raw.owners[OWNER].entries.push({ id: "poison", title: "t", state: "open", rank: "V".repeat(65) });
@@ -207,8 +250,8 @@ describe("durability and the plane", () => {
 		expect(reborn.entry(OWNER, "poison")).toBeUndefined();
 	});
 
-	it("an oversized rank refuses at the write path, and endRank rebalances instead of overflowing", () => {
-		expect(store.upsert(OWNER, [entry("bad", { rank: "V".repeat(65) })])).toEqual({
+	it("an oversized rank refuses at the write path, and a create rebalances instead of overflowing", () => {
+		expect(upsert([entry("bad", { rank: "V".repeat(65) })])).toEqual({
 			applied: false,
 			refused: "bad_rank",
 		});
@@ -217,19 +260,32 @@ describe("durability and the plane", () => {
 		// every digit and appends one more. A 63-digit tail still mints inside the bound and would
 		// never reach the rebalance this asserts.
 		const overflowing = "z".repeat(64);
-		store.upsert(OWNER, [entry("tail", { rank: overflowing })]);
-		const minted = store.endRank(OWNER, undefined);
-		expect(minted.length).toBeLessThanOrEqual(64);
+		upsert([entry("tail", { rank: overflowing })]);
+		expect(store.createAtEnd(OWNER, { id: "fresh", title: "t", state: "open" }, OWNER_ACTOR)).toEqual({
+			applied: true,
+		});
 		// The rebalance ran: the existing sibling was renumbered, not left at its old rank.
 		const tail = store.entry(OWNER, "tail")!.rank;
+		const minted = store.entry(OWNER, "fresh")!.rank;
+		expect(minted.length).toBeLessThanOrEqual(64);
 		expect(tail).not.toBe(overflowing);
 		expect(tail < minted).toBe(true);
 	});
 
+	it("a refused create leaves no rebalance behind it", () => {
+		// Placement mints INSIDE the write, so a refusal cannot commit a rank rewrite the caller then
+		// believes did not happen. Naming a parent that does not exist is the cheapest refusal.
+		upsert([entry("tail", { rank: `${"z".repeat(64)}` })]);
+		expect(
+			store.createAtEnd(OWNER, { id: "fresh", title: "t", state: "open", parent: "ghost" }, OWNER_ACTOR),
+		).toEqual({ applied: false, refused: "parent_missing" });
+		expect(store.entry(OWNER, "tail")!.rank).toBe("z".repeat(64));
+	});
+
 	it("the projection sorts by id whatever the insertion order, so the plane hash is stable", () => {
-		store.upsert(OWNER, [entry("z"), entry("a"), entry("m")]);
+		upsert([entry("z"), entry("a"), entry("m")]);
 		const other = new BoardStore(new DurableStore(dir, "task-board-2"), new PlaneRegistry(), undefined);
-		other.upsert(OWNER, [entry("m"), entry("z"), entry("a")]);
+		other.upsert(OWNER, [entry("m"), entry("z"), entry("a")], OWNER_ACTOR);
 		expect(other.projection(OWNER).entries.map((e) => e.id)).toEqual(
 			store.projection(OWNER).entries.map((e) => e.id),
 		);

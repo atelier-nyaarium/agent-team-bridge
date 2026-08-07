@@ -28,6 +28,23 @@ export type BoardResult = { applied: true } | { applied: false; refused: BoardRe
 /** What becomes of a session's unfinished entries when it ends. */
 export type BoardDisposition = "release" | "cancel";
 
+/** Who is writing. A VALUE every mutating call must supply, never an absence a caller can fall
+ * into: omitting a session id used to mean "no scope check", so a route that forgot one wrote
+ * unconditionally. The `sessionAuthority.ts` rule, applied to the board. */
+export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: string };
+
+/** The owner's own authority, for the console (their device) and the sweeps. Named rather than
+ * spelled out at each site, so grepping it lists every place owner authority is claimed. */
+export const OWNER_ACTOR: BoardActor = { kind: "owner" };
+
+/** The one scope predicate. The owner writes anything; a session writes only what it holds. Used
+ * for the entry being written AND for a parent it is being attached to, so an entry cannot be
+ * grafted into a tree its writer does not own. */
+export function mayWrite(entry: BoardEntry, actor: BoardActor): "held" | undefined {
+	if (actor.kind === "owner") return undefined;
+	return entry.sessionId === actor.sessionId ? undefined : "held";
+}
+
 /** The wire marker the console retires an action on. Declared once, beside the vocabulary it
  * prefixes; a residue test keeps it that way, because any other throw whose message happens to
  * start with it would silently discard an owner's edit. */
@@ -187,8 +204,9 @@ export class BoardStore {
 	}
 
 	/** Insert-or-replace whole entries (creation, and the write half of a cross-Gateway move). A
-	 * parent must exist among the surviving entries or the batch itself. */
-	upsert(ownerId: string, entries: readonly BoardEntry[]): BoardResult {
+	 * parent must exist among the surviving entries or the batch itself, and must be writable by
+	 * this actor - an existing entry it does not hold cannot be adopted as a parent. */
+	upsert(ownerId: string, entries: readonly BoardEntry[], actor: BoardActor): BoardResult {
 		return this.mutate(ownerId, (board) => {
 			const incoming = new Set(entries.map((e) => e.id));
 			let added = 0;
@@ -198,6 +216,17 @@ export class BoardStore {
 			for (const e of entries) {
 				if (!isValidRank(e.rank)) return "bad_rank";
 				if (e.parent && !board.entries.has(e.parent) && !incoming.has(e.parent)) return "parent_missing";
+				// Replacing an entry, or parenting onto one, is a write to it.
+				const current = board.entries.get(e.id);
+				if (current) {
+					const denied = mayWrite(current, actor);
+					if (denied) return denied;
+				}
+				const existingParent = e.parent && !incoming.has(e.parent) ? board.entries.get(e.parent) : undefined;
+				if (existingParent) {
+					const denied = mayWrite(existingParent, actor);
+					if (denied) return denied;
+				}
 			}
 			for (const e of entries) {
 				const current = board.entries.get(e.id);
@@ -213,36 +242,44 @@ export class BoardStore {
 		});
 	}
 
-	setState(ownerId: string, id: string, state: BoardEntry["state"]): BoardResult {
-		return this.mutateEntry(ownerId, id, (e) => {
+	setState(ownerId: string, id: string, state: BoardEntry["state"], actor: BoardActor): BoardResult {
+		return this.mutateEntry(ownerId, id, actor, (e) => {
 			if (e.state === state) return "unchanged";
 			e.state = state;
 		});
 	}
 
-	setTitle(ownerId: string, id: string, title: string): BoardResult {
-		return this.mutateEntry(ownerId, id, (e) => {
+	setTitle(ownerId: string, id: string, title: string, actor: BoardActor): BoardResult {
+		return this.mutateEntry(ownerId, id, actor, (e) => {
 			if (e.title === title) return "unchanged";
 			e.title = title;
 		});
 	}
 
 	/** Absent body clears it - the op always sets, never leaves unchanged. */
-	setBody(ownerId: string, id: string, body: string | undefined): BoardResult {
-		return this.mutateEntry(ownerId, id, (e) => {
+	setBody(ownerId: string, id: string, body: string | undefined, actor: BoardActor): BoardResult {
+		return this.mutateEntry(ownerId, id, actor, (e) => {
 			if (e.body === body) return "unchanged";
 			if (body === undefined) delete e.body;
 			else e.body = body;
 		});
 	}
 
-	/** One placement intent: parent and rank land together. Absent parent means root. */
-	setParent(ownerId: string, id: string, parent: string | undefined, rank: string): BoardResult {
+	/** One placement intent: parent and rank land together. Absent parent means root. The PARENT is
+	 * scope-checked as well as the entry: without that, a session could graft its subtree under an
+	 * entry belonging to another session. */
+	setParent(ownerId: string, id: string, parent: string | undefined, rank: string, actor: BoardActor): BoardResult {
 		return this.mutate(ownerId, (board) => {
 			const entry = board.entries.get(id);
 			if (!entry) return "entry_missing";
+			const denied = mayWrite(entry, actor);
+			if (denied) return denied;
 			if (!isValidRank(rank)) return "bad_rank";
 			if (parent !== undefined && !board.entries.has(parent)) return "parent_missing";
+			if (parent !== undefined) {
+				const deniedParent = mayWrite(board.entries.get(parent) as BoardEntry, actor);
+				if (deniedParent) return deniedParent;
+			}
 			if (entry.parent === parent && entry.rank === rank) return "unchanged";
 			if (parent === undefined) delete entry.parent;
 			else entry.parent = parent;
@@ -345,15 +382,63 @@ export class BoardStore {
 		return cleared;
 	}
 
-	/** The rank a fresh entry takes at the end of `parent`'s live siblings. Walks the FULL entry
-	 * set (never the byte-truncated projection), and REBALANCES the sibling group when the mint
-	 * would breach the rank bound - an oversized rank stored once would poison the file against
-	 * the wire schema on every later read. */
-	endRank(ownerId: string, parent: string | undefined): string {
-		const board = this.owners.get(ownerId);
-		const siblings = board
-			? [...board.entries.values()].filter((e) => e.parent === parent && e.trashedAt === undefined)
-			: [];
+	/** Create an entry at the end of its parent's live siblings. Placement is an INTENT the write
+	 * carries, never a rank the caller holds: minting can rebalance the sibling group, so a caller
+	 * that minted first and wrote second could have that rebalance commit even when the write is
+	 * then refused. Here both land in one mutate or neither does. */
+	createAtEnd(ownerId: string, entry: Omit<BoardEntry, "rank">, actor: BoardActor): BoardResult {
+		return this.mutate(ownerId, (board) => {
+			if (!board.entries.has(entry.id) && board.entries.size + 1 > MAX_ENTRIES_PER_OWNER) return "board_full";
+			if (entry.parent !== undefined) {
+				const parent = board.entries.get(entry.parent);
+				if (!parent) return "parent_missing";
+				const denied = mayWrite(parent, actor);
+				if (denied) return denied;
+			}
+			const current = board.entries.get(entry.id);
+			if (current) {
+				const denied = mayWrite(current, actor);
+				if (denied) return denied;
+				// A retry of the same create: the id is derived from the operation id, so re-minting a
+				// rank would move an entry the caller believes it already placed.
+				return "unchanged";
+			}
+			board.entries.set(entry.id, { ...entry, rank: this.placeAtEnd(board, entry.parent) });
+			return this.wouldCycle(board, entry.id) ? "cycle" : undefined;
+		});
+	}
+
+	/** Move an entry to the end of a new parent's live siblings, minting inside the same write for
+	 * the reason [createAtEnd] gives. */
+	setParentAtEnd(ownerId: string, id: string, parent: string | undefined, actor: BoardActor): BoardResult {
+		return this.mutate(ownerId, (board) => {
+			const entry = board.entries.get(id);
+			if (!entry) return "entry_missing";
+			const denied = mayWrite(entry, actor);
+			if (denied) return denied;
+			if (parent !== undefined) {
+				const target = board.entries.get(parent);
+				if (!target) return "parent_missing";
+				const deniedParent = mayWrite(target, actor);
+				if (deniedParent) return deniedParent;
+			}
+			if (entry.parent === parent) return "unchanged";
+			if (parent === undefined) delete entry.parent;
+			else entry.parent = parent;
+			// After the reparent, so the new group's siblings are the ones measured.
+			entry.rank = this.placeAtEnd(board, parent, id);
+			return this.wouldCycle(board, id) ? "cycle" : undefined;
+		});
+	}
+
+	/** The rank for a fresh member at the end of `parent`'s live siblings, REBALANCING that group in
+	 * place when the mint would breach the rank bound - an oversized rank stored once would poison
+	 * the file against the wire schema on every later read. Mutates the board it is handed, so it is
+	 * only ever called from inside a mutate closure. */
+	private placeAtEnd(board: OwnerBoard, parent: string | undefined, exclude?: string): string {
+		const siblings = [...board.entries.values()].filter(
+			(e) => e.parent === parent && e.trashedAt === undefined && e.id !== exclude,
+		);
 		let last: string | undefined;
 		for (const e of siblings) if (last === undefined || e.rank > last) last = e.rank;
 		const minted = rankBetween(last, undefined);
@@ -364,13 +449,10 @@ export class BoardStore {
 		// rebalanceRanks asserts its own output, so this is a last line against a future regression
 		// re-poisoning the file - the exact failure this method exists to prevent.
 		if (!fresh.every(isValidRank) || !isValidRank(tail)) throw new Error("rank rebalance produced invalid ranks");
-		this.mutate(ownerId, (copy) => {
-			for (let i = 0; i < siblings.length; i++) {
-				const e = copy.entries.get(siblings[i].id);
-				if (e) e.rank = fresh[i];
-			}
-			return undefined;
-		});
+		for (let i = 0; i < siblings.length; i++) {
+			const e = board.entries.get(siblings[i].id);
+			if (e) e.rank = fresh[i];
+		}
 		return tail;
 	}
 
@@ -487,10 +569,17 @@ export class BoardStore {
 		return { applied: true };
 	}
 
-	private mutateEntry(ownerId: string, id: string, fn: (entry: BoardEntry) => "unchanged" | undefined): BoardResult {
+	private mutateEntry(
+		ownerId: string,
+		id: string,
+		actor: BoardActor,
+		fn: (entry: BoardEntry) => "unchanged" | undefined,
+	): BoardResult {
 		return this.mutate(ownerId, (board) => {
 			const entry = board.entries.get(id);
 			if (!entry) return "entry_missing";
+			const denied = mayWrite(entry, actor);
+			if (denied) return denied;
 			return fn(entry);
 		});
 	}

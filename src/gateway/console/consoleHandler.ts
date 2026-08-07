@@ -55,6 +55,7 @@ import {
 	type BoardProjection,
 	type BoardResult,
 	type BoardStore,
+	OWNER_ACTOR,
 	refusalError,
 	taskBoardPlaneName,
 } from "../boardStore.js";
@@ -1156,6 +1157,9 @@ export function createConsoleDispatcher({
 			// Task board ops. A REFUSAL throws with the "refused: " prefix, landing as ok=false inside
 			// the sealed reply - the one shape the console's queue may retire an action on. Any other
 			// throw (disk trouble included) carries no prefix and the queue retries it.
+			//
+			// Every one of these acts as the OWNER: the console is the owner's own device, and the
+			// owner's authority over the whole board is what lets it reassign a session's work.
 			case "board_upsert": {
 				return boardWrite(
 					requireBoard().upsert(
@@ -1163,20 +1167,21 @@ export function createConsoleDispatcher({
 						op.entries.map((e) =>
 							e.sessionId === undefined ? e : { ...e, sessionId: localSessionKey(e.sessionId) },
 						),
+						OWNER_ACTOR,
 					),
 				);
 			}
 			case "board_set_state": {
-				return boardWrite(requireBoard().setState(ownerId, op.id, op.state));
+				return boardWrite(requireBoard().setState(ownerId, op.id, op.state, OWNER_ACTOR));
 			}
 			case "board_set_title": {
-				return boardWrite(requireBoard().setTitle(ownerId, op.id, op.title));
+				return boardWrite(requireBoard().setTitle(ownerId, op.id, op.title, OWNER_ACTOR));
 			}
 			case "board_set_body": {
-				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body));
+				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body, OWNER_ACTOR));
 			}
 			case "board_set_parent": {
-				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank));
+				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank, OWNER_ACTOR));
 			}
 			case "board_set_trashed": {
 				return boardWrite(requireBoard().setTrashed(ownerId, op.id, op.trashed));
