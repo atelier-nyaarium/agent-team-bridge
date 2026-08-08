@@ -202,6 +202,16 @@ describe("the delete half of a move", () => {
 	});
 });
 
+describe("reclaim never fires without a real delete", () => {
+	it("sweepTrash reclaims only once the retention window is actually up", () => {
+		const one = hold("one");
+		setAttachments([one]);
+		store.setTrashed(OWNER, ENTRY, true);
+		store.sweepTrash(Date.now() + BOARD_TRASH_TTL_MS - 1);
+		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
+	});
+});
+
 describe("the durable store's path segments", () => {
 	it("refuses an entry id that is not the shape every real one has", () => {
 		expect(() => attachments.has(OWNER, "../../federation", blobIdOf("x"))).toThrow(/board entry id/);
