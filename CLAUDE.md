@@ -10,7 +10,9 @@ code does not belong here; rationale lives in `git log`.
 ## Layout
 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` - the three entry points
-- `src/gateway/` - the Docker-side HTTP + WS router (`index.ts`, `routes.ts`, `websocket.ts`)
+- `src/gateway/` - the Docker-side HTTP + WS router (`index.ts`, `routes.ts`, `websocket.ts`;
+  `routeSchemas.ts` holds the request schemas, byte caps and pure helpers the route table validates
+  with)
   - `wake.ts` - on-demand container/session startup; `decideWakeCreate` is the pure, unit-testable
     create-vs-reattach-vs-refuse decision
   - `sessionAuthority.ts` - the SOLE owner of "what must a caller prove to act as X". A residue test

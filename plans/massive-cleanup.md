@@ -7,6 +7,24 @@ cannot say itself. Run as an items-mode cycle: one queue entry per lap, five ste
 The live queue and lap position are in `plans/massive-cleanup.cycle.json`. This file records what
 each lap learned, not what it did. Git holds the diffs.
 
+## Two passes, in this order
+
+**Pass 1, mechanical.** Get every file under 600 lines. Moves, not redesigns. Ship it and push.
+
+**Pass 2, architectural.** Go back over what pass 1 produced and redesign anything that is only an
+ugly split: a file that exists because 600 lines had to go somewhere rather than because it owns
+something. Run it under /architecture, and judge each new file by whether it has a name that
+describes what it OWNS.
+
+The order matters. A redesign attempted while a file is still 2000 lines is a redesign nobody can
+review, and a split done with redesign in mind is slower and lands neither. Split first, cheaply and
+verifiably; then ask what the pieces should actually have been.
+
+Known pass-2 candidates as they surface:
+- `createRoutes` in `src/gateway/routes.ts` is one ~1700-line factory closure holding ~40 inner
+  functions over a captured `config`. Nothing can be lifted out of it without either passing the
+  scope explicitly or duplicating it. That is a design change, so it is queued on its own.
+
 ## Bug Classes
 
 Defect classes this cleanup keeps running into. Each one is a rule for later laps, not a log.
