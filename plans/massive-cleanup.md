@@ -104,6 +104,27 @@ verifier. Every split brief includes: enumerate HEAD's exports with the TypeScri
 starting, re-verify after, identical sets. A barrel over files containing widened internals uses
 NAMED export lists, never `export *`, so a future widening cannot silently become an API addition.
 
+### A new umbrella comment overclaims for one member
+
+Lap 21 grouped the three proof-of-possession query surfaces into one file and wrote a fresh intro
+generalizing them. Its "resolves the key to the authority the surface demands" was true for roster
+and transport but false for trust-pending, where possession of the owner key IS the authority and
+evie resolves nothing. The file's own per-schema doc two paragraphs down said so correctly; the
+audit caught the contradiction by reading evie's three handlers.
+
+Rule: a comment that generalizes over N members must be checked against each member's actual
+implementation, in whichever repo implements it. Where members differ, the umbrella states the
+shared part and defers the rest ("see each schema's own doc") instead of averaging over them.
+
+### Splitting a synced leaf is intra-repo safe
+
+The sync machinery is self-describing per file: the header's `cp <src> <dst>` line IS the sync
+target list, the SYNC-HASH is over the file's own body, and neither repo's CI diffs across repos.
+So a leaf split lands on switchboard main immediately while the evie half rides a PR, with no
+ordering hazard. The only enumerations to touch: both CI workflow lists, and the CLAUDE.md table.
+Keep the barrel a pure re-export so no consumer changes in either repo, and let each new leaf keep
+its internals private so `export *` cannot widen the surface.
+
 ### A parameter no body reads
 
 `ChatState.sessions(localGatewayId)` and `label(team, localGatewayId)` each took an argument neither

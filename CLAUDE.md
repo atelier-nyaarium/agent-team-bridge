@@ -97,7 +97,8 @@ code does not belong here; rationale lives in `git log`.
     otherwise have to open the bytes to learn); no receiver may re-derive that from content,
     filename, array position, or message direction
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
-  - `crypto.ts` / `admission.ts` / `federation-lifecycle.ts` / `evie-protocol.ts` - the synced leaves
+  - `crypto.ts` / `admission.ts` / `evie-protocol.ts` / `federation-lifecycle.ts` (a barrel over the
+    seven per-flow `federation-*` leaves) - the synced leaves; see Synced leaves below for the full list
   - `notice.ts` - the four notice tiers both reply tools and the console wire share
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
@@ -805,6 +806,17 @@ mismatch.
 | `crypto.ts` | `evie-bot/app/features/bridge/crypto.ts` |
 | `admission.ts` | `evie-bot/app/features/bridge/admission.ts` |
 | `federation-lifecycle.ts` | `evie-bot/app/features/bridge/federation-lifecycle.ts` |
+| `federation-enrollment.ts` | `evie-bot/app/features/bridge/federation-enrollment.ts` |
+| `federation-xdomain-links.ts` | `evie-bot/app/features/bridge/federation-xdomain-links.ts` |
+| `federation-tenants.ts` | `evie-bot/app/features/bridge/federation-tenants.ts` |
+| `federation-enroll-ops.ts` | `evie-bot/app/features/bridge/federation-enroll-ops.ts` |
+| `federation-handshakes.ts` | `evie-bot/app/features/bridge/federation-handshakes.ts` |
+| `federation-device-approval.ts` | `evie-bot/app/features/bridge/federation-device-approval.ts` |
+| `federation-proofs.ts` | `evie-bot/app/features/bridge/federation-proofs.ts` |
+
+`federation-lifecycle.ts` is a pure barrel over the seven `federation-*` leaves (one flow each), so
+consumers in both repos import it alone. The CI lists live in `.github/workflows/ci.yml` here and
+`_lint.yml` in evie; a new leaf needs a row in both.
 
 Always use `bun scripts/sync-leaf.ts <path>`. FOOTGUN: the order is format, restamp, copy. Copying
 first and running `lint:fix` after reformats the SOURCE, staling both the stamp and the copy, and the
