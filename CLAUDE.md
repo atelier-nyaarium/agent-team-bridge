@@ -20,8 +20,11 @@ code does not belong here; rationale lives in `git log`.
     fails the build if any other module reads the credential fields
   - `presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence plane, cross-device read
     anchors, host RPC correlation
-  - `boardStore.ts` - the owner's task board: its own checked-write durable file, the per-owner
-    plane, and the enumerated refusals every board op resolves to (see Task board below)
+  - `boardStore.ts` - the owner's task board: its own checked-write durable file and the per-owner
+    plane (see Task board below)
+  - `boardAuthority.ts` - board write authority (`BoardActor`, `mayWrite`) plus the enumerated
+    refusals every board op resolves to and the `refused: ` marker's sole producer
+  - `boardNotices.ts` - the pre/post notice classifier the awareness pushes are built from
   - `boardCascade.ts` - the pure both-directions state rule the store runs after a write, so a
     finished parent and its finished children cannot disagree (see Task board below)
   - `noAckPush.ts` - the reply-less awareness push: the bank, its window, and the three-valued
@@ -344,11 +347,12 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
 `/task-board` route, shipped to the phone on the `task-board:${ownerId}` plane. Entries are FLAT
 (parent pointer + fractional `rank`); receivers rebuild the tree. Design record: `plans/task-board.md`.
 
-- **The store is the sole validator.** Every write path resolves to one of its enumerated refusals
-  (`BoardRefusal`), and a refusal is an ok=false INSIDE the sealed reply (`refused: ` prefix) - the
-  ONLY shape a client may retire a queued action on; every other failure retries. That prefix is the
-  one signal that DISCARDS an owner's edit, so `refusalError` is its single producer and
-  `board-refusal-residue.test.ts` fails the build if another module writes it.
+- **The store is the sole validator.** Every write path resolves to one of the enumerated refusals
+  (`BoardRefusal`, declared in `boardAuthority.ts`), and a refusal is an ok=false INSIDE the sealed
+  reply (`refused: ` prefix) - the ONLY shape a client may retire a queued action on; every other
+  failure retries. That prefix is the one signal that DISCARDS an owner's edit, so `refusalError` is
+  its single producer and `board-refusal-residue.test.ts` fails the build if any other module under
+  `src/` writes it.
 - **A session's end is one mutation.** `sessionEnded` trashes done/cancelled and applies the caller's
   `boardDisposition` to the rest, and that disposition rides the `forget` op itself, so a session's
   end and its work's end cannot be ordered wrongly against each other. Required as a VALUE at every

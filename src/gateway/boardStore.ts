@@ -5,38 +5,23 @@ import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js"
 import { type DurableStore, DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BoardEntrySchema } from "../shared/schemas.js";
-import { applyCascade, type CascadeChange } from "./boardCascade.js";
+import {
+	type BoardActor,
+	type BoardDisposition,
+	type BoardRefusal,
+	type BoardResult,
+	mayWrite,
+	OWNER_ACTOR,
+} from "./boardAuthority.js";
+import { applyCascade } from "./boardCascade.js";
+import { type BoardNotice, noticesFor } from "./boardNotices.js";
+
+export type { BoardActor, BoardDisposition, BoardRefusal, BoardResult } from "./boardAuthority.js";
+export { BOARD_REFUSED_PREFIX, mayWrite, OWNER_ACTOR, refusalError, visibleTo } from "./boardAuthority.js";
+export type { BoardNotice } from "./boardNotices.js";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-/** Every way a board write can be told it will NEVER apply. This vocabulary is load-bearing: it is
- * the one signal that retires a queued console action, which means it permanently discards the
- * owner's edit. `session_missing` is detectable only at the console edge, but it is a refusal in
- * exactly the same sense, so it lives here rather than as a loose string there. */
-export type BoardRefusal =
-	| "entry_missing"
-	| "parent_missing"
-	| "cycle"
-	| "held"
-	| "would_orphan"
-	| "board_full"
-	| "bad_rank"
-	| "session_missing";
-
-/** `cascaded` names the entries the board moved on its own alongside the caller's write, so the
- * caller can say so rather than let a state change appear out of nowhere. Absent when nothing moved. */
-export type BoardResult =
-	| { applied: true; cascaded?: readonly CascadeChange[] }
-	| { applied: false; refused: BoardRefusal };
-
-/** What becomes of a session's unfinished entries when it ends. */
-export type BoardDisposition = "release" | "cancel";
-
-/** Who is writing. A VALUE every mutating call must supply, never an absence a caller can fall
- * into: omitting a session id used to mean "no scope check", so a route that forgot one wrote
- * unconditionally. The `sessionAuthority.ts` rule, applied to the board. */
-export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: string };
 
 /**
  * Where attachment bytes go when an entry stops naming them. Behind an interface because the store
@@ -56,61 +41,10 @@ export interface BoardAttachmentSink {
 	releasedAll(ownerId: string, entryId: string): void;
 }
 
-/** The owner's own authority, for the console (their device) and the sweeps. Named rather than
- * spelled out at each site, so grepping it lists every place owner authority is claimed. */
-export const OWNER_ACTOR: BoardActor = { kind: "owner" };
-
-/**
- * May this actor touch this entry? The owner anything; a session only what it holds, and never
- * anything in the trash - that is the owner's own set-aside, and a session's list has already
- * stopped showing it.
- *
- * The SAME rule answers the entry being written and any parent it is attached to. Nesting was
- * briefly looser, allowing a session to hang work off a BACKLOG entry: that left the entry
- * advertised as unclaimed while `claim`'s subtree rule refused every other session, with nothing in
- * any list explaining why. A session breaking a backlog item down claims it first.
- */
-export function mayWrite(entry: BoardEntry, actor: BoardActor): BoardRefusal | undefined {
-	if (actor.kind === "owner") return undefined;
-	if (entry.trashedAt !== undefined) return "entry_missing";
-	return entry.sessionId === actor.sessionId ? undefined : "held";
-}
-
-/** Whether a session's own default list would return this entry. The ONE owner of that rule: the
- * route filters with it and the notice classifier decides visibility with it, so a change to what a
- * session can see cannot leave the two disagreeing about what it is told. */
-export function visibleTo(entry: BoardEntry | undefined, sessionId: string): boolean {
-	if (!entry || entry.trashedAt !== undefined) return false;
-	return entry.sessionId === undefined || entry.sessionId === sessionId;
-}
-
-/** The wire marker the console retires an action on. Declared once, beside the vocabulary it
- * prefixes; a residue test keeps it that way, because any other throw whose message happens to
- * start with it would silently discard an owner's edit. */
-export const BOARD_REFUSED_PREFIX = "refused: ";
-
-/** The one way to raise a refusal from a throwing path. */
-export function refusalError(refused: BoardRefusal): Error {
-	return new Error(`${BOARD_REFUSED_PREFIX}${refused}`);
-}
-
 export interface BoardProjection {
 	entries: BoardEntry[];
 	truncated: boolean;
 }
-
-/** What a session is told about a write to board work it holds, or is about to. Everything except an
- * edit carries the TITLE: the id stops resolving once the entry leaves that session's list, and an
- * arrival names work the session may never have seen. An edit does not, since a re-read resolves it. */
-export type BoardNotice = { sessionId: string; entryId: string } & (
-	| { kind: "changed" }
-	// One wording for both an assignment and something coming back out of the trash: a reassign made
-	// WHILE trashed leaves the pre-state already naming the new session, so the two are not
-	// distinguishable from pre/post alone, and "is yours" is true either way.
-	| { kind: "arrived"; title: string }
-	| { kind: "backlog"; title: string }
-	| { kind: "gone"; title: string; how: "trashed" | "removed" | "reassigned" }
-);
 
 ////////////////////////////////
 //  Schemas
@@ -162,11 +96,6 @@ export function taskBoardPlaneName(ownerId: string): string {
 export function boardEntryIdForOperation(from: string, operationId: string): string {
 	const digest = crypto.createHash("sha256").update(`BOARD_ENTRY_V2\n${from}\n${operationId}`).digest("hex");
 	return `bd_${digest.slice(0, 32)}`;
-}
-
-/** Whether this session may write the entry, which is also what it means to hold it. */
-function holds(entry: BoardEntry | undefined, sessionId: string): boolean {
-	return entry !== undefined && mayWrite(entry, { kind: "session", sessionId }) === undefined;
 }
 
 /**
@@ -242,50 +171,6 @@ function orphanedParents(prev: OwnerBoard, next: OwnerBoard, touched: ReadonlySe
 		if (!stillAChild) out.push(before.parent);
 	}
 	return out;
-}
-
-/**
- * Classified per entry from pre/post against `mayWrite` and `visibleTo`, never from which method ran,
- * so a method gaining a caller cannot change what is announced.
- *
- * BOTH holders are addressees. Reading only the pre-state would leave a session silent about work it
- * just gained, and would let a take-away sit in its bank uncorrected when the owner immediately
- * undoes one: the arrival overwrites that bank entry, which is the whole reason the bank keys on id.
- */
-function noticesFor(
-	prev: OwnerBoard,
-	next: OwnerBoard,
-	touched: ReadonlySet<string>,
-	writer: BoardActor,
-): BoardNotice[] {
-	const notices: BoardNotice[] = [];
-	for (const entryId of touched) {
-		const pre = prev.entries.get(entryId);
-		const post = next.entries.get(entryId);
-		const parties = new Set([pre?.sessionId, post?.sessionId].filter((s) => s !== undefined));
-		for (const sessionId of parties) {
-			// mayWrite guarantees a session holds what it writes, so every route write is a self-echo and
-			// the board's highest-volume writer would otherwise announce its own work to itself.
-			if (writer.kind === "session" && writer.sessionId === sessionId) continue;
-			const held = holds(pre, sessionId);
-			const holdsNow = holds(post, sessionId);
-			if (!held && !holdsNow) continue;
-			const title = (holdsNow ? post?.title : pre?.title) ?? "";
-			if (!held) {
-				notices.push({ sessionId, entryId, kind: "arrived", title });
-			} else if (!holdsNow) {
-				if (post === undefined) notices.push({ sessionId, entryId, kind: "gone", title, how: "removed" });
-				else if (visibleTo(post, sessionId)) notices.push({ sessionId, entryId, kind: "backlog", title });
-				else if (post.trashedAt !== undefined)
-					notices.push({ sessionId, entryId, kind: "gone", title, how: "trashed" });
-				else notices.push({ sessionId, entryId, kind: "gone", title, how: "reassigned" });
-			} else if (stableHash(pre) !== stableHash(post)) {
-				// A commit spanning many entries reaches here for each; a value-identical one is not news.
-				notices.push({ sessionId, entryId, kind: "changed" });
-			}
-		}
-	}
-	return notices;
 }
 
 ////////////////////////////////

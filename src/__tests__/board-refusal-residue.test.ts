@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BOARD_REFUSED_PREFIX, refusalError } from "../gateway/boardStore.js";
+import { BOARD_REFUSED_PREFIX, refusalError } from "../gateway/boardAuthority.js";
 
 ////////////////////////////////
 //  Constants
@@ -21,11 +21,8 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** Every gateway module that can throw on a board write path. */
-const THROWING_SOURCES = [
-	path.join(REPO_ROOT, "src", "gateway", "console", "consoleHandler.ts"),
-	path.join(REPO_ROOT, "src", "gateway", "routes.ts"),
-];
+/** The one sanctioned home of the marker; the positive control below proves the exemption works. */
+const OWNER = path.join(REPO_ROOT, "src", "gateway", "boardAuthority.ts");
 
 /** The wire marker itself, spelled out rather than imported: a test that builds its needle from the
  * value under test cannot notice that value changing. */
@@ -43,6 +40,21 @@ function code(file: string): string {
 		.replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/** Every TypeScript source under src/ except the owner, so no module anywhere in the tree can grow
+ * a marker of its own unnoticed. */
+function sweptSources(): string[] {
+	const out: string[] = [];
+	const walk = (dir: string): void => {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (entry.name.endsWith(".ts") && full !== OWNER) out.push(full);
+		}
+	};
+	walk(path.join(REPO_ROOT, "src"));
+	return out;
+}
+
 ////////////////////////////////
 //  Tests
 
@@ -50,12 +62,13 @@ describe("the refusal marker has exactly one producer", () => {
 	// A refusal is the only signal that retires a queued console action, which permanently discards
 	// the owner's edit. Any other throw whose message happens to start with the marker would do the
 	// same, silently.
-	it.each(THROWING_SOURCES)("%s writes no refusal marker of its own", (file) => {
-		expect(MARKER.test(code(file))).toBe(false);
+	it("no module under src/ writes a refusal marker of its own", () => {
+		const offenders = sweptSources().filter((file) => MARKER.test(code(file)));
+		expect(offenders.map((file) => path.relative(REPO_ROOT, file))).toEqual([]);
 	});
 
-	it("boardStore.ts owns it, so the guard above is proving something", () => {
-		expect(MARKER.test(code(path.join(REPO_ROOT, "src", "gateway", "boardStore.ts")))).toBe(true);
+	it("boardAuthority.ts owns it, so the guard above is proving something", () => {
+		expect(MARKER.test(code(OWNER))).toBe(true);
 	});
 
 	it("the console reads the same marker the gateway writes", () => {
