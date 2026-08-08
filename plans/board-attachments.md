@@ -620,7 +620,7 @@ by construction rather than as a precondition a caller has to meet. A member the
 still uploading stays retryable, which is the one genuine race. An older console omits the field and
 gets exactly the previous behaviour, so the deploy window is safe.
 
-## Phase 2 - Moving between machines
+## Phase 2 - Moving between machines ✅
 
 - The console-mediated move per Question 3 learns to carry bytes: download from the origin when the
   local copy is gone, upload to the destination (the `targetGateway` threading already landed in
