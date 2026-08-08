@@ -60,7 +60,10 @@ code does not belong here; rationale lives in `git log`.
 - `android/.../MainActivity.kt` - the `Repo` singleton, the activity, and the `App` composable that
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),
-  `SessionDialogs.kt`, `ReorderableTabRow.kt` (geometry in `TabDragMath.kt`), `TimeText.kt`
+  `SessionDialogs.kt`, `ReorderableTabRow.kt` (geometry in `TabDragMath.kt`), `TimeText.kt`.
+  `App` keeps the navigation and overlay flags it routes on; what it does NOT decide routes with lives
+  outside it: `RendererPoolBindings.kt` (the WebView pool and its callbacks), `AppOverlays.kt` (queue
+  and viewer), `LinkMenu.kt` (a tapped link's menu and how a link opens)
   - Settings is four files: `SettingsScreen.kt` is the hub and its route dispatch, `SettingsSections.kt`
     its small leaf screens (plugins, profile, networks, security), `SettingsSystem.kt` the system screen
     with the update and battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
