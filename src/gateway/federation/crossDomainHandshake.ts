@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
 import type {
 	CrossDomainConfirmResult,
 	CrossDomainListenResult,
@@ -12,13 +11,44 @@ import {
 	crossDomainSas,
 	verifyCrossDomainCommitment,
 } from "../../shared/cross-domain-sas.js";
-import type {
-	CrossDomainHandshakeReplyParams,
-	CrossDomainHandshakeRevealReplyParams,
-} from "../../shared/evie-protocol.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import { verifyXDomainLink } from "../../shared/federation-protocol.js";
+import {
+	type CrossDomainHandshakeDeps,
+	type CrossDomainRouter,
+	type CrossDomainSelf,
+	DEFAULT_MAX_ATTEMPTS,
+	DEFAULT_TTL_MS,
+	type ListeningSession,
+	type Pairing,
+} from "./crossDomainHandshakeTypes.js";
+import {
+	parseListeningToken,
+	SALT_RANDOM_BYTES,
+	TOKEN_RANDOM_BYTES,
+	type XDomainCommitReplyWire,
+	type XDomainCommitWire,
+	type XDomainRevealReplyWire,
+	type XDomainRevealWire,
+} from "./crossDomainHandshakeWire.js";
 import type { CrossDomainPeer, CrossDomainPeers } from "./crossDomainPeers.js";
+
+export type { CrossDomainHandshakePumpDeps } from "./crossDomainHandshakePump.js";
+export { createCrossDomainHandshakePump } from "./crossDomainHandshakePump.js";
+export type { CrossDomainHandshakeDeps, CrossDomainRouter, CrossDomainSelf } from "./crossDomainHandshakeTypes.js";
+export type {
+	XDomainCommitReplyWire,
+	XDomainCommitWire,
+	XDomainRevealReplyWire,
+	XDomainRevealWire,
+} from "./crossDomainHandshakeWire.js";
+export {
+	parseCommitReply,
+	parseListeningToken,
+	parseRevealReply,
+	XDomainCommitWireSchema,
+	XDomainRevealWireSchema,
+} from "./crossDomainHandshakeWire.js";
 
 ////////////////////////////////
 //  Cross-Domain listening-mode handshake
@@ -54,183 +84,6 @@ import type { CrossDomainPeer, CrossDomainPeers } from "./crossDomainPeers.js";
 //  owner's attestation. No cross-Gateway link exchange is needed because the seal only uses the
 //  friend's box key from the pairing, so whose signature is on the stored link does not affect
 //  seal security.
-
-////////////////////////////////
-//  Interfaces & Types
-
-/** Round 1, requester -> receiver: the rendezvous token + pin + the requester's hiding
- * commitment. No keys revealed yet (the commitment binds them). */
-export interface XDomainCommitWire {
-	listeningToken: string;
-	pin: string;
-	requesterCommitment: string;
-}
-
-/** Round 1 reply, receiver -> requester: the receiver's own hiding commitment, formed
- * having seen ONLY the requester's commitment. */
-export interface XDomainCommitReplyWire {
-	receiverCommitment: string;
-}
-
-/** Round 2, requester -> receiver: the requester's revealed keys+ids + the salt that
- * un-hides its round-1 commitment. The receiver checks it reproduces Ha before the SAS. */
-export interface XDomainRevealWire {
-	listeningToken: string;
-	pin: string;
-	requesterParty: CrossDomainParty;
-	requesterSalt: string;
-}
-
-/** Round 2 reply, receiver -> requester: the receiver's revealed keys+ids + salt (must
- * reproduce Hb) plus the SAS over both committed parties + the pin. */
-export interface XDomainRevealReplyWire {
-	receiverParty: CrossDomainParty;
-	receiverSalt: string;
-	sas: string;
-}
-
-/** The Router routing seam: drive each round trip to the receiver Gateway (named by the
- * token prefix) and await its reply. Injected so this coordinator never imports the Router. */
-export interface CrossDomainRouter {
-	sendCommit(receiverGatewayId: string, req: XDomainCommitWire): Promise<XDomainCommitReplyWire>;
-	sendReveal(receiverGatewayId: string, req: XDomainRevealWire): Promise<XDomainRevealReplyWire>;
-}
-
-////////////////////////////////
-//  Schemas
-
-/** Boundary validation for an inbound round-1 commit frame (the opaque `payload` the Router
- * relays verbatim), parsed before `handleIncomingCommit` so a malformed frame is rejected. */
-export const XDomainCommitWireSchema = z.object({
-	listeningToken: z.string().min(1).max(256),
-	pin: z.string().min(1).max(256),
-	requesterCommitment: z.string().min(1).max(256),
-});
-
-const CrossDomainPartySchema = z.object({
-	ownerSignPub: z.string().min(1),
-	gatewaySignPub: z.string().min(1),
-	gatewayBoxPub: z.string().min(1),
-	domainId: z.string().min(1).max(64),
-	gatewayId: z.string().min(1).max(64),
-});
-
-/** Boundary validation for an inbound round-2 reveal frame. */
-export const XDomainRevealWireSchema = z.object({
-	listeningToken: z.string().min(1).max(256),
-	pin: z.string().min(1).max(256),
-	requesterParty: CrossDomainPartySchema,
-	requesterSalt: z.string().min(1).max(256),
-});
-
-const XDomainCommitReplyWireSchema = z.object({
-	receiverCommitment: z.string().min(1).max(256),
-});
-
-const XDomainRevealReplyWireSchema = z.object({
-	receiverParty: CrossDomainPartySchema,
-	receiverSalt: z.string().min(1).max(256),
-	sas: z.string().min(1),
-});
-
-/** Parse + validate a receiver Gateway's round-1 commit reply (the opaque `result` of
- * the held call). Throws on a malformed reply so the requester leg fails fast. */
-export function parseCommitReply(raw: unknown): XDomainCommitReplyWire {
-	return XDomainCommitReplyWireSchema.parse(raw);
-}
-
-/** Parse + validate a receiver Gateway's round-2 reveal reply. Throws on a malformed
- * reply so the requester does not cross-check a forged shape. */
-export function parseRevealReply(raw: unknown): XDomainRevealReplyWire {
-	return XDomainRevealReplyWireSchema.parse(raw);
-}
-
-/** This Gateway's own identity for the handshake: the phone-held owner root key (public only)
- * plus this Gateway's keys + ids. The owner signs the link on the phone, so the gateway holds
- * only the public owner key, used to compute the SAS and verify its own signed link. */
-export interface CrossDomainSelf {
-	ownerSignPub: () => string | null;
-	gatewaySignPub: string;
-	gatewayBoxPub: string;
-	domainId: string;
-	gatewayId: string;
-}
-
-/** A paired session (either role), keyed by pin. Confirm only needs the FRIEND's keys (to
- * verify the link and store the peer), which is exactly what a pairing holds. */
-interface Pairing {
-	friendOwnerSignPub: string;
-	friendDomainId: string;
-	friendGatewayId: string;
-	friendGatewaySignPub: string;
-	friendGatewayBoxPub: string;
-	sas: string;
-	expiresAt: number;
-}
-
-/** Receiver round-1 state held between the commit and reveal rounds: the commitments
- * exchanged plus this side's salt. The friend's keys arrive only at reveal. */
-interface ReceiverCommit {
-	pin: string;
-	requesterCommitment: string;
-	receiverSalt: string;
-	receiverCommitment: string;
-}
-
-/** A receiver-side listening window. */
-interface ListeningSession {
-	token: string;
-	expiresAt: number;
-	// Total pairing attempts against this token; capped to bound brute force.
-	attempts: number;
-	// Set by round 1 (single-flight: a second commit is rejected once present).
-	commit?: ReceiverCommit;
-	// Set by round 2 once the requester reveal verifies against the commitment.
-	pairing?: Pairing;
-}
-
-export interface CrossDomainHandshakeDeps {
-	self: CrossDomainSelf;
-	peers: CrossDomainPeers;
-	/** The Router routing seam (requester role). Absent when the Router is not wired, in
-	 * which case `request` errors instead of routing. */
-	route?: CrossDomainRouter;
-	/** Listening-window TTL (default 1 hour). */
-	ttlMs?: number;
-	/** Hard cap on pairing attempts per listening token before it is invalidated. */
-	maxAttempts?: number;
-	now?: () => number;
-}
-
-////////////////////////////////
-//  Constants
-
-// Intentionally long (1 hour) so a friend installing the app from scratch does not time out
-// mid-pairing. Leaving the pairing screen still cancels it.
-const DEFAULT_TTL_MS = 3_600_000;
-
-// Per-token cap on pairing attempts; on cap-exceeded the token + pairing are invalidated and the
-// owner must re-listen. A fresh listen() resets the counter, so this caps SAS guesses per window,
-// not per requester-owner relationship.
-const DEFAULT_MAX_ATTEMPTS = 5;
-
-// The random tail of a listening token: 18 bytes base64url, matching the enrollment nonce.
-const TOKEN_RANDOM_BYTES = 18;
-
-// Per-side commitment salt: 18 random bytes base64url, hiding the (public) committed keys so the
-// commitment is binding without being guessable.
-const SALT_RANDOM_BYTES = 18;
-
-////////////////////////////////
-//  Functions & Helpers
-
-/** Parse a listening token `<gatewayId>.<random>` into its receiver Gateway id (the prefix
- * lets the requester route without a lookup). Returns null when the token has no separator. */
-export function parseListeningToken(token: string): { gatewayId: string } | null {
-	const i = token.indexOf(".");
-	if (i <= 0) return null;
-	return { gatewayId: token.slice(0, i) };
-}
 
 ////////////////////////////////
 //  Class
@@ -574,136 +427,5 @@ export class CrossDomainHandshakeCoordinator {
 		for (const [token, session] of this.listening) if (session.expiresAt <= t) this.invalidate(token);
 		for (const [pin, pairing] of this.requesterPairings)
 			if (pairing.expiresAt <= t) this.requesterPairings.delete(pin);
-	}
-}
-
-////////////////////////////////
-//  Router wiring (requester seam + receiver pump)
-//
-//  Bridges the coordinator to the evie client. The requester leg drives each round trip
-//  as a tool call; the receiver leg validates an inbound relayed frame, runs it through
-//  the coordinator, and replies as the matching reply tool call. Mirrors the gateway-relay
-//  wiring in gatewayRelay.ts (one parse, one error surface).
-
-/** The inbound round-1 commit frame the Router routed to this Gateway. The outer envelope is
- * validated here; the inner `payload` is parsed with XDomainCommitWireSchema before dispatch. */
-const InboundCommitFrameSchema = z.object({
-	type: z.literal("cross_domain_handshake"),
-	handshakeId: z.string().min(1).max(128),
-	srcDomain: z.string().min(1).max(64),
-	srcGateway: z.string().min(1).max(64),
-	dstGateway: z.string().min(1).max(64),
-	payload: z.unknown(),
-});
-
-/** The inbound round-2 reveal frame. */
-const InboundRevealFrameSchema = z.object({
-	type: z.literal("cross_domain_handshake_reveal"),
-	handshakeId: z.string().min(1).max(128),
-	srcDomain: z.string().min(1).max(64),
-	srcGateway: z.string().min(1).max(64),
-	dstGateway: z.string().min(1).max(64),
-	payload: z.unknown(),
-});
-
-export interface CrossDomainHandshakePumpDeps {
-	/** Runs an inbound round-1 commit through the coordinator's receiver leg. */
-	handleIncomingCommit: (req: XDomainCommitWire) => XDomainCommitReplyWire;
-	/** Runs an inbound round-2 reveal through the coordinator's receiver leg. */
-	handleIncomingReveal: (req: XDomainRevealWire) => XDomainRevealReplyWire;
-	/** Sends a cross_domain_handshake_reply tool call back to the Router (round 1,
-	 * correlated by handshakeId). */
-	sendCommitReply: (reply: CrossDomainHandshakeReplyParams) => Promise<{ error?: string }>;
-	/** Sends a cross_domain_handshake_reveal_reply tool call back to the Router (round 2). */
-	sendRevealReply: (reply: CrossDomainHandshakeRevealReplyParams) => Promise<{ error?: string }>;
-}
-
-/** Validates an inbound cross_domain_handshake / cross_domain_handshake_reveal frame, runs it
- * through the receiver coordinator, and ships the reply back to the Router. A malformed frame
- * with no handshakeId is dropped (nothing to correlate); any other failure replies with an error
- * so the requester's held call settles fast. */
-export function createCrossDomainHandshakePump({
-	handleIncomingCommit,
-	handleIncomingReveal,
-	sendCommitReply,
-	sendRevealReply,
-}: CrossDomainHandshakePumpDeps) {
-	return function pump(raw: unknown): void {
-		void (async () => {
-			const type = (raw as { type?: unknown } | null)?.type;
-			if (type === "cross_domain_handshake_reveal") {
-				await dispatchReveal(raw);
-			} else {
-				await dispatchCommit(raw);
-			}
-		})().catch((err: Error) => {
-			console.error(`[cross-domain-handshake] pump error: ${err.message}`);
-		});
-	};
-
-	async function dispatchCommit(raw: unknown): Promise<void> {
-		const parsed = InboundCommitFrameSchema.safeParse(raw);
-		if (!parsed.success) {
-			const handshakeId = (raw as { handshakeId?: unknown } | null)?.handshakeId;
-			if (typeof handshakeId === "string" && handshakeId.length > 0) {
-				await sendCommitReply({
-					handshakeId,
-					ok: false,
-					error: `invalid cross_domain_handshake: ${parsed.error.issues[0]?.message ?? "malformed"}`,
-				});
-			} else {
-				console.error(`[cross-domain-handshake] dropping malformed commit frame with no handshakeId`);
-			}
-			return;
-		}
-		const frame = parsed.data;
-		const req = XDomainCommitWireSchema.safeParse(frame.payload);
-		if (!req.success) {
-			await sendCommitReply({
-				handshakeId: frame.handshakeId,
-				ok: false,
-				error: `invalid handshake payload: ${req.error.issues[0]?.message ?? "malformed"}`,
-			});
-			return;
-		}
-		try {
-			const result = handleIncomingCommit(req.data);
-			await sendCommitReply({ handshakeId: frame.handshakeId, ok: true, result });
-		} catch (err) {
-			await sendCommitReply({ handshakeId: frame.handshakeId, ok: false, error: (err as Error).message });
-		}
-	}
-
-	async function dispatchReveal(raw: unknown): Promise<void> {
-		const parsed = InboundRevealFrameSchema.safeParse(raw);
-		if (!parsed.success) {
-			const handshakeId = (raw as { handshakeId?: unknown } | null)?.handshakeId;
-			if (typeof handshakeId === "string" && handshakeId.length > 0) {
-				await sendRevealReply({
-					handshakeId,
-					ok: false,
-					error: `invalid cross_domain_handshake_reveal: ${parsed.error.issues[0]?.message ?? "malformed"}`,
-				});
-			} else {
-				console.error(`[cross-domain-handshake] dropping malformed reveal frame with no handshakeId`);
-			}
-			return;
-		}
-		const frame = parsed.data;
-		const req = XDomainRevealWireSchema.safeParse(frame.payload);
-		if (!req.success) {
-			await sendRevealReply({
-				handshakeId: frame.handshakeId,
-				ok: false,
-				error: `invalid reveal payload: ${req.error.issues[0]?.message ?? "malformed"}`,
-			});
-			return;
-		}
-		try {
-			const result = handleIncomingReveal(req.data);
-			await sendRevealReply({ handshakeId: frame.handshakeId, ok: true, result });
-		} catch (err) {
-			await sendRevealReply({ handshakeId: frame.handshakeId, ok: false, error: (err as Error).message });
-		}
 	}
 }

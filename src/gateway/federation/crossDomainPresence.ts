@@ -345,9 +345,10 @@ export function createCrossDomainPresenceSource(deps: CrossDomainPresenceSourceD
  * registration pattern). Plain in-memory state persisted on the same periodic/shutdown cadence as
  * sessions/jobs/mailboxes/read-anchors (via the caller's own `snapshot()`/`restore()` into the
  * shared durable-state file) - losing a few seconds of this on an unclean crash is corrected by the
- * source Domain's NEXT push. There is no independent backstop pull yet (planned for a later phase);
- * until one exists, a push that is dropped (rate-limited, relayed but never received) or exhausts
- * its retry budget with no FOLLOWING source-side change has no automatic recovery path here.
+ * source Domain's NEXT push, or by the independent backstop pull (`createCrossDomainPresenceReconciler`
+ * below), which lands through this same `land()` entry point on its own cadence - so a push that is
+ * dropped (rate-limited, relayed but never received) or exhausts its retry budget with no FOLLOWING
+ * source-side change is still eventually corrected.
  */
 export class CrossDomainPresenceConsumer {
 	// A Map, not a plain object: srcDomainId is a linked peer's OWN self-reported string, never
