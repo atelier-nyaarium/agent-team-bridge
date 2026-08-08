@@ -7,8 +7,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,15 +20,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -121,20 +125,6 @@ fun BoardScreen(
 	}
 
 	LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-		item(key = "new") {
-			Row(
-				Modifier.fillMaxWidth().padding(top = 10.dp),
-				horizontalArrangement = Arrangement.End,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				// Says "Resume" when a draft is waiting: the button is the only trace of it once the
-				// form is closed, and a bare "New" would read as discarding what is still there.
-				TextButton(onClick = { composing = true }) {
-					Text(if (draftTitle.isBlank() && draftBody.isBlank()) "New" else "Resume draft")
-				}
-			}
-		}
-
 		// Silence here reads as success, so each gets its own dismissable line. The two kinds are
 		// OPPOSITE outcomes and must not share wording: a refusal never landed and can simply be redone,
 		// while a drop landed and took the pictures with it for good.
@@ -190,7 +180,26 @@ fun BoardScreen(
 			}
 		}
 
-		item(key = "sect:backlog") { BoardSectionLabel("Backlog", rows.unassigned.rows.size) }
+		item(key = "sect:backlog") {
+			// The button rides the Backlog header rather than a row of its own: a new entry lands on the
+			// backlog, so this is where it belongs, and a lone button over empty space read as a mistake.
+			BoardSectionLabel("Backlog", rows.unassigned.rows.size) {
+				// Says "Resume" when a draft is waiting: the button is the only trace of it once the form
+				// is closed, and a bare "New" would read as discarding what is still there.
+				Button(
+					onClick = { composing = true },
+					contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+					modifier = Modifier.height(34.dp),
+				) {
+					Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+					Spacer(Modifier.width(5.dp))
+					Text(
+						if (draftTitle.isBlank() && draftBody.isBlank()) "New" else "Resume draft",
+						style = MaterialTheme.typography.labelLarge,
+					)
+				}
+			}
+		}
 		boardGroupItems(
 			this,
 			rows.unassigned,
@@ -389,7 +398,7 @@ fun StateMark(state: String) {
 }
 
 @Composable
-private fun BoardSectionLabel(label: String, count: Int) {
+private fun BoardSectionLabel(label: String, count: Int, trailing: (@Composable () -> Unit)? = null) {
 	Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
 		Text(
 			label.uppercase(),
@@ -398,6 +407,10 @@ private fun BoardSectionLabel(label: String, count: Int) {
 		)
 		Spacer(Modifier.weight(1f))
 		Text("$count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+		trailing?.let {
+			Spacer(Modifier.width(12.dp))
+			it()
+		}
 	}
 }
 
@@ -421,6 +434,9 @@ private fun SessionGroupHeader(state: ChatState, key: GroupKey) {
 	}
 }
 
+/** Tighter than a default button, so the pair fits beside the form's title without wrapping. */
+private val FORM_BUTTON_PADDING = PaddingValues(horizontal = 18.dp, vertical = 6.dp)
+
 /** The new-entry form, in place of the list. Save is disabled on a blank title, since a titleless
  * entry renders as an empty row everywhere the board is drawn. */
 @Composable
@@ -443,8 +459,10 @@ private fun BoardComposeForm(
 			verticalAlignment = Alignment.CenterVertically,
 		) {
 			Text("New entry", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-			TextButton(onClick = onCancel) { Text("Cancel") }
-			TextButton(onClick = onSave, enabled = title.isNotBlank()) { Text("Save") }
+			// Outlined against filled, rather than two flat labels: Save is the one the form exists for,
+			// and a pair of bare words reads as text rather than as the two ways out of the screen.
+			OutlinedButton(onClick = onCancel, contentPadding = FORM_BUTTON_PADDING) { Text("Cancel") }
+			Button(onClick = onSave, enabled = title.isNotBlank(), contentPadding = FORM_BUTTON_PADDING) { Text("Save") }
 		}
 		OutlinedTextField(
 			value = title,
