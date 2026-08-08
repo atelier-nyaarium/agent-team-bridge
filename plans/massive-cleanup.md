@@ -137,6 +137,24 @@ Rule: when a split widens a member that guarded an invariant, the same lap adds 
 Put it in the TS suite, since the Kotlin tests run after merge and cannot block a PR. Negative-control
 it with a planted probe before trusting it.
 
+### Pass-2 candidate: two Android files named for a shape, not a concept
+
+`SessionsHeaders.kt` is two concepts. Its section chrome (the gateway, spawn-point and linked-friend
+headers) is called only by the sessions list, but it also holds a status vocabulary (statusWord, the
+status color tokens, presenceColor, StatusChip, SectionLabel) that ThreadScreen, MainActivity and
+Users all read. The tell is structural: the file has to alternate five section markers because the
+two concepts interleave. Extract the vocabulary; the remainder honestly owns the section rows.
+
+`SessionDialogs.kt` calls itself dialogs, but four of its members are not dialogs at all: the
+scheduled-send dock, the limit dock, the waking notice and the retime surface are inline docks that
+stack above ThreadScreen's composer, share a layout contract, and have no other caller. A
+`ThreadDocks.kt` leaves behind a file whose name is true: the session-lifecycle dialogs shared by the
+list and the thread header.
+
+Smaller, same pass: `EmptyBoard` and `BoardBody` say "board" but render the SESSIONS tab's empty
+state, and the real Task Board is a sibling package with its own screen, so a reader grepping either
+one gets false hits.
+
 ### Pass-2 candidate: a ceremony engine spans two collaborators
 
 `trustExchange` mirrors `enrollExchange` skeleton for skeleton, which is why `pollEnroll` had to

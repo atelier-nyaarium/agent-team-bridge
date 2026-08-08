@@ -945,11 +945,6 @@ internal fun looksProvisionable(s: String): Boolean = runCatching {
 	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
 }.getOrDefault(false)
 
-/** The session-board grouping key: the full (Domain, Gateway) pair. A gateway id is
- * unique only within a Domain, so two linked friend Domains running an identically-named
- * gateway must group separately rather than merge. */
-internal data class GatewayGroupKey(val domainId: String, val gatewayId: String)
-
 // Cap the rendered voice menu: some providers ship hundreds of voices, and the
 // field's text filters the rest into view.
 /** A provisioning blob is small JSON; anything larger is a mis-picked file. */

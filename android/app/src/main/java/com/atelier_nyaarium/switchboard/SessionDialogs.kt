@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -517,4 +518,68 @@ fun DirectoryField(
 			}
 		}
 	}
+}
+
+@Composable
+fun SessionActionsDialog(
+	label: String,
+	canRename: Boolean,
+	onRename: () -> Unit,
+	onForget: () -> Unit,
+	onDismiss: () -> Unit,
+) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text(label, fontFamily = FontFamily.Monospace) },
+		text = {
+			Column {
+				if (canRename) {
+					TextButton(onClick = hapticClick(onRename), modifier = Modifier.fillMaxWidth()) { Text("Rename") }
+				} else {
+					Text(
+						"Project names come from the Gateway and cannot be renamed.",
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+					)
+				}
+				TextButton(onClick = hapticClick(onForget), modifier = Modifier.fillMaxWidth()) { Text("Forget...") }
+			}
+		},
+		confirmButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
+	)
+}
+
+@Composable
+fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text(title) },
+		text = { Text(body) },
+		confirmButton = { TextButton(onClick = hapticClick(onConfirm)) { Text(confirmText) } },
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
+	)
+}
+
+/** Forgetting a session with unfinished board work: cancel the tasks (trash with the session) or
+ * unassign them (return to the backlog). Dismissing abandons the forget rather than deciding by inaction. */
+@Composable
+internal fun BoardForgetDialog(
+	label: String,
+	undone: Int,
+	onCancelTasks: () -> Unit,
+	onUnassign: () -> Unit,
+	onDismiss: () -> Unit,
+) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("Forget $label?") },
+		text = {
+			Text(
+				"It still holds $undone unfinished task${if (undone == 1) "" else "s"}. " +
+					"Finished ones go to the trash either way.",
+			)
+		},
+		confirmButton = { TextButton(onClick = hapticClick(onUnassign)) { Text("Back to the backlog") } },
+		dismissButton = { TextButton(onClick = hapticClick(onCancelTasks)) { Text("Mark cancelled") } },
+	)
 }
