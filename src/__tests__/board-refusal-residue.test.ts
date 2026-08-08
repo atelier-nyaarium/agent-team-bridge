@@ -61,7 +61,7 @@ describe("the refusal marker has exactly one producer", () => {
 	it("the console reads the same marker the gateway writes", () => {
 		// The two halves ship on separate triggers, so a drift here is a silent capability outage:
 		// every refusal would read as a retryable error and no queued action would ever retire.
-		const kotlin = read(path.join(ANDROID_SRC, "ConsoleClient.kt"));
+		const kotlin = read(path.join(ANDROID_SRC, "ConsoleClientTypes.kt"));
 		const declared = /BOARD_REFUSED_PREFIX\s*=\s*"([^"]+)"/.exec(kotlin);
 
 		expect(declared).not.toBeNull();

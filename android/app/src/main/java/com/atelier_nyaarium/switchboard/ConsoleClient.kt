@@ -13,7 +13,6 @@ import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.TrustPendingRequest
 import com.atelier_nyaarium.switchboard.proto.TrustPendingResult
-import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
@@ -51,23 +50,16 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
-import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
-import com.atelier_nyaarium.switchboard.proto.TeamInfo
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
-import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.Address
-import com.atelier_nyaarium.switchboard.proto.LOCAL_DOMAIN_SENTINEL
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
-import com.atelier_nyaarium.switchboard.proto.composeSessionName
-import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.proto.TransportRequest
 import com.atelier_nyaarium.switchboard.proto.TransportResult
@@ -85,8 +77,6 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.Call
 import okhttp3.Callback
@@ -96,253 +86,6 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-
-/**
- * Credential blob the console holds. Reaches the console bridge through the k8s API
- * service-proxy: the SA token authenticates to the API server, the app token (a separate
- * forwarded header) authenticates to evie.
- *
- * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime
- * behavior a schema cannot express: device defaulting to Build.MODEL, conversationId
- * minting a UUID, trailing-slash URL normalization, the service-proxy defaults.
- */
-data class Provisioning(
-	val apiUrl: String,
-	val caPem: String,
-	val saToken: String,
-	val appToken: String,
-	val namespace: String,
-	val service: String,
-	val port: Int,
-	val device: String,
-	val conversationId: String,
-	/** Present on a friend invite blob: the pending Domain id + one-time invite nonce the app
-	 * first-roots with. Its presence is what distinguishes an invite from an already-rooted admin blob. */
-	val pendingTenant: PendingTenantRef? = null,
-	/** Present alongside pendingTenant on an enroll invite: the admin's owner keys + Domain and the
-	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
-	 * to run the ceremony as enrollee. */
-	val enrollHandshake: EnrollHandshakeRef? = null,
-	/** evie's public nonce-gated device-approval ingress. A held device stamps it into the
-	 * authorize-console QR so a fresh device can reach evie with no creds; absent means this network
-	 * has no public ingress and the Add-a-device entry is disabled. */
-	val deviceApprovalReach: String? = null,
-) {
-	companion object {
-		fun parse(blob: String): Provisioning {
-			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
-			return Provisioning(
-				apiUrl = p.apiUrl.trimEnd('/'),
-				caPem = p.caPem,
-				saToken = p.saToken,
-				appToken = p.appToken ?: "",
-				namespace = p.namespace ?: "evie-bot",
-				service = p.service ?: "evie-console-bridge",
-				port = p.port?.toInt() ?: 20004,
-				device = p.device ?: (android.os.Build.MODEL ?: "android"),
-				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
-				pendingTenant = p.pendingTenant,
-				enrollHandshake = p.enrollHandshake,
-				deviceApprovalReach = p.deviceApprovalReach?.trimEnd('/'),
-			)
-		}
-	}
-}
-
-/** The local team field (`spawn` or `spawn.session`) of a canonical address string, for the UI's
- * short labels and the board's spawn-point nesting. A SpawnPoint (arity 3) yields its bare spawn; an
- * Address (arity 4) yields `spawn.session`. */
-internal fun localFieldOf(canonical: String): String =
-	when (val t = parseTarget(canonical, "", "")) {
-		is Address -> composeSessionName(t.spawn, t.session)
-		is SpawnPoint -> t.spawn
-	}
-
-/** [localFieldOf] for a value that may ALREADY be a local field rather than a canonical address.
- * `parseTarget` throws on one, and the board holds both forms: its entries store the local field
- * while a chat's `Team.name` is the address. Idempotent, which is what lets a caller apply it
- * without first knowing which form it was handed. */
-internal fun localFieldOrSelf(value: String): String = runCatching { localFieldOf(value) }.getOrDefault(value)
-
-/** The Gateway segment of a canonical address string. */
-internal fun gatewayOf(canonical: String): String =
-	when (val t = parseTarget(canonical, "", "")) {
-		is Address -> t.gateway
-		is SpawnPoint -> t.gateway
-	}
-
-/** UI model for the sessions board. Mapped from the wire TeamInfo in `teams()`, and also
- * constructed locally for ended threads whose team has left the bridge (a state that never
- * exists on the wire). `name` is the canonical address key (`domain.gateway.spawn.session`, or
- * `domain.gateway.spawn` for a spawn-point); `shortName` and `gatewayId` derive from it. */
-data class Team(
-	val name: String,
-	val status: String,
-	val mode: String,
-	val queueDepth: Int,
-	val kind: String = "loose",
-	// Plugin version the agent's MCP process reported. Null for consoles, offline catalog
-	// entries, and gateways without the feature. The board shows it only when it differs
-	// from this app's own expected version.
-	val version: String? = null,
-	// The owning Gateway's Domain id, kept a separate field rather than folded into the canonical
-	// address. A gateway id is unique only within a Domain, so the board groups by the
-	// (domainId, gatewayId) pair. Null for a pre-federation Gateway and for the
-	// locally-synthesized ended session.
-	val domainId: String? = null,
-	// The owning Domain's display name, stamped by the gateway's discover. The Peers list shows
-	// this instead of the opaque domainId. Null for a gateway without the feature or a Domain
-	// that has not set a name yet.
-	val displayName: String? = null,
-	// True when the owning Domain is the admin's own, from the register reply via the gateway.
-	// The local session's value gates the admin surfaces.
-	val isAdminDomain: Boolean = false,
-	// The gateway-authoritative free-form label the board renders for this session. Distinct from
-	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
-	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
-	val sessionLabel: String? = null,
-	// Daemon-derived working/needs-login, from the presence plane (2-frame-hysteresis confirmed
-	// server-side). Null means unknown (never observed, or derivation just became impossible), never
-	// false - a tile shows no pulse rather than a stale frozen one. Distinct from
-	// sessionWorking/sessionNeedsLogin, which back the terminal's own peek and still drive its
-	// local frame directly.
-	val working: Boolean? = null,
-	val needsLogin: Boolean? = null,
-	// The session is holding an unanswered usage-limit dialog and cannot progress until it is
-	// answered. limitDetail is the text after the headline's middle dot ("resets 5pm"), null when that
-	// headline carried no dot, so a blocked session still renders as blocked without one.
-	val limitBlocked: Boolean? = null,
-	val limitDetail: String? = null,
-	// Same-Domain federation freshness for a peer-gateway-sourced row; null for a local row (not a
-	// fourth "local" value - the field simply carries no federation freshness concept for one).
-	val presenceFresh: String? = null,
-) {
-	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
-	val shortName: String get() = localFieldOf(name)
-
-	/** Owning Gateway id (the gateway segment of the canonical address). */
-	val gatewayId: String get() = gatewayOf(name)
-
-	/** A live socket serves this session: confirmed online, or verifying its handshake (connected
-	 * but the LLM has not re-answered, e.g. across a gateway restart). Both count as awake. */
-	val isLive: Boolean get() = status == "online" || status == "verifying"
-}
-
-/** The one TeamInfo -> Team mapper, shared by the legacy `teams()` list_teams relay AND the
- * presence-plane piggyback on a poll response - both carry the identical wire shape, so mapping
- * it once here means the two paths can never quietly drift onto different Team shapes. */
-internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
-	val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
-	// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the
-	// non-addressable `domain.gateway.spawn` (arity 3); every chat is the full
-	// `domain.gateway.spawn.session` (arity 4), a bare team field defaulting its session to
-	// DEFAULT_SESSION exactly as the gateway's localAddress does, so a chat's Team.name is
-	// byte-equal to the address a session_id carries (no thread/team join mismatch).
-	val domain = it.domainId?.ifEmpty { null } ?: LOCAL_DOMAIN_SENTINEL
-	val parsed = parseSessionName(it.team)
-	val canonicalName = if (it.kind == "devcontainer") {
-		SpawnPoint.of(domain, gatewayId, parsed.project).canonical
-	} else {
-		Address.of(domain, gatewayId, parsed.project, parsed.session).canonical
-	}
-	return Team(
-		name = canonicalName,
-		status = it.status,
-		mode = it.mode ?: "",
-		queueDepth = it.queue_depth.toInt(),
-		kind = it.kind,
-		version = it.version,
-		domainId = it.domainId,
-		displayName = it.displayName,
-		isAdminDomain = it.isAdminDomain ?: false,
-		sessionLabel = it.sessionLabel,
-		working = it.working,
-		needsLogin = it.needsLogin,
-		limitBlocked = it.limitBlocked,
-		limitDetail = it.limitDetail,
-		presenceFresh = it.presenceFresh,
-	)
-}
-
-data class SendResult(val ok: Boolean, val status: String, val error: String?)
-
-/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment coordinator,
- * which answers an EnrollResult directly instead of relaying to a Gateway. */
-@Serializable
-private data class EnrollEnvelope(
-	val device: String,
-	val conversationId: String,
-	val opId: String,
-	val enrollOp: EnrollOp,
-)
-
-/** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
-@Serializable
-// internal (not private): referenced from postEvieDirect, an internal inline fun - an inline
-// function's body cannot access a private-in-file type even from the same file (the compiler
-// treats inlining as a visibility-widening operation). Same bug class as ConsoleClient's own
-// PINNED_*/HELD_*/PROXY_CEILING_MS companion constants; see their comment for the general rule.
-internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
-
-/** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
- * firstRoot intake, decided at evie and never relayed to a Gateway. */
-@Serializable
-private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
-
-/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
- * console-bridge enroll-handshake broker, a dumb relay never sent to a Gateway. */
-@Serializable
-private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
-
-/** Roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler,
- * which aggregates across Domains a gateway cannot see and answers itself. */
-@Serializable
-private data class RosterEnvelope(val roster: RosterRequest)
-
-/** Transport-request POST body: a top-level `transport` field routes to evie's console-bridge
- * transport intake, which holds the gateway-bridge Secret and answers itself. */
-@Serializable
-private data class TransportEnvelope(val transport: TransportRequest)
-
-/** Device-approval POST body for the AUTHENTICATED held device: a top-level `consoleApproval` field
- * routes to evie's console-bridge device-approval coordinator (arm/poll/approve/cancel). The public
- * join/fetch steps go to the credential-less ingress instead (see postPublicApproval). */
-@Serializable
-private data class ConsoleApprovalEnvelope(val consoleApproval: ConsoleApprovalOp)
-
-/** Trust-rendezvous POST bodies: top-level fields routing to evie's trust broker and pending query. */
-@Serializable
-private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
-
-@Serializable
-private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
-
-/** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the minted
- * one-time invite `nonce` the admin's app builds the friend's QR from. The wire EnrollResult schema
- * omits `nonce`, so this is a richer local decode. */
-@Serializable
-data class ProvisionTenantResult(val ok: Boolean, val error: String? = null, val nonce: String? = null)
-
-/** Decode tolerates unknown fields (additive protocol). Encode omits null-defaulted optionals,
- * which is what the gateway's schemas accept. */
-internal val wireJson = Json { ignoreUnknownKeys = true }
-
-/** The gateway's marker for a decision that will never apply, as opposed to a failure that might
- * succeed later. Mirrors the prefix consoleHandler.ts stamps on a refusal. */
-const val BOARD_REFUSED_PREFIX = "refused:"
-
-/** A board op the gateway itself decided will never apply. The ONE outcome that retires a queued
- * action; every other failure retries. */
-class BoardRefused(val reason: String) : Exception(reason)
-
-/** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields are identical by
- * design; the mapper avoids coupling the two class hierarchies. */
-private fun Crypto.SealedEnvelope.toProto(): SealedEnvelope =
-	SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
-
-/** Map a proto.SealedEnvelope to Crypto.SealedEnvelope for unseal calls. */
-private fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
-	Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
 /** Talks to the console bridge through the CA-pinned k8s API service-proxy. */
 class ConsoleClient(private val prov: Provisioning, private val store: AppStateStore) : BoardWriter {
