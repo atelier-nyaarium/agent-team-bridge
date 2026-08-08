@@ -111,6 +111,12 @@ started.
 const UPDATE_DESCRIPTION = `
 Change an entry on your taskboard. Omitted fields are left alone. Claim a
 backlog entry before updating it.
+
+State carries through the tree, so mark only the entry you actually finished.
+Finishing the last unfinished child finishes its parent; finishing a parent
+finishes everything under it; and putting anything back to unfinished reopens
+the finished entries above it. The reply names whatever moved this way, already
+saved, for you to mention rather than act on.
 `.trim();
 
 const CLEAR_DESCRIPTION = `
@@ -225,12 +231,48 @@ async function fetchAttachments(args: { id: string; filenames?: string[] }): Pro
 	return lines.join("\n");
 }
 
+/** Wire shape of one auto-marked entry. Read defensively rather than parsed: the gateway updates on
+ * its own trigger, so a plugin can be talking to one that has never heard of a cascade. */
+type CascadeLine = { id?: unknown; title?: unknown; from?: unknown; to?: unknown; reason?: unknown };
+
+const CASCADE_CAUSE: Record<string, string> = {
+	children_finished: "everything under it is finished",
+	parent_finished: "the entry above it was finished",
+	child_reopened: "work under it went back to unfinished",
+};
+
+/**
+ * What the board did on its own, as prose, because a bare list of ids reads as something the caller
+ * has to act on. It does not: the change is already saved.
+ *
+ * Returns empty for anything that is not a populated array of usable rows, so an older gateway's
+ * reply, or a newer one's field this does not understand, degrades to the plain JSON answer.
+ */
+export function cascadeProse(raw: unknown): string {
+	if (!Array.isArray(raw) || raw.length === 0) return "";
+	const lines: string[] = [];
+	for (const row of raw as CascadeLine[]) {
+		if (typeof row?.title !== "string" || typeof row.to !== "string") continue;
+		const cause = typeof row.reason === "string" ? CASCADE_CAUSE[row.reason] : undefined;
+		lines.push(`- "${row.title}" is now ${row.to}${cause ? `, because ${cause}` : ""}.`);
+	}
+	if (lines.length === 0) return "";
+	const count = lines.length === 1 ? "one other entry" : `${lines.length} other entries`;
+	return [
+		"",
+		`The board also moved ${count} to keep the tree consistent:`,
+		...lines,
+		"This is already saved and needs no follow-up write. Say so if the owner would want to know.",
+	].join("\n");
+}
+
 async function post(
 	body: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
 	try {
 		const result = await postBoard(body);
-		return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+		const prose = cascadeProse((result as { cascaded?: unknown })?.cascaded);
+		return { content: [{ type: "text" as const, text: `${JSON.stringify(result, null, 2)}${prose}` }] };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		// A failure here cannot say whether the write landed and the reply was lost. Calling the tool

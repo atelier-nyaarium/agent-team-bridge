@@ -5,6 +5,7 @@ import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js"
 import { type DurableStore, DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BoardEntrySchema } from "../shared/schemas.js";
+import { applyCascade, type CascadeChange } from "./boardCascade.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -23,7 +24,11 @@ export type BoardRefusal =
 	| "bad_rank"
 	| "session_missing";
 
-export type BoardResult = { applied: true } | { applied: false; refused: BoardRefusal };
+/** `cascaded` names the entries the board moved on its own alongside the caller's write, so the
+ * caller can say so rather than let a state change appear out of nowhere. Absent when nothing moved. */
+export type BoardResult =
+	| { applied: true; cascaded?: readonly CascadeChange[] }
+	| { applied: false; refused: BoardRefusal };
 
 /** What becomes of a session's unfinished entries when it ends. */
 export type BoardDisposition = "release" | "cancel";
@@ -221,6 +226,25 @@ function promoteOrphans(entries: Map<string, BoardEntry>): number {
 }
 
 /**
+ * Parents that just lost a live child, derived from pre/post rather than named by a caller.
+ *
+ * These are the only entries the cascade cannot reach on its own: the child was trashed, reparented
+ * or deleted, so no walk up from it arrives here any more. Deriving it here rather than at the three
+ * call sites is what stops a fourth way of detaching a child from silently skipping the rule.
+ */
+function orphanedParents(prev: OwnerBoard, next: OwnerBoard, touched: ReadonlySet<string>): string[] {
+	const out: string[] = [];
+	for (const id of touched) {
+		const before = prev.entries.get(id);
+		if (!before || before.trashedAt !== undefined || before.parent === undefined) continue;
+		const after = next.entries.get(id);
+		const stillAChild = after !== undefined && after.trashedAt === undefined && after.parent === before.parent;
+		if (!stillAChild) out.push(before.parent);
+	}
+	return out;
+}
+
+/**
  * Classified per entry from pre/post against `mayWrite` and `visibleTo`, never from which method ran,
  * so a method gaining a caller cannot change what is announced.
  *
@@ -364,62 +388,74 @@ export class BoardStore {
 	 * parent must exist among the surviving entries or the batch itself, and must be writable by
 	 * this actor - an existing entry it does not hold cannot be adopted as a parent. */
 	upsert(ownerId: string, entries: readonly BoardEntry[], actor: BoardActor): BoardResult {
-		return this.mutate(ownerId, actor, (board, touch) => {
-			const incoming = new Set(entries.map((e) => e.id));
-			let added = 0;
-			let changed = false;
-			for (const e of entries) if (!board.entries.has(e.id)) added++;
-			if (board.entries.size + added > MAX_ENTRIES_PER_OWNER) return "board_full";
-			for (const e of entries) {
-				if (!isValidRank(e.rank)) return "bad_rank";
-				if (e.parent && !board.entries.has(e.parent) && !incoming.has(e.parent)) return "parent_missing";
-				// Replacing an entry, or parenting onto one, is a write to it.
-				const current = board.entries.get(e.id);
-				if (current) {
-					const denied = mayWrite(current, actor);
-					if (denied) return denied;
+		return this.mutate(
+			ownerId,
+			actor,
+			(board, touch) => {
+				const incoming = new Set(entries.map((e) => e.id));
+				let added = 0;
+				let changed = false;
+				for (const e of entries) if (!board.entries.has(e.id)) added++;
+				if (board.entries.size + added > MAX_ENTRIES_PER_OWNER) return "board_full";
+				for (const e of entries) {
+					if (!isValidRank(e.rank)) return "bad_rank";
+					if (e.parent && !board.entries.has(e.parent) && !incoming.has(e.parent)) return "parent_missing";
+					// Replacing an entry, or parenting onto one, is a write to it.
+					const current = board.entries.get(e.id);
+					if (current) {
+						const denied = mayWrite(current, actor);
+						if (denied) return denied;
+					}
+					const existingParent =
+						e.parent && !incoming.has(e.parent) ? board.entries.get(e.parent) : undefined;
+					if (existingParent) {
+						const denied = mayWrite(existingParent, actor);
+						if (denied) return denied;
+					}
 				}
-				const existingParent = e.parent && !incoming.has(e.parent) ? board.entries.get(e.parent) : undefined;
-				if (existingParent) {
-					const denied = mayWrite(existingParent, actor);
-					if (denied) return denied;
+				for (const e of entries) {
+					const current = board.entries.get(e.id);
+					// Attachments are NOT part of an upsert, whatever the incoming entry carries.
+					// `setAttachments` is their sole committer, and that is what guarantees every stored
+					// member's bytes are durable under the entry. A cross-Gateway move upserts a subtree
+					// verbatim, so honouring the field here would land members nothing ever ingested: the
+					// owner's next attachment write on that entry would then find no bytes, and since a
+					// missing-bytes op is retryable rather than refused, the action would retry forever
+					// and close the whole Gateway lane behind it.
+					// Dropped FIRST and restored second. Spreading the stored value over the incoming one
+					// only overwrites a list that already exists, so an entry with none - the destination of
+					// a move, which is the case this exists for - kept whatever the incoming entry carried.
+					const merged = { ...e };
+					delete merged.attachments;
+					if (current?.attachments) merged.attachments = current.attachments;
+					// Key-order-insensitive compare: the in-place setters can reorder a stored entry's
+					// keys, and a value-identical re-send must still gate as unchanged.
+					if (!current || stableHash(current) !== stableHash(merged)) {
+						changed = true;
+						touch(e.id);
+					}
+					board.entries.set(e.id, merged);
 				}
-			}
-			for (const e of entries) {
-				const current = board.entries.get(e.id);
-				// Attachments are NOT part of an upsert, whatever the incoming entry carries.
-				// `setAttachments` is their sole committer, and that is what guarantees every stored
-				// member's bytes are durable under the entry. A cross-Gateway move upserts a subtree
-				// verbatim, so honouring the field here would land members nothing ever ingested: the
-				// owner's next attachment write on that entry would then find no bytes, and since a
-				// missing-bytes op is retryable rather than refused, the action would retry forever
-				// and close the whole Gateway lane behind it.
-				// Dropped FIRST and restored second. Spreading the stored value over the incoming one
-				// only overwrites a list that already exists, so an entry with none - the destination of
-				// a move, which is the case this exists for - kept whatever the incoming entry carried.
-				const merged = { ...e };
-				delete merged.attachments;
-				if (current?.attachments) merged.attachments = current.attachments;
-				// Key-order-insensitive compare: the in-place setters can reorder a stored entry's
-				// keys, and a value-identical re-send must still gate as unchanged.
-				if (!current || stableHash(current) !== stableHash(merged)) {
-					changed = true;
-					touch(e.id);
+				for (const e of entries) {
+					if (this.wouldCycle(board, e.id)) return "cycle";
 				}
-				board.entries.set(e.id, merged);
-			}
-			for (const e of entries) {
-				if (this.wouldCycle(board, e.id)) return "cycle";
-			}
-			return changed ? undefined : "unchanged";
-		});
+				return changed ? undefined : "unchanged";
+			},
+			true,
+		);
 	}
 
 	setState(ownerId: string, id: string, state: BoardEntry["state"], actor: BoardActor): BoardResult {
-		return this.mutateEntry(ownerId, id, actor, (e) => {
-			if (e.state === state) return "unchanged";
-			e.state = state;
-		});
+		return this.mutateEntry(
+			ownerId,
+			id,
+			actor,
+			(e) => {
+				if (e.state === state) return "unchanged";
+				e.state = state;
+			},
+			true,
+		);
 	}
 
 	setTitle(ownerId: string, id: string, title: string, actor: BoardActor): BoardResult {
@@ -475,48 +511,58 @@ export class BoardStore {
 	 * scope-checked as well as the entry: without that, a session could graft its subtree under an
 	 * entry belonging to another session. */
 	setParent(ownerId: string, id: string, parent: string | undefined, rank: string, actor: BoardActor): BoardResult {
-		return this.mutate(ownerId, actor, (board, touch) => {
-			const entry = board.entries.get(id);
-			if (!entry) return "entry_missing";
-			const denied = mayWrite(entry, actor);
-			if (denied) return denied;
-			if (!isValidRank(rank)) return "bad_rank";
-			if (parent !== undefined && !board.entries.has(parent)) return "parent_missing";
-			if (parent !== undefined) {
-				const deniedParent = mayWrite(board.entries.get(parent) as BoardEntry, actor);
-				if (deniedParent) return deniedParent;
-			}
-			if (entry.parent === parent && entry.rank === rank) return "unchanged";
-			// A reorder within the same parent is rank-only, which no other session can act on.
-			if (entry.parent !== parent) touch(id);
-			if (parent === undefined) delete entry.parent;
-			else entry.parent = parent;
-			entry.rank = rank;
-			return this.wouldCycle(board, id) ? "cycle" : undefined;
-		});
+		return this.mutate(
+			ownerId,
+			actor,
+			(board, touch) => {
+				const entry = board.entries.get(id);
+				if (!entry) return "entry_missing";
+				const denied = mayWrite(entry, actor);
+				if (denied) return denied;
+				if (!isValidRank(rank)) return "bad_rank";
+				if (parent !== undefined && !board.entries.has(parent)) return "parent_missing";
+				if (parent !== undefined) {
+					const deniedParent = mayWrite(board.entries.get(parent) as BoardEntry, actor);
+					if (deniedParent) return deniedParent;
+				}
+				if (entry.parent === parent && entry.rank === rank) return "unchanged";
+				// A reorder within the same parent is rank-only, which no other session can act on.
+				if (entry.parent !== parent) touch(id);
+				if (parent === undefined) delete entry.parent;
+				else entry.parent = parent;
+				entry.rank = rank;
+				return this.wouldCycle(board, id) ? "cycle" : undefined;
+			},
+			true,
+		);
 	}
 
 	/** Trash or restore an entry AND its subtree - a flag, never a removal. The stamp is this
 	 * gateway's clock, since the sweep runs against it. */
 	setTrashed(ownerId: string, id: string, trashed: boolean, now = Date.now()): BoardResult {
-		return this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
-			if (!board.entries.has(id)) return "entry_missing";
-			let changed = false;
-			for (const memberId of this.subtree(board, id)) {
-				const e = board.entries.get(memberId);
-				if (!e) continue;
-				if (trashed && e.trashedAt === undefined) {
-					e.trashedAt = now;
-					changed = true;
-					touch(memberId);
-				} else if (!trashed && e.trashedAt !== undefined) {
-					delete e.trashedAt;
-					changed = true;
-					touch(memberId);
+		return this.mutate(
+			ownerId,
+			OWNER_ACTOR,
+			(board, touch) => {
+				if (!board.entries.has(id)) return "entry_missing";
+				let changed = false;
+				for (const memberId of this.subtree(board, id)) {
+					const e = board.entries.get(memberId);
+					if (!e) continue;
+					if (trashed && e.trashedAt === undefined) {
+						e.trashedAt = now;
+						changed = true;
+						touch(memberId);
+					} else if (!trashed && e.trashedAt !== undefined) {
+						delete e.trashedAt;
+						changed = true;
+						touch(memberId);
+					}
 				}
-			}
-			return changed ? undefined : "unchanged";
-		});
+				return changed ? undefined : "unchanged";
+			},
+			true,
+		);
 	}
 
 	/** Assign or unassign an entry and its subtree. Owner-authority: any entry, any session - the
@@ -614,48 +660,58 @@ export class BoardStore {
 	 * that minted first and wrote second could have that rebalance commit even when the write is
 	 * then refused. Here both land in one mutate or neither does. */
 	createAtEnd(ownerId: string, entry: Omit<BoardEntry, "rank">, actor: BoardActor): BoardResult {
-		return this.mutate(ownerId, actor, (board, touch) => {
-			// The replay answer comes FIRST and is not scope-checked. The id derives from the caller's
-			// own private operation id, so an id that already exists IS this caller's earlier create -
-			// and a backlog create leaves the entry unassigned, which a scope check would then refuse,
-			// telling a caller its landed create will never apply.
-			if (board.entries.has(entry.id)) return "unchanged";
-			if (board.entries.size + 1 > MAX_ENTRIES_PER_OWNER) return "board_full";
-			if (entry.parent !== undefined) {
-				const parent = board.entries.get(entry.parent);
-				if (!parent) return "parent_missing";
-				const denied = mayWrite(parent, actor);
-				if (denied) return denied;
-			}
-			board.entries.set(entry.id, { ...entry, rank: this.placeAtEnd(board, entry.parent) });
-			touch(entry.id);
-			return this.wouldCycle(board, entry.id) ? "cycle" : undefined;
-		});
+		return this.mutate(
+			ownerId,
+			actor,
+			(board, touch) => {
+				// The replay answer comes FIRST and is not scope-checked. The id derives from the caller's
+				// own private operation id, so an id that already exists IS this caller's earlier create -
+				// and a backlog create leaves the entry unassigned, which a scope check would then refuse,
+				// telling a caller its landed create will never apply.
+				if (board.entries.has(entry.id)) return "unchanged";
+				if (board.entries.size + 1 > MAX_ENTRIES_PER_OWNER) return "board_full";
+				if (entry.parent !== undefined) {
+					const parent = board.entries.get(entry.parent);
+					if (!parent) return "parent_missing";
+					const denied = mayWrite(parent, actor);
+					if (denied) return denied;
+				}
+				board.entries.set(entry.id, { ...entry, rank: this.placeAtEnd(board, entry.parent) });
+				touch(entry.id);
+				return this.wouldCycle(board, entry.id) ? "cycle" : undefined;
+			},
+			true,
+		);
 	}
 
 	/** Move an entry to the end of a new parent's live siblings, minting inside the same write for
 	 * the reason [createAtEnd] gives. */
 	setParentAtEnd(ownerId: string, id: string, parent: string | undefined, actor: BoardActor): BoardResult {
-		return this.mutate(ownerId, actor, (board, touch) => {
-			const entry = board.entries.get(id);
-			if (!entry) return "entry_missing";
-			const denied = mayWrite(entry, actor);
-			if (denied) return denied;
-			if (parent !== undefined) {
-				const target = board.entries.get(parent);
-				if (!target) return "parent_missing";
-				const deniedParent = mayWrite(target, actor);
-				if (deniedParent) return deniedParent;
-			}
-			if (entry.parent === parent) return "unchanged";
-			if (parent === undefined) delete entry.parent;
-			else entry.parent = parent;
-			// After the reparent, so the new group's siblings are the ones measured. Its rebalance
-			// rewrites sibling ranks, which nothing can act on, so only the moved entry is announced.
-			entry.rank = this.placeAtEnd(board, parent, id);
-			touch(id);
-			return this.wouldCycle(board, id) ? "cycle" : undefined;
-		});
+		return this.mutate(
+			ownerId,
+			actor,
+			(board, touch) => {
+				const entry = board.entries.get(id);
+				if (!entry) return "entry_missing";
+				const denied = mayWrite(entry, actor);
+				if (denied) return denied;
+				if (parent !== undefined) {
+					const target = board.entries.get(parent);
+					if (!target) return "parent_missing";
+					const deniedParent = mayWrite(target, actor);
+					if (deniedParent) return deniedParent;
+				}
+				if (entry.parent === parent) return "unchanged";
+				if (parent === undefined) delete entry.parent;
+				else entry.parent = parent;
+				// After the reparent, so the new group's siblings are the ones measured. Its rebalance
+				// rewrites sibling ranks, which nothing can act on, so only the moved entry is announced.
+				entry.rank = this.placeAtEnd(board, parent, id);
+				touch(id);
+				return this.wouldCycle(board, id) ? "cycle" : undefined;
+			},
+			true,
+		);
 	}
 
 	/** The rank for a fresh member at the end of `parent`'s live siblings, REBALANCING that group in
@@ -695,16 +751,21 @@ export class BoardStore {
 	 * copy. A leaked directory per move is bounded by a rare owner action and is recoverable by hand.
 	 */
 	remove(ownerId: string, ids: readonly string[]): BoardResult {
-		return this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
-			const removing = new Set(ids);
-			for (const e of board.entries.values()) {
-				if (!removing.has(e.id) && e.parent && removing.has(e.parent)) return "would_orphan";
-			}
-			for (const id of ids) {
-				if (board.entries.delete(id)) touch(id);
-			}
-			return undefined;
-		});
+		return this.mutate(
+			ownerId,
+			OWNER_ACTOR,
+			(board, touch) => {
+				const removing = new Set(ids);
+				for (const e of board.entries.values()) {
+					if (!removing.has(e.id) && e.parent && removing.has(e.parent)) return "would_orphan";
+				}
+				for (const id of ids) {
+					if (board.entries.delete(id)) touch(id);
+				}
+				return undefined;
+			},
+			true,
+		);
 	}
 
 	/** A session ended. Done and cancelled entries are trashed (30 recoverable days); what happens to
@@ -831,11 +892,16 @@ export class BoardStore {
 	 * Touched ids are LOCAL to this invocation. Four exits never commit (unchanged, a refusal, a
 	 * `placeAtEnd` throw, a commit rollback), and a store-level buffer would ship what they left behind
 	 * on the owner's next successful write. A closure marks ids rather than snapshots, since `current`
-	 * is the untouched pre-state and cannot drift from what committed. */
+	 * is the untouched pre-state and cannot drift from what committed.
+	 *
+	 * `cascade` is opt-in per caller rather than automatic, because it must not ride a write that
+	 * cannot have caused one. Renaming an entry would otherwise heal a board that was already
+	 * inconsistent, announcing auto-marks the owner would read as caused by the rename. */
 	private mutate(
 		ownerId: string,
 		writer: BoardActor,
 		fn: (board: OwnerBoard, touch: (entryId: string) => void) => BoardRefusal | "unchanged" | undefined,
+		cascade = false,
 	): BoardResult {
 		const current = this.owners.get(ownerId) ?? { revision: 0, entries: new Map() };
 		const copy: OwnerBoard = {
@@ -846,10 +912,16 @@ export class BoardStore {
 		const outcome = fn(copy, (entryId) => touched.add(entryId));
 		if (outcome === "unchanged") return { applied: true };
 		if (outcome) return { applied: false, refused: outcome };
+		// Before noticesFor, so a holder hears about an entry the board moved for them, not just the
+		// one the writer named.
+		const cascaded = cascade
+			? applyCascade(copy.entries, [...touched], orphanedParents(current, copy, touched))
+			: [];
+		for (const change of cascaded) touched.add(change.id);
 		const notices = noticesFor(current, copy, touched, writer);
 		this.commit(ownerId, copy);
 		if (notices.length > 0) this.announce(notices);
-		return { applied: true };
+		return cascaded.length > 0 ? { applied: true, cascaded } : { applied: true };
 	}
 
 	/** The write already committed, so a throwing sink is logged rather than propagated. */
@@ -869,16 +941,22 @@ export class BoardStore {
 		id: string,
 		actor: BoardActor,
 		fn: (entry: BoardEntry) => "unchanged" | undefined,
+		cascade = false,
 	): BoardResult {
-		return this.mutate(ownerId, actor, (board, touch) => {
-			const entry = board.entries.get(id);
-			if (!entry) return "entry_missing";
-			const denied = mayWrite(entry, actor);
-			if (denied) return denied;
-			const outcome = fn(entry);
-			if (!outcome) touch(id);
-			return outcome;
-		});
+		return this.mutate(
+			ownerId,
+			actor,
+			(board, touch) => {
+				const entry = board.entries.get(id);
+				if (!entry) return "entry_missing";
+				const denied = mayWrite(entry, actor);
+				if (denied) return denied;
+				const outcome = fn(entry);
+				if (!outcome) touch(id);
+				return outcome;
+			},
+			cascade,
+		);
 	}
 
 	/** Install the new board and write the whole file synchronously. An installed-but-unsynced

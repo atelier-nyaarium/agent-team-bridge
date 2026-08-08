@@ -46,6 +46,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import type { CascadeChange } from "./boardCascade.js";
 import {
 	type BoardActor,
 	type BoardResult,
@@ -1936,7 +1937,9 @@ export function createRoutes({
 		// BoardResult, not a widened `refused: string`: the refusal vocabulary is the one signal that
 		// discards an owner's edit, so a route may only relay a member of it.
 		const answer = (result: BoardResult, extra?: Record<string, unknown>) =>
-			result.applied ? done({ applied: true, ...extra }) : done({ applied: false, refused: result.refused });
+			result.applied
+				? done({ applied: true, ...extra, ...(result.cascaded ? { cascaded: result.cascaded } : {}) })
+				: done({ applied: false, refused: result.refused });
 
 		switch (r.action) {
 			case "list": {
@@ -2007,6 +2010,9 @@ export function createRoutes({
 				if (!entry) return answer({ applied: false, refused: "entry_missing" });
 				const denied = mayWrite(entry, actor);
 				if (denied) return answer({ applied: false, refused: denied });
+				// One update is several store writes, and either of the last two can cascade. Collected
+				// across them so the caller is told about every entry the board moved, not just the last.
+				const cascaded: CascadeChange[] = [];
 				if (r.title !== undefined) {
 					const res = boardStore.setTitle(owner, r.id, r.title, actor);
 					if (!res.applied) return answer(res);
@@ -2018,6 +2024,7 @@ export function createRoutes({
 				if (r.state !== undefined) {
 					const res = boardStore.setState(owner, r.id, r.state, actor);
 					if (!res.applied) return answer(res);
+					if (res.cascaded) cascaded.push(...res.cascaded);
 				}
 				if (r.parent !== undefined) {
 					const parent = r.parent === null ? undefined : r.parent;
@@ -2026,9 +2033,10 @@ export function createRoutes({
 					if (parent !== entry.parent) {
 						const res = boardStore.setParentAtEnd(owner, r.id, parent, actor);
 						if (!res.applied) return answer(res);
+						if (res.cascaded) cascaded.push(...res.cascaded);
 					}
 				}
-				return done({ applied: true });
+				return done({ applied: true, ...(cascaded.length > 0 ? { cascaded } : {}) });
 			}
 			case "clear": {
 				return done({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });

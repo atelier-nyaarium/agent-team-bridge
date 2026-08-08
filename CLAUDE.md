@@ -19,6 +19,8 @@ code does not belong here; rationale lives in `git log`.
     anchors, host RPC correlation
   - `boardStore.ts` - the owner's task board: its own checked-write durable file, the per-owner
     plane, and the enumerated refusals every board op resolves to (see Task board below)
+  - `boardCascade.ts` - the pure both-directions state rule the store runs after a write, so a
+    finished parent and its finished children cannot disagree (see Task board below)
   - `noAckPush.ts` - the reply-less awareness push: the bank, its window, and the three-valued
     liveness read at the send edge (see Awareness pushes below)
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
@@ -352,6 +354,13 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
   re-running over newer state. `isBoardMutationKind` is the one predicate both gates derive from.
 - **A same-value write commits nothing.** Every setter reports unchanged, since a real commit fsyncs
   the whole board file synchronously.
+- **State cascades, and the cascade is OPT-IN per write** (`boardCascade.ts`). A seed's own state is
+  never rederived, or reopening a parent whose children are all done would close it again in the same
+  breath. The one thing a walk cannot reach is a parent that LOST a child to a trash, move or delete,
+  so `orphanedParents` derives those from pre/post rather than letting three call sites name them.
+  Nothing is re-checked against `mayWrite`: a cascade is authored by the board, and gating it on the
+  writer's authority would make the rule fire or not depending on who holds an entry they cannot see.
+  The console does NOT reimplement it; a phone edit shows the cascade when the next snapshot lands.
 - **claim/release are session-scoped and per-member**: claim refuses if ANY subtree member is held
   elsewhere; release lets go of only the caller's own members. The owner-authority cascade is
   `board_set_session` alone.

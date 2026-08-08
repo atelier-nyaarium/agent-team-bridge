@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardRequestBody } from "../mcp/board/boardTools.js";
+import { boardRequestBody, cascadeProse } from "../mcp/board/boardTools.js";
 import { GATED_CAPABILITY_IDS } from "../mcp/capabilities.js";
 
 describe("task board tool requests", () => {
@@ -47,5 +47,43 @@ describe("task board tool requests", () => {
 
 	it("the taskboard capability is gated, so the tools cannot register unannounced", () => {
 		expect(GATED_CAPABILITY_IDS).toContain("taskboard");
+	});
+});
+
+describe("what the board moved on its own", () => {
+	it("names each entry and why, and says the write is already done", () => {
+		const text = cascadeProse([
+			{ id: "bd_1", title: "Phase 1", from: "open", to: "done", reason: "children_finished" },
+			{ id: "bd_2", title: "Write it up", from: "open", to: "done", reason: "parent_finished" },
+		]);
+		expect(text).toContain('"Phase 1" is now done, because everything under it is finished.');
+		expect(text).toContain('"Write it up" is now done, because the entry above it was finished.');
+		expect(text).toContain("needs no follow-up write");
+	});
+
+	it("counts in words, so one entry does not read as a list", () => {
+		const one = cascadeProse([{ title: "Solo", to: "done", reason: "children_finished" }]);
+		expect(one).toContain("one other entry");
+		expect(
+			cascadeProse([
+				{ title: "a", to: "done" },
+				{ title: "b", to: "done" },
+			]),
+		).toContain("2 other entries");
+	});
+
+	it("still names an entry whose reason this plugin does not know", () => {
+		// The gateway updates on its own trigger and may ship a reason added after this build. Dropping
+		// the row would hide a state change; dropping the clause alone loses nothing that matters.
+		const text = cascadeProse([{ title: "Later", to: "cancelled", reason: "something_new" }]);
+		expect(text).toContain('"Later" is now cancelled.');
+	});
+
+	it("says nothing at all when there is nothing to say", () => {
+		// An older gateway sends no field, and a same-version one sends none when nothing moved. Both
+		// have to leave the plain answer untouched rather than append an empty heading.
+		for (const raw of [undefined, null, [], "cascaded", [{ id: "bd_1" }]]) {
+			expect(cascadeProse(raw)).toBe("");
+		}
 	});
 });
