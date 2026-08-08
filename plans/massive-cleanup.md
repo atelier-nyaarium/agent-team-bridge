@@ -27,6 +27,48 @@ Every lap that moves a declaration breaks one, and the failure names the test ra
 Rule: a source-residue test names a DECLARATION, never a file. Anything that resolves a declaration
 to a path must fail loudly on zero matches and on more than one.
 
+### A split brief that names groupings instead of the target
+
+Lap 2 fanned out four Sonnet agents, one per new file, and every grouping I handed them was one
+coherent screen. Four of the five resulting files are still over 600 lines: `SessionsScreen.kt` at
+1220, `SettingsScreen.kt` at 1006, `ThreadScreen.kt` at 786, `MainActivity.kt` at 1124. The agents
+did exactly what they were told, and what they were told was wrong.
+
+I had optimized the brief for "one screen per file" when the goal is "under 600 lines". Those agree
+only for small screens.
+
+Rule: a split brief states the 600-line TARGET as the constraint and hands the agent a starting
+grouping, not a final one. Tell it to measure as it goes and to propose its own sub-split, naming
+the seam, whenever its file would land over. A grouping is a hypothesis, and the agent holding the
+file is the one positioned to falsify it.
+
+### A parallel fan-out cannot share a write target
+
+Four agents each moving a chunk OUT of one file would clobber each other. Phase 1 authors the new
+files read-only on the source; a single phase 2 agent then deletes every moved block in one pass.
+The tree is deliberately broken between the phases, so phase 2 must be told to leave it compiling
+whatever else happens.
+
+Corollary learned the hard way: phase 2's agent died on an API content filter while writing its
+final report, AFTER its edits had landed and compiled. A failed agent is not a failed step. Check
+the tree before re-running anything, or a re-run doubles the work it already did.
+
+Second corollary: a later agent handed a 47-line verbatim import list tripped the same filter after
+five reads, having changed nothing. Both failures involved a long block of bare qualified names in
+the prompt. Hand an agent a RULE it can apply ("prune every import the file no longer uses, keeping
+getValue and setValue, which are delegate operators nothing names") rather than a machine-readable
+list to transcribe. Whether the list is what tripped it is unproven, but the rule form is the better
+brief regardless, and it is shorter.
+
+### Kotlin has no unused-import gate
+
+Nothing in this repo catches a dead import: Kotlin does not error on them, the Android build has no
+ktlint, and `bun run lint` is TS-only. The MainActivity split left 152 dead imports and all four
+gates stayed green.
+
+Rule: every lap that moves declarations OUT of a file must prune that file's imports and verify by
+compiling. A red-team angle should keep asking for it, since no tool will.
+
 ### A parameter no body reads
 
 `ChatState.sessions(localGatewayId)` and `label(team, localGatewayId)` each took an argument neither

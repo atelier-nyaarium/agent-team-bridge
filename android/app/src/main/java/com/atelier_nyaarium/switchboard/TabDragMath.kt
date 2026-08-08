@@ -3,7 +3,7 @@ package com.atelier_nyaarium.switchboard
 ////////////////////////////////
 //  Tab drag-reorder geometry
 //
-//  Pure math behind MainActivity's ReorderableTabRow. All positions are untranslated layout slots
+//  Pure math behind ReorderableTabRow.kt's ReorderableTabRow. All positions are untranslated layout slots
 //  (what onGloballyPositioned reports; graphicsLayer translation never moves a layout slot), so the
 //  visual shifts and ghost these functions drive can never feed back into their own inputs. An
 //  insertion index is a position in the list WITHOUT the dragged item (remove-then-insert

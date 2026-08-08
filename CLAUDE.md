@@ -35,6 +35,10 @@ code does not belong here; rationale lives in `git log`.
   operates ON are siblings in the same package, not members: `Message.kt`, `MessageFile.kt`,
   `MessageText.kt` (`oneLine`, and how a row becomes speech), `Draft.kt`, `ThreadOps.kt`,
   `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`
+- `android/.../MainActivity.kt` - the `Repo` singleton, the activity, and the `App` composable that
+  routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
+  `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),
+  `SessionDialogs.kt`, `ReorderableTabRow.kt` (geometry in `TabDragMath.kt`), `TimeText.kt`
 - `android/.../board/` - the console's board half. `BoardState.kt` and `BoardRows.kt` are the pure
   reducers (queue, snapshot merge, row flattening); `BoardManager.kt` owns the durable blob and is
   the only thing that mutates it
