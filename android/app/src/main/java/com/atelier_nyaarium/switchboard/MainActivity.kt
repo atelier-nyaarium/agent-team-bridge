@@ -79,6 +79,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lock
@@ -3399,12 +3400,30 @@ fun ThreadScreen(
 				onOpen = onOpenDraftFile,
 				onRemove = onRemoveDraftFile,
 			)
+			// Composer-local, like DraftStrip's own expand: this describes the VIEW, not the draft, so
+			// it must not follow a tab switch or survive into what gets sent.
+			var composerCollapsed by remember { mutableStateOf(false) }
+			// A long draft grows the field until it covers the conversation it is a reply to. Pinning it
+			// to two lines gives the thread back without touching what has been typed.
+			Row(
+				Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+				horizontalArrangement = Arrangement.End,
+			) {
+				IconButton(onClick = hapticClick { composerCollapsed = !composerCollapsed }) {
+					Icon(
+						if (composerCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+						contentDescription = if (composerCollapsed) "Grow the message box" else "Shrink the message box",
+					)
+				}
+			}
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
 					value = draft.text,
 					onValueChange = onDraftTextChange,
 					label = { Text("Message") },
 					minLines = 2,
+					// Collapsed pins it at its minimum and scrolls inside; otherwise it grows freely.
+					maxLines = if (composerCollapsed) 2 else Int.MAX_VALUE,
 					modifier = Modifier.weight(1f),
 				)
 				// Attach stacks above Send in a narrow right column, so the text field
