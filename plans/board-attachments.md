@@ -528,6 +528,32 @@ unit-covered but have never been looked at. Every previous UI change in this pha
 screen was broken in a way no gate could see, so this one is owed a look before the phase is called
 done. Seeding it needs a `BoardRefusal` in the sandbox fixture's board blob, which is one field.
 
+### Bug Classes: a fix that silently disables its own guard
+
+**Mechanism:** the console's board queue and the helpers around it.
+**Defect class:** a change widens or narrows a helper, and the CALLER that the change existed to
+protect keeps reading the old shape. Both sides still compile, and the guard becomes a constant.
+
+Three instances, all in this feature, all caught by an auditor rather than a gate:
+
+1. `upsert`-ignores was written as a spread, which only overrode when the stored entry ALREADY had
+   attachments. The case it existed for (a move's destination, which has none) kept the incoming list.
+2. `boardBytesReady` collapsed "could not find out" into "not ready", and the drain's no-charge branch
+   then parked a permanently failing stat at the lane head at zero attempts.
+3. `pendingFetches()` was widened from `Pair(blobId, gateway)` to `Triple(entry, blobId, gateway)`,
+   and `kickBoardDownload` kept reading `it.first`. Both elements are `String`, so the compiler saw
+   nothing and the give-up bypass became a constant false: the exact guard the previous commit had
+   added to stop a move freezing a Gateway lane.
+
+The shared root is that these helpers return POSITIONAL tuples and booleans whose meaning lives only
+in a comment, so a shape change cannot fail a build and a semantic change cannot fail a test. The
+cheap structural answer is a named data class per helper (`PendingFetch(entryId, blobId, holder)`)
+rather than `Triple`, which turns instance 3 into a compile error. The deeper one is that a guard
+should be tested through its CONSUMER, not by asserting the field it reads - every one of these
+passed a test that checked the stored value and not the decision made from it. Raised for
+`architecture-fan-out`; the guard-shape test added here (`pendingFetchesAnswersEntryThenBlobThenHolder`)
+pins instance 3 only.
+
 ### Bug Classes
 
 **Mechanism:** the console's queued board action, drained per Gateway lane.
