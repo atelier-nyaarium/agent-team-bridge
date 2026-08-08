@@ -123,7 +123,12 @@ export function applyCascade(
  *
  * A parent with no live children is left alone: a leaf is not something to auto-complete, and
  * trashing every child turns a parent back into one. Mixed done and cancelled reads as done, since
- * nothing is left to work on and at least some of it was actually finished. */
+ * nothing is left to work on and at least some of it was actually finished.
+ *
+ * Children only ever FINISH a parent that was unfinished. They never move one terminal state to the
+ * other, because which one it is was a deliberate choice: a cancelled parent keeping a done child
+ * would otherwise turn itself into done the next time anything near it moved. Going back to
+ * unfinished is the one exception, since that is the whole point of the reopen rule. */
 function settledState(
 	parent: BoardEntry,
 	children: Map<string, string[]>,
@@ -132,6 +137,7 @@ function settledState(
 	const live = (children.get(parent.id) ?? []).map((id) => entries.get(id)).filter((e) => e !== undefined);
 	if (live.length === 0) return undefined;
 	if (live.every((c) => isTerminal(c.state))) {
+		if (isTerminal(parent.state)) return undefined;
 		return live.some((c) => c.state === "done") ? "done" : "cancelled";
 	}
 	return isTerminal(parent.state) ? "open" : undefined;

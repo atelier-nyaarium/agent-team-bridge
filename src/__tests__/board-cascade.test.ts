@@ -96,6 +96,21 @@ describe("finishing a parent finishes what hangs off it", () => {
 		expect(states("p", "c1", "c2")).toEqual(["p:done", "c1:cancelled", "c2:done"]);
 	});
 
+	it("cancelling a parent leaves work that was already done, since it really was done", () => {
+		upsert([entry("p"), entry("c1", { parent: "p", state: "done" }), entry("c2", { parent: "p" })]);
+		setState("p", "cancelled");
+		expect(states("p", "c1", "c2")).toEqual(["p:cancelled", "c1:done", "c2:cancelled"]);
+	});
+
+	it("keeps that parent cancelled when the board is walked again later", () => {
+		// Its children now read as "all terminal, one done", which is the shape that makes an UNfinished
+		// parent done. It must not promote a parent the owner deliberately cancelled.
+		upsert([entry("p"), entry("c1", { parent: "p", state: "done" }), entry("c2", { parent: "p" })]);
+		setState("p", "cancelled");
+		store.setTrashed(OWNER, "c2", true);
+		expect(stateOf("p")).toBe("cancelled");
+	});
+
 	it("does not complete a leaf that simply has no children", () => {
 		upsert([entry("solo")]);
 		expect(stateOf("solo")).toBe("open");
