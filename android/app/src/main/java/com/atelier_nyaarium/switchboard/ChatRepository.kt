@@ -4087,8 +4087,13 @@ class ChatRepository(
 		// Bytes this entry no longer names, dropped from the device now. The orphan sweep keeps or
 		// takes a whole BUCKET, so it can never reclaim one file out of an entry that still holds
 		// others - a removed picture would sit there for the entry's whole life.
+		// Only files NAMED as a blob: a `.landing` temp belongs to a download still in flight, and
+		// deleting it here would tear that transfer's destination out from under it. Those are bounded
+		// by the bucket, which goes whole when the entry does.
 		val stays = (keep + added).mapTo(mutableSetOf()) { it.blobId }
-		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach { if (it.name !in stays) it.delete() }
+		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach {
+			if (it.name.startsWith("sha256-") && it.name !in stays) it.delete()
+		}
 
 		// `supplied` is a claim about THIS device's disk, nothing more: these are the members whose
 		// bytes are here and going up. A member outside it that the Gateway also cannot find exists on
@@ -4154,10 +4159,14 @@ class ChatRepository(
 				// gallery renders the partial bytes forever, and `supplied` would then assert a blobId
 				// this device cannot actually produce, putting the write into an unsatisfiable retry.
 				val tmp = File(target.parentFile, "${target.name}.landing")
-				staged.copyTo(tmp, overwrite = true)
-				if (!tmp.renameTo(target)) {
+				try {
+					staged.copyTo(tmp, overwrite = true)
+					if (!tmp.renameTo(target)) error("could not land ${a.filename}")
+				} finally {
+					// Whatever went wrong, the partial goes with it. The usual trigger is a full disk, so
+					// leaking here would consume more of the exact resource whose exhaustion caused the
+					// failure, and nothing else collects it: this entry's bucket is kept for its whole life.
 					tmp.delete()
-					error("could not land ${a.filename}")
 				}
 				// The blob store is a transfer buffer; holding the landed copy too would keep every
 				// attachment twice on the device with the least room for it.

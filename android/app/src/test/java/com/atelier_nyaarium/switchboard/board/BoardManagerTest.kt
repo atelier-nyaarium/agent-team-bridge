@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.BoardRefused
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -205,11 +206,21 @@ class BoardManagerTest {
 	}
 
 	@Test
-	fun anEmptyBoardCannotDriveAByteDelete() {
-		// An empty board is what a failed decode looks like, and equally what a Gateway that lost its
-		// own board file answers over the wire. In that second case the phone holds the last copies.
-		val manager = BoardManager(storeStub())
-		assertFalse("nothing known yet is not permission to delete", manager.boardIsKnown)
+	fun oneGatewaysEmptySnapshotCannotDriveAByteDelete() {
+		// A Gateway that lost its own board file answers with an EMPTY list over the wire, and the
+		// phone then holds the last copies of its attachments. Buckets are keyed per entry and the keep
+		// set is built per gateway, so a second Gateway still having entries must not make this true -
+		// two machines is the ordinary configuration, not an edge case.
+		val json = Json { ignoreUnknownKeys = true }
+		val blob = BoardBlob(
+			gateways = mapOf(
+				"gw-a" to GatewayBoard(entries = listOf(entry("a1"))),
+				"gw-b" to GatewayBoard(entries = emptyList()),
+			),
+		)
+		val manager = BoardManager(FakeStore(json.encodeToString(BoardBlob.serializer(), blob)))
+
+		assertFalse("one gateway's loss is not permission to delete its bytes", manager.boardIsKnown)
 	}
 
 	@Test

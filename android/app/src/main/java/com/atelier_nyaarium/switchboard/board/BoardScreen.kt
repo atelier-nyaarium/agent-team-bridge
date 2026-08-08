@@ -135,19 +135,34 @@ fun BoardScreen(
 			}
 		}
 
-		// A refused action never lands, so the row snapped back to Gateway truth without saying so.
-		// One dismissable line per refusal, since silence here reads as success.
+		// Silence here reads as success, so each gets its own dismissable line. The two kinds are
+		// OPPOSITE outcomes and must not share wording: a refusal never landed and can simply be redone,
+		// while a drop landed and took the pictures with it for good.
 		for ((index, refusal) in repo.board.refusals.withIndex()) {
 			item(key = "refused:$index:${refusal.entryId ?: "none"}") {
+				// Named rather than left as a floating banner: without the task, the owner has no way to
+				// tell which entry lost a picture.
+				val named = refusal.entryId?.let { id ->
+					repo.board.sourceGatewayIds().firstNotNullOfOrNull { gw ->
+						repo.board.mergedEntries(gw).firstOrNull { it.id == id }?.title
+					}
+				}
 				Row(
 					Modifier.fillMaxWidth().combinedClickable(onClick = { repo.board.dismissRefusal(refusal) }).padding(vertical = 6.dp),
 					horizontalArrangement = Arrangement.spacedBy(8.dp),
 					verticalAlignment = Alignment.CenterVertically,
 				) {
 					Text(
-						"A change did not stick (${refusal.reason}). Tap to dismiss.",
+						when (refusal.kind) {
+							BoardNoticeKind.DROPPED ->
+								"Gone for good on ${named ?: "an entry"}: ${refusal.reason}. Nothing still had the file. Tap to dismiss."
+							BoardNoticeKind.REFUSED ->
+								"A change did not stick${named?.let { " on $it" } ?: ""} (${refusal.reason}). Tap to dismiss."
+						},
 						style = MaterialTheme.typography.labelSmall,
 						color = MaterialTheme.colorScheme.error,
+						maxLines = 3,
+						overflow = TextOverflow.Ellipsis,
 					)
 				}
 			}

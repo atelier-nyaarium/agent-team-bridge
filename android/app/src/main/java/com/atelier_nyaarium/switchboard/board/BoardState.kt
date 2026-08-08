@@ -37,10 +37,35 @@ data class GatewayBoard(
 	val lastSyncedAt: Long = 0,
 )
 
+/**
+ * One thing the owner has to be told about a queued write, and WHICH thing it is.
+ *
+ * A refusal never landed, so the row already snapped back to Gateway truth and the owner can simply
+ * redo it. A drop is the opposite on both counts: the write applied, and the pictures are gone from
+ * every machine. Telling the owner "a change did not stick" about a drop invites them to redo an edit
+ * that already succeeded and to keep waiting for a file nothing will bring back.
+ */
+@Serializable
+data class BoardRefusal(
+	val entryId: String?,
+	val reason: String,
+	val kind: BoardNoticeKind = BoardNoticeKind.REFUSED,
+)
+
+@Serializable
+enum class BoardNoticeKind {
+	REFUSED,
+	DROPPED,
+}
+
 @Serializable
 data class BoardBlob(
 	val gateways: Map<String, GatewayBoard> = emptyMap(),
 	val queue: List<PendingBoardAction> = emptyList(),
+	// Durable BECAUSE the drain that mints these runs backgrounded, down a cadence ladder that ends in
+	// alarm wakeups on a killable process. An in-memory notice about pictures that are gone for good
+	// would routinely die before the owner ever opened the app.
+	val notices: List<BoardRefusal> = emptyList(),
 )
 
 ////////////////////////////////

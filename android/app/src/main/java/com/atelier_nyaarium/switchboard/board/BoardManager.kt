@@ -45,7 +45,6 @@ interface BoardWriter {
 }
 
 /** One refused action's residue: the row marker's content, and the draft restore for an edit. */
-data class BoardRefusal(val entryId: String?, val reason: String)
 
 /** The one line a session card and thread strip show while board work exists. */
 data class BoardLiveLine(val title: String, val state: String, val finished: Int, val total: Int)
@@ -83,9 +82,21 @@ class BoardManager(private val store: BoardStore) {
 	/** Bumped on every visible change; Compose reads it to re-derive rows. */
 	val revision = mutableLongStateOf(0L)
 
-	/** Refusals awaiting the owner's dismissal, newest last. Snapshot state, so a row marker appears
-	 * the moment one lands rather than at some later unrelated recomposition. */
+	/** Notices awaiting the owner's dismissal, newest last. Snapshot state, so a row appears the moment
+	 * one lands rather than at some later unrelated recomposition; mirrored into the durable blob so a
+	 * notice minted by a backgrounded drain survives the process being reclaimed. */
 	val refusals = mutableStateListOf<BoardRefusal>()
+
+	init {
+		// A notice minted while the app was backgrounded is only useful if it is still here when the
+		// owner next looks.
+		refusals.addAll(blob.notices)
+	}
+
+	private fun notice(entry: BoardRefusal) {
+		refusals.add(entry)
+		mutate { it.copy(notices = it.notices + entry) }
+	}
 
 	val knownVersion: TaskBoardVersion?
 		get() = blob.gateways[routeGatewayId()]?.version
@@ -98,11 +109,17 @@ class BoardManager(private val store: BoardStore) {
 	 * A board with no entries is not evidence that no entry has attachments. It is what a failed local
 	 * decode looks like, and equally what a Gateway that lost its own board file answers over the
 	 * wire - and in that second case the phone's copies are the last ones anywhere, since the
-	 * Gateway's bytes survive with nothing left to name them. An empty board also has nothing to
-	 * reclaim, so refusing to sweep on one costs exactly nothing.
+	 * Gateway's bytes survive with nothing left to name them.
+	 *
+	 * EVERY gateway must have entries, not merely one of them: buckets are keyed by entry and the keep
+	 * set is built per gateway, so with two machines a snapshot loss on the second still drops its
+	 * buckets out of the keep set while the first keeps this answer true. Two machines is the ordinary
+	 * configuration. The cost of being conservative is that a genuinely empty board stops reclaiming
+	 * dead buckets until any gateway reports an entry again, which is a leak that self-heals; deleted
+	 * bytes do not.
 	 */
 	val boardIsKnown: Boolean
-		get() = loadedCleanly && blob.gateways.values.any { it.entries.isNotEmpty() }
+		get() = loadedCleanly && blob.gateways.values.all { it.entries.isNotEmpty() }
 
 	private fun load(): BoardBlob {
 		val raw = store.loadTaskBoard() ?: return BoardBlob()
@@ -144,6 +161,7 @@ class BoardManager(private val store: BoardStore) {
 
 	fun dismissRefusal(refusal: BoardRefusal) {
 		refusals.remove(refusal)
+		mutate { it.copy(notices = it.notices.filter { n -> n != refusal }) }
 	}
 
 	/** A plane snapshot (route Gateway) or a board_read reply (any Gateway) landed. */
@@ -299,11 +317,11 @@ class BoardManager(private val store: BoardStore) {
 				// Shown on the same row the owner already reads for a refused edit. The write applied,
 				// but these pictures existed on no machine and are gone, which they have to be told.
 				if (dropped.isNotEmpty()) {
-					refusals.add(BoardRefusal(entryIdOf(action.op), "could not find ${dropped.joinToString(", ")}"))
+					notice(BoardRefusal(entryIdOf(action.op), dropped.joinToString(", "), BoardNoticeKind.DROPPED))
 				}
 			} catch (e: BoardRefused) {
 				DebugLog.log("Board", "action ${action.opId} refused: ${e.reason}")
-				refusals.add(BoardRefusal(entryIdOf(action.op), e.reason))
+				notice(BoardRefusal(entryIdOf(action.op), e.reason))
 				// Abandon dependents too: a move's delete must not fire because its write was refused.
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
 			} catch (e: Exception) {
@@ -339,7 +357,7 @@ class BoardManager(private val store: BoardStore) {
 			// would retire this action, and a queued action nothing retires eventually closes the lane.
 			if (!File(source).exists()) {
 				DebugLog.log("Board", "action ${action.opId} abandoned: ${source.substringAfterLast('/')} is gone")
-				refusals.add(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
+				notice(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
 			}
 			// Throwing is how the lane stops here without sending. The attempt the catch charges is
