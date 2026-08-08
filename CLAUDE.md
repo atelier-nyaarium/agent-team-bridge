@@ -80,6 +80,10 @@ code does not belong here; rationale lives in `git log`.
     `./schemas.js`. Every schema carries `.meta({id})`, which is its generated Kotlin class name.
     The barrel's export order is biome-sorted and NOT the codegen's emission order, which comes
     from `scripts/codegen-kotlin.ts`'s own ROOTS list
+  - `codex-thinking.ts` - the Codex delegation wire truth: a barrel over the `codexThinking*.ts`
+    domain files (identity, activities, targets, agent state, relay frames, App Server protocol,
+    agent record, catalog), re-exporting the original public surface by name so the split files'
+    internal helpers stay out of it. Never fed to the Kotlin codegen
   - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
     its own module because schemas.ts and federation-protocol.ts both consume it and would cycle.
     A file DECLARES what it is here (`role`, plus the ref and design-card facts a receiver would
