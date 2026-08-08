@@ -270,9 +270,14 @@ class BoardManager(private val store: BoardStore) {
 				toGateway,
 				dependsOn = last,
 				sources = members.associate { it.blobId to sourceFor(entry.id, it.blobId) },
-				// Where to pull a member this device never downloaded. Its bytes are on the ORIGIN,
+				// ONLY the members this device does not already hold. Listing them all would make the
+				// abandon branch dead for every move, so a member whose local file later vanishes could
+				// never retire its action - and a linked delete behind it closes the origin's lane
+				// before the struggling step-past is even considered. Its bytes are on the ORIGIN,
 				// which is what the record still names until the destination stores its own.
-				fetchFrom = members.associate { it.blobId to it.blobGateway },
+				fetchFrom = members
+					.filterNot { File(sourceFor(entry.id, it.blobId)).isFile }
+					.associate { it.blobId to it.blobGateway },
 			)
 		}
 		enqueue(ConsoleOp.BoardRemove(subtree.map { it.id }), fromGateway, dependsOn = last)
@@ -407,11 +412,16 @@ class BoardManager(private val store: BoardStore) {
 	val queuedActions: List<PendingBoardAction>
 		get() = blob.queue
 
-	/** Members a queued action must PULL before it can push, as (blobId, holding gateway). A move's
-	 * attach cannot retire until these arrive, and its own kick dies with the process, so the resume
-	 * pass has to see them or the origin's linked delete blocks that Gateway's lane for good. */
-	fun pendingFetches(): List<Pair<String, String>> =
-		blob.queue.flatMap { action -> action.fetchFrom.map { (blobId, gw) -> blobId to gw } }
+	/** Members a queued action must PULL before it can push, as (entry, blobId, holding gateway). The
+	 * ENTRY comes from the action rather than being re-found later: once the upsert half retires, no
+	 * cached view names that entry, so a search would answer nothing in exactly the window this
+	 * exists for. A move's attach cannot retire until these arrive, and its own kick dies with the
+	 * process, so the resume pass has to see them or the origin's linked delete blocks that lane. */
+	fun pendingFetches(): List<Triple<String, String, String>> =
+		blob.queue.flatMap { action ->
+			val entryId = entryIdOf(action.op) ?: return@flatMap emptyList()
+			action.fetchFrom.map { (blobId, gw) -> Triple(entryId, blobId, gw) }
+		}
 
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }

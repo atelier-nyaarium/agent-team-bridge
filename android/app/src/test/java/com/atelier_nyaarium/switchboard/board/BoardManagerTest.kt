@@ -208,8 +208,8 @@ class BoardManagerTest {
 
 	@Test
 	fun aMoveCarriesItsBytesAndDeletesTheOriginLast() {
-		// The origin delete now reclaims bytes, so it must not drain until the destination holds them
-		// durably. Ordering is the only thing standing between a move and destroying the last copy.
+		// The origin entry stops existing when the delete lands, so the destination has to hold the
+		// bytes by then or the picture is reachable from nowhere.
 		val picture = BoardAttachment("sha256-${"a".repeat(64)}", "gw-a", "shot.png", "image/png", 3)
 		val board = BoardManager(storeStub())
 		val subtree = listOf(entry("m1").copy(attachments = listOf(picture)))
@@ -224,8 +224,40 @@ class BoardManagerTest {
 		// Chained, so the delete cannot drain before the bytes have landed.
 		assertEquals(queue[0].opId, queue[1].dependsOn)
 		assertEquals(queue[1].opId, queue[2].dependsOn)
-		// It knows where to PULL a picture this device never opened.
+		// It knows where to PULL a picture this device never opened: the ORIGIN still holds it.
 		assertEquals("gw-a", queue[1].fetchFrom[picture.blobId])
+		// And the record it writes names the DESTINATION, which is where the bytes are going. These
+		// two gateway ids sit one line apart and swapping them compiles, so both are pinned.
+		val written = (queue[1].op as ConsoleOp.BoardSetAttachments).attachments.single()
+		assertEquals("gw-b", written.blobGateway)
+		assertEquals(picture.blobId, written.blobId)
+	}
+
+	@Test
+	fun aMoveChainsOnlyTheEntriesThatHaveAttachments() {
+		// The chain threads through a subtree where most entries carry nothing, and a broken link is
+		// what lets the origin delete overtake an attachment write.
+		val picture = BoardAttachment("sha256-${"a".repeat(64)}", "gw-a", "shot.png", "image/png", 3)
+		val board = BoardManager(storeStub())
+		val subtree = listOf(entry("m1"), entry("m2").copy(attachments = listOf(picture)), entry("m3"))
+
+		board.enqueueMove(subtree, fromGateway = "gw-a", toGateway = "gw-b") { e, b -> "/tmp/$e/$b" }
+
+		val queue = board.queuedActions
+		assertEquals("one upsert, one attachment write, one delete", 3, queue.size)
+		assertEquals("m2", (queue[1].op as ConsoleOp.BoardSetAttachments).id)
+		assertEquals(queue[1].opId, queue[2].dependsOn)
+	}
+
+	@Test
+	fun aMoveWithNoAttachmentsLinksTheDeleteStraightToTheUpsert() {
+		val board = BoardManager(storeStub())
+
+		board.enqueueMove(listOf(entry("m1")), fromGateway = "gw-a", toGateway = "gw-b") { e, b -> "/tmp/$e/$b" }
+
+		val queue = board.queuedActions
+		assertEquals(2, queue.size)
+		assertEquals(queue[0].opId, queue[1].dependsOn)
 	}
 
 	@Test

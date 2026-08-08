@@ -4204,16 +4204,12 @@ class ChatRepository(
 		// A move's attach waits on bytes this device may never have held. Its own kick dies with the
 		// process, and nothing else would ever start it again, so the action would wait forever and its
 		// linked origin delete would hold that Gateway's lane closed behind it.
-		for ((blobId, holder) in board.pendingFetches()) {
-			for (gw in board.sourceGatewayIds()) {
-				val a = board.mergedEntries(gw).asSequence()
-					.flatMap { e -> (e.attachments ?: emptyList()).map { e.id to it } }
-					.firstOrNull { it.second.blobId == blobId } ?: continue
-				if (!Attachments.boardFile(filesDir, a.first, blobId).isFile) {
-					kickBoardDownload(a.first, a.second.copy(blobGateway = holder))
-				}
-				break
-			}
+		for ((entryId, blobId, holder) in board.pendingFetches()) {
+			if (Attachments.boardFile(filesDir, entryId, blobId).isFile) continue
+			// Everything needed is on the action itself. Searching a cached view for the blobId instead
+			// answers nothing once the upsert has retired, and can match the wrong entry when the same
+			// picture hangs on two of them.
+			kickBoardDownload(entryId, BoardAttachment(blobId, holder, blobId, "application/octet-stream", 0))
 		}
 	}
 

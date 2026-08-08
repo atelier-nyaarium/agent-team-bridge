@@ -40,8 +40,9 @@ export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: strin
  *
  * NOT called from `restore`'s per-entry drop, which is corruption recovery: reclaiming there would
  * turn this store's one tolerant path into its one irrecoverable one. NOT called from `remove`
- * either, whose only caller is the delete half of a cross-Gateway move; leaking a directory per move
- * is the deliberate trade until a move learns to carry its bytes.
+ * either: that op carries ids and nothing else, so reclaiming there would rest on the SENDER having
+ * copied the bytes elsewhere first, and the console is the last of the four components to update.
+ * Adding it needs EVIDENCE on the op, not an assumption about who sent it. See `remove`.
  */
 export interface BoardAttachmentSink {
 	/** Bytes the entry no longer names. */
