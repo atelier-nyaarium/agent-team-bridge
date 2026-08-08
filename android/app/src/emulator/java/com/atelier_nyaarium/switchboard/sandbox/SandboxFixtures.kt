@@ -18,6 +18,7 @@ import com.atelier_nyaarium.switchboard.OutgoingFile
 import com.atelier_nyaarium.switchboard.Team
 import com.atelier_nyaarium.switchboard.board.BoardBlob
 import com.atelier_nyaarium.switchboard.board.GatewayBoard
+import com.atelier_nyaarium.switchboard.localFieldOrSelf
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.RefFileMeta
@@ -45,7 +46,7 @@ import kotlinx.serialization.json.Json
  * eventually, and that is fine for a sandbox.
  */
 class SandboxFixtures(private val filesDir: File, private val assets: AssetManager) {
-	/** One session, enough for the board to render tiles instead of onboarding. */
+	/** Two sessions: one carries every seeded surface, the second only exists so the tab row draws. */
 	fun teams(): List<Team> = listOf(
 		Team(
 			name = SESSION,
@@ -54,6 +55,14 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			queueDepth = 0,
 			kind = "loose",
 			sessionLabel = "Sandbox",
+		),
+		Team(
+			name = SESSION_2,
+			status = "online",
+			mode = "channel",
+			queueDepth = 0,
+			kind = "loose",
+			sessionLabel = "Second",
 		),
 	)
 
@@ -328,6 +337,13 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		 * to special-case it. */
 		const val SESSION = "local.sandbox.host.demo"
 
+		/** A second session on a DIFFERENT gateway, since the thread's tab row is one tab per gateway. */
+		const val SESSION_2 = "local.parsing.host.other"
+
+		/** Must be the gateway segment of [SESSION]: `Team.gatewayId` derives from the address, and the
+		 * thread strip looks the board up under whatever that answers. */
+		const val GATEWAY = "sandbox"
+
 		/** A stable non-zero mailbox epoch for the seeded rows: countsUnread() needs seq > 0, and
 		 * the anchor resolves by (epoch, seq) equality, so both must be real values here. */
 		const val SANDBOX_EPOCH = 7L
@@ -363,7 +379,7 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 	fun seedBoard(store: AppStateStore) {
 		// A real id, not whatever a cleared install has: sourceGatewayIds drops empty ones, so a board
 		// keyed by "" renders as an empty backlog with no hint that anything was seeded.
-		val gatewayId = store.loadGatewayId().ifEmpty { "sandbox-gw".also { store.saveGatewayId(it) } }
+		val gatewayId = GATEWAY.also { store.saveGatewayId(it) }
 		val entryId = "b".repeat(32)
 		val present = writeBoardBytes(entryId, "shot", 4_000)
 		val huge = BoardAttachment(
@@ -375,12 +391,15 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		)
 		val missing = huge.copy(blobId = "sha256-${"d".repeat(64)}", filename = "gone.png", mime = "image/png", size = 900)
 
+		// Held by the sandbox session, not the backlog, or the thread's board strip has no group to
+		// match and renders as nothing at all.
 		val entry = BoardEntry(
 			id = entryId,
 			title = "An entry with pictures",
 			body = "Tap a row to open it. The big one waits to be asked.",
-			state = "open",
+			state = "in_progress",
 			rank = "m",
+			sessionId = localFieldOrSelf(SESSION),
 			attachments = listOf(present, huge, missing),
 		)
 		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry))))

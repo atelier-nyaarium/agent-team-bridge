@@ -1749,7 +1749,9 @@ fun SessionsScreen(
 							fun renderProject(projectKey: String, header: @Composable () -> Unit) {
 								val sessions = byProject[projectKey].orEmpty().sortedWith(order)
 								if (sessions.isEmpty()) return
-								item(key = "spawn:$projectKey") { header() }
+								// Keyed by gateway too: one LazyColumn spans every gateway, and a spawn name is
+								// unique only within one, so two gateways with a `host` spawn threw on a duplicate key.
+								item(key = "spawn:$composite/$projectKey") { header() }
 								items(sessions, key = { "team:${it.name}" }) { team ->
 									SessionCard(
 										state = state,
@@ -3274,13 +3276,13 @@ fun ThreadScreen(
 		// imePadding keeps the composer above the keyboard (adjustResize alone does
 		// not resize a Compose window on modern Android).
 		Column(Modifier.padding(pad).fillMaxSize().imePadding()) {
-			// The board strip sits ABOVE the tab row: it belongs to the bar (the pulse-as-bottom-edge
-			// treatment), and the tab row's own drag geometry stays untouched beneath it.
-			if (boardStrip != null && !terminalMode) {
-				com.atelier_nyaarium.switchboard.board.BoardStrip(group = boardStrip, liveLine = boardLiveLine)
-			}
 			if (tabs.size > 1) {
 				ReorderableTabRow(tabs = tabs, selected = team, tabLabel = tabLabel, onSelect = onGateway, onReorder = onReorderTabs)
+			}
+			// Below the tab row, not above it. The strip is the open tab's own entries and its height
+			// changes as they do, which walked the tab row up and down the screen under it.
+			if (boardStrip != null && !terminalMode) {
+				com.atelier_nyaarium.switchboard.board.BoardStrip(group = boardStrip, liveLine = boardLiveLine)
 			}
 			if (terminalMode) {
 				TerminalView(
@@ -3410,8 +3412,9 @@ fun ThreadScreen(
 				horizontalArrangement = Arrangement.End,
 			) {
 				IconButton(onClick = hapticClick { composerCollapsed = !composerCollapsed }) {
+					// Same direction as the board's own collapsers: open points down, shut points up.
 					Icon(
-						if (composerCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+						if (composerCollapsed) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
 						contentDescription = if (composerCollapsed) "Grow the message box" else "Shrink the message box",
 					)
 				}
