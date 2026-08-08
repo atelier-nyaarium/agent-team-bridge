@@ -75,8 +75,11 @@ code does not belong here; rationale lives in `git log`.
 - `src/shared/` - wire truth and utilities used by both sides
   - `capabilities.ts` - the capability ids and the guidance text each one carries, what the host
     daemon's own configuration declares at register, and the fold from a per-source bundle to one list
-  - `schemas.ts` - THE single zod truth for every wire shape. Every schema carries `.meta({id})`,
-    which is its generated Kotlin class name
+  - `schemas.ts` - THE single zod truth for every wire shape: a barrel re-exporting the
+    `schemas*.ts` domain files, so every importer keeps importing named symbols from
+    `./schemas.js`. Every schema carries `.meta({id})`, which is its generated Kotlin class name.
+    The barrel's export order is biome-sorted and NOT the codegen's emission order, which comes
+    from `scripts/codegen-kotlin.ts`'s own ROOTS list
   - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
     its own module because schemas.ts and federation-protocol.ts both consume it and would cycle.
     A file DECLARES what it is here (`role`, plus the ref and design-card facts a receiver would

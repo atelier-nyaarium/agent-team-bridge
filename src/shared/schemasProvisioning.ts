@@ -1,0 +1,68 @@
+import { z } from "zod";
+import { b64Field, slugField } from "./crypto.js";
+import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
+
+////////////////////////////////
+//  Provisioning Schema
+//
+//  The blob the user pastes at console setup. Credentials and endpoints only.
+//  Runtime defaulting stays app-side (device from Build.MODEL, conversationId
+//  minting a UUID, URL normalization); the schema carries only the shape.
+
+// The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
+// for a pending (unrooted) Domain, both a friend invite and the admin's own fresh setup. A
+// pending Domain has no gateway, so the app cannot learn it is pending from a register reply;
+// it reads this off the blob and first-roots directly against evie with the nonce. Absent for a
+// re-provision of an already-rooted Domain. Named (.meta id) so the codegen emits a nested class.
+export const PendingTenantRefSchema = z
+	.object({
+		// The opaque pending Domain id the friend's first_root roots.
+		domainId: slugField(),
+		// The one-time invite nonce (base64) evie checks unspent before rooting.
+		nonce: b64Field(),
+	})
+	.meta({ id: "PendingTenantRef" });
+
+// The admin-enroll handshake seed the QR carries (present only on an ADMIN-ENROLL invite
+// blob). Named (.meta id) so the codegen emits it as a nested Kotlin class.
+export const EnrollHandshakeRefSchema = z
+	.object({
+		// The admin's OWNER keys + Domain, OOB-authenticated by the in-person scan; the friend
+		// folds them into its local enroll SAS (ENROLL_SAS_V1).
+		adminOwnerSignPub: b64Field(),
+		adminOwnerBoxPub: b64Field(),
+		adminDomainId: slugField(),
+		// The unguessable id naming the evie broker window both phones drive.
+		handshakeId: b64Field(),
+		// The one-time shared secret both phones fold into the SAS but NEVER send to evie.
+		pin: b64Field(),
+	})
+	.meta({ id: "EnrollHandshakeRef" });
+
+export const ProvisioningSchema = z
+	.object({
+		apiUrl: z.string().min(1),
+		caPem: z.string(),
+		saToken: z.string(),
+		appToken: z.string().optional(),
+		namespace: z.string().optional(),
+		service: z.string().optional(),
+		port: z.number().int().positive().optional(),
+		device: z.string().optional(),
+		conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
+		// Set only for a pending (unrooted) Domain blob (a friend invite or the admin's own fresh
+		// setup): the pending Domain id plus the one-time invite nonce. Its presence is the
+		// discriminator: the app first-roots iff it is present, else it just provisions the
+		// console. Absent for a re-provision of an already-rooted Domain.
+		pendingTenant: PendingTenantRefSchema.optional(),
+		// Present only on an ADMIN-ENROLL invite blob: the seed for the in-person mutual 6-digit
+		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
+		// provision / re-provision.
+		enrollHandshake: EnrollHandshakeRefSchema.optional(),
+		// evie's public nonce-gated device-approval ingress, the reach a fresh device POSTs its
+		// join/fetch to in the "Add a device" self-enroll. A held device stamps it into the
+		// authorize-console QR; absent means this network has no public ingress and the Add-a-device
+		// entry is shown disabled.
+		deviceApprovalReach: z.string().optional(),
+	})
+	.meta({ id: "Provisioning" });
