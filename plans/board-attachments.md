@@ -313,13 +313,20 @@ the lap that attacked it. The Plan section references these and adds nothing of 
 - The `board_` name prefix is load-bearing: `isBoardMutationKind` is a prefix test feeding both the
   opCache and the durable replay layer.
 - Committed through `BoardStore.mutate`, which bumps the plane and banks the `changed` notice for the
-  holding session for free. The gateway's op handler checks presence DURABLE-FIRST: a blobId already
-  under the entry's durable directory is present, full stop; otherwise copy it from the blob cache,
-  digest-checked; only if neither holds is the op a plain retryable error (the console's queue
-  retries and the upload is racing it). Durable-first matters because the absolute op names the
-  SURVIVORS on every write: a cache-only check turns the owner removing one picture, weeks later
-  when the cache has swept the others, into a forever-retrying action that closes the entry's lane.
-  It would pass every warm-cache test. **No new `BoardRefusal` member anywhere in this plan.**
+  holding session for free. The gateway's op handler resolves EVERY member before adopting any, then
+  stores what resolved:
+  - **Durable-first.** A blobId already under the entry's directory is present, full stop. The
+    absolute op names the SURVIVORS on every write, so a cache-only check turns the owner removing one
+    picture, weeks later when the cache has swept the others, into a permanently failing action. It
+    would pass every warm-cache test.
+  - Otherwise copy from the blob cache, digest-checked.
+  - Otherwise, if the sender's `supplied` list names it, a plain retryable error: the upload is
+    genuinely racing this write.
+  - Otherwise DROP it and report which. Those bytes are on no machine, and an op that cannot be
+    satisfied is one the console retries forever, eventually closing that Gateway's whole lane.
+  - Adopt only after every member is accounted for, so a partial pass cannot leave bytes under an
+    entry whose stored list never names them.
+  **No new `BoardRefusal` member anywhere in this plan.**
 
 ## The console
 
@@ -471,6 +478,14 @@ attachment and without the tool nothing can read one. Build order inside the pha
 order: gateway first (store, op, serving, the route's names-only projection and its new `attachments`
 read action), then the plugin's fetch tool, then the
 console. Every constraint above applies here except the two Phase 2 items below.
+
+### Not yet seen on a screen
+
+The gallery, the three tile states and the viewer were verified on the emulator. The board's NOTICE
+row was not: its two wordings, the entry-title lookup beside them and the line cap are compiled and
+unit-covered but have never been looked at. Every previous UI change in this phase that skipped the
+screen was broken in a way no gate could see, so this one is owed a look before the phase is called
+done. Seeding it needs a `BoardRefusal` in the sandbox fixture's board blob, which is one field.
 
 ### Bug Classes
 
