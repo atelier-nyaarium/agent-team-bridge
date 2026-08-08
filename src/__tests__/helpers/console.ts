@@ -1,0 +1,216 @@
+import type { ServerWebSocket } from "bun";
+import {
+	type ConsoleHandlerDeps,
+	type ConsoleRoutes,
+	createConsoleDispatcher,
+} from "../../gateway/console/consoleHandler.js";
+import type { WakeResult } from "../../gateway/wake.js";
+import type { ConversationRegistry, TeamRegistry, WsData } from "../../gateway/websocket.js";
+import type { ConsoleOp, OpenedConsoleFrame } from "../../shared/console-protocol.js";
+import { DeviceMailboxStore } from "../../shared/device-mailbox.js";
+import type { DurableStore } from "../../shared/durable-store.js";
+import { ownerKeyId } from "../../shared/owner-id.js";
+import type { SessionStore } from "../../shared/session-store.js";
+
+////////////////////////////////
+//  Interfaces & Types
+
+export interface Harness {
+	registry: TeamRegistry;
+	conversationRegistry: ConversationRegistry;
+	mailboxStore: DeviceMailboxStore;
+	sendCalls: Record<string, unknown>[];
+	respondCalls: Record<string, unknown>[];
+	handler: ReturnType<typeof createConsoleDispatcher>;
+}
+
+////////////////////////////////
+//  Functions & Helpers
+
+export function jsonRes(body: unknown, status = 200): Response {
+	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** An in-memory stand-in for DurableStore (no real disk I/O). Passing the SAME instance to two
+ * separately-constructed DurableOpStores simulates a gateway restart: a fresh in-memory opCache
+ * (a new createConsoleDispatcher) reading the same durable snapshot a prior instance wrote. */
+export function fakeDurable(): DurableStore {
+	let state: unknown = null;
+	return {
+		load: () => state,
+		save: (s: unknown) => {
+			state = s;
+		},
+		saveChecked: (s: unknown) => {
+			state = s;
+		},
+	} as unknown as DurableStore;
+}
+
+// Deterministic ids for collision tests.
+export function scriptedIds(...ids: string[]) {
+	let extra = 0;
+	return () => ids.shift() ?? `fill${extra++}`;
+}
+
+// The default owner for test frames. The mailbox is keyed by this (via ownerKeyId),
+// so every default frame shares one owner inbox; pass a different ownerSignPub to
+// simulate a second owner.
+export const OWNER_PUB = "owner-pub";
+export const OWNER = ownerKeyId(OWNER_PUB);
+
+// The handler operates on an OPENED frame (the pump unseals the wire frame first),
+// so tests construct that directly. A stable signer per conversation satisfies the
+// install binding; tests that exercise the binding pass an explicit signer. All
+// frames share one owner by default (the inbox is owner-keyed).
+export function frame(
+	op: ConsoleOp,
+	opId = "op1",
+	device = "pixel",
+	conversationId = "conv-pixel",
+	signerSignPub = `signer-${conversationId}`,
+	ownerSignPub = OWNER_PUB,
+): OpenedConsoleFrame {
+	return { opId, signerSignPub, ownerSignPub, conversationId, device, op };
+}
+
+/** A minimal non-virtual socket standing in for a real devcontainer connection. */
+export function realTeamWs(team: string, subId: string): ServerWebSocket<WsData> {
+	return {
+		readyState: 1,
+		send: () => {},
+		close: () => {},
+		ping: () => {},
+		data: {
+			teamName: team,
+			subId,
+			conversationId: null,
+			mode: "channel",
+			missedPings: 0,
+			isStale: false,
+			handshakeConfirmed: true,
+		},
+	} as unknown as ServerWebSocket<WsData>;
+}
+
+export function makeHarness(
+	overrides: Partial<ConsoleRoutes> = {},
+	deps: Partial<
+		Pick<
+			ConsoleHandlerDeps,
+			| "domainStatus"
+			| "domain"
+			| "planeRegistry"
+			| "presence"
+			| "intentTracker"
+			| "readAnchors"
+			| "crossDomainPresenceConsumer"
+			| "linkedDomainIds"
+		>
+	> = {},
+): Harness {
+	const registry: TeamRegistry = new Map();
+	const conversationRegistry: ConversationRegistry = new Map();
+	const mailboxStore = new DeviceMailboxStore();
+	const sendCalls: Record<string, unknown>[] = [];
+	const respondCalls: Record<string, unknown>[] = [];
+
+	const routes: ConsoleRoutes = {
+		send: async (_req, body) => {
+			sendCalls.push(body);
+			return jsonRes({ session_id: "conv:host:team-a", status: "running" });
+		},
+		respond: (_req, body) => {
+			respondCalls.push(body);
+			return jsonRes({ delivered: true });
+		},
+		teams: () =>
+			jsonRes([
+				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
+			]),
+		// list_teams fans out via discover; mirror the team list here.
+		discover: async () =>
+			jsonRes([
+				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
+			]),
+		...overrides,
+	};
+
+	const handler = createConsoleDispatcher({
+		registry,
+		conversationRegistry,
+		mailboxStore,
+		localGatewayId: "test-host",
+		localDomainId: "test-domain",
+		routes,
+		domainStatus: deps.domainStatus,
+		domain: deps.domain,
+		planeRegistry: deps.planeRegistry,
+		presence: deps.presence,
+		intentTracker: deps.intentTracker,
+		readAnchors: deps.readAnchors,
+		crossDomainPresenceConsumer: deps.crossDomainPresenceConsumer,
+		linkedDomainIds: deps.linkedDomainIds,
+	});
+	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
+}
+
+/** Shared by the terminal-ops (peek/tmux_send/list_dirs/reload_plugins), create_session, and
+ * close/forget/rename split files - each exercises this same relayToHost-backed dispatcher. */
+export function makeTerminalHarness(
+	isProjectName: (n: string) => boolean = (n) => n === "recipe-app",
+	relayPeek?: () => { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
+	opts: {
+		sessionStore?: SessionStore;
+		relayFails?: boolean;
+		relayTimesOut?: boolean;
+		relayDisconnects?: boolean;
+		tryWakeTeam?: (team: string) => Promise<WakeResult>;
+		createSessionBoundMs?: number;
+		isWakeInFlight?: (team: string) => boolean;
+		markCreateInFlight?: (team: string) => () => void;
+		awaitRegister?: (team: string) => Promise<WakeResult>;
+		dropSessionResume?: (team: string) => void;
+	} = {},
+) {
+	const hostOps: Record<string, unknown>[] = [];
+	const routes: ConsoleRoutes = {
+		send: async () => jsonRes({ session_id: "s", status: "running" }),
+		respond: () => jsonRes({ delivered: true }),
+		teams: () => jsonRes([]),
+		discover: async () => jsonRes([]),
+	};
+	const handler = createConsoleDispatcher({
+		registry: new Map(),
+		conversationRegistry: new Map(),
+		mailboxStore: new DeviceMailboxStore(),
+		localGatewayId: "test-host",
+		localDomainId: "test-domain",
+		routes,
+		isProjectName,
+		sessionStore: opts.sessionStore,
+		tryWakeTeam: opts.tryWakeTeam,
+		isWakeInFlight: opts.isWakeInFlight,
+		markCreateInFlight: opts.markCreateInFlight,
+		awaitRegister: opts.awaitRegister,
+		dropSessionResume: opts.dropSessionResume,
+		createSessionBoundMs: opts.createSessionBoundMs,
+		relayToHost: async (op) => {
+			hostOps.push(op as unknown as Record<string, unknown>);
+			if (opts.relayTimesOut) return { ok: false, error: "host op timed out", errorKind: "timeout" };
+			if (opts.relayDisconnects) {
+				return { ok: false, error: "host daemon disconnected", errorKind: "disconnected" };
+			}
+			if (opts.relayFails) return { ok: false, error: "launch failed" };
+			if (op.kind === "peek")
+				return relayPeek ? relayPeek() : { ok: true, result: { kind: "tmux", ansi: "SCREEN", hash: "h1" } };
+			if (op.kind === "listDirs") return { ok: true, result: { entries: [".config", "projects"] } };
+			return { ok: true, result: { sent: true } };
+		},
+	});
+	return { handler, hostOps, sessionStore: opts.sessionStore };
+}

@@ -32,7 +32,8 @@ code does not belong here; rationale lives in `git log`.
     the one authenticated route behind all five tools (see Codex delegation below)
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
-    the capability store, the relay pump, the durable op store
+    the capability store, the relay pump, the durable op store. `consoleTypes.ts` holds the deps and
+    route interfaces, bounds and pure predicates `consoleHandler.ts`'s dispatcher is built on
 - `android/.../ChatRepository.kt` - the console's process singleton. The types and pure helpers it
   operates ON are siblings in the same package, not members: `Message.kt`, `MessageFile.kt`,
   `MessageText.kt` (`oneLine`, and how a row becomes speech), `Draft.kt`, `ThreadOps.kt`,
