@@ -91,6 +91,19 @@ gates stayed green.
 Rule: every lap that moves declarations OUT of a file must prune that file's imports and verify by
 compiling. A red-team angle should keep asking for it, since no tool will.
 
+### A split silently changes the module's export surface
+
+Twice in consecutive laps, and in opposite directions. Lap 7: widening four internals so split files
+could share them let an `export *` barrel republish them, 99 public exports where HEAD had 95. Lap
+8: re-exporting only what current importers pull dropped ten HEAD-public types, 4 where HEAD had 14,
+after the splitter wrongly reported them module-private. Lint and tests were green both times; only
+the verifier's checker-based `getExportsOfModule` comparison saw either.
+
+Rule: the module surface is part of the split's contract, and the SPLITTER proves it, not just the
+verifier. Every split brief includes: enumerate HEAD's exports with the TypeScript checker before
+starting, re-verify after, identical sets. A barrel over files containing widened internals uses
+NAMED export lists, never `export *`, so a future widening cannot silently become an API addition.
+
 ### A parameter no body reads
 
 `ChatState.sessions(localGatewayId)` and `label(team, localGatewayId)` each took an argument neither

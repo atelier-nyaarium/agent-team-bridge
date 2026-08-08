@@ -13,7 +13,7 @@ export const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
 ////////////////////////////////
 //  Functions & Helpers
 
-export function requestedAgent(agentId = AGENT_ID): CodexPersistedAgent {
+export function requestedAgent(agentId = AGENT_ID, operationId = OPERATION_ID): CodexPersistedAgent {
 	return CodexPersistedAgentSchema.parse({
 		version: 1,
 		agentId,
@@ -21,8 +21,8 @@ export function requestedAgent(agentId = AGENT_ID): CodexPersistedAgent {
 		requestedTarget: { kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
 		exchanges: [
 			{
-				exchangeId: OPERATION_ID,
-				operationId: OPERATION_ID,
+				exchangeId: operationId,
+				operationId,
 				kind: "start",
 				prompt: "Review",
 				status: "requested",
@@ -32,7 +32,7 @@ export function requestedAgent(agentId = AGENT_ID): CodexPersistedAgent {
 		turns: [],
 		operations: [
 			{
-				operationId: OPERATION_ID,
+				operationId,
 				kind: "start",
 				fingerprint: codexOperationFingerprint("start", agentId, "Review"),
 				state: "requested",

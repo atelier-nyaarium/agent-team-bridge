@@ -28,9 +28,10 @@ code does not belong here; rationale lives in `git log`.
     liveness read at the send edge (see Awareness pushes below)
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
-  - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog and
-    its reducers, the per-agent critical section that folds daemon receipts and events into them, and
-    the one authenticated route behind all five tools (see Codex delegation below)
+  - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog, the
+    per-agent critical section that folds daemon receipts and events into it, and the one
+    authenticated route behind all five tools; the pure reducers and the shared types live in
+    `codexAgentReducers.ts` and `codexAgentTypes.ts` (see Codex delegation below)
   - `evie/` - WS client to evie-bot over the k8s API service-proxy
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store. `consoleTypes.ts` holds the deps and
