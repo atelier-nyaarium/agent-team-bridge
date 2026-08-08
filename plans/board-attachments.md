@@ -512,7 +512,7 @@ Found while auditing, not caused by this feature, each worth its own fix outside
 
 Two phases.
 
-## Phase 1 - The feature
+## Phase 1 - The feature ✅
 
 The whole thing end to end: it does not split, since without the console nothing can create an
 attachment and without the tool nothing can read one. Build order inside the phase follows the deploy
