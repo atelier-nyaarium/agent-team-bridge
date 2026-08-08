@@ -686,13 +686,15 @@ export class BoardStore {
 	 * TRUE removal, the delete half of a cross-Gateway move only. Literal ids: a survivor whose
 	 * parent is being removed refuses the batch, so a caller must ship the whole subtree.
 	 *
-	 * Reclaims attachment bytes, which is safe ONLY because the move now writes them to the
-	 * destination durably before this half is allowed to drain. While it did not, this deliberately
-	 * leaked a directory per move rather than destroying the origin's last copy.
+	 * Reclaims NOTHING, deliberately, even though the move now writes bytes to the destination first.
+	 * This op carries ids and nothing else, so the Gateway has no evidence the destination stored
+	 * anything - the safety would rest entirely on the sender being a console new enough to have done
+	 * it. The console is the LAST of the four components to update, so there is a guaranteed window
+	 * where every console in the field still sends the old pair and the reclaim would destroy the only
+	 * copy. A leaked directory per move is bounded by a rare owner action and is recoverable by hand.
 	 */
 	remove(ownerId: string, ids: readonly string[]): BoardResult {
-		let removed: string[] = [];
-		const result = this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
+		return this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
 			const removing = new Set(ids);
 			for (const e of board.entries.values()) {
 				if (!removing.has(e.id) && e.parent && removing.has(e.parent)) return "would_orphan";
@@ -700,19 +702,8 @@ export class BoardStore {
 			for (const id of ids) {
 				if (board.entries.delete(id)) touch(id);
 			}
-			removed = [...ids];
 			return undefined;
 		});
-		if (result.applied) {
-			for (const id of removed) {
-				try {
-					this.attachmentSink?.releasedAll(ownerId, id);
-				} catch (err) {
-					console.error(`[task-board] could not reclaim attachments for ${id}:`, err);
-				}
-			}
-		}
-		return result;
 	}
 
 	/** A session ended. Done and cancelled entries are trashed (30 recoverable days); what happens to

@@ -4146,7 +4146,10 @@ class ChatRepository(
 	}
 
 	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
-		if ((boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
+		// A queued move is waiting on these, and nothing else can retire it, so giving up would leave
+		// the origin's linked delete holding that Gateway's lane closed forever.
+		val required = board.pendingFetches().any { it.first == a.blobId }
+		if (!required && (boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
 		if (!boardDownloadsInFlight.add(a.blobId)) return
 		repoScope.launch {
 			try {
@@ -4198,6 +4201,20 @@ class ChatRepository(
 	 * picture would never go up. Cheap to repeat: an upload resumes from the Gateway's own cursor. */
 	private fun resumeBoardUploads() {
 		for ((_, source, gatewayId) in board.pendingSources()) kickBoardUpload(source, gatewayId)
+		// A move's attach waits on bytes this device may never have held. Its own kick dies with the
+		// process, and nothing else would ever start it again, so the action would wait forever and its
+		// linked origin delete would hold that Gateway's lane closed behind it.
+		for ((blobId, holder) in board.pendingFetches()) {
+			for (gw in board.sourceGatewayIds()) {
+				val a = board.mergedEntries(gw).asSequence()
+					.flatMap { e -> (e.attachments ?: emptyList()).map { e.id to it } }
+					.firstOrNull { it.second.blobId == blobId } ?: continue
+				if (!Attachments.boardFile(filesDir, a.first, blobId).isFile) {
+					kickBoardDownload(a.first, a.second.copy(blobGateway = holder))
+				}
+				break
+			}
+		}
 	}
 
 	/** One transfer per source at a time. Without the guard the poll cadence would start a second

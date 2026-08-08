@@ -261,8 +261,12 @@ class BoardManager(private val store: BoardStore) {
 		for (entry in subtree) {
 			val members = entry.attachments.orEmpty()
 			if (members.isEmpty()) continue
+			// Re-stamped to the DESTINATION, which is where these bytes are about to live. Copying the
+			// origin's id forward leaves the record naming a machine that no longer has to hold them,
+			// and a console routed anywhere else then loses the picture the moment that cache sweeps.
+			val landed = members.map { it.copy(blobGateway = toGateway) }
 			last = enqueue(
-				ConsoleOp.BoardSetAttachments(entry.id, members, supplied = members.map { it.blobId }),
+				ConsoleOp.BoardSetAttachments(entry.id, landed, supplied = members.map { it.blobId }),
 				toGateway,
 				dependsOn = last,
 				sources = members.associate { it.blobId to sourceFor(entry.id, it.blobId) },
@@ -402,6 +406,12 @@ class BoardManager(private val store: BoardStore) {
 	 * before the destination holds the bytes destroys the last copy. */
 	val queuedActions: List<PendingBoardAction>
 		get() = blob.queue
+
+	/** Members a queued action must PULL before it can push, as (blobId, holding gateway). A move's
+	 * attach cannot retire until these arrive, and its own kick dies with the process, so the resume
+	 * pass has to see them or the origin's linked delete blocks that Gateway's lane for good. */
+	fun pendingFetches(): List<Pair<String, String>> =
+		blob.queue.flatMap { action -> action.fetchFrom.map { (blobId, gw) -> blobId to gw } }
 
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }

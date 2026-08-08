@@ -184,30 +184,13 @@ describe("the trash sweep", () => {
 });
 
 describe("the delete half of a move", () => {
-	it("reclaims the origin's bytes, which is safe only because the destination stored them first", () => {
+	it("leaves the origin's bytes alone, because the op carries no evidence they landed elsewhere", () => {
+		// The gateway is told ids and nothing else. Reclaiming here would rest on the SENDER being a
+		// console new enough to have written the bytes to the destination first, and the console is the
+		// last of the four components to update.
 		const one = hold("one");
 		setAttachments([one]);
 		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: true });
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(false);
-	});
-
-	it("a refused remove reclaims nothing", () => {
-		const child = "e".repeat(32);
-		store.upsert(OWNER, [entry(child, { parent: ENTRY })], OWNER_ACTOR);
-		const one = hold("one");
-		setAttachments([one]);
-		// Shipping the parent without its child would strand the child, so the whole batch refuses.
-		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: false, refused: "would_orphan" });
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
-	});
-});
-
-describe("reclaim never fires without a real delete", () => {
-	it("sweepTrash reclaims only once the retention window is actually up", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		store.setTrashed(OWNER, ENTRY, true);
-		store.sweepTrash(Date.now() + BOARD_TRASH_TTL_MS - 1);
 		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
 	});
 });

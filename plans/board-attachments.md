@@ -589,6 +589,18 @@ gets exactly the previous behaviour, so the deploy window is safe.
   copies the just-uploaded cache bytes into the entry's durable directory before the metadata
   commits. Order is load-bearing; a failure at any point leaves the entry where it was, and the
   origin delete never runs before the destination's durable copy exists.
-- `remove()` becomes a reclaim site in the SAME change, closing the deliberate Phase 1 leak. Safe
-  now precisely because of the step above: by the time the origin delete fires, the destination
-  holds the bytes durably, not merely in its sweepable cache.
+- **`remove()` still reclaims NOTHING.** This was meant to close the Phase 1 leak, was implemented,
+  and was reverted: the argument for it was backwards. The op carries ids and nothing else, so the
+  safety would rest on the SENDER being a console new enough to have written the bytes to the
+  destination first - and the console is the LAST of the four components to update. There is a
+  guaranteed window where the reclaiming Gateway is live and every console in the field still sends
+  the old upsert-plus-remove pair, and the reclaim then destroys the only copy. A stale device is a
+  second trigger for the same root: whether an attach step exists at all is decided from its cached
+  snapshot. Closing this needs EVIDENCE on the op that the destination stored the bytes, not an
+  assumption about who sent it. The leak stays: bounded by a rare owner action, recoverable by hand.
+- Attachment records are re-stamped to the DESTINATION as they move. Carrying the origin's
+  `blobGateway` forward leaves the record naming a machine that no longer has to hold the bytes, and
+  a console routed elsewhere loses the picture the moment that cache sweeps.
+- A move's attach waits on bytes this device may never have held, and nothing but the pull can retire
+  it, so the pull rejoins the per-poll resume pass and ignores the give-up counter while an action is
+  waiting on it. Otherwise the origin's linked delete holds that Gateway's lane closed for good.
