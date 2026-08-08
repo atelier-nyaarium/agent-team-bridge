@@ -107,8 +107,9 @@ code does not belong here; rationale lives in `git log`.
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
-- `scripts/` - `build.ts`, `codegen-kotlin.ts`, `sync-leaf.ts`, `setup.ts` (the admin menu),
-  `check-module-residue.ts`, `import-stts-voices.ts`, `build-grammars.ts`
+- `scripts/` - `build.ts`, `codegen-kotlin.ts`, `sync-leaf.ts`, `setup.ts` (the admin menu entry;
+  its options live in `setup-gateway.ts` / `setup-provision.ts` / `setup-purge.ts` /
+  `setup-enrollment-ui.ts`), `check-module-residue.ts`, `import-stts-voices.ts`, `build-grammars.ts`
 - `tests/fixtures/` - golden wire fixtures and signing vectors read by BOTH vitest and the Kotlin
   tests. `_manifest.json` and `_signing-vectors-manifest.json` are the inventories both runtimes
   iterate, so a new corpus cannot be read by only one side
