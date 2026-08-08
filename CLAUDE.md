@@ -414,6 +414,16 @@ coldest object, so eviction there is silent permanent loss.
 - Files land under their BLOB name, not the display name, since a downloading device knows only the
   blobId and the owner can pick two `screenshot.png`. Above `BOARD_AUTO_DOWNLOAD_MAX_BYTES` a console
   waits to be asked; that is NOT a cap on what may be attached, which is the ordinary wire limit.
+- **A cross-Gateway move carries its bytes**, as a CHAIN: upsert, then one `board_set_attachments` per
+  entry that has any, then the origin's delete, each `dependsOn` the last so the delete drains after
+  the destination holds them. Records are re-stamped to the destination, and a member this device
+  never downloaded rides `fetchFrom` so the pull is restarted by the per-poll resume pass. `supplied`
+  names ONLY what the device holds: claiming the rest would disable the Gateway's drop path and leave
+  a picture that exists nowhere retrying forever behind a linked delete, which closes that lane.
+- **`remove()` still reclaims nothing**, deliberately. It carries ids and no evidence the destination
+  stored anything, and the console is the LAST component to update, so a reclaiming Gateway would
+  destroy the only copy for every console still sending the old pair. A leaked directory per move is
+  the accepted trade. See `plans/board-attachments.md` for the full reasoning and what closing it needs.
 
 ### Awareness pushes
 
