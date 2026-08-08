@@ -42,7 +42,9 @@ code does not belong here; rationale lives in `git log`.
 - `android/.../ChatRepository.kt` - the console's process singleton. The types and pure helpers it
   operates ON are siblings in the same package, not members: `Message.kt`, `MessageFile.kt`,
   `MessageText.kt` (`oneLine`, and how a row becomes speech), `Draft.kt`, `ThreadOps.kt`,
-  `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`
+  `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`.
+  `ChatPersistence.kt` is the delegate it HOLDS: the JSON codec between the in-memory maps and
+  AppStateStore (threads, read anchors, labels, scheduled sends, absence streaks, drafts)
 - `android/.../MainActivity.kt` - the `Repo` singleton, the activity, and the `App` composable that
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),

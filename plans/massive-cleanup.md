@@ -125,6 +125,12 @@ ordering hazard. The only enumerations to touch: both CI workflow lists, and the
 Keep the barrel a pure re-export so no consumer changes in either repo, and let each new leaf keep
 its internals private so `export *` cannot widen the surface.
 
+### Pass-2 candidate: ChatPersistence is now JVM-testable
+
+The persistence codec's extraction left a class whose only dependency is AppStateStore. The JSON
+round-trip (including isAddressKey's key filtering and the legacy-shape draft load) has zero JVM
+unit coverage, before and after the move. A fake store makes it testable without Robolectric.
+
 ### A redundant-looking test guarding a semantic invariant
 
 Lap 22's sweep cut two strict-schema tests as mechanically redundant (same .strict() unknown-key
