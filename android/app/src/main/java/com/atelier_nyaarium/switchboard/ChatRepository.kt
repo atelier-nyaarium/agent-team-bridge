@@ -104,14 +104,16 @@ class ChatRepository(
 	 * read the head before mutating it; `scheduledSendFireMutex` guards the same shape for sends. */
 	private val advanceMutex = Mutex()
 
-	// Declared before _state so loadPersistedThreads/Labels/ReadAnchors read them in order. Kotlin
-	// initializes fields in declaration order.
+	// Declared before _state, which snapshots it. Kotlin initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
+
+	/** The JSON codec over [store]. Declared before _state so its loads can seed the initial state. */
+	private val persistence = ChatPersistence(store)
 
 	// One-shot grammar-version wipe. MUST run BEFORE the first thread/label load-parse below, so a
 	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
 	// blocks and property initializers top-to-bottom, so this settles before _state's
-	// loadPersistedThreads()/loadPersistedLabels() read anything.
+	// persistence.loadPersistedThreads()/loadPersistedLabels() read anything.
 	init {
 		if (store.migrateSchemaIfNeeded()) {
 			// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
@@ -124,8 +126,8 @@ class ChatRepository(
 	// Canned directory listings for the create dialog's picker, installed only by seedSandbox
 	// (emulator build). Null on every real device, so listDirs always asks the gateway there.
 	@Volatile private var sandboxDirs: Map<String, List<String>>? = null
-	private val loadedThreadsAtStartup: Map<String, List<Message>> = loadPersistedThreads()
-	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = loadPersistedReadAnchors(loadedThreadsAtStartup)
+	private val loadedThreadsAtStartup: Map<String, List<Message>> = persistence.loadPersistedThreads()
+	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = persistence.loadPersistedReadAnchors(loadedThreadsAtStartup)
 
 	private val _state = MutableStateFlow(
 		ChatState(
@@ -135,13 +137,13 @@ class ChatRepository(
 			unread = loadedThreadsAtStartup.mapValues { (team, msgs) -> unreadCount(msgs, loadedReadAnchorsAtStartup[team]) },
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
-			labels = loadPersistedLabels(),
-			teamAbsenceStreaks = loadPersistedAbsenceStreaks(),
+			labels = persistence.loadPersistedLabels(),
+			teamAbsenceStreaks = persistence.loadPersistedAbsenceStreaks(),
 			localGatewayId = localGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
-			scheduledSends = loadPersistedScheduledSends(),
-			drafts = loadPersistedDrafts(),
+			scheduledSends = persistence.loadPersistedScheduledSends(),
+			drafts = persistence.loadPersistedDrafts(),
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -2121,7 +2123,7 @@ class ChatRepository(
 			}
 			st
 		}
-		if (anyChanged) persistReadAnchors(next.readAnchors)
+		if (anyChanged) persistence.persistReadAnchors(next.readAnchors)
 	}
 
 	/** Report every team whose local read anchor has advanced past what this device last told the
@@ -2836,8 +2838,8 @@ class ChatRepository(
 		freshTeamsMutex.withLock {
 			val visible = filterTombstoned(raw, forgottenUntil, System.currentTimeMillis())
 			val next = _state.updateAndGet { it.withFreshTeams(visible) }
-			persistLabels(next.labels)
-			persistAbsenceStreaks(next.teamAbsenceStreaks)
+			persistence.persistLabels(next.labels)
+			persistence.persistAbsenceStreaks(next.teamAbsenceStreaks)
 		}
 		refreshDisplayNameFromTeams()
 	}
@@ -3366,7 +3368,7 @@ class ChatRepository(
 		}
 		if (!claimed) return@withContext
 		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return@withContext
-		persistThreads(_state.value.threads)
+		persistence.persistThreads(_state.value.threads)
 		val (files, refused) = rebuildFiles(msg)
 		if (refused != null) {
 			setMessageStatus(team, messageId, "error")
@@ -3426,7 +3428,7 @@ class ChatRepository(
 			val rec = ScheduledSend(text, fileRefs, fireAtMillis, opId, targetDomainId, System.currentTimeMillis())
 			val prior = _state.value.scheduledSends[team]
 			val next = _state.updateAndGet { s -> s.copy(scheduledSends = s.scheduledSends + (team to rec)) }.scheduledSends
-			persistScheduledSends(next)
+			persistence.persistScheduledSends(next)
 			rearmScheduledSendAlarm(next)
 			// A replace's old bucket is now unreferenced - clean it up the same way forget() does,
 			// never inline (best-effort, off pollScope, healed by the next sweepOrphanAttachments if
@@ -3488,7 +3490,7 @@ class ChatRepository(
 		val next = _state.updateAndGet { s ->
 			s.copy(scheduledSends = s.scheduledSends + (team to prior.copy(fireAtMillis = fireAtMillis)))
 		}.scheduledSends
-		persistScheduledSends(next)
+		persistence.persistScheduledSends(next)
 		rearmScheduledSendAlarm(next)
 		return true
 	}
@@ -3500,7 +3502,7 @@ class ChatRepository(
 	private fun clearScheduledSendRecord(team: String): ScheduledSend? {
 		val prior = _state.value.scheduledSends[team] ?: return null
 		val next = _state.updateAndGet { s -> s.copy(scheduledSends = s.scheduledSends - team) }.scheduledSends
-		persistScheduledSends(next)
+		persistence.persistScheduledSends(next)
 		rearmScheduledSendAlarm(next)
 		return prior
 	}
@@ -3713,7 +3715,7 @@ class ChatRepository(
 			val thread = s.threads[team] ?: return@updateAndGet s
 			s.copy(threads = s.threads + (team to thread.filterNot { it.id == id }))
 		}.threads
-		persistThreads(threads)
+		persistence.persistThreads(threads)
 	}
 
 	private fun setMessageStatus(team: String, id: Long, status: String?) {
@@ -3721,7 +3723,7 @@ class ChatRepository(
 			val thread = s.threads[team] ?: return@updateAndGet s
 			s.copy(threads = s.threads + (team to thread.map { if (it.id == id) it.copy(status = status) else it }))
 		}.threads
-		persistThreads(threads)
+		persistence.persistThreads(threads)
 	}
 
 	/** Stage picked Uris under one cumulative admission budget. Each is streamed to disk, never
@@ -4283,7 +4285,7 @@ class ChatRepository(
 			}
 			withAnchor.recomputeUnread(team, thread)
 		}
-		if (anchorChanged) persistReadAnchors(next.readAnchors)
+		if (anchorChanged) persistence.persistReadAnchors(next.readAnchors)
 	}
 
 	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a local
@@ -4340,7 +4342,7 @@ class ChatRepository(
 				s
 			}
 		}
-		if (changed) persistReadAnchors(next.readAnchors)
+		if (changed) persistence.persistReadAnchors(next.readAnchors)
 	}
 
 	/** Close a tab: drop it locally AND, for a local addressable session, kill its tmux on the gateway
@@ -4402,7 +4404,7 @@ class ChatRepository(
 	// Per-thread composer state (ChatState.drafts), persisted so a power-management kill (or any
 	// process death) never loses a half-typed message or a picked-but-unsent file. Every writer
 	// below reads-modifies-writes the SAME _state.drafts map through withDraft and persists via
-	// persistDrafts, so text, files, and the two restore paths (cancelFailedSend,
+	// persistence.persistDrafts, so text, files, and the two restore paths (cancelFailedSend,
 	// cancelScheduledSendForEdit, both above) can never observe or clobber a stale copy of the map.
 
 	/** Set a team's composer text, replacing whatever text was there; files are untouched. */
@@ -4410,7 +4412,7 @@ class ChatRepository(
 		val next = _state.updateAndGet { s ->
 			s.withDraft(team, (s.drafts[team] ?: Draft()).copy(text = text))
 		}.drafts
-		persistDrafts(next)
+		persistence.persistDrafts(next)
 	}
 
 	/** Pick files into a team's draft, eagerly copying them into their own bucket - mirroring
@@ -4441,7 +4443,7 @@ class ChatRepository(
 			val current = s.drafts[team] ?: Draft()
 			s.withDraft(team, current.copy(files = current.files + copied, locations = current.locations + located))
 		}.drafts
-		persistDrafts(next)
+		persistence.persistDrafts(next)
 	}
 
 	/** Drop one picked file from a team's draft (the attachment chip's remove) and delete its
@@ -4457,7 +4459,7 @@ class ChatRepository(
 				),
 			)
 		}.drafts
-		persistDrafts(next)
+		persistence.persistDrafts(next)
 		scheduleAttachmentDelete(listOf(src))
 	}
 
@@ -4480,7 +4482,7 @@ class ChatRepository(
 		val next = _state.updateAndGet { s ->
 			s.withDraft(team, mergeTakenBackDraft(s.drafts[team] ?: Draft(), text, files))
 		}.drafts
-		persistDrafts(next)
+		persistence.persistDrafts(next)
 	}
 
 	/**
@@ -4501,7 +4503,7 @@ class ChatRepository(
 	fun clearDraft(team: String) {
 		if (_state.value.drafts[team] == null) return
 		val next = _state.updateAndGet { s -> s.copy(drafts = s.drafts - team) }.drafts
-		persistDrafts(next)
+		persistence.persistDrafts(next)
 	}
 
 	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
@@ -4511,7 +4513,7 @@ class ChatRepository(
 			val next = if (name.isBlank()) s.labels - team else s.labels + (team to name.trim())
 			s.copy(labels = next)
 		}.labels
-		persistLabels(labels)
+		persistence.persistLabels(labels)
 	}
 
 	/** Rename a session: set it locally for immediate feedback, then push it to the gateway so the
@@ -4559,7 +4561,7 @@ class ChatRepository(
 			val next = _state.updateAndGet { s ->
 				if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
 			}
-			persistLabels(next.labels)
+			persistence.persistLabels(next.labels)
 		} else if (reply?.renamed == false || (!isLocal && result.isFailure)) {
 			var reverted = true
 			if (isLocal) {
@@ -4571,7 +4573,7 @@ class ChatRepository(
 						s
 					}
 				}
-				persistLabels(next.labels)
+				persistence.persistLabels(next.labels)
 				reverted = next.labels[team] != before
 			}
 			if (reverted) {
@@ -4686,7 +4688,7 @@ class ChatRepository(
 			val next = thread.toMutableList().also { it[idx] = row.copy(files = files) }
 			s.copy(threads = s.threads + (team to next))
 		}.threads
-		if (changed) persistThreads(threads)
+		if (changed) persistence.persistThreads(threads)
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
@@ -4767,9 +4769,9 @@ class ChatRepository(
 				drafts = s.drafts - key,
 			)
 		}
-		persistThreadsAndReadAnchors(next.threads, next.readAnchors)
-		persistLabels(next.labels)
-		persistDrafts(next.drafts)
+		persistence.persistThreadsAndReadAnchors(next.threads, next.readAnchors)
+		persistence.persistLabels(next.labels)
+		persistence.persistDrafts(next.drafts)
 		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
 		cancelScheduledSend(key)
 		// Queue first, cache second. Dropping under the advance mutex stops the player only once the
@@ -4872,7 +4874,7 @@ class ChatRepository(
 			val next = existing + msg.copy(id = newId)
 			s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 		}.threads
-		persistThreads(threads)
+		persistence.persistThreads(threads)
 		return newId
 	}
 
@@ -4915,7 +4917,7 @@ class ChatRepository(
 				}
 			}
 			if (folded) {
-				persistThreads(updated.threads)
+				persistence.persistThreads(updated.threads)
 				return false
 			}
 		}
@@ -4952,296 +4954,13 @@ class ChatRepository(
 			}
 		}.threads
 		if (handled) {
-			persistThreads(threads)
+			persistence.persistThreads(threads)
 			// The old row's now-orphaned bucket copies (see Attachments.mergeSentEchoFiles) -
 			// deleted here, not left for the cold-start sweep, so the common case never leaks
 			// even transiently.
 			scheduleAttachmentDelete(deleteSrcs)
 		} else {
 			append(team, echo)
-		}
-	}
-
-	private fun threadsJson(threads: Map<String, List<Message>>): String {
-		val root = JSONObject()
-		for ((team, msgs) in threads) {
-			val arr = JSONArray()
-			for (m in msgs) {
-				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
-				obj.putOpt("status", m.status)
-				obj.putOpt("opId", m.opId)
-				if (m.epoch != 0L) obj.put("epoch", m.epoch)
-				if (m.seq != 0L) obj.put("seq", m.seq)
-				obj.putOpt("title", m.title)
-				obj.putOpt("summary", m.summary)
-				obj.putOpt("fullSpoken", m.fullSpoken)
-				val (persistFrom, persistTo) = persistedAttribution(m)
-				obj.putOpt("from", persistFrom)
-				obj.putOpt("to", persistTo)
-				if (m.isPeer) obj.put("isPeer", true)
-				// Local paths and blob references only. The files themselves live on disk, not in here.
-				if (m.files.isNotEmpty()) {
-					val files = JSONArray()
-					for (f in m.files) {
-						files.put(fileJson(f))
-					}
-					obj.put("files", files)
-				}
-				arr.put(obj)
-			}
-			root.put(team, arr)
-		}
-		return root.toString()
-	}
-
-	private fun persistThreads(threads: Map<String, List<Message>>) {
-		runCatching { store.saveThreads(threadsJson(threads)) }
-	}
-
-	private fun readAnchorsJson(anchors: Map<String, ReadAnchor>): String {
-		val root = JSONObject()
-		for ((team, a) in anchors) {
-			root.put(team, JSONObject().put("epoch", a.epoch).put("seq", a.seq).put("at", a.at))
-		}
-		return root.toString()
-	}
-
-	private fun persistReadAnchors(anchors: Map<String, ReadAnchor>) {
-		runCatching { store.saveReadAnchors(readAnchorsJson(anchors)) }
-	}
-
-	/** Write threads AND read anchors in one SharedPreferences batch (see
-	 * AppStateStore.saveThreadsAndReadAnchors) - required whenever a single state transition
-	 * changed both, so a process kill between two separate writes can never strand one against
-	 * the other's stale value. */
-	private fun persistThreadsAndReadAnchors(threads: Map<String, List<Message>>, anchors: Map<String, ReadAnchor>) {
-		runCatching { store.saveThreadsAndReadAnchors(threadsJson(threads), readAnchorsJson(anchors)) }
-	}
-
-	/** Load persisted read anchors, keyed by canonical address. On the FIRST run after this
-	 * feature ships (no anchors persisted at all yet - `store.loadReadAnchors()` returns null),
-	 * one-shot seed every EXISTING thread at its own tail, so the update does not resurrect old
-	 * messages as unread; a brand-new team created afterward gets no seed and its first message
-	 * badges immediately via the runtime "no anchor -> everything after it unread" rule. */
-	private fun loadPersistedReadAnchors(threads: Map<String, List<Message>>): Map<String, ReadAnchor> {
-		val json = store.loadReadAnchors()
-		if (json != null) {
-			return runCatching {
-				val root = JSONObject(json)
-				buildMap {
-					for (rawKey in root.keys()) {
-						if (!isAddressKey(rawKey)) continue
-						val a = root.getJSONObject(rawKey)
-						put(rawKey, ReadAnchor(a.optLong("epoch"), a.optLong("seq"), a.optLong("at")))
-					}
-				}
-			}.getOrDefault(emptyMap())
-		}
-		val seeded = threads.mapNotNull { (team, msgs) -> lastInboundAnchor(msgs)?.let { team to it } }.toMap()
-		persistReadAnchors(seeded)
-		return seeded
-	}
-
-	/** A persisted thread/label/draft key is a canonical 4-segment address (domain.gateway.spawn.session).
-	 * Anything else - a prior device-name-as-segment bug key, or any non-canonical shorter form - is
-	 * dropped on load so it cannot resurface as an unsendable ghost chat; re-saving the cleaned map
-	 * drops it for good. The exact-3-dots check enforces arity 4 (parseTarget alone also accepts arity
-	 * 1/2/3). The domain arg is "" not localDomain(): this runs during _state construction (localDomain()
-	 * reads _state and would NPE), and a 4-segment key carries its own domain so the arg is unused. */
-	private fun isAddressKey(rawKey: String): Boolean =
-		rawKey.count { it == '.' } == 3 && runCatching { parseTarget(rawKey, "", localGatewayId) }.isSuccess
-
-	private fun loadPersistedThreads(): Map<String, List<Message>> {
-		val json = store.loadThreads() ?: return emptyMap()
-		return runCatching {
-			val root = JSONObject(json)
-			val merged = LinkedHashMap<String, MutableList<Message>>()
-			for (rawKey in root.keys()) {
-				if (!isAddressKey(rawKey)) continue
-				val canonicalKey = rawKey
-				val arr = root.getJSONArray(rawKey)
-				val loaded = (0 until arr.length()).map {
-					val m = arr.getJSONObject(it)
-					val isPeer = m.optBoolean("isPeer")
-					// A peer row's from/to are the same address grammar as a thread key, so validate them
-					// the same way (isAddressKey) before trusting them - a corrupted store file or a future
-					// grammar change must degrade to the existing unresolvable-from fallback, not surface
-					// a malformed value verbatim into a notification or the thread UI.
-					val (loadedFrom, loadedTo) = loadedAttribution(
-						persistedFrom = m.optString("from").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
-						persistedTo = m.optString("to").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
-						isPeer = isPeer,
-						isMe = m.optBoolean("me"),
-						canonicalKey = canonicalKey,
-					)
-					Message(
-						m.optBoolean("me"),
-						m.optString("text"),
-						m.optLong("at"),
-						0L,
-						loadFiles(m),
-						m.optString("status").takeIf { s -> s.isNotEmpty() },
-						m.optString("opId").takeIf { s -> s.isNotEmpty() },
-						title = m.optString("title").tierOrNull(),
-						summary = m.optString("summary").tierOrNull(),
-						fullSpoken = m.optString("fullSpoken").tierOrNull(),
-						epoch = m.optLong("epoch", 0L),
-						seq = m.optLong("seq", 0L),
-						from = loadedFrom,
-						to = loadedTo,
-						isPeer = isPeer,
-					)
-				}
-					// Stored threads can hold a "waking" row, from when the cold-wake wait was a transcript
-					// row rather than a notice card (ChatState.wakingTeams). Nothing resolves such a row,
-					// so drop it. "pending" echoes WITH an opId are kept for the service's idempotent
-					// reconcile; legacy ones without an opId cannot be re-sent safely, so they demote to
-					// retriable here (and never strand a forever-working chip if the service fails early).
-					.filterNot { !it.fromMe && it.status == "waking" }
-					.map { if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it }
-				merged.getOrPut(canonicalKey) { mutableListOf() }.addAll(loaded)
-			}
-			// id is not persisted; assign a dense per-thread id by time order AFTER any
-			// merge, so it stays unique within the (possibly merged) thread.
-			merged.mapValues { (_, msgs) -> msgs.sortedBy { it.at }.mapIndexed { i, m -> m.copy(id = i.toLong()) } }
-		}.getOrDefault(emptyMap())
-	}
-
-	private fun persistLabels(labels: Map<String, String>) {
-		val root = JSONObject()
-		for ((team, name) in labels) root.put(team, name)
-		runCatching { store.saveLabels(root.toString()) }
-	}
-
-	private fun loadPersistedLabels(): Map<String, String> {
-		val json = store.loadLabels() ?: return emptyMap()
-		return runCatching {
-			val root = JSONObject(json)
-			buildMap {
-				for (rawKey in root.keys()) {
-					if (!isAddressKey(rawKey)) continue
-					put(rawKey, root.getString(rawKey))
-				}
-			}
-		}.getOrDefault(emptyMap())
-	}
-
-	private fun scheduledSendsJson(records: Map<String, ScheduledSend>): String {
-		val root = JSONObject()
-		for ((team, rec) in records) {
-			val files = JSONArray()
-			for (f in rec.fileRefs) files.put(fileJson(f))
-			root.put(
-				team,
-				JSONObject()
-					.put("text", rec.text)
-					.put("files", files)
-					.put("fireAt", rec.fireAtMillis)
-					.put("opId", rec.opId)
-					.putOpt("targetDomainId", rec.targetDomainId)
-					.put("createdAt", rec.createdAt),
-			)
-		}
-		return root.toString()
-	}
-
-	private fun persistScheduledSends(records: Map<String, ScheduledSend>) {
-		runCatching { store.saveScheduledSends(scheduledSendsJson(records)) }
-	}
-
-	/** Same disposable storage class as drafts/labels, with no special re-provisioning survival.
-	 * A corrupt or legacy-grammar row is dropped rather than risked as a
-	 * bogus immediate fire (a blank opId or a non-positive fireAt reads as "already due"). Each row
-	 * parses under its OWN runCatching, not one wrapping the whole loop - a single malformed team
-	 * entry (a torn/partial SharedPreferences write, a future schema mismatch) must not throw away
-	 * every OTHER team's still-good record too. That would not just lose data quietly: the next cold
-	 * start's unconditional fireDueScheduledSends() would find nothing due and call
-	 * rearmScheduledSendAlarm(), which cancels the real, still-armed AlarmManager alarm for every
-	 * affected team when the map comes back smaller than it should be. */
-	private fun loadPersistedScheduledSends(): Map<String, ScheduledSend> {
-		val json = store.loadScheduledSends() ?: return emptyMap()
-		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
-		return buildMap {
-			for (rawKey in root.keys()) {
-				if (!isAddressKey(rawKey)) continue
-				runCatching {
-					val obj = root.getJSONObject(rawKey)
-					val opId = obj.optString("opId")
-					val fireAt = obj.optLong("fireAt")
-					if (opId.isEmpty() || fireAt <= 0L) return@runCatching null
-					ScheduledSend(
-						text = obj.optString("text"),
-						fileRefs = loadFiles(obj),
-						fireAtMillis = fireAt,
-						opId = opId,
-						targetDomainId = obj.optString("targetDomainId").takeIf { it.isNotEmpty() },
-						createdAt = obj.optLong("createdAt"),
-					)
-				}.getOrNull()?.let { put(rawKey, it) }
-			}
-		}
-	}
-
-	private fun persistAbsenceStreaks(streak: Map<String, Int>) {
-		val root = JSONObject()
-		for ((team, count) in streak) root.put(team, count)
-		runCatching { store.saveAbsenceStreaks(root.toString()) }
-	}
-
-	private fun loadPersistedAbsenceStreaks(): Map<String, Int> {
-		val json = store.loadAbsenceStreaks() ?: return emptyMap()
-		return runCatching {
-			val root = JSONObject(json)
-			buildMap {
-				for (rawKey in root.keys()) {
-					if (!isAddressKey(rawKey)) continue
-					put(rawKey, root.optInt(rawKey, 0))
-				}
-			}
-		}.getOrDefault(emptyMap())
-	}
-
-	/** Absent on a draft saved before locations existed, and on any file the provider named nothing
-	 * usable for. Either way the row hides rather than showing a guess. */
-	private fun loadLocations(obj: JSONObject): Map<String, String> {
-		val raw = obj.optJSONObject("locations") ?: return emptyMap()
-		return buildMap {
-			for (src in raw.keys()) raw.optString(src).takeIf { it.isNotBlank() }?.let { put(src, it) }
-		}
-	}
-
-	private fun persistDrafts(records: Map<String, Draft>) {
-		val root = JSONObject()
-		for ((team, draft) in records) {
-			val files = JSONArray()
-			for (f in draft.files) files.put(fileJson(f))
-			val locations = JSONObject()
-			for ((src, where) in draft.locations) locations.put(src, where)
-			root.put(team, JSONObject().put("text", draft.text).put("files", files).put("locations", locations))
-		}
-		runCatching { store.saveDrafts(root.toString()) }
-	}
-
-	/** A pre-Draft persisted row is a bare JSON string (just the text); real users have saved
-	 * drafts under that shape, so it loads as `Draft(text = it)` rather than being dropped. A
-	 * current-shape row is an object with "text" + "files", read the same way a ScheduledSend's
-	 * fileRefs are (loadFiles). Either way an entry that comes back unoccupied (empty legacy text)
-	 * is dropped, matching withDraft's own sparse-map invariant. */
-	private fun loadPersistedDrafts(): Map<String, Draft> {
-		val json = store.loadDrafts() ?: return emptyMap()
-		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
-		return buildMap {
-			for (rawKey in root.keys()) {
-				if (!isAddressKey(rawKey)) continue
-				runCatching {
-					val obj = root.optJSONObject(rawKey)
-					if (obj != null) {
-						Draft(text = obj.optString("text"), files = loadFiles(obj), locations = loadLocations(obj))
-					} else {
-						Draft(text = root.getString(rawKey))
-					}
-				}.getOrNull()?.takeIf { it.isOccupied }?.let { put(rawKey, it) }
-			}
 		}
 	}
 
