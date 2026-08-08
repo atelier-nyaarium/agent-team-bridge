@@ -56,8 +56,15 @@ interface BoardWriter {
  */
 data class PendingFetch(val entryId: String, val blobId: String, val holder: String)
 
-/** The one line a session card and thread strip show while board work exists. */
-data class BoardLiveLine(val title: String, val state: String, val finished: Int, val total: Int)
+/** The one line a session card and thread strip show while board work exists. `currentId` names the
+ * entry the title came from, which is what lets a card show the branch that entry sits in. */
+data class BoardLiveLine(
+	val title: String,
+	val state: String,
+	val finished: Int,
+	val total: Int,
+	val currentId: String? = null,
+)
 
 /**
  * The console's board half: the per-Gateway cache, the pending-action queue, and the drain.
@@ -476,7 +483,17 @@ class BoardManager(private val store: BoardStore) {
 		val current = mine.filter { it.state == "in_progress" }.minByOrNull { it.rank }
 			?: mine.filter { it.state == "open" }.minByOrNull { it.rank }
 			?: mine.minByOrNull { it.rank }
-		return BoardLiveLine(current?.title ?: "", current?.state ?: "open", finished, mine.size)
+		return BoardLiveLine(current?.title ?: "", current?.state ?: "open", finished, mine.size, current?.id)
+	}
+
+	/** The branch a session card draws: the top-level entry holding [BoardLiveLine.currentId], plus
+	 * everything under it. Empty when the session has no live board work. */
+	fun cardBranch(gatewayId: String, team: String, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
+		val key = GroupKey(gatewayId, sessionKeyOf(team))
+		val group = flattenBoard(listOf(BoardSource(gatewayId, mergedEntries(gatewayId))))
+			.sessions.firstOrNull { it.key == key }
+			?: return CardBranch(emptyList(), 0)
+		return cardBranchOf(group.rows, currentId, max)
 	}
 
 	private fun entryIdOf(op: ConsoleOp): String? = when (op) {

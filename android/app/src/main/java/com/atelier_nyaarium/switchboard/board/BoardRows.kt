@@ -20,6 +20,37 @@ data class BoardRows(
 	val trash: List<BoardRow>,
 )
 
+/** What a session card draws, and how much of the branch it had to leave out. */
+data class CardBranch(val rows: List<BoardRow>, val hidden: Int)
+
+/** How many rows a session card will draw before it starts counting instead. A card is a glance;
+ * past this the session list turns into a page of scrolling and the board tab is the better place. */
+const val CARD_BRANCH_MAX = 6
+
+/**
+ * One branch of a session's tree: the top-level entry holding [currentId] and everything beneath it.
+ *
+ * `rows` is already in tree order with depth, so a branch is the slice from a depth-0 row up to the
+ * next one. That is what makes this a pair of scans rather than a second walk over the parent
+ * pointers, and it cannot disagree with what the board tab draws.
+ *
+ * An unknown or absent [currentId] falls back to the FIRST branch rather than to nothing: a session
+ * whose current entry was just trashed still has work worth showing, and an empty card would read as
+ * a session with no board at all.
+ */
+fun cardBranchOf(rows: List<BoardRow>, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
+	if (rows.isEmpty()) return CardBranch(emptyList(), 0)
+	val at = rows.indexOfFirst { it.entry.id == currentId }.takeIf { it >= 0 } ?: 0
+	var start = at
+	while (start > 0 && rows[start].depth != 0) start--
+	var end = start + 1
+	while (end < rows.size && rows[end].depth != 0) end++
+	val branch = rows.subList(start, end)
+	// The cut keeps the TOP of the branch, not the rows around the current entry: the root names what
+	// the work is, and a slice starting mid-tree would show indented children under nothing.
+	return if (branch.size <= max) CardBranch(branch, 0) else CardBranch(branch.take(max), branch.size - max)
+}
+
 /** The ONE pure producer of board rows: its output guarantees each entry id appears at most once,
  * which every LazyColumn key depends on.
  *

@@ -150,6 +150,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -893,6 +894,15 @@ fun App(
 				if (!boardOnHere) emptyMap()
 				else state.teams.associate { it.name to repo.board.liveLine(repo.boardGatewayOf(it.name), it.name) }
 			}
+			// Alongside the lines rather than inside the card, on the same revision key: the list
+			// recomposes on every poll and a per-card flatten would rebuild every session's tree each time.
+			val boardBranches = remember(boardRevisionForCards, state.teams, boardOnHere) {
+				if (!boardOnHere) emptyMap()
+				else state.teams.mapNotNull { team ->
+					val line = boardLines[team.name] ?: return@mapNotNull null
+					team.name to repo.board.cardBranch(repo.boardGatewayOf(team.name), team.name, line.currentId)
+				}.toMap()
+			}
 			MainTabsScreen(
 				state = state,
 				boardEnabled = pluginManager.isActive("taskboard"),
@@ -950,6 +960,7 @@ fun App(
 						onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
 							?.let { c -> { enrolleeCeremonyCtx = c } },
 						boardLine = { team -> boardLines[team.name] },
+						boardBranch = { team -> boardBranches[team.name] },
 						undoneFor = { team ->
 							if (pluginManager.isActive("taskboard")) {
 								repo.board.undoneCount(repo.boardGatewayOf(team.name), team.name)
@@ -1532,6 +1543,7 @@ fun SessionsScreen(
 	onVerifyEnroll: (() -> Unit)? = null,
 	// The board's live line per session card; { null } keeps every card's ordinary ladder.
 	boardLine: (Team) -> BoardLiveLine? = { null },
+	boardBranch: (Team) -> com.atelier_nyaarium.switchboard.board.CardBranch? = { null },
 	// How many unfinished board entries this session holds, and the forget that first decides what
 	// becomes of them. Zero keeps the plain forget confirm.
 	undoneFor: (Team) -> Int = { 0 },
@@ -1759,6 +1771,7 @@ fun SessionsScreen(
 										nested = true,
 										pulsePhase = pulsePhase,
 										boardLine = boardLine(team),
+									boardBranch = boardBranch(team),
 										onClick = hapticClick { onOpen(team.name) },
 										onLongPress = { actionTeam = team },
 									)
@@ -1798,6 +1811,7 @@ fun SessionsScreen(
 									team = team,
 									pulsePhase = pulsePhase,
 									boardLine = boardLine(team),
+									boardBranch = boardBranch(team),
 									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)
@@ -2244,6 +2258,8 @@ fun SessionCard(
 	// The board's live line, when this session has unfinished board work. sessionCardPreview decides
 	// what it does to the ladder; null means this session has no board work to show.
 	boardLine: BoardLiveLine? = null,
+	// The branch that line sits in. Null falls back to drawing the line alone.
+	boardBranch: com.atelier_nyaarium.switchboard.board.CardBranch? = null,
 	onClick: () -> Unit,
 	onLongPress: () -> Unit,
 ) {
@@ -2328,7 +2344,7 @@ fun SessionCard(
 			// The ladder, top down: the session's own last reply headline, then its unfinished board
 			// work, then the thread's newest row. sessionCardPreview owns which of those show and what
 			// each is stamped with; this only paints what it answered.
-			val preview = sessionCardPreview(state, team.name, boardLine)
+			val preview = sessionCardPreview(state, team.name, boardLine, boardBranch)
 			preview.headline?.let { headline ->
 				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 					Text(
@@ -2349,20 +2365,28 @@ fun SessionCard(
 			}
 			val liveBoardWork = preview.boardWork
 			if (liveBoardWork != null) {
-				Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-					com.atelier_nyaarium.switchboard.board.StateMark(liveBoardWork.state)
-					Text(
-						liveBoardWork.title,
-						style = MaterialTheme.typography.bodySmall,
-						maxLines = 1,
-						overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-						modifier = Modifier.weight(1f),
-					)
-					Text(
-						"${liveBoardWork.finished}/${liveBoardWork.total}",
-						style = MaterialTheme.typography.labelSmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-					)
+				// The branch when there is one, else the single line it replaces. The count rides the FIRST
+				// row either way, and counts the whole session rather than the shown branch, so it does not
+				// change meaning with which branch happens to be current.
+				val branch = preview.boardBranch
+				if (branch == null) {
+					BoardCardRow(liveBoardWork.state, liveBoardWork.title, depth = 0) {
+						BoardCardCount(liveBoardWork)
+					}
+				} else {
+					branch.rows.forEachIndexed { index, row ->
+						BoardCardRow(row.entry.state, oneLine(row.entry.title).orEmpty(), row.depth) {
+							if (index == 0) BoardCardCount(liveBoardWork)
+						}
+					}
+					if (branch.hidden > 0) {
+						Text(
+							"+${branch.hidden} more",
+							style = MaterialTheme.typography.labelSmall,
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+							modifier = Modifier.padding(start = 19.dp),
+						)
+					}
 				}
 			}
 			val snippet = preview.snippet
@@ -2392,6 +2416,37 @@ fun SessionCard(
 			}
 		}
 	}
+}
+
+/** One board row on a session card. Indented a little tighter than the thread strip's, since a card
+ * has a narrower column and the depth only has to be readable, not measured. */
+@Composable
+private fun BoardCardRow(state: String, title: String, depth: Int, trailing: @Composable () -> Unit) {
+	Row(
+		Modifier.fillMaxWidth().padding(start = (depth * 13).dp),
+		horizontalArrangement = Arrangement.spacedBy(7.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		com.atelier_nyaarium.switchboard.board.StateMark(state)
+		Text(
+			title,
+			style = MaterialTheme.typography.bodySmall,
+			textDecoration = if (state == "cancelled") TextDecoration.LineThrough else null,
+			maxLines = 1,
+			overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+			modifier = Modifier.weight(1f),
+		)
+		trailing()
+	}
+}
+
+@Composable
+private fun BoardCardCount(line: com.atelier_nyaarium.switchboard.board.BoardLiveLine) {
+	Text(
+		"${line.finished}/${line.total}",
+		style = MaterialTheme.typography.labelSmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
 }
 
 @Composable

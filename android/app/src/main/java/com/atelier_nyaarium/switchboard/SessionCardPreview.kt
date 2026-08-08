@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
+import com.atelier_nyaarium.switchboard.board.CardBranch
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -16,6 +17,9 @@ data class SessionCardPreview(
 	val headline: String? = null,
 	val headlineAt: Long? = null,
 	val boardWork: BoardLiveLine? = null,
+	/** The branch under [boardWork]'s own entry. Null whenever [boardWork] is, so the two cannot
+	 * disagree about whether the card is showing board work at all. */
+	val boardBranch: CardBranch? = null,
 	val snippet: String? = null,
 	val snippetAt: Long? = null,
 )
@@ -24,7 +28,12 @@ data class SessionCardPreview(
 //  Functions & Helpers
 
 /** Derive a card's rungs from the thread and the session's live board line. */
-fun sessionCardPreview(state: ChatState, team: String, boardLine: BoardLiveLine?): SessionCardPreview {
+fun sessionCardPreview(
+	state: ChatState,
+	team: String,
+	boardLine: BoardLiveLine?,
+	boardBranch: CardBranch? = null,
+): SessionCardPreview {
 	val boardWork = boardLine?.takeIf { it.finished < it.total }
 	// Live board work displaces the relative time on every rung: the finished-over-total count answers
 	// "is anything happening" better than a timestamp does.
@@ -52,6 +61,9 @@ fun sessionCardPreview(state: ChatState, team: String, boardLine: BoardLiveLine?
 		headlineAt = reply?.at?.takeIf { headline != null && timeAllowed },
 		// Collapsed like the board strip's own single-line rows, which render this same title.
 		boardWork = boardWork?.let { it.copy(title = oneLine(it.title).orEmpty()) },
+		// Tied to boardWork rather than passed straight through: a session whose work is all finished
+		// shows no board rung, and a branch surviving that would draw a tree under nothing.
+		boardBranch = boardBranch?.takeIf { boardWork != null && it.rows.isNotEmpty() },
 		snippet = snippet,
 		// The thread's newest time, which is also what sessionOrder sorts on, so the card's LOWEST time
 		// is its sort key and the column reads in order down the list. Never shown alone: a bare time

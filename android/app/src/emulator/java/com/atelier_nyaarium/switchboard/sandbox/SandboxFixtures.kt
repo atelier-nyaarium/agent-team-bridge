@@ -402,7 +402,17 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			sessionId = localFieldOrSelf(SESSION),
 			attachments = listOf(present, huge, missing),
 		)
-		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry))))
+		// A second root with children in all four states, ranked so its in-progress CHILD is the
+		// session's current entry. That is what makes the card's branch walk visible: it has to climb to
+		// this root and skip the attachments entry above it.
+		val branch = listOf(
+			BoardEntry(id = "c".repeat(32), title = "Half-finished example", state = "in_progress", rank = "zm", sessionId = localFieldOrSelf(SESSION)),
+			BoardEntry(id = "d".repeat(32), title = "Child 1 - finished", state = "done", rank = "a", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
+			BoardEntry(id = "e".repeat(32), title = "Child 2 - being worked on", state = "in_progress", rank = "b", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
+			BoardEntry(id = "f".repeat(32), title = "Child 3 - dropped", state = "cancelled", rank = "c", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
+			BoardEntry(id = "1".repeat(32), title = "Child 4 - not started", state = "open", rank = "d", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
+		)
+		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch)))
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
 	}
 
