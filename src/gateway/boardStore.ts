@@ -682,10 +682,17 @@ export class BoardStore {
 		return tail;
 	}
 
-	/** TRUE removal, the delete half of a cross-Gateway move only. Literal ids: a survivor whose
-	 * parent is being removed refuses the batch, so a caller must ship the whole subtree. */
+	/**
+	 * TRUE removal, the delete half of a cross-Gateway move only. Literal ids: a survivor whose
+	 * parent is being removed refuses the batch, so a caller must ship the whole subtree.
+	 *
+	 * Reclaims attachment bytes, which is safe ONLY because the move now writes them to the
+	 * destination durably before this half is allowed to drain. While it did not, this deliberately
+	 * leaked a directory per move rather than destroying the origin's last copy.
+	 */
 	remove(ownerId: string, ids: readonly string[]): BoardResult {
-		return this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
+		let removed: string[] = [];
+		const result = this.mutate(ownerId, OWNER_ACTOR, (board, touch) => {
 			const removing = new Set(ids);
 			for (const e of board.entries.values()) {
 				if (!removing.has(e.id) && e.parent && removing.has(e.parent)) return "would_orphan";
@@ -693,8 +700,19 @@ export class BoardStore {
 			for (const id of ids) {
 				if (board.entries.delete(id)) touch(id);
 			}
+			removed = [...ids];
 			return undefined;
 		});
+		if (result.applied) {
+			for (const id of removed) {
+				try {
+					this.attachmentSink?.releasedAll(ownerId, id);
+				} catch (err) {
+					console.error(`[task-board] could not reclaim attachments for ${id}:`, err);
+				}
+			}
+		}
+		return result;
 	}
 
 	/** A session ended. Done and cancelled entries are trashed (30 recoverable days); what happens to

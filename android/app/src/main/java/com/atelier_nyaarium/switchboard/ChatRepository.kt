@@ -4247,7 +4247,18 @@ class ChatRepository(
 		if (subtree.isEmpty()) return
 		// The moved root joins the destination at top level: its old parent stays behind.
 		subtree[0] = subtree[0].copy(parent = null)
-		board.enqueueMove(subtree, fromGateway, target)
+		// A moved picture lands under the SAME name in the destination's bucket, since the bucket is
+		// keyed by entry and the entry keeps its id across a move.
+		board.enqueueMove(subtree, fromGateway, target) { entryId, blobId ->
+			Attachments.boardFile(filesDir, entryId, blobId).absolutePath
+		}
+		// Pull anything this device never opened. The queued write retries until the bytes are here,
+		// rather than abandoning, because for a move a missing local file is normal.
+		for (entry in subtree) {
+			for (a in entry.attachments.orEmpty()) {
+				if (!Attachments.boardFile(filesDir, entry.id, a.blobId).isFile) kickBoardDownload(entry.id, a)
+			}
+		}
 	}
 
 	val terminalRefreshMs: Long get() = store.terminalRefreshMs

@@ -24,6 +24,10 @@ data class PendingBoardAction(
 	// which is generated from the wire schema: a device path names a user and a folder layout, and
 	// these cross a Gateway. The drain uploads each before sending, so an attach survives a restart.
 	val sources: Map<String, String> = emptyMap(),
+	// Members whose bytes must be PULLED before they can be pushed, by the Gateway holding them. A
+	// move carries pictures this device may never have opened, so its source file legitimately does
+	// not exist yet - which is why a missing file here retries rather than abandoning.
+	val fetchFrom: Map<String, String> = emptyMap(),
 )
 
 /** One Gateway's cached board half. `lastSyncedAt` is CACHE metadata (deliberately outside the

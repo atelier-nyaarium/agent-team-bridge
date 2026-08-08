@@ -199,9 +199,15 @@ class BoardManager(private val store: BoardStore) {
 		gatewayId: String,
 		dependsOn: String? = null,
 		sources: Map<String, String> = emptyMap(),
+		fetchFrom: Map<String, String> = emptyMap(),
 	): String {
 		val opId = UUID.randomUUID().toString()
-		mutate { it.copy(queue = it.queue + PendingBoardAction(opId, gatewayId, op, dependsOn, sources = sources)) }
+		mutate {
+			it.copy(
+				queue = it.queue +
+					PendingBoardAction(opId, gatewayId, op, dependsOn, sources = sources, fetchFrom = fetchFrom),
+			)
+		}
 		return opId
 	}
 
@@ -234,7 +240,12 @@ class BoardManager(private val store: BoardStore) {
 	/** The cross-Gateway move: the write half upserts the subtree on the target, and the delete
 	 * half is LINKED so it cannot drain until the write's acceptance is recorded - per-Gateway
 	 * lanes would otherwise let the delete land first and the entry exist nowhere. */
-	fun enqueueMove(subtree: List<BoardEntry>, fromGateway: String, toGateway: String) {
+	fun enqueueMove(
+		subtree: List<BoardEntry>,
+		fromGateway: String,
+		toGateway: String,
+		sourceFor: (entryId: String, blobId: String) -> String,
+	) {
 		// Seed the destination as a known Gateway before either half is queued. Membership must not
 		// depend on the queue: once the upsert is accepted and retired, a target with no snapshot
 		// would drop out of the source list while the origin's delete still subtracts the entry, and
@@ -243,8 +254,24 @@ class BoardManager(private val store: BoardStore) {
 			if (blob.gateways.containsKey(toGateway)) blob
 			else blob.copy(gateways = blob.gateways + (toGateway to GatewayBoard()))
 		}
-		val writeId = enqueue(ConsoleOp.BoardUpsert(subtree), toGateway)
-		enqueue(ConsoleOp.BoardRemove(subtree.map { it.id }), fromGateway, dependsOn = writeId)
+		var last = enqueue(ConsoleOp.BoardUpsert(subtree), toGateway)
+		// The upsert deliberately carries no attachments, so each entry that has any needs its own
+		// absolute write on the destination. Chained rather than parallel: the origin delete must not
+		// fire until every one of them has landed, or the move destroys the last copy of a picture.
+		for (entry in subtree) {
+			val members = entry.attachments.orEmpty()
+			if (members.isEmpty()) continue
+			last = enqueue(
+				ConsoleOp.BoardSetAttachments(entry.id, members, supplied = members.map { it.blobId }),
+				toGateway,
+				dependsOn = last,
+				sources = members.associate { it.blobId to sourceFor(entry.id, it.blobId) },
+				// Where to pull a member this device never downloaded. Its bytes are on the ORIGIN,
+				// which is what the record still names until the destination stores its own.
+				fetchFrom = members.associate { it.blobId to it.blobGateway },
+			)
+		}
+		enqueue(ConsoleOp.BoardRemove(subtree.map { it.id }), fromGateway, dependsOn = last)
 	}
 
 	/** Drop queued writes for a session's entries, because the owner has just forgotten it.
@@ -355,7 +382,9 @@ class BoardManager(private val store: BoardStore) {
 			if (client.boardBytesReady(blobId, action.gatewayId)) continue
 			// Not up yet, and the local copy is gone, so no transfer can ever finish it. Nothing else
 			// would retire this action, and a queued action nothing retires eventually closes the lane.
-			if (!File(source).exists()) {
+			// A member being fetched from elsewhere has no local file YET, which is not the same as
+			// gone: a move carries pictures this device may never have opened.
+			if (!File(source).exists() && blobId !in action.fetchFrom) {
 				DebugLog.log("Board", "action ${action.opId} abandoned: ${source.substringAfterLast('/')} is gone")
 				notice(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
@@ -369,6 +398,11 @@ class BoardManager(private val store: BoardStore) {
 
 	/** Local sources for everything still queued, so a cold start can restart the transfers whose
 	 * in-memory kick died with the process. Keyed blobId to path, per Gateway. */
+	/** The queue in drain order. Its ORDER is behaviour, not internals: a move's origin delete landing
+	 * before the destination holds the bytes destroys the last copy. */
+	val queuedActions: List<PendingBoardAction>
+		get() = blob.queue
+
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }
 

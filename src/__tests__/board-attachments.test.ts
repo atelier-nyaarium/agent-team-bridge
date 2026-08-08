@@ -183,6 +183,25 @@ describe("the trash sweep", () => {
 	});
 });
 
+describe("the delete half of a move", () => {
+	it("reclaims the origin's bytes, which is safe only because the destination stored them first", () => {
+		const one = hold("one");
+		setAttachments([one]);
+		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: true });
+		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(false);
+	});
+
+	it("a refused remove reclaims nothing", () => {
+		const child = "e".repeat(32);
+		store.upsert(OWNER, [entry(child, { parent: ENTRY })], OWNER_ACTOR);
+		const one = hold("one");
+		setAttachments([one]);
+		// Shipping the parent without its child would strand the child, so the whole batch refuses.
+		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: false, refused: "would_orphan" });
+		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
+	});
+});
+
 describe("the durable store's path segments", () => {
 	it("refuses an entry id that is not the shape every real one has", () => {
 		expect(() => attachments.has(OWNER, "../../federation", blobIdOf("x"))).toThrow(/board entry id/);
