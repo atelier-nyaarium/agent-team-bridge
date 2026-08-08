@@ -103,7 +103,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 	val focus = active
 	if (focus != null) {
 		SessionShareScreen(
-			sessionName = sessions.find { it.name == focus }?.let { state.label(it.name, state.localGatewayId) } ?: focus,
+			sessionName = sessions.find { it.name == focus }?.let { state.label(it.name) } ?: focus,
 			people = people,
 			trustFirst = trustFirst,
 			current = shares[focus] ?: SessionShares(false, emptySet()),
@@ -161,7 +161,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 				val st = shares[s.name] ?: SessionShares(false, emptySet())
 				Card(Modifier.fillMaxWidth().hapticClickable { active = s.name }) {
 					Column(Modifier.padding(16.dp)) {
-						Text(state.label(s.name, state.localGatewayId), style = MaterialTheme.typography.titleMedium)
+						Text(state.label(s.name), style = MaterialTheme.typography.titleMedium)
 						Text(
 							modeSummary(st, people),
 							style = MaterialTheme.typography.bodyMedium,

@@ -288,7 +288,7 @@ fun BoardScreen(
 						modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
 					)
 					for (team in repo.boardAssignTargets()) {
-						SheetAction(state.label(team.name, state.localGatewayId)) {
+						SheetAction(state.label(team.name)) {
 							repo.boardAssign(open.row.gatewayId, entry.id, team.name)
 							sheet = null
 						}
@@ -415,7 +415,7 @@ private fun SessionGroupHeader(state: ChatState, key: GroupKey) {
 	// No team in the roster means the session ended or the roster is between refreshes; the stored
 	// key's own leaf is the honest label then, never a guess at some other machine's session.
 	val label = state.teamForSessionKey(key.gatewayId, key.sessionId)
-		?.let { state.label(it, state.localGatewayId) }
+		?.let { state.label(it) }
 		?: key.sessionId.substringAfterLast('.')
 	Card(Modifier.fillMaxWidth()) {
 		Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -357,7 +357,7 @@ fun App(
 	rendererPool.onCancel = { team, id -> repo.cancelFailedSend(team, id) }
 	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
 	// Reads the live state at render time so a rename reflects without rebuilding the pool.
-	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr, repo.state.value.localGatewayId) }
+	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr) }
 	// Attribute the local user's own messages by their account display name instead of "you".
 	rendererPool.selfLabel = { repo.state.value.displayName }
 	// Attachment taps open the in-app viewer; the path is re-validated against the
@@ -719,7 +719,7 @@ fun App(
 		}
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
-			val session = state.sessions(state.localGatewayId).firstOrNull { it.name == openTeam }
+			val session = state.sessions().firstOrNull { it.name == openTeam }
 			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
@@ -1389,7 +1389,7 @@ private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 internal fun sessionOrder(state: ChatState): Comparator<Team> =
 	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
-		.thenBy { state.label(it.name, state.localGatewayId) }
+		.thenBy { state.label(it.name) }
 
 /** This device's own Domain's sessions, excluding a linked friend's - those render in the
  * dedicated "Linked friends" section instead (sourced from the live crossDomainPresence plane),
@@ -1564,7 +1564,7 @@ fun SessionsScreen(
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
-			label = state.label(team.name, state.localGatewayId),
+			label = state.label(team.name),
 			canRename = team.kind != "devcontainer",
 			onRename = {
 				actionTeam = null
@@ -1580,7 +1580,7 @@ fun SessionsScreen(
 	renameTeam?.let { team ->
 		RenameDialog(
 			team = team.shortName,
-			current = state.label(team.name, state.localGatewayId),
+			current = state.label(team.name),
 			onSave = {
 				onRename(team.name, it)
 				renameTeam = null
@@ -1595,7 +1595,7 @@ fun SessionsScreen(
 		val undone = undoneFor(team)
 		if (undone > 0) {
 			BoardForgetDialog(
-				label = state.label(team.name, state.localGatewayId),
+				label = state.label(team.name),
 				undone = undone,
 				onCancelTasks = {
 					onForgetWithTasks(team.name, true)
@@ -1609,7 +1609,7 @@ fun SessionsScreen(
 			)
 		} else {
 			ConfirmDialog(
-				title = "Forget ${state.label(team.name, state.localGatewayId)}?",
+				title = "Forget ${state.label(team.name)}?",
 				body = "Drops this thread, its label, and unread state from this device.",
 				confirmText = "Forget",
 				onConfirm = {
@@ -1634,7 +1634,7 @@ fun SessionsScreen(
 	}
 
 	Column(modifier.fillMaxSize()) {
-		val sessions = state.sessions(state.localGatewayId)
+		val sessions = state.sessions()
 			// Computed here (rather than calling ChatRepository.confirmedDomainId(), which this
 			// Composable has no access to) so both linkedDomains and the local/peer session split below
 			// share one value.
@@ -2265,7 +2265,7 @@ fun SessionCard(
 ) {
 	val haptics = LocalHapticFeedback.current
 	val strong = rememberStrongHaptic()
-	val display = state.label(team.name, state.localGatewayId)
+	val display = state.label(team.name)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val statusWord = statusWord(team.status)

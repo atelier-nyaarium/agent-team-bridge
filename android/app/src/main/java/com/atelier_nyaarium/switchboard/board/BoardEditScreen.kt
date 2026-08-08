@@ -161,7 +161,7 @@ fun BoardEditScreen(
 			PlacementRow(
 			"Session",
 			entry.sessionId?.let { key ->
-				state.teamForSessionKey(gatewayId, key)?.let { state.label(it, state.localGatewayId) }
+				state.teamForSessionKey(gatewayId, key)?.let { state.label(it) }
 					?: key.substringAfterLast('.')
 			} ?: "Unassigned",
 		)

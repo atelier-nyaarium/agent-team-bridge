@@ -51,7 +51,7 @@ class ChatStateSessionsTest {
 			threads = mapOf(canonical to listOf(makeMsg())),
 			localGatewayId = "sakura",
 		)
-		val sessions = state.sessions("sakura")
+		val sessions = state.sessions()
 		assertEquals(1, sessions.size)
 		assertEquals("online", sessions[0].status)
 		assertFalse(
@@ -68,7 +68,7 @@ class ChatStateSessionsTest {
 			threads = mapOf("local.sakura.gone.claude" to listOf(makeMsg())),
 			localGatewayId = "sakura",
 		)
-		val sessions = state.sessions("sakura")
+		val sessions = state.sessions()
 		assertEquals(1, sessions.size)
 		assertEquals("ended", sessions[0].status)
 	}
@@ -89,7 +89,7 @@ class ChatStateSessionsTest {
 			threads = mapOf(threadKey to listOf(makeMsg())),
 			localGatewayId = "sakura",
 		)
-		val sessions = state.sessions("sakura")
+		val sessions = state.sessions()
 		assertEquals("must be exactly 1 session (no phantom ended)", 1, sessions.size)
 		assertEquals("online", sessions[0].status)
 		assertFalse(sessions.any { it.status == "ended" })

@@ -40,8 +40,8 @@ internal fun shouldNotifyBurst(isVisible: Boolean, canNotify: Boolean, closedTea
  * unlike every other row this is applied to. */
 internal fun peerFramed(state: ChatState, m: Message, text: String): String {
 	if (!m.isPeer) return text
-	val fromLabel = m.from?.let { state.label(it, state.localGatewayId) } ?: "?"
-	val toLabel = m.to?.let { state.label(it, state.localGatewayId) }
+	val fromLabel = m.from?.let { state.label(it) } ?: "?"
+	val toLabel = m.to?.let { state.label(it) }
 	return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
 }
 
@@ -596,7 +596,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		val thread = state.threads[team].orEmpty()
 		val rows = unreadRows(thread, state.readAnchors[team])
 		val last = rows.lastOrNull() ?: return null
-		val label = state.label(team, state.localGatewayId)
+		val label = state.label(team)
 		val style = NotificationCompat.InboxStyle()
 		for (m in rows.takeLast(5)) {
 			// A notice carries a purpose-written notification line; its body may be
@@ -644,7 +644,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private fun notifyScheduledSendFailed(repo: ChatRepository, team: String, opId: String) {
 		if (!canNotify()) return
 		val state = repo.state.value
-		val label = state.label(team, state.localGatewayId)
+		val label = state.label(team)
 		val notification = NotificationCompat.Builder(this, CHANNEL_SCHEDULED_SEND_FAILED)
 			.setSmallIcon(android.R.drawable.stat_notify_error)
 			.setContentTitle("Scheduled send failed")

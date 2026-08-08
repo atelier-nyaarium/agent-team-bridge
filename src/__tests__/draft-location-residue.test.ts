@@ -45,6 +45,27 @@ function read(file: string): string {
 	return fs.readFileSync(file, "utf8");
 }
 
+/**
+ * A Kotlin data class's constructor body, found anywhere under the android sources.
+ *
+ * Searched rather than read from a named file: these types move between files as the sources are
+ * split, and a path pinned here fails as a missing declaration, which reads identically to the
+ * declaration being deleted. Throws when there is no single match, so a rename cannot pass silently.
+ */
+function dataClassBody(name: string): string {
+	const needle = `data class ${name}(`;
+	const hits = fs
+		.readdirSync(ANDROID_SRC, { recursive: true, encoding: "utf8" })
+		.filter((f) => f.endsWith(".kt"))
+		.map((f) => read(path.join(ANDROID_SRC, f)))
+		.filter((source) => source.includes(needle));
+
+	if (hits.length !== 1) throw new Error(`expected exactly one declaration of ${name}, found ${hits.length}`);
+
+	const start = hits[0].indexOf(needle);
+	return hits[0].slice(start, hits[0].indexOf("\n)", start));
+}
+
 ////////////////////////////////
 //  Tests
 
@@ -58,22 +79,12 @@ describe("a picked file's origin never reaches the wire", () => {
 	it("MessageFile declares no origin field, so the conversion has nowhere to put one", () => {
 		// The device's own row type. It is what a Draft holds and what storeOutgoing produces, so a
 		// field here would flow to the wire through storeOutgoing's successor without anyone noticing.
-		const source = read(path.join(ANDROID_SRC, "ChatRepository.kt"));
-		const start = source.indexOf("data class MessageFile(");
-		expect(start).toBeGreaterThan(-1);
-		const body = source.slice(start, source.indexOf("\n)", start));
-
-		expect(LOCATION_FIELD.test(body)).toBe(false);
+		expect(LOCATION_FIELD.test(dataClassBody("MessageFile"))).toBe(false);
 	});
 
 	it("Draft is where it actually lives, so the guard above is proving something", () => {
 		// Without this the suite would still pass if the feature were deleted outright, which would
 		// make every assertion here vacuous.
-		const source = read(path.join(ANDROID_SRC, "ChatRepository.kt"));
-		const start = source.indexOf("data class Draft(");
-		expect(start).toBeGreaterThan(-1);
-		const body = source.slice(start, source.indexOf("\n)", start));
-
-		expect(body).toContain("locations");
+		expect(dataClassBody("Draft")).toContain("locations");
 	});
 });
