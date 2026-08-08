@@ -61,6 +61,11 @@ code does not belong here; rationale lives in `git log`.
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),
   `SessionDialogs.kt`, `ReorderableTabRow.kt` (geometry in `TabDragMath.kt`), `TimeText.kt`
+  - The sessions tab is five files: `MainTabsScreen.kt` is the app shell hosting both tabs (it owns
+    the top bar and pager, and takes each tab as an opaque slot), `SessionsScreen.kt` the list,
+    `SessionsHeaders.kt` its section chrome and status vocabulary, `SessionCard.kt` the card with its
+    board rungs (rules in `SessionCardPreview.kt`), `SessionsEmptyState.kt` the connection-state
+    machine shown instead of the list
 - `android/.../board/` - the console's board half. `BoardState.kt` and `BoardRows.kt` are the pure
   reducers (queue, snapshot merge, row flattening); `BoardManager.kt` owns the durable blob and is
   the only thing that mutates it
