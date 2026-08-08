@@ -137,6 +137,27 @@ Rule: when a split widens a member that guarded an invariant, the same lap adds 
 Put it in the TS suite, since the Kotlin tests run after merge and cannot block a PR. Negative-control
 it with a planted probe before trusting it.
 
+### A "these locals are entangled" claim is checkable, so check it
+
+The settings voice screen was left whole on the reasoning that its locals are shared across every
+sub-block, so cutting it would thread six-plus interdependent values across a file boundary. Half
+true. The audit traced each sub-block's actual reads: the six playback-preference blocks (pre-generate,
+auto-play, chime, overlay, and both volume sliders) read NONE of the probe locals. Their only tie to
+the connection state is positional, sitting below a gate that stays with the caller. They extract at
+the cost of one parameter. The top cluster genuinely does interlock and must never be cut.
+
+Rule: "too entangled to split" is a claim about which locals each block reads, and that is
+mechanically checkable. Trace it before accepting it, in either direction.
+
+### Pass-2 candidate: settings duplication, counted
+
+Boilerplate the split made visible, with counts: the labeled-switch row is hand-rolled 3 times
+(~30 lines of pure chrome), a dialog's Cancel button is byte-identical 5 times, the cancel-plus-async-
+action row 3 times, the two percent sliders are a line-for-line template repeated twice, and the
+Networks screen repeats a title-button-divider triad 3 times inside 12 lines. Most consequential:
+the biometric gate before a destructive action is copy-pasted verbatim 5 times across two files. That
+one is security-sensitive and wants a single definition rather than five hand copies.
+
 ### Pass-2 candidate: two Android files named for a shape, not a concept
 
 `SessionsHeaders.kt` is two concepts. Its section chrome (the gateway, spawn-point and linked-friend
