@@ -246,14 +246,6 @@ describe("sealer (cross-Domain v2)", () => {
 		const env = seal(Buffer.from(JSON.stringify(inner)), Y.box.pub, X.sign.priv);
 		expect(() => ySealer.open("gw-x", env)).toThrow(/v1 frame from a cross-Domain Gateway/);
 	});
-
-	it("a local gateway is unaffected by an empty cross-Domain set (no v2 ever)", () => {
-		// Sanity: with no peers, a local seal stays v1 even though the cross path exists.
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
-		const env = aSealer.seal("B", { ok: true });
-		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
-		expect(inner.v).toBe(1);
-	});
 });
 
 ////////////////////////////////

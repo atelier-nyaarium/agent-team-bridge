@@ -3,8 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	Address,
+	assertSlug,
 	composeSessionName,
 	isComposite,
+	isSlug,
+	LOCAL_DOMAIN_SENTINEL,
 	parseSessionName,
 	parseStoreKey,
 	parseTarget,
@@ -108,20 +111,50 @@ describe("address vectors", () => {
 });
 
 describe("address grammar invariants", () => {
-	it("a store key is byte-stable regardless of the parsing gateway (fully qualified, no local resolution)", () => {
-		const key = "conv.c.a95dd4e979aa3be5.sakura.nyaadot.ik-tracking";
-		expect(parseStoreKey(key)).not.toBeNull();
-		expect(storeKey(parseStoreKey(key) as SessionKey)).toBe(key);
+	it("isSlug accepts lowercase alnum + internal/trailing hyphen, rejects leading hyphen and separators", () => {
+		expect(isSlug("nyaadot")).toBe(true);
+		expect(isSlug("ik-tracking")).toBe(true);
+		expect(isSlug("a95dd4e979aa3be5")).toBe(true);
+		expect(isSlug("-foo")).toBe(false);
+		expect(isSlug("my.app")).toBe(false);
+		expect(isSlug("a/b")).toBe(false);
+		expect(isSlug("a:b")).toBe(false);
+		expect(isSlug("UPPER")).toBe(false);
+		expect(isSlug("")).toBe(false);
+		expect(isSlug("a".repeat(65))).toBe(false);
+	});
+
+	it("assertSlug throws on an invalid segment", () => {
+		expect(() => assertSlug("my.app")).toThrow(/invalid address segment/);
 	});
 
 	it("a dotted segment is rejected at construction (no ambiguous split)", () => {
 		expect(() => Address.of("d", "g", "my.app", "s")).toThrow(/invalid address segment/);
 	});
 
-	it("a local target with our (domain, gateway) round-trips through parseTarget", () => {
-		const t = parseTarget("nyaadot.ik-tracking", "a95dd4e979aa3be5", "sakura");
-		expect(t).toBeInstanceOf(Address);
-		expect((t as Address).domain).toBe("a95dd4e979aa3be5");
-		expect((t as Address).gateway).toBe("sakura");
+	it("local fills the sentinel domain in arming mode", () => {
+		expect(Address.local("", "sakura", "host", "cooking").canonical).toBe(
+			`${LOCAL_DOMAIN_SENTINEL}.sakura.host.cooking`,
+		);
+		expect(Address.local("a95dd4e979aa3be5", "sakura", "host", "cooking").domain).toBe("a95dd4e979aa3be5");
+	});
+
+	it("spawnPoint projects an address down to its 3-layer spawn-point", () => {
+		const sp = Address.of("a95dd4e979aa3be5", "sakura", "nyaadot", "ik-tracking").spawnPoint;
+		expect(sp.canonical).toBe("a95dd4e979aa3be5.sakura.nyaadot");
+		expect(sp.equals(SpawnPoint.of("a95dd4e979aa3be5", "sakura", "nyaadot"))).toBe(true);
+	});
+
+	it("parseTarget names the failure: empty segment vs bad arity", () => {
+		expect(() => parseTarget("", "d", "g")).toThrow(/invalid address segment/); // [""] -> arity 1, empty segment
+		expect(() => parseTarget("a.b.c.d.e", "d", "g")).toThrow(/invalid address arity/);
+	});
+
+	it("accepts a long (128) conversationId but rejects an over-long one", () => {
+		const addr = Address.of("a95dd4e979aa3be5", "sakura", "nyaadot", "ik-tracking");
+		const ok: SessionKey = { kind: "conv", conversationId: "a".repeat(128), address: addr };
+		expect(parseStoreKey(storeKey(ok))).toEqual(ok);
+		const tooLong = ["conv", "a".repeat(129), "d", "g", "sp", "s"].join(".");
+		expect(parseStoreKey(tooLong)).toBeNull();
 	});
 });

@@ -35,24 +35,11 @@ describe("ChannelReplySchema", () => {
 		expect(r.success).toBe(false);
 	});
 
-	it("rejects a missing title", () => {
-		const { title: _title, ...rest } = VALID_REPLY;
-		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
-	});
-
-	it("rejects a missing summary", () => {
-		const { summary: _summary, ...rest } = VALID_REPLY;
-		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
-	});
-
-	it("rejects a missing full", () => {
-		const { full: _full, ...rest } = VALID_REPLY;
-		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
-	});
-
-	it("rejects a missing fullSpoken", () => {
-		const { fullSpoken: _fullSpoken, ...rest } = VALID_REPLY;
-		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
+	it("requires every tier (a reply missing any of the four is rejected)", () => {
+		for (const tier of ["title", "summary", "full", "fullSpoken"] as const) {
+			const { [tier]: _dropped, ...rest } = VALID_REPLY;
+			expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
+		}
 	});
 
 	it("rejects an empty full (NoticeFull requires min length 1)", () => {
@@ -60,7 +47,7 @@ describe("ChannelReplySchema", () => {
 		expect(r.success).toBe(false);
 	});
 
-	it("rejects attachments with no full (attachments-only is no longer allowed)", () => {
+	it("rejects an attachments-only reply (attachments never stand in for the tiers)", () => {
 		const r = ChannelReplySchema.safeParse({ session_id: "s1", attachments: ["/tmp/screenshot.png"] });
 		expect(r.success).toBe(false);
 	});

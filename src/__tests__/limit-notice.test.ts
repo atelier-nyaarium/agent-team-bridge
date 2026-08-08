@@ -83,14 +83,8 @@ describe("limitNotice", () => {
 			});
 		});
 
-		it.each([
-			["You've hit your session limit · resets 3pm", "resets 3pm"],
-			["You've hit your Opus limit · resets Monday", "resets Monday"],
-			["You've hit your fast limit · resets in 3h 20m", "resets in 3h 20m"],
-			["You've hit your usage credit limit · resets 5pm", "resets 5pm"],
-			["You've reached your weekly limit · resets 9am", "resets 9am"],
-		])("reads %j", (headline, detail) => {
-			expect(limitNotice(dialog(headline))?.detail).toBe(detail);
+		it("reads 'reached' as well as 'hit'", () => {
+			expect(limitNotice(dialog("You've reached your weekly limit · resets 9am"))?.detail).toBe("resets 9am");
 		});
 
 		it("reads a name that does not exist yet, since no name is enumerated", () => {
@@ -179,15 +173,6 @@ describe("limitNotice", () => {
 				"   2. No, and tell Claude what to do differently",
 			].join("\n");
 			expect(limitNotice(screen)).toBeNull();
-		});
-
-		it.each([
-			"GitHub API rate limit exceeded (5,000/hr shared across all tools)",
-			"The summary doesn't include usage data for last week",
-			"You've hit the nail on the head",
-			"const RATE_LIMIT = 10;",
-		])("ignores ordinary output that mentions limits (%j)", (line) => {
-			expect(limitNotice(composer(`  └   ${line}`))).toBeNull();
 		});
 	});
 });

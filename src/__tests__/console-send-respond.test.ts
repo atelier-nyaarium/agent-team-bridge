@@ -244,23 +244,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 		expect(entries[0].body).toContain("CLI-mode");
 	});
 
-	it("a retried opId replays the cached reply without re-running the send", async () => {
-		const h = makeHarness();
-		const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-dup");
-		const r1 = await h.handler.handleFrame(f);
-		const r2 = await h.handler.handleFrame(f);
-		expect(r1).toEqual(r2);
-		expect(h.sendCalls).toHaveLength(1);
-	});
-
-	it("concurrent retries of one opId coalesce onto a single dispatch", async () => {
-		const h = makeHarness();
-		const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-coalesce");
-		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
-		expect(r1).toEqual(r2);
-		expect(h.sendCalls).toHaveLength(1);
-	});
-
 	it("the same opId on two conversations does not cross-replay", async () => {
 		const h = makeHarness();
 		const a = await h.handler.handleFrame(

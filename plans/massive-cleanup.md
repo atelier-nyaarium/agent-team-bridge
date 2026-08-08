@@ -125,6 +125,19 @@ ordering hazard. The only enumerations to touch: both CI workflow lists, and the
 Keep the barrel a pure re-export so no consumer changes in either repo, and let each new leaf keep
 its internals private so `export *` cannot widen the surface.
 
+### A redundant-looking test guarding a semantic invariant
+
+Lap 22's sweep cut two strict-schema tests as mechanically redundant (same .strict() unknown-key
+path, same missing-required-field failure). The adversarial pass defeated both with verified
+mutations: `status` is the retired sibling schema's real field name, and attachments-only was a
+real prior shape a refine could reintroduce - each deleted test was the ONLY thing standing between
+the schema and that specific regression. Restored.
+
+Rule: reduction needs two gates, not one. The sweep proves a cut is path-redundant; a separate
+adversarial pass must fail to construct a production mutation only the deleted test catches. A test
+whose probe value is a loaded name (a retired field, a withdrawn capability) is an invariant guard,
+not a duplicate, however identical its mechanics look.
+
 ### A parameter no body reads
 
 `ChatState.sessions(localGatewayId)` and `label(team, localGatewayId)` each took an argument neither

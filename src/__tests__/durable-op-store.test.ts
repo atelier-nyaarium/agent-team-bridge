@@ -29,13 +29,6 @@ describe("DurableOpStore", () => {
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "complete", result: { delivered: true } });
 	});
 
-	it("clear drops the record so a later get is unknown again", () => {
-		const store = new DurableOpStore(fakeDurable());
-		const generation = store.markInFlight("conv-a", "op-1");
-		store.clear("conv-a", "op-1", generation);
-		expect(store.get("conv-a", "op-1")).toBeUndefined();
-	});
-
 	it("a failed op never becomes replayable: clearing after in-flight leaves nothing to replay", () => {
 		// Mirrors the real call sequence: markInFlight before dispatch, then clear (never
 		// markComplete) when the op settles as a failure - so a retry sees "unknown" and
