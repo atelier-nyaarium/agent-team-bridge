@@ -234,6 +234,24 @@ class BoardManagerTest {
 	}
 
 	@Test
+	fun pendingFetchesAnswersEntryThenBlobThenHolder() {
+		// The consumer indexes this tuple positionally and every element is a String, so a reordering
+		// compiles and silently turns its lookup into a constant false. That is how the give-up bypass
+		// died once already: it kept reading the first element after the entry id was prepended.
+		val picture = BoardAttachment("sha256-${"a".repeat(64)}", "gw-a", "shot.png", "image/png", 3)
+		val board = BoardManager(storeStub())
+
+		board.enqueueMove(listOf(entry("m1").copy(attachments = listOf(picture))), "gw-a", "gw-b") { e, b ->
+			"/tmp/$e/$b"
+		}
+
+		val (entryId, blobId, holder) = board.pendingFetches().single()
+		assertEquals("m1", entryId)
+		assertEquals(picture.blobId, blobId)
+		assertEquals("gw-a", holder)
+	}
+
+	@Test
 	fun aMoveChainsOnlyTheEntriesThatHaveAttachments() {
 		// The chain threads through a subtree where most entries carry nothing, and a broken link is
 		// what lets the origin delete overtake an attachment write.

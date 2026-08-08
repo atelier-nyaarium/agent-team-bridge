@@ -4148,14 +4148,17 @@ class ChatRepository(
 	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
 		// A queued move is waiting on these, and nothing else can retire it, so giving up would leave
 		// the origin's linked delete holding that Gateway's lane closed forever.
-		val required = board.pendingFetches().any { it.first == a.blobId }
-		if (!required && (boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
+		val waiting = board.pendingFetches().firstOrNull { (_, blobId, _) -> blobId == a.blobId }
+		if (waiting == null && (boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
 		if (!boardDownloadsInFlight.add(a.blobId)) return
+		// While a move is queued, the RECORD already names the destination, which by construction does
+		// not have the bytes yet. The queued action knows where they actually are.
+		val holder = waiting?.third ?: a.blobGateway
 		repoScope.launch {
 			try {
 				val target = Attachments.boardFile(filesDir, entryId, a.blobId)
 				val c = client() ?: return@launch
-				val staged = c.downloadBlob(a.blobId, a.blobGateway)
+				val staged = c.downloadBlob(a.blobId, holder)
 				target.parentFile?.mkdirs()
 				// Through a temp and a rename. A direct overwrite deletes the good copy first and leaves
 				// a TRUNCATED file if the process dies mid-copy, which nothing would ever correct: the
@@ -4208,7 +4211,8 @@ class ChatRepository(
 			if (Attachments.boardFile(filesDir, entryId, blobId).isFile) continue
 			// Everything needed is on the action itself. Searching a cached view for the blobId instead
 			// answers nothing once the upsert has retired, and can match the wrong entry when the same
-			// picture hangs on two of them.
+			// picture hangs on two of them. Only blobId and gateway are read downstream; the rest of
+			// this record is filler, and kickBoardDownload resolves the holder from the queue anyway.
 			kickBoardDownload(entryId, BoardAttachment(blobId, holder, blobId, "application/octet-stream", 0))
 		}
 	}
