@@ -1,6 +1,5 @@
 import {
 	CODEX_DEFAULT_MODEL,
-	CODEX_HOST_TARGET_ID,
 	CodexAppServerThreadReadResultSchema,
 	type CodexDaemonCommand,
 	CodexDaemonCommandSchema,
@@ -9,62 +8,23 @@ import {
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
 	type CodexEventAck,
-	type CodexExecutionTarget,
 	type CodexResolvedTarget,
-	CodexResolvedTargetSchema,
-	classifyCodexItemPhase,
-	codexContainerTargetId,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-thinking.js";
-import { CodexAppServerClient, createJsonlTransport } from "./codexAppServer.js";
-import type { CodexChild, TargetLease, TargetSupervisor } from "./codexTargets.js";
-import { CodexTurnTracker, type TurnOutcome } from "./codexTurnTracker.js";
+import type { AppServerSession } from "./codexAppServerSession.js";
+import { defaultOpenClient } from "./codexAppServerSession.js";
+import type { CodexDaemonDeps, TargetSession, TurnBinding } from "./codexDaemonTypes.js";
+import { resolveCodexTarget } from "./codexTargetResolve.js";
+import type { TargetLease } from "./codexTargets.js";
+import type { ReadOutcome, TerminalOutcome } from "./codexTurnOutcome.js";
+import { outcomeFromRead, terminalOf } from "./codexTurnOutcome.js";
+import { CodexTurnTracker } from "./codexTurnTracker.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** The App Server calls this service makes. Named separately from the client class so a test can
- * stand in for a child process without one. */
-export interface AppServerSession {
-	onEvent(listener: (message: { method: string; params?: unknown }) => void): void;
-	startThread(settings: { cwd: string; model?: string }): Promise<string>;
-	resumeThread(threadId: string): Promise<void>;
-	readThread(threadId: string): Promise<unknown>;
-	startTurn(threadId: string, text: string): Promise<string>;
-	steerTurn(threadId: string, turnId: string, text: string): Promise<void>;
-	interruptTurn(threadId: string, turnId: string): Promise<void>;
-	close(): void;
-}
-
-export interface CodexDaemonDeps {
-	targets: TargetSupervisor;
-	daemonInstanceId: string;
-	send(message: Record<string, unknown>): void;
-	openClient?(child: CodexChild, model: string): Promise<AppServerSession>;
-	/** Turns a host session's workdir HINT into a real directory. Injected because the rule lives in
-	 * the host daemon, and a hint may be a console-picked path or a bare human label. */
-	resolveHostCwd(hint: string | undefined): string;
-	now?(): number;
-}
-
-/** Which agent a native turn belongs to. The App Server knows nothing of agents, so every event it
- * emits is correlated back through this. */
-interface TurnBinding {
-	ownerKey: string;
-	agentId: string;
-	threadId: string;
-}
-
-interface TargetSession {
-	targetId: string;
-	generation: number;
-	client: AppServerSession;
-	tracker: CodexTurnTracker;
-	nextEventId: number;
-	turns: Map<string, TurnBinding>;
-	threads: Map<string, TurnBinding>;
-}
+export type { AppServerSession } from "./codexAppServerSession.js";
+export type { CodexDaemonDeps } from "./codexDaemonTypes.js";
+export { codexTargetIdFor, resolveCodexTarget } from "./codexTargetResolve.js";
+export type { CodexDaemonEvent, CodexDaemonReceipt };
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -74,77 +34,9 @@ interface TargetSession {
 // otherwise have to rediscover.
 const OUTBOX_MAX_ENTRIES = 1_000;
 
-export function codexTargetIdFor(target: CodexExecutionTarget): string {
-	return target.kind === "host" ? CODEX_HOST_TARGET_ID : codexContainerTargetId(target.project);
-}
-
-/**
- * A requested target resolved to the one a child actually runs under. The cwd rides the thread, so
- * it is the only per-agent part of this.
- *
- * A host session's hint is NOT a path. It may be a console-picked directory or a bare human label,
- * and `resolveHostWorkdir` is the one place that knows which is which. Passing the hint through as a
- * cwd made every host start fail its own schema and be refused as an unavailable target.
- */
-export function resolveCodexTarget(
-	target: CodexExecutionTarget,
-	resolveHostCwd: (hint: string | undefined) => string,
-): CodexResolvedTarget {
-	return CodexResolvedTargetSchema.parse({
-		kind: target.kind,
-		targetId: codexTargetIdFor(target),
-		cwd: target.kind === "host" ? resolveHostCwd(target.workdirHint) : `/workspace/${target.project}`,
-	});
-}
-
 function describe(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
 	return sanitizeCodexErrorText(text) || "codex command failed";
-}
-
-/** How a turn ended. The one shape both the live tracker and a post-restart `thread/read` produce, so
- * a rebuilt terminal and a witnessed one are the same message. */
-type TerminalOutcome =
-	| { status: "completed"; finalResponse?: string; finalItemId?: string }
-	| { status: "failed"; error: string }
-	| { status: "interrupted" };
-
-/**
- * What App Server says about one turn.
- *
- * Three answers, not two. Collapsing `running` and `unknown` into a single absent outcome is what
- * lets a live turn be reported as a failed one: the caller cannot tell "App Server says it is still
- * going" from "App Server could not tell me", and the plan requires opposite handling for each.
- */
-type ReadOutcome = { known: "settled"; outcome: TerminalOutcome } | { known: "running" } | { known: "unknown" };
-
-/** The outcome a settled turn had, rebuilt from what `thread/read` still holds. Nothing is invented:
- * a turn whose items are gone reports completed with no answer rather than a guessed one. */
-function outcomeFromRead(result: unknown, threadId: string, turnId: string): ReadOutcome {
-	const parsed = CodexAppServerThreadReadResultSchema.safeParse(result);
-	if (!parsed.success || parsed.data.thread.id !== threadId) return { known: "unknown" };
-	const turn = parsed.data.thread.turns.find((candidate) => candidate.id === turnId);
-	if (!turn) return { known: "unknown" };
-	if (turn.status === "inProgress") return { known: "running" };
-	if (turn.status === "interrupted") return { known: "settled", outcome: { status: "interrupted" } };
-	// A read carries no error text, so a failure recovered this way says only that it failed.
-	if (turn.status === "failed") return { known: "settled", outcome: { status: "failed", error: "turn failed" } };
-	const messages = turn.items.filter(
-		(item): item is { type: "agentMessage"; id: string; text: string; phase?: unknown } =>
-			item.type === "agentMessage",
-	);
-	// The same three-way classification the live tracker uses, so a turn rebuilt after a restart and
-	// one witnessed as it ran cannot disagree about which item was the answer. Commentary is excluded
-	// from the fallback: handing narration back as a final response is a WRONG answer, where handing
-	// back none is merely an empty one.
-	const classified = messages.map((item) => ({ item, kind: classifyCodexItemPhase(item.phase) }));
-	const final =
-		classified.findLast((entry) => entry.kind === "answer")?.item ??
-		classified.findLast((entry) => entry.kind === "candidate")?.item;
-	return {
-		known: "settled",
-		outcome: { status: "completed", finalResponse: final?.text, finalItemId: final?.id },
-	};
 }
 
 ////////////////////////////////
@@ -644,23 +536,3 @@ export class CodexDaemonService {
 		return this.rejections;
 	}
 }
-
-////////////////////////////////
-//  Functions & Helpers
-
-function terminalOf(outcome: TurnOutcome): TerminalOutcome {
-	switch (outcome.status) {
-		case "completed":
-			return { status: "completed", finalResponse: outcome.finalResponse };
-		case "failed":
-			return { status: "failed", error: outcome.error ?? "turn failed" };
-		default:
-			return { status: "interrupted" };
-	}
-}
-
-async function defaultOpenClient(child: CodexChild, model: string): Promise<CodexAppServerClient> {
-	return CodexAppServerClient.open(createJsonlTransport(child), model);
-}
-
-export type { CodexDaemonEvent, CodexDaemonReceipt };

@@ -62,6 +62,9 @@ code does not belong here; rationale lives in `git log`.
   - `designer/` / `connector/` - designer cards; game-client connector
   - `devcontainer/` - host daemon plumbing (`hostDaemon.ts`, `hostOpRunner.ts`, `tmuxCore.ts`) plus
     the per-session tools every peer registers
+    - `hostResolve.ts` - the pure, independently-tested resolution logic hostDaemon.ts's WS
+      orchestration delegates to: catalog scanning, host/devcontainer workdir and watch-target
+      resolution, and the tmux launch command builder
     - `codexTargets.ts` - one supervised `codex app-server` per execution target. A working directory
       is NOT a target property: a thread carries its own, so every host session shares one child
     - `codexAppServer.ts` - the JSONL transport and fail-closed client. Every server-initiated request

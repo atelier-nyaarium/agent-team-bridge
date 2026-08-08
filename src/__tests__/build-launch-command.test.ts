@@ -7,7 +7,7 @@ import {
 	listHostDirs,
 	resolveHostWorkdir,
 	resolveWatchTarget,
-} from "../mcp/devcontainer/hostDaemon.js";
+} from "../mcp/devcontainer/hostResolve.js";
 
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
 
