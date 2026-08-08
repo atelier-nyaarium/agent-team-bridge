@@ -183,7 +183,7 @@ fun BoardScreen(
 		item(key = "sect:backlog") {
 			// The button rides the Backlog header rather than a row of its own: a new entry lands on the
 			// backlog, so this is where it belongs, and a lone button over empty space read as a mistake.
-			BoardSectionLabel("Backlog", rows.unassigned.rows.size) {
+			BoardSectionLabel("Backlog") {
 				// Says "Resume" when a draft is waiting: the button is the only trace of it once the form
 				// is closed, and a bare "New" would read as discarding what is still there.
 				Button(
@@ -398,7 +398,7 @@ fun StateMark(state: String) {
 }
 
 @Composable
-private fun BoardSectionLabel(label: String, count: Int, trailing: (@Composable () -> Unit)? = null) {
+private fun BoardSectionLabel(label: String, trailing: (@Composable () -> Unit)? = null) {
 	Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
 		Text(
 			label.uppercase(),
@@ -406,11 +406,7 @@ private fun BoardSectionLabel(label: String, count: Int, trailing: (@Composable 
 			color = MaterialTheme.colorScheme.onSurfaceVariant,
 		)
 		Spacer(Modifier.weight(1f))
-		Text("$count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-		trailing?.let {
-			Spacer(Modifier.width(12.dp))
-			it()
-		}
+		trailing?.let { it() }
 	}
 }
 
