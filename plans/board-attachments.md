@@ -493,6 +493,16 @@ act on later.
   construction, so a fixture that seeds after `Repo.get` writes to disk and is then ignored. The board
   simply showed the previous run's data, which reads as "my fixture did not run" rather than "my
   fixture ran too late".
+- **A guard's own test is usually the wrong test, and this codebase makes that easy.** Three times a
+  guard here broke while its test stayed green, because the test asserted the value the guard READS
+  rather than the decision it MAKES. `queue[1].fetchFrom[blobId] == "gw-a"` passes whether or not the
+  consumer can find that entry. The habit worth building: when a helper exists to protect something,
+  the test should exercise the protection, not the plumbing. Nothing in the tooling pushes that way,
+  and positional tuples of same-typed fields actively push the other way.
+- **`enqueueMove` now touches the filesystem**, which made a previously pure queue builder depend on
+  ambient disk state. The existing tests pass literal `/tmp/...` paths that never exist, so one branch
+  of its new filter has no coverage in either direction. A predicate parameter would have kept it pure;
+  I took the direct `File(...).isFile` because it was two lines, and the tests silently got weaker.
 
 # Pre-existing holes, separately scoped
 
