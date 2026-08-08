@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SessionStore, sanitizeLabel, sanitizeWorkdirPath } from "../shared/session-store.js";
+import { sanitizeLabel, sanitizeWorkdirPath } from "../shared/session-sanitize.js";
+import { SessionStore } from "../shared/session-store.js";
 
 // Deterministic ids for clash tests: yields the scripted values, then unique fillers.
 function scriptedIds(...ids: string[]) {

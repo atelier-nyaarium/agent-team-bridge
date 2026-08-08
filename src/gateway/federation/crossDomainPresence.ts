@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type CrossDomainPresenceSession, CrossDomainPresenceSessionSchema } from "../../shared/federation-protocol.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../../shared/plane-registry.js";
-import { sanitizeDescription, sanitizeLabel } from "../../shared/session-store.js";
+import { sanitizeDescription, sanitizeLabel } from "../../shared/session-sanitize.js";
 
 ////////////////////////////////
 //  Interfaces & Types

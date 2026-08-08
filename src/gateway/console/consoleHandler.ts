@@ -37,7 +37,8 @@ import {
 	SpawnPoint,
 	storeKey,
 } from "../../shared/session-id.js";
-import { type SessionRecord, sanitizeLabel } from "../../shared/session-store.js";
+import { sanitizeLabel } from "../../shared/session-sanitize.js";
+import type { SessionRecord } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
 import {

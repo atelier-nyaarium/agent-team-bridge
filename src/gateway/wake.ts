@@ -1,4 +1,4 @@
-import { sanitizeLabel } from "../shared/session-store.js";
+import { sanitizeLabel } from "../shared/session-sanitize.js";
 
 ////////////////////////////////
 //  Interfaces & Types

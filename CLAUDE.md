@@ -102,6 +102,8 @@ code does not belong here; rationale lives in `git log`.
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
   - `session-store.ts` - the gateway's authoritative session records, keyed by `spawn.id`
+  - `session-sanitize.ts` / `session-tokens.ts` - label/workdir/description normalization; session id
+    and bind-token minting
   - `board-attachment-store.ts` - attachment bytes owned by a board entry, keyed
     `(ownerId, entryId, blobId)` with every path segment asserted. Nothing sweeps it; that IS the
     durability. See Board attachments below
