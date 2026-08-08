@@ -364,7 +364,12 @@ fun App(
 				},
 				onLink = { showLinkWizard = true },
 				onHostNetworks = { showHostNetworks = true },
-				onAddGateway = { showAddGateway = true },
+				// Closes Users on the way, like onEnrollUser above: this branch is evaluated BEFORE
+				// showAddGateway's, so leaving it set renders Users over the screen just opened.
+				onAddGateway = {
+					showUsers = false
+					showAddGateway = true
+				},
 			)
 		showApproval ->
 			ApprovalWindowScreen(repo = repo, onBack = { showApproval = false })
