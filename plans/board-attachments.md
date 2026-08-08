@@ -453,6 +453,47 @@ the lap that attacked it. The Plan section references these and adds nothing of 
 - Fetch failures (bytes gone, wrong name, holding Gateway unreachable) are ERRORS, never refusals: a
   route may only relay a member of `BoardRefusal`, and none of these is one.
 
+## Painpoints
+
+Not a code audit. These are the things that actually cost time on this plan, with enough detail to
+act on later.
+
+- **`Attachments` has three path concepts and one of them is a trap.** A `src` carries an
+  `appassets` URL prefix, `relOf` recovers the relative part, and `resolve` maps that to a File - but
+  `resolve` ends in `takeIf { it.isFile }`, so it answers null for a path that does not exist YET.
+  That makes it unusable for building a download DESTINATION, which is the obvious thing to reach for.
+  Combined with `relOf` silently returning null for a string missing the prefix, a reader that builds
+  a path the "obvious" way gets null forever with no error anywhere. This produced a gallery that
+  compiled, passed every gate, and was completely inert. `Attachments.boardFile` exists now as the one
+  place that owns a board path; the general shape (a resolver that refuses non-existent files, beside
+  a parser that nulls on a shape mismatch) is still there for the next feature to fall into.
+- **The board queue's lane rules are the most dangerous code in this area and the least legible.** The
+  whole worst-case - one stuck action freezing every write to a Gateway - lives in five lines of
+  `eligibleBoardActions`, where `chosen[lane] = action; laneClosed.add(lane)` for a head UNDER the
+  struggling threshold is what closes the lane. Reading it, the struggling branch looks like the
+  dangerous one; it is the safe one. Three separate rounds on this plan misread it, including one
+  where the "fix" guaranteed the freeze. A named predicate for "this head holds its lane" would make
+  the trap visible.
+- **A comment described a branch that had been deleted, and an auditor believed it.** After the
+  no-charge branch was removed, `ConsoleClient:boardBytesReady`'s doc still said "the drain charges no
+  attempt for a transfer still running". That is the timelessness rule failing in the direction that
+  matters: a stale comment about control flow is worse than no comment, because the next reader
+  reasons from it. Worth a sweep of comments that describe OTHER files' behaviour, since those are the
+  ones nothing invalidates when the other file changes.
+- **Kotlin property initialization order silently defeated a flag.** `loadedCleanly` was declared after
+  `blob = load()`, so its own initializer ran after `load()` had set it and overwrote the result. No
+  warning, no error, and the behaviour looked correct in every reading of the function. Only a unit
+  test caught it. Anything a constructor-time function needs to WRITE has to be declared above the
+  property whose initializer calls it, and nothing in the language says so.
+- **`AttachmentViewer` must be composed at the top level and nothing says so at the definition.** The
+  requirement is written as a comment at the one existing CALL site in `MainActivity`. Nested inside a
+  scrolling column it renders inline: a squashed strip of its own controls with no image, no error.
+  The constraint belongs on the composable.
+- **Sandbox seeding order is load-bearing and unstated.** `BoardManager` reads its durable blob once at
+  construction, so a fixture that seeds after `Repo.get` writes to disk and is then ignored. The board
+  simply showed the previous run's data, which reads as "my fixture did not run" rather than "my
+  fixture ran too late".
+
 # Pre-existing holes, separately scoped
 
 Found while auditing, not caused by this feature, each worth its own fix outside this plan:
