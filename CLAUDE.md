@@ -45,6 +45,13 @@ code does not belong here; rationale lives in `git log`.
   `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`.
   `ChatPersistence.kt` is the delegate it HOLDS: the JSON codec between the in-memory maps and
   AppStateStore (threads, read anchors, labels, scheduled sends, absence streaks, drafts)
+  - The federation surface is four more held delegates, reached as `repo.enroll` / `.devices` /
+    `.domainAdmin` / `.trust`: `EnrollOps.kt` (owner facts through `submitOwnerFact`, membership, the
+    FLOW-1 ceremony, gateway admit), `DeviceApprovalOps.kt` (the add-a-device rendezvous, both
+    sides), `DomainAdminOps.kt` (own-Domain identity plus hosted tenants), `TrustOps.kt` (the trust
+    graph, the link wizard, FLOW-2, cross-Domain shares). They reach back into the repository for
+    `store` / `_state` / `client()` / `federation`, and `federation-manager-residue.test.ts` fails
+    the build if anything outside these five files touches the owner keys
 - `android/.../MainActivity.kt` - the `Repo` singleton, the activity, and the `App` composable that
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),
