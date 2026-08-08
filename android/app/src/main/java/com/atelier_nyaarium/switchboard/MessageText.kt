@@ -47,3 +47,13 @@ internal fun ttsTextFramed(
 	val toLabel = msg.to?.let { state.label(it) }
 	return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
 }
+
+/** A peer-mirror row's notification/TTS text, framed as "from -> to: text" so it never reads as
+ * if addressed to this console - neither party in a peer-mirror row is this console's own team,
+ * unlike every other row this is applied to. */
+internal fun peerFramed(state: ChatState, m: Message, text: String): String {
+	if (!m.isPeer) return text
+	val fromLabel = m.from?.let { state.label(it) } ?: "?"
+	val toLabel = m.to?.let { state.label(it) }
+	return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
+}

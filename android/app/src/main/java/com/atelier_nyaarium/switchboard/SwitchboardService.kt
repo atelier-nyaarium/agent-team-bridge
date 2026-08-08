@@ -27,24 +27,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-/** Whether a team's burst should get full notification treatment (banner + TTS). The
- * burst still bumps unread/mailbox state in the drain loop regardless of this decision - it only
- * gates `notifyBurst`'s banner/TTS path. False while the Activity is visible (the user is already
- * looking at the app), notifications are otherwise unavailable, or the team's tab is muted
- * (explicitly Closed and not yet reopened; a never-opened team is not muted). */
-internal fun shouldNotifyBurst(isVisible: Boolean, canNotify: Boolean, closedTeams: Set<String>, team: String): Boolean =
-	!isVisible && canNotify && team !in closedTeams
-
-/** A peer-mirror row's notification/TTS text, framed as "from -> to: text" so it never reads as
- * if addressed to this console - neither party in a peer-mirror row is this console's own team,
- * unlike every other row this is applied to. */
-internal fun peerFramed(state: ChatState, m: Message, text: String): String {
-	if (!m.isPeer) return text
-	val fromLabel = m.from?.let { state.label(it) } ?: "?"
-	val toLabel = m.to?.let { state.label(it) }
-	return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
-}
-
 /**
  * Foreground service owning the bridge connection and poll loop, so messages keep
  * arriving while the Activity is backgrounded or the screen is off. The Activity
