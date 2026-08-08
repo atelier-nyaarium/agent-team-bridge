@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
 
 /**
  * The Users surface: every member on this network, by name + presence. Fetched from evie
- * (ChatRepository.fetchRoster - the cross-tenant aggregation), which returns each member's owner
+ * (TrustOps.fetchRoster - the cross-tenant aggregation), which returns each member's owner
  * identity + display name + an online dot. This is the roster's first render: a name, a presence
  * dot, the owner fingerprint, and a "you" marker on your own row. The richer surface (the Trusted
  * badge, the per-row kebab, the arm-trust flow, share control) builds on these rows.
@@ -77,7 +77,7 @@ fun UsersScreen(
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	// Non-throwing read: a corrupt owner key degrades to empty (no row ever matches it) rather
 	// than crashing the roster. The connect path surfaces a corrupt key as a terminal cause.
-	val myOwnerKeys = remember { repo.ownerKeysForDisplay() }
+	val myOwnerKeys = remember { repo.enroll.ownerKeysForDisplay() }
 	val myOwner = myOwnerKeys?.signPub.orEmpty()
 	// Bumped on an untrust/trust so the per-row Trusted badge re-reads the friend graph.
 	var trustVersion by remember { mutableIntStateOf(0) }
@@ -95,9 +95,9 @@ fun UsersScreen(
 	var sharedCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
 	suspend fun refresh() {
-		outcome = repo.fetchRoster()
-		pending = repo.fetchPendingTrust().getOrDefault(emptyList()).associate { it.initiatorOwnerSignPub to it.rendezvousId }
-		sharedCounts = repo.sharedSessionCounts().getOrDefault(emptyMap())
+		outcome = repo.trust.fetchRoster()
+		pending = repo.trust.fetchPendingTrust().getOrDefault(emptyList()).associate { it.initiatorOwnerSignPub to it.rendezvousId }
+		sharedCounts = repo.trust.sharedSessionCounts().getOrDefault(emptyMap())
 	}
 	LaunchedEffect(Unit) { refresh() }
 
@@ -217,7 +217,7 @@ fun UsersScreen(
 						Text("No one else here yet.", style = MaterialTheme.typography.bodyMedium)
 					}
 					for (m in members) {
-						val trusted = remember(m.ownerSignPub, trustVersion) { repo.isOwnerTrusted(m.ownerSignPub) }
+						val trusted = remember(m.ownerSignPub, trustVersion) { repo.trust.isOwnerTrusted(m.ownerSignPub) }
 						val armedRendezvous = pending[m.ownerSignPub]
 						UserRow(
 							member = m,
@@ -231,7 +231,7 @@ fun UsersScreen(
 									activeTrust = if (armedRendezvous != null) {
 										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.displayName)
 									} else {
-										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.displayName)
+										TrustLaunch(repo.trust.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.displayName)
 									}
 								}
 							} else {
@@ -243,7 +243,7 @@ fun UsersScreen(
 								null
 							},
 							onUntrust = if (trusted) {
-								{ scope.launch { repo.untrustOwner(m.ownerSignPub); trustVersion++ } }
+								{ scope.launch { repo.trust.untrustOwner(m.ownerSignPub); trustVersion++ } }
 							} else {
 								null
 							},

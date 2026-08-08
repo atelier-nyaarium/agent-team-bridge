@@ -77,7 +77,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var provisionAttempted by remember { mutableStateOf(false) }
 	// Touch the owner key up front so it exists before any first-root. Non-throwing: a corrupt stored
 	// key must not crash app start, and the connect path surfaces it as a terminal cause.
-	LaunchedEffect(Unit) { repo.ownerKeysForDisplay() }
+	LaunchedEffect(Unit) { repo.enroll.ownerKeysForDisplay() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()
@@ -200,7 +200,7 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 		val s = scan
 		if (!waiting || s == null) return@LaunchedEffect
 		while (waiting) {
-			repo.newDeviceFetch(s)
+			repo.devices.newDeviceFetch(s)
 				.onSuccess { installed -> if (installed) return@LaunchedEffect }
 				.onFailure {
 					status = it.message ?: "The approval expired - ask your other device to add it again."
@@ -216,7 +216,7 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 			onResult = { scanned ->
 				scanning = false
 				scope.launch {
-					val parsed = repo.parseAuthorizeConsole(scanned)
+					val parsed = repo.devices.parseAuthorizeConsole(scanned)
 					if (parsed == null) status = "That isn't an add-device code." else scan = parsed.also { status = "" }
 				}
 			},
@@ -264,7 +264,7 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 								scope.launch {
 									busy = true
 									status = "Joining..."
-									repo.newDeviceJoin(s)
+									repo.devices.newDeviceJoin(s)
 										.onSuccess {
 											waiting = true
 											status = ""

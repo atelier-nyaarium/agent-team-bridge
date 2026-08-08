@@ -264,7 +264,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 				opBusy = true
 				opStatus = ""
 				scope.launch {
-					repo.setDisplayName(displayName)
+					repo.domainAdmin.setDisplayName(displayName)
 						.onSuccess { opStatus = "Saved." }
 						.onFailure { opStatus = "Couldn't save: ${it.message?.take(120)}" }
 					opBusy = false
@@ -410,7 +410,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 							if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
 							deleting = true
 							deleteError = null
-							when (val outcome = repo.deleteDomain()) {
+							when (val outcome = repo.domainAdmin.deleteDomain()) {
 								DeleteDomainOutcome.Deleted -> {
 									confirmDelete = false
 									onClear()

@@ -50,7 +50,7 @@ sealed interface TrustCompareStep {
 }
 
 /**
- * The FLOW-2 trust compare: drives `ChatRepository.trustExchange` over a rendezvous (the initiator
+ * The FLOW-2 trust compare: drives `TrustOps.trustExchange` over a rendezvous (the initiator
  * armed; the target joined a highlighted arm), shows the typed 6-digit SAS for an out-of-band
  * compare, and on a mutual [Yes] records the owner-to-owner trust (REUSES `enrollConfirm`). The SAS
  * code is owner-anchored + symmetric (sorted-owner-key roles), so both phones display the SAME code.
@@ -70,17 +70,17 @@ fun TrustCompareScreen(
 	var busy by remember { mutableStateOf(false) }
 	// Set once the human commits trust, so leaving the screen afterward does NOT cancel the rendezvous.
 	val confirmed = remember { AtomicBoolean(false) }
-	val edgeNonce = remember { repo.freshLinkNonce() }
+	val edgeNonce = remember { repo.trust.freshLinkNonce() }
 	val who = peerName.ifEmpty { "the other person" }
 
 	LaunchedEffect(Unit) {
-		repo.trustExchange(rendezvousId, mySide, peerOwnerSignPub)
+		repo.trust.trustExchange(rendezvousId, mySide, peerOwnerSignPub)
 			.onSuccess { step = TrustCompareStep.Compare(it) }
 			.onFailure { step = TrustCompareStep.Failed(it.message ?: "Trust could not complete.") }
 	}
 	DisposableEffect(Unit) {
 		onDispose {
-			if (!confirmed.get()) scope.launch { repo.trustCancel(rendezvousId) }
+			if (!confirmed.get()) scope.launch { repo.trust.trustCancel(rendezvousId) }
 		}
 	}
 
@@ -126,7 +126,7 @@ fun TrustCompareScreen(
 										step = TrustCompareStep.Failed("Lost the confirmed session; please retry.")
 										return@launch
 									}
-									repo.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
+									repo.enroll.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
 										// Both outcomes mean the friend edge is recorded (the relay edge is
 										// best-effort); the Trusted badge appears either way.
 										.onSuccess { step = TrustCompareStep.Done }

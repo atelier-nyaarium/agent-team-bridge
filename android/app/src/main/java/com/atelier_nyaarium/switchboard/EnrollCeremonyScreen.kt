@@ -66,13 +66,13 @@ fun EnrollCeremonyScreen(
 	val confirmed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 	// One owner-link nonce pinned for the whole ceremony so a retry (or a lost-ack re-submit) re-signs
 	// the SAME edge bytes, which evie dedupes - rather than accumulating a fresh edge per attempt.
-	val edgeNonce = remember { repo.freshLinkNonce() }
+	val edgeNonce = remember { repo.trust.freshLinkNonce() }
 
 	// Drive the commit-reveal exchange the moment the screen opens: commit this side, poll the broker
 	// for the peer, verify the binding, compute the code. A failure (mismatch, timeout, transport)
 	// lands on the Failed panel.
 	LaunchedEffect(ctx.handshakeId, ctx.role) {
-		repo.enrollExchange(ctx)
+		repo.enroll.enrollExchange(ctx)
 			.onSuccess { ex -> step = EnrollStep.Compare(ex.sas, ex) }
 			.onFailure { step = EnrollStep.Failed(humanizeEnrollError(it.message)) }
 	}
@@ -85,7 +85,7 @@ fun EnrollCeremonyScreen(
 		onDispose {
 			if (!confirmed.get()) {
 				@Suppress("OPT_IN_USAGE")
-				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.enrollCancel(ctx.handshakeId, ctx.role) } }
+				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.enroll.enrollCancel(ctx.handshakeId, ctx.role) } }
 			}
 		}
 	}
@@ -119,7 +119,7 @@ fun EnrollCeremonyScreen(
 						confirmed.set(true)
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId, edgeNonce, s.exchange.peerParty.ownerSignPub)
+							repo.enroll.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId, edgeNonce, s.exchange.peerParty.ownerSignPub)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done
@@ -136,7 +136,7 @@ fun EnrollCeremonyScreen(
 						// stops on a clear warning - never silently retried, since a mismatch may be tampering.
 						busy = true
 						scope.launch {
-							runCatching { repo.enrollCancel(ctx.handshakeId, ctx.role) }
+							runCatching { repo.enroll.enrollCancel(ctx.handshakeId, ctx.role) }
 							step = EnrollStep.Failed(
 								"The codes did not match. Do not continue - rescan in person and try again, and if it keeps " +
 									"mismatching the connection may be tampered with.",
@@ -152,7 +152,7 @@ fun EnrollCeremonyScreen(
 					onRetry = {
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.peerDomainId, edgeNonce, s.peerOwnerSignPub)
+							repo.enroll.enrollConfirm(ctx.myParty.domainId, s.peerDomainId, edgeNonce, s.peerOwnerSignPub)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done

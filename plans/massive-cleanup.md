@@ -125,6 +125,31 @@ ordering hazard. The only enumerations to touch: both CI workflow lists, and the
 Keep the barrel a pure re-export so no consumer changes in either repo, and let each new leaf keep
 its internals private so `export *` cannot widen the surface.
 
+### A widening is a new hazard, and the house answer is a residue test
+
+Splitting the federation surface out of ChatRepository forced `federation` from private to internal,
+which in a single-module app means every file can now reach the owner's signing keys directly and
+bypass the merge-iff-accepted choke point that the code's own comments call load-bearing. Lint and
+tests were green; nothing pinned it. `federation-manager-residue.test.ts` now fails the build if any
+file outside the repository and its four collaborators touches the manager.
+
+Rule: when a split widens a member that guarded an invariant, the same lap adds the residue test.
+Put it in the TS suite, since the Kotlin tests run after merge and cannot block a PR. Negative-control
+it with a planted probe before trusting it.
+
+### Pass-2 candidate: a ceremony engine spans two collaborators
+
+`trustExchange` mirrors `enrollExchange` skeleton for skeleton, which is why `pollEnroll` had to
+become a top-level function when the twins landed in different classes. Both ceremony screens now
+straddle EnrollOps and TrustOps, while every other screen maps to exactly one collaborator, so the
+split failed its own test here. A CeremonyOps owning the two exchanges, confirm, cancel and the poll
+would give each ceremony screen one collaborator and put the twins side by side for unification.
+
+Related: EnrollOps is the grab bag of the four. Its honest cohesion is "rides submitOwnerFact", not
+enrollment: membership administration, owner-key custody and the cross-Domain link submissions all
+sit there because they share that choke point, and four of five link-submission callers are in
+TrustOps.
+
 ### Pass-2 candidate: ChatPersistence is now JVM-testable
 
 The persistence codec's extraction left a class whose only dependency is AppStateStore. The JSON

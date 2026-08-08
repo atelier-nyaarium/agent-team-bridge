@@ -67,7 +67,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 	var enteredToken by remember { mutableStateOf("") }
 	var pairing by remember { mutableStateOf<CrossDomainPairing?>(null) }
 	// Pinned for the life of this pairing so a confirm retry reuses the same signed link bytes.
-	val linkNonce = remember { repo.freshLinkNonce() }
+	val linkNonce = remember { repo.trust.freshLinkNonce() }
 
 	var typed by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
@@ -83,7 +83,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 			// also sweeps on its TTL, so a dropped cancel is bounded.
 			if (tok != null || pin != null) {
 				@Suppress("OPT_IN_USAGE")
-				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.crossDomainCancel(tok, pin) } }
+				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.trust.crossDomainCancel(tok, pin) } }
 			}
 		}
 	}
@@ -99,7 +99,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 	LaunchedEffect(openToken, step) {
 		if (role != LinkRole.RECEIVER || openToken == null || step !is LinkStep.Rendezvous) return@LaunchedEffect
 		while (step is LinkStep.Rendezvous) {
-			val outcome = repo.crossDomainListenState(openToken)
+			val outcome = repo.trust.crossDomainListenState(openToken)
 			val arrived = outcome.getOrNull()
 			if (arrived != null) {
 				receiverPairing = arrived
@@ -138,7 +138,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 						busy = true
 						note = ""
 						scope.launch {
-							repo.crossDomainListen()
+							repo.trust.crossDomainListen()
 								.onSuccess { listening = it }
 								.onFailure { fail("Could not open a listening window: ${it.message?.take(140)}") }
 							busy = false
@@ -153,7 +153,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 						busy = true
 						note = ""
 						scope.launch {
-							repo.crossDomainRequest(enteredToken)
+							repo.trust.crossDomainRequest(enteredToken)
 								.onSuccess { p ->
 									pairing = p
 									step = LinkStep.Verify(CrossDomainLink.requesterSas(p.result))
@@ -180,7 +180,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 								LinkRole.REQUESTER -> {
 									val p = pairing
 									if (p == null) Result.failure(IllegalStateException("The pairing was lost; start over."))
-									else repo.crossDomainConfirmRequester(p, linkNonce)
+									else repo.trust.crossDomainConfirmRequester(p, linkNonce)
 								}
 
 								LinkRole.RECEIVER -> {
@@ -189,7 +189,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 									if (token == null || friend == null) {
 										Result.failure(IllegalStateException("The pairing was lost; start over."))
 									} else {
-										repo.crossDomainConfirmReceiver(token, friend, linkNonce)
+										repo.trust.crossDomainConfirmReceiver(token, friend, linkNonce)
 									}
 								}
 
@@ -217,7 +217,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 					onRetry = {
 						busy = true
 						scope.launch {
-							repo.retryXdomainLinkEdge(s.peerDomainId)
+							repo.trust.retryXdomainLinkEdge(s.peerDomainId)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> LinkStep.Done

@@ -65,10 +65,10 @@ private data class SessionShares(val everyone: Boolean, val domains: Set<String>
 fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	val state by repo.state.collectAsState()
-	val sessions = remember(state) { repo.shareableSessions().filter { gatewayId == null || it.gatewayId == gatewayId } }
-	val people = remember(state) { repo.linkedDomains() }
+	val sessions = remember(state) { repo.trust.shareableSessions().filter { gatewayId == null || it.gatewayId == gatewayId } }
+	val people = remember(state) { repo.trust.linkedDomains() }
 	// Non-throwing read: a corrupt owner key degrades to empty rather than crashing the sheet.
-	val myOwner = remember { repo.ownerKeysForDisplay()?.signPub.orEmpty() }
+	val myOwner = remember { repo.enroll.ownerKeysForDisplay()?.signPub.orEmpty() }
 	// Roster people you have NOT linked - shown disabled ("trust first") in the Specific picker, since
 	// you can only share with someone you have a cross-Domain link to.
 	var trustFirst by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -79,8 +79,8 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 	var note by remember { mutableStateOf<String?>(null) }
 
 	suspend fun refresh() {
-		val everyone = repo.sessionsSharedToEveryone().getOrDefault(emptySet())
-		val specific = repo.crossDomainShares().getOrDefault(emptySet())
+		val everyone = repo.trust.sessionsSharedToEveryone().getOrDefault(emptySet())
+		val specific = repo.trust.crossDomainShares().getOrDefault(emptySet())
 		val byName = sessions.associate { s ->
 			s.name to SessionShares(
 				everyone = s.name in everyone,
@@ -94,7 +94,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 		refresh()
 		// People on the roster I have not linked (by owner key) become "trust first" rows.
 		val linkedOwners = people.mapNotNull { it.ownerSignPub }.toSet()
-		trustFirst = repo.fetchRoster().getOrDefault(emptyList())
+		trustFirst = repo.trust.fetchRoster().getOrDefault(emptyList())
 			.filter { it.ownerSignPub != myOwner && it.ownerSignPub !in linkedOwners }
 			.map { it.displayName.ifEmpty { "(unnamed)" } }
 			.distinct()
@@ -120,8 +120,8 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 				scope.launch {
 					note = null
 					// Specific implies not-everyone: clear the everyone share first so the two never overlap.
-					if (shares[focus]?.everyone == true) repo.setShareEveryoneTrusted(focus, false)
-					repo.setCrossDomainShare(focus, domainId, checked).onFailure { note = it.message?.take(120) }
+					if (shares[focus]?.everyone == true) repo.trust.setShareEveryoneTrusted(focus, false)
+					repo.trust.setCrossDomainShare(focus, domainId, checked).onFailure { note = it.message?.take(120) }
 					refresh()
 				}
 			},
@@ -294,19 +294,19 @@ private suspend fun applyMode(
 ): Result<Unit> = runCatching {
 	when (mode) {
 		ShareMode.PRIVATE -> {
-			if (current.everyone) repo.setShareEveryoneTrusted(session, false).getOrThrow()
-			for (d in current.domains) repo.setCrossDomainShare(session, d, false).getOrThrow()
+			if (current.everyone) repo.trust.setShareEveryoneTrusted(session, false).getOrThrow()
+			for (d in current.domains) repo.trust.setCrossDomainShare(session, d, false).getOrThrow()
 		}
 
 		ShareMode.EVERYONE -> {
 			// Everyone supersedes specific shares; clear them so the two never overlap.
-			for (d in current.domains) repo.setCrossDomainShare(session, d, false).getOrThrow()
-			repo.setShareEveryoneTrusted(session, true).getOrThrow()
+			for (d in current.domains) repo.trust.setCrossDomainShare(session, d, false).getOrThrow()
+			repo.trust.setShareEveryoneTrusted(session, true).getOrThrow()
 		}
 
 		ShareMode.SPECIFIC -> {
 			// Leaving everyone for specific: drop everyone; the people checklist adds the specifics.
-			if (current.everyone) repo.setShareEveryoneTrusted(session, false).getOrThrow()
+			if (current.everyone) repo.trust.setShareEveryoneTrusted(session, false).getOrThrow()
 		}
 	}
 }

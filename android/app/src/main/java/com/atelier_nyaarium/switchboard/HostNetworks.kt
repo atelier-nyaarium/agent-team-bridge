@@ -64,7 +64,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 	val state by repo.state.collectAsState()
 	// Re-derive rows on a discovery change (a state chip flips) or after an add/remove.
 	var refresh by remember { mutableStateOf(0) }
-	val tenants = remember(state.teams, refresh) { repo.hostedTenants() }
+	val tenants = remember(state.teams, refresh) { repo.domainAdmin.hostedTenants() }
 	var showAdd by remember { mutableStateOf(false) }
 
 	if (showAdd) {
@@ -192,7 +192,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 					busy = true
 					status = "Creating..."
 					scope.launch {
-						repo.provisionTenant(label)
+						repo.domainAdmin.provisionTenant(label)
 							.onSuccess { onDone() }
 							.onFailure {
 								busy = false
@@ -226,7 +226,7 @@ fun HostedTenantDetailScreen(
 	val context = LocalContext.current
 	val scope = rememberCoroutineScope()
 	val state by repo.state.collectAsState()
-	val tenant = remember(state.teams, domainId) { repo.hostedTenants().firstOrNull { it.domainId == domainId } }
+	val tenant = remember(state.teams, domainId) { repo.domainAdmin.hostedTenants().firstOrNull { it.domainId == domainId } }
 	// The invite blob is built lazily because it fetches the gateway transport on demand.
 	var inviteBlob by remember(domainId) { mutableStateOf<String?>(null) }
 	var status by remember { mutableStateOf("") }
@@ -252,7 +252,7 @@ fun HostedTenantDetailScreen(
 				status = ""
 				busy = true
 				scope.launch {
-					repo.removeHostedTenant(domainId)
+					repo.domainAdmin.removeHostedTenant(domainId)
 						.onSuccess { onRemoved() }
 						.onFailure {
 							busy = false
@@ -294,7 +294,7 @@ fun HostedTenantDetailScreen(
 						busy = true
 						status = "Preparing invite..."
 						scope.launch {
-							repo.buildInviteBlob(tenant)
+							repo.domainAdmin.buildInviteBlob(tenant)
 								.onSuccess {
 									inviteBlob = it
 									status = ""
@@ -336,9 +336,9 @@ fun HostedTenantDetailScreen(
 						busy = true
 						status = "Regenerating..."
 						scope.launch {
-							repo.regenerateInvite(domainId, tenant.displayName)
+							repo.domainAdmin.regenerateInvite(domainId, tenant.displayName)
 								.onSuccess {
-									repo.buildInviteBlob(it)
+									repo.domainAdmin.buildInviteBlob(it)
 										.onSuccess { b -> inviteBlob = b; status = "New invite ready. The old one no longer works." }
 										.onFailure { e -> status = "Refreshed, but could not rebuild the QR: ${e.message?.take(120)}" }
 								}

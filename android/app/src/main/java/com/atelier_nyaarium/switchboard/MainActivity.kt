@@ -322,7 +322,7 @@ fun App(
 	// "Verify with the admin" entry, and a completed compare latches it off.
 	LaunchedEffect(state.provisioned, state.firstRooted) {
 		if (state.provisioned && !enrolleeCeremonyOffered) {
-			repo.pendingEnrolleeCeremony()?.let {
+			repo.enroll.pendingEnrolleeCeremony()?.let {
 				enrolleeCeremonyCtx = it
 				enrolleeCeremonyOffered = true
 			}
@@ -448,7 +448,7 @@ fun App(
 				inviteBlob = null,
 				peerLabel = "the admin",
 				onDone = {
-					repo.markEnrolleeCeremonyDone()
+					repo.enroll.markEnrolleeCeremonyDone()
 					enrolleeCeremonyCtx = null
 				},
 				onCancel = { enrolleeCeremonyCtx = null },
@@ -467,7 +467,7 @@ fun App(
 				onRemoved = { hostTenant = null },
 				onLink = { showLinkWizard = true },
 				onVerify = { blob, label ->
-					repo.adminEnrollContext(hostTenant!!)?.let {
+					repo.enroll.adminEnrollContext(hostTenant!!)?.let {
 						adminCeremonyCtx = it
 						adminCeremonyBlob = blob
 						adminCeremonyLabel = label
@@ -540,7 +540,7 @@ fun App(
 					showUsers = true
 				},
 				onClear = {
-					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; drop
+					// The Domain-delete transaction (DomainAdminOps.deleteDomain) owns the local wipe; drop
 					// plugin device state (e.g. the Designer index) alongside it, then navigate home.
 					pluginManager.host.accountWipeHandlers.forEachCaught(onError = ::logPluginThrow) { it.onWipe(context) }
 					showSettings = false
@@ -805,7 +805,7 @@ fun App(
 						onListDirs = { path -> repo.listDirs(path) },
 						// Launch the enrollee compare from the empty board when one is still owed (the
 						// device rooted an enroll invite but has not completed the in-person trust step).
-						onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
+						onVerifyEnroll = (if (state.provisioned) repo.enroll.pendingEnrolleeCeremony() else null)
 							?.let { c -> { enrolleeCeremonyCtx = c } },
 						boardLine = { team -> boardLines[team.name] },
 						boardBranch = { team -> boardBranches[team.name] },
