@@ -604,3 +604,13 @@ gets exactly the previous behaviour, so the deploy window is safe.
 - A move's attach waits on bytes this device may never have held, and nothing but the pull can retire
   it, so the pull rejoins the per-poll resume pass and ignores the give-up counter while an action is
   waiting on it. Otherwise the origin's linked delete holds that Gateway's lane closed for good.
+- **A move declares `supplied` for the members it actually HOLDS, never all of them.** That is what
+  leaves the op a terminal answer: a member neither this device nor the destination can produce is
+  DROPPED by the Gateway and reported. Claiming to supply everything disables that drop, and since a
+  linked delete closes the origin's lane before the struggling step-past is considered, the only
+  escape left would be forgetting the session. Retiring an origin machine is an ordinary owner action
+  and must not freeze a Gateway.
+- While a move is queued the RECORD already names the destination, which by construction does not
+  hold the bytes yet, so a download resolves its holder from the queued action rather than the record.
+  Without that the gallery pulls from the wrong machine, and since the failure counter and the
+  in-flight set are keyed by blobId alone, those failures poison the move's own pull.

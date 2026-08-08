@@ -265,16 +265,18 @@ class BoardManager(private val store: BoardStore) {
 			// origin's id forward leaves the record naming a machine that no longer has to hold them,
 			// and a console routed anywhere else then loses the picture the moment that cache sweeps.
 			val landed = members.map { it.copy(blobGateway = toGateway) }
+			val held = members.filter { File(sourceFor(entry.id, it.blobId)).isFile }
 			last = enqueue(
-				ConsoleOp.BoardSetAttachments(entry.id, landed, supplied = members.map { it.blobId }),
+				ConsoleOp.BoardSetAttachments(entry.id, landed, supplied = held.map { it.blobId }),
 				toGateway,
 				dependsOn = last,
 				sources = members.associate { it.blobId to sourceFor(entry.id, it.blobId) },
-				// ONLY the members this device does not already hold. Listing them all would make the
-				// abandon branch dead for every move, so a member whose local file later vanishes could
-				// never retire its action - and a linked delete behind it closes the origin's lane
-				// before the struggling step-past is even considered. Its bytes are on the ORIGIN,
-				// which is what the record still names until the destination stores its own.
+				// The members this device does NOT hold. Its bytes are on the ORIGIN, which is what the
+				// record names until the destination stores its own. Keeping these out of `supplied` is
+				// what leaves the op a terminal answer: a member neither side can produce is DROPPED by
+				// the Gateway and reported, rather than retried forever behind a linked delete that
+				// closes the origin's lane. Claiming to supply them would disable that and leave
+				// forgetting the session as the only escape.
 				fetchFrom = members
 					.filterNot { File(sourceFor(entry.id, it.blobId)).isFile }
 					.associate { it.blobId to it.blobGateway },
