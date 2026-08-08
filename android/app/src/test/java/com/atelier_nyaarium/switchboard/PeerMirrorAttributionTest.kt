@@ -65,8 +65,8 @@ class PeerMirrorAttributionTest {
 
 	@Test
 	fun peerEntryStaysMarkedAsPeerEvenWhenOnlyToFailsToResolve() {
-		// The exact shape that used to get silently mis-persisted as an ordinary row: a real,
-		// resolved from paired with an unresolvable to.
+		// A real, resolved from paired with an unresolvable to must still persist as a peer row, never
+		// fall back to an ordinary one.
 		val a = resolveMessageAttribution(
 			kind = "peer",
 			entryFrom = "alice.sakura.coolapp.main",

@@ -46,10 +46,10 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
  * two weeks.
  *
  * `markInFlight` mints a fresh generation token on every call - including a re-execution over an
- * already-in-flight record (the opCache-eviction-during-in-flight tail, accepted in Audit round 3)
- * - and `clear` only takes effect when the caller's own generation still matches the CURRENT one.
- * This is what keeps a stale, superseded attempt's eventual failure from erasing a newer, still-
- * live attempt's own in-flight marker. `markComplete` is write-once instead: it is never
+ * already-in-flight record (the opCache-eviction-during-in-flight tail, an accepted, expected
+ * corner) - and `clear` only takes effect when the caller's own generation still matches the
+ * CURRENT one. This is what keeps a stale, superseded attempt's eventual failure from erasing a
+ * newer, still-live attempt's own in-flight marker. `markComplete` is write-once instead: it is never
  * generation-gated (any attempt that genuinely succeeded should permanently win), but a SECOND
  * genuine success for the same key can never overwrite the first result, and a `complete` record
  * is separately immune to `clear` regardless of generation, since the op's side effect already
@@ -106,9 +106,9 @@ export class DurableOpStore {
 	public markInFlight(conversationId: string, opId: string): number {
 		const existing = this.byConversation.get(conversationId)?.get(opId);
 		if (existing?.record.state === "in-flight") {
-			// The crash-mid-work/opCache-eviction-during-in-flight recovery path (Audit round 3) -
-			// exactly the moment a duplicate side effect (a second channel_push/response_push) can
-			// occur, so it is worth a trace even though it is an accepted, expected corner.
+			// The crash-mid-work/opCache-eviction-during-in-flight recovery path - exactly the moment a
+			// duplicate side effect (a second channel_push/response_push) can occur, so it is worth a
+			// trace even though it is an accepted, expected corner.
 			console.warn(
 				`[durableOpStore] ${conversationId.slice(0, 12)}/${opId} re-executing over an already in-flight record (generation ${existing.generation})`,
 			);

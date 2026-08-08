@@ -84,10 +84,9 @@ describe("routes", () => {
 
 	describe("constants", () => {
 		it("derives the payload bucket from the one size limit rather than restating it", () => {
-			// Four independent copies of this number all encoded a constraint that no longer existed,
-			// and not one of them moved when it went away - the console went on refusing exactly the
-			// large files the chunked transport was built to carry. Asserting the DERIVATION rather
-			// than a literal is what stops that recurring: a literal here would just be a fifth copy.
+			// Assert the DERIVATION rather than a literal: an independent copy of this number can silently
+			// drift from MAX_BLOB_BYTES, the size limit it must track, and the console would then refuse
+			// exactly the large files the chunked transport was built to carry.
 			expect(MAX_RESPONSE_FILE_BYTES).toBe(MAX_BLOB_BYTES);
 		});
 

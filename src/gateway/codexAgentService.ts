@@ -695,9 +695,10 @@ export class CodexAgentService {
 	}
 
 	private applyRejection(receipt: Extract<CodexDaemonReceipt, { kind: "rejected" }>, at: number): CodexApplication {
-		// The reason is the whole value of a refusal. Dropping it made "model not offered: <id>" reach
-		// a caller as "delivery was not confirmed within the wait budget", which is both useless and
-		// untrue.
+		// The reason is the whole value of a refusal: without it, a caller sees only a generic
+		// "delivery was not confirmed within the wait budget" in place of the actual cause (e.g. "model
+		// not offered: <id>"), which is both useless and untrue - the daemon did explain, and that
+		// explanation must reach the caller rather than being discarded here.
 		if (receipt.operationId) {
 			this.refusals.set(receipt.operationId, receipt.error);
 			if (this.refusals.size > 256) this.refusals.delete(this.refusals.keys().next().value as string);

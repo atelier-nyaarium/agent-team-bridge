@@ -8,10 +8,10 @@ import org.json.JSONObject
 //  Functions & Helpers
 
 /** A persisted thread/label/draft key is a canonical 4-segment address (domain.gateway.spawn.session).
- * Anything else - a prior device-name-as-segment bug key, or any non-canonical shorter form - is
- * dropped on load so it cannot resurface as an unsendable ghost chat; re-saving the cleaned map
- * drops it for good. The exact-3-dots check enforces arity 4 (parseTarget alone also accepts arity
- * 1/2/3), and at arity 4 parseTarget ignores both locality args, so this is a pure function. */
+ * Anything else - a key with a device name substituted for a segment, or any non-canonical shorter
+ * form - is dropped on load so it cannot resurface as an unsendable ghost chat; re-saving the cleaned
+ * map drops it for good. The exact-3-dots check enforces arity 4 (parseTarget alone also accepts
+ * arity 1/2/3), and at arity 4 parseTarget ignores both locality args, so this is a pure function. */
 private fun isAddressKey(rawKey: String): Boolean =
 	rawKey.count { it == '.' } == 3 && runCatching { parseTarget(rawKey, "", "") }.isSuccess
 

@@ -32,8 +32,8 @@ class ZoomMathTest {
 	@Test
 	fun oneHundredPercentShrinksASmallImageBackDownBecauseFitAlreadyMagnifiedIt() {
 		// A 64px icon on a 1440px frame is blown up ~22x by ContentScale.Fit, so true 1:1 is a layer
-		// scale far BELOW 1. A floor pinned at 1 made this unreachable, which is the bug this
-		// replaces: the icon could never be seen at its own size.
+		// scale far BELOW 1: the scale range must not floor at 1, or a small image could never be seen at
+		// its own size.
 		val bounds = ImageBounds(width = 64, height = 64, sampleSize = 1)
 		val scale = ZoomMath.scaleForRatio(ZoomMath.PRESET_ACTUAL, bounds, 1440, 2400)
 

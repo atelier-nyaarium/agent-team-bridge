@@ -174,8 +174,8 @@ describe("routes", () => {
 
 		it("refuses a file that never says what it is, rather than guessing a role for it", async () => {
 			// Absence is not a state anyone interprets. A sender that cannot name a role is malformed,
-			// and refusing it at the edge is what stops a receiver from having to guess - the guessing
-			// is exactly what six commits of re-derivation used to do.
+			// and refusing it at the edge is what stops a receiver from having to guess a role from other
+			// fields on the file instead.
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("sess-roleless", "agent", "console");
 			await store.waitForResult("sess-roleless", 1);

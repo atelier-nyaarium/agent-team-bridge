@@ -29,7 +29,8 @@ private const val ENROLL_GRACE_MS = 90_000L
  * CertPathValidatorException.
  *
  * A handshake merely dropped mid-flight carries none of these and must NOT be labeled a certificate
- * change: that misdiagnosis told a user to re-run setup during a plain infra outage.
+ * change: mislabeling it that way sends the user to re-run setup over what is only a plain infra
+ * outage.
  */
 internal fun certValidationEvidence(e: Throwable): Boolean {
 	var t: Throwable? = e

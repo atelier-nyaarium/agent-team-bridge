@@ -87,7 +87,8 @@ function writeCache(bundle: CapabilityBundle): void {
  *
  * Carried forward PER SOURCE. A source that spoke this round is taken as-is for the ids it owns,
  * including an affirmative empty, and one that stayed silent keeps whatever it last said. Deciding
- * that across a merged list is what repeatedly dropped or resurrected a capability.
+ * that across a MERGED list instead conflates silence with an affirmative empty answer, which can
+ * drop or resurrect a capability a source explicitly withdrew.
  *
  * Writing the result back is safe for the same reason: every section in it is either a fresh answer
  * or a byte-identical carry-forward of one, so nothing inferred is ever stored as reported.

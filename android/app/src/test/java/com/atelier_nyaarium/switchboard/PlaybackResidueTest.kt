@@ -5,10 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The three rules that keep the playback lifecycle's recorded bug classes unexpressible rather than
- * merely fixed. Each is a claim about the SOURCE, because a behaviour test cannot see a new call site
- * that reintroduces the hazard - and a new call site is exactly how each of these recurred: nine
- * rounds of patches, every one of them correct where it landed.
+ * The three rules that keep the playback lifecycle's bug classes unexpressible rather than merely
+ * fixed. Each is a claim about the SOURCE, because a behaviour test cannot see a new call site that
+ * reintroduces the hazard.
  */
 class PlaybackResidueTest {
 	private val mainSrc = File("src/main/java/com/atelier_nyaarium/switchboard")
@@ -43,15 +42,14 @@ class PlaybackResidueTest {
 
 	@Test
 	fun abandonHasNoDefaultForWhetherThePositionSurvives() {
-		// A pause, a skip, a trash and a genuine displacement all end as PREEMPTED and do not agree
-		// about the position: two keep it, two destroy it. Inferring from the outcome made
-		// `forgetPosition` a no-op, re-filing the offset on the play lane one line after the delete.
+		// A pause, a skip, a trash and a genuine displacement all end as PREEMPTED but disagree on
+		// whether the position survives: two keep it, two destroy it, so the outcome alone cannot decide
+		// it.
 		//
 		// The ENFORCEMENT is the missing default: with none, a call site that says nothing does not
-		// compile, which is exhaustive and has no pattern to evade. This asserts only that the default
-		// is still absent, because the first version of this rule was a regex over call sites - and a
-		// regex cannot tell "every call declares its intent" from "the pattern matched nothing", which
-		// is the same vacuity it was written to prevent.
+		// compile, which is exhaustive and has no pattern to evade. This asserts only that the default is
+		// still absent, because a regex over call sites cannot tell "every call declares its intent" from
+		// "the pattern matched nothing" - the same vacuity a compile-time check closes.
 		val signature = File(mainSrc, "SttsPlayer.kt").readText()
 			.lines()
 			.first { it.contains("fun abandon(") }

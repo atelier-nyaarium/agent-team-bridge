@@ -37,9 +37,9 @@ const DEFAULT_WAIT_BUDGET_MS = CODEX_WAIT_BUDGET_MS;
  *
  * The split is not cosmetic. An agent RESULT is a report about an agent, and the schema only lets one
  * carry an error when the agent is genuinely unavailable or recovering. A refused REQUEST says
- * nothing about the agent's health, so it answers with the request-error shape instead. Routing
- * those through the result envelope is how three separate 500s shipped: the envelope rejected them
- * and the throw escaped the handler's own catch.
+ * nothing about the agent's health, so it answers with the request-error shape instead: routing a
+ * request-level failure through the result envelope fails the envelope's own schema, and the
+ * resulting throw escapes the handler's catch as a 500 instead of the intended 400.
  *
  * Keyed by the error union, so a new transition code fails the build rather than at runtime.
  */
@@ -137,8 +137,9 @@ function describeAgent(
 			observation: interrupting ? "interruptRequested" : declinedToWait ? "accepted" : "waitTimedOut",
 			turn: { id: turn.id, state: turn.state },
 			// An interrupt request reports the turn it is stopping, never how that turn was delivered:
-			// the delivery already happened and is no longer what the caller is being told about. Sending
-			// both is what made every stop of a working agent answer a 500.
+			// the delivery already happened and is no longer what the caller is being told about. The
+			// envelope schema forbids carrying both on an interrupting turn, so sending delivery here
+			// fails validation and turns a stop of a working agent into a 500 instead of the interrupt result.
 			delivery: interrupting ? undefined : exchange?.delivery,
 			activities,
 		});

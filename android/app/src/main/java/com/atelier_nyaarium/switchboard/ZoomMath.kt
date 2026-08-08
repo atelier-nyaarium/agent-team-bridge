@@ -63,8 +63,8 @@ object ZoomMath {
 	 *
 	 * Fit is undone and the downsample factor is put back, so 100% is one source pixel per screen
 	 * pixel on any density and any image size. An image smaller than the frame therefore returns a
-	 * scale BELOW 1 for 100%, since Fit had already magnified it past 1:1. That case is precisely
-	 * what a floor pinned at 1 used to make unreachable.
+	 * scale BELOW 1 for 100%, since Fit had already magnified it past 1:1; a floor pinned at 1 would
+	 * make that case unreachable and misrepresent 100% zoom.
 	 */
 	fun scaleForRatio(ratio: Float, bounds: ImageBounds, containerWidth: Int, containerHeight: Int): Float {
 		val fit = fitFactor(bounds, containerWidth, containerHeight)

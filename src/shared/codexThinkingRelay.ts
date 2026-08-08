@@ -246,9 +246,9 @@ export type CodexDaemonReceipt = z.infer<typeof CodexDaemonReceiptSchema>;
  * Whether losing one daemon message would change what an owner believes about an outcome.
  *
  * Stated per kind rather than inferred, and keyed by the unions themselves so a new kind added above
- * without an entry here fails the build. It was inferred once, from "carries a generation", and that
- * read a fence's ORDERING role as a durability claim: commentary carries one too, and sat in the
- * daemon's outbox being replayed forever.
+ * without an entry here fails the build. A fence's ORDERING role is not a durability claim: inferring
+ * reliability from "carries a generation" would mark commentary reliable too, and an item classified
+ * that way but never acknowledged sits in the daemon's outbox being replayed forever.
  */
 export const CODEX_RELIABLE_EVENT_KIND: Record<CodexDaemonEvent["kind"], boolean> = {
 	activity: false,

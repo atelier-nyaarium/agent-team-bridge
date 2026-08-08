@@ -62,8 +62,9 @@ describe("what a caller reads back from the gateway", () => {
 	const received: unknown[] = [];
 
 	beforeAll(async () => {
-		// A real socket, not a mock. A mock would have happily handed back a string for `error` and
-		// proved nothing - which is exactly how the "[object Object]" refusal shipped.
+		// A real socket, not a mock: a mock that hands back a plain string for `error` would pass even
+		// though a structured refusal object stringifies to the literal text "[object Object]", hiding
+		// exactly the shape mismatch this test exists to catch.
 		server = http.createServer((req, res) => {
 			let raw = "";
 			req.on("data", (chunk) => {

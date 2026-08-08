@@ -236,8 +236,9 @@ class BoardManagerTest {
 	@Test
 	fun pendingFetchesAnswersEntryThenBlobThenHolder() {
 		// The consumer indexes this tuple positionally and every element is a String, so a reordering
-		// compiles and silently turns its lookup into a constant false. That is how the give-up bypass
-		// died once already: it kept reading the first element after the entry id was prepended.
+		// compiles and silently turns its lookup into a constant false - the shape that lets a caller
+		// keep reading the first element after a new one is prepended and start comparing the wrong
+		// field.
 		val picture = BoardAttachment("sha256-${"a".repeat(64)}", "gw-a", "shot.png", "image/png", 3)
 		val board = BoardManager(storeStub())
 

@@ -42,8 +42,6 @@ class PlaybackRequestsSoundTest {
 
 		val drop = r.sound(second)!!
 
-		// Preemption reporting the predecessor was one of the reasons to extract this; until the
-		// sounding pointer moved in here it sat inside playFile where no test could reach it.
 		assertEquals(listOf(SttsPlayer.Outcome.PREEMPTED), drop.events.map { it.outcome })
 		assertEquals(SttsPlayer.Tier.TITLE, drop.events.single().tier)
 		assertEquals(first, drop.soundingEnded)
@@ -59,9 +57,8 @@ class PlaybackRequestsSoundTest {
 		r.sound(mine)
 		r.started(mine)
 
-		// Handed to the player before the person acted, and only now ready. Displacing here is the
-		// defect three rounds of caller-side guards failed to close, because by this point no caller
-		// is left to ask.
+		// Handed to the player before the person acted, and only now ready: displacing here has no
+		// caller left to ask, so it must yield instead.
 		val auto = r.claim(team, at + 1, SttsPlayer.Tier.TITLE)!!
 		val drop = r.sound(auto, yielding = true)
 

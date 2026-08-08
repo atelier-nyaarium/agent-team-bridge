@@ -622,9 +622,8 @@ class SttsPlayer(private val root: File) {
 		// The request that just lost the sound did not ASK to stop - something else took it - so keep
 		// where it got to. Taken here because `installPlayer` tears that player down on the next line,
 		// and because this path never goes through `apply`: the registry publishes the displaced
-		// terminal from inside `sound()`, so nothing else was ever going to run an effect for it. This
-		// is the ordinary way a run is interrupted, and for a long time it was the one case that
-		// recorded nothing.
+		// terminal from inside `sound()`, so nothing else runs an effect for it - this is the ordinary
+		// way a run is interrupted, and the only place a displaced run's position gets recorded.
 		if (displaced.soundingEnded != null) rememberWhereItGotTo()
 		installPlayer(id, mp, effect, f)
 		// Resume where it stopped. Keyed on THIS recording, so the offset a hand-played (attributed)

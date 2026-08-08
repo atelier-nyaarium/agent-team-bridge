@@ -34,7 +34,7 @@ object AppUpdater {
 		data class Failed(val message: String) : Result
 	}
 
-	// No callTimeout previously meant a stalled download left the Settings "Update" busy
+	// callTimeout is required here, or a stalled download leaves the Settings "Update" busy
 	// spinner stuck forever (its reset only runs after the call returns). 10 minutes is
 	// generous for a full APK even on a slow connection, but finite so the UI can recover.
 	private val client = OkHttpClient.Builder()

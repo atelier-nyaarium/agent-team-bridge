@@ -54,8 +54,9 @@ class AttachmentDisplayTest {
 
 	@Test
 	fun theViewerRefusesWhatBitmapFactoryCannotDecodeSoTheTapLandsOnTheFileSheet() {
-		// The live regression: routing on an `image/` prefix sent both of these to BitmapFactory and
-		// showed "Could not decode image" instead of a readable sheet.
+		// Both mimes match an `image/` prefix, but BitmapFactory cannot decode them: routing on the
+		// prefix alone would send them to the image stage and show "Could not decode image" instead of
+		// the file sheet.
 		assertFalse(viewerDecodableImage("image/svg+xml"))
 		assertFalse(viewerDecodableImage("image/tiff"))
 	}

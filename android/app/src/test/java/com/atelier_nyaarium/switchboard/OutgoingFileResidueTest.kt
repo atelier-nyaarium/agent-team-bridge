@@ -8,9 +8,8 @@ import org.junit.Test
 /**
  * The two rules that make the whole-file-in-memory bug unexpressible rather than merely unlikely.
  *
- * Both are structural claims about the source, so they are checked against the source. A unit test
- * over behavior cannot see a NEW call site that reintroduces the hazard, which is exactly the
- * failure mode being guarded: the previous fix hardened one call site and the next one crashed.
+ * Both are structural claims about the source, so they are checked against the source: a unit test
+ * over behavior cannot see a NEW call site that reintroduces the hazard.
  */
 class OutgoingFileResidueTest {
 	private val mainSrc = File("src/main/java/com/atelier_nyaarium/switchboard")

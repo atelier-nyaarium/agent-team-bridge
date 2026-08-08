@@ -55,7 +55,8 @@ type AnchorKeyword = (typeof ANCHOR_KEYWORDS)[number];
  *
  * Derived from what the reader treats specially rather than hand-maintained: that mode's structural
  * tokens, `%` because it introduces an escape, and `<`/`>`/whitespace because `tryParseRef` strips
- * those before lexing. A hand-kept list is what drifted twice before this existed.
+ * those before lexing. A hand-kept list can drift from what the reader actually treats specially;
+ * deriving it here keeps the two in sync.
  */
 const SCOPE_ESCAPES = new Set(["%", ":", "#", "<", ">"]);
 const FRAGMENT_ESCAPES = new Set(["%", ":", "#", ".", "@", "<", ">"]);

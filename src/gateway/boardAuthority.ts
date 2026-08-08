@@ -28,8 +28,8 @@ export type BoardResult =
 export type BoardDisposition = "release" | "cancel";
 
 /** Who is writing. A VALUE every mutating call must supply, never an absence a caller can fall
- * into: omitting a session id used to mean "no scope check", so a route that forgot one wrote
- * unconditionally. The `sessionAuthority.ts` rule, applied to the board. */
+ * into: an omitted session id must never default to "no scope check", or a route that forgets
+ * one writes unconditionally. The `sessionAuthority.ts` rule, applied to the board. */
 export type BoardActor = { kind: "owner" } | { kind: "session"; sessionId: string };
 
 ////////////////////////////////
@@ -44,10 +44,11 @@ export const OWNER_ACTOR: BoardActor = { kind: "owner" };
  * anything in the trash - that is the owner's own set-aside, and a session's list has already
  * stopped showing it.
  *
- * The SAME rule answers the entry being written and any parent it is attached to. Nesting was
- * briefly looser, allowing a session to hang work off a BACKLOG entry: that left the entry
- * advertised as unclaimed while `claim`'s subtree rule refused every other session, with nothing in
- * any list explaining why. A session breaking a backlog item down claims it first.
+ * The SAME rule answers the entry being written and any parent it is attached to. Checking only the
+ * entry being written would let a session hang work off a BACKLOG entry it does not hold: the entry
+ * would still show as unclaimed in every list while `claim`'s subtree rule silently refuses every
+ * other session that tries to take it, with nothing explaining why. A session breaking a backlog
+ * item down must claim it first.
  */
 export function mayWrite(entry: BoardEntry, actor: BoardActor): BoardRefusal | undefined {
 	if (actor.kind === "owner") return undefined;

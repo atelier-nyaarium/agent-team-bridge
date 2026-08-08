@@ -10,8 +10,9 @@ import org.junit.Test
  * Pins the TLS-failure split in classifyConnError: "certificate changed" (terminal) is reserved
  * for actual validation evidence in the cause chain, while a handshake merely dropped mid-flight
  * (a reset, a degraded control plane) classifies transient so the app retries instead of telling
- * the user to re-run setup. Field-proven: an LKE etcd outage surfaced as bare
- * SSLHandshakeExceptions and the app mislabeled them a certificate change.
+ * the user to re-run setup. A bare SSLHandshakeException with no validation evidence in its cause
+ * chain must classify as transient even when the underlying cause is a control-plane outage rather
+ * than a client-side network blip.
  */
 class ClassifyConnErrorTest {
 

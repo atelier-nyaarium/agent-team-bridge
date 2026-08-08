@@ -10,13 +10,13 @@ import { describe, expect, it } from "vitest";
  *
  * `FederationManager` signs and merges owner facts. The merge-iff-accepted invariant (an owner action
  * cannot submit without the matching local merge, or a revoked member stays visible on the board)
- * holds only because every caller goes through one of the files below. The manager used to be
- * private to ChatRepository; splitting the federation surface out widened it to `internal`, which in
- * a single-module app means any file could otherwise merge an admission evie rejected, or add a
- * trusted owner with no ceremony.
+ * holds only because every caller goes through one of the files below. `ChatRepository.federation` is
+ * declared `internal`, not `private`, so nothing in the compiler stops another file in the module from
+ * merging an admission evie rejected, or adding a trusted owner with no ceremony - this guard is what
+ * actually enforces the boundary.
  *
- * Deliberately in the TS suite: the Android tests run on push to main, so a Kotlin-side assertion
- * could not stop the regression from landing in a PR.
+ * Deliberately in the TS suite: the Android tests only run on push to main, so a Kotlin-side
+ * assertion could not block a bad PR that widens this reachability again.
  */
 const ANDROID_SRC = path.join(
 	import.meta.dirname,

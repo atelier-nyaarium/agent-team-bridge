@@ -127,10 +127,10 @@ export const REGISTER_WINDOW_MS = 60_000;
 //
 // MUST stay comfortably above the send path's post-wake settle delay (routes.ts waits for the woken
 // session's channel listener before delivering, which re-pushes the handshake for an unconfirmed
-// recipient). At 3s the two were EQUAL, so the nudge landed about a millisecond after this window
-// opened and every wake-then-deliver duplicated the handshake by construction - the window
-// postponed the duplicate rather than preventing it. 30s also absorbs a slow `claude --resume`,
-// where registration lands well before the session can answer anything.
+// recipient): a value merely equal to that delay lets the post-wake nudge land right as this window
+// opens, so every wake-then-deliver duplicates the handshake - the window only postpones the
+// duplicate rather than preventing it. 30s also absorbs a slow `claude --resume`, where registration
+// lands well before the session can answer anything.
 export const HANDSHAKE_REPUSH_DEDUPE_MS = 30_000;
 
 // repushHandshake's total attempt cap. /respond is unauthenticated and conversationId is spoofable

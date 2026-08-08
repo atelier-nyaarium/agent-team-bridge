@@ -244,9 +244,8 @@ describe("confirmed managed callers", () => {
 	});
 });
 
-// The rule this whole module exists to enforce was previously written out at eight call sites and
-// went wrong at three of them, each time by reading a credential field directly and deriving its own
-// answer. Keeping those fields unreachable is what stops a ninth site inventing a ninth rule.
+// Keeping the credential fields unreachable outside sessionAuthority is what stops a call site
+// from reading one directly and deriving its own rule for what it proves.
 describe("no call site reaches around the authority", () => {
 	// session-store owns the stored field, sessionAuthority owns every rule derived from it,
 	// wsTypes declares WsData, websocket performs the single write that stamps a proven credential

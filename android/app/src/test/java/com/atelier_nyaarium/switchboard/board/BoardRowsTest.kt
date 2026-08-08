@@ -108,7 +108,8 @@ class BoardRowsTest {
 	@Test
 	fun aFinishedBranchStaysInPlaceWithEveryDescendantShown() {
 		// Nothing collapses and nothing moves to the bottom: a finished entry reads as finished from
-		// its own state mark, and hiding the shape of the work behind a tap is what this replaced.
+		// its own state mark, so collapsing or relocating it would only hide the shape of the work behind
+		// a tap.
 		val rows = flattenBoard(
 			listOf(
 				BoardSource(

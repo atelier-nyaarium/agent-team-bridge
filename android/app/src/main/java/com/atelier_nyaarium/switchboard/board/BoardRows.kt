@@ -54,9 +54,9 @@ fun cardBranchOf(rows: List<BoardRow>, currentId: String?, max: Int = CARD_BRANC
 /** The ONE pure producer of board rows: its output guarantees each entry id appears at most once,
  * which every LazyColumn key depends on.
  *
- * Every live entry renders, in tree position. Finished branches used to collapse behind a count and
- * finished leaves used to gather at the bottom; both hid the shape of the work behind a tap. A
- * finished entry already reads as finished from its own state mark. */
+ * Every live entry renders, in tree position, never collapsed behind a count or gathered to the
+ * bottom - either would hide the shape of the work behind a tap. A finished entry already reads as
+ * finished from its own state mark. */
 fun flattenBoard(sources: List<BoardSource>, sessionGateway: (String) -> String? = { null }): BoardRows {
 	val winners = LinkedHashMap<String, Pair<BoardEntry, String>>()
 	for (source in sources) {

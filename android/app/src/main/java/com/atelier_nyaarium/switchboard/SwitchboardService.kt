@@ -646,7 +646,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	 * emission - so a process restart's first emission converges cleanly and conflation/
 	 * cancellation of the collector can never skip a state). Only a team with a notification
 	 * CURRENTLY SHOWING is touched: cancel it once its count reaches 0 (the scroll-driven read
-	 * model's own bar-clear signal, replacing the old cancel-on-open sites), or silently refresh
+	 * model's own bar-clear signal), or silently refresh
 	 * its content while draining. A tap-consumed (autoCancel) or never-posted (visible-arrival,
 	 * muted) team is presence-checked out, so this can never fabricate a notification the burst
 	 * path itself would not have posted, nor re-alert one the user already dismissed by tapping. */

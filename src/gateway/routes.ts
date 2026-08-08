@@ -1671,12 +1671,12 @@ export function createRoutes({
 	/**
 	 * What an agent sees of an entry: its attachments as FILENAMES only.
 	 *
-	 * The list case used to return the store's projection objects verbatim, so without this the
-	 * moment `attachments` landed on the schema every visible session would receive `blobId` and
-	 * `blobGateway` with no code change and no review step. A blobId is a bearer token, and this is
-	 * the only place an agent could otherwise obtain one: ids are content digests and no enumeration
-	 * op exists. The plumbing lives on the `attachments` action instead, which the tool handler calls
-	 * and whose answer never reaches the model's context.
+	 * Without this projection the list route returns the store's entries verbatim, so any field that
+	 * later lands on the BoardEntry schema (e.g. `blobId`, `blobGateway`) reaches every visible session
+	 * with no code change and no review step. A blobId is a bearer token, and this is the only place an
+	 * agent could otherwise obtain one: ids are content digests and no enumeration op exists. The
+	 * plumbing lives on the `attachments` action instead, which the tool handler calls and whose answer
+	 * never reaches the model's context.
 	 */
 	function projectForAgent(entry: BoardEntry): AgentBoardEntry {
 		if (!entry.attachments) return entry;

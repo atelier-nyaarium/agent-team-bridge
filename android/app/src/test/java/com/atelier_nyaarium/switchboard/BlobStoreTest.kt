@@ -14,7 +14,7 @@ import org.junit.Test
 /**
  * The Kotlin half of the blob-store conformance corpus. This suite and the vitest one read the
  * SAME `tests/fixtures/blob/_manifest.json`, so a chunk-boundary or digest rule cannot end up
- * honored by only one runtime - the failure mode this project has already paid for twice.
+ * honored by only one runtime.
  */
 class BlobStoreTest {
 	private lateinit var root: File

@@ -7,8 +7,8 @@ import org.junit.Test
 
 /**
  * Pins the claim table's two load-bearing invariants: every claim is tagged with the source that
- * made it (without the source saying so), and a key collision REFUSES instead of shadowing
- * (ShadowIndex was deliberately tossed).
+ * made it (without the source saying so), and a key collision REFUSES instead of shadowing - silent
+ * last-wins override is a modding-ecosystem feature, not something a first-party app should tolerate.
  */
 class PluginRegistryTest {
 

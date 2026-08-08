@@ -190,8 +190,8 @@ class ChatRepository(
 	@Volatile var scheduledSendScheduler: ScheduledSendAlarmScheduler? = null
 	// Serializes fireDueScheduledSends() so the cold-boot chain's own unconditional call and a
 	// warm alarm-kick's call can never both convert the same due record into two duplicate rows -
-	// the exact double-fire shape Phase 1's DurableOpStore exists to close for send/respond, applied
-	// here at the client layer instead. Ordinary schedule/cancel/edit mutations do NOT take this
+	// the same double-fire shape DurableOpStore exists to close for send/respond, applied here at
+	// the client layer instead. Ordinary schedule/cancel/edit mutations do NOT take this
 	// lock (they are plain, fast, _state.update-only ops like every other mutation in this file);
 	// only the fire path's check-then-convert sequence needs the exclusion.
 	private val scheduledSendFireMutex = Mutex()
@@ -1884,7 +1884,7 @@ class ChatRepository(
 					// CancellationException on teardown, and JVM CancellationException extends
 					// Exception - classifyConnError must never see one, and a swallowed cancel here
 					// would fall through to pushback.decide(..., lastPassFailed = true) and can
-					// re-acquire an already-released wakelock (see console-hardening.md).
+					// re-acquire an already-released wakelock.
 					e.rethrowIfCancellation()
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
@@ -2192,8 +2192,8 @@ class ChatRepository(
 	 * across calls, unlike a row's single out-$opId bucket), so two picks that happen to share a
 	 * basename cannot overwrite each other on disk. */
 	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
-		// Admitted like any other pick: a draft is just a send that has not happened yet, and this
-		// path previously had no size bound at all.
+		// Admitted like any other pick: a draft is just a send that has not happened yet, so the
+		// same admission bound applies here too.
 		val (picked, refused) = admitPicked(uris, "pick-${UUID.randomUUID()}")
 		if (refused != null) {
 			_state.update { it.copy(error = refused.message()) }

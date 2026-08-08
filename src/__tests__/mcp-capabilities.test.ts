@@ -145,8 +145,8 @@ describe("fetchCapabilities", () => {
 	});
 
 	it("trusts a cache that recorded the owner turning everything off", async () => {
-		// This used to be floored back on by the fail-open set, which meant a guess overriding the one
-		// piece of evidence available: the owner's own last known choice.
+		// A fail-open floor must not override a cache that recorded the owner's own last known choice:
+		// that recorded choice is the one piece of evidence actually available here.
 		writeCache(bundle({ console: [], daemon: [] }));
 		vi.stubGlobal(
 			"fetch",

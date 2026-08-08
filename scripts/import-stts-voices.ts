@@ -1,8 +1,8 @@
 // Normalize each provider's native voice-list export into the bundled STTS
 // catalog (android/app/src/main/assets/stts-providers.json). Each TTS provider
-// publishes its voice catalog in its OWN shape, so refreshing the picker's
-// options used to mean hand-transcribing ids. Instead, drop a provider's raw
-// export into data/stts-voices/<provider>.json and run this script: it maps the
+// publishes its voice catalog in its OWN shape, so there is no single format to hand-transcribe ids
+// from. Instead, drop a provider's raw export into data/stts-voices/<provider>.json and run this
+// script: it maps the
 // native shape to the catalog's { id, label } voices, in place, leaving every
 // other descriptor field untouched.
 //

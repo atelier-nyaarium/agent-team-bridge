@@ -4,12 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The sender label `ThreadRenderer` shows for a row: this is the exact logic that previously
- * existed only inline inside `toJson()`, duplicated (and out of sync with) a second copy inside
- * `fingerprint()` - a peer-mirror row's "from -> to" framing was computed for cache-invalidation
- * purposes but never actually reached the rendered JSON. Extracted as a pure function so the
- * rendered output itself has direct test coverage, not just the fingerprint that was supposed to
- * track it.
+ * The sender label `ThreadRenderer` shows for a row, as its own pure function rather than logic
+ * inlined in `toJson()` or folded into `fingerprint()`'s cache-invalidation computation: the two
+ * must not be conflated, since fingerprint's "from -> to" framing serves recomposition and is not
+ * guaranteed to match what actually renders.
  *
  * Pure function tests, no Android context (no Robolectric).
  */

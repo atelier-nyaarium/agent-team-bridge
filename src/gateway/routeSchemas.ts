@@ -76,9 +76,9 @@ export const RespondBodySchema = z.object({
 	files: ChannelFilesSchema.optional(),
 });
 
-// Per-payload total across a message's files, and DERIVED rather than restated: this used to be its
-// own 16 MB constant and stayed at 16 MB after the reason for it was deleted, which is exactly the
-// drift the single source now prevents. A single file may still use the whole bucket.
+// Per-payload total across a message's files, and DERIVED rather than restated: an independently
+// declared cap has nothing tying its value back to the real constraint, so it can drift stale once
+// the actual limit moves elsewhere. A single file may still use the whole bucket.
 //
 // Advisory by nature, because it sums sender-stated sizes and nothing re-measures them. The real
 // enforcement is per-blob on the write path, where the bytes actually land.
@@ -172,8 +172,8 @@ export const PluginActionRequestSchema = z
 
 /** The total a payload's files CLAIM to be. Sender-stated and never re-measured here, because the
  * bytes are not here: they travel the blob plane, where the write path counts what actually lands
- * against MAX_BLOB_BYTES. This stays as the cheap sanity check on an obviously absurd manifest, not
- * as the memory backstop it used to be. */
+ * against MAX_BLOB_BYTES. This is only a cheap sanity check on an obviously absurd manifest, not a
+ * memory-safety bound: nothing here caps how much a caller may claim before the blob plane counts it. */
 export function fileBytes(files: ChannelFile[]): number {
 	let n = 0;
 	for (const f of files) n += f.size;
@@ -186,8 +186,8 @@ export function fileBytes(files: ChannelFile[]): number {
  * For the persistent store only. `blobId` names content to anyone holding it, and the routes that
  * read the store (`/pending` to enumerate, `/poll` to fetch) authorize nobody, so a stored reference
  * is readable content for as long as the entry lives, which for a channel conversation is forever.
- * This is the same boundary the old `stripFileBytes` drew when the bytes were inline; moving them
- * out of band changed what has to be withheld, not whether.
+ * Whether the bytes ride inline or out of band, the store must withhold whatever makes them
+ * fetchable; only the field carrying that changes.
  */
 export function stripFileRefs(files: ChannelFile[]): ChannelFile[] {
 	return files.map(({ blobId: _omit, blobGateway: _also, ...meta }) => meta);

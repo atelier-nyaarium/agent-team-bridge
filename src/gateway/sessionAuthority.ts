@@ -12,10 +12,10 @@ import type { TeamRegistry, WsData } from "./websocket.js";
  * What a caller must prove in order to act as some subject, as resolved by this module.
  *
  * The whole point of the type is that UNBOUND is a VALUE a resolver decided on, never an absence
- * a caller arrived at by falling off the end of its own derivation. Every gate here used to be
- * hand-written, every one ended in "no expectation, therefore allow", and so every incomplete
- * derivation silently meant ALLOW. Being opaque, this cannot be constructed at a call site, so a
- * gate can no longer manufacture an accidental permit.
+ * a caller arrived at by falling off the end of its own derivation. A hand-written gate that falls
+ * off the end of its own derivation defaults to "no expectation, therefore allow", so an incomplete
+ * derivation silently means ALLOW. Being opaque, this type cannot be constructed at a call site, so
+ * a gate can no longer manufacture an accidental permit that way.
  */
 export interface SessionBinding {
 	readonly token: string | null;
@@ -68,9 +68,9 @@ export interface SessionAuthority {
 	 * The composition: who may act for whatever session serves this team key, awake or asleep.
 	 *
 	 * Live-first for the alias case above, with a record fallback because asleep is a session's
-	 * normal state and the easiest moment to forge into. Named rather than re-derived at each site
-	 * because getting exactly this pair of rules wrong, in each direction, is what two separate
-	 * audit rounds caught.
+	 * normal state and the easiest moment to forge into. Named rather than re-derived at each site:
+	 * getting either half of this precedence wrong at a new call site would silently reopen the
+	 * forgery window this module exists to close.
 	 */
 	toActFor(teamKey: string): SessionBinding;
 

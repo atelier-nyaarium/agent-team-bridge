@@ -94,9 +94,9 @@ export const CodexAppServerTurnCompletedSchema = z.looseObject({
  * What one App Server item is, by its `phase`.
  *
  * The SOLE owner of that vocabulary. Two readers need it - the live tracker as items stream in, and
- * the rebuild that reconstructs a turn from `thread/read` after a restart - and they used to spell
- * it separately. The rebuild had never heard of `commentary`, so a completed turn with no final
- * answer handed its last narration line back as the turn's answer.
+ * the rebuild that reconstructs a turn from `thread/read` after a restart - and both MUST agree on
+ * it: a reader that does not recognize `commentary` treats a completed turn with no final answer as
+ * if its last narration line were the answer.
  *
  * `candidate` is deliberately the default for an unrecognized phase: dropping agent text loses it
  * entirely, while treating narration as an answer is only wrong when a real answer exists.

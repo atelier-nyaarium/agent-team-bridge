@@ -53,11 +53,9 @@ sealed interface Admission {
  * Admission stats; it never opens the file for reading, so the decision costs the same whatever the
  * file turns out to be.
  *
- * There is deliberately no heap check here any more. One used to refuse a large attachment on a
- * loaded device, because the send path held the file base64'd, JSON-encoded and sealed all at once,
- * at roughly 1.8x its size. The transport moves a bounded chunk at a time now, so the memory a send
- * costs no longer scales with the file, and a heap-proportional refusal would only deny work the
- * device can plainly do.
+ * There is deliberately no heap check here: the transport moves a bounded chunk at a time, so the
+ * memory a send costs does not scale with the file, and a heap-proportional refusal would only deny
+ * work the device can plainly do.
  */
 object OutgoingFiles {
 	/** Admit an already-local file (a bucket copy from a first send, or a scheduled send's). */
@@ -75,7 +73,7 @@ object OutgoingFiles {
 		val mime = resolver.getType(uri) ?: "application/octet-stream"
 
 		// Ask the provider first. A provider that will not answer gets refused rather than read
-		// blind, since an unknown length is exactly the case that used to end in an OOM.
+		// blind, since reading with no known length risks an OOM.
 		val declared = runCatching {
 			resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
 		}.getOrNull()
@@ -130,8 +128,8 @@ object OutgoingFiles {
 	}.getOrNull()
 }
 
-/** The user-facing sentence for a refusal, so every surface says the same true thing. Notably NOT
- * "no longer on this device" for a size problem, which is what the old silent-drop path claimed. */
+/** The user-facing sentence for a refusal, so every surface says the same true thing: never
+ * "no longer on this device" for a size problem, since that would misstate why the file was refused. */
 internal fun Admission.Refused.message(): String = when (reason) {
 	Admission.Reason.GONE -> "\"$name\" is no longer on this device."
 	Admission.Reason.OVER_TRANSPORT ->

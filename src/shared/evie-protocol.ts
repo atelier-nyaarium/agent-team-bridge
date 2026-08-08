@@ -34,11 +34,11 @@ export const BLOB_CHUNK_BYTES = 1_048_576;
 /**
  * Largest a single attachment may be, anywhere in the system.
  *
- * THE one size limit. Every other cap derives from this rather than restating it, because the
- * previous four independent 16 MB constants all encoded a constraint that no longer exists and none
- * of them moved when it went away: the old path held a payload whole at every hop, so the ceiling
- * had to clear the tightest hop against a phone's heap. Nothing is held whole now. What bounds a
- * transfer is BLOB_CHUNK_BYTES per hop and disk in total, and neither grows with the file.
+ * THE one size limit. Every other cap derives from this rather than restating it as its own
+ * constant: a restated value has nothing tying it back to what actually bounds a transfer, so it can
+ * drift stale independent of it. Nothing is held whole at any hop: what bounds a transfer is
+ * BLOB_CHUNK_BYTES per hop and disk space in total, and neither scales with the size of the file
+ * being moved.
  *
  * Enforced where the bytes land rather than where they are described. A message states a file's
  * `size`, but that is the sender talking and nothing verifies it, so the ceiling lives on the

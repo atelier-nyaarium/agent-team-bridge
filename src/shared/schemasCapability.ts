@@ -16,9 +16,9 @@ export const EnabledPluginSchema = z
 			.max(129)
 			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
 			.describe("The plugin's globally unique id, as its manifest declares it."),
-		// A plugin's guidance is a whole section of an agent's instructions, not a sentence. The
-		// first real one shipped at 2304 characters against an earlier 2000 cap, which the wire
-		// then refused and the store discarded, so the capability vanished with no error anywhere.
+		// A plugin's guidance is a whole section of an agent's instructions, not a sentence, so the cap
+		// must stay generous: a limit that is too tight is refused by the wire and discarded by the
+		// store, and the capability vanishes with no error anywhere.
 		instructions: z
 			.string()
 			.max(16_000)
@@ -40,7 +40,8 @@ export const CapabilitySnapshotSchema = z.object({
  *
  * Sections rather than one merged list, because a consumer deciding what to keep from its own last
  * answer has to ask whether the source that owns an id spoke this round. A flattened list cannot
- * answer that, and every attempt to work around it has silently dropped or resurrected a capability.
+ * answer that: without knowing which source spoke, a consumer either drops a capability the silent
+ * source still holds, or resurrects one it just withdrew.
  *
  * Hand-named fields rather than a map: there are two sources, they are shaped differently, and a
  * third costs one field.

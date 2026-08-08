@@ -23,7 +23,7 @@ const BlobIdField = z.string().regex(/^sha256-[0-9a-f]{64}$/);
 //  Named rather than inlined into ConsoleOpSchema because these three ops have TWO doors: the sealed
 //  console plane and the gateway's plain HTTP routes. `answerBlobOp` already made the handling
 //  single; this makes the validation single too, so a bound cannot exist at one door and not the
-//  other. The HTTP side previously trusted a bare cast, which was harmless only by accident.
+//  other. A bare type cast at either door would skip that bound silently, with nothing to catch it.
 
 /** Which Gateway holds the bytes, when it is not the one being asked. Absent means "you have them
  * or nobody does", which is every same-Gateway transfer. */

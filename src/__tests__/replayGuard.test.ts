@@ -37,7 +37,8 @@ describe("ReplayGuard", () => {
 		// Simulate a restart: a brand-new guard loads the persisted seen-set.
 		const revived = new ReplayGuard(300_000, 50_000, () => now);
 		revived.restore(snap);
-		// The captured nonce is still a replay AFTER the restart (the bug this fixes).
+		// The captured nonce is still a replay AFTER the restart: restoring a snapshot into a fresh
+		// guard must reject it exactly as the original guard would have.
 		expect(revived.check("hostA", "n1")).toBe(false);
 		// A fresh nonce is still accepted.
 		expect(revived.check("hostA", "n2")).toBe(true);

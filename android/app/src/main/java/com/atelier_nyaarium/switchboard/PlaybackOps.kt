@@ -51,8 +51,9 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 		// A run announces its speaker with a sentinel; a message played by hand carries its own
 		// attribution instead.
 		attributed: Boolean = true,
-		// Null when it started; otherwise WHY. Four causes - no key, no provider, a gone message, an
-		// unspeakable row - used to collapse into one `false` the alert could only shrug at.
+		// Null when it started; otherwise WHY: one of four causes (no key, no provider, a gone
+		// message, an unspeakable row), each named so the alert is never left with only a generic
+		// failure.
 	): String? {
 		val client = repo.sttsClient() ?: return "no voice key set"
 		val provider = repo.currentProvider() ?: return "no voice provider set"
@@ -65,8 +66,8 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 		return if (taken) null else "already speaking"
 	}
 
-	/** A QUERY rather than something a consumer accumulates from events: the glyph listener, the only
-	 * subscriber that ever tried to rebuild this from the stream, got it wrong twice. */
+	/** A QUERY, not something a consumer accumulates from the event stream: a row's state is derived
+	 * from the queue, so anything rebuilding it from events can disagree with the queue itself. */
 	fun playStatesFor(team: String): Map<Long, String> {
 		val states = mutableMapOf<Long, String>()
 		for (entry in queue.queued()) {
@@ -282,15 +283,13 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	 * back to, which is why nothing auto-resumes past it. Read through an accessor that CANNOT report
 	 * a pause over an idle queue.
 	 *
-	 * A pause describes a run, so it cannot outlive one - and three separate rounds each found a new
-	 * way for a run to end without passing through whichever single place was normalizing the flag at
-	 * the time (a thread torn down, an entry trashed, the last entry skipped). None of them held,
-	 * because the rule lived at the writers rather than at the value. A stranded flag refuses autoplay
-	 * on every team afterwards, with no enabled control left on screen to clear it.
+	 * A pause describes a run, so it cannot outlive one, and a run can end without passing through any
+	 * particular writer (a thread torn down, an entry trashed, the last entry skipped). Normalizing at
+	 * the writers therefore cannot hold: each new way to empty the queue strands the flag again, and a
+	 * stranded flag refuses autoplay on every team with no enabled control left on screen to clear it.
 	 *
-	 * Normalizing in the GETTER is what makes the bad state unobservable rather than merely unreached:
-	 * a new way to empty the queue cannot reintroduce it, because there is no longer a reader that
-	 * could see it.
+	 * Normalizing in the GETTER makes the bad state unobservable rather than merely unreached, so a new
+	 * way to empty the queue cannot reintroduce it.
 	 */
 	@Volatile
 	private var pausedFlag = false
@@ -321,10 +320,10 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	}
 
 	/** Get every queued entry's audio made before its turn comes. Driven off the settled queue rather
-	 * than off message arrival, so it follows what will ACTUALLY be spoken - the old pre-generate warmed
-	 * on delivery and knew nothing about the queue. Warming is idempotent per entry, so calling it on
-	 * every change is free. Deliberately keeps going while the run is PAUSED: a pause means the person is
-	 * busy, not that the work should stop. */
+	 * than off message arrival, so it follows what will ACTUALLY be spoken - warming off message
+	 * arrival alone has no notion of the queue and would warm entries that are never actually going to
+	 * play. Warming is idempotent per entry, so calling it on every change is free. Deliberately keeps
+	 * going while the run is PAUSED: a pause means the person is busy, not that the work should stop. */
 	private fun warmQueued() {
 		val client = repo.sttsClient() ?: return
 		val provider = repo.currentProvider() ?: return
@@ -481,9 +480,8 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	 * without retiring the request would strand a playback whose terminal has nothing to advance. */
 	suspend fun dropFromQueue(entry: QueueEntry) {
 		// ONE critical section, and it names the entry throughout. Deciding head-vs-not under the lock
-		// and then acting outside it still let the head advance in between, so the trash discarded
-		// whatever had become current rather than the tile that was tapped - the same "re-derive it
-		// later from something coarser" shape this subsystem keeps producing.
+		// and then acting outside it would let the head advance in between, so the trash could discard
+		// whatever had become current rather than the tile that was tapped.
 		try {
 			advanceMutex.withLock {
 				if (queue.playing() == entry) {

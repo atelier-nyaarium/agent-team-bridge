@@ -137,8 +137,9 @@ describe("upsert and attachments", () => {
 	});
 
 	it("drops an incoming list on an entry it has NEVER held, which is the move's destination", () => {
-		// The case the first version of this rule missed: with no stored entry there was nothing to
-		// overwrite the incoming field with, so a move landed members no Gateway had the bytes for.
+		// With no stored entry, there is nothing to overwrite the incoming attachments field with, so
+		// upsert must drop the incoming list rather than adopt it - adopting it would land members no
+		// Gateway ever received bytes for.
 		const fresh = "d".repeat(32);
 		store.upsert(OWNER, [{ ...entry(fresh), attachments: [attachment("never-uploaded")] }], OWNER_ACTOR);
 		expect(store.entry(OWNER, fresh)?.attachments).toBeUndefined();

@@ -8,9 +8,9 @@ import { parseDsCard } from "../designer/dsCard.js";
 import { routerPost } from "./helpers.js";
 
 // Advisory per-file cap on the agent side, DERIVED from the one size limit rather than restating
-// it - a private copy is how the previous four caps drifted apart. The gateway enforces the real
-// backstop (a buggy agent on a trusted machine is not the threat model, but a clear error here
-// beats a silent oversized push).
+// it - an independent copy here could drift from the real limit it must track. The gateway enforces
+// the real backstop (a buggy agent on a trusted machine is not the threat model, but a clear error
+// here beats a silent oversized push).
 const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
 // An extension missing here falls back to octet-stream, and both renderers classify on the mime

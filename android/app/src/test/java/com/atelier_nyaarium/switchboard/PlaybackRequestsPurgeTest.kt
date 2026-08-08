@@ -36,8 +36,8 @@ class PlaybackRequestsPurgeTest {
 		val r = requests()
 		val heard = Heard()
 		heard.subscribe(r)
-		// A warm-up holds nothing here. It captures the horizon and asks later, which is what the four
-		// rounds of claim, role, and per-item staleness were each trying to approximate.
+		// A warm-up holds nothing here. It captures the horizon and asks later, rather than holding a
+		// claim, a role, or any other per-item marker.
 		val horizon = r.purgeStamp()
 
 		r.purgeTeam(team)
