@@ -45,6 +45,11 @@ code does not belong here; rationale lives in `git log`.
   `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`.
   `ChatPersistence.kt` is the delegate it HOLDS: the JSON codec between the in-memory maps and
   AppStateStore (threads, read anchors, labels, scheduled sends, absence streaks, drafts)
+  - `PlaybackOps.kt` (`repo.playback`) owns the whole playback serialization boundary: the autoplay
+    queue, its advance mutex, the marker sequence and every transport control and read model. It
+    subscribes to the player from its own init, so it must stay declared after `stts` and `repoScope`
+  - `BoardOps.kt` (`repo.boardOps`) is the repository side of the board: capture, the setters, the
+    attachment transfers and assignment. The `BoardManager` it wraps stays as `repo.board`
   - The federation surface is four more held delegates, reached as `repo.enroll` / `.devices` /
     `.domainAdmin` / `.trust`: `EnrollOps.kt` (owner facts through `submitOwnerFact`, membership, the
     FLOW-1 ceremony, gateway admit), `DeviceApprovalOps.kt` (the add-a-device rendezvous, both
@@ -617,7 +622,7 @@ reports running work as unconfirmed.
   something a consumer can see or stop, and a purge reaches it through the epoch, which also covers
   the gaps between its writes where a claim cannot exist. A tap toggles on what is AUDIBLE, never on
   the claim, because a row cannot show a request that is only synthesizing.
-- **Autoplay yields, people do not** (`PlaybackQueue.kt`): the repository owns the queue and advances
+- **Autoplay yields, people do not** (`PlaybackQueue.kt`): `PlaybackOps` owns the queue and advances
   it from playback terminals under one mutex; `SttsPlayer` stays a one-shot engine. A request declares
   whether it YIELDS, and `sound()` decides: a yielding one that finds the sound taken stands down and
   reports its own terminal instead of displacing. That belongs there rather than at the call sites,
