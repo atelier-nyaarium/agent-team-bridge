@@ -39,7 +39,8 @@ code does not belong here; rationale lives in `git log`.
     escaped-newline lint
   - `channel/` - `channel_reply`, `channel_reply_structured`, `notify_human`, channel push
   - `references/` - `ref://` resolution: lexer, grammar, tree-sitter resolver, artifact builder
-  - `board/` - the six `taskBoard*` tools, registered only when the console announced `taskboard`
+  - `board/` - the `taskBoard*` tools, registered only when the console announced `taskboard`.
+    `taskBoardFetchAttachments` is the two-hop read: names to blobIds on the route, then bytes
   - `designer/` / `connector/` - designer cards; game-client connector
   - `devcontainer/` - host daemon plumbing (`hostDaemon.ts`, `hostOpRunner.ts`, `tmuxCore.ts`) plus
     the per-session tools every peer registers
@@ -73,6 +74,9 @@ code does not belong here; rationale lives in `git log`.
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
   - `session-store.ts` - the gateway's authoritative session records, keyed by `spawn.id`
+  - `board-attachment-store.ts` - attachment bytes owned by a board entry, keyed
+    `(ownerId, entryId, blobId)` with every path segment asserted. Nothing sweeps it; that IS the
+    durability. See Board attachments below
   - `board-rank.ts` - fractional ranks for task-board ordering: plain string order IS sibling order,
     and `rebalanceRanks` asserts every rank it mints because an invalid one poisons the durable file
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
@@ -373,6 +377,43 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
   lies past the cut. Merging the whole prior cache resurrects every deletion, forever.
 - `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are the same 30 days for unrelated reasons and
   must never share a constant.
+
+### Board attachments
+
+The owner attaches files to a task board entry from the console; agents read them and never write.
+Bytes live in `shared/board-attachment-store.ts`, a durable per-entry store beside the blob cache and
+deliberately NOT part of it: the cache evicts coldest-first and a board picture is by construction its
+coldest object, so eviction there is silent permanent loss.
+
+- **`board_set_attachments` is the SOLE committer of the field**, absolute like every other setter, and
+  `upsert` IGNORES `attachments` on every incoming entry. A move ships a subtree verbatim, so honouring
+  it there would store members no Gateway ingested.
+- **The op declares `supplied`, and the Gateway stores what it can RESOLVE.** A member that is durable
+  or cached is kept; one the sender says it is still uploading is a retryable error; one that is
+  neither exists on no machine and is DROPPED and reported. That is what makes the op always
+  satisfiable - see the plan's `Bug Classes` for the three rounds spent before this, all of them a
+  queued op whose precondition the queue could not guarantee wedging its whole Gateway lane.
+- **Presence is checked DURABLE-FIRST**, and every member resolves before any is adopted. The absolute
+  op re-states survivors, so a cache-only check fails months later once the cache has swept, and a
+  partial adopt leaves bytes no stored list names.
+- **Three doors read bytes, not two.** `answerBlobOp` covers the HTTP route and the console's sealed
+  plane; the federation export `serveBlobRange` is neither. All three go through `readBlobRange`, or a
+  peer cannot reach an attachment whose cached copy was swept.
+- **The `/task-board` list projects display facts only** (`filename`, `mime`, `size`), never `blobId` or
+  `blobGateway`, and the ids live on a separate `attachments` action the fetch tool calls. A blobId is
+  a bearer token and the list is the only place an agent could otherwise get one. Stripping is
+  ROUTE-side: plugin-side would leak whole records during the gateway-first deploy window.
+- **Console:** the local `src` rides `PendingBoardAction`, never the codegen'd `ConsoleOp` (a device
+  path would cross the wire). A new queued op kind needs a case in THREE silent fallthroughs -
+  `applyBoardOp`, `boardEntryIdsOf`, `entryIdOf`. Uploads run on `repoScope` outside the drain mutex;
+  the drain only CHECKS readiness and charges an attempt when bytes are not up, because a head below
+  the struggling threshold holds its lane closed.
+- **An empty board is never permission to delete bytes.** `boardIsKnown` requires every Gateway to have
+  entries: an empty snapshot is what a Gateway that lost its own board file answers, and in that case
+  the phone holds the last copies.
+- Files land under their BLOB name, not the display name, since a downloading device knows only the
+  blobId and the owner can pick two `screenshot.png`. Above `BOARD_AUTO_DOWNLOAD_MAX_BYTES` a console
+  waits to be asked; that is NOT a cap on what may be attached, which is the ordinary wire limit.
 
 ### Awareness pushes
 
