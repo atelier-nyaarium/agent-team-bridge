@@ -61,6 +61,9 @@ code does not belong here; rationale lives in `git log`.
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),
   `SessionDialogs.kt`, `ReorderableTabRow.kt` (geometry in `TabDragMath.kt`), `TimeText.kt`
+  - Settings is four files: `SettingsScreen.kt` is the hub and its route dispatch, `SettingsSections.kt`
+    its small leaf screens (plugins, profile, networks, security), `SettingsSystem.kt` the system screen
+    with the update and battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
   - The sessions tab is five files: `MainTabsScreen.kt` is the app shell hosting both tabs (it owns
     the top bar and pager, and takes each tab as an opaque slot), `SessionsScreen.kt` the list,
     `SessionsHeaders.kt` its section chrome and status vocabulary, `SessionCard.kt` the card with its
