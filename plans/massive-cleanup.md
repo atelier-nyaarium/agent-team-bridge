@@ -137,6 +137,19 @@ Rule: when a split widens a member that guarded an invariant, the same lap adds 
 Put it in the TS suite, since the Kotlin tests run after merge and cannot block a PR. Negative-control
 it with a planted probe before trusting it.
 
+### A comment states the invariant, never the defect history
+
+Code is not an issue tracker. A comment must stand on intrinsic logic alone, for a reader with no
+memory of how the code got here, so a defect tally ("three separate rounds", "got it wrong twice",
+"this cost an outage", "each fix was correct where it landed") fails on its face however hard the
+lesson was. The tell in my own writing was calling a comment "paid-for" or saying it "earned its
+keep": both are claims about our history, not about the code.
+
+Rule: keep the constraint, drop the story. "A terminal that does not match belongs to a run that has
+already ended" is a rule and stays. "The glyph listener got it wrong twice" is a receipt and goes.
+Where a block is only a receipt, delete it; where a rule is buried in one, keep the rule alone.
+Never delete a statement of fact about behavior to achieve this.
+
 ### A "these locals are entangled" claim is checkable, so check it
 
 The settings voice screen was left whole on the reasoning that its locals are shared across every
