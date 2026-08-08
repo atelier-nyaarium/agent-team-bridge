@@ -546,13 +546,18 @@ Three instances, all in this feature, all caught by an auditor rather than a gat
    added to stop a move freezing a Gateway lane.
 
 The shared root is that these helpers return POSITIONAL tuples and booleans whose meaning lives only
-in a comment, so a shape change cannot fail a build and a semantic change cannot fail a test. The
-cheap structural answer is a named data class per helper (`PendingFetch(entryId, blobId, holder)`)
-rather than `Triple`, which turns instance 3 into a compile error. The deeper one is that a guard
-should be tested through its CONSUMER, not by asserting the field it reads - every one of these
-passed a test that checked the stored value and not the decision made from it. Raised for
-`architecture-fan-out`; the guard-shape test added here (`pendingFetchesAnswersEntryThenBlobThenHolder`)
-pins instance 3 only.
+in a comment, so a shape change cannot fail a build and a semantic change cannot fail a test.
+
+**Applied:** `pendingFetches` now answers a named `PendingFetch(entryId, blobId, holder)` instead of a
+`Triple` of three Strings, so the exact mistake that produced instance 3 is a compile error rather
+than a constant-false comparison. Positional destructuring still reads fine at the one call site that
+wants all three.
+
+**Still open, and the deeper half:** a guard should be tested through its CONSUMER, not by asserting
+the field it reads. All three instances passed a test that checked the stored value and never the
+decision made from it, which is why three broken guards shipped green. Naming the type fixes the
+shape mistakes; it does nothing about a guard whose meaning quietly inverts. That is the one worth
+carrying into the next feature that adds a queued op kind.
 
 ### Bug Classes
 

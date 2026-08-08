@@ -46,6 +46,16 @@ interface BoardWriter {
 
 /** One refused action's residue: the row marker's content, and the draft restore for an edit. */
 
+/**
+ * Bytes a queued action is waiting on, and where to get them.
+ *
+ * NAMED rather than a Triple of three Strings. The positional version compiled fine when the shape
+ * changed under a caller that kept reading the first element, which silently turned that caller's
+ * guard into a constant false and left a move able to freeze a whole Gateway lane. Named fields make
+ * that same mistake a compile error.
+ */
+data class PendingFetch(val entryId: String, val blobId: String, val holder: String)
+
 /** The one line a session card and thread strip show while board work exists. */
 data class BoardLiveLine(val title: String, val state: String, val finished: Int, val total: Int)
 
@@ -419,10 +429,10 @@ class BoardManager(private val store: BoardStore) {
 	 * cached view names that entry, so a search would answer nothing in exactly the window this
 	 * exists for. A move's attach cannot retire until these arrive, and its own kick dies with the
 	 * process, so the resume pass has to see them or the origin's linked delete blocks that lane. */
-	fun pendingFetches(): List<Triple<String, String, String>> =
+	fun pendingFetches(): List<PendingFetch> =
 		blob.queue.flatMap { action ->
 			val entryId = entryIdOf(action.op) ?: return@flatMap emptyList()
-			action.fetchFrom.map { (blobId, gw) -> Triple(entryId, blobId, gw) }
+			action.fetchFrom.map { (blobId, gw) -> PendingFetch(entryId, blobId, gw) }
 		}
 
 	fun pendingSources(): List<Triple<String, String, String>> =

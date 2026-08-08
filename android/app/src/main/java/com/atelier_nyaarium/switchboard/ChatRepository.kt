@@ -4148,12 +4148,12 @@ class ChatRepository(
 	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
 		// A queued move is waiting on these, and nothing else can retire it, so giving up would leave
 		// the origin's linked delete holding that Gateway's lane closed forever.
-		val waiting = board.pendingFetches().firstOrNull { (_, blobId, _) -> blobId == a.blobId }
+		val waiting = board.pendingFetches().firstOrNull { it.blobId == a.blobId }
 		if (waiting == null && (boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
 		if (!boardDownloadsInFlight.add(a.blobId)) return
 		// While a move is queued, the RECORD already names the destination, which by construction does
 		// not have the bytes yet. The queued action knows where they actually are.
-		val holder = waiting?.third ?: a.blobGateway
+		val holder = waiting?.holder ?: a.blobGateway
 		repoScope.launch {
 			try {
 				val target = Attachments.boardFile(filesDir, entryId, a.blobId)
