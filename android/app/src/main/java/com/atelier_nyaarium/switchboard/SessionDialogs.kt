@@ -395,6 +395,13 @@ fun CreateSessionDialog(
 ////////////////////////////////
 //  Functions & Helpers
 
+// The gateway's displayLabel/sessionLabel wire schema caps both at 64 characters; enforced
+// client-side too so pasting a long string reads as "can't type more" rather than a confusing
+// server-side rejection once submitted.
+internal const val SESSION_LABEL_MAX_CHARS = 64
+
+internal const val WORKDIR_MAX_CHARS = 512
+
 /** Whether a typed workdir is a shape the gateway will accept (absolute or ~-rooted); blocks a
  * half-typed fragment before the gateway would reject the whole create. Mirrors host-op.ts
  * isWorkdirPath's shape rule - character rules stay enforced server-side. */

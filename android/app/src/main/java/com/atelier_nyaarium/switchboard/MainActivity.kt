@@ -1,52 +1,37 @@
 package com.atelier_nyaarium.switchboard
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.board.BoardEditScreen
 import com.atelier_nyaarium.switchboard.board.BoardScreen
 import com.atelier_nyaarium.switchboard.board.BoardSource
 import com.atelier_nyaarium.switchboard.board.GroupKey
 import com.atelier_nyaarium.switchboard.board.flattenBoard
-import com.atelier_nyaarium.switchboard.plugins.TappedLink
 import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.isComposite
-import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
 object Repo {
@@ -129,7 +114,6 @@ fun App(
 	openQueueRequest: MutableState<Boolean>,
 ) {
 	val state by repo.state.collectAsState()
-	val scope = rememberCoroutineScope()
 	val context = LocalContext.current
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
@@ -140,7 +124,8 @@ fun App(
 	var openNonce by remember { mutableStateOf(0) }
 	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
 	// so re-opening the same thread later does not silently re-scroll to an old message.
-	var revealAt by remember { mutableStateOf<Pair<String, Long>?>(null) }
+	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
+	var revealAt by revealAtState
 	// Read here as well as in the sheet: the board's own way in has to appear the moment a run starts
 	// and go when it ends, and that is a settled-state question like every other one in this feature.
 	// Keyed on the revision so the failures scan runs when the queue changes rather than on every
@@ -197,122 +182,11 @@ fun App(
 	// user happens to visit the toggle screen.
 	val pluginManager = remember { Plugins.get(context) }
 
-	// WebView pool lives at App scope (never leaves composition) so each thread's
-	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
-	// destroyed with the Activity.
-	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
-	rendererPool.onRetry = { team, id -> repo.command { retrySend(team, id) } }
-	rendererPool.onCancel = { team, id -> repo.cancelFailedSend(team, id) }
-	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
-	// Reads the live state at render time so a rename reflects without rebuilding the pool.
-	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr) }
-	// Attribute the local user's own messages by their account display name instead of "you".
-	rendererPool.selfLabel = { repo.state.value.displayName }
-	// Attachment taps open the in-app viewer; the path is re-validated against the
-	// attachments root before any file is touched. The wire mime (what the agent
-	// declared) is preferred over extension guessing.
-	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
-	rendererPool.onAttachmentTap = { tapTeam, rel ->
-		Attachments.resolve(context.filesDir, rel)?.let { file ->
-			// Drafts as well as threads: a picked file belongs to no message, so a threads-only
-			// scan leaves the viewer's rows blank for exactly the files a pre-send check is for.
-			val wire = state.threads.values.asSequence().flatten()
-				.flatMap { it.files.asSequence() }
-				.plus(state.drafts.values.asSequence().flatMap { it.files.asSequence() })
-				.firstOrNull { it.src?.endsWith("/$rel") == true }
-			val mime = wire?.mime?.takeIf { it.isNotEmpty() } ?: mimeForFile(file)
-			// A plugin (e.g. the Designer) may claim a tapped attachment and open it in its own
-			// viewer; only fall back to the generic attachment viewer when none does. The team is
-			// the tapped thread's own (bound per-renderer), not the ambient on-screen team.
-			val claimed = pluginManager.host.attachmentOpeners.anyCaught(onError = ::logPluginThrow) {
-				it.tryOpen(context, tapTeam, rel, mime, file.name)
-			}
-			if (!claimed) {
-				// Size and mtime come from the WIRE, not from the local copy: the file on disk was
-				// written by the fetch, so its own mtime is when it landed here, not the age the
-				// sender meant to carry. Absent when the sender never stamped it, and the row hides.
-				viewer = OpenAttachment(file, file.name, mime, rel, wire?.size, wire?.modifiedAt)
-			}
-		}
-	}
-	// A plugin may decorate its own attachment chips (e.g. the Designer's card title); the first
-	// non-null decoration wins, everything else renders the plain chip. Containment matters here:
-	// this runs on every sync of every open thread, so a throwing decorator must cost only its own
-	// decoration, never the transcript render.
-	rendererPool.decorateFile = { team, file ->
-		pluginManager.host.attachmentChipDecorators.firstNotNullCaught(onError = ::logPluginThrow) {
-			it.decorate(team, file)
-		}
-	}
-	// In-thread Play buttons render only when STTS is provisioned; taps speak the full tier, and the
-	// player's now-playing pushes glyph state back. Re-evaluated per recomposition so provisioning
-	// in-session lights the buttons for renderers built afterward.
-	rendererPool.playEnabled = repo.sttsReady()
-	rendererPool.onPlayTap = { team, at ->
-		// A tap on an audible message stops it; otherwise it JOINS the queue at FULL rather than
-		// starting alongside it. A row that is already queued renders unpressable, so a tap can only
-		// ever arrive for one that is idle or playing.
-		if (repo.playback.isMessagePlaying(team, at)) {
-			repo.playback.stopMessage(team, at)
-		} else {
-			repo.command { playback.enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false) }
-		}
-	}
-	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
-	// Links: a tap on a standard anchor routes through the scheme dispatcher (openLink); the
-	// context menu (long-press on a standard anchor, or tap on an unhandled-protocol link)
-	// shows the URL with Open enabled only when the dispatcher can actually open it.
-	var linkMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
-	// Set only when a plugin was offered this link and declined it, so the dialog can explain itself.
-	var linkMenuNote by remember { mutableStateOf<String?>(null) }
-	rendererPool.onLinkTap = { team, url -> openLink(context, team, url) }
-	rendererPool.onLinkMenu = { team, url ->
-		linkMenuNote = null
-		linkMenu = team to url
-	}
-	// A tapped link whose scheme a plugin claims. The framework resolves the ROW first, so a handler
-	// receives that row's own files rather than a row id it would have to trust and resolve itself.
-	// The same ref in two messages points at two different snapshots, which is why the row's `at`
-	// rides along. Unresolvable, unclaimed, or declined all fall through to the link menu: never a
-	// crash, never a silent no-op, never a wrong-row open.
-	rendererPool.onClaimedLinkTap = { team, rowId, rowAt, url ->
-		val row = repo.state.value.threads[team]?.firstOrNull { it.id == rowId && it.at == rowAt }
-		val claimed = row != null &&
-			pluginManager.host.linkHandlers.anyCaught(onError = ::logPluginThrow) {
-				it.tryOpen(context, TappedLink(team, url, row.files))
-			}
-		if (!claimed) {
-			linkMenuNote = "No code snapshot is attached to this message."
-			linkMenu = team to url
-		}
-	}
-	// Claimed schemes decide which links render as live rather than broken; re-pushed on a toggle.
-	rendererPool.handledSchemes = pluginManager.host.linkHandlers.values().map { it.scheme }
-	DisposableEffect(Unit) {
-		// Fires on the player's daemon thread; the pool's renderer map is
-		// main-owned, so hop through the composition scope (main-dispatched).
-		// An event is a nudge to re-read, not a fact to accumulate. Asking the repository what is true
-		// now means this cannot drift from it - the version that tracked generations itself was wrong
-		// twice, once blanking a row still playing and once stranding one that had ended.
-		val glyphs = repo.stts.addListener { event ->
-			val team = event.team
-			scope.launch { rendererPool.setPlayStates(team, repo.playback.playStatesFor(team)) }
-		}
-		onDispose { repo.stts.removeListener(glyphs) }
-	}
-	// And again once the queue has SETTLED. A raw playback event fires before the terminal it reports
-	// has advanced the queue, so a row painted from it can show the state from just before the advance
-	// with no later event to correct it - the same pre-settle race the transport hit, answered the same
-	// way. Every open tab, since one terminal can start a message in a different thread.
-	LaunchedEffect(Unit) {
-		repo.playback.queueRevision.collect {
-			for (team in repo.state.value.openTabs) rendererPool.setPlayStates(team, repo.playback.playStatesFor(team))
-		}
-	}
-	val dark = isSystemInDarkTheme()
-	LaunchedEffect(dark) { rendererPool.setDark(dark) }
-	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
-	DisposableEffect(Unit) { onDispose { rendererPool.destroyAll() } }
+	val viewerState = remember { mutableStateOf<OpenAttachment?>(null) }
+	var viewer by viewerState
+	val linkMenuState = remember { mutableStateOf<Pair<String, String>?>(null) }
+	val linkMenuNoteState = remember { mutableStateOf<String?>(null) }
+	val rendererPool = rememberBoundRendererPool(repo, pluginManager, viewerState, linkMenuState, linkMenuNoteState)
 
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
@@ -832,136 +706,13 @@ fun App(
 		}
 	}
 
-	// The queue list. Opened by the bubble and by the transport notification's body, so it is reachable
-	// whether or not the overlay permission was ever granted.
-	// NOT while locked. Every other overlay down here is reached by an in-app gesture, which already
-	// implies an unlocked session; this one arrives by INTENT from the notification or the bubble, so
-	// without the guard a tap on a locked phone would put queued message titles and working transport
-	// controls on top of the lock screen.
-	if (openQueueRequest.value && !locked) {
-		QueueSheetHost(
-			repo = repo,
-			onDismiss = { openQueueRequest.value = false },
-			onJump = { entry ->
-				// Through the same request the notification tap uses, so the jump inherits its whole
-				// open gesture - dismissing masking surfaces, selecting the tab, re-snapping - rather
-				// than re-implementing a partial copy of it.
-				revealAt = entry.team to entry.at
-				openTeamRequest.value = entry.team
-				openQueueRequest.value = false
-			},
-		)
-	}
-
-	// Composed after the screens so it overlays them and its BackHandler wins.
-	viewer?.let { att ->
-		AttachmentViewer(
-			att = att,
-			onOpenWith = {
-				rendererPool.openWith(att.relPath)
-				viewer = null
-			},
-			onDismiss = { viewer = null },
-		)
-	}
-
-	linkMenu?.let { (team, url) ->
-		AlertDialog(
-			onDismissRequest = { linkMenu = null },
-			title = { Text("Link") },
-			text = {
-				Column {
-					Text(url)
-					// A claimed scheme that reached this dialog was offered to its plugin and declined,
-					// so say why rather than leaving it indistinguishable from an unhandled link.
-					if (linkMenuNote != null) {
-						Spacer(Modifier.height(8.dp))
-						Text(linkMenuNote!!, style = MaterialTheme.typography.bodySmall)
-					}
-				}
-			},
-			confirmButton = {
-				// Greyed out for a scheme the dispatcher cannot open (an unhandled protocol's
-				// menu is copy-only until a handler exists).
-				TextButton(
-					enabled = linkOpenable(url),
-					onClick = hapticClick {
-						openLink(context, team, url)
-						linkMenu = null
-					},
-				) { Text("Open") }
-			},
-			dismissButton = {
-				TextButton(onClick = hapticClick {
-					copyLinkToClipboard(context, url)
-					linkMenu = null
-				}) { Text("Copy URL") }
-			},
-		)
-	}
+	QueueOverlay(repo, openQueueRequest, locked, revealAtState, openTeamRequest)
+	AttachmentViewerOverlay(viewerState, rendererPool)
+	LinkMenuDialog(linkMenuState, linkMenuNoteState)
 }
 
 /** Registry onError sink shared by every plugin-registry consultation site: a claim that threw
  * is logged and skipped, never fatal. */
-private fun logPluginThrow(message: String, err: Throwable) {
+internal fun logPluginThrow(message: String, err: Throwable) {
 	DebugLog.log("Plugins", "$message: $err")
 }
-
-internal fun readClipboard(context: Context): String? {
-	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
-	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-}
-
-/** The schemes [openLink] can actually open today. Also drives the link menu's Open button state
- * and mirrors the renderer's own standard-vs-unhandled split (markdown-link-rules.js): a scheme
- * outside this set renders as an inert red link whose menu offers Copy only. */
-private val OPENABLE_SCHEMES = setOf("http", "https", "mailto")
-
-private fun linkOpenable(url: String): Boolean = Uri.parse(url).scheme?.lowercase() in OPENABLE_SCHEMES
-
-/** Every link activation (tap, or Open from the context menu) funnels here, keyed by scheme, so a
- * custom protocol (e.g. a host-project file reference) becomes a new branch without touching the
- * renderer or pool. `team` is the thread the link was tapped in - unused by the web schemes, but a
- * project-scoped protocol needs it to know which session's host it acts on. */
-private fun openLink(context: Context, team: String, url: String) {
-	when (Uri.parse(url).scheme?.lowercase()) {
-		in OPENABLE_SCHEMES -> runCatching {
-			context.startActivity(
-				Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-			)
-		}
-		else -> {}
-	}
-}
-
-private fun copyLinkToClipboard(context: Context, url: String) {
-	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-	cm.setPrimaryClip(ClipData.newPlainText("link", url))
-}
-
-/** True once the text is a JSON object with the fields a Provisioning needs. */
-internal fun looksProvisionable(s: String): Boolean = runCatching {
-	val j = org.json.JSONObject(s.trim())
-	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
-}.getOrDefault(false)
-
-// Cap the rendered voice menu: some providers ship hundreds of voices, and the
-// field's text filters the rest into view.
-/** A provisioning blob is small JSON; anything larger is a mis-picked file. */
-internal const val MAX_PROVISION_BLOB_BYTES = 1_000_000L
-
-internal const val MAX_VOICE_MENU_ITEMS = 60
-
-/** The Voice connection's single honest state, shown on the settings status line.
- * DIRTY = creds edited but not yet re-Tested (the voice/Play block stays hidden). */
-internal enum class SttsConn { NOT_SET_UP, DIRTY, TESTING, CONNECTED, NO_VOICES, FAILED }
-
-internal suspend fun resolveConn(repo: ChatRepository): Pair<SttsConn, String> =
-	foldConn(repo.sttsProbe(), repo.sttsReady())
-
-// The gateway's displayLabel/sessionLabel wire schema caps both at 64 characters; enforced
-// client-side too so pasting a long string reads as "can't type more" rather than a confusing
-// server-side rejection once submitted.
-internal const val SESSION_LABEL_MAX_CHARS = 64
-
-internal const val WORKDIR_MAX_CHARS = 512

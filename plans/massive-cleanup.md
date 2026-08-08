@@ -137,6 +137,19 @@ Rule: when a split widens a member that guarded an invariant, the same lap adds 
 Put it in the TS suite, since the Kotlin tests run after merge and cannot block a PR. Negative-control
 it with a planted probe before trusting it.
 
+### Pass-2 candidate: the App composable's navigation is a state machine, not a screen
+
+MainActivity's remaining 603-line `App` body is one cross-wired router: every branch's callbacks flip
+OTHER branches' flags, so extracting a router function needs about 21 references threaded both ways,
+and several closures both read and write the same flag. Splitting it by moving code would either
+exceed any sane parameter list or hide the same references inside a props bag, which is state
+hoisting wearing a disguise.
+
+The real fix is a redesign: one navigation state holder owning the overlay and route flags, with the
+branches asking it rather than toggling each other. That is a pass-2 item, not a move. Two seams WERE
+honest and were taken: the renderer-pool wiring (it configures a shared object and decides no route)
+and the trailing overlay hosting.
+
 ### A comment states the invariant, never the defect history
 
 Code is not an issue tracker. A comment must stand on intrinsic logic alone, for a reader with no

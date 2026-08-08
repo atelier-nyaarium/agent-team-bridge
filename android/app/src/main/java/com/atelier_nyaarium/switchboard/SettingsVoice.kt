@@ -54,6 +54,17 @@ import kotlinx.coroutines.launch
 ////////////////////////////////
 //  Functions & Helpers
 
+// Cap the rendered voice menu: some providers ship hundreds of voices, and the
+// field's text filters the rest into view.
+internal const val MAX_VOICE_MENU_ITEMS = 60
+
+/** The Voice connection's single honest state, shown on the settings status line.
+ * DIRTY = creds edited but not yet re-Tested (the voice/Play block stays hidden). */
+internal enum class SttsConn { NOT_SET_UP, DIRTY, TESTING, CONNECTED, NO_VOICES, FAILED }
+
+internal suspend fun resolveConn(repo: ChatRepository): Pair<SttsConn, String> =
+	foldConn(repo.sttsProbe(), repo.sttsReady())
+
 /** Pure fold of a probe + catalog presence into the honest connection state, so a JVM
  * test pins it: Ok+voices -> CONNECTED, Ok-but-no-catalog -> NO_VOICES (a green status
  * never sits over a dimmed picker), Unreachable -> FAILED with the reason passed through. */

@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +44,23 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+////////////////////////////////
+//  Functions & Helpers
+
+internal fun readClipboard(context: Context): String? {
+	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+}
+
+/** True once the text is a JSON object with the fields a Provisioning needs. */
+internal fun looksProvisionable(s: String): Boolean = runCatching {
+	val j = org.json.JSONObject(s.trim())
+	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
+}.getOrDefault(false)
+
+/** A provisioning blob is small JSON; anything larger is a mis-picked file. */
+internal const val MAX_PROVISION_BLOB_BYTES = 1_000_000L
 
 ////////////////////////////////
 //  Composables
