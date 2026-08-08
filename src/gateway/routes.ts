@@ -166,6 +166,32 @@ export interface RoutesDeps {
 	auth?: SessionAuthority;
 	// The owner's task board (boardStore.ts). Absent when not wired; the board route then 503s.
 	boardStore?: BoardStore;
+	// State that must survive a rebuild (see RoutesCarryOver). Absent in test harnesses, which build
+	// the route table once and never rebuild it.
+	carryOver?: RoutesCarryOver;
+}
+
+/**
+ * The state a routes rebuild must NOT restart from empty.
+ *
+ * `createRoutes` runs again when federation activates mid-session, so anything it allocates per call
+ * is discarded at that moment. Owned by the caller and passed back in, which is what makes the
+ * survival a property of the wiring rather than of nobody having rebuilt yet.
+ *
+ * Only entries whose loss changes BEHAVIOUR belong here. A burst cache does not: rebuilding it costs
+ * one recomputation and can report nothing stale.
+ */
+export interface RoutesCarryOver {
+	/** Settled replies for the board route's mutating operations. Losing this turns a retried
+	 * absolute write into a second write rather than a replay. */
+	boardOperationReplies: Map<string, Record<string, unknown>>;
+	/** In-flight cross-Gateway blob fetches. Losing this un-coalesces the fetches already running,
+	 * so the same bytes are pulled twice. */
+	blobFetches: Map<string, Promise<boolean>>;
+}
+
+export function createRoutesCarryOver(): RoutesCarryOver {
+	return { boardOperationReplies: new Map(), blobFetches: new Map() };
 }
 
 ////////////////////////////////
@@ -202,6 +228,7 @@ export function createRoutes({
 	repushHandshake,
 	ownerId,
 	boardStore,
+	carryOver = createRoutesCarryOver(),
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
 	/** Settled replies for the board route's mutating operations, keyed `from:operationId`.
@@ -213,7 +240,7 @@ export function createRoutes({
 	 * is structural, in the board file itself. Closing it wants this route's own durable file;
 	 * DurableOpStore is typed to console results and keyed by conversation, so it cannot just be
 	 * borrowed. Tracked in the plan. */
-	const boardOperationReplies = new Map<string, Record<string, unknown>>();
+	const boardOperationReplies = carryOver.boardOperationReplies;
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
 	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
 	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
@@ -476,7 +503,7 @@ export function createRoutes({
 
 	/** In-progress cross-Gateway fetches, keyed by blob. Cleared on settle, so this is a coalescer
 	 * rather than a cache: a later reader of an absent blob still triggers a fresh attempt. */
-	const blobFetches = new Map<string, Promise<boolean>>();
+	const blobFetches = carryOver.blobFetches;
 
 	/**
 	 * Pull a whole blob in from the Gateway that holds it, and report whether this Gateway now has it.

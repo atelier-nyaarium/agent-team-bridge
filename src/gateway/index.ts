@@ -73,7 +73,7 @@ import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
-import { createRoutes } from "./routes.js";
+import { createRoutes, createRoutesCarryOver } from "./routes.js";
 import { createSessionAuthority, presentedByRequest } from "./sessionAuthority.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
@@ -1073,8 +1073,13 @@ export async function startGateway(): Promise<void> {
 		announcePresenceDirty: () => presence.markDirty(),
 	});
 
+	// Outlives the rebuild below, which is the whole point: activating federation mid-session runs
+	// buildRoutes() again, and anything createRoutes allocates per call would restart from empty.
+	const routesCarryOver = createRoutesCarryOver();
+
 	function buildRoutes() {
 		return createRoutes({
+			carryOver: routesCarryOver,
 			registry,
 			conversationRegistry,
 			store,

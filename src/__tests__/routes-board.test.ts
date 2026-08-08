@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
-import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
+import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway/routes.js";
 import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -14,7 +14,8 @@ describe("routes", () => {
 		function makeBoardCtx(): { ctx: RoutesDeps; board: BoardStore } {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-route-"));
 			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
-			const ctx = makeCtx({ boardStore: board, ownerId: () => "owner-1" });
+			// The real composition root owns this and hands the same instance to every rebuild.
+			const ctx = makeCtx({ boardStore: board, ownerId: () => "owner-1", carryOver: createRoutesCarryOver() });
 			return { ctx, board };
 		}
 
@@ -44,6 +45,36 @@ describe("routes", () => {
 			expect(second.body.id).toBe(first.body.id);
 			const list = await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" });
 			expect(list.body.entries).toHaveLength(1);
+		});
+
+		it("a rebuilt route table still replays a settled mutation instead of re-applying it", async () => {
+			// Activating federation mid-session rebuilds the route table. The reply record has to be
+			// the caller's, not the table's, or the rebuild turns the next retry into a second write.
+			const { ctx, board } = makeBoardCtx();
+			const created = await call(createRoutes(ctx).taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "op-create",
+				title: "Original",
+				assignTo: "self",
+			});
+			const id = created.body.id as string;
+			const rename = {
+				from: "recipe-app",
+				action: "update" as const,
+				operationId: "op-rename",
+				id,
+				title: "Renamed once",
+			};
+			await call(createRoutes(ctx).taskBoard, rename);
+			// The owner edits between the write and its retry. A replay must not undo that; a second
+			// write would, because the body carries an absolute title.
+			board.setTitle("owner-1", id, "Owner's later edit", OWNER_ACTOR);
+			await call(createRoutes(ctx).taskBoard, rename);
+
+			const list = await call(createRoutes(ctx).taskBoard, { from: "recipe-app", action: "list", scope: "all" });
+			const entry = (list.body.entries as Array<Record<string, unknown>>).find((e) => e.id === id);
+			expect(entry?.title).toBe("Owner's later edit");
 		});
 
 		it("every tool's request body is one the route accepts", async () => {
