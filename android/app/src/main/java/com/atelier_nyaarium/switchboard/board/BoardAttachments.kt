@@ -57,8 +57,8 @@ fun BoardAttachments(
 					for (a in attachments) {
 						// Asking for the file is what STARTS the fetch, so a row that has no bytes yet
 						// reports which of the three states it is in rather than an endless spinner.
-						val file = remember(revision, a.blobId) { repo.boardAttachmentFile(entryId, a) }
-						val status = if (file != null) null else repo.boardAttachmentState(a)
+						val file = remember(revision, a.blobId) { repo.boardOps.boardAttachmentFile(entryId, a) }
+						val status = if (file != null) null else repo.boardOps.boardAttachmentState(a)
 						Row(
 							Modifier.fillMaxWidth()
 								// One tap does the obvious thing for whichever state the row is in: open
@@ -67,7 +67,7 @@ fun BoardAttachments(
 									if (file != null) {
 										onOpen(OpenAttachment(file, a.filename, a.mime, "", a.size))
 									} else {
-										repo.boardDownloadAttachment(entryId, a)
+										repo.boardOps.boardDownloadAttachment(entryId, a)
 									}
 								}
 								.padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),

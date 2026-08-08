@@ -82,7 +82,8 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
  */
 class ChatRepository(
 	internal val store: AppStateStore,
-	private val filesDir: File,
+	// internal (not private): BoardOps reads every attachment's on-disk bucket location directly.
+	internal val filesDir: File,
 	private val contentResolver: ContentResolver,
 	// STTS provider catalog, parsed + validated once from the bundled asset by
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
@@ -95,14 +96,6 @@ class ChatRepository(
 	/** The task board's console half: cache, pending queue and drain (see BoardManager's own doc).
 	 * The poll loop presents its known version, applies its plane snapshot, and drains it. */
 	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
-
-	/** What autoplay still has to speak. The repository owns it and advances it; [SttsPlayer] stays a
-	 * one-shot engine that knows nothing about what comes next. */
-	private val queue = PlaybackQueue()
-
-	/** Serializes every advance. A player terminal and a user gesture can arrive together, and both
-	 * read the head before mutating it; `scheduledSendFireMutex` guards the same shape for sends. */
-	private val advanceMutex = Mutex()
 
 	// Declared before _state, which snapshots it. Kotlin initializes fields in declaration order.
 	@Volatile internal var localGatewayId: String = store.loadGatewayId()
@@ -233,7 +226,9 @@ class ChatRepository(
 	// (a missed scheduled send has no "next cold start heals it" backstop the way an orphan
 	// attachment delete does). Never cancelled: ChatRepository is a bare process singleton with no
 	// teardown of its own, so this lives for the process's lifetime, same as the singleton itself.
-	private val repoScope = CoroutineScope(
+	// internal (not private): PlaybackOps and BoardOps launch their own background transfers on this
+	// same scope, so an exception routes through the one CoroutineExceptionHandler below.
+	internal val repoScope = CoroutineScope(
 		SupervisorJob() + Dispatchers.IO +
 			CoroutineExceptionHandler { _, e ->
 				DebugLog.log("Repo", "uncaught in repo scope: ${e.javaClass.simpleName}: ${e.message}")
@@ -242,20 +237,6 @@ class ChatRepository(
 				_state.update { it.copy(error = "Something went wrong: ${e.javaClass.simpleName}") }
 			},
 	)
-
-	// The queue advances off terminals, so it subscribes for the process's lifetime rather than with a
-	// screen: a backgrounded burst has no UI listening and must still walk forward. Declared after
-	// repoScope because it uses it.
-	init {
-		stts.addListener { event ->
-			if (event is SttsPlayer.Event.Ended) {
-				val entry = QueueEntry(event.team, event.at, event.tier)
-				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
-				// and a marker's entry key is shared by every run of the same session.
-				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen, event.reason) }
-			}
-		}
-	}
 
 	/**
 	 * Run a repository command on the repository's OWN scope.
@@ -281,6 +262,12 @@ class ChatRepository(
 	internal val devices = DeviceApprovalOps(this)
 	internal val domainAdmin = DomainAdminOps(this)
 	internal val trust = TrustOps(this)
+	// The playback surface (the autoplay queue and every transport control over it) and the
+	// repository-side board wiring, split out the same way (see each class's own doc).
+	// Must stay declared after `stts` and `repoScope`: PlaybackOps subscribes to the player from its
+	// own init, so constructing it earlier reads those fields before they exist.
+	internal val playback = PlaybackOps(this)
+	internal val boardOps = BoardOps(this)
 	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
 	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
 	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
@@ -483,7 +470,8 @@ class ChatRepository(
 	/** STTS client from the settings-backed creds (NOT the blob), or null when not
 	 * configured. The cache is invalidated by setSttsCreds() on an in-app edit, the
 	 * one mutation point - so an edited key takes effect without an app restart. */
-	private fun sttsClient(): SttsClient? {
+	// internal (not private): PlaybackOps resolves the client for every actual playback call.
+	internal fun sttsClient(): SttsClient? {
 		sttsClient?.let { return it.takeIf { c -> c.isConfigured } }
 		// Cache only a configured client, so an unconfigured build (fresh install, no key yet)
 		// is not retained as an idle OkHttpClient until creds arrive.
@@ -533,7 +521,8 @@ class ChatRepository(
 	/** The descriptor for the current selection, or null if the stored id is not
 	 * in the catalog (a removed provider) - the Play surfaces disable loudly
 	 * rather than silently substituting another voice. */
-	private fun currentProvider(): com.atelier_nyaarium.switchboard.proto.SttsProvider? {
+	// internal (not private): PlaybackOps resolves the provider for every actual playback call.
+	internal fun currentProvider(): com.atelier_nyaarium.switchboard.proto.SttsProvider? {
 		val id = sttsProviderId
 		return sttsCatalog.firstOrNull { it.id == id }
 	}
@@ -548,644 +537,6 @@ class ChatRepository(
 	fun sttsVoiceFor(providerId: String): String = store.sttsVoiceFor(providerId)
 
 	fun setSttsVoiceFor(providerId: String, voice: String) = store.setSttsVoiceFor(providerId, voice.trim())
-
-	/**
-	 * Speak one message tier (notification action or thread button). The whole
-	 * resolution (credential decrypt, message lookup, text prep) hops to the
-	 * player's control lane so a broadcast receiver's main thread does zero
-	 * disk or crypto work. Cache and single-flight live in SttsPlayer, so
-	 * impatient multi-taps synthesize once; tapping an entry that is already
-	 * claimed cancels it. No-op when unconfigured or the message is gone.
-	 */
-	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
-		stts.post { startPlayback(team, at, tier) }
-	}
-
-	/** Whether the engine TOOK this message, which is the same as whether a terminal is now owed for
-	 * it. Every reason to give up returns false here rather than returning silently, because a queue
-	 * waiting on a terminal that will never come waits forever. */
-	private fun startPlayback(
-		team: String,
-		at: Long,
-		tier: SttsPlayer.Tier,
-		yielding: Boolean = false,
-		// A run announces its speaker with a sentinel; a single message played by hand has no marker,
-		// so it carries its own attribution instead.
-		attributed: Boolean = true,
-		// Null when it started; otherwise WHY it did not. Four quite different problems - no key, no
-		// provider, a message that has since gone, and a row with nothing speakable in it - used to
-		// collapse into one `false`, and the alert could only shrug at all of them. The no-key case is
-		// the likeliest cause of a whole burst failing at once, which is exactly when a user needs to
-		// be told which of their problems this is.
-	): String? {
-		val client = sttsClient() ?: return "no voice key set"
-		val provider = currentProvider() ?: return "no voice provider set"
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe }
-			?: return "message is no longer here"
-		val text = ttsTextFramed(_state.value, msg, tier, attributed)
-		if (text.isBlank()) return "nothing to read aloud"
-		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		val taken = stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
-		return if (taken) null else "already speaking"
-	}
-
-	/**
-	 * What each of one team's messages is doing: "playing" for the audible one, "loading" for the one
-	 * handed to the engine but not yet sounding, "queued" for the rest. A message not named is idle.
-	 *
-	 * A QUERY rather than something a consumer accumulates from events. Every subscriber that rebuilt
-	 * this from the stream would have to get the same reconstruction right, and the glyph listener -
-	 * the only one that ever tried - got it wrong twice.
-	 */
-	fun playStatesFor(team: String): Map<Long, String> {
-		val states = mutableMapOf<Long, String>()
-		for (entry in queue.queued()) {
-			if (entry.team != team) continue
-			states[entry.at] = when {
-				stts.isPlayingMessage(entry.team, entry.at) -> "playing"
-				entry == queue.playing() -> "loading"
-				else -> "queued"
-			}
-		}
-		return states
-	}
-
-	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
-
-	fun stopMessage(team: String, at: Long) = stts.stopMessage(team, at)
-
-	/**
-	 * The markers still owed before the current entry's body may speak, in order.
-	 *
-	 * A marker is an ordinary request with its own terminal, so the sequence advances the same way the
-	 * queue does - on a terminal - rather than through a second mechanism. Held here rather than on
-	 * [QueueEntry] because what an entry CONSISTS of is not the queue's business; the queue answers
-	 * what plays next.
-	 */
-	private val pendingMarkers = ArrayDeque<Marker>()
-
-	/** The entry [pendingMarkers] were staged for. A marker announces a specific session, so a queue
-	 * that moved on while one was in flight must not let the leftovers introduce the wrong one. */
-	private var markersFor: QueueEntry? = null
-
-	/** The marker handed to the engine, by its own entry key. CLAIMED rather than sounding: a marker
-	 * spends its whole synthesis owning nothing audible, and a teardown in that window still has to
-	 * reach it. A terminal that does not match belongs to a run that has already ended. */
-	private var markerInFlight: Long? = null
-
-	private sealed interface Marker {
-		data object Chime : Marker
-
-		data class Spoken(val text: String) : Marker
-	}
-
-	/**
-	 * Queue one message and speak it if nothing is speaking.
-	 *
-	 * `announceRun` is false for a tap: a chime marks a run that began on its own, and a person who
-	 * pressed a button already knows they started it. The sentinel still plays, because which session
-	 * is speaking is not something the tap tells them.
-	 */
-	suspend fun enqueueForPlay(
-		team: String,
-		at: Long,
-		tier: SttsPlayer.Tier,
-		announceRun: Boolean,
-		// Autoplay only speaks followed threads. A person asking for a specific message has already
-		// decided, and a notification can name a thread that is not open - refusing there would be a
-		// button that does nothing and says nothing.
-		requireFollowed: Boolean = true,
-	) {
-		val entry = QueueEntry(team, at, tier)
-		advanceMutex.withLock {
-			// Re-checked under the lock, not just at the drain. A burst job runs on its own coroutine
-			// and can land after a close or forget has already swept this team, putting an entry back
-			// into a queue the teardown believed it had emptied.
-			if (requireFollowed && team !in _state.value.openTabs) return
-			// Asked BEFORE the enqueue: mid-run the queue is never idle, so the chime marks the run
-			// rather than every message in it.
-			val beginsRun = queue.isIdle()
-			if (!queue.enqueue(entry)) return
-			if (beginsRun) queueMarkers(entry, chime = announceRun)
-			resumeIfSilent()
-		}
-		transportChanged()
-	}
-
-	/** Stage the markers that precede one entry's body. A manual tap never chimes; it is not a run. */
-	private fun queueMarkers(entry: QueueEntry, chime: Boolean) {
-		pendingMarkers.clear()
-		markersFor = entry
-		if (chime) pendingMarkers.addLast(Marker.Chime)
-		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: return
-		pendingMarkers.addLast(Marker.Spoken(sentinelText(_state.value, msg, entry.team)))
-	}
-
-	private fun clearMarkers() {
-		pendingMarkers.clear()
-		markersFor = null
-		markerInFlight = null
-	}
-
-	/** Play the next owed marker, or report that the body may now speak. Records WHICH marker is in
-	 * flight, so a terminal can be matched to it: without that, a marker from a run that has already
-	 * been torn down drives the current run's sequence and swallows its message. */
-	private fun nextMarkerStarted(): Boolean {
-		while (pendingMarkers.isNotEmpty()) {
-			val started = when (val marker = pendingMarkers.removeFirst()) {
-				is Marker.Chime -> chimeSource?.invoke()?.let { stts.playChime(it, sttsChimeVolume) }
-				is Marker.Spoken -> speakMarker(marker.text)
-			}
-			// A marker that will not play is skipped rather than allowed to stall the body behind it:
-			// losing a boundary is a smaller harm than losing the message.
-			if (started != null) {
-				markerInFlight = started
-				return true
-			}
-		}
-		markerInFlight = null
-		return false
-	}
-
-	private fun speakMarker(text: String): Long? {
-		val client = sttsClient() ?: return null
-		val provider = currentProvider() ?: return null
-		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		return stts.playMarker(client, provider, voice, text, sttsVolume)
-	}
-
-	/**
-	 * Resolves the chime to a file the player can open. Set by the app layer, because reading a raw
-	 * resource or a user-chosen content URI needs a Context and this class deliberately holds none -
-	 * the same seam the alarm scheduler uses.
-	 *
-	 * Unset or failing means no chime, and the sequence carries on to the sentinel. A boundary marker
-	 * that cannot load must not hold up the message behind it.
-	 */
-	@Volatile
-	var chimeSource: (() -> File?)? = null
-
-	/** Retire the entry that just ended and speak whatever follows. Every terminal routes here, so the
-	 * outcome alone decides whether the queue moves: a decode failure must not retire an entry as
-	 * though it had been heard, and a user stop must not walk forward. */
-	/** `gen` names the request that ended. Zero means "no request at all" - a terminal this class
-	 * synthesized because the engine declined the entry, which is never a marker. Generations start at
-	 * one, so it cannot collide with a real one. */
-	private suspend fun onPlaybackEnded(
-		entry: QueueEntry,
-		outcome: SttsPlayer.Outcome,
-		gen: Long = 0L,
-		reason: String? = null,
-	) {
-		try {
-			advanceEnded(entry, outcome, gen, reason)
-		} finally {
-			// After the advance, not on the event: the queue is only correct once this has run.
-			transportChanged()
-		}
-	}
-
-	private suspend fun advanceEnded(entry: QueueEntry, outcome: SttsPlayer.Outcome, gen: Long, reason: String?) {
-		advanceMutex.withLock {
-			// A marker finishing means the sequence moves on, never that the queue does: the body it
-			// precedes has not been spoken yet, and advancing here would skip the message entirely.
-			if (entry.team == SttsPlayer.MARKER_TEAM) {
-				// Matched to the marker that was actually started. A terminal from a torn-down run
-				// otherwise looks indistinguishable from this run's own, and drives it a step forward
-				// while its message has not been spoken.
-				if (gen != markerInFlight) return
-				markerInFlight = null
-				val head = queue.playing()
-				// The run these markers belonged to is gone, either torn down or moved on. Nothing else
-				// will report a terminal for it, so drop the leftovers and pick the queue back up
-				// rather than leaving the backlog waiting on a message that may never arrive.
-				if (head == null || markersFor != head) {
-					clearMarkers()
-					resumeIfSilent()
-					return
-				}
-				// Gapped, so each marker reads as a boundary rather than running into what follows. The
-				// owner is captured HERE, not re-read when the gap expires: by then the run may have
-				// been torn down and a new one staged, and a stale callback that re-bound to whatever
-				// was current would drive the new entry's sequence and drop its body unspoken.
-				val owner = head
-				stts.afterGap {
-					repoScope.launch {
-						advanceMutex.withLock {
-							if (markersFor != owner || queue.playing() != owner) return@withLock
-							if (nextMarkerStarted()) return@withLock
-							clearMarkers()
-							speakBody(owner)
-						}
-					}
-				}
-				return
-			}
-			val step = queue.advance(entry, outcome, reason)
-			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
-			if (step.next != null) {
-				// Spoken unconditionally. `advance` has already installed this as the head, so refusing
-				// here would strand an entry the engine was never given and no terminal will ever
-				// retire. It is safe to hand over even while the user is listening to something else:
-				// the request yields at the player and reports its own terminal.
-				speak(step.next)
-				return
-			}
-			// The head just gave the sound to something else. An empty head reads exactly like an idle
-			// queue, so without this the resume below would speak straight over what displaced it.
-			if (step.standDown) return
-			// A terminal for something the queue does not own. If that freed the sound, pick the run
-			// back up rather than stalling until the next message arrives.
-			resumeIfSilent()
-		}
-	}
-
-	/** Drop everything queued for a team and stop it if it was the one speaking, then carry on with
-	 * whatever other teams still have waiting. Ordered drop-then-stop on purpose: the stop's own
-	 * terminal would otherwise advance into an entry this same call is removing. Cache deletion is a
-	 * separate step, so closing a tab the user may reopen keeps its audio. */
-	suspend fun dropQueuedFor(team: String) {
-		advanceMutex.withLock {
-			// Tearing the thread down is not a pause. Swept across the whole TEAM rather than the entry
-			// handed back: a pause parks its message in pending, so the one entry that actually holds an
-			// offset is never the head, and the head is all a teardown is told about.
-			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier, remember = false) }
-			stts.forgetTeamPositions(team)
-			// A marker lives under its own reserved team, so dropping the message's team cannot reach
-			// one already handed to the engine. Abandoned by its own identity rather than by stopping
-			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
-			// what IS audible may belong to a team nobody asked to silence.
-			if (markersFor?.team == team) {
-				markerInFlight?.let { stts.abandonGeneration(it) }
-				clearMarkers()
-			}
-			resumeIfSilent()
-		}
-		// A teardown changes what there is to show as surely as a terminal does. Without this, closing
-		// a thread mid-run left the lockscreen holding a transport for a run that no longer exists.
-		transportChanged()
-	}
-
-	/** Start the next entry only while nothing is audible. "The queue has no head" is not the same
-	 * question: the queue is headless the instant it stands down, and answering the wrong one is how it
-	 * ends up speaking over the playback it just yielded to. Callers hold [advanceMutex]. */
-	/** Whether a transport control has held the run. Distinct from an empty queue: paused means there
-	 * is something to come back to, which is why nothing auto-resumes past it. */
-	@Volatile
-	/**
-	 * Whether the run is held. Read through an accessor that CANNOT report a pause over an idle queue.
-	 *
-	 * A pause describes a run, so it cannot outlive one - and three separate rounds each found a new
-	 * way for a run to end without passing through whichever single place was normalizing the flag at
-	 * the time (a thread torn down, an entry trashed, the last entry skipped). Each fix was correct
-	 * where it landed and none of them held, because the rule lived at the writers rather than at the
-	 * value. A stranded flag refuses autoplay on every team afterwards, with no enabled control left
-	 * on screen to clear it.
-	 *
-	 * Normalizing in the GETTER is what makes the bad state unobservable rather than merely unreached:
-	 * a new way to empty the queue cannot reintroduce it, because there is no longer a reader that
-	 * could see it.
-	 */
-	private var pausedFlag = false
-	private var transportPaused: Boolean
-		get() {
-			if (pausedFlag && queue.isIdle()) pausedFlag = false
-			return pausedFlag
-		}
-		set(value) {
-			pausedFlag = value
-		}
-
-	/**
-	 * Called after the run's state has SETTLED, never from a raw playback event.
-	 *
-	 * A transport surface asks what the queue is doing, and an event fires before the queue has been
-	 * advanced for it - so a listener reading on the event sees the entry that just ended still
-	 * installed. Mid-run that self-corrects on the next start; at the last terminal there is no next
-	 * start, and the surface stays showing a run that is over.
-	 */
-	@Volatile
-	var onTransportChanged: (() -> Unit)? = null
-
-	/**
-	 * Bumped whenever the settled queue state changes. What the sheet re-reads on.
-	 *
-	 * A counter rather than a second callback slot: [onTransportChanged] is one slot the service owns,
-	 * and a UI that took it would silently unhook the lockscreen. A counter has no owner, so any number
-	 * of surfaces can watch it, and it carries no state of its own to drift - it only says "ask again".
-	 */
-	val queueRevision: kotlinx.coroutines.flow.StateFlow<Int> get() = _queueRevision
-	private val _queueRevision = kotlinx.coroutines.flow.MutableStateFlow(0)
-
-	private fun transportChanged() {
-		_queueRevision.value = _queueRevision.value + 1
-		warmQueued()
-		runCatching { onTransportChanged?.invoke() }
-	}
-
-	/**
-	 * Get every queued entry's audio made before its turn comes.
-	 *
-	 * Driven off the settled queue rather than off message arrival, so it follows what will ACTUALLY
-	 * be spoken - the old pre-generate warmed on delivery, behind a settings toggle, and knew nothing
-	 * about the queue. Warming is idempotent per entry, so calling it on every change is free.
-	 *
-	 * Deliberately keeps going while the run is PAUSED. A pause means the person is busy, not that the
-	 * work should stop; having the backlog ready is most of the value of pausing at all.
-	 */
-	private fun warmQueued() {
-		val client = sttsClient() ?: return
-		val provider = currentProvider() ?: return
-		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		val state = _state.value
-		for (entry in queue.queued()) {
-			val tier = entry.tier ?: continue
-			val msg = state.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: continue
-			// The words the RUN will speak, not the attributed form a hand-play uses - the cache is keyed
-			// on the text, so warming the other one would fill the cache and still synthesize live.
-			val text = ttsTextFramed(state, msg, tier, attributed = false)
-			if (text.isNotBlank()) stts.warm(client, provider, voice, entry.team, entry.at, tier, text)
-		}
-	}
-
-	private fun resumeIfSilent() {
-		if (transportPaused || queue.playing() != null || stts.isSounding()) return
-		queue.startNext()?.let { speak(it) }
-	}
-
-	/** Hold the run where it is. PREEMPTED already means "stand down and wait" rather than "advance",
-	 * so a pause is that plus a flag stopping the next terminal from picking the run back up. */
-	suspend fun pausePlayback() {
-		advanceMutex.withLock {
-			// Nothing to pause means nothing to resume. Setting the flag here would stick: an idle
-			// queue mints no terminal, so no event would ever arrive to clear it, and every later run
-			// - autoplay AND the in-thread button, which share this start path - would be refused.
-			if (queue.isIdle()) return@withLock
-			transportPaused = true
-			markerInFlight?.let { stts.abandonGeneration(it) }
-			clearMarkers()
-			val head = queue.playing()
-			if (head != null) {
-				// Requeued at the FRONT, then retired. Stopping audio would only reach a body that is
-				// already sounding - during a marker, or while the body is still synthesizing, there is
-				// nothing audible to stop, and the head would stay installed AND be waiting in pending:
-				// stuck, and then spoken twice when the synthesis it never cancelled finally landed.
-				// A pause KEEPS where it got to - that is what separates it from a skip. Which sound's
-				// position that is stays the engine's to answer: during the chime or the sentinel the
-				// audible thing is a marker, and a marker is never resumable, so a pause landing there
-				// files nothing rather than cutting the opening off the body.
-				queue.requeueFront(head)
-				stts.abandon(head.team, head.at, head.tier, remember = true)
-				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
-			}
-		}
-		transportChanged()
-	}
-
-	suspend fun resumePlayback() {
-		advanceMutex.withLock {
-			transportPaused = false
-			resumeIfSilent()
-		}
-		transportChanged()
-	}
-
-	/** Give up on what is speaking and move to the next entry. Distinct from a pause: this one is a
-	 * decision about THIS message, so the run continues. */
-	suspend fun skipPlayback() {
-		// try/finally, because a bare return inside `withLock` leaves the whole function - the surfaces
-		// would keep showing the state from before the skip until some later terminal happened to
-		// correct them.
-		try {
-			advanceMutex.withLock {
-				// A pause retires the head and parks the message at the FRONT of the queue, so after one
-				// there is no head to skip - the thing being skipped is that parked entry. Promoting it
-				// first means Skip discards it, rather than resuming the very message it was asked to
-				// move past.
-				val head = queue.playing() ?: queue.startNext() ?: return@withLock
-				retireHead(head)
-			}
-		} finally {
-			transportChanged()
-		}
-	}
-
-	/** What a transport surface should show: whether anything is queued at all, and whether it is
-	 * currently held. */
-	fun transportState(): Pair<Boolean, Boolean> = Pair(!queue.isIdle(), transportPaused)
-
-	/**
-	 * The queue as the sheet renders it, in speaking order, current entry first.
-	 *
-	 * Built here rather than in the UI so the sheet holds no state of its own - it is the fourth
-	 * surface reporting this run, and the ones that kept their own copy are the ones that drifted.
-	 */
-	fun queueRows(): List<QueueRow> {
-		val head = queue.playing()
-		// Read once rather than per row: it is the same answer for all of them, and asking inside the
-		// loop would let the current entry change mid-list.
-		val current = playbackPosition()
-		// Only the HEAD can be mid-synthesis, and only until its audio starts. Everything behind it is
-		// waiting its turn, which is a different thing and must not draw as work in progress.
-		val generating = head != null && !stts.isPlayingMessage(head.team, head.at)
-		return queue.queued().distinct().map { entry ->
-			row(
-				entry,
-				isCurrent = entry == head,
-				// The live player for the one that is sounding; otherwise whatever warming measured. A
-				// queued entry knows its own length as soon as its audio exists, which is the point of
-				// making it early.
-				durationMs = current?.takeIf { it.entry == entry }?.durationMs
-					?: stts.warmedDuration(entry.team, entry.at, entry.tier),
-				generating = generating && entry == head,
-			)
-		}
-	}
-
-	/** The entries that gave up, for the alert's list. Separate from [queueRows] because these are no
-	 * longer a run: nothing will speak them, and the only things offered are a jump and a dismissal. */
-	fun failedRows(): List<QueueRow> =
-		queue.remembered().map {
-			row(it, isCurrent = false, durationMs = null, gaveUp = true, reason = shortCause(queue.reasonFor(it)))
-		}
-
-	/**
-	 * A cause a person can read, from whatever the provider said.
-	 *
-	 * The raw string is an HTTP body: it can run to paragraphs, name internal endpoints, and echo
-	 * request content back. A tile is not the place for it - what a user needs is which of their
-	 * problems this is, and only the first line of it.
-	 */
-	private fun shortCause(reason: String?): String {
-		val raw = reason?.trim().orEmpty()
-		return when {
-			raw.isEmpty() -> "not spoken"
-			raw.contains("401") || raw.contains("403", true) -> "voice key rejected"
-			raw.contains("429") -> "voice service busy"
-			raw.contains("timeout", true) || raw.contains("timed out", true) -> "voice service timed out"
-			raw.contains("playback failed", true) -> "audio would not play"
-			// Already a phrase written for a person - the decline paths mint these themselves.
-			raw.length <= 60 && !raw.contains('{') && !raw.contains('<') -> raw
-			else -> raw.lineSequence().first().take(60)
-		}
-	}
-
-	private fun row(
-		entry: QueueEntry,
-		isCurrent: Boolean,
-		durationMs: Long?,
-		generating: Boolean = false,
-		gaveUp: Boolean = false,
-		reason: String? = null,
-	): QueueRow {
-		val msg = _state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
-		return QueueRow(
-			entry = entry,
-			sessionLabel = _state.value.label(entry.team),
-			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
-			durationMs = durationMs,
-			isCurrent = isCurrent,
-			generating = generating,
-			gaveUp = gaveUp,
-			reason = reason,
-		)
-	}
-
-	/**
-	 * Take one entry out of the queue. The tile's trash, and the same action as a swipe on the bubble.
-	 *
-	 * Routed through skip when it is the HEAD, rather than reaching into the queue: the head is
-	 * installed in the engine, so removing it without retiring the request would leave a playback whose
-	 * terminal has nothing to advance, and the run would stop there.
-	 */
-	suspend fun dropFromQueue(entry: QueueEntry) {
-		// ONE critical section, and it names the entry throughout. Deciding head-vs-not under the lock
-		// and then acting outside it still let the head advance in between, so the trash discarded
-		// whatever had become current rather than the tile that was tapped - the same "re-derive it
-		// later from something coarser" shape this subsystem keeps producing.
-		try {
-			advanceMutex.withLock {
-				if (queue.playing() == entry) {
-					retireHead(entry)
-					return@withLock
-				}
-				queue.drop(entry)
-				// Giving up on a message gives up on where it had got to, exactly as a skip does - which
-				// the abandon is told outright rather than left to work out from the outcome.
-				stts.abandon(entry.team, entry.at, entry.tier, remember = false)
-				stts.forgetPosition(entry.team, entry.at, entry.tier)
-				// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
-				// parked otherwise leaves the flag set over an idle queue, refusing every later run on
-				// every team with no enabled control left to clear it.
-				resumeIfSilent()
-			}
-		} finally {
-			transportChanged()
-		}
-	}
-
-	/** Retire a NAMED head and start whatever follows it. The shared body of skip and of trashing the
-	 * tile that is speaking, so the two cannot drift; both must already hold [advanceMutex]. */
-	private fun retireHead(head: QueueEntry) {
-		markerInFlight?.let { stts.abandonGeneration(it) }
-		clearMarkers()
-		stts.forgetPosition(head.team, head.at, head.tier)
-		stts.abandon(head.team, head.at, head.tier, remember = false)
-		// STOPPED, not COMPLETED. The queue advances on both, but only COMPLETED means "heard" - and a
-		// skip that claimed it did cleared the message out of the failures list, telling the user they
-		// had heard the very thing they had just given up on.
-		val next = queue.advance(head, SttsPlayer.Outcome.STOPPED).next ?: return
-		// Skip means "move past this one", NEVER "start playing". Clearing the pause here made the
-		// lockscreen's own next button start the phone talking out loud from a state the user had
-		// deliberately silenced - and every media app on the platform advances without sounding.
-		//
-		// The promoted entry has to be parked rather than left alone, because `advance` installs it as
-		// the head BEFORE handing it back: declining to speak it would strand an entry the engine never
-		// received and no terminal will ever retire. PREEMPTED puts it back at the front, which is
-		// exactly where a resume should find it.
-		if (transportPaused) {
-			queue.advance(next, SttsPlayer.Outcome.PREEMPTED)
-		} else {
-			speak(next)
-		}
-	}
-
-	/** Acknowledge one failure. "Seen", not "resolved" - the message was never spoken and this does not
-	 * pretend otherwise; it only stops the alert asking again. */
-	suspend fun acknowledgeFailure(entry: QueueEntry) {
-		advanceMutex.withLock { queue.forgetFailure(entry) }
-		transportChanged()
-	}
-
-	/**
-	 * Where the current BODY is and how long it is, for the sheet's one bar. Null when nothing is
-	 * playing, which the bar shows as disabled rather than as zero.
-	 *
-	 * Scoped to the head, so the bar is null through the chime and the sentinel rather than sweeping
-	 * them. The plan is explicit that neither marker gets a timeline, and a bar that ran over one would
-	 * invite a seek into audio there is nowhere useful to land in.
-	 */
-	fun playbackPosition(): SttsPlayer.Position? =
-		stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
-
-	/** Where the run would pick up while it is held. A pause has no player, so the live snapshot is
-	 * null and the sheet showed nothing at all - blanking the timeline at precisely the moment the
-	 * preserved position is the thing worth seeing. Duration stays unknown until audio exists again. */
-	fun heldPosition(): Long? {
-		if (!transportPaused) return null
-		val parked = queue.queued().firstOrNull() ?: return null
-		return stts.heldPosition(parked.team, parked.at, parked.tier)
-	}
-
-	/** Move the current body. Named, so a bar built a moment ago cannot seek whatever took the sound
-	 * since - a marker, or the next message. */
-	fun seekPlayback(ms: Long) {
-		val snap = playbackPosition() ?: return
-		stts.seekTo(snap.owner, ms)
-	}
-
-	/** Open the thread a queue entry belongs to, returning the CANONICAL key its tab is filed under so
-	 * the caller can point the active tab at the same value. Revealing the message itself is the
-	 * caller's half: only the view layer can scroll, and this class holds no view. */
-	fun jumpTo(entry: QueueEntry): String = openThread(entry.team)
-
-	/** What the bubble draws: how many are still to speak, whether the current one is still being
-	 * generated, and how many gave up. The failure count outlives a drained queue, which is why it is
-	 * reported separately rather than folded into the total. */
-	fun queueCounts(): Triple<Int, Boolean, Int> {
-		val queued = queue.queued()
-		val head = queue.playing()
-		val generating = head != null && !stts.isPlayingMessage(head.team, head.at)
-		return Triple(queued.size, generating, queue.remembered().size)
-	}
-
-	/** Hand an entry to the engine, and synthesise its terminal ourselves if the engine would not take
-	 * it. Without that, an entry the engine silently declines leaves the head un-retired and every
-	 * message behind it unspoken for the life of the process. */
-	private fun speak(entry: QueueEntry) {
-		// Markers first when this entry is owed any. Their terminals chain the body behind them, so
-		// this returns having started the boundary rather than the message. Markers staged for a
-		// DIFFERENT entry are discarded: they name a session, and announcing the wrong one is worse
-		// than announcing none.
-		if (markersFor != entry) queueMarkers(entry, chime = false)
-		if (nextMarkerStarted()) return
-		speakBody(entry)
-	}
-
-	private fun speakBody(entry: QueueEntry) {
-		val tier = entry.tier
-		if (tier == null) {
-			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = "no tier to speak") }
-			return
-		}
-		// Yielding: by the time this reaches the player the user may have started something of their
-		// own, and autoplay stands down rather than talking over it.
-		stts.post {
-			startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)?.let { why ->
-				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = why) }
-			}
-		}
-	}
 
 	/** The run-start sound, as a content Uri. Empty means the bundled asset; [CHIME_SILENT] means the
 	 * user chose no sound at all, which is a decision rather than an unset preference. Persisted. */
@@ -1234,45 +585,6 @@ class ChatRepository(
 		set(value) {
 			store.sttsChimeVolume = value
 		}
-
-	/** Map the autoPlay pref string to its tier, or null for "off"/unknown. */
-	private fun autoPlayTier(value: String): SttsPlayer.Tier? = when (value) {
-		"title" -> SttsPlayer.Tier.TITLE
-		"summary" -> SttsPlayer.Tier.SUMMARY
-		"full" -> SttsPlayer.Tier.FULL
-		else -> null
-	}
-
-	/** Pre-synthesize every tier of a message into the cache so a later Play is
-	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
-	 * failure - the notification fires regardless and Play falls back to live
-	 * synthesis. No-op when unconfigured or the message is gone. */
-	private fun preloadMessage(team: String, at: Long) {
-		val client = sttsClient() ?: return
-		val provider = currentProvider() ?: return
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
-		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		stts.preloadTiers(
-			client,
-			provider,
-			voice,
-			team,
-			at,
-			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.TITLE),
-			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.SUMMARY),
-			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.FULL),
-		)
-	}
-
-	/** Settings voice preview with the current provider/voice. */
-	fun playSttsSample() {
-		stts.post {
-			val client = sttsClient() ?: return@post
-			val provider = currentProvider() ?: return@post
-			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.playSample(client, provider, voice, "This is your switchboard voice.", sttsVolume)
-		}
-	}
 
 	/** STTS service liveness WITH the failure cause, for the settings Connection status line. */
 	suspend fun sttsProbe(): SttsProbe =
@@ -1759,352 +1071,12 @@ class ChatRepository(
 		runCatchingCancellable { client().listDirs(path).entries }.getOrDefault(emptyList())
 	}
 
-	/** board_read every NON-route Gateway the presence roster names (the route Gateway's half rides
-	 * the plane). Fired on board-tab open, pull-refresh, and entering a non-route session's thread;
-	 * a down Gateway just leaves its column stale. Same-Domain only: a linked friend's Gateway is
-	 * not this owner's board. */
-	fun refreshBoard() {
-		repoScope.launch {
-			for (gw in otherKeyringGateways(localGatewayId)) runCatchingCancellable { board.read(client(), gw) }
-		}
-	}
-
 	/** This owner's admitted Gateways other than the route one. Keyring-derived, so a Gateway with
 	 * no sessions in the roster is still reached, and a linked friend's is never included. */
-	private fun otherKeyringGateways(route: String): List<String> =
+	// internal (not private): BoardOps.refreshBoard and BoardOps.boardAssignTargets fan out to every
+	// other Gateway the same way reportPluginsToOtherGateways and forget do here.
+	internal fun otherKeyringGateways(route: String): List<String> =
 		(Keyring.parse(store.loadDomain())?.admittedGatewayIds() ?: emptyList()).filter { it != route }
-
-	/** Sessions an entry may be assigned to: a live session (never a spawn-point, which has no record
-	 * for the gateway to resolve) on a Gateway this owner's keyring can seal to. The keyring is the
-	 * test rather than the Domain fields, which say nothing about whether a seal would succeed. */
-	fun boardAssignTargets(): List<Team> {
-		val reachable = (otherKeyringGateways(localGatewayId) + localGatewayId).toSet()
-		return _state.value.teams.filter {
-			it.kind != "console" && it.kind != "devcontainer" && (it.gatewayId.isEmpty() || it.gatewayId in reachable)
-		}
-	}
-
-	/** Forget a session that still holds unfinished board work. The disposition is a FIELD of the
-	 * forget op, so the session's end and its work's end are one gateway-side mutation, and the
-	 * gateway disposes of every entry it holds for that session rather than the subset this device
-	 * happens to have polled.
-	 *
-	 * The pending queue is the other writer to those entries, so its actions for them are DROPPED
-	 * first: an absolute write draining afterwards would overwrite the choice the owner just made.
-	 * `onForgotten` runs only once the forget has actually landed - a session whose forget never
-	 * reached its Gateway still exists, so destroying its design cards and notifications would strand
-	 * the session with none of its history. */
-	fun forgetWithBoardDisposition(team: String, cancelThem: Boolean, onForgotten: () -> Unit) {
-		val asked = if (cancelThem) "cancel" else "release"
-		board.dropQueuedForSession(boardGatewayOf(team), team)
-		forget(team, asked, onForgotten)
-	}
-
-	/** Whether a session's thread belongs to a non-route Gateway (its board half is cadence-fresh
-	 * through board_read rather than live on the plane). */
-	fun isNonRouteSession(team: String): Boolean {
-		val gw = _state.value.teams.firstOrNull { it.name == team }?.gatewayId ?: return false
-		return gw.isNotEmpty() && gw != localGatewayId
-	}
-
-	/** The Gateway a session's board entries home on: its own, else the route Gateway. Takes a chat's
-	 * `Team.name` (the qualified address). */
-	fun boardGatewayOf(team: String?): String {
-		val gw = team?.let { s -> _state.value.teams.firstOrNull { it.name == s }?.gatewayId }
-		return gw?.ifEmpty { null } ?: localGatewayId
-	}
-
-	/** The same answer for an entry's stored `sessionId`, which is the bare local field rather than
-	 * the address, so it cannot be matched against `Team.name` directly. NULL rather than the route
-	 * fallback when nothing matches: the duplicate-id tie-break asks "is this copy homed where its
-	 * session lives", and a total function answers yes for a session that is not there at all.  */
-	fun boardGatewayOfKey(sessionKey: String): String? {
-		if (sessionKey.isEmpty()) return null
-		val gw = _state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
-		return gw?.ifEmpty { localGatewayId }
-	}
-
-	/** Capture a thought onto the route Gateway's backlog: root level, after the last root. */
-	fun boardCapture(title: String, body: String?) {
-		val gw = localGatewayId
-		val last = board.mergedEntries(gw)
-			.filter { it.parent == null && it.trashedAt == null }
-			.maxOfOrNull { it.rank }
-		val entry = com.atelier_nyaarium.switchboard.proto.BoardEntry(
-			id = UUID.randomUUID().toString().replace("-", "").take(32),
-			title = title,
-			body = body,
-			state = "open",
-			rank = com.atelier_nyaarium.switchboard.board.BoardRank.between(last, null),
-		)
-		board.enqueue(ConsoleOp.BoardUpsert(listOf(entry)), gw)
-	}
-
-	fun boardSetState(gatewayId: String, id: String, state: String) =
-		board.enqueue(ConsoleOp.BoardSetState(id, state), gatewayId)
-
-	fun boardSetTitle(gatewayId: String, id: String, title: String) =
-		board.enqueue(ConsoleOp.BoardSetTitle(id, title), gatewayId)
-
-	fun boardSetBody(gatewayId: String, id: String, body: String?) =
-		board.enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
-
-	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
-		board.enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
-
-	/**
-	 * Set an entry's attachments to exactly this list, staging any newly picked file first.
-	 *
-	 * Absolute like every other board write: adding and removing are the same call, which is why the
-	 * caller passes the whole list rather than a delta. A picked file is COPIED into the entry's own
-	 * bucket before anything is queued - `admitPicked` stages a bare File with no src, and the copy is
-	 * what mints one, which the gallery thumbnail needs anyway.
-	 *
-	 * Off the caller's thread, always. This arrives from a Compose click and does three full passes
-	 * over a file the wire allows to be 500 MB: the content-resolver stage, the hash, and the copy.
-	 * On the main thread that is an ANR on any real attachment.
-	 */
-	fun boardSetAttachments(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) =
-		command { boardSetAttachmentsNow(gatewayId, id, keep, add) }
-
-	private fun boardSetAttachmentsNow(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) {
-		val bucket = Attachments.boardBucket(id)
-		// Staged somewhere OTHER than the destination bucket: keepBuckets pins that bucket for the
-		// entry's whole life, so a staged-N left in it would never be swept.
-		val (staged, refused) =
-			if (add.isEmpty()) emptyList<OutgoingFile>() to null else admitPicked(add, "pick-${UUID.randomUUID()}")
-		if (refused != null) {
-			_state.update { it.copy(error = refused.message()) }
-			return
-		}
-		// Count only. Size is NOT bounded here: a board attachment rides the same chunked plane as any
-		// other file and may be as large as the wire allows. What size decides is whether a device
-		// fetches it unprompted, which is the gallery's business, not the picker's.
-		if (keep.size + staged.size > Protocol.BOARD_ATTACHMENTS_MAX) {
-			staged.forEach { it.source.delete() }
-			_state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
-			return
-		}
-		val sources = mutableMapOf<String, String>()
-		val added = staged.mapNotNull { picked ->
-			// Landed under its BLOB name, not its display name: a device that downloads this later
-			// knows only the blobId, and the owner can pick two files called screenshot.png.
-			val blobId = client?.blobIdOf(picked.source) ?: return@mapNotNull null
-			val target = Attachments.boardFile(filesDir, id, blobId)
-			target.parentFile?.mkdirs()
-			picked.source.copyTo(target, overwrite = true)
-			picked.source.delete()
-			sources[blobId] = target.absolutePath
-			BoardAttachment(
-				blobId = blobId,
-				blobGateway = gatewayId,
-				filename = picked.name,
-				mime = picked.mime,
-				size = picked.size,
-			)
-		}
-		// Every member this device can supply, not just the new picks. The op is absolute, so it
-		// re-states the survivors too, and a survivor the Gateway does not hold is unsatisfiable
-		// forever otherwise: after a move the destination never ingested it, and a second device
-		// editing from a stale list can name one the owner has already removed. The bytes are usually
-		// right here, because Question 4 keeps a copy on the device that opened the entry.
-		for (a in keep) {
-			val local = Attachments.boardFile(filesDir, id, a.blobId)
-			if (local.isFile) sources[a.blobId] = local.absolutePath
-		}
-		// Bytes this entry no longer names, dropped from the device now. The orphan sweep keeps or
-		// takes a whole BUCKET, so it can never reclaim one file out of an entry that still holds
-		// others - a removed picture would sit there for the entry's whole life.
-		// Only files NAMED as a blob: a `.landing` temp belongs to a download still in flight, and
-		// deleting it here would tear that transfer's destination out from under it. Those are bounded
-		// by the bucket, which goes whole when the entry does.
-		val stays = (keep + added).mapTo(mutableSetOf()) { it.blobId }
-		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach {
-			if (it.name.startsWith("sha256-") && it.name !in stays) it.delete()
-		}
-
-		// `supplied` is a claim about THIS device's disk, nothing more: these are the members whose
-		// bytes are here and going up. A member outside it that the Gateway also cannot find exists on
-		// no machine, and the Gateway drops it instead of failing the write forever.
-		board.enqueue(
-			ConsoleOp.BoardSetAttachments(id, keep + added, supplied = sources.keys.toList()),
-			gatewayId,
-			sources = sources,
-		)
-		// Outside the drain, which is single-flight: a multi-minute transfer inside it would stall every
-		// board write on every Gateway. repoScope so it survives the Activity going away mid-upload.
-		// Cheap for a survivor the Gateway already holds - uploadBlob short-circuits on its stat.
-		for ((_, source) in sources) kickBoardUpload(source, gatewayId)
-	}
-
-	/**
-	 * The local file for one attachment, downloading it if this device does not have it yet.
-	 *
-	 * Question 4's "on open, and keep": the attaching device already holds the bytes, so its own peek
-	 * is instant, and a second device or a reinstall pays once. Null while a fetch is running or after
-	 * one gave up, which is what lets a tile show three states rather than a spinner that never ends.
-	 */
-	fun boardAttachmentFile(entryId: String, a: BoardAttachment): File? {
-		val landed = Attachments.boardFile(filesDir, entryId, a.blobId)
-		if (landed.isFile) return landed
-		// Only small ones come down on their own. A large attachment is legitimate - the plane carries
-		// it in chunks like anything else - but opening an entry must not spend hundreds of megabytes
-		// of someone's data before they have asked for the file.
-		if (a.size <= Protocol.BOARD_AUTO_DOWNLOAD_MAX_BYTES) kickBoardDownload(entryId, a)
-		return null
-	}
-
-	/** The owner asking for a file the gallery would not fetch on its own. */
-	fun boardDownloadAttachment(entryId: String, a: BoardAttachment) {
-		boardFetchFailures.remove(a.blobId)
-		kickBoardDownload(entryId, a)
-	}
-
-	/** Which attachments this device is fetching or has given up on, so a tile can say which. Plain
-	 * maps rather than snapshot state: this class holds no Compose types, and the board's own
-	 * revision is what the tiles already recompose on. */
-	private val boardFetchFailures = java.util.Collections.synchronizedMap(mutableMapOf<String, Int>())
-	private val boardDownloadsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-	fun boardAttachmentState(a: BoardAttachment): String = when {
-		a.blobId in boardDownloadsInFlight -> "downloading"
-		(boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP -> "failed"
-		a.size > Protocol.BOARD_AUTO_DOWNLOAD_MAX_BYTES -> "manual"
-		else -> "pending"
-	}
-
-	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
-		// A queued move is waiting on these, and nothing else can retire it, so giving up would leave
-		// the origin's linked delete holding that Gateway's lane closed forever.
-		val waiting = board.pendingFetches().firstOrNull { it.blobId == a.blobId }
-		if (waiting == null && (boardFetchFailures[a.blobId] ?: 0) >= BOARD_FETCH_GIVE_UP) return
-		if (!boardDownloadsInFlight.add(a.blobId)) return
-		// While a move is queued, the RECORD already names the destination, which by construction does
-		// not have the bytes yet. The queued action knows where they actually are.
-		val holder = waiting?.holder ?: a.blobGateway
-		repoScope.launch {
-			try {
-				val target = Attachments.boardFile(filesDir, entryId, a.blobId)
-				val c = client() ?: return@launch
-				val staged = c.downloadBlob(a.blobId, holder)
-				target.parentFile?.mkdirs()
-				// Through a temp and a rename. A direct overwrite deletes the good copy first and leaves
-				// a TRUNCATED file if the process dies mid-copy, which nothing would ever correct: the
-				// gallery renders the partial bytes forever, and `supplied` would then assert a blobId
-				// this device cannot actually produce, putting the write into an unsatisfiable retry.
-				val tmp = File(target.parentFile, "${target.name}.landing")
-				try {
-					staged.copyTo(tmp, overwrite = true)
-					if (!tmp.renameTo(target)) error("could not land ${a.filename}")
-				} finally {
-					// Whatever went wrong, the partial goes with it. The usual trigger is a full disk, so
-					// leaking here would consume more of the exact resource whose exhaustion caused the
-					// failure, and nothing else collects it: this entry's bucket is kept for its whole life.
-					tmp.delete()
-				}
-				// The blob store is a transfer buffer; holding the landed copy too would keep every
-				// attachment twice on the device with the least room for it.
-				c.forgetBlob(a.blobId)
-				boardFetchFailures.remove(a.blobId)
-				board.revision.longValue++
-			} catch (e: Exception) {
-				e.rethrowIfCancellation()
-				// Bounded like a message's own fetch: a picture whose bytes are gone must stop asking.
-				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
-				DebugLog.log("Board", "attachment fetch failed: ${e.message?.take(80)}")
-				// So the tile repaints as "could not download" rather than sitting on the last state.
-				board.revision.longValue++
-			} finally {
-				boardDownloadsInFlight.remove(a.blobId)
-			}
-		}
-	}
-
-	/** Every board bucket already on disk, for the one case where the board cannot say which are live. */
-	private fun existingBoardBuckets(): Set<String> =
-		Attachments.root(filesDir).listFiles()
-			?.filter { it.isDirectory && it.name.startsWith("board-") }
-			?.mapTo(mutableSetOf()) { it.name }
-			?: emptySet()
-
-	/** Restart the transfers whose kick died with the process, or with a failure that only logged.
-	 * The queued action survived either way, so without this the drain would check forever and the
-	 * picture would never go up. Cheap to repeat: an upload resumes from the Gateway's own cursor. */
-	private fun resumeBoardUploads() {
-		for ((_, source, gatewayId) in board.pendingSources()) kickBoardUpload(source, gatewayId)
-		// A move's attach waits on bytes this device may never have held. Its own kick dies with the
-		// process, and nothing else would ever start it again, so the action would wait forever and its
-		// linked origin delete would hold that Gateway's lane closed behind it.
-		for ((entryId, blobId, holder) in board.pendingFetches()) {
-			if (Attachments.boardFile(filesDir, entryId, blobId).isFile) continue
-			// Everything needed is on the action itself. Searching a cached view for the blobId instead
-			// answers nothing once the upsert has retired, and can match the wrong entry when the same
-			// picture hangs on two of them. Only blobId and gateway are read downstream; the rest of
-			// this record is filler, and kickBoardDownload resolves the holder from the queue anyway.
-			kickBoardDownload(entryId, BoardAttachment(blobId, holder, blobId, "application/octet-stream", 0))
-		}
-	}
-
-	/** One transfer per source at a time. Without the guard the poll cadence would start a second
-	 * upload of the same file every pass, each racing the last for the same offsets. */
-	private val boardUploadsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-	private fun kickBoardUpload(source: String, gatewayId: String) {
-		if (!boardUploadsInFlight.add(source)) return
-		repoScope.launch {
-			try {
-				client?.uploadBlob(File(source), gatewayId)
-			} catch (e: Exception) {
-				e.rethrowIfCancellation()
-				DebugLog.log("Board", "attachment upload failed: ${e.message?.take(80)}")
-			} finally {
-				boardUploadsInFlight.remove(source)
-			}
-		}
-	}
-
-	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the backlog. A
-	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
-	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
-	fun boardAssign(fromGateway: String, id: String, team: String?) {
-		val target = boardGatewayOf(team)
-		// The stored value is the bare local field, never the address the chat tab is keyed by; the
-		// optimistic row has to group the same way the gateway will store it.
-		val sessionId = team?.let { board.sessionKeyOf(it) }
-		if (sessionId == null || target == fromGateway) {
-			board.enqueue(ConsoleOp.BoardSetSession(id, sessionId), fromGateway)
-			return
-		}
-		val entries = board.mergedEntries(fromGateway)
-		val children = entries.groupBy { it.parent }
-		val subtree = mutableListOf<com.atelier_nyaarium.switchboard.proto.BoardEntry>()
-		// Visited set, like every other walk over this tree: a self-parent from bad data would
-		// otherwise grow the list forever on the main thread.
-		val seen = mutableSetOf<String>()
-		val stack = ArrayDeque(listOf(id))
-		while (stack.isNotEmpty()) {
-			val cur = stack.removeLast()
-			if (!seen.add(cur)) continue
-			val e = entries.firstOrNull { it.id == cur } ?: continue
-			subtree.add(e.copy(sessionId = sessionId))
-			for (kid in children[cur] ?: emptyList()) stack.addLast(kid.id)
-		}
-		if (subtree.isEmpty()) return
-		// The moved root joins the destination at top level: its old parent stays behind.
-		subtree[0] = subtree[0].copy(parent = null)
-		// A moved picture lands under the SAME name in the destination's bucket, since the bucket is
-		// keyed by entry and the entry keeps its id across a move.
-		board.enqueueMove(subtree, fromGateway, target) { entryId, blobId ->
-			Attachments.boardFile(filesDir, entryId, blobId).absolutePath
-		}
-		// Pull anything this device never opened. The queued write retries until the bytes are here,
-		// rather than abandoning, because for a move a missing local file is normal.
-		for (entry in subtree) {
-			for (a in entry.attachments.orEmpty()) {
-				if (!Attachments.boardFile(filesDir, entry.id, a.blobId).isFile) kickBoardDownload(entry.id, a)
-			}
-		}
-	}
 
 	val terminalRefreshMs: Long get() = store.terminalRefreshMs
 
@@ -2525,7 +1497,9 @@ class ChatRepository(
 
 	/** Stage picked Uris under one cumulative admission budget. Each is streamed to disk, never
 	 * held whole, and the first refusal is reported rather than silently dropping the file. */
-	private fun admitPicked(uris: List<Uri>, bucket: String): Pair<List<OutgoingFile>, Admission.Refused?> {
+	// internal (not private): BoardOps.boardSetAttachmentsNow admits a board entry's newly picked
+	// files through this same budget.
+	internal fun admitPicked(uris: List<Uri>, bucket: String): Pair<List<OutgoingFile>, Admission.Refused?> {
 		val staged = mutableListOf<OutgoingFile>()
 		val dir = File(Attachments.root(filesDir), bucket)
 		var running = 0L
@@ -2697,7 +1671,7 @@ class ChatRepository(
 					launch { runCatching { board.drain(client()) } }
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
-					resumeBoardUploads()
+					boardOps.resumeBoardUploads()
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
@@ -2835,7 +1809,7 @@ class ChatRepository(
 						val scope = pollScope
 						// Pre-generate and auto-play are independent: enter the launch
 						// path when either is active for this followed thread.
-						val autoTier = autoPlayTier(sttsAutoPlay)
+						val autoTier = playback.autoPlayTier(sttsAutoPlay)
 						val eligible =
 							scope != null && lastAgent != null && sttsReady() && followed && (sttsAutoGen || autoTier != null)
 						// EVERY agent message, in arrival order, addressed by the thread it actually
@@ -2869,14 +1843,14 @@ class ChatRepository(
 								// timeouts, so a failed or slow synth still falls through and
 								// the notification fires. The rest of the burst warms as the
 								// queue reaches it.
-								if (sttsAutoGen) preloadMessage(warm.first, warm.second)
+								if (sttsAutoGen) playback.preloadMessage(warm.first, warm.second)
 								onInbound?.invoke(t, ms)
 								// Hands-free: queue every arriving message in order. The queue
 								// speaks the first immediately and the rest as each terminal
 								// lands, so a burst is heard whole instead of only its last.
 								if (autoTier != null) {
 									for ((msg, owner) in queueable) {
-									enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
+									playback.enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
 								}
 								}
 							}
@@ -2966,7 +1940,7 @@ class ChatRepository(
 	suspend fun reconcilePending() = withContext(Dispatchers.IO) {
 		// Board attachment transfers are stranded the same way and recover the same way: the queued
 		// action survived, but the coroutine carrying its bytes did not.
-		resumeBoardUploads()
+		boardOps.resumeBoardUploads()
 		// Unlike forgottenUntil's time-based self-expiry, a reconciled key's liveness is tied to
 		// its message's own status: once a row leaves "pending" it can never be looked at again
 		// (the loop below skips non-pending rows outright), so retaining only currently-pending
@@ -3055,7 +2029,7 @@ class ChatRepository(
 		if (board.boardIsKnown) {
 			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep)
 		} else {
-			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep + existingBoardBuckets())
+			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep + boardOps.existingBoardBuckets())
 		}
 		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
 		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
@@ -3157,7 +2131,7 @@ class ChatRepository(
 		_state.update { it.copy(openTabs = it.openTabs - key, closedTeams = it.closedTeams + key) }
 		// Stop speaking a thread the user just closed, but KEEP its cache: a close is reopenable and
 		// the audio was already paid for. Only `forget` deletes.
-		repoScope.launch { dropQueuedFor(key) }
+		repoScope.launch { playback.dropQueuedFor(key) }
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
@@ -3575,7 +2549,7 @@ class ChatRepository(
 		// queue no longer points at it, so the stop's own terminal cannot advance into an entry whose
 		// audio `purge` is about to delete.
 		repoScope.launch {
-			dropQueuedFor(key)
+			playback.dropQueuedFor(key)
 			stts.purge(key)
 		}
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
@@ -3806,7 +2780,8 @@ class ChatRepository(
 
 		/** Fetches after which a board attachment tile stops asking and says so. A picture whose bytes
 		 * are genuinely gone must not re-request on every open forever. */
-		private const val BOARD_FETCH_GIVE_UP = 3
+		// internal (not private): BoardOps.boardAttachmentState / kickBoardDownload read this bound.
+		internal const val BOARD_FETCH_GIVE_UP = 3
 
 		// A scheduled send's own bounded failure recovery: reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire

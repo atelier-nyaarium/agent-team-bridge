@@ -676,7 +676,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		enabled = current != null,
 		onClick = hapticClick {
 			sampleError = null
-			repo.playSttsSample()
+			repo.playback.playSttsSample()
 		},
 	) {
 		Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))

@@ -70,12 +70,12 @@ fun BoardScreen(
 	modifier: Modifier = Modifier,
 ) {
 	// Opening the tab refreshes every non-route Gateway's column (the route one rides the plane).
-	LaunchedEffect(Unit) { repo.refreshBoard() }
+	LaunchedEffect(Unit) { repo.boardOps.refreshBoard() }
 
 	// The revision read is what re-derives rows when the cache, queue or a plane snapshot moves.
 	val revision by repo.board.revision
 	val rows = remember(revision, state.teams) {
-		val sessionGateway = { sessionKey: String -> repo.boardGatewayOfKey(sessionKey) }
+		val sessionGateway = { sessionKey: String -> repo.boardOps.boardGatewayOfKey(sessionKey) }
 		val sources = repo.board.sourceGatewayIds().map { gw -> BoardSource(gw, repo.board.mergedEntries(gw)) }
 		flattenBoard(sources, sessionGateway)
 	}
@@ -83,7 +83,7 @@ fun BoardScreen(
 	// A Gateway whose column could not be refreshed says HOW stale it is: a silently old column is
 	// otherwise indistinguishable from a current one.
 	val staleColumns = remember(revision) {
-		val route = repo.boardGatewayOf(null)
+		val route = repo.boardOps.boardGatewayOf(null)
 		repo.board.sourceGatewayIds()
 			.filter { it != route }
 			.mapNotNull { gw -> repo.board.lastSyncedAt(gw).takeIf { it > 0 }?.let { gw to it } }
@@ -113,7 +113,7 @@ fun BoardScreen(
 			onBody = { draftBody = it },
 			onCancel = { composing = false },
 			onSave = {
-				repo.boardCapture(draftTitle.trim(), draftBody.trim().takeIf { it.isNotEmpty() })
+				repo.boardOps.boardCapture(draftTitle.trim(), draftBody.trim().takeIf { it.isNotEmpty() })
 				draftTitle = ""
 				draftBody = ""
 				composing = false
@@ -251,7 +251,7 @@ fun BoardScreen(
 				Column(Modifier.padding(bottom = 24.dp)) {
 					if (entry.trashedAt != null) {
 						SheetAction("Restore") {
-							repo.boardSetTrashed(gw, entry.id, false)
+							repo.boardOps.boardSetTrashed(gw, entry.id, false)
 							sheet = null
 						}
 					} else {
@@ -259,18 +259,18 @@ fun BoardScreen(
 						for (state2 in listOf("open", "in_progress", "paused", "done", "cancelled")) {
 							if (state2 == entry.state) continue
 							SheetAction("Mark ${stateLabel(state2)}") {
-								repo.boardSetState(gw, entry.id, state2)
+								repo.boardOps.boardSetState(gw, entry.id, state2)
 								sheet = null
 							}
 						}
 						if (entry.sessionId != null) {
 							SheetAction("Back to the backlog") {
-								repo.boardAssign(gw, entry.id, null)
+								repo.boardOps.boardAssign(gw, entry.id, null)
 								sheet = null
 							}
 						}
 						SheetAction("Trash") {
-							repo.boardSetTrashed(gw, entry.id, true)
+							repo.boardOps.boardSetTrashed(gw, entry.id, true)
 							sheet = null
 						}
 					}
@@ -287,9 +287,9 @@ fun BoardScreen(
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 						modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
 					)
-					for (team in repo.boardAssignTargets()) {
+					for (team in repo.boardOps.boardAssignTargets()) {
 						SheetAction(state.label(team.name)) {
-							repo.boardAssign(open.row.gatewayId, entry.id, team.name)
+							repo.boardOps.boardAssign(open.row.gatewayId, entry.id, team.name)
 							sheet = null
 						}
 					}

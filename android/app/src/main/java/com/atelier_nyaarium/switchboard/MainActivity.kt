@@ -145,13 +145,13 @@ fun App(
 	// and go when it ends, and that is a settled-state question like every other one in this feature.
 	// Keyed on the revision so the failures scan runs when the queue changes rather than on every
 	// unrelated recomposition of the board.
-	val queueRevision by repo.queueRevision.collectAsState()
+	val queueRevision by repo.playback.queueRevision.collectAsState()
 	val queueState = remember(queueRevision) {
-		val (active, paused) = repo.transportState()
+		val (active, paused) = repo.playback.transportState()
 		when {
 			// The alert outranks the run: a message that was never spoken is the thing worth showing,
 			// and it is the state that outlives everything else.
-			repo.failedRows().isNotEmpty() -> QueueGlance.ALERT
+			repo.playback.failedRows().isNotEmpty() -> QueueGlance.ALERT
 			active && paused -> QueueGlance.PAUSED
 			active -> QueueGlance.SPEAKING
 			else -> QueueGlance.IDLE
@@ -252,10 +252,10 @@ fun App(
 		// A tap on an audible message stops it; otherwise it JOINS the queue at FULL rather than
 		// starting alongside it. A row that is already queued renders unpressable, so a tap can only
 		// ever arrive for one that is idle or playing.
-		if (repo.isMessagePlaying(team, at)) {
-			repo.stopMessage(team, at)
+		if (repo.playback.isMessagePlaying(team, at)) {
+			repo.playback.stopMessage(team, at)
 		} else {
-			repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false) }
+			repo.command { playback.enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false) }
 		}
 	}
 	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
@@ -296,7 +296,7 @@ fun App(
 		// twice, once blanking a row still playing and once stranding one that had ended.
 		val glyphs = repo.stts.addListener { event ->
 			val team = event.team
-			scope.launch { rendererPool.setPlayStates(team, repo.playStatesFor(team)) }
+			scope.launch { rendererPool.setPlayStates(team, repo.playback.playStatesFor(team)) }
 		}
 		onDispose { repo.stts.removeListener(glyphs) }
 	}
@@ -305,8 +305,8 @@ fun App(
 	// with no later event to correct it - the same pre-settle race the transport hit, answered the same
 	// way. Every open tab, since one terminal can start a message in a different thread.
 	LaunchedEffect(Unit) {
-		repo.queueRevision.collect {
-			for (team in repo.state.value.openTabs) rendererPool.setPlayStates(team, repo.playStatesFor(team))
+		repo.playback.queueRevision.collect {
+			for (team in repo.state.value.openTabs) rendererPool.setPlayStates(team, repo.playback.playStatesFor(team))
 		}
 	}
 	val dark = isSystemInDarkTheme()
@@ -598,11 +598,11 @@ fun App(
 			// This session's board slice for the strip. A non-route session's half is cadence-fresh
 			// through board_read, so entering its thread refreshes it (one of the three triggers).
 			val boardOn = pluginManager.isActive("taskboard")
-			val boardGateway = repo.boardGatewayOf(openTeam)
+			val boardGateway = repo.boardOps.boardGatewayOf(openTeam)
 			// Keyed on boardGateway too: opening from a notification composes the thread before the
 			// teams roster lands, and without that key the non-route read would never fire at all.
 			LaunchedEffect(openTeam, boardOn, boardGateway) {
-				if (boardOn && repo.isNonRouteSession(openTeam!!)) repo.refreshBoard()
+				if (boardOn && repo.boardOps.isNonRouteSession(openTeam!!)) repo.boardOps.refreshBoard()
 			}
 			val boardRevision by repo.board.revision
 			// boardGateway is a key here for the same reason the effect above takes it: it answers the
@@ -694,7 +694,7 @@ fun App(
 				undoneTasks = if (boardOn) repo.board.undoneCount(boardGateway, openTeam!!) else 0,
 				onForgetWithTasks = { cancelThem ->
 					val forgotten = openTeam!!
-					repo.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
+					repo.boardOps.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
 				// and the host machine's terminal is reached through the dedicated "host" target.
@@ -740,7 +740,7 @@ fun App(
 			val boardRevisionForCards by repo.board.revision
 			val boardLines = remember(boardRevisionForCards, state.teams, boardOnHere) {
 				if (!boardOnHere) emptyMap()
-				else state.teams.associate { it.name to repo.board.liveLine(repo.boardGatewayOf(it.name), it.name) }
+				else state.teams.associate { it.name to repo.board.liveLine(repo.boardOps.boardGatewayOf(it.name), it.name) }
 			}
 			// Alongside the lines rather than inside the card, on the same revision key: the list
 			// recomposes on every poll and a per-card flatten would rebuild every session's tree each time.
@@ -748,7 +748,7 @@ fun App(
 				if (!boardOnHere) emptyMap()
 				else state.teams.mapNotNull { team ->
 					val line = boardLines[team.name] ?: return@mapNotNull null
-					team.name to repo.board.cardBranch(repo.boardGatewayOf(team.name), team.name, line.currentId)
+					team.name to repo.board.cardBranch(repo.boardOps.boardGatewayOf(team.name), team.name, line.currentId)
 				}.toMap()
 			}
 			MainTabsScreen(
@@ -759,7 +759,7 @@ fun App(
 					repo.command { refreshTeams() }
 					// The board's non-route columns have no live plane, so Refresh is their only
 					// manual retry.
-					repo.refreshBoard()
+					repo.boardOps.refreshBoard()
 				},
 				onSettings = {
 					settingsRoute = SettingsRoute.HUB
@@ -811,14 +811,14 @@ fun App(
 						boardBranch = { team -> boardBranches[team.name] },
 						undoneFor = { team ->
 							if (pluginManager.isActive("taskboard")) {
-								repo.board.undoneCount(repo.boardGatewayOf(team.name), team.name)
+								repo.board.undoneCount(repo.boardOps.boardGatewayOf(team.name), team.name)
 							} else 0
 						},
 						onForgetWithTasks = { team, cancelThem ->
 							// Plugin state and notifications die only once the forget has landed: a
 							// session whose forget never reached its Gateway still exists, and it must
 							// not come back with its design cards already destroyed.
-							repo.forgetWithBoardDisposition(team, cancelThem) {
+							repo.boardOps.forgetWithBoardDisposition(team, cancelThem) {
 								pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
 									it.onForget(context, team)
 								}

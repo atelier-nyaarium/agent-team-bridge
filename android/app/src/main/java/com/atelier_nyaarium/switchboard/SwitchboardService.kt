@@ -211,15 +211,15 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		repo.onScheduledSendFailed = { team, opId -> notifyScheduledSendFailed(repo, team, opId) }
-		repo.chimeSource = { resolveChime() }
+		repo.playback.chimeSource = { resolveChime() }
 		// Transport surfaces send commands and show state; they never hold state of their own, so the
 		// lockscreen and the in-thread row cannot disagree about what is playing.
 		transport = SttsTransport(
 			this,
 			CHANNEL_STATUS,
-			onPlay = { repo.command { resumePlayback() } },
-			onPause = { repo.command { pausePlayback() } },
-			onSkip = { repo.command { skipPlayback() } },
+			onPlay = { repo.command { playback.resumePlayback() } },
+			onPause = { repo.command { playback.pausePlayback() } },
+			onSkip = { repo.command { playback.skipPlayback() } },
 		)
 		// Driven by the repository's settled-state hook rather than raw playback events: an event fires
 		// before the queue has been advanced for it, so at the last terminal a transport built from it
@@ -232,10 +232,14 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			// act. The failures themselves stay - they are still in the list and still in the shade,
 			// and there is deliberately no gesture that discards several of them at once.
 			onSwipeAway = {
-				if (repo.transportState().first) repo.command { skipPlayback() } else mainHandler.post { bubble?.dismiss() }
+				if (repo.playback.transportState().first) {
+					repo.command { playback.skipPlayback() }
+				} else {
+					mainHandler.post { bubble?.dismiss() }
+				}
 			},
 		)
-		repo.onTransportChanged = { publishTransport() }
+		repo.playback.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
 		repo.scheduledSendScheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
@@ -298,9 +302,9 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private val focus by lazy {
 		SpeechFocus(
 			this,
-			alreadyPaused = { Repo.get(this).transportState().second },
-			onPause = { Repo.get(this).command { pausePlayback() } },
-			onResume = { Repo.get(this).command { resumePlayback() } },
+			alreadyPaused = { Repo.get(this).playback.transportState().second },
+			onPause = { Repo.get(this).command { playback.pausePlayback() } },
+			onResume = { Repo.get(this).command { playback.resumePlayback() } },
 		)
 	}
 
@@ -308,7 +312,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	 * exactly when what a transport should show has changed. */
 	private fun publishTransport() {
 		val repo = Repo.get(this)
-		val (active, paused) = repo.transportState()
+		val (active, paused) = repo.playback.transportState()
 		// Held exactly while the app INTENDS to make sound, which is what makes a pause give the user's
 		// music back - holding through a pause defeats the transient gain the whole design rests on.
 		//
@@ -324,7 +328,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		}
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)
-		val counts = repo.queueCounts()
+		val counts = repo.playback.queueCounts()
 		// Three states, not two. A run gets the media notification; a finished run that dropped
 		// something gets an ALERT, because the transport's controls have nothing left to act on and an
 		// entry titled "Speaking" over silence is a lie with two dead buttons on it. The alert still
@@ -412,8 +416,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		val repo = Repo.get(this)
 		repo.onInbound = null
 		repo.onScheduledSendFailed = null
-		repo.chimeSource = null
-		repo.onTransportChanged = null
+		repo.playback.chimeSource = null
+		repo.playback.onTransportChanged = null
 		// Captured into a local first: the field is cleared below, and a lambda referencing the FIELD
 		// would find it null by the time main ran it, leaking the window.
 		focus.release()

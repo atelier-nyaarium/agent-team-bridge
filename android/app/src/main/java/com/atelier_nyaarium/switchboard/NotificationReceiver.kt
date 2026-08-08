@@ -24,9 +24,9 @@ class NotificationReceiver : BroadcastReceiver() {
 		// be handled before the extras below are required.
 		val repo = Repo.get(context)
 		when (intent.action) {
-			SttsTransport.ACTION_PLAY -> return repo.command { resumePlayback() }
-			SttsTransport.ACTION_PAUSE -> return repo.command { pausePlayback() }
-			SttsTransport.ACTION_SKIP -> return repo.command { skipPlayback() }
+			SttsTransport.ACTION_PLAY -> return repo.command { playback.resumePlayback() }
+			SttsTransport.ACTION_PAUSE -> return repo.command { playback.pausePlayback() }
+			SttsTransport.ACTION_SKIP -> return repo.command { playback.skipPlayback() }
 		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
@@ -36,9 +36,13 @@ class NotificationReceiver : BroadcastReceiver() {
 			// is invisible to the row, the bubble and the lockscreen, all three of which report what the
 			// queue is doing. It also stops a notification tap racing a run already in progress.
 			ACTION_PLAY_FULL ->
-				if (at > 0) repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false, requireFollowed = false) }
+				if (at > 0) {
+					repo.command { playback.enqueueForPlay(team, at, SttsPlayer.Tier.FULL, announceRun = false, requireFollowed = false) }
+				}
 			ACTION_PLAY_SUMMARY ->
-				if (at > 0) repo.command { enqueueForPlay(team, at, SttsPlayer.Tier.SUMMARY, announceRun = false, requireFollowed = false) }
+				if (at > 0) {
+					repo.command { playback.enqueueForPlay(team, at, SttsPlayer.Tier.SUMMARY, announceRun = false, requireFollowed = false) }
+				}
 		}
 	}
 

@@ -89,8 +89,10 @@ fun BoardEditScreen(
 					// Filled, like the form's own Save: a bare word in a bar reads as a title, not a control.
 					Button(
 						onClick = {
-							if (title.isNotBlank() && title != baseline.first) repo.boardSetTitle(gatewayId, entryId, title.trim())
-							if (body != baseline.second) repo.boardSetBody(gatewayId, entryId, body.ifBlank { null })
+							if (title.isNotBlank() && title != baseline.first) {
+								repo.boardOps.boardSetTitle(gatewayId, entryId, title.trim())
+							}
+							if (body != baseline.second) repo.boardOps.boardSetBody(gatewayId, entryId, body.ifBlank { null })
 							onClose()
 						},
 						contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
@@ -126,7 +128,7 @@ fun BoardEditScreen(
 			Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
 				for (s in STATES) {
 					AssistChip(
-						onClick = { repo.boardSetState(gatewayId, entryId, s) },
+						onClick = { repo.boardOps.boardSetState(gatewayId, entryId, s) },
 						label = { Text(stateChipLabel(s), style = MaterialTheme.typography.labelSmall) },
 						colors = if (s == entry.state) {
 							AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
@@ -145,9 +147,11 @@ fun BoardEditScreen(
 				attachments = entry.attachments ?: emptyList(),
 				repo = repo,
 				entryId = entryId,
-				onPick = { picked -> repo.boardSetAttachments(gatewayId, entryId, entry.attachments ?: emptyList(), picked) },
+				onPick = { picked ->
+					repo.boardOps.boardSetAttachments(gatewayId, entryId, entry.attachments ?: emptyList(), picked)
+				},
 				onRemove = { gone ->
-					repo.boardSetAttachments(
+					repo.boardOps.boardSetAttachments(
 						gatewayId,
 						entryId,
 						(entry.attachments ?: emptyList()).filter { it.blobId != gone.blobId },
@@ -193,7 +197,7 @@ fun BoardEditScreen(
 					modifier = Modifier
 						.fillMaxWidth()
 						.clickable {
-							repo.boardSetTrashed(gatewayId, entryId, entry.trashedAt == null)
+							repo.boardOps.boardSetTrashed(gatewayId, entryId, entry.trashedAt == null)
 							onClose()
 						}
 						.padding(horizontal = 14.dp, vertical = 13.dp),
