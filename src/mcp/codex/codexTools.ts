@@ -39,6 +39,15 @@ message to start them together.
 model is optional and belongs here only, since it is fixed for the thread's life.
 Leave it off unless you have a reason; an unoffered one is refused, not swapped.
 
+cwd is where the thread runs, and it is what the thread may WRITE: that directory
+and the temp dir, nothing else on the machine. It defaults to your own session's
+project, so an agent asked to work on a sibling project can read it and cannot
+change it. Set cwd to that project when you mean the agent to edit it, and prefer
+that over having it stage edits somewhere else, which costs it the ability to run
+the project's own tests on its work. Fixed for the thread's life, like model, and
+host sessions only. A path that does not resolve to a directory falls back to your
+home directory rather than failing, so check the agent landed where you meant.
+
 The agent belongs to this session, not to its caller. If the caller dies,
 codexListAgents still returns it with its full history.
 `.trim();
@@ -140,7 +149,7 @@ export function registerCodexTools(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"codexStartAgent",
 		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
-		async (args: { prompt: string; model?: string }) => post(codexRequestBody("start", args)),
+		async (args: { prompt: string; model?: string; cwd?: string }) => post(codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(

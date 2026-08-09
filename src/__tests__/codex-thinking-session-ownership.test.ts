@@ -86,6 +86,21 @@ describe("Codex session ownership and target resolution", () => {
 		});
 	});
 
+	it("lets a caller's cwd override the session's own workdir for a host agent", () => {
+		const { sessionStore, service } = setup();
+		const record = sessionStore.mint({ spawn: "host", sessionLabel: "Work", workdirPath: "/projects/chosen" });
+
+		expect(service.resolveExecutionTarget(record, "/projects/elsewhere")).toEqual({
+			kind: "host",
+			workdirHint: "/projects/elsewhere",
+		});
+		// Absent means the session's own, never a guess: an agent with no cwd lands where its session is.
+		expect(service.resolveExecutionTarget(record)).toEqual({
+			kind: "host",
+			workdirHint: "/projects/chosen",
+		});
+	});
+
 	it("looks up agents and operations only inside the confirmed owner's catalog", () => {
 		const { sessionStore, service, setAgents } = setup();
 		const mine = confirmManaged(sessionStore, "recipe-app");

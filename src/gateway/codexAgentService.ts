@@ -98,10 +98,12 @@ export class CodexAgentService {
 		return this.sessionStore.listCodexAgents(owner);
 	}
 
-	resolveExecutionTarget(owner: SessionRecord): CodexExecutionTarget | null {
+	/** `cwd` overrides the session's own workdir for a host target. The daemon still resolves it, so an
+	 * unusable path lands in home rather than anywhere a caller named. */
+	resolveExecutionTarget(owner: SessionRecord, cwd?: string): CodexExecutionTarget | null {
 		let target: CodexExecutionTarget;
 		if (owner.spawn === "host") {
-			target = { kind: "host", workdirHint: this.sessionStore.hostWorkdirHint(owner) };
+			target = { kind: "host", workdirHint: cwd ?? this.sessionStore.hostWorkdirHint(owner) };
 		} else {
 			const hostProjectPath = this.offlineCatalog.get(owner.spawn);
 			if (!hostProjectPath) return null;

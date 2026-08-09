@@ -224,7 +224,12 @@ export class CodexRoute {
 		// Derived, not minted, so an HTTP retry of this same invocation names the same agent and
 		// replays instead of colliding.
 		const agentId = codexAgentIdForOperation(request.operationId);
-		const target = this.deps.service.resolveExecutionTarget(owner);
+		// Refused rather than ignored: a devcontainer thread runs at its project root, and accepting a
+		// path this side would silently drop would tell the caller its agent is somewhere it is not.
+		if (request.cwd !== undefined && owner.spawn !== "host") {
+			throw new CodexTransitionError("invalid_input", "cwd applies to host sessions only");
+		}
+		const target = this.deps.service.resolveExecutionTarget(owner, request.cwd);
 		if (!target) return unavailable(agentId, TARGET_UNAVAILABLE, "no trusted execution target for this session");
 
 		const committed = this.deps.service.beginStart(req, {

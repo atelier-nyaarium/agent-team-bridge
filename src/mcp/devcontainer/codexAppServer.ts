@@ -289,8 +289,13 @@ export class CodexAppServerClient {
 		return CodexAppServerTurnStartResultSchema.parse(result).turn.id;
 	}
 
+	/** The wire field is `expectedTurnId`; `turn/interrupt` names the same value `turnId`. */
 	async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
-		await this.transport.request("turn/steer", { threadId, turnId, input: [{ type: "text", text }] });
+		await this.transport.request("turn/steer", {
+			threadId,
+			expectedTurnId: turnId,
+			input: [{ type: "text", text }],
+		});
 	}
 
 	async interruptTurn(threadId: string, turnId: string): Promise<void> {

@@ -266,6 +266,9 @@ export const CodexStartAgentInputSchema = z
 		 * Server's own `model/list` at the point of use, so an unoffered one is refused rather than
 		 * quietly falling back to a tier nobody asked for. */
 		model: z.string().min(1).max(128).optional(),
+		/** Host-only, and on start alone: a thread's working directory is fixed for its life. Resolved
+		 * by the daemon's `resolveHostWorkdir`, which falls back to home rather than trusting a path. */
+		cwd: z.string().min(1).max(512).optional(),
 	})
 	.strict();
 
