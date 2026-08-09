@@ -88,6 +88,45 @@ The first is the split this pass should be least happy with. Three of round 3's 
 real subject and EnrollOps is what was left over, so the enrollment ceremony's steps ended up spread
 across two files with nothing holding the sequence.
 
+## Question 4 - What does ChatRepository become?
+
+Q: Extract the poll loop and drain, repair the delegate seams first, add read-side projection only,
+or leave it?
+A: Extract the poll loop and drain as its own object.
+
+Reason: everything else in the file is downstream of the drain, so anything cut before it is written
+against a shape the drain still owns. It is also the one cut that makes a real invariant explicit
+rather than emergent: inbound subscribers inherit exactly-once BECAUSE they fire inside the drain
+before the cursor commits, and today that holds only because of where the code sits. 372 lines, sole
+writer of all four plane cursors, sole reader of both subscriber lists, and 15 of the 17 method
+groups are reachable only through it or a field it writes.
+
+Splitting `_state` was measured and rejected: 25 of its 30 fields form one cluster that must stay
+together, and the check revised that UP from 22 on a second pass after finding inline `state.value.X`
+reads its first scan had missed. It would move 19 percent of write sites while giving up the
+atomicity boundary that 24 multi-field writes and 30-plus multi-field reads depend on. Two tears it
+would introduce: the presence chip contradicting the waking notice in one viewport, and the composer
+(hidden while a scheduled send exists, but fed from drafts) leaving restored text on screen nowhere.
+
+Repairing the delegate seams is the rival worth remembering rather than dismissing. The four prior
+extractions moved code but not coupling: consumers reach 170 endpoints through 11 pass-through
+handles, and three live hazards came out of those splits (a memo keyed on `board.revision` querying
+`boardOps`, a read-modify-write across both into an absolute setter, and `awaitSchedulerWired`, a
+spin-wait bridging an ordering gap the Service cannot close). Fold these into the drain extraction's
+lap rather than losing them.
+
+### A third defect, not a refactor (FIXED, f950c8e)
+
+`reconcileTeamNotifications` is keyed on `state.threads.keys`, so a showing notification whose thread
+is gone can never be visited again. The forget path was already covered by call sites cancelling
+directly, and the doc naming that hazard is at `cancelTeamNotification`. `clearAll` was not: it
+replaces the whole state with a fresh `ChatState`, cancels the alarm, purges TTS and attachments, and
+leaves every showing message notification stranded permanently. Reachable from the delete-domain,
+leave and revoke flows, which means message previews outlive a security-motivated wipe.
+
+Fixed at the class rather than the call site: team ids occupy their own disjoint range, so the
+reconciler now sweeps any showing id in that range with no live thread behind it.
+
 ## A deferred entry's premise is a claim, not a record
 
 Four deferred entries proposing cuts to the gateway route layer were checked against the code rather
