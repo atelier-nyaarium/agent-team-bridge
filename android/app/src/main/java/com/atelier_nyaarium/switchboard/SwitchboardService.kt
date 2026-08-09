@@ -656,8 +656,10 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		if (active.isEmpty()) return
 		val state = repo.state.value
 		val nmc = NotificationManagerCompat.from(this)
+		val liveIds = HashSet<Int>(state.threads.size)
 		for (team in state.threads.keys) {
 			val id = teamNotificationId(team)
+			liveIds += id
 			if (id !in active) continue
 			// A team muted via Close Tab must not have its already-showing notification silently
 			// updated with new content - shouldNotifyBurst already refuses to POST for a muted team;
@@ -666,6 +668,14 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 				nmc.cancel(id)
 			} else {
 				teamNotificationBuilder(repo, state, team)?.let { nmc.notify(id, it.setOnlyAlertOnce(true).build()) }
+			}
+		}
+		// A showing entry whose thread is gone: the loop above is keyed on live threads, so nothing
+		// else can reach it. Identifiable because team ids occupy their own disjoint range, and safe
+		// because a thread's absence is the same fact the loop cancels on when unread reaches 0.
+		for (id in active) {
+			if (id >= TEAM_ID_RANGE_START && id < TEAM_ID_RANGE_START + TEAM_ID_RANGE_SIZE && id !in liveIds) {
+				nmc.cancel(id)
 			}
 		}
 	}
@@ -721,10 +731,9 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			}
 		}
 
-		/** Dismiss a team's message notification. Forgetting a team drops its thread from
-		 * `state.threads` entirely, so [reconcileTeamNotifications]'s own reconcile loop (keyed on
-		 * that map) can never visit it again to cancel a still-showing entry - the forget call site
-		 * must do it directly instead. */
+		/** Dismiss a team's message notification, immediately. Forgetting drops the thread from
+		 * `state.threads`, and [reconcileTeamNotifications] sweeps such orphans, but only on its next
+		 * emission - a forget call site calls this so the entry goes at the moment of the gesture. */
 		fun cancelTeamNotification(context: Context, team: String) {
 			NotificationManagerCompat.from(context).cancel(teamNotificationId(team))
 		}
