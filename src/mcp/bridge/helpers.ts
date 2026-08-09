@@ -86,10 +86,6 @@ export function bridgeProjectName(): string {
 	return PROJECT_NAME;
 }
 
-export function bridgeAgentType(): string {
-	return AGENT_TYPE;
-}
-
 export function bridgeConversationId(): string {
 	return CONVERSATION_ID;
 }

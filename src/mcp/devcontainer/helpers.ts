@@ -1,17 +1,10 @@
-import { exec, execSync, spawn } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-export interface ExecInContainerParams {
-	projectPath: string;
-	command: string[];
-	timeoutMs?: number;
-	stdin?: string;
-}
 
 export interface ContainerUpResult {
 	wasAlreadyRunning: boolean;
@@ -240,39 +233,5 @@ export function ensureContainerUpAsync(projectPath: string): Promise<ContainerUp
 				);
 			},
 		);
-	});
-}
-
-// Container execution
-
-export function execInContainer({
-	projectPath,
-	command,
-	timeoutMs = 120000,
-	stdin,
-}: ExecInContainerParams): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const proc = spawn(devcontainerBin(), ["exec", "--workspace-folder", projectPath, ...command], {
-			timeout: timeoutMs,
-		});
-
-		let stdout = "";
-		let stderr = "";
-		proc.stdout.on("data", (d: Buffer) => (stdout += d));
-		proc.stderr.on("data", (d: Buffer) => (stderr += d));
-		proc.on("error", reject);
-		proc.on("close", (code) => {
-			if (code === 0) {
-				resolve(stdout.trim());
-			} else {
-				const msg = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n") || "(no output)";
-				reject(new Error(`Exit ${code}: ${msg}`));
-			}
-		});
-
-		if (stdin != null) {
-			proc.stdin.write(stdin);
-			proc.stdin.end();
-		}
 	});
 }

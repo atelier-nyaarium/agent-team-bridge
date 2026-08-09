@@ -31,8 +31,6 @@ export function die(msg: string): never {
 ////////////////////////////////
 //  OS-aware host primitives
 
-export const IS_WINDOWS = process.platform === "win32";
-
 /** The LAN-facing IPv4 of the interface that reaches the internet: the source address the OS picks
  * when routing to a public IP, so a Docker-bridge or VPN address never wins the phone's pinned-TLS
  * dial. Cross-platform in place of `ip route get` / `hostname -I`: a connected UDP socket binds the
@@ -91,11 +89,6 @@ export function k(...args: string[]) {
 /** kubectl with `stdin` piped in (e.g. `apply -f -`). */
 export function kStdin(stdin: string, ...args: string[]) {
 	return $`docker exec -i ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} -n ${NS} ${args} < ${Buffer.from(stdin)}`;
-}
-
-/** docker exec into the gateway container (printenv, rm, ...). */
-export function dx(...args: string[]) {
-	return $`docker exec ${CONTAINER} ${args}`;
 }
 
 /** docker compose in the current project. */
