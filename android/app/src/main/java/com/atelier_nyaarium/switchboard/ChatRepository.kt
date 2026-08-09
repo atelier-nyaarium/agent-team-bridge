@@ -2,19 +2,9 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ContentResolver
 import android.net.Uri
-import android.provider.OpenableColumns
-import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
-import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
-import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
-import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
-import com.atelier_nyaarium.switchboard.proto.EnrollOp
-import com.atelier_nyaarium.switchboard.proto.EnrollParty
-import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.Address
-import com.atelier_nyaarium.switchboard.proto.BoardAttachment
-import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
@@ -23,12 +13,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
-import com.atelier_nyaarium.switchboard.proto.SasCrypto
-import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
-import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionKey
-import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
-import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.Protocol
@@ -37,10 +22,6 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.time.ZoneId
 import java.util.UUID
-import kotlinx.serialization.json.JsonObject
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CancellationException
@@ -65,7 +46,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
 
 /** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
@@ -1523,12 +1503,6 @@ class ChatRepository(
 		}
 		return staged to null
 	}
-
-	private fun queryName(uri: Uri): String? = runCatching {
-		contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-			if (c.moveToFirst()) c.getString(0) else null
-		}
-	}.getOrNull()
 
 	/** Runs [block] (the poll call), but abandons it early - returning null - if a focus transition
 	 * (declareFocus) or a manual refresh (refreshTeams) interrupts it mid-hold. The caller simply
