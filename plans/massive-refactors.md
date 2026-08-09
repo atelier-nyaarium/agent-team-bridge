@@ -88,6 +88,42 @@ The first is the split this pass should be least happy with. Three of round 3's 
 real subject and EnrollOps is what was left over, so the enrollment ceremony's steps ended up spread
 across two files with nothing holding the sequence.
 
+## A deferred entry's premise is a claim, not a record
+
+Four deferred entries proposing cuts to the gateway route layer were checked against the code rather
+than taken at face value. Two were substantially wrong, one was half wrong, one is still unverified.
+
+- "Model a BoardRoute on CodexRoute, the same shape already built once." codexRoute.ts was created
+  greenfield and never touched routes.ts, so it is evidence that a new subsystem deserves its own
+  file. CodexRoute also holds no mutable state; its only field is its deps, and its own doc gives a
+  fan-in reason. The state a BoardRoute would encapsulate is the reply map now living in
+  RoutesCarryOver, so the class buys nothing.
+- "Move the wake service into wake.ts, which shrinks the route table." tryWakeTeam and doWakeTeam are
+  in index.ts. routes.ts only calls the injected one. The claim that the orchestration needs about
+  what decideWakeCreate takes was wrong by roughly ten collaborators plus a mutable in-flight map.
+- "resolveSealTarget captures nothing." The function is sealTargetFor and captures two closure
+  values. The correction argues FOR extracting it as a pure function: both captured deps are
+  federation-activation-dependent, so fields on an object would go stale at activation.
+- The fourth (BridgeHandshakeCoordinator) has had no equivalent check, and its body now says so.
+
+These were written from memory at the end of long laps and read as confident. Half were wrong about
+facts one `git show` would have settled. An entry's premise gets re-checked before it is planned.
+
+### What routes.ts is, measured
+
+createRoutes returns 18 members and 11 are HTTP routes; the other 7 are called by consoleHandler,
+crossDomainPresence and the blob route. Ten of the 11 routes hold no cross-call state. What the
+members share is a dependency spine (address minters, impersonation refusal, the mailbox trio, the
+seal-to-relay stack), which per-route classes would cut across, each re-declaring a subset of it.
+
+The extraction that paid is PresenceFacade: a concern became an object and `teams()` collapsed to one
+call plus two side effects it deliberately does not own. The two members here that genuinely want to
+be objects are not routes at all: the blob fetch single-flight coalescer and the presence burst cache
+with its invalidator.
+
+Six deps are declared, destructured and never read: codexAgentService, isWakeInFlight,
+offlineCatalog, knownTeamPaths, displayName, isAdminDomain.
+
 ### A second defect, not a refactor (FIXED, 991ba91)
 
 The Users screen's "Add gateway" was dead. It set `showAddGateway` without clearing `showUsers`, and

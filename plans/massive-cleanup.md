@@ -242,3 +242,44 @@ the function re-canonicalized its input, which it does not. Dropped in lap 1.
 
 Rule: when a split surfaces a parameter nothing reads, drop it in the same lap. The compiler finds
 every call site, and leaving it is a signature that lies.
+
+## Completed laps
+
+The board entries these came from were trashed once the pass closed. The commits are the durable
+record; this table indexes them, and the third column keeps what a commit message cannot.
+
+| # | What | Commit | Worth remembering |
+|---|------|--------|-------------------|
+| 01 | ChatRepository types out, 6306 to 5335 | d5b79cd | Also dropped a parameter no body read, across 25 call sites |
+| 02 | MainActivity round 1, 4907 to 1124 | d7436ab | 152 dead imports, and nothing in the toolchain caught them |
+| 03 | routes.ts schemas out | a4fb707 | Suite 2498 lines to 7 files, 117 = 117 by running HEAD standalone |
+| 04 | consoleHandler types out | be6daee | Dispatcher body left byte-identical on purpose |
+| 05 | WS types out | 8fd4d1f | Both remaining closures declared honest remainders |
+| 06 | schemas.ts split by wire domain | b570694 | Proof was a byte-identical regenerated Protocol.kt |
+| 07 | codex-thinking split 8 ways | 83bcc45 | Verifier caught 4 internals leaked into the public surface |
+| 08 | codexAgentService types and reducers | a680a8c | Verifier caught 10 public types silently dropped |
+| 09 | ConsoleClient types out | a79cc67 | 1120-line class kept whole, and named as a remainder |
+| 10 | boardStore authority and notices | 4394924 | Refusal residue test widened to a whole-src sweep |
+| 11 | Federation suites split 17 ways | 8c96df2 | Per-suite runtime baselines, not static counts |
+| 12 | setup.ts into 7 concern modules | 6e85e50 | Every menu branch smoke-checked non-destructively |
+| 13 | TerminalView split 5 ways | ffeb168 | Splitter caught its own tooling corrupting a glyph |
+| 14 | Playback suite split 5 ways | 0ac0915 | SttsPlayer proven single-class, tear-apart refused |
+| 15 | Handshake split 4 ways | a618d6c | crossDomainPresence left at 600 with the reasoning stated |
+| 16 | DesignerDock split 4 ways | fded411 | All 7 widenings proven cross-file |
+| 17 | Daemon pair split | f22699e | hostResolve.ts was already a unit its own test treated as one |
+| 18 | Session store trimmed | 7bd4eb7 | device-mailbox justified as leave-as-is, with precedent |
+| 19 | evie BridgeServer | PR 1429 | Cross-repo, gated in the sibling's own devcontainer |
+| 20 | KubeSecretStore split 7 ways | PR 1430 | 14 = 14 exports |
+| 21 | federation-lifecycle, a SYNCED LEAF | a16f10d, PR 1431 | 7 leaves identical in both repos, both CI lists extended |
+| 22 | reply-tool suite and the final test sweep | 8482fbd | Adversarial pass defeated 2 of my cuts with real mutations |
+| 23 | ChatRepository round 2, persistence | dbaca68, 9b75408 | Red team turned a class doc from a lie into the truth |
+| 24 | ChatRepository round 3, federation | 067cd1b, 63a8a3f | The widening was a real hazard, so it gained a residue test |
+| 25 | ChatRepository round 4, playback and board | d219b75, 48af275 | A construction-order constraint had migrated silently |
+| 26 | SessionsScreen split six ways | b84679d | Three misplacements taken only on call-site evidence |
+| 27 | SettingsScreen split four ways | a868bc0, 2d9ae3a | The mover's "too entangled" claim was traced and was false |
+| 29 | MainActivity round 2 | d67b434 | Routing refused with a count, not a feeling |
+| 33 | Incident-history comment sweep | 1e1a108, f095d36 | 64 rewritten, 2 correctly refused as test-name strings |
+
+Laps 28 and 30 through 32 folded into their neighbours and never had their own board entries.
+
+The redesign pass that follows is scoped in `massive-refactors.md`.
