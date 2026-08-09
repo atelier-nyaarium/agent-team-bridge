@@ -32,10 +32,9 @@ Reuse an agent rather than starting one per attempt. A thread that already
 holds its own last three failures fixes the fourth; a fresh one relearns the
 problem every time. Follow up with codexMessageAgent.
 
-awaitResponse (default true) waits up to about four minutes. A longer turn is not
-lost: it keeps running, and codexAwaitAgent picks it up. Pass false to return on
-durable acceptance and collect later the same way - and always pass false when
-you are running several at once.
+Waits for the turn. A turn outliving the wait budget keeps running; your harness
+backgrounds the call and returns the result when it lands. Issue several in one
+message to start them together.
 
 model is optional and belongs here only, since it is fixed for the thread's life.
 Leave it off unless you have a reason; an unoffered one is refused, not swapped.
@@ -55,16 +54,15 @@ If a turn is still running the prompt STEERS it, joining the work in flight
 rather than queueing behind it. If the agent is idle it starts a new turn.
 Guardrails do not carry over implicitly; restate any that still apply.
 
-awaitResponse (default true) waits up to about four minutes; a longer turn keeps
-running and codexAwaitAgent picks it up.
+Waits for the turn. A turn outliving the wait budget keeps running; your harness
+backgrounds the call and returns the result when it lands.
 `.trim();
 
 const AWAIT_DESCRIPTION = `
 Wait for a Codex agent's current turn to finish and return its outcome.
 
-Use after a call made with awaitResponse false, or to pick up an agent whose
-earlier wait timed out. With nothing running it returns the latest settled
-state immediately.
+Use to pick up a turn reported as waitTimedOut. With nothing running it returns the
+latest settled state immediately.
 `.trim();
 
 const STOP_DESCRIPTION = `
@@ -102,7 +100,7 @@ function operationId(): string {
  * gateway's request schemas are strict. */
 export function codexRequestBody(
 	kind: "start" | "message" | "await" | "stop" | "list",
-	args: { agentId?: string; prompt?: string; awaitResponse?: boolean; model?: string } = {},
+	args: { agentId?: string; prompt?: string; model?: string } = {},
 ): Record<string, unknown> {
 	const mutating = kind === "start" || kind === "message" || kind === "stop";
 	return {
@@ -110,7 +108,6 @@ export function codexRequestBody(
 		...(mutating ? { operationId: operationId() } : {}),
 		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
 		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
-		...(kind === "start" || kind === "message" ? { awaitResponse: args.awaitResponse ?? true } : {}),
 		...(kind === "start" && args.model ? { model: args.model } : {}),
 	};
 }
@@ -143,15 +140,13 @@ export function registerCodexTools(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"codexStartAgent",
 		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
-		async (args: { prompt: string; awaitResponse?: boolean; model?: string }) =>
-			post(codexRequestBody("start", args)),
+		async (args: { prompt: string; model?: string }) => post(codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexMessageAgent",
 		{ title: "Codex Message Agent", description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
-		async (args: { agentId: string; prompt: string; awaitResponse?: boolean }) =>
-			post(codexRequestBody("message", args)),
+		async (args: { agentId: string; prompt: string }) => post(codexRequestBody("message", args)),
 	);
 
 	mcpServer.registerTool(

@@ -111,7 +111,6 @@ async function working(context: ReturnType<typeof setup>) {
 		kind: "start",
 		operationId: START,
 		prompt: "Audit",
-		awaitResponse: false,
 	});
 	context.relay.handleHostMessage(
 		receipt(context, 0, {
@@ -259,7 +258,6 @@ describe("Codex session isolation", () => {
 			kind: "start",
 			operationId: foreignOperation,
 			prompt: "Not yours",
-			awaitResponse: false,
 		});
 		const foreignAgentId = codexAgentIdForOperation(foreignOperation);
 
@@ -289,7 +287,6 @@ describe("Codex session isolation", () => {
 			kind: "start",
 			operationId: "123e4567-e89b-42d3-a456-4266141740fe",
 			prompt: "Not yours",
-			awaitResponse: false,
 		});
 
 		const mine = await (await context.route.handle(post(context.token), { kind: "list" })).json();
@@ -328,7 +325,6 @@ describe("Codex recovery", () => {
 			kind: "start",
 			operationId: START,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 		const accepted = receipt(context, 0, {
 			kind: "accepted",

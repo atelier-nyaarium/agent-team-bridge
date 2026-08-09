@@ -262,7 +262,6 @@ export const CodexAgentResultSchema = z
 export const CodexStartAgentInputSchema = z
 	.object({
 		prompt: CodexPromptSchema,
-		awaitResponse: z.boolean().optional().default(true),
 		/** Belongs on start alone: a model is fixed for a thread's life. Verified against the App
 		 * Server's own `model/list` at the point of use, so an unoffered one is refused rather than
 		 * quietly falling back to a tier nobody asked for. */
@@ -274,7 +273,6 @@ export const CodexMessageAgentInputSchema = z
 	.object({
 		agentId: CodexAgentIdSchema,
 		prompt: CodexPromptSchema,
-		awaitResponse: z.boolean().optional().default(true),
 	})
 	.strict();
 

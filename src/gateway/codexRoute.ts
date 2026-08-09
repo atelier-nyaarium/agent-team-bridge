@@ -93,14 +93,7 @@ function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexSt
  * satisfy an earlier waiter. Everything else is derived from the stored state, which is why a result
  * cannot claim an outcome the record does not hold.
  */
-function describeAgent(
-	agent: CodexPersistedAgent,
-	waitedTurnId: string | undefined,
-	/** True when the caller asked not to wait. A running turn is then a DELIVERY, not an expiry: the
-	 * envelope has `accepted` for exactly that, and calling it `waitTimedOut` tells a caller its
-	 * prompt ran out of time when it was in fact handed over successfully. */
-	declinedToWait = false,
-): CodexAgentResult {
+function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefined): CodexAgentResult {
 	// An agent whose state could not be confirmed says exactly that, whatever turns it happens to
 	// hold. Checked FIRST and for every branch: reporting a settled turn's answer while the record is
 	// in recovery hands the caller a previous prompt's response as though it answered this one.
@@ -134,7 +127,7 @@ function describeAgent(
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: "working",
-			observation: interrupting ? "interruptRequested" : declinedToWait ? "accepted" : "waitTimedOut",
+			observation: interrupting ? "interruptRequested" : "waitTimedOut",
 			turn: { id: turn.id, state: turn.state },
 			// An interrupt request reports the turn it is stopping, never how that turn was delivered:
 			// the delivery already happened and is no longer what the caller is being told about. The
@@ -251,7 +244,7 @@ export class CodexRoute {
 				model: request.model,
 			});
 		}
-		return this.settle(owner, agentId, request.operationId, request.awaitResponse);
+		return this.settle(owner, agentId, request.operationId);
 	}
 
 	private async message(
@@ -278,7 +271,7 @@ export class CodexRoute {
 				prompt: request.prompt,
 			});
 		}
-		return this.settle(owner, request.agentId, request.operationId, request.awaitResponse);
+		return this.settle(owner, request.agentId, request.operationId);
 	}
 
 	private async stop(
@@ -336,12 +329,7 @@ export class CodexRoute {
 	 * The turn is whatever the acceptance recorded, so a caller that did not wait still learns which
 	 * turn its prompt landed in, and one that did wait cannot be satisfied by a later turn.
 	 */
-	private async settle(
-		owner: SessionRecord,
-		agentId: string,
-		operationId: string,
-		awaitResponse: boolean,
-	): Promise<CodexAgentResult> {
+	private async settle(owner: SessionRecord, agentId: string, operationId: string): Promise<CodexAgentResult> {
 		// ONE deadline for the whole call. Acceptance and the turn are two phases of a single wait, and
 		// giving each its own fresh budget let a documented nine-minute call block for eighteen.
 		const deadline = this.deadline();
@@ -381,7 +369,6 @@ export class CodexRoute {
 				},
 			});
 		}
-		if (!awaitResponse) return describeAgent(agent, turnId, true);
 		await this.waitForTurn(owner, agentId, turnId, deadline);
 		return describeAgent(this.current(owner, agentId) ?? agent, turnId);
 	}

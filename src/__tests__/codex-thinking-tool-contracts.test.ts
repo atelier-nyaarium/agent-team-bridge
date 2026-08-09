@@ -14,11 +14,8 @@ import {
 import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
 describe("Codex tool contracts", () => {
-	it("defaults waiting and rejects private or unknown tool fields", () => {
-		expect(CodexStartAgentInputSchema.parse({ prompt: "Review this" })).toEqual({
-			prompt: "Review this",
-			awaitResponse: true,
-		});
+	it("rejects private or unknown tool fields", () => {
+		expect(CodexStartAgentInputSchema.parse({ prompt: "Review this" })).toEqual({ prompt: "Review this" });
 		expect(CodexStartAgentInputSchema.safeParse({ prompt: "Review", operationId: OPERATION_ID }).success).toBe(
 			false,
 		);
@@ -26,8 +23,8 @@ describe("Codex tool contracts", () => {
 	});
 
 	it.each([
-		{ kind: "start", operationId: OPERATION_ID, prompt: "Review", awaitResponse: true },
-		{ kind: "message", operationId: OPERATION_ID, agentId: AGENT_ID, prompt: "Continue", awaitResponse: false },
+		{ kind: "start", operationId: OPERATION_ID, prompt: "Review" },
+		{ kind: "message", operationId: OPERATION_ID, agentId: AGENT_ID, prompt: "Continue" },
 		{ kind: "await", agentId: AGENT_ID },
 		{ kind: "stop", operationId: OPERATION_ID, agentId: AGENT_ID },
 		{ kind: "list" },

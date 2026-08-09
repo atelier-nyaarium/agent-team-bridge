@@ -47,13 +47,6 @@ describe("what a tool actually sends", () => {
 			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x", model: "s" }),
 		).not.toHaveProperty("model");
 	});
-
-	it("defaults awaitResponse to true, and carries an explicit false", () => {
-		expect(codexRequestBody("start", { prompt: "Audit" })).toMatchObject({ awaitResponse: true });
-		expect(codexRequestBody("start", { prompt: "Audit", awaitResponse: false })).toMatchObject({
-			awaitResponse: false,
-		});
-	});
 });
 
 describe("what a caller reads back from the gateway", () => {
@@ -117,9 +110,7 @@ describe("what a caller reads back from the gateway", () => {
 	it("sends a body the gateway can parse", async () => {
 		reply = { status: 200, body: {} };
 		received.length = 0;
-		await routerPost("/codex", codexRequestBody("start", { prompt: "Audit", awaitResponse: false }), {
-			retries: 0,
-		});
+		await routerPost("/codex", codexRequestBody("start", { prompt: "Audit" }), { retries: 0 });
 
 		expect(CodexGatewayRequestSchema.safeParse(received[0]).success).toBe(true);
 	});

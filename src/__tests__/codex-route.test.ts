@@ -63,7 +63,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit the parser",
-			awaitResponse: false,
 		});
 		const body = await response.json();
 
@@ -77,7 +76,7 @@ describe("Codex gateway route", () => {
 
 	it("returns the same agent when the same operation is retried", async () => {
 		const context = setup();
-		const body = { kind: "start", operationId: OPERATION_ID, prompt: "Audit", awaitResponse: false };
+		const body = { kind: "start", operationId: OPERATION_ID, prompt: "Audit" };
 		const first = await (await context.route.handle(post(context.token), body)).json();
 		const second = await (await context.route.handle(post(context.token), body)).json();
 
@@ -92,7 +91,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 		const body = await response.json();
 
@@ -108,7 +106,6 @@ describe("Codex gateway route", () => {
 			operationId: OPERATION_ID,
 			agentId: "codex_ffffffffffffffffffffffffffffffff",
 			prompt: "Continue",
-			awaitResponse: false,
 		});
 		const body = await response.json();
 
@@ -132,7 +129,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 		const body = await (await context.route.handle(post(context.token), { kind: "list" })).json();
 
@@ -146,7 +142,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 		const agentId = codexAgentIdForOperation(OPERATION_ID);
 		const command = context.sent.find((message) => message.type === "codex_command") as Record<string, unknown>;
@@ -189,7 +184,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION,
 			prompt: "Audit",
-			awaitResponse: false,
 			model: "gpt-5-typo",
 		});
 		await Promise.resolve();
@@ -217,7 +211,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 			model: "gpt-5.6-luna",
 		});
 
@@ -228,7 +221,7 @@ describe("Codex gateway route", () => {
 		});
 	});
 
-	it("calls a declined wait an acceptance, not a timeout", async () => {
+	it("reports a turn still running at the budget as a timeout, with its delivery", async () => {
 		const context = setup();
 		await working(context);
 
@@ -237,12 +230,10 @@ describe("Codex gateway route", () => {
 				kind: "start",
 				operationId: OPERATION_ID,
 				prompt: "Audit",
-				awaitResponse: false,
 			})
 		).json();
 
-		// Nothing timed out: the caller chose not to wait and the prompt was delivered.
-		expect(body.observation).toBe("accepted");
+		expect(body.observation).toBe("waitTimedOut");
 		expect(body.delivery).toBe("started");
 	});
 
@@ -270,7 +261,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 
 		// Exactly what the await tool's own description tells a caller to do after a start times out.
@@ -291,7 +281,6 @@ describe("Codex gateway route", () => {
 			kind: "start",
 			operationId: OPERATION_ID,
 			prompt: "Audit",
-			awaitResponse: false,
 		});
 
 		// Messaging an agent that is still creating is an ordinary conflict, not an outage.
@@ -300,7 +289,6 @@ describe("Codex gateway route", () => {
 			operationId: "123e4567-e89b-42d3-a456-426614174009",
 			agentId: codexAgentIdForOperation(OPERATION_ID),
 			prompt: "Continue",
-			awaitResponse: false,
 		});
 
 		expect(response.status).toBe(400);
@@ -333,7 +321,6 @@ describe("Codex gateway route", () => {
 			operationId: "123e4567-e89b-42d3-a456-42661417400a",
 			agentId,
 			prompt: "Continue",
-			awaitResponse: true,
 		});
 		const body = await response.json();
 
@@ -369,7 +356,6 @@ describe("Codex gateway route", () => {
 			operationId: "123e4567-e89b-42d3-a456-42661417400b",
 			agentId,
 			prompt: "A DIFFERENT QUESTION",
-			awaitResponse: true,
 		});
 		expect(context.service.listOwnedAgents(context.owner)[0]?.agentState).toBe("recovering");
 
