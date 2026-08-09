@@ -210,7 +210,6 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			sealer: aliceSealer,
 			crossDomainPeers: alicePeers,
 			registry: registryWith({ "app.dev": channelWs([]) }),
-			knownTeamPaths: new Map([["app.dev", "/x"]]),
 			sessionStore: storeWith("app.dev"),
 		});
 		ctx.config.localDomainId = "alice";

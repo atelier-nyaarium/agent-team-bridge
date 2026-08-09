@@ -88,7 +88,15 @@ export function fakeEvie(opts: {
 	return { client, calls };
 }
 
-export function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): RoutesDeps {
+/** RoutesDeps plus the values makeCtx needs to BUILD a presence facade. These are presence's
+ * construction inputs, not the route table's, so they are not part of RoutesDeps. */
+export type FederationCtxOverrides = Partial<RoutesDeps> & {
+	offlineCatalog?: Map<string, string>;
+	displayName?: (() => string | null | undefined) | null;
+	isAdminDomain?: (() => boolean | null) | null;
+};
+
+export function makeCtx(localGatewayId: string, over: FederationCtxOverrides = {}): RoutesDeps {
 	const registry = over.registry ?? (new Map() as RoutesDeps["registry"]);
 	const offlineCatalog = over.offlineCatalog ?? new Map<string, string>();
 	const config = { localGatewayId, localDomainId: "alice", ...over.config };
@@ -98,8 +106,6 @@ export function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}):
 		store: new PendingJobStore<ResponsePayload>(),
 		config,
 		tryWakeTeam: () => Promise.resolve({ ok: false }),
-		offlineCatalog,
-		knownTeamPaths: new Map(),
 		// teams()/discover() defer entirely to presence.snapshot() - wire a real facade over
 		// the same registry/offlineCatalog/sessionStore this context uses so discovery tests see
 		// the local Gateway's own sessions, not an empty list.

@@ -1085,27 +1085,16 @@ export async function startGateway(): Promise<void> {
 			store,
 			capabilityStore,
 			daemonCapabilityStore,
-			codexAgentService,
 			blobStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
-			isWakeInFlight,
-			offlineCatalog,
-			knownTeamPaths,
 			sessionStore,
 			presence,
 			mailboxStore,
 			evieClient,
 			sealer,
 			crossDomainPeers: crossDomainPeersForConsole,
-			// The owner's display name (from evie's register reply), stamped on every local TeamInfo
-			// so a linked friend Domain sees the owner's self-set label. Null until the first register.
-			displayName: () => domainMeta?.displayName ?? null,
-			// True when this Gateway's own Domain is the admin's (the evie-runner who provisions others).
-			// Stamped on the local TeamInfo so the console shows admin surfaces only on the admin's own
-			// session. Null (not false) until the first register, so "unknown" stays unknown.
-			isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
 			// Local-first seal-target resolution on the send side: a target gateway the local
 			// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
 			// local/friend gateway-id collision never routes a local send to the friend.

@@ -76,23 +76,12 @@ export interface RoutesDeps {
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
 	tryWakeTeam: (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => Promise<WakeResult>;
-	/** Whether a wake is in flight for a composite team. An asleep record with a wake in flight is
-	 * reported as `verifying` (coming up) rather than `available`, so a booting session shows as such
-	 * from the moment it is spawned/woken, not only once its MCP registers. */
-	isWakeInFlight?: (team: string) => boolean;
-	offlineCatalog: Map<string, string>;
-	// Durable team -> projectPath map (never cleared, unlike offlineCatalog which
-	// empties when the host daemon disconnects). Membership in either marks a team
-	// as devcontainer-backed.
-	knownTeamPaths: Map<string, string>;
 	// The durable session-record store. Used directly by send/respond's live-incarnation
 	// resolution; teams() itself defers entirely to `presence.snapshot()` below. Optional for
 	// test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
 	capabilityStore?: Pick<import("./console/capabilityStore.js").CapabilityStore, "snapshot">;
 	daemonCapabilityStore?: Pick<import("./daemonCapabilities.js").DaemonCapabilityStore, "snapshot">;
-	// The Codex route boundary, constructed with the checked session-resume writer.
-	codexAgentService?: import("./codexAgentService.js").CodexAgentService;
 	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
 	// to-refresh and the poll response's presence plane can never compute two different answers.
 	// Optional so a harness testing routes with no presence wiring still gets an empty teams list
@@ -112,15 +101,6 @@ export interface RoutesDeps {
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// The owner's display name (learned from evie's register reply), stamped on
-	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
-	// discovery roster. Absent/null when unset.
-	displayName?: (() => string | null | undefined) | null;
-	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
-	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
-	// admin surfaces only on the admin's own session. Null when unknown (pre-register), mirroring
-	// displayName.
-	isAdminDomain?: (() => boolean | null) | null;
 	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the
 	// sealer's local-first resolution on the SEND side, so a send to your own local Gateway
 	// whose id collides with a friend's gateway id is sealed v1 to the local Domain (the bare-string
@@ -204,9 +184,6 @@ export function createRoutes({
 	capabilityStore,
 	daemonCapabilityStore,
 	tryWakeTeam,
-	isWakeInFlight,
-	offlineCatalog,
-	knownTeamPaths,
 	sessionStore,
 	presence,
 	mailboxStore,
@@ -215,8 +192,6 @@ export function createRoutes({
 	sealer,
 	blobStore,
 	crossDomainPeers,
-	displayName,
-	isAdminDomain,
 	resolvesLocalGateway,
 	touchShares,
 	isSharedToForReply,

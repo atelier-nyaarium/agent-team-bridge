@@ -297,7 +297,6 @@ describe("federation routing (E2E sealed)", () => {
 			evieClient: evie.client,
 			sealer: sealerA,
 			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
-			knownTeamPaths: new Map([["recipe-app.dev", "/x"]]),
 			sessionStore: storeWith("recipe-app.dev"),
 			displayName: () => "My Lab",
 		});
@@ -344,7 +343,6 @@ describe("federation routing (E2E sealed)", () => {
 			evieClient: evie.client,
 			sealer: sealerA,
 			registry: registryWith({}),
-			knownTeamPaths: new Map(),
 			sessionStore: storeWith(),
 		});
 		const { discover } = createRoutes(ctx);

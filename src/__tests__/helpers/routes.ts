@@ -32,8 +32,8 @@ export function makePresence(opts: {
 	offlineCatalog: Map<string, string>;
 	sessionStore?: SessionStore;
 	localDomainId?: () => string | null;
-	displayName?: RoutesDeps["displayName"];
-	isAdminDomain?: RoutesDeps["isAdminDomain"];
+	displayName?: (() => string | null | undefined) | null;
+	isAdminDomain?: (() => boolean | null) | null;
 }): PresenceFacade {
 	const facade = new PresenceFacade({
 		sessionStore: opts.sessionStore ?? new SessionStore(),
@@ -49,12 +49,19 @@ export function makePresence(opts: {
 	return facade;
 }
 
-export function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
+/** RoutesDeps plus the values makeCtx needs to BUILD a presence facade. These are presence's
+ * construction inputs, not the route table's, so they are not part of RoutesDeps. */
+export type CtxOverrides = Partial<RoutesDeps> & {
+	offlineCatalog?: Map<string, string>;
+	displayName?: (() => string | null | undefined) | null;
+	isAdminDomain?: (() => boolean | null) | null;
+};
+
+export function makeCtx(overrides: CtxOverrides = {}): RoutesDeps {
 	const registry = overrides.registry || (new Map() as RoutesDeps["registry"]);
 	const conversationRegistry = overrides.conversationRegistry || (new Map() as RoutesDeps["conversationRegistry"]);
 	const store = overrides.store || new PendingJobStore<ResponsePayload>();
 	const offlineCatalog = overrides.offlineCatalog || new Map<string, string>();
-	const knownTeamPaths = overrides.knownTeamPaths || new Map<string, string>();
 	const config = { localGatewayId: "test-host", localDomainId: "alice" };
 	return {
 		registry,
@@ -69,9 +76,6 @@ export function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 			localGatewayId: config.localGatewayId,
 		}),
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve({ ok: false })),
-		isWakeInFlight: overrides.isWakeInFlight,
-		offlineCatalog,
-		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
 		sessionStore: overrides.sessionStore,
 		presence:
@@ -87,8 +91,6 @@ export function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 				displayName: overrides.displayName,
 				isAdminDomain: overrides.isAdminDomain,
 			}),
-		displayName: overrides.displayName,
-		isAdminDomain: overrides.isAdminDomain,
 		touchShares: overrides.touchShares,
 		sharesFor: overrides.sharesFor,
 		crossDomainPresenceConsumer: overrides.crossDomainPresenceConsumer,
