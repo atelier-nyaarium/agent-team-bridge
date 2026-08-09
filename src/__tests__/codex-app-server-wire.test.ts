@@ -64,16 +64,19 @@ describe("App Server request params", () => {
 		expect(transport.paramsOf("turn/interrupt")).toEqual({ threadId: THREAD_ID, turnId: TURN_ID });
 	});
 
-	it("starts a thread at the caller's cwd with approvals refused up front", async () => {
+	it("starts a thread at the caller's cwd with approvals refused and a sandbox named", async () => {
 		const { client, transport } = await openClient();
 
 		await client.startThread({ cwd: "/workspace/recipe-app" });
 
+		// An omitted sandbox is not a neutral default: the App Server picks read-only, and approvals
+		// refused up front means the thread cannot escalate, so every write fails for its whole life.
 		expect(transport.paramsOf("thread/start")).toEqual({
 			cwd: "/workspace/recipe-app",
 			model: MODEL,
 			reasoningEffort: "high",
 			approvalPolicy: "never",
+			sandbox: "workspace-write",
 		});
 	});
 

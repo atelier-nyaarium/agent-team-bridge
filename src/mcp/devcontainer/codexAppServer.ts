@@ -246,8 +246,8 @@ export class CodexAppServerClient {
 		this.transport.onEvent(listener);
 	}
 
-	/** Sandbox and network are deliberately not sent: the thread takes the App Server's ordinary
-	 * workspace-write behavior, which is what the questionnaire chose. */
+	/** Sandbox is sent explicitly because the App Server defaults a thread to read-only, and an
+	 * approvalPolicy of "never" leaves an inherited default with no way to escalate out of it. */
 	async startThread(settings: ThreadSettings): Promise<string> {
 		const model = settings.model ?? this.defaultModel;
 		// An override is checked against the same list the default was, so a caller-supplied model can
@@ -261,6 +261,7 @@ export class CodexAppServerClient {
 			// this side guessed.
 			...(this.offered.get(model) ? { reasoningEffort: this.offered.get(model) } : {}),
 			approvalPolicy: "never",
+			sandbox: "workspace-write",
 		});
 		return CodexAppServerThreadStartResultSchema.parse(result).thread.id;
 	}
