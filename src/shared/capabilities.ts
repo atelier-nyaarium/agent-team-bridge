@@ -18,49 +18,48 @@ export const CODEX_THINKING_CAPABILITY_ID = "codex-thinking";
 
 // Served only by switchboard_capabilities. The always-on block carries names alone, so length here
 // is not charged against the MCP server instructions.
-export const CODEX_THINKING_INSTRUCTIONS = [
-	"Codex agents are enabled. A Codex agent is a second-model-family thread this session owns, for",
-	"handing off a self-contained sub-task.",
-	"",
-	"Shaping a pipeline:",
-	"- Fan-out dimensions run on Codex: an audit of one subsystem, an adversarial second read, an",
-	"  isolated repro, an iterative fix.",
-	"- Research is the exception, web research especially. It stays on Opus.",
-	"- Consolidating steps run on Claude, since a join reads every dimension and needs your session",
-	"  context and this repo's conventions. Size it to the work: Sonnet collates, Opus decides.",
-	"- Shapes that work, not an exhaustive list:",
-	"    Research (Opus)                  -> Rank (Sonnet)",
-	"    Audit (Codex)                    -> Synthesize (Sonnet)",
-	"    Architecture assessment (Codex)  -> Synthesize (Opus)",
-	"    Iterative fix until pass (Codex) -> Report (Sonnet)",
-	"- Ask before fanning out whether the dimensions should be Codex or Claude. Left to you, choose",
-	"  Codex for anything that is not research.",
-	"",
-	"Driving them:",
-	"- ONE agent can hold several Codex threads at once. Issue the codexStartAgent calls together in",
-	"  one message so they run concurrently. Measured against the alternative, a wrapper",
-	"  agent per Codex thread cost roughly four times the tokens and found no more: the wrappers spend",
-	"  their budget re-reading the same files to decide whether to trust what they were told to relay.",
-	"- Spend the saved budget on the join instead. Whoever collects should verify what came back.",
-	"- Reuse a thread across attempts rather than starting a fresh agent per loop, and re-task the same",
-	"  agent when an answer is thin. A thread holding its own last three failures fixes the fourth.",
-	"- Give each a schema so it returns data, not prose. Condense where the detail does not change what",
-	"  you do next; never paraphrase a finding you will act on.",
-	"- Too large to carry back: have Codex write a scratch file and return the path.",
-	"- Put constraints in the prompt you delegate. A Codex thread keeps workspace-write and web access",
-	"  for its whole life, and GPT-family agents pursue a goal through unexpected or suspect actions.",
-	"- The triage gate still applies to what comes back. A confident tone is not evidence; verify",
-	"  against the code.",
-	"",
-	"Budget and recovery:",
-	"- A waiting call blocks about four minutes and holds a slot. A turn outliving that is NOT lost: it",
-	"  keeps running and codexAwaitAgent collects it.",
-	"- Codex agents belong to this session, not to whoever started one. If that caller dies,",
-	"  codexListAgents returns every thread with its full history, so re-run the collection, not the",
-	"  work.",
-	"",
-	"Call this tool again after your next context compaction.",
-].join("\n");
+export const CODEX_THINKING_INSTRUCTIONS = `
+# Codex Thinking
+
+Codex agents are enabled. A Codex agent is a second-model-family thread this session owns, for handing off a self-contained sub-task.
+
+## Sandbox
+
+Codex sandbox denies outbound network access. Writes can only happen in the directory you start it in. Otherwise, all other executions are permitted.
+
+GPT-family agents are **very literal** and pursue a goal through unexpected or suspect actions. Set guardrails in the prompt you delegate.
+
+But, choose your terms **very literally**, because if you say "Never" in the beginning, Codex might not listen to you even if you say "It's OK now".
+- "Don't XXX." - Means you will never lift the restriction. Trashing the thread is the only way around.
+- "Don't XXX, unless I say otherwise later" - Means you may lift the restriction depending on feel.
+
+## Driving Codex Agent manually
+
+- An agent can hold several Codex threads at once. Issue the codexStartAgent calls in parallel to run concurrently.
+- For developing, reuse the thread. For one-off audits, prefer a fresh thread for an empty context and fresh eyes.
+- For one-offs, give them a markdown Report format.
+- You are the triage gate for what codex says and does. A confident tone is not evidence; verify against the code.
+
+## Shaping a Codex Agent Workflow
+
+Fan-out dimensions run on Codex: Audits, assessments, adversarial second reads.
+
+Research is the exception, web research especially. It stays on Opus.
+
+Ask once before fanning out whether the dimensions should be Codex or Claude. Left to you, choose Codex for anything that is not research.
+
+The last consolidating steps always runs on Claude. Don't pipe a Codex to a Codex. Choose model depending on task: Sonnet collates, Opus decides.
+
+Shapes that work, not an exhaustive list:
+- Research (Opuses)                  -> Rank (Sonnet)
+- Audit (Codexes)                    -> Synthesize (Sonnet)
+- Architecture assessment (Codexes)  -> Synthesize (Opus)
+- Iterative fix until pass (Codex)   -> Report (Sonnet)
+
+## Recovery
+
+Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns every thread with its full history, so recover or re-run the collection.
+`.trim();
 
 // An empty array is an affirmative "nothing enabled" rather than silence, which is what lets a
 // disabled daemon replace a declaration it made while the feature was on.

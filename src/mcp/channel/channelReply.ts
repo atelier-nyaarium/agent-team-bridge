@@ -88,7 +88,13 @@ export function registerChannelReply(mcpServer: McpServer, capabilities: Capabil
 		"channel_reply",
 		{
 			title: "Channel Reply",
-			description: `Reply to an incoming channel message. Channel conversations are streams: you can call this any number of times on the same session_id. Each call is just another message in the stream; there is no finality or "done" status. session_id, title, summary, full, and fullSpoken are all required. Send responses verbatim unless the requester explicitly asked for a summary.${guidance}`,
+			description: `Reply to an incoming channel message.
+
+Channel conversations are streams. Call this any number of times on the same session_id. There is no finality or "done" status.
+
+session_id, title, summary, full and fullSpoken are all required.
+
+Send responses verbatim unless the requester asked for a summary.${guidance}`,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: ChannelReplySchema as any,
 		},

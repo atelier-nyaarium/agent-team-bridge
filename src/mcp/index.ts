@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import fs from "node:fs";
 import packageJson from "../../package.json";
 import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
 import { isInsideContainer } from "../shared/env.js";
@@ -34,12 +34,15 @@ import { resolveSessionNaming } from "./team-name.js";
 // client has no such race.
 const INITIAL_ROUTER_CONNECT_GRACE_MS = 200;
 
-const CHANNEL_INSTRUCTIONS = [
-	'Cross-team messages arrive as <channel source="..." ...> tags. ALL metadata rides as tag attributes (session_id, from, and reply_schema when the request specifies one); the tag body is the message itself, nothing is jammed into it.',
-	"Read the request and do the work.",
-	"Reply with the channel_reply tool: session_id (from the tag attributes), title (a one-line headline), summary (a few sentences), full (your prose reply, renders as markdown + mermaid), and fullSpoken (a spoken copy of full for text-to-speech) are all required - the console shows the title in its notification bar and speaks the spoken tiers aloud. Attachments (absolute file paths) are optional. The conversation stays open, so you may reply multiple times (interim updates, etc.) with no finality.",
-	"When the inbound tag carries a reply_schema, reply with channel_reply_structured instead: pass session_id and a responseData object matching that schema.",
-].join(" ");
+const CHANNEL_INSTRUCTIONS = `
+Cross-team messages arrive as <channel source="..." ...> tags. All metadata rides as tag attributes: session_id, from, and reply_schema when the request specifies one. The tag body is the message. Read the request and do the work.
+
+Reply with the channel_reply tool, and keep your usual stout response a terse 1-liner as a receipt.
+When the inbound tag carries a reply_schema, use channel_reply_structured instead.
+The conversation stays open. Reply as many times as you need; there is no finality.
+
+💠 If this was your first received message, call \`switchboard_capabilities\` to understand the channel features. If you recently compacted, call it again immediately.
+`.trim();
 
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();

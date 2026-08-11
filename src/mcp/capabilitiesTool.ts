@@ -13,7 +13,9 @@ const capabilitiesSchema: any = z.object({}).strict();
 //  Functions & Helpers
 
 const description = `
-What Switchboard capabilities this session has, and the guidance each one carries. Call once to understand their features, and again immediately after a context compaction.
+What Switchboard capabilities this session has. If you received a message over the channel, call this immediately right now to understand the features offered to the channel.
+
+💠 If you recently compacted, remember to call this again, immediately.
 `.trim();
 
 /** What changed since startup, in ids alone. Instruction text is served from the startup snapshot

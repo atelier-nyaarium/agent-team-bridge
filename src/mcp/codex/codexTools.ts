@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import crypto from "node:crypto";
 import {
 	CodexAwaitAgentInputSchema,
 	CodexListAgentsInputSchema,
@@ -13,84 +13,76 @@ import { routerPost } from "../bridge/helpers.js";
 //  Functions & Helpers
 
 const START_DESCRIPTION = `
-Start a Codex agent: a second-model-family thread this session owns, for a
-self-contained sub-task.
+# Start Codex Agent
 
-State its guardrails in the prompt. Switchboard sets none for you, and the
-thread holds workspace-write and network access for its whole life whatever
-you write, so the prompt is the only boundary that exists. Say plainly:
-  - whether it may write at all, and if so which paths
-  - whether it may reach the network
-  - what done looks like
+Start a second-model-family thread this session owns, for a self-contained sub-task.
 
-Codex is strong and it is literal. Given a goal and no edges, it will reach
-that goal by whatever route works, including routes you would not have picked.
-A narrow explicit scope gets excellent work out of it. An open brief gets
-surprises. Code edits are fine when the scope is narrow and you can state it.
+Waits for the turn. A turn outliving the wait budget keeps running and your harness returns it later. Issue several in one message to start them together.
 
-Reuse an agent rather than starting one per attempt. A thread that already
-holds its own last three failures fixes the fourth; a fresh one relearns the
-problem every time. Follow up with codexMessageAgent.
+## Guardrails
 
-Waits for the turn. A turn outliving the wait budget keeps running; your harness
-backgrounds the call and returns the result when it lands. Issue several in one
-message to start them together.
+Switchboard sets none. State them in the prompt: what it may write, whether it may reach the network, what done looks like.
 
-model is optional and belongs here only, since it is fixed for the thread's life.
-Leave it off unless you have a reason; an unoffered one is refused, not swapped.
+Codex brings its own sandbox. Its shape is not yours to assume, so have the agent probe and report rather than guess. Restricting what the sandbox already forbids buys nothing.
 
-cwd is where the thread runs, and it is what the thread may WRITE: that directory
-and the temp dir, nothing else on the machine. It defaults to your own session's
-project, so an agent asked to work on a sibling project can read it and cannot
-change it. Set cwd to that project when you mean the agent to edit it, and prefer
-that over having it stage edits somewhere else, which costs it the ability to run
-the project's own tests on its work. Fixed for the thread's life, like model, and
-host sessions only. A path that does not resolve to a directory falls back to your
-home directory rather than failing, so check the agent landed where you meant.
+Codex is **very literal**. Given a goal and no edges, it reaches that goal by whatever route works. A narrow scope gets excellent work; an open brief gets surprises.
 
-The agent belongs to this session, not to its caller. If the caller dies,
-codexListAgents still returns it with its full history.
+## Arguments
+
+- \`model\` - optional, fixed for the thread's life. An unoffered one is refused, not swapped.
+- \`cwd\` - where it runs. Fixed for the thread's life. Host sessions only.
+
+Setting \`cwd\` does NOT grant write access. Only your session's own project is writable, plus the temp dir. A thread pointed at a sibling project can read it and run its tests; it cannot edit it. Delegate edits only within your own project.
+
+A \`cwd\` that does not resolve falls back to your home directory rather than failing. Check the agent landed where you meant.
+
+## Reuse
+
+Reuse an agent rather than starting one per attempt. A thread holding its own last three failures fixes the fourth. Follow up with \`codexMessageAgent\`.
+
+The agent belongs to this session, not to its caller. If the caller dies, \`codexListAgents\` still returns it with its full history.
 `.trim();
 
 const MESSAGE_DESCRIPTION = `
+# Message Codex Agent
+
 Send a follow-up prompt to a Codex agent this session owns.
 
-Prefer this over starting a new agent. The thread keeps everything it has
-already read, tried and got wrong, so a follow-up that says what failed is
-worth far more than a fresh agent given the same brief.
+Prefer this over starting a new agent. The thread keeps what it has already read, tried and got wrong, so a follow-up naming the failure beats a fresh agent given the same brief.
 
-If a turn is still running the prompt STEERS it, joining the work in flight
-rather than queueing behind it. If the agent is idle it starts a new turn.
-Guardrails do not carry over implicitly; restate any that still apply.
+A running turn is STEERED, joining the work in flight rather than queueing. An idle agent starts a new turn.
 
-Waits for the turn. A turn outliving the wait budget keeps running; your harness
-backgrounds the call and returns the result when it lands.
+Guardrails do not carry over. Restate any that still apply.
+
+Waits for the turn. A turn outliving the wait budget keeps running and your harness returns it later.
 `.trim();
 
 const AWAIT_DESCRIPTION = `
+# Await Codex Agent
+
 Wait for a Codex agent's current turn to finish and return its outcome.
 
-Use to pick up a turn reported as waitTimedOut. With nothing running it returns the
-latest settled state immediately.
+Use to pick up a turn previously reported as \`waitTimedOut\`. If nothing is running, it returns the latest settled state immediately.
 `.trim();
 
 const STOP_DESCRIPTION = `
+# Stop Codex Agent
+
 Ask a Codex agent to interrupt its current turn.
 
-Asynchronous: it returns as soon as the request is durable, and the turn's real
-ending arrives afterwards. That ending may still be a completion, if the turn
-finished before the interrupt landed. Stopping an idle agent is a no-op.
+Asynchronous. It returns once the request is durable; the turn's real ending arrives afterwards, and may still be a completion if the turn finished first. Stopping an idle agent is a no-op.
 
-This does NOT close the agent. Its thread stays reusable, so codexMessageAgent
-still works afterwards. Nothing here reaches processes Codex started in the
-background.
+Does NOT close the agent. The thread stays reusable via \`codexMessageAgent\`.
+
+Does not reach processes Codex started in the background.
 `.trim();
 
 const LIST_DESCRIPTION = `
+# List Codex Agents
+
 List this session's Codex agents with their full prompt and response history.
 
-Scoped to this session, and to it alone. Agents outlive the caller that started
-them, so this is how work is picked up after a subagent or workflow has ended.
+Scoped to this session alone. Agents outlive the caller that started them, so this is how work is picked up after a subagent or workflow ends.
 `.trim();
 
 /**

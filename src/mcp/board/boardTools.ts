@@ -1,7 +1,7 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import crypto from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { BOARD_BODY_MAX } from "../../shared/schemas.js";
 import { sweepStaging } from "../blobTransfer.js";
@@ -23,34 +23,49 @@ const ListInputSchema = {
 	scope: z
 		.enum(["unclaimed", "session", "all"])
 		.optional()
-		.describe("unclaimed = the backlog only, session = your taskboard only, all = both. Default all."),
+		.describe(
+			`
+\`unclaimed\` = The backlog only
+\`session\` = Your taskboard only
+\`all\` = Both (default)
+`.trim(),
+		),
 };
 
 const ClaimInputSchema = {
-	id: ID.describe("Entry to take, along with its whole subtree."),
+	id: ID.describe(`Entry to take, along with its whole subtree.`),
 };
 
 const ReleaseInputSchema = {
-	id: ID.describe("Entry to give up, along with its whole subtree. Only for work you are not going to do."),
+	id: ID.describe(
+		`
+Entry to give up, along with its whole subtree.
+
+Only for work you are not going to do.
+`.trim(),
+	),
 };
 
 const CreateInputSchema = {
-	title: z.string().min(1).max(500).describe("One line naming the work."),
-	assignTo: z
-		.enum(["self", "backlog"])
-		.describe("self = onto your taskboard, you work it. backlog = the owner's backlog, work you are not doing."),
-	body: z.string().max(BOARD_BODY_MAX).optional().describe("Longer detail. The owner reads this."),
+	title: z.string().min(1).max(500).describe(`One line naming the work.`),
+	assignTo: z.enum(["self", "backlog"]).describe(
+		`
+self = onto your taskboard, you work it.
+backlog = the owner's backlog, work you are not doing.
+`.trim(),
+	),
+	body: z.string().max(BOARD_BODY_MAX).optional().describe(`Longer detail. The owner reads this.`),
 	parent: ID.optional().describe(PARENT_TEXT),
 };
 
 const UpdateInputSchema = {
-	id: ID.describe("Entry to change. Must be one you hold."),
-	title: z.string().min(1).max(500).optional().describe("Replaces the title."),
-	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe("Replaces the body. null clears it."),
+	id: ID.describe(`Entry to change. Must be one you hold.`),
+	title: z.string().min(1).max(500).optional().describe(`Replaces the title.`),
+	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replaces the body. null clears it.`),
 	state: z
 		.enum(["open", "in_progress", "paused", "done", "cancelled"])
 		.optional()
-		.describe("open, in_progress, paused, done, cancelled."),
+		.describe(`open, in_progress, paused, done, cancelled.`),
 	// nullable AND optional: absent means leave the placement alone, null means move to top level.
 	// Legal here because MCP inputs never pass through the Kotlin codegen.
 	parent: ID.nullable().optional().describe(`${PARENT_TEXT} null moves it to top level.`),
@@ -59,82 +74,102 @@ const UpdateInputSchema = {
 const ClearInputSchema = {};
 
 const FetchAttachmentsInputSchema = {
-	id: ID.describe("Entry whose attachments to fetch."),
+	id: ID.describe(`Entry whose attachments to fetch.`),
 	filenames: z
 		.array(z.string().min(1).max(255))
 		.optional()
-		.describe("Only these files, by the names the list showed. Omit for all of them."),
+		.describe(`Only these files, by the names the list showed. Omit for all of them.`),
 };
 
 ////////////////////////////////
 //  Functions & Helpers
 
 const LIST_DESCRIPTION = `
-Two halves, and the names matter when you talk about them: entries assigned to
-this session are YOUR TASKBOARD ("my taskboard"), and unassigned ones are THE
-BACKLOG (the owner's, not yours). Flat, with parent pointers - rebuild the tree
-from those.
+# List Task Board Entries
+
+Two halves, and the names matter when you talk about them to the user:
+- **Your taskboard:** Entries assigned to this session.
+- **The backlog:** Unassigned entries. No session has claimed them.
+
+Flat, with parent pointers. Rebuild the tree from those.
 `.trim();
 
 const CLAIM_DESCRIPTION = `
-Move an entry, and everything under it, from the backlog onto your taskboard.
+# Claim Backlog Entry
 
-Refuses when another session holds it, so repeating a claim whose reply you lost
-is safe rather than a theft.
+Move an entry, and everything nested under it, from the backlog onto your taskboard.
 
-When what you just claimed is one entry whose BODY is a list of subtasks, explode
-it: create each item as a nested entry under it, then clear the body you took them
-from. A list living in prose cannot be given a state, held by anyone, or counted,
-so leaving it there costs the owner every one of those. Word each title better
-than the source line rather than copying it verbatim, and keep any detail that
-does not fit a title in that child's own body.
+## Exploding a list
+
+When what you just claimed is one entry whose BODY is a list of subtasks, explode it.
+
+- Create each item as a nested entry under it.
+- Clear the body you took them from.
+- Word each title better than the source line rather than copying it verbatim.
+- Keep any detail that does not fit a title in that child's own body.
 `.trim();
 
 const RELEASE_DESCRIPTION = `
-Give an entry and its subtree up, back to the backlog, keeping its state, body
-and place in the tree.
+# Release Task Board Entry
 
-Only for work you are NOT going to do. Finishing a plan, writing entries up, or
-handing a report to the owner are none of them a reason to release: the work is
-still yours, so it stays on your taskboard. If in doubt, keep it.
+Give an entry and its subtree up, back to the backlog, keeping its state, body and place in the tree.
+
+Only for work you are NOT going to do. If in doubt, keep it.
+
+Finishing a plan, writing entries up, and handing a report to the owner are none of them a reason to
+release. The work is still yours.
 `.trim();
 
 const CREATE_DESCRIPTION = `
+# Create Task Board Entry
+
 Add an entry to the board.
 
-assignTo has no default on purpose: say whether this lands on your taskboard
-because you are doing it, or in the backlog because you are not. Breaking your
-own work into steps is "self" every time, including the steps you have not
-started.
+assignTo has no default on purpose. Say whether this lands on your taskboard because you are doing
+it soon, or in the backlog because it's not your concern.
+
+Breaking your own work into steps is \`self\` every time, including the steps you have not started.
 `.trim();
 
 const UPDATE_DESCRIPTION = `
-Change an entry on your taskboard. Omitted fields are left alone. Claim a
-backlog entry before updating it.
+# Update Task Board Entry
 
-State carries through the tree, so mark only the entry you actually finished.
-Finishing the last unfinished child finishes its parent; finishing a parent
-finishes everything under it; and putting anything back to unfinished reopens
-the finished entries above it. The reply names whatever moved this way, already
-saved, for you to mention rather than act on.
+Change an entry on your taskboard. Omitted fields are left alone.
+
+Claim a backlog entry before updating it.
+
+## State carries through the tree
+
+Mark only the entry you actually finished.
+
+- Finishing the last unfinished child finishes its parent.
+- Finishing a parent finishes everything under it.
+- Putting anything back to unfinished reopens the finished entries above it.
+
+The reply names whatever moved this way, already saved, for you to mention rather than act on.
 `.trim();
 
 const CLEAR_DESCRIPTION = `
-Trash your taskboard's done and cancelled entries. The owner can restore them
-for 30 days.
+# Clear Task Board Entries
+
+Trash your taskboard's done and cancelled entries. The owner can restore them for 30 days.
 `.trim();
 
 const FETCH_ATTACHMENTS_DESCRIPTION = `
+# Fetch Task Attachments
+
 Download an entry's attachments and return the paths they landed at.
 
-The owner attaches these from their phone; you can read them but never add,
-change or remove one. taskBoardList shows each entry's filenames, so name the
-ones you want ("mellisa-render.png") or omit filenames for all of them.
+The owner attaches these from their phone. You can read them, never add, change or remove one.
 
-Two things the list cannot tell you. A "changed" notice carries the entry id
-alone, so a new picture looks exactly like an edited title - re-read the entry
-to find out. And an entry nobody holds announces nothing at all, so a picture
-the owner adds to a backlog item arrives silently: look when you claim it.
+taskBoardList shows each entry's filenames. Name the ones you want, or omit filenames for all.
+
+## What the list cannot tell you
+
+- A "changed" notice carries the entry id alone, so a new picture looks exactly like an edited
+  title. Re-read the entry to find out.
+- An entry nobody holds announces nothing, so a picture the owner adds to a backlog item arrives
+  silently. Look when you claim it.
 `.trim();
 
 /**
