@@ -28,7 +28,7 @@ export const CODEX_AGENT_ID_RE = /^codex_[0-9a-f]{32}$/;
 export const CODEX_WAIT_BUDGET_MS = 240_000;
 /** Deliberately not the App Server's own default: a thread runs whatever tier this names, so leaving
  * the choice to the server would silently change what a delegated sub-task is worth. */
-export const CODEX_DEFAULT_MODEL = "gpt-5.6-luna";
+export const CODEX_DEFAULT_MODEL = "gpt-5.6-terra";
 
 /** Opaque identifier shape shared by every App Server / daemon-minted id field across every domain
  * file below. */
