@@ -49,6 +49,8 @@ export interface WebSocketDeps {
 	// Every Codex frame from the authenticated host socket. Gated on that slot for the same reason the
 	// terminal ops are: these frames mutate session-owned durable state.
 	onCodexHostMessage?: (msg: Record<string, unknown>) => void;
+	// Every Copilot ACP frame from the authenticated host socket.
+	onCopilotHostMessage?: (msg: Record<string, unknown>) => void;
 	// The gateway's authoritative session store. The handshake confirm establishes/binds a record
 	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
 	// Absent in tests that do not exercise session recording.

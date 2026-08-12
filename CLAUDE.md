@@ -586,6 +586,19 @@ prompt is the only boundary, which is why the start tool's description is the sa
 daemon answer `recovering` whenever it cannot confirm that exact turn, which settles the wait and
 reports running work as unconfirmed.
 
+### Copilot delegation
+
+A session can hand a self-contained coding task to a logged-in Copilot CLI through its ACP stdio
+server. The gateway and host daemon mirror the Codex seams: one supervised child per execution
+target, an authenticated session-owned catalog, durable operation ids, fenced relay frames, and
+start / message / await / stop / list tools. Copilot follow-ups are accepted only after the previous
+turn is idle because ACP does not expose Codex's steer operation.
+
+**Enabling it:** set `COPILOT_THINKING_ENABLED=true` in `.env` and restart the host daemon. Log in
+with the normal Copilot CLI (`copilot`, then `/login`); no external API key is used or forwarded.
+The ACP client selects `gpt-5.6-luna` by default and enables Copilot's agent permissions for the supervised
+target.
+
 ### Android app
 
 - **Plugin framework** (`android/.../plugins/`): `Plugins` is the process singleton over a
@@ -879,9 +892,10 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 | `DATA_DIR` | All durable state (default `/app/data`), deliberately separate from the log volume so clearing logs cannot wipe federation identity |
 | `FEDERATION_DIR` | Keypair, allowlist, transport.json, domain-id (default: inside `DATA_DIR`) |
 
-**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_THINKING_ENABLED`.
-Set the last to exactly `true` in `.env` to announce the `codex-thinking` capability at register; any
-other value announces its absence. `start-host-daemon.sh` / `.ps1` read `.env` and pass both through.
+**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_THINKING_ENABLED` and
+`COPILOT_THINKING_ENABLED`. Set either to exactly `true` in `.env` to announce its capability at
+register; any other value announces its absence. `start-host-daemon.sh` / `.ps1` read `.env` and pass
+the settings through.
 
 **MCP plugin (container):** `PROJECT_NAME` (required for crosstalk), `BRIDGE_ROUTER_URL` (default
 `http://switchboard:20000`), `AGENT_TYPE`, `PROJECT_HOST_PATH`, `MCP_CONNECTOR_PORT`,

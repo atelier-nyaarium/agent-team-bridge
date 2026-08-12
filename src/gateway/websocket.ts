@@ -39,6 +39,7 @@ export function createWebSocketHandlers({
 	onCatalogChange,
 	onDaemonCapabilities,
 	onCodexHostMessage,
+	onCopilotHostMessage,
 	onPresenceDerive,
 	sessionStore,
 	auth,
@@ -439,6 +440,13 @@ export function createWebSocketHandlers({
 			(msg.type === "codex_hello" || msg.type === "codex_receipt" || msg.type === "codex_event")
 		) {
 			onCodexHostMessage?.(msg);
+		}
+
+		if (
+			ws.data.teamName === "host" &&
+			(msg.type === "copilot_hello" || msg.type === "copilot_receipt" || msg.type === "copilot_event")
+		) {
+			onCopilotHostMessage?.(msg);
 		}
 
 		if (msg.type === "catalog" && ws.data.teamName === "host") {

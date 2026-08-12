@@ -6,6 +6,7 @@ import { describeDrift, renderCapabilities } from "../mcp/capabilitiesTool.js";
 import {
 	type Capability,
 	CODEX_THINKING_CAPABILITY_ID,
+	COPILOT_THINKING_CAPABILITY_ID,
 	daemonCapabilityDeclaration,
 	UNREPORTED_CAPABILITIES,
 	unionCapabilities,
@@ -45,6 +46,13 @@ describe("what the daemon announces", () => {
 
 	it("carries the guidance along, so the tool has something to serve", () => {
 		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" })[0]?.instructions).toContain("Codex");
+	});
+
+	it("declares Copilot only on the exact enabling value", () => {
+		expect(daemonCapabilityDeclaration({ COPILOT_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
+			COPILOT_THINKING_CAPABILITY_ID,
+		]);
+		expect(daemonCapabilityDeclaration({ COPILOT_THINKING_ENABLED: "1" })).toEqual([]);
 	});
 });
 

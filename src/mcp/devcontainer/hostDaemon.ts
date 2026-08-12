@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import type { LimitNotice } from "../../shared/agent-screen.js";
 import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
 import { CodexEventAckSchema } from "../../shared/codex-thinking.js";
+import { CopilotEventAckSchema } from "../../shared/copilot-thinking.js";
 import {
 	classifyPeekError,
 	type HostOp,
@@ -15,6 +16,8 @@ import { createReconnector } from "../../shared/reconnect.js";
 import { parseSessionName } from "../../shared/session-id.js";
 import { CodexDaemonService } from "./codexDaemonService.js";
 import { ExecutionTargetManager } from "./codexTargets.js";
+import { CopilotDaemonService } from "./copilotDaemonService.js";
+import { CopilotTargetManager } from "./copilotTargets.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import {
@@ -63,6 +66,13 @@ const codexDaemon = new CodexDaemonService({
 	send: safeSend,
 	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
 });
+const copilotTargets = new CopilotTargetManager();
+const copilotDaemon = new CopilotDaemonService({
+	targets: copilotTargets,
+	daemonInstanceId,
+	send: safeSend,
+	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
+});
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
 // second handleWake against a session the first is still bringing up - the reattach branch could
 // otherwise kill a session mid-startup.
@@ -83,6 +93,8 @@ function safeSend(payload: Record<string, unknown>): void {
 export function stopSupervisedChildren(): void {
 	codexDaemon.shutdown();
 	codexTargets.shutdown();
+	copilotDaemon.shutdown();
+	copilotTargets.shutdown();
 }
 
 export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
@@ -123,6 +135,8 @@ function connect(): void {
 		// A reconnect changes the socket, not what the children have already produced.
 		safeSend(codexDaemon.hello());
 		codexDaemon.replay();
+		safeSend(copilotDaemon.hello());
+		copilotDaemon.replay();
 
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
@@ -169,6 +183,15 @@ function connect(): void {
 		if (msg.type === "codex_ack") {
 			const ack = CodexEventAckSchema.safeParse(msg);
 			if (ack.success) codexDaemon.acknowledge(ack.data);
+		}
+
+		if (msg.type === "copilot_command") {
+			copilotDaemon.handleCommand(msg);
+		}
+
+		if (msg.type === "copilot_ack") {
+			const ack = CopilotEventAckSchema.safeParse(msg);
+			if (ack.success) copilotDaemon.acknowledge(ack.data);
 		}
 
 		if (msg.type === "presence_watch" && Array.isArray(msg.watch)) {

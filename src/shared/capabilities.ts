@@ -15,6 +15,7 @@ export type CapabilityBundle = z.infer<typeof CapabilityBundleSchema>;
 export const UNREPORTED_CAPABILITIES: CapabilitySnapshot = { known: false, capabilities: [], clientVersions: [] };
 
 export const CODEX_THINKING_CAPABILITY_ID = "codex-thinking";
+export const COPILOT_THINKING_CAPABILITY_ID = "copilot-thinking";
 
 // Served only by switchboard_capabilities. The always-on block carries names alone, so length here
 // is not charged against the MCP server instructions.
@@ -61,11 +62,27 @@ Shapes that work, not an exhaustive list:
 Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns every thread with its full history, so recover or re-run the collection.
 `.trim();
 
+export const COPILOT_THINKING_INSTRUCTIONS = `
+# Copilot Agent
+
+Copilot Agents are enabled. Use them for self-contained coding tasks through the logged-in Copilot CLI.
+
+Use \`copilotStartAgent\` for a fresh task, \`copilotMessageAgent\` for an idle follow-up, \`copilotAwaitAgent\` to wait,
+\`copilotStopAgent\` to stop the current turn, and \`copilotListAgents\` to inspect existing agents.
+Copilot uses the normal CLI login. Run \`copilot\` and \`/login\` if authentication is required.
+`.trim();
+
 // An empty array is an affirmative "nothing enabled" rather than silence, which is what lets a
 // disabled daemon replace a declaration it made while the feature was on.
 export function daemonCapabilityDeclaration(env: Record<string, string | undefined>): Capability[] {
-	if (env.CODEX_THINKING_ENABLED !== "true") return [];
-	return [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: CODEX_THINKING_INSTRUCTIONS }];
+	return [
+		...(env.CODEX_THINKING_ENABLED === "true"
+			? [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: CODEX_THINKING_INSTRUCTIONS }]
+			: []),
+		...(env.COPILOT_THINKING_ENABLED === "true"
+			? [{ id: COPILOT_THINKING_CAPABILITY_ID, instructions: COPILOT_THINKING_INSTRUCTIONS }]
+			: []),
+	];
 }
 
 /**

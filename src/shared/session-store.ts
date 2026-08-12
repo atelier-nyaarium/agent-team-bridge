@@ -4,6 +4,12 @@ import {
 	type CodexPersistedAgent,
 	restoreCodexAgentCatalog,
 } from "./codex-thinking.js";
+import {
+	type CopilotAgentCatalog,
+	CopilotAgentCatalogSchema,
+	type CopilotPersistedAgent,
+	restoreCopilotAgentCatalog,
+} from "./copilot-thinking.js";
 import { DurableStoreInstalledError } from "./durable-store.js";
 import { composeSessionName, isComposite, isSlug, parseSessionName } from "./session-id.js";
 import { LABEL_MAX, sanitizeLabel, sanitizeWorkdirPath } from "./session-sanitize.js";
@@ -54,7 +60,10 @@ export interface SessionRecord {
 	lastSeen: number;
 }
 
-export type PersistedSessionRecord = Omit<SessionRecord, "liveTeam"> & { codexCatalog?: CodexAgentCatalog };
+export type PersistedSessionRecord = Omit<SessionRecord, "liveTeam"> & {
+	codexCatalog?: CodexAgentCatalog;
+	copilotCatalog?: CopilotAgentCatalog;
+};
 
 export type CodexCatalogCommitResult =
 	| { committed: true; catalog: CodexAgentCatalog }
@@ -78,6 +87,24 @@ export interface CodexCatalogWriter {
 	checkpoint(owner: SessionRecord, expectedRevision: number): CodexCatalogCheckpointResult;
 }
 
+export type CopilotCatalogCommitResult =
+	| { committed: true; catalog: CopilotAgentCatalog }
+	| { committed: false; reason: "owner_missing" | "revision_conflict" };
+
+export type CopilotCatalogCheckpointResult =
+	| { confirmed: true; catalog: CopilotAgentCatalog }
+	| { confirmed: false; reason: "owner_missing" | "revision_conflict" };
+
+export interface CopilotCatalogWriter {
+	commit(
+		owner: SessionRecord,
+		expectedRevision: number,
+		agents: readonly CopilotPersistedAgent[],
+	): CopilotCatalogCommitResult;
+	isDurable(owner: SessionRecord, revision: number): boolean;
+	checkpoint(owner: SessionRecord, expectedRevision: number): CopilotCatalogCheckpointResult;
+}
+
 /** Extra id-space the mint/adopt clash check must avoid beyond existing records: catalog project
  * names and reserved host sessions live in gateway state, so the gateway injects the predicate. */
 export type ClashPredicate = (id: string) => boolean;
@@ -92,6 +119,10 @@ export interface SessionStoreOptions {
 	codexCatalogPersistence?: {
 		persistChecked: () => void;
 		receiveWriter: (writer: CodexCatalogWriter) => void;
+	};
+	copilotCatalogPersistence?: {
+		persistChecked: () => void;
+		receiveWriter: (writer: CopilotCatalogWriter) => void;
 	};
 }
 
@@ -119,6 +150,8 @@ export class SessionStore {
 	private readonly records = new Map<string, SessionRecord>();
 	private readonly codexCatalogs = new WeakMap<SessionRecord, CodexAgentCatalog>();
 	private readonly unconfirmedCodexCatalogs = new WeakMap<SessionRecord, number>();
+	private readonly copilotCatalogs = new WeakMap<SessionRecord, CopilotAgentCatalog>();
+	private readonly unconfirmedCopilotCatalogs = new WeakMap<SessionRecord, number>();
 	// Per-spawn set of taken labels, so dedup is O(1) rather than a full-store scan on every create.
 	private readonly labels = new Map<string, Set<string>>();
 	private readonly clash: ClashPredicate;
@@ -139,6 +172,16 @@ export class SessionStore {
 				isDurable: (owner, revision) => this.isCodexCatalogDurable(owner, revision),
 				checkpoint: (owner, expectedRevision) =>
 					this.checkpointCodexCatalog(owner, expectedRevision, persistChecked),
+			});
+		}
+		if (opts.copilotCatalogPersistence) {
+			const { persistChecked, receiveWriter } = opts.copilotCatalogPersistence;
+			receiveWriter({
+				commit: (owner, expectedRevision, agents) =>
+					this.commitCopilotCatalog(owner, expectedRevision, agents, persistChecked),
+				isDurable: (owner, revision) => this.isCopilotCatalogDurable(owner, revision),
+				checkpoint: (owner, expectedRevision) =>
+					this.checkpointCopilotCatalog(owner, expectedRevision, persistChecked),
 			});
 		}
 	}
@@ -280,6 +323,76 @@ export class SessionStore {
 		}
 		this.unconfirmedCodexCatalogs.delete(owner);
 		return { confirmed: true, catalog: CodexAgentCatalogSchema.parse(catalog) };
+	}
+
+	copilotCatalog(owner: SessionRecord): CopilotAgentCatalog | undefined {
+		if (this.records.get(this.teamOf(owner)) !== owner) return undefined;
+		const catalog = this.copilotCatalogs.get(owner);
+		return catalog ? CopilotAgentCatalogSchema.parse(catalog) : undefined;
+	}
+
+	listCopilotAgents(owner: SessionRecord): readonly CopilotPersistedAgent[] {
+		return this.copilotCatalog(owner)?.agents ?? [];
+	}
+
+	private commitCopilotCatalog(
+		owner: SessionRecord,
+		expectedRevision: number,
+		agents: readonly CopilotPersistedAgent[],
+		persistChecked: () => void,
+	): CopilotCatalogCommitResult {
+		if (this.records.get(this.teamOf(owner)) !== owner) return { committed: false, reason: "owner_missing" };
+		const previous = this.copilotCatalogs.get(owner);
+		const currentRevision = previous?.revision ?? 0;
+		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
+		const previousUnconfirmedRevision = this.unconfirmedCopilotCatalogs.get(owner);
+		const next = CopilotAgentCatalogSchema.parse({ version: 1, revision: expectedRevision + 1, agents });
+		this.copilotCatalogs.set(owner, next);
+		try {
+			persistChecked();
+		} catch (error) {
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmedCopilotCatalogs.set(owner, next.revision);
+			} else {
+				if (previous) this.copilotCatalogs.set(owner, previous);
+				else this.copilotCatalogs.delete(owner);
+				if (previousUnconfirmedRevision === undefined) this.unconfirmedCopilotCatalogs.delete(owner);
+				else this.unconfirmedCopilotCatalogs.set(owner, previousUnconfirmedRevision);
+			}
+			throw error;
+		}
+		this.unconfirmedCopilotCatalogs.delete(owner);
+		return { committed: true, catalog: CopilotAgentCatalogSchema.parse(next) };
+	}
+
+	private isCopilotCatalogDurable(owner: SessionRecord, revision: number): boolean {
+		if (this.records.get(this.teamOf(owner)) !== owner) return false;
+		return (
+			this.copilotCatalogs.get(owner)?.revision === revision &&
+			this.unconfirmedCopilotCatalogs.get(owner) !== revision
+		);
+	}
+
+	private checkpointCopilotCatalog(
+		owner: SessionRecord,
+		expectedRevision: number,
+		persistChecked: () => void,
+	): CopilotCatalogCheckpointResult {
+		if (this.records.get(this.teamOf(owner)) !== owner) return { confirmed: false, reason: "owner_missing" };
+		const catalog = this.copilotCatalogs.get(owner);
+		if (!catalog || catalog.revision !== expectedRevision) {
+			return { confirmed: false, reason: "revision_conflict" };
+		}
+		try {
+			persistChecked();
+		} catch (error) {
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmedCopilotCatalogs.set(owner, catalog.revision);
+			}
+			throw error;
+		}
+		this.unconfirmedCopilotCatalogs.delete(owner);
+		return { confirmed: true, catalog: CopilotAgentCatalogSchema.parse(catalog) };
 	}
 
 	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
@@ -472,15 +585,20 @@ export class SessionStore {
 		for (const record of this.records.values()) {
 			const {
 				codexCatalog: _escaped,
+				copilotCatalog: _copilotEscaped,
 				liveTeam: _live,
 				...rest
 			} = record as SessionRecord & {
 				codexCatalog?: unknown;
+				copilotCatalog?: unknown;
 			};
 			const codexCatalog = this.codexCatalogs.get(record);
-			out[this.teamOf(record)] = codexCatalog
-				? { ...rest, codexCatalog: CodexAgentCatalogSchema.parse(codexCatalog) }
-				: rest;
+			const copilotCatalog = this.copilotCatalogs.get(record);
+			out[this.teamOf(record)] = {
+				...rest,
+				...(codexCatalog ? { codexCatalog: CodexAgentCatalogSchema.parse(codexCatalog) } : {}),
+				...(copilotCatalog ? { copilotCatalog: CopilotAgentCatalogSchema.parse(copilotCatalog) } : {}),
+			};
 		}
 		return out;
 	}
@@ -535,6 +653,11 @@ export class SessionStore {
 				// A restored pathname is readable, but only a new checked save confirms its directory entry
 				// before an acceptance receipt is acknowledged.
 				this.unconfirmedCodexCatalogs.set(record, codexCatalog.revision);
+			}
+			const copilotCatalog = persisted ? restoreCopilotAgentCatalog(v.copilotCatalog) : undefined;
+			if (copilotCatalog) {
+				this.copilotCatalogs.set(record, copilotCatalog);
+				this.unconfirmedCopilotCatalogs.set(record, copilotCatalog.revision);
 			}
 			this.claimLabel(record);
 		}

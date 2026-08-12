@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
-import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
+import { CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
 import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
 import { registerBoardTools } from "./board/boardTools.js";
@@ -16,6 +16,7 @@ import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
 import { registerProjectTools } from "./connector/projectTools.js";
 import { registerStubTool } from "./connector/utils.js";
+import { registerCopilotTools } from "./copilot/copilotTools.js";
 import { registerDesignerTools } from "./designer/designerTools.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
@@ -92,6 +93,7 @@ export async function startMcp(): Promise<void> {
 	// Gated on the HOST DAEMON's declaration rather than a console plugin: these tools reach a
 	// supervised `codex app-server`, which only exists where the daemon was configured to allow one.
 	if (hasCapability(capabilities, CODEX_THINKING_CAPABILITY_ID)) registerCodexTools(mcpServer);
+	if (hasCapability(capabilities, COPILOT_THINKING_CAPABILITY_ID)) registerCopilotTools(mcpServer);
 	// Gated on the console plugin that renders the board: without it the owner has no way to see or
 	// answer anything a session writes, so the tools would be a one-way channel into a surface nobody
 	// is looking at.

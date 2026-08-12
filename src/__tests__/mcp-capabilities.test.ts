@@ -6,6 +6,7 @@ import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCap
 import {
 	type Capability,
 	CODEX_THINKING_CAPABILITY_ID,
+	COPILOT_THINKING_CAPABILITY_ID,
 	daemonCapabilityDeclaration,
 	UNREPORTED_CAPABILITIES,
 } from "../shared/capabilities.js";
@@ -334,7 +335,9 @@ describe("the gated capability ids", () => {
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
 		// the old id, the gate stops matching, and the surface vanishes from every session while the
 		// gate still holds the old name, so the outage looks intermittent.
-		const consoleGated = GATED_CAPABILITY_IDS.filter((id) => id !== CODEX_THINKING_CAPABILITY_ID);
+		const consoleGated = GATED_CAPABILITY_IDS.filter(
+			(id) => id !== CODEX_THINKING_CAPABILITY_ID && id !== COPILOT_THINKING_CAPABILITY_ID,
+		);
 
 		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining(consoleGated));
 	});
@@ -343,6 +346,7 @@ describe("the gated capability ids", () => {
 		// Announced by the host daemon's configuration rather than by a device, so the manifest check
 		// above cannot see it. Naming it here keeps a rename from silently un-gating the Codex tools.
 		expect(GATED_CAPABILITY_IDS).toContain(CODEX_THINKING_CAPABILITY_ID);
+		expect(GATED_CAPABILITY_IDS).toContain(COPILOT_THINKING_CAPABILITY_ID);
 		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
 			CODEX_THINKING_CAPABILITY_ID,
 		]);

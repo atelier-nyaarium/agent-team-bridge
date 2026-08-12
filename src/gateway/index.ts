@@ -16,13 +16,16 @@ import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
-import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
+import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
 import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
 import { CodexRoute } from "./codexRoute.js";
+import { CopilotAgentService } from "./copilotAgentService.js";
+import { CopilotRelay } from "./copilotRelay.js";
+import { CopilotRoute } from "./copilotRoute.js";
 import { createNoAckPush, type NoAckPush } from "./noAckPush.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
@@ -194,17 +197,27 @@ export async function startGateway(): Promise<void> {
 	// project or a reserved host session, so the clash space is injected here.
 	const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
-	let persistCodexCatalogChecked: (() => void) | undefined;
+	let persistAgentCatalogChecked: (() => void) | undefined;
 	let codexCatalogWriter: CodexCatalogWriter | undefined;
+	let copilotCatalogWriter: CopilotCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
 		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
 		codexCatalogPersistence: {
 			persistChecked: () => {
-				if (!persistCodexCatalogChecked) throw new Error("Codex persistence is not initialized");
-				persistCodexCatalogChecked();
+				if (!persistAgentCatalogChecked) throw new Error("Agent persistence is not initialized");
+				persistAgentCatalogChecked();
 			},
 			receiveWriter: (writer) => {
 				codexCatalogWriter = writer;
+			},
+		},
+		copilotCatalogPersistence: {
+			persistChecked: () => {
+				if (!persistAgentCatalogChecked) throw new Error("Agent persistence is not initialized");
+				persistAgentCatalogChecked();
+			},
+			receiveWriter: (writer) => {
+				copilotCatalogWriter = writer;
 			},
 		},
 	});
@@ -359,13 +372,19 @@ export async function startGateway(): Promise<void> {
 		readAnchors: readAnchors.snapshot(),
 		crossDomainPresence: crossDomainPresenceConsumer.snapshot(),
 	});
-	persistCodexCatalogChecked = () => sessionResumeDurable.saveChecked(sessionResumeSnapshot(false));
-	if (!codexCatalogWriter) throw new Error("Codex catalog writer was not initialized");
+	persistAgentCatalogChecked = () => sessionResumeDurable.saveChecked(sessionResumeSnapshot(false));
+	if (!codexCatalogWriter || !copilotCatalogWriter) throw new Error("Agent catalog writers were not initialized");
 	const codexAgentService = new CodexAgentService({
 		auth: sessionAuthority,
 		sessionStore,
 		offlineCatalog,
 		catalogWriter: codexCatalogWriter,
+	});
+	const copilotAgentService = new CopilotAgentService({
+		auth: sessionAuthority,
+		sessionStore,
+		offlineCatalog,
+		catalogWriter: copilotCatalogWriter,
 	});
 
 	// The federation replay-guard wires its own persistence here once built (it only
@@ -621,6 +640,17 @@ export async function startGateway(): Promise<void> {
 	});
 
 	const codexRoute = new CodexRoute({ service: codexAgentService, relay: codexRelay });
+	const copilotRelay = new CopilotRelay({
+		service: copilotAgentService,
+		sessionStore,
+		sendToHost: (message) => {
+			const hostWs = liveHostSocket();
+			if (!hostWs) return false;
+			hostWs.send(JSON.stringify(message));
+			return true;
+		},
+	});
+	const copilotRoute = new CopilotRoute({ service: copilotAgentService, relay: copilotRelay });
 
 	async function relayToHost(op: HostOp): Promise<HostOpResult> {
 		const hostWs = liveHostSocket();
@@ -1057,6 +1087,7 @@ export async function startGateway(): Promise<void> {
 		onCatalogChange: () => presence.markDirty(),
 		onDaemonCapabilities: (capabilities) => daemonCapabilityStore.declare(capabilities),
 		onCodexHostMessage: (msg) => codexRelay.handleHostMessage(msg),
+		onCopilotHostMessage: (msg) => copilotRelay.handleHostMessage(msg),
 		// A confirmed daemon derivation for one team; undefined means derivation became impossible for
 		// it (a peek-failure streak, or it dropped off the watch list) - a clear to unknown, distinct
 		// from observing it as not-working.
@@ -1471,6 +1502,7 @@ export async function startGateway(): Promise<void> {
 		// One door for all five Codex tools, so session authority and validation cannot drift apart
 		// across them.
 		if (method === "POST" && url.pathname === "/codex") return codexRoute.handle(req, body);
+		if (method === "POST" && url.pathname === "/copilot") return copilotRoute.handle(req, body);
 
 		// Blob transfer for agent callers. The console reaches the same store through its sealed
 		// ops; this is the plain-HTTP door for an in-process MCP, which has no relay to ride.
