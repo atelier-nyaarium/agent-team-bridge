@@ -347,7 +347,7 @@ describe("the gated capability ids", () => {
 		// above cannot see it. Naming it here keeps a rename from silently un-gating the Codex tools.
 		expect(GATED_CAPABILITY_IDS).toContain(CODEX_THINKING_CAPABILITY_ID);
 		expect(GATED_CAPABILITY_IDS).toContain(COPILOT_THINKING_CAPABILITY_ID);
-		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
+		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
 			CODEX_THINKING_CAPABILITY_ID,
 		]);
 	});

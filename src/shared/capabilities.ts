@@ -76,10 +76,10 @@ Copilot uses the normal CLI login. Run \`copilot\` and \`/login\` if authenticat
 // disabled daemon replace a declaration it made while the feature was on.
 export function daemonCapabilityDeclaration(env: Record<string, string | undefined>): Capability[] {
 	return [
-		...(env.CODEX_THINKING_ENABLED === "true"
+		...(env.CODEX_AGENT_ENABLED === "true"
 			? [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: CODEX_THINKING_INSTRUCTIONS }]
 			: []),
-		...(env.COPILOT_THINKING_ENABLED === "true"
+		...(env.COPILOT_AGENT_ENABLED === "true"
 			? [{ id: COPILOT_THINKING_CAPABILITY_ID, instructions: COPILOT_THINKING_INSTRUCTIONS }]
 			: []),
 	];

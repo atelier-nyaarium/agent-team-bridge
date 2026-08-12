@@ -574,7 +574,7 @@ the daemon may retire it; `failed` means this gateway could not build a record f
 fact about this code, so it is never acknowledged. Collapsing them let a reducer bug make the daemon
 delete the only copy of a terminal.
 
-**Enabling it:** set `CODEX_THINKING_ENABLED=true` in `.env` and restart the host daemon. That is the
+**Enabling it:** set `CODEX_AGENT_ENABLED=true` in `.env` and restart the host daemon. That is the
 only switch. A session picks the tools up at its next start, never mid-session.
 
 **Residual risk, stated plainly:** a Codex thread holds workspace-write and network access for its
@@ -594,7 +594,7 @@ target, an authenticated session-owned catalog, durable operation ids, fenced re
 start / message / await / stop / list tools. Copilot follow-ups are accepted only after the previous
 turn is idle because ACP does not expose Codex's steer operation.
 
-**Enabling it:** set `COPILOT_THINKING_ENABLED=true` in `.env` and restart the host daemon. Log in
+**Enabling it:** set `COPILOT_AGENT_ENABLED=true` in `.env` and restart the host daemon. Log in
 with the normal Copilot CLI (`copilot`, then `/login`); no external API key is used or forwarded.
 The ACP client selects `gpt-5.6-luna` by default and enables Copilot's agent permissions for the supervised
 target.
@@ -892,8 +892,8 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 | `DATA_DIR` | All durable state (default `/app/data`), deliberately separate from the log volume so clearing logs cannot wipe federation identity |
 | `FEDERATION_DIR` | Keypair, allowlist, transport.json, domain-id (default: inside `DATA_DIR`) |
 
-**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_THINKING_ENABLED` and
-`COPILOT_THINKING_ENABLED`. Set either to exactly `true` in `.env` to announce its capability at
+**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_AGENT_ENABLED` and
+`COPILOT_AGENT_ENABLED`. Set either to exactly `true` in `.env` to announce its capability at
 register; any other value announces its absence. `start-host-daemon.sh` / `.ps1` read `.env` and pass
 the settings through.
 

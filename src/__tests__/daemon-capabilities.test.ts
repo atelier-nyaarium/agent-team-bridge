@@ -37,22 +37,22 @@ const CODEX = { id: CODEX_THINKING_CAPABILITY_ID, instructions: "Delegate like s
 
 describe("what the daemon announces", () => {
 	it("declares codex-thinking only on the exact enabling value", () => {
-		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
+		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
 			CODEX_THINKING_CAPABILITY_ID,
 		]);
-		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "1" })).toEqual([]);
+		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "1" })).toEqual([]);
 		expect(daemonCapabilityDeclaration({})).toEqual([]);
 	});
 
 	it("carries the guidance along, so the tool has something to serve", () => {
-		expect(daemonCapabilityDeclaration({ CODEX_THINKING_ENABLED: "true" })[0]?.instructions).toContain("Codex");
+		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" })[0]?.instructions).toContain("Codex");
 	});
 
 	it("declares Copilot only on the exact enabling value", () => {
-		expect(daemonCapabilityDeclaration({ COPILOT_THINKING_ENABLED: "true" }).map((c) => c.id)).toEqual([
+		expect(daemonCapabilityDeclaration({ COPILOT_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
 			COPILOT_THINKING_CAPABILITY_ID,
 		]);
-		expect(daemonCapabilityDeclaration({ COPILOT_THINKING_ENABLED: "1" })).toEqual([]);
+		expect(daemonCapabilityDeclaration({ COPILOT_AGENT_ENABLED: "1" })).toEqual([]);
 	});
 });
 
@@ -197,7 +197,7 @@ describe("a declaration's whole journey to a session", () => {
 	}
 
 	it("reaches a session as a name in the block and guidance in the tool", () => {
-		const served = serve({ CODEX_THINKING_ENABLED: "true" }, [{ id: "designer", instructions: "Dock a card." }]);
+		const served = serve({ CODEX_AGENT_ENABLED: "true" }, [{ id: "designer", instructions: "Dock a card." }]);
 
 		expect(capabilityInstructions(served.capabilities)).toContain("`codex-thinking`, `designer`");
 		expect(capabilityInstructions(served.capabilities)).not.toContain("Dock a card.");
