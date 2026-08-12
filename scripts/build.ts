@@ -122,10 +122,14 @@ export function checkDerivedSites(root: string): void {
 /** Space-separated fields ahead of the path, per porcelain v2 record type. */
 const PATH_FIELD_OFFSET: Record<string, number> = { "1": 8, "2": 9, u: 10 };
 
+function isDistPath(file: string): boolean {
+	return file.split("/").includes(DIST_DIR);
+}
+
 /**
  * Tracked-but-uncommitted work in the tree, by porcelain v2 record type: `1` ordinary change, `2`
- * rename or copy, `u` unmerged. Untracked (`?`) and ignored (`!`) are deliberately not counted - a
- * scratch file lying around is no reason to block a release.
+ * rename or copy, `u` unmerged. Untracked (`?`), ignored (`!`), and generated `dist` files are not
+ * counted because the build removes and recreates them.
  *
  * This gates the bump so the rollback on a failed build can be a plain `git checkout --`: the only
  * changes to those files are the ones this script just made.
@@ -148,7 +152,8 @@ export function dirtyTrackedFiles(porcelainV2: string): string[] {
 			cut = next + 1;
 		}
 		if (cut === -1) continue;
-		dirty.push((line.slice(cut).split("\t")[0] ?? "").trim());
+		const file = (line.slice(cut).split("\t")[0] ?? "").trim();
+		if (file && !isDistPath(file)) dirty.push(file);
 	}
 	return dirty;
 }

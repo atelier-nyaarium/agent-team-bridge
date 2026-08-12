@@ -142,6 +142,15 @@ describe("the clean-tree gate", () => {
 		expect(dirtyTrackedFiles(`${headers}? scratch.txt\n! node_modules/\n`)).toEqual([]);
 	});
 
+	it("ignores tracked files under root and nested dist directories", () => {
+		const lines = [
+			"1 .M N... 100644 100644 100644 aaa bbb dist/main-mcp.js",
+			"1 .M N... 100644 100644 100644 aaa bbb src/dist/generated.js",
+			"1 .M N... 100644 100644 100644 aaa bbb src/main-mcp.ts",
+		].join("\n");
+		expect(dirtyTrackedFiles(headers + lines)).toEqual(["src/main-mcp.ts"]);
+	});
+
 	it("keeps spaces in a path rather than truncating at the first one", () => {
 		expect(dirtyTrackedFiles(`${headers}1 .M N... 100644 100644 100644 abc def my notes.md`)).toEqual([
 			"my notes.md",
