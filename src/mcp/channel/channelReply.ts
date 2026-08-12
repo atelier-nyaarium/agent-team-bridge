@@ -88,13 +88,15 @@ export function registerChannelReply(mcpServer: McpServer, capabilities: Capabil
 		"channel_reply",
 		{
 			title: "Channel Reply",
-			description: `Reply to an incoming channel message.
+			description: `
+# Channel Reply
 
-Channel conversations are streams. Call this any number of times on the same session_id. There is no finality or "done" status.
+Reply to an incoming channel message. Conversations are streams, so call this repeatedly on the same \`session_id\` when needed.
 
-session_id, title, summary, full and fullSpoken are all required.
+\`session_id\`, \`title\`, \`summary\`, \`full\`, and \`fullSpoken\` are required.
 
-Send responses verbatim unless the requester asked for a summary.${guidance}`,
+Send responses verbatim unless the requester asked for a summary.${guidance}
+`.trim(),
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: ChannelReplySchema as any,
 		},
@@ -107,7 +109,13 @@ export function registerChannelReplyStructured(mcpServer: McpServer): void {
 		"channel_reply_structured",
 		{
 			title: "Channel Reply (Structured)",
-			description: `Reply to a request that carried a reply_schema (e.g. the bridge handshake). responseData is a native object matching that schema. Use ONLY when the inbound <channel> tag has a reply_schema attribute; for all other replies use channel_reply.`,
+			description: `
+# Channel Reply (Structured)
+
+Reply to a request with \`reply_schema\`, such as the bridge handshake. \`responseData\` must match that schema.
+
+Use only when the inbound \`<channel>\` tag has \`reply_schema\`. Otherwise use \`channel_reply\`.
+`.trim(),
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: ChannelReplyStructuredSchema as any,
 		},

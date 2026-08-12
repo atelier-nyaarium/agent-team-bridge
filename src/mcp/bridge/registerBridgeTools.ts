@@ -33,15 +33,15 @@ const DISABLED_TOOLS: Array<{ name: string; title: string; description: string }
 	{
 		name: "crosstalk_discover",
 		title: "Crosstalk Discover",
-		description: "List all active teams on the bridge network.",
+		description: `List reachable bridge teams.`,
 	},
-	{ name: "crosstalk_send", title: "Crosstalk Send", description: "Send a request to another team." },
-	{ name: "crosstalk_wait", title: "Crosstalk Wait", description: "Wait N seconds before retrying." },
-	{ name: "channel_reply", title: "Channel Reply", description: "Reply to an incoming channel message." },
+	{ name: "crosstalk_send", title: "Crosstalk Send", description: `Send a request to another team.` },
+	{ name: "crosstalk_wait", title: "Crosstalk Wait", description: `Wait before retrying.` },
+	{ name: "channel_reply", title: "Channel Reply", description: `Reply to an incoming channel message.` },
 	{
 		name: "channel_reply_structured",
 		title: "Channel Reply (Structured)",
-		description: "Reply to a request that carried a reply_schema.",
+		description: `Reply to a request with \`reply_schema\`.`,
 	},
 ];
 

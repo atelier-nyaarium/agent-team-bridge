@@ -17,7 +17,11 @@ const ReloadPluginsSchema = z.object({
 		.string()
 		.optional()
 		.describe(
-			`Host-only. Team name to target (e.g. "evie-bot"). Resolves to container "{team}_devcontainer-dev-1". Omit to target the host's own session.`,
+			`
+Host-only target \`team\`, e.g. \`evie-bot\`.
+
+Resolves to \`{team}_devcontainer-dev-1\`. Omit for the host session.
+`.trim(),
 		),
 });
 type ReloadPluginsArgs = z.infer<typeof ReloadPluginsSchema>;
@@ -131,14 +135,21 @@ export function spawnReloadPlugins(target: TmuxTarget): string {
 }
 
 const description = `
-Automate the plugin update sequence for a Claude Code session.
-Spawns a background script that drives the tmux session through:
-1. /plugin update on the atelier-nyaarium marketplace (covers both switchboard and nyaaskills)
-2. /reload-plugins, which reconnects the plugin MCP servers on its own
+# Reload Plugins
 
-The tool returns immediately. The script waits for the current tool call to finish before starting.
-On the host, omit 'team' to target the host session, or provide 'team' to target a devcontainer.
-In a container, always targets the local session (team param is ignored).
+Update plugins for a Claude Code session.
+
+## Sequence
+
+1. \`/plugin\` update in the \`atelier-nyaarium\` marketplace, covering \`switchboard\` and \`nyaaskills\`.
+2. \`/reload-plugins\`, which reconnects plugin MCP servers.
+
+Returns immediately. The script waits for the current tool call to finish.
+
+## Targeting
+
+- On the host, omit \`team\` for this session or provide it for a devcontainer.
+- In a container, targets this session and ignores \`team\`.
 `.trim();
 
 export function registerReloadPlugins(mcpServer: McpServer): void {

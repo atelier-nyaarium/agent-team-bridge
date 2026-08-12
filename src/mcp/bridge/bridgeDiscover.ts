@@ -112,13 +112,15 @@ function formatSessionLine(t: DiscoverEntry): string {
 	return `${name}: ${status}`;
 }
 
-const DESCRIPTION = `List the agent teams reachable on the bridge (yours excluded), grouped by team.
+const DESCRIPTION = `
+# Crosstalk Discover
 
-Every team gets a header, its spawn-point address, even one with no active session. That header alone is not a valid crosstalk_send target; see crosstalk_send for starting a session under it.
+List reachable agent teams, excluding this session.
 
-Each active session nests under its team header at its own full address.
+Each team has a spawn-point address. A spawn point without a session is not a valid target. Use \`crosstalk_send\` with \`displayLabel\` to create a session under it.
 
-The human's console and host daemon are hidden. Asleep sessions show when they were last seen.`;
+Active sessions appear under each team at their full addresses. Asleep sessions show their last-seen time.
+`.trim();
 
 export function registerBridgeDiscover(mcpServer: McpServer): void {
 	mcpServer.registerTool(

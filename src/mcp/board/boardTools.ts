@@ -1,7 +1,7 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import crypto from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { BOARD_BODY_MAX } from "../../shared/schemas.js";
 import { sweepStaging } from "../blobTransfer.js";
@@ -11,12 +11,6 @@ import { EVIE_FILES_DIR, materializeFiles, safeFilename } from "../channel/evieF
 ////////////////////////////////
 //  Schemas
 
-/** No depth limit is enforced anywhere; a refusal at depth five would fail a write the owner never
- * sees a reason for. The ask lives in the parameter text instead. The scope sentence does describe a
- * real refusal, so it has to be here - the tool text is the only place an agent reads it. */
-const PARENT_TEXT =
-	"Entry id to nest under, one you hold - claim a backlog entry first. Omit for top level. No depth limit, but keep trees 4 deep or under.";
-
 const ID = z.string().min(1).max(64);
 
 const ListInputSchema = {
@@ -25,9 +19,9 @@ const ListInputSchema = {
 		.optional()
 		.describe(
 			`
-\`unclaimed\` = The backlog only
-\`session\` = Your taskboard only
-\`all\` = Both (default)
+\`unclaimed\` - backlog only
+\`session\` - this session's task board
+\`all\` - both (default)
 `.trim(),
 		),
 };
@@ -39,9 +33,9 @@ const ClaimInputSchema = {
 const ReleaseInputSchema = {
 	id: ID.describe(
 		`
-Entry to give up, along with its whole subtree.
+Entry and subtree to release to the backlog.
 
-Only for work you are not going to do.
+Use only for work you will not do.
 `.trim(),
 	),
 };
@@ -50,25 +44,36 @@ const CreateInputSchema = {
 	title: z.string().min(1).max(500).describe(`One line naming the work.`),
 	assignTo: z.enum(["self", "backlog"]).describe(
 		`
-self = onto your taskboard, you work it.
-backlog = the owner's backlog, work you are not doing.
+\`self\` - assign to this session
+\`backlog\` - leave unassigned
 `.trim(),
 	),
-	body: z.string().max(BOARD_BODY_MAX).optional().describe(`Longer detail. The owner reads this.`),
-	parent: ID.optional().describe(PARENT_TEXT),
+	body: z.string().max(BOARD_BODY_MAX).optional().describe(`Optional details for the owner.`),
+	parent: ID.optional().describe(
+		`
+Parent entry you hold. Claim a backlog entry first.
+
+Omit for top level. No depth limit. Keep trees four levels deep or fewer.
+`.trim(),
+	),
 };
 
 const UpdateInputSchema = {
 	id: ID.describe(`Entry to change. Must be one you hold.`),
 	title: z.string().min(1).max(500).optional().describe(`Replaces the title.`),
-	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replaces the body. null clears it.`),
-	state: z
-		.enum(["open", "in_progress", "paused", "done", "cancelled"])
-		.optional()
-		.describe(`open, in_progress, paused, done, cancelled.`),
+	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replaces the body. \`null\` clears it.`),
+	state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]).optional().describe(`Work state.`),
 	// nullable AND optional: absent means leave the placement alone, null means move to top level.
 	// Legal here because MCP inputs never pass through the Kotlin codegen.
-	parent: ID.nullable().optional().describe(`${PARENT_TEXT} null moves it to top level.`),
+	parent: ID.nullable()
+		.optional()
+		.describe(
+			`
+Parent entry you hold. Claim a backlog entry first.
+
+Omit to keep the parent. \`null\` moves the entry to top level. No depth limit. Keep trees four levels deep or fewer.
+`.trim(),
+		),
 };
 
 const ClearInputSchema = {};
@@ -78,7 +83,7 @@ const FetchAttachmentsInputSchema = {
 	filenames: z
 		.array(z.string().min(1).max(255))
 		.optional()
-		.describe(`Only these files, by the names the list showed. Omit for all of them.`),
+		.describe(`Attachment filenames from \`taskBoardList\`. Omit for all attachments.`),
 };
 
 ////////////////////////////////
@@ -87,89 +92,83 @@ const FetchAttachmentsInputSchema = {
 const LIST_DESCRIPTION = `
 # List Task Board Entries
 
-Two halves, and the names matter when you talk about them to the user:
-- **Your taskboard:** Entries assigned to this session.
-- **The backlog:** Unassigned entries. No session has claimed them.
+List entries assigned to this session and unclaimed backlog entries.
 
-Flat, with parent pointers. Rebuild the tree from those.
+Entries are flat with parent pointers. Rebuild the tree from them.
 `.trim();
 
 const CLAIM_DESCRIPTION = `
 # Claim Backlog Entry
 
-Move an entry, and everything nested under it, from the backlog onto your taskboard.
+Claim a backlog entry and its subtree for this session.
 
-## Exploding a list
+## Subtask lists
 
-When what you just claimed is one entry whose BODY is a list of subtasks, explode it.
+If the entry's \`body\` lists subtasks:
 
-- Create each item as a nested entry under it.
-- Clear the body you took them from.
-- Word each title better than the source line rather than copying it verbatim.
-- Keep any detail that does not fit a title in that child's own body.
+- Create each as a child entry.
+- Clear the source \`body\`.
+- Improve each title and move remaining detail into its \`body\`.
 `.trim();
 
 const RELEASE_DESCRIPTION = `
 # Release Task Board Entry
 
-Give an entry and its subtree up, back to the backlog, keeping its state, body and place in the tree.
+Release an entry and subtree to the backlog without changing its state, \`body\`, or tree position.
 
-Only for work you are NOT going to do. If in doubt, keep it.
-
-Finishing a plan, writing entries up, and handing a report to the owner are none of them a reason to
-release. The work is still yours.
+Release only work you will not do. Keep it after reporting or planning it.
 `.trim();
 
 const CREATE_DESCRIPTION = `
 # Create Task Board Entry
 
-Add an entry to the board.
+Create a task board entry.
 
-assignTo has no default on purpose. Say whether this lands on your taskboard because you are doing
-it soon, or in the backlog because it's not your concern.
+Set \`assignTo\` explicitly:
 
-Breaking your own work into steps is \`self\` every time, including the steps you have not started.
+- \`self\` - work for this session
+- \`backlog\` - unassigned work
+
+Use \`self\` for every step of your own work, including unstarted steps.
 `.trim();
 
 const UPDATE_DESCRIPTION = `
 # Update Task Board Entry
 
-Change an entry on your taskboard. Omitted fields are left alone.
+Update an entry on this session's task board. Omitted fields stay unchanged.
 
 Claim a backlog entry before updating it.
 
-## State carries through the tree
+## State cascades
 
 Mark only the entry you actually finished.
 
 - Finishing the last unfinished child finishes its parent.
-- Finishing a parent finishes everything under it.
-- Putting anything back to unfinished reopens the finished entries above it.
+- Finishing a parent finishes its descendants.
+- Reopening work reopens finished ancestors.
 
-The reply names whatever moved this way, already saved, for you to mention rather than act on.
+The reply lists saved cascaded changes.
 `.trim();
 
 const CLEAR_DESCRIPTION = `
 # Clear Task Board Entries
 
-Trash your taskboard's done and cancelled entries. The owner can restore them for 30 days.
+Trash this session's \`done\` and \`cancelled\` entries. The owner can restore them for 30 days.
 `.trim();
 
 const FETCH_ATTACHMENTS_DESCRIPTION = `
 # Fetch Task Attachments
 
-Download an entry's attachments and return the paths they landed at.
+Download an entry's attachments and return local paths.
 
-The owner attaches these from their phone. You can read them, never add, change or remove one.
+The owner attaches files from their phone. You can read them but cannot change them.
 
-taskBoardList shows each entry's filenames. Name the ones you want, or omit filenames for all.
+\`taskBoardList\` shows filenames. Set \`filenames\` to select files, or omit it for all.
 
-## What the list cannot tell you
+## Attachment notices
 
-- A "changed" notice carries the entry id alone, so a new picture looks exactly like an edited
-  title. Re-read the entry to find out.
-- An entry nobody holds announces nothing, so a picture the owner adds to a backlog item arrives
-  silently. Look when you claim it.
+- A \`changed\` notice names only the entry \`id\`. Re-read the entry to identify the change.
+- Unclaimed entries send no notice. Check attachments when you claim one.
 `.trim();
 
 /**

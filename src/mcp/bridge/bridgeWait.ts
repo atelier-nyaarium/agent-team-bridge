@@ -17,7 +17,7 @@ export function registerBridgeWait(mcpServer: McpServer): void {
 		"crosstalk_wait",
 		{
 			title: "Crosstalk Wait",
-			description: `Wait N seconds before retrying. Use when another team asks you to wait.`,
+			description: `Wait before retrying when another team asks.`,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeWaitSchema as any,
 		},

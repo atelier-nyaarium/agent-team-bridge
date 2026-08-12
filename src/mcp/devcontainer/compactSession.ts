@@ -18,11 +18,23 @@ const CompactSessionSchema = z.object({
 		})
 		.describe(
 			`
-One long single line of plain-text prose steering the compaction pass (no newlines). Spell out:
-- Mandatory if a team via TeamCreate exists: preserve as verbatim as possible the current team_name, every teammate's name (the messaging key, not the UUID) with their agentType, the config path ~/.claude/teams/{team_name}/config.json, the task list path ~/.claude/tasks/{team_name}/, and any in-flight task IDs with owners.
-- What to keep (open threads, unresolved decisions, how to call a chain of Tools).
-- Anything that must survive verbatim (exact error strings, commit hashes, user-supplied text).
-- What to discard (stale exploration, failed attempts).
+Compaction instructions. One plain-text line with no newlines.
+
+## Preserve
+
+- Open threads, unresolved decisions, and tool-call sequences.
+- Exact error strings, commit hashes, and user-supplied text.
+- Exclude stale exploration and failed attempts.
+
+## Team state
+
+If a team exists via \`TeamCreate\`, preserve as verbatim as possible:
+
+- the current \`team_name\`
+- each teammate's messaging name, not UUID, with \`agentType\`
+- \`~/.claude/teams/{team_name}/config.json\`
+- \`~/.claude/tasks/{team_name}/\`
+- in-flight task IDs and owners
 `.trim(),
 		),
 });
@@ -35,9 +47,15 @@ const compactSchema: any = CompactSessionSchema;
 //  Functions & Helpers
 
 const description = `
-Compact the local Claude Code session by sending "/compact <instructions>" to tmux pane 0.
+# Compact Session
 
-Requires the session to be idle: the "/compact" line only takes effect when the REPL prompt is accepting input. Before calling this tool, schedule a one-shot CronCreate for 2 minutes later with prompt "Resume.", then stop the current turn so the session goes idle.
+Send \`/compact <instructions>\` to local tmux pane \`0\`.
+
+## Idle session
+
+\`/compact\` only works when the REPL prompt accepts input.
+
+Before calling, schedule one-shot \`CronCreate\` for two minutes later with prompt \`Resume.\`, then stop the current turn.
 `.trim();
 
 export function registerCompactSession(mcpServer: McpServer): void {

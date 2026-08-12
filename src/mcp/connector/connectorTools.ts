@@ -30,10 +30,9 @@ export default function (z) {
 \t\t{
 \t\t\tname: "foo",
 \t\t\ttitle: "Foo",
-\t\t\tdescription:
-\t\t\t\t"A simple test tool for validating the connector works. Accepts a numeric 'bar' parameter and echoes it back.",
+\t\t\tdescription: \`Test connector calls by echoing a number.\`,
 \t\t\tschema: z.object({
-\t\t\t\tbar: z.number().describe("Some numeric value."),
+\t\t\t\tbar: z.number().describe(\`Numeric value.\`),
 \t\t\t}),
 \t\t},
 \t];
@@ -58,7 +57,7 @@ export function registerConnectorTools(
 		"mcpConnectorStatus",
 		{
 			title: "MCP Connector Status",
-			description: `Show the connector's mode (HTTP/HTTPS), auth status, and connected game clients with their IDs.`,
+			description: `Show connector status and connected clients.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -111,7 +110,7 @@ export function registerConnectorTools(
 		"mcpConnectorServe",
 		{
 			title: "Start Connector",
-			description: `Start serving project tools on the connector port. Fails if another session already owns the port.`,
+			description: `Start serving project tools on the connector port.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -135,7 +134,7 @@ export function registerConnectorTools(
 		"mcpConnectorUnserve",
 		{
 			title: "Stop Connector",
-			description: `Stop serving project tools. Disconnects all game clients. Another IDE session can then take over with mcpConnectorServe.`,
+			description: `Stop serving project tools and disconnect clients.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -154,7 +153,20 @@ export function registerConnectorTools(
 		"mcpConnectorOpen",
 		{
 			title: "Open MCP Connector",
-			description: `Open the connector to the public with HTTPS/WSS. Requires both a token (mcpConnectorGenerateToken) and certs (mcpConnectorGenerateCert). Warning: disconnects all currently connected game clients.`,
+			description: `
+# Open MCP Connector
+
+Open the connector publicly with \`HTTPS/WSS\`.
+
+## Required
+
+- \`mcpConnectorGenerateToken\`
+- \`mcpConnectorGenerateCert\`
+
+## Effect
+
+Disconnects connected clients.
+`.trim(),
 			inputSchema: {},
 		},
 		async () => {
@@ -194,7 +206,7 @@ export function registerConnectorTools(
 		"mcpConnectorClose",
 		{
 			title: "Close MCP Connector",
-			description: `Revert the connector to localhost-only HTTP. Disconnects remote clients.`,
+			description: `Restore localhost-only HTTP and disconnect remote clients.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -221,13 +233,13 @@ export function registerConnectorTools(
 	// mcpConnectorGenerateCert
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const generateCertObj: any = z.object({
-		domain: z.string().optional().describe(`Domain for the certificate SAN. Defaults to "localhost".`),
+		domain: z.string().optional().describe(`Certificate SAN domain. Defaults to \`localhost\`.`),
 	});
 	mcpServer.registerTool(
 		"mcpConnectorGenerateCert",
 		{
 			title: "Generate TLS Certificate",
-			description: `Generate a self-signed CA and server certificate. Writes to .claude/connector/. Required before mcpConnectorOpen.`,
+			description: `Generate self-signed certificates in \`.claude/connector/\` for \`mcpConnectorOpen\`.`,
 			inputSchema: generateCertObj,
 		},
 		async ({ domain: domainArg }: { domain?: string }) => {
@@ -270,7 +282,7 @@ export function registerConnectorTools(
 		"mcpConnectorGenerateToken",
 		{
 			title: "Generate Auth Token",
-			description: `Generate a bearer token for authenticating game client connections. Required before mcpConnectorOpen. Token is persisted in .claude/connector/token.`,
+			description: `Generate and persist a bearer token for \`mcpConnectorOpen\`.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -299,13 +311,13 @@ export function registerConnectorTools(
 	// mcpConnectorDisconnect
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const disconnectObj: any = z.object({
-		clientId: z.string().describe(`6-char client hash from mcpConnectorStatus.`),
+		clientId: z.string().describe(`Six-character client hash from \`mcpConnectorStatus\`.`),
 	});
 	mcpServer.registerTool(
 		"mcpConnectorDisconnect",
 		{
 			title: "Disconnect Game Client",
-			description: `Disconnect a game client by its 6-char ID. Pending tool invocations on that client will fail. Get IDs from mcpConnectorStatus.`,
+			description: `Disconnect \`clientId\`, ending its pending tool invocations.`,
 			inputSchema: disconnectObj,
 		},
 		async ({ clientId }: { clientId: string }) => {
@@ -326,7 +338,7 @@ export function registerConnectorTools(
 		"mcpConnectorClientBundle",
 		{
 			title: "Get Client Connection Bundle",
-			description: `Generate a connect.json and ca.crt bundle for a game tester to copy into their game's mcp-connector/ folder.`,
+			description: `Generate \`connect.json\` and \`ca.crt\` for a game's \`mcp-connector/\` folder.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -370,7 +382,7 @@ export function registerConnectorTools(
 			"mcpConnectorCreateSchema",
 			{
 				title: "Create MCP Schema",
-				description: `No .claude/connector/mcp-schema.js found. Run this to generate an example schema. Use /mcp to restart after editing.`,
+				description: `Create an example \`.claude/connector/mcp-schema.js\` tool schema.`,
 				inputSchema: {},
 			},
 			async () => {

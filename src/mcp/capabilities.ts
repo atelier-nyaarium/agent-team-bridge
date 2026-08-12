@@ -138,10 +138,6 @@ export function hasCapability(capabilities: Capability[], id: CapabilityId): boo
 // can decide does not apply yet, and the block holds nothing else for it to fall back on.
 export function capabilityInstructions(capabilities: Capability[]): string {
 	if (capabilities.length === 0) return "";
-	const names = capabilities.map((c) => c.id).join(", ");
-	return [
-		`\n\nSwitchboard capabilities enabled: ${names}.`,
-		"Call switchboard_capabilities once to understand their features.",
-		"If your context has just been compacted, call it again.",
-	].join(" ");
+	const names = capabilities.map((c) => `\`${c.id}\``).join(", ");
+	return `\n\n## Capabilities\n\nEnabled: ${names}.\n\nCall \`switchboard_capabilities\` after receiving a channel message or compacting.`;
 }

@@ -11,30 +11,35 @@ import { parseDsCard } from "./dsCard.js";
 
 const PushCardSchema = z
 	.object({
-		session_id: z
-			.string()
-			.min(1)
-			.describe("The channel session_id this design belongs to (from the inbound <channel> tag)."),
+		session_id: z.string().min(1).describe(`Channel \`session_id\` from the inbound \`<channel>\` tag.`),
 		name: z
 			.string()
 			.min(1)
 			.describe(
-				'The card\'s filename, e.g. "editor-form.html". Pushing the same name again updates it in place.',
+				`
+Card filename, e.g. \`editor-form.html\`.
+
+A duplicate \`name\` updates the card.
+`.trim(),
 			),
 		html: z
 			.string()
 			.min(1)
 			.describe(
-				'The card\'s full self-contained HTML (inline CSS/SVG, no external assets). First line must be the `<!-- @dsCard group="..." width="..." height="..." -->` marker.',
+				`
+Self-contained \`HTML\` with inline \`CSS\` and \`SVG\`. No external assets.
+
+The first line must be \`<!-- @dsCard group="..." width="..." height="..." -->\`.
+`.trim(),
 			),
-		message: z.string().optional().describe("A short accompanying message shown alongside the card."),
+		message: z.string().optional().describe(`Optional message displayed beside the card.`),
 	})
 	.strict();
 type PushCardArgs = z.infer<typeof PushCardSchema>;
 
 const DeleteCardSchema = z
 	.object({
-		fileName: z.string().min(1).describe("The card's filename to delete, matching what it was pushed as."),
+		fileName: z.string().min(1).describe(`Card \`fileName\` to delete.`),
 	})
 	.strict();
 type DeleteCardArgs = z.infer<typeof DeleteCardSchema>;
@@ -43,11 +48,21 @@ type DeleteCardArgs = z.infer<typeof DeleteCardSchema>;
 //  Functions & Helpers
 
 const PUSH_DESCRIPTION = `
-Push a design card (a self-contained @dsCard-marked HTML file) into the dock of the given conversation. Same effect as attaching a marked .html file via channel_reply, but takes the HTML inline - no temp file needed. Pushing the same \`name\` again updates that card in place.
+# Push Design Card
+
+Push self-contained \`@dsCard\` \`HTML\` into the conversation's dock.
+
+Attaching marked \`.html\` through \`channel_reply\` has the same effect.
+
+A duplicate \`name\` updates the card.
 `.trim();
 
 const DELETE_DESCRIPTION = `
-Delete a design card from your own conversation's dock, by filename. Acts only on the calling conversation - there is no way to target a different one. Use when the human says something like "forget that design" or "that one was bad, remove it".
+# Delete Design Card
+
+Delete a card from the calling conversation's dock by \`fileName\`.
+
+Cannot target another conversation.
 `.trim();
 
 export function registerDesignerTools(mcpServer: McpServer): void {
@@ -66,12 +81,16 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		};
 		mcpServer.registerTool(
 			"designer_push_card",
-			{ title: "Designer Push Card", description: `[Disabled] ${PUSH_DESCRIPTION}`, inputSchema: {} },
+			{ title: "Designer Push Card", description: `Disabled. Set \`PROJECT_NAME\` to enable.`, inputSchema: {} },
 			async () => configError,
 		);
 		mcpServer.registerTool(
 			"designer_delete_card",
-			{ title: "Designer Delete Card", description: `[Disabled] ${DELETE_DESCRIPTION}`, inputSchema: {} },
+			{
+				title: "Designer Delete Card",
+				description: `Disabled. Set \`PROJECT_NAME\` to enable.`,
+				inputSchema: {},
+			},
 			async () => configError,
 		);
 		return;

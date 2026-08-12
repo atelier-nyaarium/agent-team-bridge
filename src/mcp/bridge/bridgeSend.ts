@@ -14,33 +14,50 @@ const BridgeSendSchema = z
 			.string()
 			.optional()
 			.describe(
-				`Target session - paste the address exactly as crosstalk_discover prints it (domain.gateway.spawn.session) - never shorten it, a shortened address resolves locally instead of to the intended target. An online session receives it directly, no invite step needed, whether it already messaged you, your human named it, or you're addressing it unprompted. An asleep session is woken on send. A session-less spawn-point (domain.gateway.spawn, no session segment) is not itself a valid target - mint a new session under it instead by setting displayLabel (else the send fails, asking for one). A mint may pick a different session name than what you typed - the response names the resolved address; use that one for anything after the first message, not the address you originally sent to.`,
+				`
+Target session. Copy the full address from \`crosstalk_discover\`: \`domain.gateway.spawn.session\`.
+
+Never shorten it. A shortened address resolves locally instead of to the intended target.
+
+- An online session receives it directly, with no invite step.
+- An asleep session is woken on send.
+- A spawn point without a session is not a valid target. Set \`displayLabel\` to create a session under it.
+
+The created session may have a different name. Use the resolved address from the response afterwards.
+`.trim(),
 			),
-		body: z
-			.string()
-			.optional()
-			.describe(
-				`Full Markdown formatted details of the request. Provide a detailed description and any context that would be helpful to the other team.`,
-			),
+		body: z.string().optional().describe(`Full Markdown request details and relevant context.`),
 		displayLabel: z
 			.string()
 			.min(1)
 			.max(64)
 			.optional()
 			.describe(
-				`Human-readable label for the new session (a short human name like "Bug Investigation", never a slug/id/machine-generated string) - required to create a not-yet-existing target; ignored when the target already exists.`,
+				`
+Human-readable label for a new session, e.g. \`Bug Investigation\`. Never a slug, \`id\`, or generated string.
+
+Required to create a target that does not yet exist. Ignored when the target already exists.
+`.trim(),
 			),
 		session_id: z
 			.string()
 			.optional()
 			.describe(
-				`Polling only: pass a session_id (with no body) to peek at the latest result for an existing conversation. Omit this field for sends - channel conversations are auto-derived from the sender/target pair.`,
+				`
+Polling only. Pass \`session_id\` with no \`body\` to peek at an existing conversation's latest result.
+
+Omit it for sends. Channel conversations derive from the sender and target pair.
+`.trim(),
 			),
 		attachments: z
 			.array(z.string())
 			.optional()
 			.describe(
-				`Absolute paths to send alongside the body. The receiving agent gets them written to disk and listed as a [FILES] block of paths to Read, so this is how you hand a screenshot or a log to the other team for direct inspection. Requires a body.`,
+				`
+Absolute paths to send with \`body\`. Requires \`body\`.
+
+The receiving agent gets local files listed in a \`[FILES]\` block.
+`.trim(),
 			),
 	})
 	.strict();
@@ -55,19 +72,27 @@ type SendResult = ResponsePayload & { error?: string; available?: string[] };
 //  Functions & Helpers
 
 const description = `
+# Crosstalk Send
+
 Send a request to another team.
 
-Two call patterns:
-1. Send: provide to + body. The conversation with that team is automatically reused across all your messages; you do not manage session_ids.
-2. Poll: provide session_id only (no body). Peeks at the latest stored result for an existing conversation without consuming it. Rarely needed for channel-mode teams since responses arrive via push.
+## Send
 
-Channel-mode teams (Claude): responses are pushed back automatically as <channel> notifications. No polling needed. The target team can reply multiple times (progress updates, phase reports) without closing the conversation; just keep watching the channel.
+Provide \`to\` and \`body\`. Conversations are reused automatically; do not manage \`session_id\` values.
 
-Set attachments (absolute paths) when the other team needs to see an artifact rather than a description of one, such as a screenshot or a failing log. They arrive written to disk with the paths listed for the recipient to Read, and replies can carry attachments back the same way.
+## Poll
 
-The owner can see every exchange in their console.
+Provide \`session_id\` only, with no \`body\`, to peek at the latest stored result without consuming it.
 
-When relaying responses back to the user, send them verbatim unless the user explicitly asked for a summary.
+## Replies
+
+Channel-mode replies arrive as \`<channel>\` notifications. A team may send multiple progress updates without closing the conversation.
+
+## Attachments
+
+Set \`attachments\` when the team needs an artifact, such as a screenshot or log. Replies can attach files too.
+
+Relay responses verbatim unless the user requested a summary.
 `.trim();
 
 async function formatResult(

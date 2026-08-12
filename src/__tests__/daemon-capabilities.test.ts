@@ -191,7 +191,7 @@ describe("a declaration's whole journey to a session", () => {
 	it("reaches a session as a name in the block and guidance in the tool", () => {
 		const served = serve({ CODEX_THINKING_ENABLED: "true" }, [{ id: "designer", instructions: "Dock a card." }]);
 
-		expect(capabilityInstructions(served.capabilities)).toContain("codex-thinking, designer");
+		expect(capabilityInstructions(served.capabilities)).toContain("`codex-thinking`, `designer`");
 		expect(capabilityInstructions(served.capabilities)).not.toContain("Dock a card.");
 		expect(renderCapabilities(served.capabilities, null)).toContain("codexStartAgent");
 	});

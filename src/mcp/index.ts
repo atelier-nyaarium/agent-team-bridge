@@ -1,6 +1,6 @@
+import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import fs from "node:fs";
 import packageJson from "../../package.json";
 import { CODEX_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
 import { isInsideContainer } from "../shared/env.js";

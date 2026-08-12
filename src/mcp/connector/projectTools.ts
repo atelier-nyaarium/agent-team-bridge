@@ -156,13 +156,11 @@ export async function registerProjectTools(
 			clientId: z
 				.string()
 				.optional()
-				.describe(`6-char client hash from mcpConnectorStatus. Use this or instance to target a client.`),
+				.describe(`Six-character client hash from \`mcpConnectorStatus\`. Use this or \`instance\`.`),
 			instance: z
 				.string()
 				.optional()
-				.describe(
-					`Instance name (from ?instance= query param on connect). Use this or clientId to target a client.`,
-				),
+				.describe(`Instance name from the \`?instance=\` connection query. Use this or \`clientId\`.`),
 			...tool.schema.shape,
 		};
 

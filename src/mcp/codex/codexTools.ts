@@ -1,5 +1,5 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import crypto from "node:crypto";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	CodexAwaitAgentInputSchema,
 	CodexListAgentsInputSchema,
@@ -15,46 +15,38 @@ import { routerPost } from "../bridge/helpers.js";
 const START_DESCRIPTION = `
 # Start Codex Agent
 
-Start a second-model-family thread this session owns, for a self-contained sub-task.
+Start a session-owned Codex agent for a self-contained subtask.
 
-Waits for the turn. A turn outliving the wait budget keeps running and your harness returns it later. Issue several in one message to start them together.
+Waits for the turn. A turn beyond the wait budget keeps running and is returned later.
 
-## Guardrails
+## Prompt
 
-Switchboard sets none. State them in the prompt: what it may write, whether it may reach the network, what done looks like.
+State allowed writes, network access, and completion criteria.
 
-Codex brings its own sandbox. Its shape is not yours to assume, so have the agent probe and report rather than guess. Restricting what the sandbox already forbids buys nothing.
+## Options
 
-Codex is **very literal**. Given a goal and no edges, it reaches that goal by whatever route works. A narrow scope gets excellent work; an open brief gets surprises.
+- \`model\` - optional and fixed for the agent's lifetime
+- \`cwd\` - host-session working directory, fixed for the agent's lifetime
 
-## Arguments
-
-- \`model\` - optional, fixed for the thread's life. An unoffered one is refused, not swapped.
-- \`cwd\` - where it runs. Fixed for the thread's life. Host sessions only.
-
-Setting \`cwd\` does NOT grant write access. Only your session's own project is writable, plus the temp dir. A thread pointed at a sibling project can read it and run its tests; it cannot edit it. Delegate edits only within your own project.
-
-A \`cwd\` that does not resolve falls back to your home directory rather than failing. Check the agent landed where you meant.
+\`cwd\` does not grant write access. Agents can write only this session's project and the temp directory. An unresolved \`cwd\` falls back to the home directory.
 
 ## Reuse
 
-Reuse an agent rather than starting one per attempt. A thread holding its own last three failures fixes the fourth. Follow up with \`codexMessageAgent\`.
+Reuse an agent with \`codexMessageAgent\` instead of starting one per attempt. The thread retains its history.
 
-The agent belongs to this session, not to its caller. If the caller dies, \`codexListAgents\` still returns it with its full history.
+Agents belong to this session, not their caller. Use \`codexListAgents\` to resume work after a caller ends.
 `.trim();
 
 const MESSAGE_DESCRIPTION = `
 # Message Codex Agent
 
-Send a follow-up prompt to a Codex agent this session owns.
+Send a follow-up prompt to a session-owned Codex agent.
 
-Prefer this over starting a new agent. The thread keeps what it has already read, tried and got wrong, so a follow-up naming the failure beats a fresh agent given the same brief.
+A follow-up keeps the agent's history. Repeat any guardrails that still apply.
 
-A running turn is STEERED, joining the work in flight rather than queueing. An idle agent starts a new turn.
+A running turn is steered. An idle agent starts a new turn.
 
-Guardrails do not carry over. Restate any that still apply.
-
-Waits for the turn. A turn outliving the wait budget keeps running and your harness returns it later.
+Waits for the turn. A turn beyond the wait budget keeps running and is returned later.
 `.trim();
 
 const AWAIT_DESCRIPTION = `
@@ -62,7 +54,7 @@ const AWAIT_DESCRIPTION = `
 
 Wait for a Codex agent's current turn to finish and return its outcome.
 
-Use to pick up a turn previously reported as \`waitTimedOut\`. If nothing is running, it returns the latest settled state immediately.
+Use after \`waitTimedOut\`. If no turn is running, returns the latest settled state.
 `.trim();
 
 const STOP_DESCRIPTION = `
@@ -70,19 +62,19 @@ const STOP_DESCRIPTION = `
 
 Ask a Codex agent to interrupt its current turn.
 
-Asynchronous. It returns once the request is durable; the turn's real ending arrives afterwards, and may still be a completion if the turn finished first. Stopping an idle agent is a no-op.
+Returns after the interrupt request is durable. The settled outcome arrives later. Stopping an idle agent is a no-op.
 
-Does NOT close the agent. The thread stays reusable via \`codexMessageAgent\`.
+The agent stays reusable with \`codexMessageAgent\`.
 
-Does not reach processes Codex started in the background.
+Does not stop background processes started by Codex.
 `.trim();
 
 const LIST_DESCRIPTION = `
 # List Codex Agents
 
-List this session's Codex agents with their full prompt and response history.
+List this session's Codex agents with their prompt and response history.
 
-Scoped to this session alone. Agents outlive the caller that started them, so this is how work is picked up after a subagent or workflow ends.
+Agents outlive their callers. Use this to resume work after a subagent or workflow ends.
 `.trim();
 
 /**

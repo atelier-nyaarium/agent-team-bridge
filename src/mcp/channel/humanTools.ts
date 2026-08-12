@@ -21,9 +21,7 @@ export const NotifyHumanSchema = z
 		attachments: z
 			.array(z.string())
 			.optional()
-			.describe(
-				`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`,
-			),
+			.describe(`Optional absolute attachment paths. Images render inline on the console.`),
 	})
 	.strict();
 type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
@@ -32,7 +30,18 @@ type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 //  Functions & Helpers
 
 const NOTIFY_DESCRIPTION = `
-Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), \`full\` the message body threaded under your team's name, and \`fullSpoken\` what the console speaks in full's place. All four are required. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
+# Notify Human
+
+Push a notification to every registered console.
+
+## Required fields
+
+- \`title\` - notification-bar line
+- \`summary\` - short text for console features
+- \`full\` - message body under this team's name
+- \`fullSpoken\` - spoken replacement for \`full\`
+
+Use for milestones and critical blockers. Use \`channel_reply\` for conversational replies.
 `.trim();
 
 // This and `channel_reply` are the ONLY tools whose body is scanned for refs, so their descriptions
@@ -45,7 +54,7 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 		"notify_human",
 		{
 			title: "Notify Human",
-			description: `${NOTIFY_DESCRIPTION}${capabilityInstructions(capabilities)}`,
+			description: `${NOTIFY_DESCRIPTION}${capabilityInstructions(capabilities)}`.trim(),
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {

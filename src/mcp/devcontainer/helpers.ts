@@ -64,7 +64,7 @@ function teardownContainer(projectPath: string): void {
 			stdio: "pipe",
 		});
 	} catch {
-		// non-fatal — compose project may not exist yet
+		// Non-fatal. Compose project may not exist yet.
 	}
 	try {
 		execSync(`docker network ls --filter "name=${composeName}" -q | xargs -r docker network rm`, {
@@ -114,7 +114,7 @@ const MARKETPLACE_SOURCE = "atelier-nyaarium/claude-marketplace";
 
 // Sets autoUpdate:true on the marketplace entry after `claude plugin install` creates it.
 // Everything else (enabledPlugins, marketplace source, installed_plugins.json) is written
-// by the CLI — this patch just flips the autoUpdate flag we want.
+// By the CLI. This patch sets the needed autoUpdate flag.
 const AUTOUPDATE_PATCH = JSON.stringify({
 	extraKnownMarketplaces: {
 		"atelier-nyaarium": { autoUpdate: true },

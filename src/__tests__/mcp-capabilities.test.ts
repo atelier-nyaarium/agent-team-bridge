@@ -296,7 +296,7 @@ describe("capabilityInstructions", () => {
 	it("names what is enabled and leaves the guidance to the tool", () => {
 		const text = capabilityInstructions([{ id: "designer", instructions: "Prefer Switchboard." }, { id: "notes" }]);
 
-		expect(text).toContain("designer, notes");
+		expect(text).toContain("`designer`, `notes`");
 		expect(text).not.toContain("Prefer Switchboard.");
 		expect(text).toContain("switchboard_capabilities");
 	});
