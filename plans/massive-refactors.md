@@ -448,3 +448,25 @@ Reported again, still deliberately NOT deleted: the four CodexAppServer result s
 protocol vocabulary in the App Server definition file, re-exported by the barrel; local mode did
 not consume them) and the console-protocol op types, both being protocol surface rather than
 orphaned code.
+
+## Refactor 11 - Cover the persistence codec
+
+The seam first, then the tests: `ChatPersistenceStore` (13 slot methods declared beside the codec,
+following the IdleSilenceStore precedent) lets a map-backed fake stand in for the Context-bound
+AppStateStore, so the codec's whole surface runs on the JVM. `AppStateStore` implements it with
+override markers; `ChatPersistence` takes the interface. Verified behavior-preserving by the audit
+pair and by every existing gate.
+
+Nineteen behavior tests over the fake, one per survival rule rather than per method: thread
+round-trips with dense ids, the waking-row drop and legacy pending demotion, non-address keys
+dropped on load and for good on re-save, malformed peer attribution degrading instead of surfacing,
+anchor first-run seeding pinned against persisted-wins AND against the empty-map answer (only a
+NULL slot reseeds), scheduled-send per-row poison isolation beside the blank-opId/zero-fireAt
+drops, legacy bare-string drafts coexisting with the current shape, draft locations hiding blanks,
+and per-row draft poison isolation.
+
+The audit's fix-then-ship was earned: labels and absence streaks initially had zero coverage, and
+nothing pinned the containment BOUNDARY. Threads, anchors and labels contain per FILE (one broken
+sibling blanks the whole map), while scheduled sends and drafts contain per ROW. Both postures are
+now asserted explicitly, so a future edit moving a codec across that line fails a test instead of
+silently changing what a torn file costs.
