@@ -342,3 +342,25 @@ re-extracted and re-diffed independently, then re-ran the Kotlin gate itself rat
 the report. Direction (b) from the entry (promote the vocabulary to a sealed type with label+color
 members) was not taken: the single-file vocabulary already makes a second copy unnatural, and the
 type change touches every render site for no defect it closes today.
+
+## Refactor 7 - ThreadScreen's 49 parameters become three assembled subjects
+
+Operation set (one commit):
+
+- add ComposerState (draft + sendAwaitingWake + 7 handlers), ScheduledSendState (record + 3
+  handlers), TerminalState (6 facts + refreshMs + 5 handlers) at the top of ThreadScreen.kt
+- rewrite the signature (49 -> 27 params) and every internal read onto the clusters
+- rewrite the one call site (MainActivity) to assemble the three objects inline
+- the naming collision closed: `waking` is now ComposerState.sendAwaitingWake and `wakePending` is
+  TerminalState.wakeInFlight, distinct names in distinct types, so swapping them is a type error
+- fold-in: the redundant safe call in the eligible expression, now in a touched line
+
+Verified with my own eyes on the sandbox emulator: the thread renders through the clusters (board
+strip, transcript, Designer dock, the seeded draft's attachment strip, composer input flowing), and
+the terminal view opens with its Wake path. Emulator shut down after.
+
+Audit (2 fresh Luna threads + Sonnet synthesis): the wiring table checked out completely, and the
+two wake booleans provably did not cross. The synthesis caught two stale comments the Codex threads
+missed, on top of the one they found; all three fixed. Lesson kept for future prompts: comments
+naming deleted parameters are a class the fidelity thread should grep for mechanically
+(old-name-in-comment survives every compile gate).

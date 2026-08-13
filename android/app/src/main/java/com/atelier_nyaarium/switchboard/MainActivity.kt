@@ -380,37 +380,41 @@ fun App(
 					repo.closeTab(t)
 				},
 				onSessions = { openTeam = null },
-				onSend = { text, uris -> repo.command { send(openTeam!!, text, uris) } },
-				draft = state.drafts[openTeam!!] ?: Draft(),
-				onDraftTextChange = { repo.setDraftText(openTeam!!, it) },
-				onAddDraftFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },
-				onRemoveDraftFile = { src -> repo.removeDraftFile(openTeam!!, src) },
-				// A draft file resolves the same way a tapped transcript attachment does, so the
-				// viewer sees one shape of OpenAttachment no matter which surface opened it.
-				onOpenDraftFile = { file ->
-					val rel = Attachments.relOf(file.src)
-					val resolved = Attachments.fileFor(context.filesDir, file.src)
-					if (rel != null && resolved != null) {
-						viewer = OpenAttachment(
-							resolved,
-							file.name,
-							file.mime,
-							rel,
-							file.size,
-							file.modifiedAt,
-							// Only reachable from here: a draft is the one place a file has a source
-							// the user might want to check before it goes anywhere.
-							location = state.drafts[openTeam!!]?.locations?.get(file.src),
-						)
-					}
-				},
-				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },
-				onClearDraft = { repo.clearDraft(openTeam!!) },
-				scheduledSend = state.scheduledSends[openTeam!!],
-				waking = openTeam!! in state.wakingTeams,
-				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
-				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
-				onCancelScheduledSend = { repo.cancelScheduledSendForEdit(openTeam!!) },
+				composer = ComposerState(
+					draft = state.drafts[openTeam!!] ?: Draft(),
+					sendAwaitingWake = openTeam!! in state.wakingTeams,
+					onSend = { text, uris -> repo.command { send(openTeam!!, text, uris) } },
+					onTextChange = { repo.setDraftText(openTeam!!, it) },
+					onAddFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },
+					onRemoveFile = { src -> repo.removeDraftFile(openTeam!!, src) },
+					// A draft file resolves the same way a tapped transcript attachment does, so the
+					// viewer sees one shape of OpenAttachment no matter which surface opened it.
+					onOpenFile = { file ->
+						val rel = Attachments.relOf(file.src)
+						val resolved = Attachments.fileFor(context.filesDir, file.src)
+						if (rel != null && resolved != null) {
+							viewer = OpenAttachment(
+								resolved,
+								file.name,
+								file.mime,
+								rel,
+								file.size,
+								file.modifiedAt,
+								// Only reachable from here: a draft is the one place a file has a source
+								// the user might want to check before it goes anywhere.
+								location = state.drafts[openTeam!!]?.locations?.get(file.src),
+							)
+						}
+					},
+					onAppendText = { insert -> repo.appendDraftText(openTeam!!, insert) },
+					onClear = { repo.clearDraft(openTeam!!) },
+				),
+				scheduled = ScheduledSendState(
+					record = state.scheduledSends[openTeam!!],
+					onSchedule = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
+					onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
+					onCancel = { repo.cancelScheduledSendForEdit(openTeam!!) },
+				),
 				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
@@ -424,30 +428,28 @@ fun App(
 					val forgotten = openTeam!!
 					repo.boardOps.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
 				},
-				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
-				// and the host machine's terminal is reached through the dedicated "host" target.
-				terminalEligible = isComposite(localFieldOf(openTeam!!)) &&
-					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
-				// The terminal view (docker-logs then tmux) opens by default only for a session already
-				// known to be stuck (sessionNeedsLogin below) - a plain booting session opens to chat
-				// instead, since there is nothing to watch until it either comes up or gets stuck. The
-				// Wake button reattaches an asleep one.
-				sessionStatus = session?.status,
-				// Daemon-derived (presence plane), so it can be true even before "online" - a peeked pane
-				// stuck at a login prompt is knowable while the MCP handshake is still pending.
-				sessionNeedsLogin = session?.needsLogin == true,
-				// Also daemon-derived, so the chat view learns about a block with no peek of its own.
-				sessionLimitBlocked = session?.limitBlocked == true,
-				sessionLimitDetail = session?.limitDetail,
-				// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so the
-				// terminal seeds "Waking..." rather than "asleep"; a plain asleep session reads "asleep".
-				wakePending = session?.status == "verifying",
-				onWake = { repo.wakeSession(openTeam!!) },
-				onRelaunch = { repo.relaunchSession(openTeam!!) },
-				terminalRefreshMs = repo.terminalRefreshMs,
-				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
-				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
-				onResumeAfterLimit = { repo.resumeAfterLimit(openTeam!!) },
+				terminal = TerminalState(
+					// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off
+					// in v1, and the host machine's terminal is reached through the dedicated "host" target.
+					eligible = isComposite(localFieldOf(openTeam!!)) &&
+						(session?.gatewayId.isNullOrEmpty() || session.gatewayId == state.localGatewayId),
+					sessionStatus = session?.status,
+					// Daemon-derived (presence plane), so it can be true even before "online" - a peeked
+					// pane stuck at a login prompt is knowable while the MCP handshake is still pending.
+					needsLogin = session?.needsLogin == true,
+					// Also daemon-derived, so the chat view learns about a block with no peek of its own.
+					limitBlocked = session?.limitBlocked == true,
+					limitDetail = session?.limitDetail,
+					// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so
+					// the terminal seeds "Waking..." rather than "asleep".
+					wakeInFlight = session?.status == "verifying",
+					onWake = { repo.wakeSession(openTeam!!) },
+					onRelaunch = { repo.relaunchSession(openTeam!!) },
+					refreshMs = repo.terminalRefreshMs,
+					onPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
+					onSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
+					onResumeAfterLimit = { repo.resumeAfterLimit(openTeam!!) },
+				),
 				onFocusChange = repo::declareFocus,
 			)
 		}

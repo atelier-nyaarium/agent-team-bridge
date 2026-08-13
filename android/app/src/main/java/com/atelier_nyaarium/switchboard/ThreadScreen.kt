@@ -70,6 +70,63 @@ import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import kotlinx.coroutines.launch
 
 ////////////////////////////////
+//  Interfaces & Types
+
+/** The composer as one subject: what it shows, what Send consumes, and every draft edit. */
+data class ComposerState(
+	/** The single source read by the text field, the chips, and every occupied/enabled check, so a
+	 * tab switch can never bleed one thread's picked files into another's. */
+	val draft: Draft,
+	/** A send is waiting on this team's cold boot (ChatState.wakingTeams); draws the notice card. */
+	val sendAwaitingWake: Boolean,
+	val onSend: (String, List<Uri>) -> Unit,
+	val onTextChange: (String) -> Unit,
+	val onAddFiles: (List<Uri>) -> Unit,
+	val onRemoveFile: (String) -> Unit,
+	val onOpenFile: (MessageFile) -> Unit,
+	/** The plugin dock's composer-insert seam (e.g. the Designer's "Reference in chat"). */
+	val onAppendText: (String) -> Unit,
+	/** Drops the draft and reclaims its now-unreferenced attachment copies after Send hands off. */
+	val onClear: () -> Unit,
+)
+
+/** This team's scheduled send: the banked record driving the dock, and its lifecycle. */
+data class ScheduledSendState(
+	/** At most one pending record, null otherwise; also gates the long-press Schedule Send item. */
+	val record: ScheduledSend?,
+	/** suspend + Boolean: the repo-side time check is authoritative, and the caller must await the
+	 * real outcome before clearing the composer or a failure destroys the user's message. */
+	val onSchedule: suspend (String, List<Uri>, Long) -> Boolean,
+	/** Time-only on purpose: the banked attachments are copied MessageFile refs, not the live
+	 * content:// Uris onSchedule takes, so a full re-edit would risk a silent attachment drop. */
+	val onReschedule: suspend (Long) -> Boolean,
+	/** Cancels and hands the content back into the draft; the dock reads the result through it. */
+	val onCancel: () -> Unit,
+)
+
+/** The terminal view and the session-health facts it decides from. */
+data class TerminalState(
+	/** Only the host-agent and devcontainers have a daemon-drivable pane. */
+	val eligible: Boolean,
+	val sessionStatus: String?,
+	/** A session wake is in flight, a different fact from ComposerState.sendAwaitingWake. */
+	val wakeInFlight: Boolean,
+	/** Daemon-derived (presence plane), true independent of sessionStatus: the one signal at tap
+	 * time that separates a stuck boot from a plain one still in progress. */
+	val needsLogin: Boolean,
+	val limitBlocked: Boolean,
+	val limitDetail: String?,
+	val refreshMs: Long,
+	val onWake: () -> Unit,
+	/** Force-relaunch claude in a still-existing pane (ChatRepository.relaunchSession). */
+	val onRelaunch: suspend () -> Unit,
+	val onPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
+	val onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
+	/** Clear a usage-limit dialog and pick the work back up (ChatRepository.resumeAfterLimit). */
+	val onResumeAfterLimit: suspend () -> Unit,
+)
+
+////////////////////////////////
 //  Functions & Helpers
 
 /** Mint content:// Uris over a draft's already-copied files - the one remaining FileProvider mint
@@ -122,21 +179,11 @@ fun ThreadScreen(
 	onGateway: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
-	onSend: (String, List<Uri>) -> Unit,
-	// This thread's composer state - what it shows and what Send consumes (ChatRepository.Draft).
-	// The single source read by the text field, the attachment chips, and every occupied/enabled
-	// check below; there is no local composable copy of it (see the deleted `draft`/`attachments`
-	// vars this replaced), so a tab switch can never bleed one thread's picked files into another's.
-	draft: Draft,
-	onDraftTextChange: (String) -> Unit,
-	onAddDraftFiles: (List<Uri>) -> Unit,
-	onRemoveDraftFile: (String) -> Unit,
-	onOpenDraftFile: (MessageFile) -> Unit,
-	// The plugin dock's composer-insert seam (e.g. the Designer's "Reference in chat").
-	onAppendDraftText: (String) -> Unit,
-	// Send hands the draft's content off (re-bucketed under its own out-$opId - see the Send
-	// handler below); this drops the draft and reclaims its now-unreferenced attachment copies.
-	onClearDraft: () -> Unit,
+	// The three assembled subjects (see their types above): distinct types are what make handing
+	// one cluster's fact to another's slot a compile error instead of a plausible call.
+	composer: ComposerState,
+	scheduled: ScheduledSendState,
+	terminal: TerminalState,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
 	// The board gate, same as the sessions list: unfinished tasks turn Forget into a decision the
@@ -144,47 +191,6 @@ fun ThreadScreen(
 	// two surfaces cannot disagree about when a forget is safe.
 	undoneTasks: Int = 0,
 	onForgetWithTasks: (Boolean) -> Unit = {},
-	// At most one pending scheduled send for this team, null otherwise -
-	// drives the dock and gates the long-press menu's Schedule Send item.
-	scheduledSend: ScheduledSend?,
-	// True while a send is waiting on this team's cold boot, drawing the notice card above the
-	// composer (ChatState.wakingTeams).
-	waking: Boolean,
-	// suspend + Boolean (not fire-and-forget Unit): the repo-side time check is authoritative and can
-	// fail (the picker's own gate goes stale if the user idles past its 1-minute floor) - the caller
-	// must await the real outcome before clearing the composer, since clearing eagerly would destroy
-	// the user's message on any failure with no way to recover it.
-	onScheduleSend: suspend (String, List<Uri>, Long) -> Boolean,
-	// Dock tap-to-edit is deliberately time-only, not a full text/attachment re-edit: the banked
-	// attachments are already-copied MessageFile refs, not the live content:// Uris onScheduleSend
-	// takes, so re-threading them through the same call without risking a silent attachment drop
-	// would need its own dedicated seam. Changing the time alone has no such mismatch.
-	onReschedule: suspend (Long) -> Boolean,
-	// Cancels team's scheduled send and hands its content back into the draft itself (see
-	// ChatRepository.cancelScheduledSendForEdit) - the dock reads the result through `draft`,
-	// same as every other composer writer, rather than through a returned record.
-	onCancelScheduledSend: () -> Unit,
-	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
-	// team-bound suspend closures (the screen supplies the team).
-	terminalEligible: Boolean,
-	sessionStatus: String?,
-	wakePending: Boolean,
-	// Daemon-derived (presence plane), true independent of sessionStatus - a peeked pane can show a
-	// login prompt while still "verifying", before the MCP handshake ever confirms it "online". The
-	// one signal available at tap time that distinguishes a stuck boot from a plain one still in
-	// progress (see the terminalMode default below).
-	sessionNeedsLogin: Boolean,
-	sessionLimitBlocked: Boolean,
-	sessionLimitDetail: String?,
-	onWake: () -> Unit,
-	// The terminal palette's Wake up button: force-relaunch claude in a still-existing pane
-	// (close_session + create_session composed - see ChatRepository.relaunchSession).
-	onRelaunch: suspend () -> Unit,
-	terminalRefreshMs: Long,
-	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
-	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
-	// Clear a usage-limit dialog and pick the work back up (see ChatRepository.resumeAfterLimit).
-	onResumeAfterLimit: suspend () -> Unit,
 	onFocusChange: (FocusIntent) -> Unit = {},
 ) {
 	var showMenu by remember { mutableStateOf(false) }
@@ -227,15 +233,15 @@ fun ThreadScreen(
 	var scheduleDialogGeneration by remember { mutableStateOf(0) }
 	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. A plain
 	// still-waking session (asleep, booting, or a fresh create) opens to CHAT by default - only a
-	// session already known to be stuck (sessionNeedsLogin) jumps straight to terminal, so the human
-	// sees the problem instantly instead of watching an otherwise-uneventful boot.
+	// session already known to be stuck (terminal.needsLogin) jumps straight to terminal, so the
+	// human sees the problem instantly instead of watching an otherwise-uneventful boot.
 	var terminalMode by remember(team) {
-		val waking = sessionStatus in setOf(null, "available", "verifying")
-		mutableStateOf(terminalEligible && waking && sessionNeedsLogin)
+		val booting = terminal.sessionStatus in setOf(null, "available", "verifying")
+		mutableStateOf(terminal.eligible && booting && terminal.needsLogin)
 	}
 	if (terminalMode) BackHandler { terminalMode = false }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-		if (uris.isNotEmpty()) onAddDraftFiles(uris)
+		if (uris.isNotEmpty()) composer.onAddFiles(uris)
 	}
 
 	// Hold the screen awake while a thread is open (reading or replying); released
@@ -292,9 +298,9 @@ fun ThreadScreen(
 			onConfirm = { at ->
 				// Snapshot now: the async call below must bank exactly what was on screen at the
 				// moment of the tap, not whatever the draft happens to hold once it resolves.
-				val text = draft.text
-				val files = draftFileUris(composerContext, draft.files)
-				val editingExisting = scheduledSend != null
+				val text = composer.draft.text
+				val files = draftFileUris(composerContext, composer.draft.files)
+				val editingExisting = scheduled.record != null
 				val myGeneration = scheduleDialogGeneration
 				scheduleSubmitting = true
 				scheduleScope.launch {
@@ -307,7 +313,7 @@ fun ThreadScreen(
 						// composer once that call reports genuine success, never optimistically on tap:
 						// clearing first and finding out later would destroy the user's message on any
 						// failure, with no way to recover it.
-						ok = if (editingExisting) onReschedule(at) else onScheduleSend(text, files, at)
+						ok = if (editingExisting) scheduled.onReschedule(at) else scheduled.onSchedule(text, files, at)
 					} finally {
 						// try/finally, not a bare sequential call: makes the re-enable explicit rather than
 						// incidental on today's callees happening not to throw (both already runCatching
@@ -325,7 +331,7 @@ fun ThreadScreen(
 						if (scheduleDialogGeneration == myGeneration) {
 							scheduleSubmitting = false
 							scheduleDialogSeed = null
-							if (ok && !editingExisting) onClearDraft()
+							if (ok && !editingExisting) composer.onClear()
 						}
 					}
 				}
@@ -355,7 +361,7 @@ fun ThreadScreen(
 					}
 				},
 				actions = {
-					if (terminalEligible) {
+					if (terminal.eligible) {
 						IconButton(onClick = hapticClick { terminalMode = !terminalMode }) {
 							if (terminalMode) {
 								Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Back to chat")
@@ -408,14 +414,14 @@ fun ThreadScreen(
 			if (terminalMode) {
 				TerminalView(
 					team = team,
-					refreshMs = terminalRefreshMs,
-					wakePending = wakePending,
-					sessionStatus = sessionStatus,
-					onWake = onWake,
-					onRelaunch = onRelaunch,
-					onPeek = onTerminalPeek,
-					onSend = onTerminalSend,
-					onResumeAfterLimit = onResumeAfterLimit,
+					refreshMs = terminal.refreshMs,
+					wakePending = terminal.wakeInFlight,
+					sessionStatus = terminal.sessionStatus,
+					onWake = terminal.onWake,
+					onRelaunch = terminal.onRelaunch,
+					onPeek = terminal.onPeek,
+					onSend = terminal.onSend,
+					onResumeAfterLimit = terminal.onResumeAfterLimit,
 					onFocusChange = onFocusChange,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
@@ -450,19 +456,19 @@ fun ThreadScreen(
 					unreadBoundary = unreadBoundary,
 					revealAt = revealAt,
 					onRevealed = onRevealed,
-					composerOccupied = draft.isOccupied,
+					composerOccupied = composer.draft.isOccupied,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			}
 			// Above the plugin slots deliberately: nothing sent to a limit-blocked session is read until
 			// the dialog clears, so this outranks anything else docked here.
-			if (sessionLimitBlocked) {
+			if (terminal.limitBlocked) {
 				SessionLimitDock(
-					detail = sessionLimitDetail,
+					detail = terminal.limitDetail,
 					onResume = {
 						resumingAfterLimit = true
 						resumeScope.launch {
-							runCatching { onResumeAfterLimit() }
+							runCatching { terminal.onResumeAfterLimit() }
 							resumingAfterLimit = false
 						}
 					},
@@ -472,8 +478,8 @@ fun ThreadScreen(
 			// Plugin dock slots (e.g. the Designer dock) sit between the messages and the
 			// composer; each slot draws nothing when it has nothing to show for this thread. The
 			// scope carries a composer-insert seam (e.g. the Designer's "Reference in chat"), team-bound
-			// through onAppendDraftText -> ChatRepository.appendDraftText rather than an ambient var.
-			val dockScope = com.atelier_nyaarium.switchboard.plugins.ThreadDockScope(team, onAppendDraftText)
+			// through composer.onAppendText -> ChatRepository.appendDraftText rather than an ambient var.
+			val dockScope = com.atelier_nyaarium.switchboard.plugins.ThreadDockScope(team, composer.onAppendText)
 			// Composable slots cannot route through forEachCaught (a @Composable invocation needs the
 			// enclosing composable context, which a non-inline lambda parameter does not provide);
 			// a throwing slot is Compose's own error path, not a registry-containment case.
@@ -498,30 +504,30 @@ fun ThreadScreen(
 					}
 				}
 			}
-			if (waking) WakingNotice(label)
+			if (composer.sendAwaitingWake) WakingNotice(label)
 			// A plain sibling in this same Column, same reason the plugin dock slots above need no
 			// collision-avoidance logic: nothing to show contributes no space at all.
-			scheduledSend?.let { rec ->
+			scheduled.record?.let { rec ->
 				ScheduledSendDock(
 					rec = rec,
 					onEdit = {
 						scheduleDialogSeed = rec.fireAtMillis
 						scheduleDialogGeneration++
 					},
-					cancelEnabled = !draft.isOccupied,
-					onCancel = onCancelScheduledSend,
+					cancelEnabled = !composer.draft.isOccupied,
+					onCancel = scheduled.onCancel,
 				)
 			}
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			// Hidden entirely while something is scheduled - the dock above is the sole surface then;
 			// letting the text field survive alongside it would let the user keep typing into a
 			// message that no longer has anywhere to go until the dock is cancelled or fires.
-			if (scheduledSend == null) {
+			if (scheduled.record == null) {
 			DraftAttachments(
-				files = draft.files,
+				files = composer.draft.files,
 				filesDir = composerContext.filesDir,
-				onOpen = onOpenDraftFile,
-				onRemove = onRemoveDraftFile,
+				onOpen = composer.onOpenFile,
+				onRemove = composer.onRemoveFile,
 			)
 			// Composer-local, like DraftStrip's own expand: this describes the VIEW, not the draft, so
 			// it must not follow a tab switch or survive into what gets sent.
@@ -542,8 +548,8 @@ fun ThreadScreen(
 			}
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
-					value = draft.text,
-					onValueChange = onDraftTextChange,
+					value = composer.draft.text,
+					onValueChange = composer.onTextChange,
 					label = { Text("Message") },
 					minLines = 2,
 					// Collapsed pins it at its minimum and scrolls inside; otherwise it grows freely.
@@ -566,7 +572,7 @@ fun ThreadScreen(
 					) {
 						Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
 					}
-					val sendEnabled = draft.isOccupied
+					val sendEnabled = composer.draft.isOccupied
 					val sendHaptics = LocalHapticFeedback.current
 					val sendStrongHaptic = rememberStrongHaptic()
 					// Material3's IconButton family exposes no onLongClick, so Send is a hand-rolled Surface
@@ -581,8 +587,8 @@ fun ThreadScreen(
 								onLongClickLabel = "Schedule send",
 								onClick = {
 									sendHaptics.performHapticFeedback(HapticFeedbackType.LongPress)
-									onSend(draft.text, draftFileUris(composerContext, draft.files))
-									onClearDraft()
+									composer.onSend(composer.draft.text, draftFileUris(composerContext, composer.draft.files))
+									composer.onClear()
 								},
 								onLongClick = {
 									sendStrongHaptic()
@@ -605,7 +611,7 @@ fun ThreadScreen(
 					DropdownMenu(expanded = showSendMenu, onDismissRequest = { showSendMenu = false }) {
 						DropdownMenuItem(
 							text = { Text("Schedule Send") },
-							// No scheduledSend == null guard needed here: this whole menu is unreachable once
+							// No scheduled.record == null guard needed here: this whole menu is unreachable once
 							// one's already active, since the composer row it lives in is replaced by the dock
 							// entirely - the dock is the sole edit/reschedule/cancel surface.
 							enabled = sendEnabled,
@@ -620,8 +626,8 @@ fun ThreadScreen(
 							enabled = sendEnabled,
 							onClick = hapticClick {
 								showSendMenu = false
-								onSend(draft.text, draftFileUris(composerContext, draft.files))
-								onClearDraft()
+								composer.onSend(composer.draft.text, draftFileUris(composerContext, composer.draft.files))
+								composer.onClear()
 							},
 						)
 					}
