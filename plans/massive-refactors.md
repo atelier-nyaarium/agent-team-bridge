@@ -423,3 +423,28 @@ Not taken, recorded: the fold-the-whole-service-pure direction (b), since the ap
 effects (durability check, commit, refusal write) are exactly what the service is for; and the
 relay progress-bookkeeping duplication (copilotRelay vs codexRelay) stays for a later entry, being
 reliability plumbing rather than the retiring decision.
+
+## Refactor 10 - The dead-surface sweep
+
+The call graph was re-run fresh (grep + compiler + two adversarial Luna threads over both source
+sets, reflection and codegen included), not trusted from the entry's list.
+
+Deleted (4cffbf2): EnrollOps.ownerSas/ownerSignPub/ownerBoxPub (every consumer already reaches
+repo.federation directly; the residue test pins WHO may do that, and the wrappers added nothing);
+TrustOps.unlinkDomain and its now-orphaned ConsoleClient.crossDomainUnlink (the cascade the first
+deletion exposed). Kept alive on evidence: ownerKeysForDisplay, exportOwnerBackup,
+importOwnerBackup (Management, Users, Onboarding, Sharing all call them).
+
+The entry's own caution answered: unlinkDomain is NOT a bug wearing dead code's clothes. Undoing a
+link is exposed as untrustOwner (per person, Users row), which subsumes the teardown for every
+Domain the person owns; per-Domain unlink has wire support (the gateway op and its consoleHandler
+arm STAY, deliberately) but no UI, so restoring it is a product decision, not archaeology.
+
+Behavior improvement the audit surfaced, committed separately: untrustOwner now pulls discovery
+the way the deleted unlinkDomain documented, so an untrusted person's sessions leave the board
+promptly instead of waiting out DISCOVERY_REFRESH_MS.
+
+Reported again, still deliberately NOT deleted: the four CodexAppServer result schemas (wire
+protocol vocabulary in the App Server definition file, re-exported by the barrel; local mode did
+not consume them) and the console-protocol op types, both being protocol surface rather than
+orphaned code.

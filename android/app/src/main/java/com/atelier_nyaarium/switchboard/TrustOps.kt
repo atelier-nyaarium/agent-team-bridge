@@ -234,6 +234,9 @@ internal class TrustOps(private val repo: ChatRepository) {
 			for (d in peerDomains) {
 				runCatchingCancellable { repo.enroll.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
 			}
+			// Mesh-wide discovery has no push, so an explicit pull is what makes the person's sessions
+			// leave the board promptly instead of waiting out DISCOVERY_REFRESH_MS.
+			repo.refreshDiscovery()
 			Unit
 		}
 	}
