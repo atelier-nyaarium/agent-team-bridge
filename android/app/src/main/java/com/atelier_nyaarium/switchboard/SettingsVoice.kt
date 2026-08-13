@@ -314,6 +314,32 @@ internal fun SttsVoiceSection(repo: ChatRepository) {
 		Text("Playback failed: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 	}
 
+	PlaybackPreferences(repo)
+
+	if (pickerOpen) {
+		AlertDialog(
+			onDismissRequest = { pickerOpen = false },
+			confirmButton = {},
+			title = { Text("Provider") },
+			text = {
+				Column {
+					for (p in providers) {
+						TextButton(onClick = hapticClick {
+							providerId = p.id
+							repo.sttsProviderId = p.id
+							voice = repo.sttsVoiceFor(p.id)
+							pickerOpen = false
+						}) { Text(p.label) }
+					}
+				}
+			},
+		)
+	}
+}
+
+/** The playback preferences below the provider section; they read only the repository. */
+@Composable
+private fun PlaybackPreferences(repo: ChatRepository) {
 	var autoTts by remember { mutableStateOf(repo.sttsAutoGen) }
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		Column(Modifier.weight(1f)) {
@@ -494,26 +520,6 @@ internal fun SttsVoiceSection(repo: ChatRepository) {
 		Text(
 			"How loud the sound at the start of a run is, relative to the speech after it.",
 			style = MaterialTheme.typography.bodySmall,
-		)
-	}
-
-	if (pickerOpen) {
-		AlertDialog(
-			onDismissRequest = { pickerOpen = false },
-			confirmButton = {},
-			title = { Text("Provider") },
-			text = {
-				Column {
-					for (p in providers) {
-						TextButton(onClick = hapticClick {
-							providerId = p.id
-							repo.sttsProviderId = p.id
-							voice = repo.sttsVoiceFor(p.id)
-							pickerOpen = false
-						}) { Text(p.label) }
-					}
-				}
-			},
 		)
 	}
 }
