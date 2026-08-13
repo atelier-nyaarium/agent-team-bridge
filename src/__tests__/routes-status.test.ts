@@ -3,15 +3,18 @@ import { EVIE_WS_MAX_PAYLOAD_BYTES } from "../gateway/evie/evieClient.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES } from "../gateway/routes.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
 
 describe("routes", () => {
 	describe("/pending", () => {
+		const anyCaller = () => new Request("http://localhost/pending");
+
 		it("returns empty array when no jobs", async () => {
 			const ctx = makeCtx();
 			const { pending } = createRoutes(ctx);
-			const res = pending();
+			const res = pending(anyCaller());
 			expect(await res.json()).toEqual([]);
 		});
 
@@ -20,8 +23,30 @@ describe("routes", () => {
 			store.create("sess-1", "a", "b");
 			const ctx = makeCtx({ store });
 			const { pending } = createRoutes(ctx);
-			const res = pending();
+			const res = pending(anyCaller());
 			expect(await res.json()).toEqual([{ session_id: "sess-1", from: "a", to: "b", state: "waiting" }]);
+		});
+
+		// A session_id is the credential /poll and /respond accept, and a console-originated one
+		// embeds the owner's mailbox key, so enumerating the list hands out the keys to both doors.
+		it("refuses a caller that holds no session of this gateway's", async () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("conv.owner-1.alice.test-host.app.dev", "a", "b");
+			const sessionStore = new SessionStore();
+			const record = sessionStore.mint({ spawn: "app" });
+			const token = sessionStore.ensureBindToken(record);
+			sessionStore.activateBinding(record);
+			const { pending } = createRoutes(makeCtx({ store, sessionStore }));
+
+			const refused = pending(anyCaller());
+			expect(refused.status).toBe(403);
+			expect(await refused.json()).not.toContainEqual(expect.objectContaining({ session_id: expect.anything() }));
+
+			const admitted = pending(
+				new Request("http://localhost/pending", { headers: { "x-session-token": token } }),
+			);
+			expect(admitted.status).toBe(200);
+			expect(await admitted.json()).toHaveLength(1);
 		});
 	});
 
