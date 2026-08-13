@@ -4,13 +4,13 @@ import { agentInboundFrameTypes } from "../shared/agent-backend.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode } from "../shared/types.js";
-import { NOTHING_PRESENTED, type Presented, presentedByRegister, type SessionBinding } from "./sessionAuthority.js";
+import { HandshakeGate } from "./handshakeGate.js";
+import { NOTHING_PRESENTED, type Presented, presentedByRegister } from "./sessionAuthority.js";
 import {
 	type ConversationRegistry,
 	getAllActiveRealWs,
 	getAllActiveWs,
 	HANDSHAKE_REPUSH_DEDUPE_MS,
-	HANDSHAKE_REPUSH_MAX_ATTEMPTS,
 	type HandshakeRepushOutcome,
 	REGISTER_WINDOW_MS,
 	RESERVED_TEAM_NAMES,
@@ -56,12 +56,7 @@ export function createWebSocketHandlers({
 	const liveWriter = presenceWriter ?? sessionStore;
 
 	function heartbeatTick() {
-		// An entry past its dedupe window no longer throttles anything, so this is pure cleanup:
-		// bounds teamLastRepushAt against an unauthenticated register minting unbounded team names.
-		const now = Date.now();
-		for (const [team, lastAt] of teamLastRepushAt) {
-			if (now - lastAt >= HANDSHAKE_REPUSH_DEDUPE_MS) teamLastRepushAt.delete(team);
-		}
+		handshakeGate.sweep();
 		for (const subs of registry.values()) {
 			for (const ws of subs.values()) {
 				const data = ws.data as WsData;
@@ -77,117 +72,43 @@ export function createWebSocketHandlers({
 	}
 	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
-	// Maps handshake session_id -> the socket that owes a lead/worker reply, so we can resolve
-	// handshake responses. sentAt/repushCount back repushHandshake's dedupe window and attempt cap.
-	// Cleared on close/evict (forgetPending); bounded by the count of live unconfirmed sockets, since
-	// mintHandshake fires at most once per register and repushHandshake reuses the existing entry.
-	const handshakePending = new Map<string, { team: string; subId: string; sentAt: number; repushCount: number }>();
-
-	// Last repushHandshake success per TEAM (not per entry): a caller who knows several of one
-	// team's sub-session conversationIds could otherwise round-robin across them to land a fresh
-	// push every tick, sidestepping the per-entry dedupe window (HANDSHAKE_REPUSH_DEDUPE_MS in
-	// wsTypes.ts). Keyed by team name - an
-	// unauthenticated /bridge register can claim any team-shaped string, so this is swept by
-	// heartbeatTick below rather than assumed bounded; an entry past HANDSHAKE_REPUSH_DEDUPE_MS has
-	// zero remaining throttling effect, so the sweep is pure cleanup with no behavior change.
-	const teamLastRepushAt = new Map<string, number>();
-
-	// Teams that have completed at least one REAL handshake round-trip (a genuine challenge
-	// answered via resolveHandshake, not a self-reported register field). A register's own
-	// isMainOrLead:true claim is only honored for a team already in this set - otherwise a
-	// never-before-seen team could skip the handshake challenge entirely on its first-ever
-	// connection by simply asserting the field, with no server-side signal backing it.
-	// Keyed by team, VALUED by the binding that confirmed it (null for an unbound confirmer), so the
-	// fast path re-checks identity rather than the bare name: a socket presenting a different
-	// binding than the one that answered the real challenge is sent through a fresh handshake
-	// instead of inheriting confirmed-lead status. An unbound team stores null, which a later
-	// unbound registrant matches, so a hand-launched session is not re-prompted every reconnect.
-	const confirmedLeadTeams = new Map<string, SessionBinding>();
-
-	/** Drop any pending handshake owned by a (team, subId) - a socket that will never answer. */
-	function forgetPending(team: string, subId: string): void {
-		for (const [hsId, p] of handshakePending) {
-			if (p.team === team && p.subId === subId) handshakePending.delete(hsId);
-		}
-	}
-
-	/** The exact wire push for a handshake id, byte-identical whether this is the first send or a
-	 * re-push. The MCP's confirm guard (receivedIds, keyed off from==="gateway" && replyJsonSchema)
-	 * depends on that identity, so a re-push must carry both fields unchanged. */
-	function buildHandshakePush(hsSessionId: string): string {
-		return JSON.stringify({
-			type: "channel_push",
-			from: "gateway",
-			body: `This is the initial bridge handshake. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "isMainOrLead": true }\` if you are the primary session or team lead, or \`{ "isMainOrLead": false }\` if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
-			session_id: hsSessionId,
-			replyJsonSchema: "{ isMainOrLead: bool }",
-		});
-	}
+	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,
+	// which binding confirmed a team's lead) live in the gate; every socket effect stays here.
+	const handshakeGate = new HandshakeGate();
 
 	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
 	 * that already reports its remembered role skips this entirely (see the register handler's
 	 * isMainOrLead branch). A handshake whose notification is lost recovers via repushHandshake below,
-	 * which reuses this same id rather than minting a second one. Drops any pending entry already
-	 * owned by this (team, subId) first, so a same-socket re-register can never leave two
-	 * independently-resolvable entries for the same coordinates. */
+	 * which reuses this same id rather than minting a second one. */
 	function mintHandshake(ws: ServerWebSocket<WsData>, team: string, subId: string): void {
-		forgetPending(team, subId);
-		const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
-		handshakePending.set(hsSessionId, { team, subId, sentAt: Date.now(), repushCount: 0 });
+		const { hsId, push } = handshakeGate.mint(team, subId);
 		try {
-			ws.send(buildHandshakePush(hsSessionId));
+			ws.send(push);
 		} catch (err) {
-			console.error(`[ws] handshake send failed for ${team}/${subId} [${hsSessionId}]: ${err}`);
+			console.error(`[ws] handshake send failed for ${team}/${subId} [${hsId}]: ${err}`);
 			return;
 		}
-		console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}]`);
-	}
-
-	/** The pending hs-* id owed by a (team, subId), if any - so a caller with an unconfirmed socket of
-	 * its own can be told exactly which handshake to answer first. */
-	function findPendingHandshakeId(team: string, subId: string): string | undefined {
-		for (const [hsId, p] of handshakePending) {
-			if (p.team === team && p.subId === subId) return hsId;
-		}
-		return undefined;
+		console.log(`[ws] handshake sent to ${team}/${subId} [${hsId}]`);
 	}
 
 	/** Re-send a socket's own still-pending handshake, recovering a session whose original
 	 * notification was missed (dropped, batched behind other messages, or aged out of a compacted
-	 * context) and so can never answer the reply gate that calls this. Reuses the EXISTING hs-* id -
-	 * never mints a second one, which would leak a duplicate pending entry and defeat the attempt cap.
-	 * The per-entry guards live on the pending entry itself, so forgetPending's existing close/evict
-	 * cleanup drops them for free (wsTypes.ts documents what each repush constant bounds); the team-level
-	 * guard only applies from an entry's SECOND attempt onward, so several sub-sessions of one team
-	 * recovering at once each get their one first shot instead of queuing behind a sibling. */
+	 * context) and so can never answer the reply gate that calls this. The gate decides (reusing the
+	 * existing hs-* id and owning every throttle rule); the send and its commit happen here, so a
+	 * failed send charges no attempt. */
 	function repushHandshake(team: string, subId: string): HandshakeRepushOutcome {
-		const hsId = findPendingHandshakeId(team, subId);
-		const entry = hsId ? handshakePending.get(hsId) : undefined;
-		if (!hsId || !entry) return "no-pending";
-		if (entry.repushCount >= HANDSHAKE_REPUSH_MAX_ATTEMPTS) return "capped";
-		const now = Date.now();
-		// Always applies, even on a first attempt: collapses a same-instant double-trigger on THIS
-		// entry (e.g. an immediate repush landing right after mintHandshake's own send).
-		if (now - entry.sentAt < HANDSHAKE_REPUSH_DEDUPE_MS) return "throttled";
-		// Team-wide contention only kicks in from an entry's SECOND attempt onward, so several
-		// sub-sessions of one team each get their one first shot instead of queuing behind whichever
-		// sibling's timing wins the shared window.
-		if (entry.repushCount > 0) {
-			const teamLast = teamLastRepushAt.get(team);
-			if (teamLast !== undefined && now - teamLast < HANDSHAKE_REPUSH_DEDUPE_MS) return "throttled";
-		}
+		const decision = handshakeGate.decideRepush(team, subId);
+		if (decision.kind !== "send") return decision.kind;
 		const ws = registry.get(team)?.get(subId);
 		if (ws?.readyState !== 1) return "socket-gone";
 		try {
-			ws.send(buildHandshakePush(hsId));
+			ws.send(decision.push);
 		} catch (err) {
-			console.error(`[ws] handshake re-push send failed for ${team}/${subId} [${hsId}]: ${err}`);
+			console.error(`[ws] handshake re-push send failed for ${team}/${subId} [${decision.hsId}]: ${err}`);
 			return "socket-gone";
 		}
-		entry.sentAt = now;
-		entry.repushCount += 1;
-		teamLastRepushAt.set(team, now);
-		console.log(`[ws] handshake re-pushed to ${team}/${subId} [${hsId}] (attempt ${entry.repushCount})`);
+		decision.commit();
+		console.log(`[ws] handshake re-pushed to ${team}/${subId} [${decision.hsId}] (attempt ${decision.attempt})`);
 		return "pushed";
 	}
 
@@ -201,7 +122,7 @@ export function createWebSocketHandlers({
 		if (vTeam) {
 			const vSubs = registry.get(vTeam);
 			if (vSubs?.get(victim.data.subId) === victim) vSubs.delete(victim.data.subId);
-			forgetPending(vTeam, victim.data.subId);
+			handshakeGate.forget(vTeam, victim.data.subId);
 			liveWriter?.clearLive(vTeam, victim.data.subId);
 		}
 		const vConv = victim.data.conversationId;
@@ -398,7 +319,7 @@ export function createWebSocketHandlers({
 			// can skip being asked again. A remembered "false" never arrives (a worker that answered
 			// false is evicted permanently and does not reconnect), so only true is handled here.
 			if (mode === "channel" && team !== "host") {
-				const confirmedBy = confirmedLeadTeams.get(team);
+				const confirmedBy = handshakeGate.confirmedBy(team);
 				const sameConfirmer = !!auth && !!confirmedBy && auth.sameAs(confirmedBy, auth.toAnswerFor(ws));
 				if (reg.data.isMainOrLead === true && sameConfirmer) {
 					ws.data.handshakeConfirmed = true;
@@ -530,7 +451,7 @@ export function createWebSocketHandlers({
 
 		// Clear any pending lead-handshake owned by this socket: a socket that drops before it answers
 		// would otherwise leave its entry in the map forever (resolveHandshake never fires for it).
-		forgetPending(teamName, subId);
+		handshakeGate.forget(teamName, subId);
 
 		// Drop the record's live pointer if this exact incarnation was serving it, so send/wake
 		// resolution stops probing a dead incarnation.
@@ -593,23 +514,23 @@ export function createWebSocketHandlers({
 		response?: string,
 		responderToken?: Presented,
 	): boolean {
-		const pending = handshakePending.get(sessionId);
+		const pending = handshakeGate.pendingOf(sessionId);
 		if (!pending) return false;
 
 		// Only the challenged session may answer its own handshake. Without this, anyone who learns
 		// an hs- id can answer it with isMainOrLead:false, which evicts the victim's socket while its
-		// MCP sets suppressReconnect - a permanent remote kill. Checked BEFORE the delete so a
-		// Keyed on the CHALLENGED SOCKET, which is literally the subject of the question: only the
-		// connection a challenge was issued to may answer it. Checked BEFORE the delete below, so a
-		// spoofed answer cannot consume the pending entry the real session still needs. Socket-keyed
-		// also means a token minted but never delivered cannot strand its session, since such a
-		// socket carries nothing and is therefore owed nothing.
+		// MCP sets suppressReconnect - a permanent remote kill. Keyed on the CHALLENGED SOCKET, which
+		// is literally the subject of the question: only the connection a challenge was issued to may
+		// answer it. Checked BEFORE the consume below, so a spoofed answer cannot eat the pending
+		// entry the real session still needs. Socket-keyed also means a token minted but never
+		// delivered cannot strand its session, since such a socket carries nothing and is therefore
+		// owed nothing.
 		const challenged = registry.get(pending.team)?.get(pending.subId);
 		if (auth && !auth.satisfies(auth.toAnswerFor(challenged), responderToken ?? NOTHING_PRESENTED)) {
 			console.log(`[ws] ignored handshake answer for ${pending.team} - not from the challenged session`);
 			return true;
 		}
-		handshakePending.delete(sessionId);
+		handshakeGate.consume(sessionId);
 
 		const subs = registry.get(pending.team);
 		const ws = subs?.get(pending.subId);
@@ -618,17 +539,9 @@ export function createWebSocketHandlers({
 		// was evicted must not resurrect a record or mutate registry state.
 		if (ws.readyState !== 1) return true;
 
-		// Determine if this agent claims to be the lead
-		let isMainOrLead = false;
-		if (replyAsJson && typeof replyAsJson.isMainOrLead === "boolean") {
-			isMainOrLead = replyAsJson.isMainOrLead;
-		} else if (response) {
-			isMainOrLead = /true/i.test(response);
-		}
-
-		if (isMainOrLead) {
+		if (HandshakeGate.leadClaim(replyAsJson, response)) {
 			ws.data.handshakeConfirmed = true;
-			if (auth) confirmedLeadTeams.set(pending.team, auth.toAnswerFor(ws));
+			if (auth) handshakeGate.confirmLead(pending.team, auth.toAnswerFor(ws));
 			establishRecord(ws, pending);
 			console.log(`[ws] handshake confirmed: ${pending.team}/${pending.subId} is lead`);
 		} else {
@@ -646,7 +559,7 @@ export function createWebSocketHandlers({
 		heartbeatInterval,
 		heartbeatTick,
 		resolveHandshake,
-		findPendingHandshakeId,
+		findPendingHandshakeId: (team: string, subId: string) => handshakeGate.pendingIdFor(team, subId),
 		repushHandshake,
 	};
 }
