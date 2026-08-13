@@ -65,45 +65,30 @@ export type PersistedSessionRecord = Omit<SessionRecord, "liveTeam"> & {
 	copilotCatalog?: CopilotAgentCatalog;
 };
 
-export type CodexCatalogCommitResult =
-	| { committed: true; catalog: CodexAgentCatalog }
+export type AgentCatalogCommitResult<Catalog> =
+	| { committed: true; catalog: Catalog }
 	| { committed: false; reason: "owner_missing" | "revision_conflict" };
 
-export type CodexCatalogCheckpointResult =
-	| { confirmed: true; catalog: CodexAgentCatalog }
+export type AgentCatalogCheckpointResult<Catalog> =
+	| { confirmed: true; catalog: Catalog }
 	| { confirmed: false; reason: "owner_missing" | "revision_conflict" };
 
 /** Composition-root capability for catalog mutation. Every operation snapshots the full session
  * resume envelope through the checked persistence callback before reporting confirmation. */
-export interface CodexCatalogWriter {
-	commit(
-		owner: SessionRecord,
-		expectedRevision: number,
-		agents: readonly CodexPersistedAgent[],
-	): CodexCatalogCommitResult;
+export interface AgentCatalogWriter<Catalog, Agent> {
+	commit(owner: SessionRecord, expectedRevision: number, agents: readonly Agent[]): AgentCatalogCommitResult<Catalog>;
 	/** Whether the exact live revision has crossed the checked persistence barrier. */
 	isDurable(owner: SessionRecord, revision: number): boolean;
 	/** Rewrites an unchanged revision to confirm an installed or restored snapshot. */
-	checkpoint(owner: SessionRecord, expectedRevision: number): CodexCatalogCheckpointResult;
+	checkpoint(owner: SessionRecord, expectedRevision: number): AgentCatalogCheckpointResult<Catalog>;
 }
 
-export type CopilotCatalogCommitResult =
-	| { committed: true; catalog: CopilotAgentCatalog }
-	| { committed: false; reason: "owner_missing" | "revision_conflict" };
-
-export type CopilotCatalogCheckpointResult =
-	| { confirmed: true; catalog: CopilotAgentCatalog }
-	| { confirmed: false; reason: "owner_missing" | "revision_conflict" };
-
-export interface CopilotCatalogWriter {
-	commit(
-		owner: SessionRecord,
-		expectedRevision: number,
-		agents: readonly CopilotPersistedAgent[],
-	): CopilotCatalogCommitResult;
-	isDurable(owner: SessionRecord, revision: number): boolean;
-	checkpoint(owner: SessionRecord, expectedRevision: number): CopilotCatalogCheckpointResult;
-}
+export type CodexCatalogCommitResult = AgentCatalogCommitResult<CodexAgentCatalog>;
+export type CodexCatalogCheckpointResult = AgentCatalogCheckpointResult<CodexAgentCatalog>;
+export type CodexCatalogWriter = AgentCatalogWriter<CodexAgentCatalog, CodexPersistedAgent>;
+export type CopilotCatalogCommitResult = AgentCatalogCommitResult<CopilotAgentCatalog>;
+export type CopilotCatalogCheckpointResult = AgentCatalogCheckpointResult<CopilotAgentCatalog>;
+export type CopilotCatalogWriter = AgentCatalogWriter<CopilotAgentCatalog, CopilotPersistedAgent>;
 
 /** Extra id-space the mint/adopt clash check must avoid beyond existing records: catalog project
  * names and reserved host sessions live in gateway state, so the gateway injects the predicate. */
@@ -139,6 +124,92 @@ interface CreateOpts {
 //  Class
 
 /**
+ * One backend's per-owner agent catalogs under optimistic concurrency: revision-checked commits,
+ * the checked-persistence barrier, and the unconfirmed-revision ledger a restored file starts in.
+ * One implementation, one instance per backend, so the CAS discipline cannot drift between them.
+ */
+class AgentCatalogStore<Catalog extends { revision: number }, Agent> {
+	private readonly catalogs = new WeakMap<SessionRecord, Catalog>();
+	private readonly unconfirmed = new WeakMap<SessionRecord, number>();
+
+	constructor(
+		private readonly parseCatalog: (candidate: unknown) => Catalog,
+		private readonly ownerAlive: (owner: SessionRecord) => boolean,
+	) {}
+
+	/** A validated copy of one owner's catalog. Callers cannot mutate the stored nested objects. */
+	get(owner: SessionRecord): Catalog | undefined {
+		if (!this.ownerAlive(owner)) return undefined;
+		const catalog = this.catalogs.get(owner);
+		return catalog ? this.parseCatalog(catalog) : undefined;
+	}
+
+	commit(
+		owner: SessionRecord,
+		expectedRevision: number,
+		agents: readonly Agent[],
+		persistChecked: () => void,
+	): AgentCatalogCommitResult<Catalog> {
+		if (!this.ownerAlive(owner)) return { committed: false, reason: "owner_missing" };
+		const previous = this.catalogs.get(owner);
+		const currentRevision = previous?.revision ?? 0;
+		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
+		const previousUnconfirmedRevision = this.unconfirmed.get(owner);
+		const next = this.parseCatalog({ version: 1, revision: expectedRevision + 1, agents });
+		this.catalogs.set(owner, next);
+		try {
+			persistChecked();
+		} catch (error) {
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmed.set(owner, next.revision);
+			} else {
+				if (previous) this.catalogs.set(owner, previous);
+				else this.catalogs.delete(owner);
+				if (previousUnconfirmedRevision === undefined) this.unconfirmed.delete(owner);
+				else this.unconfirmed.set(owner, previousUnconfirmedRevision);
+			}
+			throw error;
+		}
+		this.unconfirmed.delete(owner);
+		return { committed: true, catalog: this.parseCatalog(next) };
+	}
+
+	isDurable(owner: SessionRecord, revision: number): boolean {
+		if (!this.ownerAlive(owner)) return false;
+		return this.catalogs.get(owner)?.revision === revision && this.unconfirmed.get(owner) !== revision;
+	}
+
+	checkpoint(
+		owner: SessionRecord,
+		expectedRevision: number,
+		persistChecked: () => void,
+	): AgentCatalogCheckpointResult<Catalog> {
+		if (!this.ownerAlive(owner)) return { confirmed: false, reason: "owner_missing" };
+		const catalog = this.catalogs.get(owner);
+		if (!catalog || catalog.revision !== expectedRevision) {
+			return { confirmed: false, reason: "revision_conflict" };
+		}
+		try {
+			persistChecked();
+		} catch (error) {
+			if (error instanceof DurableStoreInstalledError) {
+				this.unconfirmed.set(owner, catalog.revision);
+			}
+			throw error;
+		}
+		this.unconfirmed.delete(owner);
+		return { confirmed: true, catalog: this.parseCatalog(catalog) };
+	}
+
+	/** Adopt a restored catalog. It is readable at once, but only a new checked save confirms its
+	 * directory entry, so the revision starts unconfirmed. */
+	install(record: SessionRecord, catalog: Catalog): void {
+		this.catalogs.set(record, catalog);
+		this.unconfirmed.set(record, catalog.revision);
+	}
+}
+
+/**
  * The gateway's authoritative session store: SessionRecords keyed by their composite `spawn.id`
  * team field (globally unique, exactly the address a session registers and lists under). All data
  * invariants live here - per-spawn id + label uniqueness, label sanitization, and the legacy-file
@@ -148,10 +219,14 @@ interface CreateOpts {
  */
 export class SessionStore {
 	private readonly records = new Map<string, SessionRecord>();
-	private readonly codexCatalogs = new WeakMap<SessionRecord, CodexAgentCatalog>();
-	private readonly unconfirmedCodexCatalogs = new WeakMap<SessionRecord, number>();
-	private readonly copilotCatalogs = new WeakMap<SessionRecord, CopilotAgentCatalog>();
-	private readonly unconfirmedCopilotCatalogs = new WeakMap<SessionRecord, number>();
+	private readonly codexCatalogStore = new AgentCatalogStore<CodexAgentCatalog, CodexPersistedAgent>(
+		(candidate) => CodexAgentCatalogSchema.parse(candidate),
+		(owner) => this.records.get(this.teamOf(owner)) === owner,
+	);
+	private readonly copilotCatalogStore = new AgentCatalogStore<CopilotAgentCatalog, CopilotPersistedAgent>(
+		(candidate) => CopilotAgentCatalogSchema.parse(candidate),
+		(owner) => this.records.get(this.teamOf(owner)) === owner,
+	);
 	// Per-spawn set of taken labels, so dedup is O(1) rather than a full-store scan on every create.
 	private readonly labels = new Map<string, Set<string>>();
 	private readonly clash: ClashPredicate;
@@ -168,20 +243,20 @@ export class SessionStore {
 			const { persistChecked, receiveWriter } = opts.codexCatalogPersistence;
 			receiveWriter({
 				commit: (owner, expectedRevision, agents) =>
-					this.commitCodexCatalog(owner, expectedRevision, agents, persistChecked),
-				isDurable: (owner, revision) => this.isCodexCatalogDurable(owner, revision),
+					this.codexCatalogStore.commit(owner, expectedRevision, agents, persistChecked),
+				isDurable: (owner, revision) => this.codexCatalogStore.isDurable(owner, revision),
 				checkpoint: (owner, expectedRevision) =>
-					this.checkpointCodexCatalog(owner, expectedRevision, persistChecked),
+					this.codexCatalogStore.checkpoint(owner, expectedRevision, persistChecked),
 			});
 		}
 		if (opts.copilotCatalogPersistence) {
 			const { persistChecked, receiveWriter } = opts.copilotCatalogPersistence;
 			receiveWriter({
 				commit: (owner, expectedRevision, agents) =>
-					this.commitCopilotCatalog(owner, expectedRevision, agents, persistChecked),
-				isDurable: (owner, revision) => this.isCopilotCatalogDurable(owner, revision),
+					this.copilotCatalogStore.commit(owner, expectedRevision, agents, persistChecked),
+				isDurable: (owner, revision) => this.copilotCatalogStore.isDurable(owner, revision),
 				checkpoint: (owner, expectedRevision) =>
-					this.checkpointCopilotCatalog(owner, expectedRevision, persistChecked),
+					this.copilotCatalogStore.checkpoint(owner, expectedRevision, persistChecked),
 			});
 		}
 	}
@@ -250,149 +325,20 @@ export class SessionStore {
 		return isComposite(team) ? this.records.get(team) : undefined;
 	}
 
-	/** A validated copy of one owner's catalog. Callers cannot mutate the stored nested objects. */
 	codexCatalog(owner: SessionRecord): CodexAgentCatalog | undefined {
-		if (this.records.get(this.teamOf(owner)) !== owner) return undefined;
-		const catalog = this.codexCatalogs.get(owner);
-		return catalog ? CodexAgentCatalogSchema.parse(catalog) : undefined;
+		return this.codexCatalogStore.get(owner);
 	}
 
 	listCodexAgents(owner: SessionRecord): readonly CodexPersistedAgent[] {
-		return this.codexCatalog(owner)?.agents ?? [];
-	}
-
-	private commitCodexCatalog(
-		owner: SessionRecord,
-		expectedRevision: number,
-		agents: readonly CodexPersistedAgent[],
-		persistChecked: () => void,
-	): CodexCatalogCommitResult {
-		if (this.records.get(this.teamOf(owner)) !== owner) return { committed: false, reason: "owner_missing" };
-		const previous = this.codexCatalogs.get(owner);
-		const currentRevision = previous?.revision ?? 0;
-		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
-		const previousUnconfirmedRevision = this.unconfirmedCodexCatalogs.get(owner);
-		const next = CodexAgentCatalogSchema.parse({
-			version: 1,
-			revision: expectedRevision + 1,
-			agents,
-		});
-		this.codexCatalogs.set(owner, next);
-		try {
-			persistChecked();
-		} catch (error) {
-			if (error instanceof DurableStoreInstalledError) {
-				this.unconfirmedCodexCatalogs.set(owner, next.revision);
-			} else {
-				if (previous) this.codexCatalogs.set(owner, previous);
-				else this.codexCatalogs.delete(owner);
-				if (previousUnconfirmedRevision === undefined) this.unconfirmedCodexCatalogs.delete(owner);
-				else this.unconfirmedCodexCatalogs.set(owner, previousUnconfirmedRevision);
-			}
-			throw error;
-		}
-		this.unconfirmedCodexCatalogs.delete(owner);
-		return { committed: true, catalog: CodexAgentCatalogSchema.parse(next) };
-	}
-
-	private isCodexCatalogDurable(owner: SessionRecord, revision: number): boolean {
-		if (this.records.get(this.teamOf(owner)) !== owner) return false;
-		return (
-			this.codexCatalogs.get(owner)?.revision === revision &&
-			this.unconfirmedCodexCatalogs.get(owner) !== revision
-		);
-	}
-
-	private checkpointCodexCatalog(
-		owner: SessionRecord,
-		expectedRevision: number,
-		persistChecked: () => void,
-	): CodexCatalogCheckpointResult {
-		if (this.records.get(this.teamOf(owner)) !== owner) return { confirmed: false, reason: "owner_missing" };
-		const catalog = this.codexCatalogs.get(owner);
-		if (!catalog || catalog.revision !== expectedRevision) {
-			return { confirmed: false, reason: "revision_conflict" };
-		}
-		try {
-			persistChecked();
-		} catch (error) {
-			if (error instanceof DurableStoreInstalledError) {
-				this.unconfirmedCodexCatalogs.set(owner, catalog.revision);
-			}
-			throw error;
-		}
-		this.unconfirmedCodexCatalogs.delete(owner);
-		return { confirmed: true, catalog: CodexAgentCatalogSchema.parse(catalog) };
+		return this.codexCatalogStore.get(owner)?.agents ?? [];
 	}
 
 	copilotCatalog(owner: SessionRecord): CopilotAgentCatalog | undefined {
-		if (this.records.get(this.teamOf(owner)) !== owner) return undefined;
-		const catalog = this.copilotCatalogs.get(owner);
-		return catalog ? CopilotAgentCatalogSchema.parse(catalog) : undefined;
+		return this.copilotCatalogStore.get(owner);
 	}
 
 	listCopilotAgents(owner: SessionRecord): readonly CopilotPersistedAgent[] {
-		return this.copilotCatalog(owner)?.agents ?? [];
-	}
-
-	private commitCopilotCatalog(
-		owner: SessionRecord,
-		expectedRevision: number,
-		agents: readonly CopilotPersistedAgent[],
-		persistChecked: () => void,
-	): CopilotCatalogCommitResult {
-		if (this.records.get(this.teamOf(owner)) !== owner) return { committed: false, reason: "owner_missing" };
-		const previous = this.copilotCatalogs.get(owner);
-		const currentRevision = previous?.revision ?? 0;
-		if (currentRevision !== expectedRevision) return { committed: false, reason: "revision_conflict" };
-		const previousUnconfirmedRevision = this.unconfirmedCopilotCatalogs.get(owner);
-		const next = CopilotAgentCatalogSchema.parse({ version: 1, revision: expectedRevision + 1, agents });
-		this.copilotCatalogs.set(owner, next);
-		try {
-			persistChecked();
-		} catch (error) {
-			if (error instanceof DurableStoreInstalledError) {
-				this.unconfirmedCopilotCatalogs.set(owner, next.revision);
-			} else {
-				if (previous) this.copilotCatalogs.set(owner, previous);
-				else this.copilotCatalogs.delete(owner);
-				if (previousUnconfirmedRevision === undefined) this.unconfirmedCopilotCatalogs.delete(owner);
-				else this.unconfirmedCopilotCatalogs.set(owner, previousUnconfirmedRevision);
-			}
-			throw error;
-		}
-		this.unconfirmedCopilotCatalogs.delete(owner);
-		return { committed: true, catalog: CopilotAgentCatalogSchema.parse(next) };
-	}
-
-	private isCopilotCatalogDurable(owner: SessionRecord, revision: number): boolean {
-		if (this.records.get(this.teamOf(owner)) !== owner) return false;
-		return (
-			this.copilotCatalogs.get(owner)?.revision === revision &&
-			this.unconfirmedCopilotCatalogs.get(owner) !== revision
-		);
-	}
-
-	private checkpointCopilotCatalog(
-		owner: SessionRecord,
-		expectedRevision: number,
-		persistChecked: () => void,
-	): CopilotCatalogCheckpointResult {
-		if (this.records.get(this.teamOf(owner)) !== owner) return { confirmed: false, reason: "owner_missing" };
-		const catalog = this.copilotCatalogs.get(owner);
-		if (!catalog || catalog.revision !== expectedRevision) {
-			return { confirmed: false, reason: "revision_conflict" };
-		}
-		try {
-			persistChecked();
-		} catch (error) {
-			if (error instanceof DurableStoreInstalledError) {
-				this.unconfirmedCopilotCatalogs.set(owner, catalog.revision);
-			}
-			throw error;
-		}
-		this.unconfirmedCopilotCatalogs.delete(owner);
-		return { confirmed: true, catalog: CopilotAgentCatalogSchema.parse(catalog) };
+		return this.copilotCatalogStore.get(owner)?.agents ?? [];
 	}
 
 	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
@@ -592,12 +538,12 @@ export class SessionStore {
 				codexCatalog?: unknown;
 				copilotCatalog?: unknown;
 			};
-			const codexCatalog = this.codexCatalogs.get(record);
-			const copilotCatalog = this.copilotCatalogs.get(record);
+			const codexCatalog = this.codexCatalogStore.get(record);
+			const copilotCatalog = this.copilotCatalogStore.get(record);
 			out[this.teamOf(record)] = {
 				...rest,
-				...(codexCatalog ? { codexCatalog: CodexAgentCatalogSchema.parse(codexCatalog) } : {}),
-				...(copilotCatalog ? { copilotCatalog: CopilotAgentCatalogSchema.parse(copilotCatalog) } : {}),
+				...(codexCatalog ? { codexCatalog } : {}),
+				...(copilotCatalog ? { copilotCatalog } : {}),
 			};
 		}
 		return out;
@@ -648,17 +594,9 @@ export class SessionStore {
 			};
 			this.records.set(team, record);
 			const codexCatalog = persisted ? restoreCodexAgentCatalog(v.codexCatalog) : undefined;
-			if (codexCatalog) {
-				this.codexCatalogs.set(record, codexCatalog);
-				// A restored pathname is readable, but only a new checked save confirms its directory entry
-				// before an acceptance receipt is acknowledged.
-				this.unconfirmedCodexCatalogs.set(record, codexCatalog.revision);
-			}
+			if (codexCatalog) this.codexCatalogStore.install(record, codexCatalog);
 			const copilotCatalog = persisted ? restoreCopilotAgentCatalog(v.copilotCatalog) : undefined;
-			if (copilotCatalog) {
-				this.copilotCatalogs.set(record, copilotCatalog);
-				this.unconfirmedCopilotCatalogs.set(record, copilotCatalog.revision);
-			}
+			if (copilotCatalog) this.copilotCatalogStore.install(record, copilotCatalog);
 			this.claimLabel(record);
 		}
 	}
