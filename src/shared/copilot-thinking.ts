@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { z } from "zod";
 import { COPILOT_BACKEND } from "./agent-backend.js";
 import {
@@ -6,14 +5,27 @@ import {
 	AgentOwnerKeySchema,
 	AgentResolvedTargetSchema,
 } from "./agent-execution-target.js";
+import {
+	AGENT_ACTIVITY_MAX_BYTES,
+	AGENT_ACTIVITY_MAX_ITEMS,
+	AGENT_ERROR_MAX_BYTES,
+	AGENT_PROMPT_MAX_BYTES,
+	agentActivityIssues,
+	agentIdForOperation,
+	agentOperationFingerprint,
+	agentTurnHistoryIssues,
+	boundedUtf8,
+	restoreAgentCatalog,
+	sanitizeAgentErrorText,
+} from "./agent-record.js";
 
 ////////////////////////////////
 //  Bounds
 
-export const COPILOT_PROMPT_MAX_BYTES = 256 * 1024;
-export const COPILOT_ACTIVITY_MAX_BYTES = 16 * 1024;
-export const COPILOT_ACTIVITY_MAX_ITEMS = 32;
-export const COPILOT_ERROR_MAX_BYTES = 16 * 1024;
+export const COPILOT_PROMPT_MAX_BYTES = AGENT_PROMPT_MAX_BYTES;
+export const COPILOT_ACTIVITY_MAX_BYTES = AGENT_ACTIVITY_MAX_BYTES;
+export const COPILOT_ACTIVITY_MAX_ITEMS = AGENT_ACTIVITY_MAX_ITEMS;
+export const COPILOT_ERROR_MAX_BYTES = AGENT_ERROR_MAX_BYTES;
 export const COPILOT_WAIT_BUDGET_MS = COPILOT_BACKEND.waitBudgetMs;
 export const COPILOT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const COPILOT_AGENT_ID_RE = /^copilot_[0-9a-f]{32}$/;
@@ -25,12 +37,6 @@ export const CopilotExecutionTargetSchema = AgentExecutionTargetSchema;
 export const CopilotResolvedTargetSchema = AgentResolvedTargetSchema;
 export const CopilotOpaqueIdSchema = z.string().min(1).max(512);
 
-function boundedUtf8(maxBytes: number, name: string) {
-	return z.string().refine((value) => new TextEncoder().encode(value).byteLength <= maxBytes, {
-		message: `${name} must be at most ${maxBytes} UTF-8 bytes`,
-	});
-}
-
 export const CopilotPromptSchema = z
 	.string()
 	.refine((value) => value.trim().length > 0, "prompt must not be blank")
@@ -39,21 +45,7 @@ export const CopilotPromptSchema = z
 	});
 
 export function sanitizeCopilotErrorText(raw: string): string {
-	const normalized = raw
-		.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]+/gu, " ")
-		.replace(/\s+/gu, " ")
-		.trim();
-	if (new TextEncoder().encode(normalized).byteLength <= COPILOT_ERROR_MAX_BYTES) return normalized;
-
-	let result = "";
-	let bytes = 0;
-	for (const character of normalized) {
-		const characterBytes = new TextEncoder().encode(character).byteLength;
-		if (bytes + characterBytes > COPILOT_ERROR_MAX_BYTES) break;
-		result += character;
-		bytes += characterBytes;
-	}
-	return result.trimEnd();
+	return sanitizeAgentErrorText(raw, COPILOT_ERROR_MAX_BYTES);
 }
 
 export const CopilotErrorTextSchema = boundedUtf8(COPILOT_ERROR_MAX_BYTES, "error")
@@ -64,8 +56,7 @@ export const CopilotErrorTextSchema = boundedUtf8(COPILOT_ERROR_MAX_BYTES, "erro
 //  Identity
 
 export function copilotAgentIdForOperation(operationId: string): string {
-	const digest = crypto.createHash("sha256").update(`COPILOT_AGENT_V1\n${operationId}`).digest("hex");
-	return `copilot_${digest.slice(0, 32)}`;
+	return agentIdForOperation("copilot", operationId);
 }
 
 export function copilotOperationFingerprint(
@@ -73,10 +64,7 @@ export function copilotOperationFingerprint(
 	agentId: string,
 	prompt?: string,
 ): string {
-	return crypto
-		.createHash("sha256")
-		.update(JSON.stringify([kind, agentId, prompt ?? null]))
-		.digest("hex");
+	return agentOperationFingerprint(kind, agentId, prompt);
 }
 
 ////////////////////////////////
@@ -86,13 +74,42 @@ export const CopilotActivitySchema = z.discriminatedUnion("kind", [
 	z
 		.object({
 			kind: z.literal("commentary"),
+			text: boundedUtf8(COPILOT_ACTIVITY_MAX_BYTES, "activity"),
+		})
+		.strict(),
+	z.object({ kind: z.literal("truncated"), omitted: z.number().int().positive() }).strict(),
+]);
+
+export const CopilotStoredActivitySchema = z.discriminatedUnion("kind", [
+	z
+		.object({
+			kind: z.literal("commentary"),
 			itemId: CopilotOpaqueIdSchema,
 			text: boundedUtf8(COPILOT_ACTIVITY_MAX_BYTES, "activity"),
 		})
 		.strict(),
 	z.object({ kind: z.literal("truncated"), omitted: z.number().int().positive() }).strict(),
 ]);
-export const CopilotActivitiesSchema = z.array(CopilotActivitySchema).max(COPILOT_ACTIVITY_MAX_ITEMS + 1);
+
+export const CopilotActivitiesSchema = z
+	.array(CopilotActivitySchema)
+	.max(COPILOT_ACTIVITY_MAX_ITEMS + 1)
+	.superRefine((activities, ctx) => {
+		for (const message of agentActivityIssues(activities, COPILOT_ACTIVITY_MAX_ITEMS)) {
+			ctx.addIssue({ code: "custom", message });
+		}
+	});
+
+export const CopilotStoredActivitiesSchema = z
+	.array(CopilotStoredActivitySchema)
+	.max(COPILOT_ACTIVITY_MAX_ITEMS + 1)
+	.superRefine((activities, ctx) => {
+		for (const message of agentActivityIssues(activities, COPILOT_ACTIVITY_MAX_ITEMS)) {
+			ctx.addIssue({ code: "custom", message });
+		}
+	});
+
+export type CopilotStoredActivity = z.infer<typeof CopilotStoredActivitySchema>;
 
 export const CopilotAgentStateSchema = z.enum(["creating", "idle", "working", "recovering", "unavailable"]);
 export const CopilotTurnStateSchema = z.enum(["inProgress", "completed", "failed", "interrupted"]);
@@ -147,7 +164,7 @@ export const CopilotStoredTurnSchema = z.discriminatedUnion("state", [
 		.object({
 			id: CopilotOpaqueIdSchema,
 			state: z.literal("inProgress"),
-			activities: CopilotActivitiesSchema,
+			activities: CopilotStoredActivitiesSchema,
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -155,7 +172,7 @@ export const CopilotStoredTurnSchema = z.discriminatedUnion("state", [
 		.object({
 			id: CopilotOpaqueIdSchema,
 			state: z.literal("completed"),
-			activities: CopilotActivitiesSchema,
+			activities: CopilotStoredActivitiesSchema,
 			finalResponse: z.string(),
 			updatedAt: z.number().int().nonnegative(),
 		})
@@ -164,7 +181,7 @@ export const CopilotStoredTurnSchema = z.discriminatedUnion("state", [
 		.object({
 			id: CopilotOpaqueIdSchema,
 			state: z.literal("failed"),
-			activities: CopilotActivitiesSchema,
+			activities: CopilotStoredActivitiesSchema,
 			error: CopilotErrorTextSchema,
 			updatedAt: z.number().int().nonnegative(),
 		})
@@ -173,7 +190,7 @@ export const CopilotStoredTurnSchema = z.discriminatedUnion("state", [
 		.object({
 			id: CopilotOpaqueIdSchema,
 			state: z.literal("interrupted"),
-			activities: CopilotActivitiesSchema,
+			activities: CopilotStoredActivitiesSchema,
 			updatedAt: z.number().int().nonnegative(),
 		})
 		.strict(),
@@ -230,8 +247,7 @@ export const CopilotPersistedAgentSchema = z
 	})
 	.strict()
 	.superRefine((value, ctx) => {
-		if (value.updatedAt < value.createdAt)
-			ctx.addIssue({ code: "custom", message: "agent update predates creation" });
+		for (const message of agentTurnHistoryIssues(value)) ctx.addIssue({ code: "custom", message });
 		if (!!value.sessionId !== !!value.resolvedTarget)
 			ctx.addIssue({ code: "custom", message: "session and target must appear together" });
 		if (value.activeTurnId && !value.sessionId)
@@ -239,10 +255,14 @@ export const CopilotPersistedAgentSchema = z
 		if (value.agentState === "creating" && (value.sessionId || value.turns.length > 0 || value.activeTurnId)) {
 			ctx.addIssue({ code: "custom", message: "creating agent cannot contain native state" });
 		}
-		if (value.agentState === "working" && !value.activeTurnId)
-			ctx.addIssue({ code: "custom", message: "working agent requires an active turn" });
-		if (value.agentState === "idle" && value.activeTurnId)
-			ctx.addIssue({ code: "custom", message: "idle agent cannot retain an active turn" });
+		if (new Set(value.operations.map((operation) => operation.operationId)).size !== value.operations.length) {
+			ctx.addIssue({ code: "custom", message: "stored operation IDs must be unique" });
+		}
+		for (const operation of value.operations) {
+			if (operation.createdAt < value.createdAt || operation.updatedAt > value.updatedAt) {
+				ctx.addIssue({ code: "custom", message: "stored operation timestamp is outside its agent lifetime" });
+			}
+		}
 	});
 
 export const CopilotAgentCatalogSchema = z
@@ -259,8 +279,13 @@ export type CopilotReconciliationFence = z.infer<typeof CopilotReconciliationFen
 export type CopilotAgentCatalog = z.infer<typeof CopilotAgentCatalogSchema>;
 
 export function restoreCopilotAgentCatalog(raw: unknown): CopilotAgentCatalog | undefined {
-	const parsed = CopilotAgentCatalogSchema.safeParse(raw);
-	return parsed.success ? parsed.data : undefined;
+	const restored = restoreAgentCatalog(raw, (candidate) => {
+		const result = CopilotPersistedAgentSchema.safeParse(candidate);
+		return result.success ? result.data : undefined;
+	});
+	if (!restored) return undefined;
+	const catalog = CopilotAgentCatalogSchema.safeParse(restored);
+	return catalog.success ? catalog.data : undefined;
 }
 
 ////////////////////////////////

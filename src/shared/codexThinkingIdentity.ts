@@ -1,18 +1,27 @@
 // Codex delegation: byte/shape bounds, opaque ID shapes, and agent/operation identity. The base
 // layer every other codexThinking* file imports from; imports nothing from a sibling domain file.
 
-import crypto from "node:crypto";
 import { z } from "zod";
 import { CODEX_BACKEND } from "./agent-backend.js";
 import { AgentOwnerKeySchema } from "./agent-execution-target.js";
+import {
+	AGENT_ACTIVITY_MAX_BYTES,
+	AGENT_ACTIVITY_MAX_ITEMS,
+	AGENT_ERROR_MAX_BYTES,
+	AGENT_PROMPT_MAX_BYTES,
+	agentIdForOperation,
+	agentOperationFingerprint,
+	boundedUtf8,
+	sanitizeAgentErrorText,
+} from "./agent-record.js";
 
 ////////////////////////////////
 //  Bounds
 
-export const CODEX_PROMPT_MAX_BYTES = 256 * 1024;
-export const CODEX_ACTIVITY_MAX_BYTES = 16 * 1024;
-export const CODEX_ACTIVITY_MAX_ITEMS = 32;
-export const CODEX_ERROR_MAX_BYTES = 16 * 1024;
+export const CODEX_PROMPT_MAX_BYTES = AGENT_PROMPT_MAX_BYTES;
+export const CODEX_ACTIVITY_MAX_BYTES = AGENT_ACTIVITY_MAX_BYTES;
+export const CODEX_ACTIVITY_MAX_ITEMS = AGENT_ACTIVITY_MAX_ITEMS;
+export const CODEX_ERROR_MAX_BYTES = AGENT_ERROR_MAX_BYTES;
 export const CODEX_AGENT_ID_RE = /^codex_[0-9a-f]{32}$/;
 /**
  * How long a waiting Codex call holds its HTTP connection.
@@ -37,32 +46,14 @@ export const OpaqueIdSchema = z.string().min(1).max(512);
 export const CodexOperationIdSchema = z.string().uuid();
 export const OperationIdSchema = CodexOperationIdSchema;
 
-export function boundedUtf8(maxBytes: number, name: string) {
-	return z.string().refine((value) => new TextEncoder().encode(value).byteLength <= maxBytes, {
-		message: `${name} must be at most ${maxBytes} UTF-8 bytes`,
-	});
-}
+export { boundedUtf8 };
 
 ////////////////////////////////
 //  Error text
 
 /** Normalizes untrusted daemon errors before they enter durable or caller-visible state. */
 export function sanitizeCodexErrorText(raw: string): string {
-	const normalized = raw
-		.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]+/gu, " ")
-		.replace(/\s+/gu, " ")
-		.trim();
-	if (new TextEncoder().encode(normalized).byteLength <= CODEX_ERROR_MAX_BYTES) return normalized;
-
-	let result = "";
-	let bytes = 0;
-	for (const character of normalized) {
-		const characterBytes = new TextEncoder().encode(character).byteLength;
-		if (bytes + characterBytes > CODEX_ERROR_MAX_BYTES) break;
-		result += character;
-		bytes += characterBytes;
-	}
-	return result.trimEnd();
+	return sanitizeAgentErrorText(raw, CODEX_ERROR_MAX_BYTES);
 }
 
 export const CodexErrorTextSchema = boundedUtf8(CODEX_ERROR_MAX_BYTES, "error")
@@ -93,8 +84,7 @@ export const CodexPromptSchema = z
  * Claude, and ownership is enforced by session authority rather than by the ID being unguessable.
  */
 export function codexAgentIdForOperation(operationId: string): string {
-	const digest = crypto.createHash("sha256").update(`CODEX_AGENT_V1\n${operationId}`).digest("hex");
-	return `codex_${digest.slice(0, 32)}`;
+	return agentIdForOperation("codex", operationId);
 }
 
 export function codexOperationFingerprint(
@@ -102,10 +92,7 @@ export function codexOperationFingerprint(
 	agentId: string,
 	prompt?: string,
 ): string {
-	return crypto
-		.createHash("sha256")
-		.update(JSON.stringify([kind, agentId, prompt ?? null]))
-		.digest("hex");
+	return agentOperationFingerprint(kind, agentId, prompt);
 }
 
 export type CodexAgentId = z.infer<typeof CodexAgentIdSchema>;

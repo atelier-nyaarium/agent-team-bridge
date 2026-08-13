@@ -3,6 +3,7 @@
 // needs), and building the projection from a private CodexPersistedAgent.
 
 import { z } from "zod";
+import { restoreAgentCatalog } from "./agent-record.js";
 import { CodexActivitiesSchema } from "./codexThinkingActivities.js";
 import type { CodexPersistedAgent } from "./codexThinkingAgentRecord.js";
 import {
@@ -186,35 +187,12 @@ function migrateCodexAgentRecoveryIntent(raw: unknown): unknown {
 
 /** Restore a session-owned catalog without sacrificing its owner to one damaged agent entry. */
 export function restoreCodexAgentCatalog(raw: unknown): CodexAgentCatalog | undefined {
-	if (!raw || typeof raw !== "object") return undefined;
-	const envelope = raw as { version?: unknown; revision?: unknown; agents?: unknown };
-	if (
-		envelope.version !== 1 ||
-		typeof envelope.revision !== "number" ||
-		!Number.isInteger(envelope.revision) ||
-		envelope.revision < 0 ||
-		!Array.isArray(envelope.agents)
-	)
-		return undefined;
-
-	const parsed = envelope.agents.flatMap((candidate) => {
+	const restored = restoreAgentCatalog(raw, (candidate) => {
 		const result = CodexPersistedAgentSchema.safeParse(migrateCodexAgentRecoveryIntent(candidate));
-		return result.success ? [result.data] : [];
+		return result.success ? result.data : undefined;
 	});
-	const agentIdCounts = new Map<string, number>();
-	const operationIdCounts = new Map<string, number>();
-	for (const agent of parsed) {
-		agentIdCounts.set(agent.agentId, (agentIdCounts.get(agent.agentId) ?? 0) + 1);
-		for (const operation of agent.operations) {
-			operationIdCounts.set(operation.operationId, (operationIdCounts.get(operation.operationId) ?? 0) + 1);
-		}
-	}
-	const agents = parsed.filter(
-		(agent) =>
-			agentIdCounts.get(agent.agentId) === 1 &&
-			agent.operations.every((operation) => operationIdCounts.get(operation.operationId) === 1),
-	);
-	const catalog = CodexAgentCatalogSchema.safeParse({ version: 1, revision: envelope.revision, agents });
+	if (!restored) return undefined;
+	const catalog = CodexAgentCatalogSchema.safeParse(restored);
 	return catalog.success ? catalog.data : undefined;
 }
 

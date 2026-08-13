@@ -72,6 +72,9 @@ function describeAgent(
 			(options.includeLastSettled
 				? agent.turns.findLast((candidate) => candidate.state !== "inProgress")
 				: undefined));
+	const activities = (turn?.activities ?? []).map((activity) =>
+		activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : activity,
+	);
 	const result: CopilotAgentResult = {
 		agentId: agent.agentId,
 		agentState: agent.agentState,
@@ -88,7 +91,7 @@ function describeAgent(
 						: agent.agentState === "recovering"
 							? "indeterminate"
 							: "unavailable"),
-		activities: turn?.activities ?? [],
+		activities,
 		...(turn ? { turn: { id: turn.id, state: turn.state } } : {}),
 		...(options.delivery && !uncertain ? { delivery: options.delivery } : {}),
 	};

@@ -4,6 +4,7 @@
 // for both this private shape and the public projection in codexThinkingCatalog.ts.
 
 import { z } from "zod";
+import { agentTurnHistoryIssues } from "./agent-record.js";
 import { CodexStoredActivitiesSchema } from "./codexThinkingActivities.js";
 import { CodexAgentStateSchema, CodexDeliverySchema, type CodexTurnStateSchema } from "./codexThinkingAgentState.js";
 import {
@@ -209,27 +210,11 @@ export interface CodexAgentHistoryView {
 	updatedAt: number;
 }
 
-/** Cross-boundary history invariants shared by the private catalog and its public projection. */
+/** Cross-boundary history invariants shared by the private catalog and its public projection. The
+ * turn-level subset lives in `agentTurnHistoryIssues`, shared with the Copilot family; everything
+ * exchange-shaped is Codex-only and stays here. */
 export function codexAgentHistoryIssues(value: CodexAgentHistoryView): string[] {
-	const issues: string[] = [];
-	if (value.updatedAt < value.createdAt) issues.push("agent update cannot predate creation");
-
-	const activeTurns = value.activeTurnId ? value.turns.filter((turn) => turn.id === value.activeTurnId) : [];
-	const inProgressTurns = value.turns.filter((turn) => turn.state === "inProgress");
-	if (
-		value.activeTurnId &&
-		(activeTurns.length !== 1 || activeTurns[0]?.state !== "inProgress" || inProgressTurns.length !== 1)
-	) {
-		issues.push("active turn must resolve to one in-progress turn");
-	}
-	if (!value.activeTurnId && inProgressTurns.length > 0) {
-		issues.push("an in-progress turn must be the active turn");
-	}
-	if (value.agentState === "working" && !value.activeTurnId) issues.push("working agent requires an active turn");
-	if (value.agentState === "idle" && value.activeTurnId) issues.push("idle agent cannot retain an active turn");
-	if (new Set(value.turns.map((turn) => turn.id)).size !== value.turns.length) {
-		issues.push("turn IDs must be unique");
-	}
+	const issues: string[] = [...agentTurnHistoryIssues(value)];
 
 	if (
 		value.exchanges.filter((exchange) => exchange.kind === "start").length !== 1 ||
@@ -262,9 +247,6 @@ export function codexAgentHistoryIssues(value: CodexAgentHistoryView): string[] 
 		}
 	}
 	for (const turn of value.turns) {
-		if (turn.updatedAt < value.createdAt || turn.updatedAt > value.updatedAt) {
-			issues.push("turn timestamp is outside its agent lifetime");
-		}
 		const acceptedAt = value.exchanges.flatMap((exchange) =>
 			exchange.turnId === turn.id && exchange.acceptedAt !== undefined ? [exchange.acceptedAt] : [],
 		);

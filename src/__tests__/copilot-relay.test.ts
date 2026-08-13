@@ -62,7 +62,7 @@ function askableAgent(agentState: "working" | "idle" = "working"): CopilotPersis
 		sessionId: SESSION_ID,
 		...(agentState === "working" ? { activeTurnId: TURN_ID } : {}),
 		operations: [],
-		turns: [],
+		turns: agentState === "working" ? [{ id: TURN_ID, state: "inProgress", activities: [], updatedAt: 0 }] : [],
 		createdAt: 0,
 		updatedAt: 0,
 	});

@@ -134,7 +134,22 @@ describe("Copilot gateway route", () => {
 		});
 		await flush();
 		await accept(context, START_OPERATION_ID, "turn-1", 0, "started");
-		await terminal(context, agentId, "turn-1", 1);
+		context.relay.handleHostMessage({
+			type: "copilot_event",
+			kind: "activity",
+			ownerKey: context.sessionStore.teamOf(context.owner),
+			daemonInstanceId: "daemon-1",
+			targetId: "container:recipe-app",
+			generation: 1,
+			eventId: 1,
+			agentId,
+			sessionId: "session-1",
+			turnId: "turn-1",
+			itemId: "private-item",
+			text: "Checking",
+		});
+		await flush();
+		await terminal(context, agentId, "turn-1", 2);
 
 		const response = await request;
 		const body = await response.json();
@@ -144,8 +159,10 @@ describe("Copilot gateway route", () => {
 			agentId,
 			observation: "terminal",
 			turn: { id: "turn-1", state: "completed" },
+			activities: [{ kind: "commentary", text: "Checking" }],
 			finalResponse: "Done.",
 		});
+		expect(body.activities[0]).not.toHaveProperty("itemId");
 	});
 
 	it("does not let a stale terminal settle a newer turn, and closes a racing stop", async () => {
