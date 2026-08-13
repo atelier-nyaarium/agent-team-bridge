@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { createSealer } from "../gateway/federation/sealer.js";
+import { sealTargetFor } from "../gateway/federation/sealTarget.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity, type SealedEnvelope } from "../shared/crypto.js";
@@ -241,5 +242,44 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 		expect(openedByFriend2).toBeDefined();
 		// The anchor records the resolved target Domain so a reply is bound to friend2.
 		expect(ctx.store.crossDomainBinding("conv.c1.friend2.shared-gw.lib.dev")?.dstDomainId).toBe("friend2");
+	});
+});
+
+////////////////////////////////
+//  The pure decision, called directly (no Sealer, no evie, no route table)
+
+describe("sealTargetFor decision", () => {
+	const friendA = generateIdentity();
+	const friendB = generateIdentity();
+	const twoFriendsOnDesktop = () =>
+		peersOf(
+			xdPeer(friendOwner, "aria", "desktop", friendA, localOwner),
+			xdPeer(friendOwner, "briar", "desktop", friendB, localOwner),
+		);
+
+	it("a locally-admitted id wins over a colliding friend, even with the friend's Domain named", () => {
+		const deps = {
+			resolvesLocalGateway: (id: string) => id === "desktop",
+			crossDomainPeers: peersOf(xdPeer(friendOwner, "aria", "desktop", friendA, localOwner)),
+		};
+		expect(sealTargetFor(deps, "desktop")).toBe("desktop");
+		// Local-first is what makes the collision un-hijackable; the explicit Domain never runs.
+		expect(sealTargetFor(deps, "desktop", "aria")).toBe("desktop");
+	});
+
+	it("an explicit Domain resolves the pair a bare scan would refuse as ambiguous", () => {
+		const deps = { crossDomainPeers: twoFriendsOnDesktop() };
+		expect(sealTargetFor(deps, "desktop", "briar")).toEqual({ domainId: "briar", gatewayId: "desktop" });
+		expect(() => sealTargetFor(deps, "desktop")).toThrow(/ambiguous across linked Domains/);
+	});
+
+	it("a named Domain that is not linked falls through instead of silently misrouting", () => {
+		const deps = { crossDomainPeers: peersOf(xdPeer(friendOwner, "aria", "desktop", friendA, localOwner)) };
+		// The bare scan finds the one real peer, so the wrong hint surfaces as aria, not stranger.
+		expect(sealTargetFor(deps, "desktop", "stranger")).toEqual({ domainId: "aria", gatewayId: "desktop" });
+	});
+
+	it("an unknown id passes through bare for the sealer to admit or reject", () => {
+		expect(sealTargetFor({}, "nowhere")).toBe("nowhere");
 	});
 });

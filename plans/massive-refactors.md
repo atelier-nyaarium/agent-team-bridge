@@ -516,3 +516,21 @@ the follow-up commit: the module returns trimmed to what consumers reach, the da
 cross-file comment fixed, and the coalescer got its first tests ever (single-flight shared promise,
 cleared-on-settle, holder-candidate Domain order, the stalled-cursor refusal) - reachable cheaply
 for the first time now that the factory stands alone.
+
+## Refactor 14 - The seal-target decision as a pure function
+
+The one entry where the smallest option was also the most correct one, taken exactly as decided:
+`federation/sealTarget.ts` exports `sealTargetFor(deps, targetGateway, targetDomain?)` with both
+deps arriving PER CALL, never as fields - both are federation-activation-dependent, and a field
+would go stale at the moment buildRoutes re-runs, the fc6b058 defect class. The body moved
+byte-verbatim apart from the destructure; routes.ts's two call sites (targetDomainId,
+relayToGateway) thread the same two closure values they always captured.
+
+The payoff the entry named, collected: four direct tests of the decision with no Sealer, no
+Allowlist, no fake evie - local-first winning over a colliding friend even with the friend's
+Domain named (the hijack case), the explicit Domain resolving what a bare scan refuses as
+ambiguous, an unlinked Domain hint falling through instead of silently misrouting, and the bare
+passthrough. The three pre-existing integration tests stand untouched above them.
+
+Audit proportionate to the diff (one fresh Luna, both lenses; Sonnet synthesis re-verified and ran
+the gates): verdict clean, zero mustFix, zero polish.
