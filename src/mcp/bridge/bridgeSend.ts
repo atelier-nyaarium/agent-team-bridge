@@ -131,8 +131,8 @@ async function formatResult(
 	}
 
 	// A POLLED reply names its attachments and cannot fetch them. The stored copy deliberately holds
-	// no reference (see stripFileRefs: /poll authorizes nobody, so a reference there would be a bearer
-	// token for the content), which leaves naming them the most this branch can honestly do. Saying so
+	// no reference (see stripFileRefs: a channel entry outlives every judgement made when it was
+	// sent), which leaves naming them the most this branch can honestly do. Saying so
 	// is the point - reporting "carried no bytes" would be a lie about the sender and would stop the
 	// agent asking for the one thing that does recover them. The live push path carries full
 	// references and materializes normally.

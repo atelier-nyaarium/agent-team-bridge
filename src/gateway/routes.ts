@@ -637,6 +637,37 @@ export function createRoutes({
 		return jsonResponse({ error: "reply is not from this conversation's session" }, 403);
 	}
 
+	/**
+	 * 403 when someone other than the session that asked tries to read a job's answer.
+	 *
+	 * The mirror of [refuseForeignReply]: that door decides who may ANSWER a job, this one who may
+	 * READ it. A job asked by a REMOTE session is refused outright, since a remote asker collects
+	 * its answer over the sealed response_push relay and never over local HTTP.
+	 *
+	 * A `session_id` is computable from two non-secret values, so it is a name rather than a
+	 * credential and cannot be the thing that authorizes the read.
+	 */
+	function refuseForeignPoll(req: Request, sessionId: string): Response | null {
+		if (!auth) return null;
+		// The local-plane question first, so an unproven caller cannot tell a live job from an id
+		// that names nothing: this is every answer it gets.
+		if (!provedLocalSession(req)) {
+			console.warn(`[auth] refused a poll without any session binding`);
+			return jsonResponse({ error: "this job is not open to this caller" }, 403);
+		}
+		const asker = store.askerOf(sessionId);
+		// An unknown id is the caller's own 404 to receive, not a refusal.
+		if (asker === undefined) return null;
+		const key = auth.localTeamKey(asker);
+		if (key === null) {
+			console.warn(`[auth] refused a local poll of a job asked by "${asker}", which is not a local session`);
+			return jsonResponse({ error: "this job's answer is not collected over local HTTP" }, 403);
+		}
+		if (auth.satisfies(auth.toActFor(key), presentedByRequest(req))) return null;
+		console.warn(`[auth] refused a poll of a job asked by "${asker}" from another session`);
+		return jsonResponse({ error: "this job belongs to another session" }, 403);
+	}
+
 	async function send(
 		req: Request,
 		body: Record<string, unknown>,
@@ -1247,6 +1278,10 @@ export function createRoutes({
 		}
 
 		const { session_id } = parsed.data;
+
+		// Before the read, since a persistent entry is not consumed and would keep paying out.
+		const refused = refuseForeignPoll(req, session_id);
+		if (refused) return refused;
 
 		const result = store.poll(session_id);
 

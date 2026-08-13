@@ -65,6 +65,39 @@ describe("routes", () => {
 			expect(res.status).toBe(404);
 		});
 
+		// A session_id is computable from two non-secret values, so it names a job rather than
+		// authorizing one. A persistent channel entry is not consumed on read either, so an id that
+		// leaked once would otherwise keep paying out the answer forever.
+		it("hands a job's answer only to the session that asked", async () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			const sessionStore = new SessionStore();
+			const asker = sessionStore.mint({ spawn: "app" });
+			const askerToken = sessionStore.ensureBindToken(asker);
+			sessionStore.activateBinding(asker);
+			const bystander = sessionStore.mint({ spawn: "other" });
+			const bystanderToken = sessionStore.ensureBindToken(bystander);
+			sessionStore.activateBinding(bystander);
+			store.create("conv-1", sessionStore.teamOf(asker), "coolib.dev", { persistent: true });
+			store.deliver("conv-1", { response: "the answer" } as ResponsePayload);
+			const { poll } = createRoutes(makeCtx({ store, sessionStore }));
+
+			const pollAs = (token?: string) =>
+				poll(
+					new Request("http://localhost/poll", {
+						method: "POST",
+						headers: token ? { "x-session-token": token } : {},
+					}),
+					{ session_id: "conv-1" },
+				);
+
+			expect(pollAs().status).toBe(403);
+			expect(pollAs(bystanderToken).status).toBe(403);
+
+			const mine = pollAs(askerToken);
+			expect(mine.status).toBe(200);
+			expect(await mine.json()).toMatchObject({ response: "the answer" });
+		});
+
 		it("returns running when job is timed out but no result yet", async () => {
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("sess-1", "a", "b");

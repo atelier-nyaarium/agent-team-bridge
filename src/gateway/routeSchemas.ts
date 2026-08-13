@@ -183,11 +183,10 @@ export function fileBytes(files: ChannelFile[]): number {
 /**
  * Drop the reference that makes a file's bytes fetchable, keeping everything that describes it.
  *
- * For the persistent store only. `blobId` names content to anyone holding it, and the routes that
- * read the store (`/pending` to enumerate, `/poll` to fetch) authorize nobody, so a stored reference
- * is readable content for as long as the entry lives, which for a channel conversation is forever.
- * Whether the bytes ride inline or out of band, the store must withhold whatever makes them
- * fetchable; only the field carrying that changes.
+ * For the persistent store only. `blobId` names content to anyone holding it, and a channel entry
+ * lives forever, so a stored reference outlives every judgement made when the message was sent.
+ * The store withholds whatever makes bytes fetchable regardless of who may read the entry; only
+ * the field carrying that changes.
  */
 export function stripFileRefs(files: ChannelFile[]): ChannelFile[] {
 	return files.map(({ blobId: _omit, blobGateway: _also, ...meta }) => meta);
