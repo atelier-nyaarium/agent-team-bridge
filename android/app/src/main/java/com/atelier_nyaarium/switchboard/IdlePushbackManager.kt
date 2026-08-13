@@ -18,7 +18,7 @@ private const val SILENCE_HOURLY_MAX_MS = 48 * 3_600_000L
 // than the join it was meant to cover), caught only by tracing the actual numbers, not by the
 // comments that were supposed to keep them in sync. BURST_JOIN_TIMEOUT_MS is the one root
 // quantity every other constant here derives from.
-internal const val BURST_JOIN_TIMEOUT_MS = 60_000L // ChatRepository's burstJobs.joinAll() bound
+internal const val BURST_JOIN_TIMEOUT_MS = 60_000L // PollDrain's burstJobs.joinAll() bound
 private const val PASS_OVERHEAD_MS = 15_000L // poll round trip + drain + decide, beyond the join
 private const val PASS_RUNTIME_MS = BURST_JOIN_TIMEOUT_MS + PASS_OVERHEAD_MS
 

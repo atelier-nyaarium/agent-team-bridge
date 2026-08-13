@@ -45,6 +45,10 @@ code does not belong here; rationale lives in `git log`.
   `ReadAnchor.kt`, `ChatState.kt`, `ConnError.kt`, `FederationTypes.kt`, `ScheduledSend.kt`.
   `ChatPersistence.kt` is the delegate it HOLDS: the JSON codec between the in-memory maps and
   AppStateStore (threads, read anchors, labels, scheduled sends, absence streaks, drafts)
+  - `PollDrain.kt` (`repo.drain`) owns the poll loop and mailbox drain: the loop lifecycle, the four
+    plane version cursors this device presents back, and both drain-gate subscriber lists. Inbound
+    subscribers fire inside the drain before `mailboxSync.commit`, so the exactly-once they inherit
+    is a property of living here rather than of where the code happens to sit
   - `PlaybackOps.kt` (`repo.playback`) owns the whole playback serialization boundary: the autoplay
     queue, its advance mutex, the marker sequence and every transport control and read model. It
     subscribes to the player from its own init, so it must stay declared after `stts` and `repoScope`

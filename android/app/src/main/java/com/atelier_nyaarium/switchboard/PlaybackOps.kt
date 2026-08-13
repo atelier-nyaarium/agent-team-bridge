@@ -601,7 +601,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	}
 
 	/** Map the autoPlay pref string to its tier, or null for "off"/unknown. */
-	// internal (not private): the poll loop's own burst-handling (ChatRepository.startPolling) reads
+	// internal (not private): the poll loop's own burst-handling (PollDrain.start) reads
 	// the autoplay tier to decide whether to queue an arriving burst.
 	internal fun autoPlayTier(value: String): SttsPlayer.Tier? = when (value) {
 		"title" -> SttsPlayer.Tier.TITLE
@@ -614,7 +614,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
 	 * failure - the notification fires regardless and Play falls back to live
 	 * synthesis. No-op when unconfigured or the message is gone. */
-	// internal (not private): the poll loop (ChatRepository.startPolling) preloads the first message of
+	// internal (not private): the poll loop (PollDrain.start) preloads the first message of
 	// an eligible burst before the notification fires.
 	internal fun preloadMessage(team: String, at: Long) {
 		val client = repo.sttsClient() ?: return

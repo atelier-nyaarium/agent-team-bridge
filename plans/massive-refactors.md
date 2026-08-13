@@ -584,3 +584,29 @@ always been the UNBOUND value.
 Audit (one fresh Luna, both lenses; synthesis re-verified all four disclosed deltas byte-level and
 ran the gates plus check-module-residue): verdict clean, zero mustFix. The sweep observable was
 its one worthwhile optional, taken.
+
+## Refactor 17 - The poll loop and drain out of ChatRepository
+
+The Android data root, and the Q4 decision executed as written: a `PollDrain` delegate reached as
+`repo.drain`, following the federation-Ops pattern (own the state, reach back for the appliers).
+ChatRepository 2800 to 2318; the loop, both in-flight structures, the four plane version cursors
+with their mutex, the kick channel, the interrupt handle and BOTH drain-gate subscriber lists moved
+together. What makes it worth doing rather than a line-count trade: inbound subscribers inherit the
+mailbox cursor's exactly-once BECAUSE they fire before commit, and that now holds by living in the
+object that owns the commit rather than by where the code happened to sit.
+
+The delegate surface is narrow (start, stopAndJoin, kickPoll, interrupt, onForegroundResume,
+resetPlaneCursors, prune/upsertCrossDomainVersions, scope, the two subscriber adds), so the
+repository's own callers barely changed shape. One structural discovery: the drain landing the
+keyring snapshot would have made PollDrain a sixth file touching FederationManager, which the
+federation-manager residue test refuses - so `applyDomainSync` became a one-line repository wrapper
+and the fence stands. That is the residue tests paying for themselves during a move.
+
+Audit fidelity clean on both lenses (ordering, cancellation semantics, visibility tagging, error
+streaks and every consumer rewire verified line by line; the synthesis ran all three gates itself
+with --rerun-tasks). Fix-then-ship on move HYGIENE, all taken: 15 dead imports the Kotlin build
+cannot see, stale pollScope/startPolling references in four files, and the missing CLAUDE.md map
+entry for a 570-line delegate.
+
+Pain point worth naming: an unused Kotlin import is invisible to every gate this repo has, and only
+a reader (or a Luna audit) catches it. Filed as its own tooling entry rather than folded here.

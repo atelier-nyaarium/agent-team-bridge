@@ -284,7 +284,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 	/** Restart the transfers whose kick died with the process, or with a failure that only logged.
 	 * The queued action survived either way, so without this the drain would check forever and the
 	 * picture would never go up. Cheap to repeat: an upload resumes from the Gateway's own cursor. */
-	// internal (not private): the poll loop (ChatRepository.startPolling) kicks this every pass, and
+	// internal (not private): the poll loop (PollDrain.start) kicks this every pass, and
 	// ChatRepository.reconcilePending kicks it once more for whatever died with the process.
 	internal fun resumeBoardUploads() {
 		for ((_, source, gatewayId) in repo.board.pendingSources()) kickBoardUpload(source, gatewayId)
