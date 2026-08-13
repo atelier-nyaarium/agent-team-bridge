@@ -29,8 +29,6 @@ $envFile = Join-Path $PSScriptRoot '.env'
 if (Test-Path $envFile) {
 	foreach ($line in Get-Content $envFile) {
 		if ($line -match '^HOST_WS_TOKEN=(.*)$') { $env:HOST_WS_TOKEN = $Matches[1] }
-		elseif ($line -match '^CODEX_AGENT_ENABLED=(.*)$') { $env:CODEX_AGENT_ENABLED = $Matches[1] }
-		elseif ($line -match '^COPILOT_AGENT_ENABLED=(.*)$') { $env:COPILOT_AGENT_ENABLED = $Matches[1] }
 	}
 }
 

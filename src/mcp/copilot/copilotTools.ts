@@ -8,6 +8,7 @@ import {
 	CopilotStartAgentInputSchema,
 	CopilotStopAgentInputSchema,
 } from "../../shared/copilot-thinking.js";
+import type { AgentDispatch } from "../agentDispatch.js";
 import { routerPost } from "../bridge/helpers.js";
 
 function operationId(): string {
@@ -29,17 +30,22 @@ export function copilotRequestBody(
 	};
 }
 
-async function post(body: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	try {
-		const result = await routerPost(agentHttpPath("copilot"), body);
-		return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return { content: [{ type: "text", text: `Copilot request failed: ${message}` }] };
-	}
+export const gatewayDispatch: AgentDispatch = (body) => routerPost(agentHttpPath("copilot"), body);
+
+function post(
+	dispatch: AgentDispatch,
+	body: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+	return dispatch(body).then(
+		(result) => ({ content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }),
+		(error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			return { content: [{ type: "text" as const, text: `Copilot request failed: ${message}` }] };
+		},
+	);
 }
 
-export function registerCopilotTools(mcpServer: McpServer): void {
+export function registerCopilotTools(mcpServer: McpServer, dispatch: AgentDispatch = gatewayDispatch): void {
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const startSchema: any = CopilotStartAgentInputSchema;
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
@@ -58,7 +64,8 @@ export function registerCopilotTools(mcpServer: McpServer): void {
 			description: "Start a Copilot Agent for a self-contained task.",
 			inputSchema: startSchema,
 		},
-		async (args: { prompt: string; model?: string; cwd?: string }) => post(copilotRequestBody("start", args)),
+		async (args: { prompt: string; model?: string; cwd?: string }) =>
+			post(dispatch, copilotRequestBody("start", args)),
 	);
 	mcpServer.registerTool(
 		"copilotMessageAgent",
@@ -67,7 +74,7 @@ export function registerCopilotTools(mcpServer: McpServer): void {
 			description: "Send a follow-up to an idle Copilot Agent.",
 			inputSchema: messageSchema,
 		},
-		async (args: { agentId: string; prompt: string }) => post(copilotRequestBody("message", args)),
+		async (args: { agentId: string; prompt: string }) => post(dispatch, copilotRequestBody("message", args)),
 	);
 	mcpServer.registerTool(
 		"copilotAwaitAgent",
@@ -76,16 +83,16 @@ export function registerCopilotTools(mcpServer: McpServer): void {
 			description: "Wait for a Copilot Agent turn to finish.",
 			inputSchema: awaitSchema,
 		},
-		async (args: { agentId: string }) => post(copilotRequestBody("await", args)),
+		async (args: { agentId: string }) => post(dispatch, copilotRequestBody("await", args)),
 	);
 	mcpServer.registerTool(
 		"copilotStopAgent",
 		{ title: "Copilot Stop Agent", description: "Stop the current Copilot Agent turn.", inputSchema: stopSchema },
-		async (args: { agentId: string }) => post(copilotRequestBody("stop", args)),
+		async (args: { agentId: string }) => post(dispatch, copilotRequestBody("stop", args)),
 	);
 	mcpServer.registerTool(
 		"copilotListAgents",
 		{ title: "Copilot List Agents", description: "List Copilot Agents and their turns.", inputSchema: listSchema },
-		async () => post(copilotRequestBody("list")),
+		async () => post(dispatch, copilotRequestBody("list")),
 	);
 }

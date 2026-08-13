@@ -12,6 +12,10 @@ export type AgentBackendId = "codex" | "copilot";
 export interface AgentBackendDescriptor {
 	readonly id: AgentBackendId;
 	readonly displayName: string;
+	/** The executable that must be on PATH for this backend to run. Its presence IS the switch: both
+	 * the daemon's declaration and the plugin's tool gate probe for it, so installing the CLI is the
+	 * whole opt-in. */
+	readonly binaryName: string;
 	/** How long a waiting gateway call may block. Bounded by the CLIENT: node's fetch abandons a
 	 * silent connection at 300s, and a replayed operation is never re-dispatched, so a longer hold
 	 * could never deliver its answer. */
@@ -28,12 +32,14 @@ const AGENT_WAIT_BUDGET_MS = 240_000;
 export const CODEX_BACKEND: AgentBackendDescriptor = {
 	id: "codex",
 	displayName: "Codex",
+	binaryName: "codex",
 	waitBudgetMs: AGENT_WAIT_BUDGET_MS,
 };
 
 export const COPILOT_BACKEND: AgentBackendDescriptor = {
 	id: "copilot",
 	displayName: "Copilot",
+	binaryName: "copilot",
 	waitBudgetMs: AGENT_WAIT_BUDGET_MS,
 };
 
@@ -42,10 +48,6 @@ export const AGENT_BACKENDS: readonly AgentBackendDescriptor[] = [CODEX_BACKEND,
 
 export function agentCapabilityId(id: AgentBackendId): string {
 	return `${id}-thinking`;
-}
-
-export function agentEnableEnvVar(id: AgentBackendId): string {
-	return `${id.toUpperCase()}_AGENT_ENABLED`;
 }
 
 /** Env prefix carried into a container and exempted from the child-env secret scrub. */

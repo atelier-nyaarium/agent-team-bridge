@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { CapabilityStore } from "../gateway/console/capabilityStore.js";
 import { DaemonCapabilityStore } from "../gateway/daemonCapabilities.js";
 import { capabilityInstructions } from "../mcp/capabilities.js";
@@ -30,29 +33,49 @@ function fakeDurable(seed?: unknown): DurableStore & { written: unknown } {
 	} as unknown as DurableStore & { written: unknown };
 }
 
+const tempDirs: string[] = [];
+
+function envWithExecutables(...names: string[]): Record<string, string | undefined> {
+	const dirs =
+		names.length === 0
+			? [mkdtempSync(path.join(tmpdir(), "daemon-capabilities-"))]
+			: names.map((name) => {
+					const dir = mkdtempSync(path.join(tmpdir(), "daemon-capabilities-"));
+					writeFileSync(path.join(dir, name), "#!/bin/sh\n", { mode: 0o755 });
+					return dir;
+				});
+	tempDirs.push(...dirs);
+	return { PATH: dirs.join(":") };
+}
+
+function serve(env: Record<string, string | undefined>, console_: Capability[]) {
+	const frame = WsRegisterSchema.parse({
+		type: "register",
+		team: "host",
+		token: "secret",
+		daemonCapabilities: daemonCapabilityDeclaration(env),
+	});
+	const daemon = new DaemonCapabilityStore(fakeDurable());
+	daemon.declare(frame.daemonCapabilities ?? []);
+	const consoleStore = new CapabilityStore(fakeDurable());
+	consoleStore.report("phone-1", console_);
+	// Through JSON and the wire schema, because the route serializes before the MCP parses it back.
+	const wire = JSON.parse(JSON.stringify({ console: consoleStore.snapshot(), daemon: daemon.snapshot() }));
+	return unionCapabilities(CapabilityBundleSchema.parse(wire));
+}
+
+afterEach(() => {
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 const CODEX = { id: CODEX_THINKING_CAPABILITY_ID, instructions: "Delegate like so." };
 
 ////////////////////////////////
 //  Tests
 
 describe("what the daemon announces", () => {
-	it("declares codex-thinking only on the exact enabling value", () => {
-		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
-			CODEX_THINKING_CAPABILITY_ID,
-		]);
-		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "1" })).toEqual([]);
-		expect(daemonCapabilityDeclaration({})).toEqual([]);
-	});
-
-	it("carries the guidance along, so the tool has something to serve", () => {
-		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" })[0]?.instructions).toContain("Codex");
-	});
-
-	it("declares Copilot only on the exact enabling value", () => {
-		expect(daemonCapabilityDeclaration({ COPILOT_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
-			COPILOT_THINKING_CAPABILITY_ID,
-		]);
-		expect(daemonCapabilityDeclaration({ COPILOT_AGENT_ENABLED: "1" })).toEqual([]);
+	it("declares nothing when neither CLI is installed", () => {
+		expect(daemonCapabilityDeclaration(envWithExecutables())).toEqual([]);
 	});
 });
 
@@ -180,38 +203,44 @@ describe("what switchboard_capabilities reports", () => {
 describe("a declaration's whole journey to a session", () => {
 	// The units above each cover one hop. This covers the joins between them, where a shape agreed
 	// at both ends can still be dropped in the middle.
-	function serve(env: Record<string, string | undefined>, console_: Capability[]) {
-		const frame = WsRegisterSchema.parse({
-			type: "register",
-			team: "host",
-			token: "secret",
-			daemonCapabilities: daemonCapabilityDeclaration(env),
-		});
-		const daemon = new DaemonCapabilityStore(fakeDurable());
-		daemon.declare(frame.daemonCapabilities ?? []);
-		const consoleStore = new CapabilityStore(fakeDurable());
-		consoleStore.report("phone-1", console_);
-		// Through JSON and the wire schema, because the route serializes before the MCP parses it back.
-		const wire = JSON.parse(JSON.stringify({ console: consoleStore.snapshot(), daemon: daemon.snapshot() }));
-		return unionCapabilities(CapabilityBundleSchema.parse(wire));
-	}
-
-	it("reaches a session as a name in the block and guidance in the tool", () => {
-		const served = serve({ CODEX_AGENT_ENABLED: "true" }, [{ id: "designer", instructions: "Dock a card." }]);
-
-		expect(capabilityInstructions(served.capabilities)).toContain("`codex-thinking`, `designer`");
-		expect(capabilityInstructions(served.capabilities)).not.toContain("Dock a card.");
-		expect(renderCapabilities(served.capabilities, null)).toContain("codexStartAgent");
-	});
-
 	it("leaves the console's capability alone when the daemon has nothing to declare", () => {
-		const served = serve({}, [{ id: "designer" }]);
+		const served = serve(envWithExecutables(), [{ id: "designer" }]);
 
 		expect(capabilityInstructions(served.capabilities)).toContain("designer");
 		expect(capabilityInstructions(served.capabilities)).not.toContain("codex-thinking");
 	});
 
 	it("tells a session with neither source enabled nothing at all", () => {
-		expect(capabilityInstructions(serve({}, []).capabilities)).toBe("");
+		expect(capabilityInstructions(serve(envWithExecutables(), []).capabilities)).toBe("");
+	});
+});
+
+describe("what the daemon announces", () => {
+	it("declares only Codex when its CLI is installed", () => {
+		expect(daemonCapabilityDeclaration(envWithExecutables("codex")).map((c) => c.id)).toEqual([
+			CODEX_THINKING_CAPABILITY_ID,
+		]);
+	});
+});
+
+describe("a declared capability's whole journey to a session", () => {
+	it("reaches a session as a name in the block and guidance in the tool", () => {
+		const served = serve(envWithExecutables("codex"), [{ id: "designer", instructions: "Dock a card." }]);
+
+		expect(capabilityInstructions(served.capabilities)).toContain("`codex-thinking`, `designer`");
+		expect(capabilityInstructions(served.capabilities)).not.toContain("Dock a card.");
+		expect(renderCapabilities(served.capabilities, null)).toContain("codexStartAgent");
+	});
+});
+
+describe("what the daemon announces", () => {
+	it("declares both capabilities with guidance when both CLIs are installed", () => {
+		const capabilities = daemonCapabilityDeclaration(envWithExecutables("codex", "copilot"));
+
+		expect(capabilities.map((c) => c.id)).toEqual([CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID]);
+		expect(capabilities).toEqual([
+			expect.objectContaining({ id: CODEX_THINKING_CAPABILITY_ID, instructions: expect.any(String) }),
+			expect.objectContaining({ id: COPILOT_THINKING_CAPABILITY_ID, instructions: expect.any(String) }),
+		]);
 	});
 });

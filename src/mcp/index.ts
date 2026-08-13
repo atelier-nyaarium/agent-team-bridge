@@ -2,25 +2,35 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
-import { AGENT_BACKENDS, type AgentBackendId, agentCapabilityId } from "../shared/agent-backend.js";
+import {
+	AGENT_BACKENDS,
+	type AgentBackendDescriptor,
+	type AgentBackendId,
+	agentCapabilityId,
+} from "../shared/agent-backend.js";
+import { isAgentBackendInstalled } from "../shared/agent-binary.js";
 import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
+import type { AgentDispatch } from "./agentDispatch.js";
 import { registerBoardTools } from "./board/boardTools.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
+import type { Capability } from "./capabilities.js";
 import { capabilityInstructions, fetchCapabilities, hasCapability } from "./capabilities.js";
 import { registerCapabilitiesTool } from "./capabilitiesTool.js";
 import { registerHumanTools } from "./channel/humanTools.js";
-import { registerCodexTools } from "./codex/codexTools.js";
+import { gatewayDispatch as codexGatewayDispatch, registerCodexTools } from "./codex/codexTools.js";
 import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
 import { registerProjectTools } from "./connector/projectTools.js";
 import { registerStubTool } from "./connector/utils.js";
-import { registerCopilotTools } from "./copilot/copilotTools.js";
+import { gatewayDispatch as copilotGatewayDispatch, registerCopilotTools } from "./copilot/copilotTools.js";
 import { registerDesignerTools } from "./designer/designerTools.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
+import type { LocalAgentBackend } from "./local/localAgentHost.js";
+import { createLocalAgentBackend } from "./local/localAgentHost.js";
 import { setReferencesEnabled } from "./references/attachRefs.js";
 import { resolveSessionNaming } from "./team-name.js";
 
@@ -36,10 +46,41 @@ import { resolveSessionNaming } from "./team-name.js";
 const INITIAL_ROUTER_CONNECT_GRACE_MS = 200;
 
 // Keyed by the backend union, so a backend added to the registry without a registrar fails the build.
-const AGENT_TOOL_REGISTRARS: Record<AgentBackendId, (mcpServer: McpServer) => void> = {
+const AGENT_TOOL_REGISTRARS: Record<AgentBackendId, (mcpServer: McpServer, dispatch: AgentDispatch) => void> = {
 	codex: registerCodexTools,
 	copilot: registerCopilotTools,
 };
+
+const AGENT_GATEWAY_DISPATCH: Record<AgentBackendId, AgentDispatch> = {
+	codex: codexGatewayDispatch,
+	copilot: copilotGatewayDispatch,
+};
+
+/**
+ * Register one backend's tools, if this session can reach it at all, and answer how.
+ *
+ * The daemon's declaration wins wherever it exists: it carries coordination this process cannot
+ * offer, and its agents outlive the session. Otherwise a locally installed CLI is enough on its own,
+ * which is what makes a Gatewayless session able to delegate. Installing the CLI is the whole opt-in
+ * either way; nothing here reads a flag.
+ */
+function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescriptor, capabilities: Capability[]): void {
+	const register = AGENT_TOOL_REGISTRARS[backend.id];
+	if (hasCapability(capabilities, agentCapabilityId(backend.id))) {
+		register(mcpServer, AGENT_GATEWAY_DISPATCH[backend.id]);
+		return;
+	}
+	if (!isAgentBackendInstalled(backend)) return;
+
+	const local = createLocalAgentBackend(backend);
+	// Reaped with the session that started it. A local agent has no daemon to outlive it, so a child
+	// left behind here would be one nothing can ever reach or stop again.
+	localBackends.push(local);
+	console.error(`[${backend.id}] no daemon declared it, serving locally from the installed CLI`);
+	register(mcpServer, (body) => local.handle(body));
+}
+
+const localBackends: LocalAgentBackend[] = [];
 
 const CHANNEL_INSTRUCTIONS = `
 Cross-team messages arrive as <channel source="..." ...> tags. All metadata rides as tag attributes: session_id, from, and reply_schema when the request specifies one. The tag body is the message. Read the request and do the work.
@@ -96,11 +137,9 @@ export async function startMcp(): Promise<void> {
 	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
 	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
 	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
-	// Gated on the HOST DAEMON's declaration rather than a console plugin: these tools reach a
-	// supervised child process, which only exists where the daemon was configured to allow one.
-	for (const backend of AGENT_BACKENDS) {
-		if (hasCapability(capabilities, agentCapabilityId(backend.id))) AGENT_TOOL_REGISTRARS[backend.id](mcpServer);
-	}
+	// These tools reach a child process rather than a console surface, so the gate is whether one can
+	// be reached at all: a daemon that declared the backend, or the CLI installed right here.
+	for (const backend of AGENT_BACKENDS) registerAgentBackend(mcpServer, backend, capabilities);
 	// Gated on the console plugin that renders the board: without it the owner has no way to see or
 	// answer anything a session writes, so the tools would be a one-way channel into a surface nobody
 	// is looking at.
@@ -168,6 +207,9 @@ export async function startMcp(): Promise<void> {
 		console.error(`[mcp] stdin closed, shutting down`);
 		closeRouter();
 		stopListener();
+		// A locally hosted backend's child has no daemon supervising it, so this is the only thing that
+		// ever reaps one. Left running, it would hold its model session open with nothing able to reach it.
+		for (const local of localBackends) local.shutdown();
 		process.exit(0);
 	});
 }

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	AGENT_BACKENDS,
 	agentCapabilityId,
-	agentEnableEnvVar,
 	agentEnvPrefix,
 	agentFrameType,
 	agentHttpPath,
@@ -14,19 +13,13 @@ import { CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID } from "..
 import { CODEX_WAIT_BUDGET_MS, CodexDaemonHelloSchema, CodexEventAckSchema } from "../shared/codex-thinking.js";
 import { COPILOT_WAIT_BUDGET_MS, CopilotDaemonHelloSchema, CopilotEventAckSchema } from "../shared/copilot-thinking.js";
 
-// Every derivation is pinned against the literal it replaced, so a descriptor edit that would
-// change a wire spelling or an env contract fails here instead of at a peer.
+// Every derivation is pinned so a descriptor edit that would change a wire spelling fails here instead of at a peer.
 describe("agent backend derivations", () => {
 	it("derives the capability ids the gates read", () => {
 		expect(agentCapabilityId("codex")).toBe(CODEX_THINKING_CAPABILITY_ID);
 		expect(agentCapabilityId("copilot")).toBe(COPILOT_THINKING_CAPABILITY_ID);
 		expect(CODEX_THINKING_CAPABILITY_ID).toBe("codex-thinking");
 		expect(COPILOT_THINKING_CAPABILITY_ID).toBe("copilot-thinking");
-	});
-
-	it("derives the enable switches the launch scripts export", () => {
-		expect(agentEnableEnvVar("codex")).toBe("CODEX_AGENT_ENABLED");
-		expect(agentEnableEnvVar("copilot")).toBe("COPILOT_AGENT_ENABLED");
 	});
 
 	it("derives the env prefixes the child-env scrub exempts", () => {

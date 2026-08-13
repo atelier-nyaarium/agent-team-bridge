@@ -330,6 +330,17 @@ function shippedPlugins(): { id: string; instructions?: string }[] {
 }
 
 describe("the gated capability ids", () => {
+	let codexDir: string;
+
+	beforeEach(() => {
+		codexDir = fs.mkdtempSync(path.join(os.tmpdir(), "cap-daemon-"));
+		fs.writeFileSync(path.join(codexDir, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+	});
+
+	afterEach(() => {
+		fs.rmSync(codexDir, { recursive: true, force: true });
+	});
+
 	it("each name a plugin the console actually ships, so a renamed manifest fails here", () => {
 		// A plugin id is documented to become `<author>.<content_id>` on a per-repo split, so this
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
@@ -343,11 +354,11 @@ describe("the gated capability ids", () => {
 	});
 
 	it("holds the daemon's own capability, which no console manifest can vouch for", () => {
-		// Announced by the host daemon's configuration rather than by a device, so the manifest check
+		// Announced by the host daemon's PATH probe rather than by a device, so the manifest check
 		// above cannot see it. Naming it here keeps a rename from silently un-gating the Codex tools.
 		expect(GATED_CAPABILITY_IDS).toContain(CODEX_THINKING_CAPABILITY_ID);
 		expect(GATED_CAPABILITY_IDS).toContain(COPILOT_THINKING_CAPABILITY_ID);
-		expect(daemonCapabilityDeclaration({ CODEX_AGENT_ENABLED: "true" }).map((c) => c.id)).toEqual([
+		expect(daemonCapabilityDeclaration({ PATH: codexDir }).map((c) => c.id)).toEqual([
 			CODEX_THINKING_CAPABILITY_ID,
 		]);
 	});

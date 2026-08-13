@@ -99,11 +99,18 @@ code does not belong here; rationale lives in `git log`.
     - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
       per-agent serialization, and the outbox the gateway acknowledges against. `session()` shares one
       open per target, since commands serialize per AGENT and two agents share a child
+  - `local/` - the daemonless backend a session runs itself (see Local agent mode).
+    `localAgentRuntime.ts` owns the catalog, wait budget and answer shaping; `codexLocalSession.ts` /
+    `copilotLocalSession.ts` are the per-protocol adapters; `localAgentHost.ts` wires a backend to the
+    target manager and validates both ends against the schemas the gateway route uses
+  - `agentDispatch.ts` - the one seam saying where an agent tool call is served
   - `codex/codexTools.ts` - the five Codex tools, registered only when the daemon announced
     `codex-thinking`. Each mints a private operation id per invocation, which is what makes an HTTP
     retry a replay rather than a second delegated task
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
+- `src/shared/agent-binary.ts` - whether a backend's CLI is on `PATH`. Uncached and `which`-free: the
+  answer gates both the daemon's declaration and the plugin's tool registration
 - `src/shared/` - wire truth and utilities used by both sides
   - `capabilities.ts` - the capability ids and the guidance text each one carries, what the host
     daemon's own configuration declares at register, and the fold from a per-source bundle to one list
@@ -574,8 +581,36 @@ the daemon may retire it; `failed` means this gateway could not build a record f
 fact about this code, so it is never acknowledged. Collapsing them let a reducer bug make the daemon
 delete the only copy of a terminal.
 
-**Enabling it:** set `CODEX_AGENT_ENABLED=true` in `.env` and restart the host daemon. That is the
-only switch. A session picks the tools up at its next start, never mid-session.
+**Enabling it:** the capability is announced when the `codex` CLI is found on `PATH`; no environment
+variable is required. A session picks the tools up at its next start, never mid-session.
+
+### Local agent mode
+
+A session with no daemon serving a backend runs the child ITSELF (`src/mcp/local/`), so delegation
+survives a Gatewayless setup. Installing the CLI is the whole opt-in on both paths.
+
+- **The gate is reachability, not configuration.** `registerAgentBackend` takes the daemon's
+  declaration when there is one, since it carries coordination this process cannot offer and its
+  agents outlive the session; otherwise a `PATH` probe (`shared/agent-binary.ts`) decides. There is no
+  flag on either side, and `daemonCapabilityDeclaration` announces from the same probe.
+- **The tools do not know which one served them.** `AgentDispatch` is the seam: gateway dispatch posts,
+  local dispatch calls `LocalAgentBackend.handle` with the very body it would have posted. The local
+  host validates with the SAME `*GatewayRequestSchema` and parses its answer with the SAME
+  `*AgentResultSchema` the route answers with, so a shaping mistake throws here rather than reaching
+  Claude as a plausible wrong answer.
+- **A refused REQUEST is not an unwell AGENT here either.** Both result schemas reject a busy code
+  under an `unavailable` observation, so the runtime returns `{refused}` and the host shapes it as the
+  request-error the route uses. Collapsing the two makes the answer unparseable.
+- **What local deliberately lacks is what a wire needs.** No relay so nothing is fenced, no restart so
+  nothing is durable, no HTTP so an operation cannot be retried behind the caller's back and needs no
+  replay identity. Agents die with the MCP process, and the host target is the only one: a
+  devcontainer target is something a daemon reaches across a boundary this process does not have.
+- **A dead child must not stay cached.** The runtime memoizes its open session, so `LocalBackendSession`
+  declares `onClosed` and the runtime evicts on it, identity-guarded so a late close cannot evict its
+  successor. Without it every later call goes into a closed pipe and no replacement is ever requested.
+- **Codex resumes a thread before any follow-up turn**, the way the daemon does. App Server may unload
+  an idle thread, and starting a turn on an unloaded one fails.
+- The child is reaped when stdin closes. Nothing else ever will, since no daemon supervises it.
 
 **Residual risk, stated plainly:** a Codex thread holds workspace-write and network access for its
 whole life, whatever its prompt says, and Switchboard enforces none of it. It can modify the
@@ -594,10 +629,10 @@ target, an authenticated session-owned catalog, durable operation ids, fenced re
 start / message / await / stop / list tools. Copilot follow-ups are accepted only after the previous
 turn is idle because ACP does not expose Codex's steer operation.
 
-**Enabling it:** set `COPILOT_AGENT_ENABLED=true` in `.env` and restart the host daemon. Log in
-with the normal Copilot CLI (`copilot`, then `/login`); no external API key is used or forwarded.
-The ACP client selects `gpt-5.6-luna` by default and enables Copilot's agent permissions for the supervised
-target.
+**Enabling it:** the capability is announced when the `copilot` CLI is found on `PATH`; no environment
+variable is required. Log in with the normal Copilot CLI (`copilot`, then `/login`); no external API
+key is used or forwarded. The ACP client selects `gpt-5.6-luna` by default and enables Copilot's agent
+permissions for the supervised target.
 
 ### Android app
 
@@ -892,10 +927,8 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 | `DATA_DIR` | All durable state (default `/app/data`), deliberately separate from the log volume so clearing logs cannot wipe federation identity |
 | `FEDERATION_DIR` | Keypair, allowlist, transport.json, domain-id (default: inside `DATA_DIR`) |
 
-**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above, plus `CODEX_AGENT_ENABLED` and
-`COPILOT_AGENT_ENABLED`. Set either to exactly `true` in `.env` to announce its capability at
-register; any other value announces its absence. `start-host-daemon.sh` / `.ps1` read `.env` and pass
-the settings through.
+**Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above. The daemon announces each
+capability when its corresponding CLI is found on `PATH`; no environment variable is required.
 
 **MCP plugin (container):** `PROJECT_NAME` (required for crosstalk), `BRIDGE_ROUTER_URL` (default
 `http://switchboard:20000`), `AGENT_TYPE`, `PROJECT_HOST_PATH`, `MCP_CONNECTOR_PORT`,

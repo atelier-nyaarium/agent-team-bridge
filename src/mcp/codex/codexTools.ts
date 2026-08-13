@@ -8,6 +8,7 @@ import {
 	CodexStartAgentInputSchema,
 	CodexStopAgentInputSchema,
 } from "../../shared/codex-thinking.js";
+import type { AgentDispatch } from "../agentDispatch.js";
 import { routerPost } from "../bridge/helpers.js";
 
 ////////////////////////////////
@@ -107,20 +108,25 @@ export function codexRequestBody(
 	};
 }
 
-async function post(body: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	try {
-		const result = await routerPost(agentHttpPath("codex"), body);
-		return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return { content: [{ type: "text" as const, text: `Codex request failed: ${message}` }] };
-	}
+export const gatewayDispatch: AgentDispatch = (body) => routerPost(agentHttpPath("codex"), body);
+
+function post(
+	dispatch: AgentDispatch,
+	body: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+	return dispatch(body).then(
+		(result) => ({ content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }),
+		(error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			return { content: [{ type: "text" as const, text: `Codex request failed: ${message}` }] };
+		},
+	);
 }
 
 ////////////////////////////////
 //  Registration
 
-export function registerCodexTools(mcpServer: McpServer): void {
+export function registerCodexTools(mcpServer: McpServer, dispatch: AgentDispatch = gatewayDispatch): void {
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const startSchema: any = CodexStartAgentInputSchema;
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
@@ -135,25 +141,26 @@ export function registerCodexTools(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"codexStartAgent",
 		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
-		async (args: { prompt: string; model?: string; cwd?: string }) => post(codexRequestBody("start", args)),
+		async (args: { prompt: string; model?: string; cwd?: string }) =>
+			post(dispatch, codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexMessageAgent",
 		{ title: "Codex Message Agent", description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
-		async (args: { agentId: string; prompt: string }) => post(codexRequestBody("message", args)),
+		async (args: { agentId: string; prompt: string }) => post(dispatch, codexRequestBody("message", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexAwaitAgent",
 		{ title: "Codex Await Agent", description: AWAIT_DESCRIPTION, inputSchema: awaitSchema },
-		async (args: { agentId: string }) => post(codexRequestBody("await", args)),
+		async (args: { agentId: string }) => post(dispatch, codexRequestBody("await", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexStopAgent",
 		{ title: "Codex Stop Agent", description: STOP_DESCRIPTION, inputSchema: stopSchema },
-		async (args: { agentId: string }) => post(codexRequestBody("stop", args)),
+		async (args: { agentId: string }) => post(dispatch, codexRequestBody("stop", args)),
 	);
 
 	mcpServer.registerTool(
@@ -161,6 +168,6 @@ export function registerCodexTools(mcpServer: McpServer): void {
 		// The strict schema rather than a bare `{}`: an empty literal registers in strip mode, so unknown
 		// fields would be silently dropped where every sibling tool refuses them.
 		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: listSchema },
-		async () => post(codexRequestBody("list")),
+		async () => post(dispatch, codexRequestBody("list")),
 	);
 }

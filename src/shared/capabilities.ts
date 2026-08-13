@@ -1,5 +1,6 @@
 import type { z } from "zod";
-import { AGENT_BACKENDS, type AgentBackendId, agentCapabilityId, agentEnableEnvVar } from "./agent-backend.js";
+import { AGENT_BACKENDS, type AgentBackendId, agentCapabilityId } from "./agent-backend.js";
+import { isAgentBackendInstalled } from "./agent-binary.js";
 import type { CapabilityBundleSchema, CapabilitySnapshotSchema, EnabledPluginSchema } from "./schemas.js";
 
 ////////////////////////////////
@@ -80,11 +81,17 @@ const AGENT_BACKEND_INSTRUCTIONS: Record<AgentBackendId, string> = {
 	copilot: COPILOT_THINKING_INSTRUCTIONS,
 };
 
-// An empty array is an affirmative "nothing enabled" rather than silence, which is what lets a
-// disabled daemon replace a declaration it made while the feature was on.
+/**
+ * What the daemon can actually run, probed rather than configured.
+ *
+ * A backend's CLI being installed is the whole opt-in: an owner who installed Codex wants Codex, and
+ * an extra flag in a file only this repo knows about could only ever disagree with that. An empty
+ * array is an affirmative "nothing available" rather than silence, which is what lets a daemon that
+ * lost a binary replace a declaration it made while the CLI was there.
+ */
 export function daemonCapabilityDeclaration(env: Record<string, string | undefined>): Capability[] {
 	return AGENT_BACKENDS.flatMap((backend) =>
-		env[agentEnableEnvVar(backend.id)] === "true"
+		isAgentBackendInstalled(backend, env)
 			? [{ id: agentCapabilityId(backend.id), instructions: AGENT_BACKEND_INSTRUCTIONS[backend.id] }]
 			: [],
 	);
