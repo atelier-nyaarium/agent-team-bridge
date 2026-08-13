@@ -24,7 +24,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
-import com.atelier_nyaarium.switchboard.board.BoardEditScreen
 import com.atelier_nyaarium.switchboard.board.BoardScreen
 import com.atelier_nyaarium.switchboard.board.BoardSource
 import com.atelier_nyaarium.switchboard.board.GroupKey
@@ -146,32 +145,11 @@ fun App(
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
-	var showManage by remember { mutableStateOf(false) }
-	// The Gateways kebab "Manage sharing" routes here, scoped to that gateway's sessions.
-	var sharingGateway by remember { mutableStateOf<String?>(null) }
-	var showAddGateway by remember { mutableStateOf(false) }
-	// The account "Your devices" list, and the held-device "Add a device" approval window it opens.
-	var showYourDevices by remember { mutableStateOf(false) }
-	var showApproval by remember { mutableStateOf(false) }
-	// The board's "Running Gateway Setup" opens the host-setup manual.
-	var showHostHelp by remember { mutableStateOf(false) }
-	// The open task-board entry's full-screen editor, as (gatewayId, entryId).
-	var editEntry by remember { mutableStateOf<Pair<String, String>?>(null) }
-	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
-	// transient link wizard (leaving it cancels the pairing windows).
-	var showUsers by remember { mutableStateOf(false) }
-	var showLinkWizard by remember { mutableStateOf(false) }
-	// Host-a-friend overlays: the "Networks you host" list, and the open hosted tenant's detail (its
-	// domainId, or null). Kept apart from the peer overlays so hosting never reads as linking.
-	var showHostNetworks by remember { mutableStateOf(false) }
-	var hostTenant by remember { mutableStateOf<String?>(null) }
-	// The in-person enroll compare overlays (transient, like the link wizard). The admin leg is
-	// launched from a tenant's detail with the QR blob + label; the enrollee leg is the freshly-rooted
-	// device's own context. Either non-null shows the ceremony; leaving cancels the broker window.
-	var adminCeremonyCtx by remember { mutableStateOf<EnrollCeremonyContext?>(null) }
-	var adminCeremonyBlob by remember { mutableStateOf("") }
-	var adminCeremonyLabel by remember { mutableStateOf("") }
-	var enrolleeCeremonyCtx by remember { mutableStateOf<EnrollCeremonyContext?>(null) }
+	// Every screen above the base layer, newest last (see Overlay.kt). Not saveable: a ceremony
+	// entry carries key material.
+	var overlays by remember { mutableStateOf(emptyList<Overlay>()) }
+	val openOverlay = { overlay: Overlay -> overlays = overlays.pushOverlay(overlay) }
+	val closeOverlay = { overlays = overlays.popOverlay() }
 	// One-shot so the enrollee compare auto-pops once after first-root, never re-popping after a
 	// manual dismiss (the board keeps a "Verify with the admin" entry for that).
 	var enrolleeCeremonyOffered by remember { mutableStateOf(false) }
@@ -197,7 +175,7 @@ fun App(
 	LaunchedEffect(state.provisioned, state.firstRooted) {
 		if (state.provisioned && !enrolleeCeremonyOffered) {
 			repo.enroll.pendingEnrolleeCeremony()?.let {
-				enrolleeCeremonyCtx = it
+				openOverlay(Overlay.EnrolleeCeremony(it))
 				enrolleeCeremonyOffered = true
 			}
 		}
@@ -231,24 +209,11 @@ fun App(
 	LaunchedEffect(openTeamRequest.value) {
 		openTeamRequest.value?.let { team ->
 			val opened = repo.openThread(team)
-			// A tapped notification surfaces its thread - dismiss any settings/manage overlay so the
-			// thread is not masked (rendering shows settings before openTeam) and the next back press
-			// is not consumed invisibly clearing it.
+			// A tapped notification surfaces its thread, so nothing may stay above it: clearing the
+			// stack covers every overlay by construction, including ones added later.
 			showSettings = false
 			settingsRoute = SettingsRoute.HUB
-			showManage = false
-			sharingGateway = null
-			showAddGateway = false
-			showYourDevices = false
-			showApproval = false
-			showHostHelp = false
-			showUsers = false
-			showLinkWizard = false
-			showHostNetworks = false
-			hostTenant = null
-			adminCeremonyCtx = null
-			enrolleeCeremonyCtx = null
-			editEntry = null
+			overlays = emptyList()
 			openTeam = opened
 			// A genuine open gesture - re-snap to the first unread row even if this thread is
 			// already the one on screen (openTeam unchanged does not recompose ThreadWebView).
@@ -273,30 +238,14 @@ fun App(
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
 	}
 
-	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
-	BackHandler(
-		enabled = openTeam != null || showSettings || showManage || showAddGateway || showHostHelp ||
-			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
-			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null ||
-			showYourDevices || showApproval || editEntry != null,
-	) {
+	// System back navigates within the app instead of exiting. The arms are in RENDER order (see the
+	// `when` below), so back always dismisses what is actually on screen.
+	BackHandler(enabled = overlays.isNotEmpty() || showSettings || openTeam != null) {
 		when {
-			editEntry != null -> editEntry = null
-			adminCeremonyCtx != null -> adminCeremonyCtx = null
-			enrolleeCeremonyCtx != null -> enrolleeCeremonyCtx = null
-			showLinkWizard -> showLinkWizard = false
-			hostTenant != null -> hostTenant = null
-			showHostNetworks -> showHostNetworks = false
-			showUsers -> showUsers = false
-			showApproval -> showApproval = false
-			showYourDevices -> showYourDevices = false
-			showAddGateway -> showAddGateway = false
-			showHostHelp -> showHostHelp = false
-			sharingGateway != null -> sharingGateway = null
-			showManage -> showManage = false
-			openTeam != null -> openTeam = null
+			overlays.isNotEmpty() -> closeOverlay()
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
 			showSettings -> showSettings = false
+			else -> openTeam = null
 		}
 	}
 
@@ -304,98 +253,11 @@ fun App(
 		// Lock wins over everything (a provisioned + locked session must show the lock, never a
 		// leftover overlay underneath it). An unprovisioned session is never locked.
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
-		// The in-person enroll compare overlays both the tenant detail (admin) and the board (enrollee),
-		// so they sit above those branches. Admin carries the QR blob; enrollee latches done on success.
-		adminCeremonyCtx != null ->
-			EnrollCeremonyScreen(
-				repo = repo,
-				ctx = adminCeremonyCtx!!,
-				inviteBlob = adminCeremonyBlob,
-				peerLabel = adminCeremonyLabel.ifEmpty { "the new user" },
-				onDone = { adminCeremonyCtx = null },
-				onCancel = { adminCeremonyCtx = null },
-			)
-		enrolleeCeremonyCtx != null ->
-			EnrollCeremonyScreen(
-				repo = repo,
-				ctx = enrolleeCeremonyCtx!!,
-				inviteBlob = null,
-				peerLabel = "the admin",
-				onDone = {
-					repo.enroll.markEnrolleeCeremonyDone()
-					enrolleeCeremonyCtx = null
-				},
-				onCancel = { enrolleeCeremonyCtx = null },
-			)
-		showLinkWizard ->
-			LinkWizard(
-				repo = repo,
-				onDone = { showLinkWizard = false },
-				onCancel = { showLinkWizard = false },
-			)
-		hostTenant != null ->
-			HostedTenantDetailScreen(
-				repo = repo,
-				domainId = hostTenant!!,
-				onBack = { hostTenant = null },
-				onRemoved = { hostTenant = null },
-				onLink = { showLinkWizard = true },
-				onVerify = { blob, label ->
-					repo.enroll.adminEnrollContext(hostTenant!!)?.let {
-						adminCeremonyCtx = it
-						adminCeremonyBlob = blob
-						adminCeremonyLabel = label
-					}
-				},
-			)
-		showHostNetworks ->
-			HostNetworksScreen(
-				repo = repo,
-				onBack = { showHostNetworks = false },
-				onTenant = { hostTenant = it },
-			)
-		showUsers ->
-			UsersScreen(
-				repo = repo,
-				onBack = { showUsers = false },
-				onEnrollUser = {
-					showUsers = false
-					showHostNetworks = true
-				},
-				onLink = { showLinkWizard = true },
-				onHostNetworks = { showHostNetworks = true },
-				// Closes Users on the way, like onEnrollUser above: this branch is evaluated BEFORE
-				// showAddGateway's, so leaving it set renders Users over the screen just opened.
-				onAddGateway = {
-					showUsers = false
-					showAddGateway = true
-				},
-			)
-		showApproval ->
-			ApprovalWindowScreen(repo = repo, onBack = { showApproval = false })
-		showYourDevices ->
-			YourDevicesScreen(
-				repo = repo,
-				onBack = { showYourDevices = false },
-				onAddDevice = { showApproval = true },
-			)
-		showAddGateway ->
-			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
-		showHostHelp ->
-			HostSetupHelpScreen(onBack = { showHostHelp = false })
-		sharingGateway != null ->
-			SharingScreen(repo = repo, gatewayId = sharingGateway, onBack = { sharingGateway = null })
-		showManage ->
-			GatewaysScreen(
-				repo = repo,
-				teams = state.teams,
-				onBack = { showManage = false },
-				onAddGateway = { showAddGateway = true },
-				onManageSharing = { gid -> sharingGateway = gid },
-			)
+		// One arm keyed on the stack top, so render order can never disagree with what is showing.
+		overlays.isNotEmpty() -> OverlayHost(overlays.last(), repo, state, openOverlay, closeOverlay)
 		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
-		// ProvisionScreen below (the setup screen's gear opens it). It sits below the overlay branches
-		// above, which are entered from Settings without clearing showSettings, so they must still win.
+		// ProvisionScreen below (the setup screen's gear opens it). Overlays are entered from Settings
+		// without closing it, so they sit above.
 		// SettingsScreen gates its provisioned-only rows, so the unprovisioned hub shows only System.
 		showSettings ->
 			SettingsScreen(
@@ -406,24 +268,17 @@ fun App(
 				onRoute = { settingsRoute = it },
 				onSetDeviceName = { repo.command { setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
-				onManage = { showManage = true },
-				onYourDevices = {
-					showSettings = false
-					settingsRoute = SettingsRoute.HUB
-					showYourDevices = true
-				},
-				onFederation = {
-					// Users is the federation surface; the federation actions live in its top-bar menu.
-					showSettings = false
-					settingsRoute = SettingsRoute.HUB
-					showUsers = true
-				},
+				onManage = { openOverlay(Overlay.Manage) },
+				onYourDevices = { openOverlay(Overlay.YourDevices) },
+				// Users is the federation surface; the federation actions live in its top-bar menu.
+				onFederation = { openOverlay(Overlay.Users) },
 				onClear = {
 					// The Domain-delete transaction (DomainAdminOps.deleteDomain) owns the local wipe; drop
 					// plugin device state (e.g. the Designer index) alongside it, then navigate home.
 					pluginManager.host.accountWipeHandlers.forEachCaught(onError = ::logPluginThrow) { it.onWipe(context) }
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
+					overlays = emptyList()
 					openTeam = null
 				},
 				onCloseSettings = {
@@ -438,12 +293,6 @@ fun App(
 				onProvision = { repo.command { provision(it) } },
 				onSettings = { showSettings = true },
 			)
-		// Ahead of openTeam: tapping an entry from the thread strip must show the editor, not the
-		// thread underneath it.
-		editEntry != null -> {
-			val (gw, id) = editEntry!!
-			BoardEditScreen(state = state, repo = repo, gatewayId = gw, entryId = id, onClose = { editEntry = null })
-		}
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
 			val session = state.sessions().firstOrNull { it.name == openTeam }
@@ -650,7 +499,7 @@ fun App(
 					BoardScreen(
 						state = state,
 						repo = repo,
-						onOpenEntry = { gw, id -> editEntry = gw to id },
+						onOpenEntry = { gw, id -> openOverlay(Overlay.BoardEdit(gw, id)) },
 						onSaved = goToSessions,
 						modifier = modifier,
 					)
@@ -660,9 +509,9 @@ fun App(
 						state = state,
 						modifier = modifier,
 						onRefresh = { repo.command { refreshTeams() } },
-						onManage = { showManage = true },
-						onAddGateway = { showAddGateway = true },
-						onHostHelp = { showHostHelp = true },
+						onManage = { openOverlay(Overlay.Manage) },
+						onAddGateway = { openOverlay(Overlay.AddGateway) },
+						onHostHelp = { openOverlay(Overlay.HostHelp) },
 						onOpen = { team ->
 							openTeam = repo.openThread(team)
 							openNonce++
@@ -685,7 +534,7 @@ fun App(
 						// Launch the enrollee compare from the empty board when one is still owed (the
 						// device rooted an enroll invite but has not completed the in-person trust step).
 						onVerifyEnroll = (if (state.provisioned) repo.enroll.pendingEnrolleeCeremony() else null)
-							?.let { c -> { enrolleeCeremonyCtx = c } },
+							?.let { c -> { openOverlay(Overlay.EnrolleeCeremony(c)) } },
 						boardLine = { team -> boardLines[team.name] },
 						boardBranch = { team -> boardBranches[team.name] },
 						undoneFor = { team ->

@@ -290,3 +290,36 @@ exactly. Three real items, all fixed in a follow-up commit:
 
 Also fixed here, unrelated and separately committed (94a0c7f): a redundant `!!` in ChatRepository
 that the eligibility check already proves, which had been flagged for autonomous cleanup.
+
+## Refactor 5 - Android navigation root: one overlay stack
+
+THE SECOND ONE (questionaire Q3). The App composable's 13 mutually-exclusive overlay flags, whose
+exclusivity was hand-encoded three times (render `when` arm order, BackHandler check order, a
+notification-tap reset checklist), became one `List<Overlay>` stack.
+
+Operation set (one commit):
+
+- add `Overlay.kt`: the sealed Overlay type (13 variants, carried params as fields) and the pure
+  pushOverlay (top-deduped) / popOverlay
+- add `OverlayHost.kt`: one composable dispatching on the stack top; every variant closes by pop,
+  opens by push
+- rewrite App's flag declarations, BackHandler, render `when`, and notification-tap reset onto the
+  stack; showSettings/settingsRoute stay separate saveable base-layer state (the stack is
+  deliberately NOT saveable: a ceremony entry carries key material)
+- add `OverlayStackTest.kt` pinning the stack rules
+
+Intended behavior improvements (the point of the entry): Users -> Add Gateway, Users -> Enroll,
+Settings -> Your devices, and Settings -> Users now RETURN to their opener instead of clearing it;
+back always dismisses what is on screen (the old arm order could close a thread hidden under
+Settings).
+
+Verified with my own eyes on the sandbox emulator: the four-deep chain Settings -> Domain & Trust ->
+Users -> Add Gateway unwinds one screen at a time (the exact path that shipped 991ba91's dead
+button), and the board editor opens above the shell and pops back to it. Emulator shut down after.
+
+Audit (2 fresh Luna threads + Sonnet synthesis): no navigation regressions; all 13 variants mapped,
+the one-shot ceremony guard held, the stack clear covers every old reset. Comment findings fixed.
+One real gap accepted and filed as a board entry instead of half-fixed here: the new tests cover the
+pure stack rules only, and nothing JVM-level exercises OverlayHost's dispatch or the BackHandler
+wiring, because the project has no Compose unit-test harness; the emulator build is its answer, and
+the click-through above is this lap's evidence.
