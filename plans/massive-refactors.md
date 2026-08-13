@@ -534,3 +534,26 @@ passthrough. The three pre-existing integration tests stand untouched above them
 
 Audit proportionate to the diff (one fresh Luna, both lenses; Sonnet synthesis re-verified and ran
 the gates): verdict clean, zero mustFix, zero polish.
+
+## Refactor 15 - Wake orchestration as a WakeService
+
+The entry's corrected premise held at re-measure, and the remaining direction was taken:
+`wakeService.ts` is a class mirroring the WakeCoordinator it sits beside, owning BOTH in-flight
+structures (the promise-join map and the create set), isWakeInFlight, tryWakeTeam, the private
+doWakeTeam, and markCreateInFlight - which had been living as an anonymous lambda in the
+consoleHandler wiring, invisible to any test. Nine deps, every one read; the bodies moved verbatim
+with one disclosed collapse: the live-host-socket fishing appeared THREE times in index.ts
+(doWakeTeam, liveHostSocket, pushPresenceWatch) and now has one producer. index.ts went 1609 to
+1460 and startGateway no longer holds wake state.
+
+Nine behavior tests over a real SessionStore and WakeCoordinator with a hand-fake presence Pick,
+the orchestration's first coverage ever: join semantics (shared promise identity, one wake message,
+one presence announcement per genuine wake), the catalog / live-incarnation / reserved-pane / no-
+label refusals, the disconnected answer, mint-and-resolvedTeam, rollback of a provisional record
+when the launch never confirms, and the markCreateInFlight lifecycle.
+
+Audit fix-then-ship on one honest catch: my refusal test asserted toMatch(/./), which a wrong
+message would pass. Pinned to the exact decideWakeCreate string. Fidelity was confirmed clean line
+by line, all five consumer rewires verified, and the synthesis noted the shape answers the
+objection that killed the old fold-into-wake.ts proposal: the collaborators are now named fields
+instead of a closure's ambient scope.
