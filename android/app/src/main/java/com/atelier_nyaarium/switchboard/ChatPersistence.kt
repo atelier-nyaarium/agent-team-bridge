@@ -16,12 +16,33 @@ private fun isAddressKey(rawKey: String): Boolean =
 	rawKey.count { it == '.' } == 3 && runCatching { parseTarget(rawKey, "", "") }.isSuccess
 
 ////////////////////////////////
+//  Interfaces & Types
+
+/** The string slots the codec reads and writes; AppStateStore implements it (the IdleSilenceStore
+ * pattern), and a JVM test fakes it with a map. */
+internal interface ChatPersistenceStore {
+	fun saveThreads(json: String)
+	fun loadThreads(): String?
+	fun saveReadAnchors(json: String)
+	fun loadReadAnchors(): String?
+	fun saveThreadsAndReadAnchors(threadsJson: String, anchorsJson: String)
+	fun saveLabels(json: String)
+	fun loadLabels(): String?
+	fun saveScheduledSends(json: String)
+	fun loadScheduledSends(): String?
+	fun saveAbsenceStreaks(json: String)
+	fun loadAbsenceStreaks(): String?
+	fun saveDrafts(json: String)
+	fun loadDrafts(): String?
+}
+
+////////////////////////////////
 //  Class
 
-/** The JSON codec between ChatRepository's in-memory maps and [AppStateStore]'s string slots.
+/** The JSON codec between ChatRepository's in-memory maps and the store's string slots.
  * Every save swallows its own failure (a full disk must not crash a state transition), and every
  * load drops what it cannot trust rather than surfacing it. */
-internal class ChatPersistence(private val store: AppStateStore) {
+internal class ChatPersistence(private val store: ChatPersistenceStore) {
 	private fun threadsJson(threads: Map<String, List<Message>>): String {
 		val root = JSONObject()
 		for ((team, msgs) in threads) {

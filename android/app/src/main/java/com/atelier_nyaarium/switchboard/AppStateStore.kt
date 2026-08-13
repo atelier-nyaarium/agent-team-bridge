@@ -39,7 +39,8 @@ sealed interface IdentityLoad {
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
  */
-class AppStateStore(context: Context) : IdleSilenceStore, com.atelier_nyaarium.switchboard.board.BoardStore {
+class AppStateStore(context: Context) :
+	IdleSilenceStore, ChatPersistenceStore, com.atelier_nyaarium.switchboard.board.BoardStore {
 	/** Where this app's durable state lives on disk. The prefs live here already; anything else
 	 * that has to survive a restart (the blob store's bytes) roots off the same directory. */
 	val filesDir: File = context.applicationContext.filesDir
@@ -208,48 +209,48 @@ class AppStateStore(context: Context) : IdleSilenceStore, com.atelier_nyaarium.s
 		return wipe
 	}
 
-	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
+	override fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
-	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
+	override fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
 
 	/** Per-team read anchor (the mailbox journal coordinate a device has read up to), keyed by
 	 * canonical address. Never bundled into `threads` itself: it survives independently of any
 	 * single message row (a forgotten/reloaded row can still resolve against it by coordinate). */
-	fun saveReadAnchors(json: String) = prefs.edit().putString(KEY_READ_ANCHORS, json).apply()
+	override fun saveReadAnchors(json: String) = prefs.edit().putString(KEY_READ_ANCHORS, json).apply()
 
-	fun loadReadAnchors(): String? = prefs.getString(KEY_READ_ANCHORS, null)
+	override fun loadReadAnchors(): String? = prefs.getString(KEY_READ_ANCHORS, null)
 
 	/** Write threads and read anchors in ONE SharedPreferences batch. Required whenever a single
 	 * state transition changes both (forget's cross-thread anchor sweep): two separate apply()
 	 * calls could be torn by a process kill between them, resurrecting a stale anchor against the
 	 * already-updated thread list (or vice versa). An anchor-only or threads-only change is safe
 	 * with the plain single-key setters above. */
-	fun saveThreadsAndReadAnchors(threadsJson: String, anchorsJson: String) {
+	override fun saveThreadsAndReadAnchors(threadsJson: String, anchorsJson: String) {
 		prefs.edit().putString(KEY_THREADS, threadsJson).putString(KEY_READ_ANCHORS, anchorsJson).apply()
 	}
 
-	fun saveLabels(json: String) = prefs.edit().putString(KEY_LABELS, json).apply()
+	override fun saveLabels(json: String) = prefs.edit().putString(KEY_LABELS, json).apply()
 
-	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
+	override fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
 	/** How many consecutive fresh-teams observations each locally-labeled team has been missing
 	 * entirely from. Persisted alongside labels (unlike pollFailStreak, which deliberately resets on
 	 * a fresh start): it accumulates evidence against an already-durable label across restarts, and a
 	 * device that goes a long stretch unforegrounded is also the one most likely to have its process
 	 * killed between observations. */
-	fun saveAbsenceStreaks(json: String) = prefs.edit().putString(KEY_ABSENCE_STREAKS, json).apply()
+	override fun saveAbsenceStreaks(json: String) = prefs.edit().putString(KEY_ABSENCE_STREAKS, json).apply()
 
-	fun loadAbsenceStreaks(): String? = prefs.getString(KEY_ABSENCE_STREAKS, null)
+	override fun loadAbsenceStreaks(): String? = prefs.getString(KEY_ABSENCE_STREAKS, null)
 
-	fun saveDrafts(json: String) = prefs.edit().putString(KEY_DRAFTS, json).apply()
+	override fun saveDrafts(json: String) = prefs.edit().putString(KEY_DRAFTS, json).apply()
 
-	fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
+	override fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
 
 	/** At most one pending scheduled send per team, same disposable storage class as drafts, with no
 	 * special re-provisioning survival. */
-	fun saveScheduledSends(json: String) = prefs.edit().putString(KEY_SCHEDULED_SENDS, json).apply()
+	override fun saveScheduledSends(json: String) = prefs.edit().putString(KEY_SCHEDULED_SENDS, json).apply()
 
-	fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
+	override fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
 
 	/** The whole task-board blob: per-Gateway cache + sync metadata, the pending-action queue, and
 	 * the one board draft - ONE key, so an optimistic edit and its queue append land in one apply. */
