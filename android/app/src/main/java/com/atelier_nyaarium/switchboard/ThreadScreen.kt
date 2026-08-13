@@ -2,8 +2,6 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.Context
 import android.net.Uri
-import android.view.ViewGroup
-import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,7 +40,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,7 +56,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
@@ -68,63 +64,6 @@ import com.atelier_nyaarium.switchboard.board.BoardLiveLine
 import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import kotlinx.coroutines.launch
-
-////////////////////////////////
-//  Interfaces & Types
-
-/** The composer as one subject: what it shows, what Send consumes, and every draft edit. */
-data class ComposerState(
-	/** The single source read by the text field, the chips, and every occupied/enabled check, so a
-	 * tab switch can never bleed one thread's picked files into another's. */
-	val draft: Draft,
-	/** A send is waiting on this team's cold boot (ChatState.wakingTeams); draws the notice card. */
-	val sendAwaitingWake: Boolean,
-	val onSend: (String, List<Uri>) -> Unit,
-	val onTextChange: (String) -> Unit,
-	val onAddFiles: (List<Uri>) -> Unit,
-	val onRemoveFile: (String) -> Unit,
-	val onOpenFile: (MessageFile) -> Unit,
-	/** The plugin dock's composer-insert seam (e.g. the Designer's "Reference in chat"). */
-	val onAppendText: (String) -> Unit,
-	/** Drops the draft and reclaims its now-unreferenced attachment copies after Send hands off. */
-	val onClear: () -> Unit,
-)
-
-/** This team's scheduled send: the banked record driving the dock, and its lifecycle. */
-data class ScheduledSendState(
-	/** At most one pending record, null otherwise; also gates the long-press Schedule Send item. */
-	val record: ScheduledSend?,
-	/** suspend + Boolean: the repo-side time check is authoritative, and the caller must await the
-	 * real outcome before clearing the composer or a failure destroys the user's message. */
-	val onSchedule: suspend (String, List<Uri>, Long) -> Boolean,
-	/** Time-only on purpose: the banked attachments are copied MessageFile refs, not the live
-	 * content:// Uris onSchedule takes, so a full re-edit would risk a silent attachment drop. */
-	val onReschedule: suspend (Long) -> Boolean,
-	/** Cancels and hands the content back into the draft; the dock reads the result through it. */
-	val onCancel: () -> Unit,
-)
-
-/** The terminal view and the session-health facts it decides from. */
-data class TerminalState(
-	/** Only the host-agent and devcontainers have a daemon-drivable pane. */
-	val eligible: Boolean,
-	val sessionStatus: String?,
-	/** A session wake is in flight, a different fact from ComposerState.sendAwaitingWake. */
-	val wakeInFlight: Boolean,
-	/** Daemon-derived (presence plane), true independent of sessionStatus: the one signal at tap
-	 * time that separates a stuck boot from a plain one still in progress. */
-	val needsLogin: Boolean,
-	val limitBlocked: Boolean,
-	val limitDetail: String?,
-	val refreshMs: Long,
-	val onWake: () -> Unit,
-	/** Force-relaunch claude in a still-existing pane (ChatRepository.relaunchSession). */
-	val onRelaunch: suspend () -> Unit,
-	val onPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
-	val onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
-	/** Clear a usage-limit dialog and pick the work back up (ChatRepository.resumeAfterLimit). */
-	val onResumeAfterLimit: suspend () -> Unit,
-)
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -179,7 +118,7 @@ fun ThreadScreen(
 	onGateway: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
-	// The three assembled subjects (see their types above): distinct types are what make handing
+	// The three assembled subjects (see ThreadScreenState.kt): distinct types are what make handing
 	// one cluster's fact to another's slot a compile error instead of a plausible call.
 	composer: ComposerState,
 	scheduled: ScheduledSendState,
@@ -637,156 +576,4 @@ fun ThreadScreen(
 			}
 		}
 	}
-}
-
-/**
- * The queue list, and everything it has to re-read to stay honest.
- *
- * Its OWN composable so the 500ms bar tick recomposes this sheet and nothing else. Held in App, the
- * beat sat in that scope and re-ran the whole activity's composition twice a second for as long as
- * the sheet was open.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun QueueSheetHost(repo: ChatRepository, onDismiss: () -> Unit, onJump: (QueueEntry) -> Unit) {
-	// Re-read on every settled change, and on a slow tick so the bar moves while a message plays. Both
-	// are pulls: this sheet is the fourth surface reporting one run, and the three that kept their own
-	// copy are the three that drifted from it.
-	val revision by repo.playback.queueRevision.collectAsState()
-	var beat by remember { mutableStateOf(0) }
-	LaunchedEffect(Unit) {
-		while (true) {
-			kotlinx.coroutines.delay(500)
-			beat++
-		}
-	}
-	val rows = remember(revision, beat) { repo.playback.queueRows() }
-	val failed = remember(revision) { repo.playback.failedRows() }
-	val position = remember(revision, beat) { repo.playback.playbackPosition() }
-	val held = remember(revision) { repo.playback.heldPosition() }
-	val paused = remember(revision) { repo.playback.transportState().second }
-	androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
-		QueueSheet(
-			rows = rows,
-			failed = failed,
-			paused = paused,
-			positionMs = position?.positionMs ?: held,
-			durationMs = position?.durationMs,
-			onPlayPause = { repo.command { if (paused) playback.resumePlayback() else playback.pausePlayback() } },
-			onSkip = { repo.command { playback.skipPlayback() } },
-			onSeek = { repo.playback.seekPlayback(it) },
-			onTrash = { entry -> repo.command { playback.dropFromQueue(entry) } },
-			onJump = onJump,
-			onDismissFailure = { entry -> repo.command { playback.acknowledgeFailure(entry) } },
-		)
-	}
-}
-
-/**
- * Hosts a thread's pooled WebView inside a FrameLayout. The renderer is pulled from
- * the pool (so scroll position and rendered DOM survive tab switches and Sessions
- * round-trips) and re-fed incrementally via sync(). A crashed renderer is swapped
- * for a fresh one and re-fed.
- */
-@Composable
-fun ThreadWebView(
-	team: String,
-	messages: List<Message>,
-	rendererPool: ThreadRendererPool,
-	openNonce: Int,
-	unreadBoundary: (String) -> Pair<Long?, List<Long>>,
-	// (team, at) a queue tile asked to land on, or null for an ordinary open. Carries its team so a
-	// stale request cannot scroll a thread it was never about.
-	revealAt: Pair<String, Long>?,
-	// Cleared once the reveal has been handed to the renderer. Without it the request stays set and
-	// re-fires on every later genuine open of that thread, so a notification tap weeks later would
-	// still snap to whichever message was once tapped in the queue.
-	onRevealed: () -> Unit,
-	// Whether the composer holds text: mirrored into the renderer so a failed row's Cancel, which
-	// hands its content back to that box, greys out rather than overwriting what is being typed.
-	composerOccupied: Boolean,
-	modifier: Modifier,
-) {
-	var renderer by remember(team) { mutableStateOf(rendererPool.get(team)) }
-	val filesDir = LocalContext.current.filesDir
-
-	LaunchedEffect(renderer, composerOccupied) { renderer.setComposerOccupied(composerOccupied) }
-
-	DisposableEffect(renderer) {
-		renderer.onRendererGone = { renderer = rendererPool.recreate(team) }
-		onDispose { renderer.onRendererGone = null }
-	}
-	// Ongoing delta-sync on every message-list change - unaffected by opens/reveals below, so an
-	// already-open thread keeps rendering new arrivals live. `team` is this composable's own stable
-	// parameter (never the ambient "currently on screen" team): the JS round-trip inside the reveal
-	// effect below can resolve after the user has navigated elsewhere, so closing over anything
-	// mutable here would credit or crash on the wrong thread.
-	// Keyed on the frame generation as well as the list: a video's frames land after its row is on
-	// screen and change nothing the list itself would notice, so without this no sync runs at all.
-	// The matching half is in ThreadRenderer's fingerprint, which decides whether the row re-pushes.
-	LaunchedEffect(renderer, messages, FrameReadiness.generation) {
-		renderer.sync(messages, unreadBoundary(team).first)
-	}
-	// Frames are extracted lazily and cost several seeks each, so a row renders with its glyph and
-	// gains motion later. Deliberately NOT keyed on the generation this marks, which would make each
-	// landing set retrigger the whole pass.
-	LaunchedEffect(renderer, messages) {
-		for (message in messages) {
-			for (file in message.files) {
-				if (!file.mime.startsWith("video/")) continue
-				val key = VideoThumbs.keyFor(file) ?: continue
-				// Skip on ANNOUNCED, never on "already on disk". Extraction does not observe
-				// cancellation, so an interrupted pass still writes its full set; keying the skip on
-				// the files would then make every later pass step over it, leaving the row rendered as
-				// a plain file forever with a complete set sitting unused. This also keeps the common
-				// case off the disk entirely.
-				if (FrameReadiness.versionOf(key) > 0) continue
-				val source = Attachments.fileFor(filesDir, file.src) ?: continue
-				if (VideoThumbs.ensure(filesDir, key, source).isNotEmpty()) FrameReadiness.mark(key)
-			}
-		}
-	}
-	// A genuine open (notification tap, board tap, tab switch onto a different thread, or
-	// composition re-entry after a masked surface like terminal mode or settings) re-snaps to the
-	// first unread row. Declared AFTER the sync effect so its own (idempotent) sync() call and
-	// flush-then-reveal always run against an already-rendered transcript.
-	LaunchedEffect(team, renderer, openNonce) {
-		renderer.sync(messages, unreadBoundary(team).first)
-		renderer.flushThenReveal {
-			val (firstUnreadId, region) = unreadBoundary(team)
-			renderer.revealFirstUnread(firstUnreadId, region)
-			// A queue tile named a specific message, so land on THAT rather than wherever reading
-			// happens to have got to. Runs after the unread snap so it wins, and only for the thread the
-			// tile pointed at - a tile tapped while a different tab was open must not drag this one.
-			//
-			// Resolved to the ROW KEY here. A queue entry is identified by its timestamp, but the DOM is
-			// keyed by Message.id, a per-thread local key that is deliberately not `at` - handing the
-			// timestamp straight to the renderer matched no row at all, so the jump silently did nothing.
-			revealAt?.let { (wanted, at) ->
-				if (wanted == team) {
-					messages.firstOrNull { it.at == at && !it.fromMe }?.let { renderer.revealMessage(it.id) }
-					onRevealed()
-				}
-			}
-		}
-	}
-
-	AndroidView(
-		factory = { ctx -> FrameLayout(ctx) },
-		update = { frame ->
-			val wv = renderer.webView
-			if (wv.parent !== frame) {
-				(wv.parent as? ViewGroup)?.removeView(wv)
-				frame.removeAllViews()
-				frame.addView(
-					wv,
-					FrameLayout.LayoutParams(
-						FrameLayout.LayoutParams.MATCH_PARENT,
-						FrameLayout.LayoutParams.MATCH_PARENT,
-					),
-				)
-			}
-		},
-		modifier = modifier,
-	)
 }

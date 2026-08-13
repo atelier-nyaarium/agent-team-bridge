@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +24,12 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -127,6 +134,49 @@ fun QueueSheet(
 				}
 			}
 		}
+	}
+}
+
+/**
+ * The queue list, and everything it has to re-read to stay honest.
+ *
+ * Its OWN composable so the 500ms bar tick recomposes this sheet and nothing else. Held in App, the
+ * beat sat in that scope and re-ran the whole activity's composition twice a second for as long as
+ * the sheet was open.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun QueueSheetHost(repo: ChatRepository, onDismiss: () -> Unit, onJump: (QueueEntry) -> Unit) {
+	// Re-read on every settled change, and on a slow tick so the bar moves while a message plays. Both
+	// are pulls: this sheet is the fourth surface reporting one run, and the three that kept their own
+	// copy are the three that drifted from it.
+	val revision by repo.playback.queueRevision.collectAsState()
+	var beat by remember { mutableStateOf(0) }
+	LaunchedEffect(Unit) {
+		while (true) {
+			kotlinx.coroutines.delay(500)
+			beat++
+		}
+	}
+	val rows = remember(revision, beat) { repo.playback.queueRows() }
+	val failed = remember(revision) { repo.playback.failedRows() }
+	val position = remember(revision, beat) { repo.playback.playbackPosition() }
+	val held = remember(revision) { repo.playback.heldPosition() }
+	val paused = remember(revision) { repo.playback.transportState().second }
+	androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+		QueueSheet(
+			rows = rows,
+			failed = failed,
+			paused = paused,
+			positionMs = position?.positionMs ?: held,
+			durationMs = position?.durationMs,
+			onPlayPause = { repo.command { if (paused) playback.resumePlayback() else playback.pausePlayback() } },
+			onSkip = { repo.command { playback.skipPlayback() } },
+			onSeek = { repo.playback.seekPlayback(it) },
+			onTrash = { entry -> repo.command { playback.dropFromQueue(entry) } },
+			onJump = onJump,
+			onDismissFailure = { entry -> repo.command { playback.acknowledgeFailure(entry) } },
+		)
 	}
 }
 
