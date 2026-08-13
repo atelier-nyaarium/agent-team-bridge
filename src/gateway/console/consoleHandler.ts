@@ -3,11 +3,8 @@ import type {
 	ConsoleOp,
 	ConsoleOpResult,
 	ConsoleReplyBody,
-	CrossDomainPeerEntry,
-	CrossDomainPresenceEntry,
 	CrossDomainShareTarget,
 	OpenedConsoleFrame,
-	ReadAnchorWireEntry,
 } from "../../shared/console-protocol.js";
 import {
 	ALLOWED_KEYS,
@@ -19,23 +16,13 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import type { PlaneVersion } from "../../shared/plane-registry.js";
 import { DomainStatusSchema } from "../../shared/schemas.js";
 import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { sanitizeLabel } from "../../shared/session-sanitize.js";
 import type { SessionRecord } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
-import {
-	type BoardDisposition,
-	type BoardProjection,
-	type BoardResult,
-	type BoardStore,
-	OWNER_ACTOR,
-	refusalError,
-	taskBoardPlaneName,
-} from "../boardStore.js";
-import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
+import { type BoardDisposition, type BoardResult, type BoardStore, OWNER_ACTOR, refusalError } from "../boardStore.js";
 import { readAnchorsPlaneName } from "../readAnchors.js";
 import { createConsoleDevices } from "./consoleDevices.js";
 import { createConsoleTargets } from "./consoleTargets.js";
@@ -51,6 +38,7 @@ import {
 	SEND_BOUND_MS,
 	type SendRouteJson,
 } from "./consoleTypes.js";
+import { buildPollParticipants, type PollPiggyback } from "./pollPlanes.js";
 
 export type { ConsoleHandlerDeps, ConsoleRoutes } from "./consoleTypes.js";
 export { CREATE_SESSION_BOUND_MS } from "./consoleTypes.js";
@@ -376,109 +364,25 @@ export function createConsoleDispatcher({
 				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
 
-				// The presence plane version(s) the Console already holds, translated from the wire's
-				// per-source-gateway array to the registry's plane-name-keyed presented map. Only this
-				// Gateway's own entry maps to a locally-registered plane, since only this Gateway's own
-				// federation exchange is registered here; a foreign/unrecognized source is simply absent from the
-				// map, which changedSince/waitForBump both already treat as "unknown, ship current
-				// truth" rather than a special case here. Absent knownPresenceVersions (a pre-plane
-				// console build) skips the registry entirely - unchanged behavior for that build,
-				// mirroring the domainVersion piggyback's own opt-in shape. `presenceScope` is what
-				// actually enforces that opt-out now that a second plane (linked-peers) shares this
-				// same registry: without it, changedSince's bulk "every registered plane" walk would
-				// report "presence" as changed for a caller who never even mentioned it (see
-				// PlaneRegistry.changedSince's own doc on why scope exists).
-				const pr = op.knownPresenceVersions ? planeRegistry : undefined;
-				const presenceScope = pr ? new Set(["presence"]) : undefined;
-				const presentedPresence = new Map<string, PlaneVersion>();
-				if (pr) {
-					const own = op.knownPresenceVersions?.find((v) => v.gateway === localGatewayId);
-					if (own) presentedPresence.set("presence", { epoch: own.epoch, counter: own.version });
-				}
-
-				// The linked-peers plane: same registry, a single scalar presented version (no
-				// per-source array - this Gateway's own roster has no multi-source concept). Unlike
-				// presence's array, a single optional scalar cannot distinguish "a console build that
-				// never sends knownLinkedPeersVersion" from "this session's cold boot" - both simply
-				// present nothing, and both
-				// want the same outcome (ship current), so this always participates whenever the
-				// registry itself is wired, never gated on the op field's own presence.
-				const lpr = planeRegistry;
-				const linkedPeersScope = lpr ? new Set(["linked-peers"]) : undefined;
-				const presentedLinkedPeers = new Map<string, PlaneVersion>();
-				if (lpr && op.knownLinkedPeersVersion) {
-					presentedLinkedPeers.set("linked-peers", {
-						epoch: op.knownLinkedPeersVersion.epoch,
-						counter: op.knownLinkedPeersVersion.version,
-					});
-				}
-
-				// This owner's read-anchors plane: PER OWNER (never a single Gateway-wide plane - see
-				// readAnchors.ts), registered lazily here on this owner's own first poll if it has not
-				// been touched yet (ensureRegistered is idempotent). Same single-scalar shape as
-				// linked-peers, same unconditional participation.
-				const rar = readAnchors ? planeRegistry : undefined;
-				const readAnchorsPlane = readAnchorsPlaneName(ownerId);
-				const readAnchorsScope = rar ? new Set([readAnchorsPlane]) : undefined;
-				const presentedReadAnchors = new Map<string, PlaneVersion>();
-				if (rar) {
-					readAnchors?.ensureRegistered(ownerId);
-					if (op.knownReadAnchorsVersion) {
-						presentedReadAnchors.set(readAnchorsPlane, {
-							epoch: op.knownReadAnchorsVersion.epoch,
-							counter: op.knownReadAnchorsVersion.version,
-						});
-					}
-				}
-
-				// This owner's task-board plane: same per-owner, lazily-registered, single-scalar shape
-				// as read-anchors above.
-				const tbr = boardStore ? planeRegistry : undefined;
-				const taskBoardPlane = taskBoardPlaneName(ownerId);
-				const taskBoardScope = tbr ? new Set([taskBoardPlane]) : undefined;
-				const presentedTaskBoard = new Map<string, PlaneVersion>();
-				if (tbr) {
-					boardStore?.ensureRegistered(ownerId);
-					if (op.knownTaskBoardVersion) {
-						presentedTaskBoard.set(taskBoardPlane, {
-							epoch: op.knownTaskBoardVersion.epoch,
-							counter: op.knownTaskBoardVersion.version,
-						});
-					}
-				}
-
-				// Cross-Domain presence: genuinely N independently-versioned planes, one per linked
-				// Domain (crossDomainPresence.ts) - unlike linked-peers/read-anchors' single scalar, so
-				// this ALSO gates on the op field's own presence (an absent knownCrossDomainPresenceVersions
-				// means a console build that predates this plane entirely), same reasoning as presence's
-				// own knownPresenceVersions gate above. Every currently-linked Domain's plane is ensured
-				// BEFORE building the presented map: a plane that does not exist yet cannot wake an
-				// in-flight held poll on its own first bump (PlaneRegistry.wake's membership-gated
-				// dispatch), so a linked Domain must have a plane in place before its first land()/pull.
-				const cdpr =
-					crossDomainPresenceConsumer && op.knownCrossDomainPresenceVersions ? planeRegistry : undefined;
-				const linkedIds = cdpr && linkedDomainIds ? linkedDomainIds() : [];
-				for (const id of linkedIds) crossDomainPresenceConsumer?.ensureRegistered(id);
-				const cdpPlaneToDomain = new Map(linkedIds.map((id) => [crossDomainPresencePlaneName(id), id]));
-				const crossDomainPresenceScope = cdpr ? new Set(cdpPlaneToDomain.keys()) : undefined;
-				const presentedCrossDomainPresence = new Map<string, PlaneVersion>();
-				if (cdpr) {
-					for (const v of op.knownCrossDomainPresenceVersions ?? []) {
-						presentedCrossDomainPresence.set(crossDomainPresencePlaneName(v.domainId), {
-							epoch: v.epoch,
-							counter: v.version,
-						});
-					}
-				}
+				// Every plane's whole poll participation (gate, presented map, lazy registration,
+				// hold wake-up, emission) lives in its participant; the array's order IS the settled
+				// priority. Built pre-hold so a plane's first bump can wake the held poll.
+				const participants = buildPollParticipants({
+					op,
+					ownerId,
+					localGatewayId,
+					planeRegistry,
+					presence,
+					readAnchors,
+					boardStore,
+					crossDomainPresenceConsumer,
+					linkedDomainIds,
+					domain,
+				});
 
 				if (snap.entries.length === 0 && hold > 0) {
 					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
-					if (pr) waits.push(pr.waitForBump(presentedPresence, hold, presenceScope));
-					if (lpr) waits.push(lpr.waitForBump(presentedLinkedPeers, hold, linkedPeersScope));
-					if (rar) waits.push(rar.waitForBump(presentedReadAnchors, hold, readAnchorsScope));
-					if (tbr) waits.push(tbr.waitForBump(presentedTaskBoard, hold, taskBoardScope));
-					if (cdpr)
-						waits.push(cdpr.waitForBump(presentedCrossDomainPresence, hold, crossDomainPresenceScope));
+					for (const p of participants) if (p.wait) waits.push(p.wait(hold));
 					await Promise.race(waits);
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
@@ -490,132 +394,24 @@ export function createConsoleDispatcher({
 						`[console poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
 					);
 				}
-				const base = { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
-
-				// Piggyback the keyring: hand the Console the snapshot only when its known version
-				// differs, so it stays fresh at near-zero steady cost.
-				const dom = domain?.();
-				const domainChanged = dom != null && op.knownDomainVersion !== dom.version;
-				// Same piggyback shape, generalized: the presence plane's current truth, present only
-				// when it actually moved past what the Console presented.
-				const presenceVersion = pr?.version("presence");
-				const presenceChanged = pr != null && pr.changedSince(presentedPresence, presenceScope).length > 0;
-				// Same generalization again, for the linked-peers plane.
-				const linkedPeersVersion = lpr?.version("linked-peers");
-				const linkedPeersChanged =
-					lpr != null && lpr.changedSince(presentedLinkedPeers, linkedPeersScope).length > 0;
-				// Same generalization again, for this owner's read-anchors plane.
-				const readAnchorsVersion = rar?.version(readAnchorsPlane);
-				const readAnchorsChanged =
-					rar != null && rar.changedSince(presentedReadAnchors, readAnchorsScope).length > 0;
-				// Same generalization again, for this owner's task-board plane.
-				const taskBoardVersion = tbr?.version(taskBoardPlane);
-				const taskBoardChanged = tbr != null && tbr.changedSince(presentedTaskBoard, taskBoardScope).length > 0;
-				// Same generalization again, for cross-Domain presence - EXCEPT this plane FAMILY has no
-				// single version of its own; changedSince returns the SUBSET of plane names that moved,
-				// each mapped back to its domainId via cdpPlaneToDomain.
-				const crossDomainPresenceChangedNames = cdpr
-					? cdpr.changedSince(presentedCrossDomainPresence, crossDomainPresenceScope)
-					: [];
-				const crossDomainPresenceChanged = crossDomainPresenceChangedNames.length > 0;
-
-				// Why this poll settled - the Console's instant-empty-response heuristic (its
-				// old-gateway degradation signal) reads this so a plane-only settle never trips its
-				// backoff. Priority mirrors the piggyback fields below: real mailbox entries first
-				// (they are why a console polls at all), then presence, then cross-Domain presence,
-				// then linked-peers, then read-anchors, then domain, else the hold simply elapsed with
-				// nothing new.
-				const settled:
-					| "mailbox"
-					| "presence"
-					| "crossDomainPresence"
-					| "linkedPeers"
-					| "readAnchors"
-					| "taskBoard"
-					| "domain"
-					| "timeout" =
+				// Mailbox entries are why a console polls at all, so they outrank every plane; the
+				// hold elapsing with nothing new is the fallback. The Console's instant-empty-response
+				// heuristic (its old-gateway degradation signal) reads `settled` so a plane-only
+				// settle never trips its backoff. Changed planes emit even on a mailbox settle.
+				const settled =
 					snap.entries.length > 0
-						? "mailbox"
-						: presenceChanged
-							? "presence"
-							: crossDomainPresenceChanged
-								? "crossDomainPresence"
-								: linkedPeersChanged
-									? "linkedPeers"
-									: readAnchorsChanged
-										? "readAnchors"
-										: taskBoardChanged
-											? "taskBoard"
-											: domainChanged
-												? "domain"
-												: "timeout";
-
-				// Builds only the linked Domains whose plane actually changed - never a full resend of
-				// every linked Domain (each is independently versioned, unlike presence's single plane
-				// above). Calls crossDomainPresenceConsumer.snapshot() at most once per poll, regardless
-				// of how many Domains changed.
-				function buildTaskBoard(version: PlaneVersion) {
-					const projection = planeRegistry?.snapshot<BoardProjection>(taskBoardPlane);
-					return {
-						taskBoard: projection?.entries ?? [],
-						taskBoardVersion: { epoch: version.epoch, version: version.counter },
-						...(projection?.truncated ? { taskBoardTruncated: true } : {}),
-					};
+						? ("mailbox" as const)
+						: (participants.find((p) => p.changed())?.settledAs ?? ("timeout" as const));
+				let piggyback: PollPiggyback = {};
+				for (const p of participants) {
+					if (p.changed()) piggyback = { ...piggyback, ...p.emit() };
 				}
-
-				function buildCrossDomainPresenceEntries(): CrossDomainPresenceEntry[] {
-					const landedSnapshot = crossDomainPresenceConsumer?.snapshot();
-					const out: CrossDomainPresenceEntry[] = [];
-					for (const name of crossDomainPresenceChangedNames) {
-						const domainId = cdpPlaneToDomain.get(name);
-						const version = planeRegistry?.version(name);
-						if (!domainId || !version) continue;
-						const landed = landedSnapshot?.[domainId];
-						out.push({
-							domainId,
-							version: { epoch: version.epoch, version: version.counter },
-							sessions: landed?.sessions ?? [],
-							lastRefreshedAt: landed?.lastRefreshedAt ?? 0,
-						});
-					}
-					return out;
-				}
-
 				return {
-					...base,
-					...(domainChanged ? { domainVersion: dom.version, domain: dom.snapshot } : {}),
-					...(presenceChanged && presenceVersion
-						? {
-								presence: presence?.snapshot() ?? [],
-								presenceVersions: [
-									{
-										gateway: localGatewayId,
-										epoch: presenceVersion.epoch,
-										version: presenceVersion.counter,
-									},
-								],
-							}
-						: {}),
-					...(crossDomainPresenceChanged ? { crossDomainPresence: buildCrossDomainPresenceEntries() } : {}),
-					...(linkedPeersChanged && linkedPeersVersion
-						? {
-								linkedPeers: planeRegistry?.snapshot<CrossDomainPeerEntry[]>("linked-peers") ?? [],
-								linkedPeersVersion: {
-									epoch: linkedPeersVersion.epoch,
-									version: linkedPeersVersion.counter,
-								},
-							}
-						: {}),
-					...(readAnchorsChanged && readAnchorsVersion
-						? {
-								readAnchors: planeRegistry?.snapshot<ReadAnchorWireEntry[]>(readAnchorsPlane) ?? [],
-								readAnchorsVersion: {
-									epoch: readAnchorsVersion.epoch,
-									version: readAnchorsVersion.counter,
-								},
-							}
-						: {}),
-					...(taskBoardChanged && taskBoardVersion ? buildTaskBoard(taskBoardVersion) : {}),
+					entries: snap.entries,
+					cursor: snap.cursor,
+					dropped: snap.dropped,
+					epoch: snap.epoch,
+					...piggyback,
 					settled,
 				};
 			}
