@@ -1804,7 +1804,7 @@ class ChatRepository(
 						if (eligible && agentMsgs.isNotEmpty()) {
 							val t = team
 							val ms = msgs
-							val at = lastAgent!!.at
+							val at = lastAgent.at
 							val queueable = agentMsgs
 							// The message that will speak FIRST, which is the one worth waiting on.
 							// Warming the burst's last message instead would leave the one actually
