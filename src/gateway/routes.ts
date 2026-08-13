@@ -152,6 +152,17 @@ export interface RoutesDeps {
  * Only entries whose loss changes BEHAVIOUR belong here. A burst cache does not: rebuilding it costs
  * one recomputation and can report nothing stale.
  */
+/**
+ * What a caller is asking to act as, which decides what naming a session proves.
+ *
+ * "session": the call acts AS the named session, so an unbound name passing is correct - that is
+ * what keeps a hand-launched session sending. "owner-data": the call reads or writes the OWNER's
+ * own board or mailbox, which no session name can speak for, so the caller must additionally prove
+ * it is one of this gateway's bound sessions. Required rather than defaulted: a new route is then a
+ * compile error until someone decides which it is, instead of silently taking the weaker one.
+ */
+export type CallerScope = "session" | "owner-data";
+
 export interface RoutesCarryOver {
 	/** Settled replies for the board route's mutating operations. Losing this turns a retried
 	 * absolute write into a second write rather than a replay. */
@@ -565,8 +576,27 @@ export function createRoutes({
 	 * record here. The only names that pass unproven are ones that resolve to a local session with
 	 * no armed binding, which is what keeps hand-launched sessions and a purged store working.
 	 */
-	function refuseImpersonation(req: Request, claimed: string): Response | null {
+	/**
+	 * May this caller's message be MIRRORED into the owner's own mailbox?
+	 *
+	 * The mirror lands in the owner's console under a session's name, and a session name proves
+	 * nothing on its own (see CallerScope), so an unproven caller could otherwise author entries
+	 * there. It is display-only and explicitly never load-bearing, so an unproven caller loses the
+	 * mirror rather than the delivery - the send or reply itself still lands.
+	 */
+	function mayMirrorToOwner(req: Request): boolean {
+		return !auth || auth.mayUseLocalPlane(presentedByRequest(req));
+	}
+
+	function refuseImpersonation(req: Request, claimed: string, scope: CallerScope): Response | null {
 		if (!auth) return null;
+		// Owner data is not addressed to a session, so naming one proves nothing about the right to
+		// read or write it: an unregistered name resolves to UNBOUND, which anything satisfies. Ask
+		// the local-plane question first, so an unproven caller learns nothing about which names exist.
+		if (scope === "owner-data" && !auth.mayUseLocalPlane(presentedByRequest(req))) {
+			console.warn(`[auth] refused an owner-data call claiming "${claimed}" without any session binding`);
+			return jsonResponse({ error: "the owner's own data is not open to this caller" }, 403);
+		}
 		const key = auth.localTeamKey(claimed);
 		if (key === null) {
 			// Malformed rather than unauthorized: the name cannot denote any session here, so the
@@ -626,7 +656,7 @@ export function createRoutes({
 		// console's `from` is its free-form Device Name rather than a session name, so neither can be
 		// resolved to a local record and both arrive already authenticated by their own sealed path.
 		if (!opts.trustedInbound && !opts.consoleSender) {
-			const refused = refuseImpersonation(req, from);
+			const refused = refuseImpersonation(req, from, "session");
 			if (refused) return refused;
 			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is
 			// strictly stronger than mislabelling a message: it injects the answer into that session's
@@ -869,7 +899,7 @@ export function createRoutes({
 						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must
 						// not turn an already-delivered channel_push into a spurious 500 for the caller.
 						const fromAddr = tryLocalAddress(from);
-						if (fromAddr) {
+						if (fromAddr && mayMirrorToOwner(req)) {
 							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
 							mirrorPeer(toAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
 						}
@@ -1076,7 +1106,7 @@ export function createRoutes({
 			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
 			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
 			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
-			if (localAddr) {
+			if (localAddr && mayMirrorToOwner(req)) {
 				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
 					body: response.response,
 					files,
@@ -1148,7 +1178,7 @@ export function createRoutes({
 				// own cross-Gateway origin anchor: the anchor's own session key embeds the REMOTE
 				// target's address, never a local one.
 				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
-				if (askerAddr) {
+				if (askerAddr && mayMirrorToOwner(req)) {
 					const key = parseStoreKey(respondSessionId);
 					const isRemoteAnchor =
 						key?.kind === "conv" &&
@@ -1263,7 +1293,7 @@ export function createRoutes({
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const r = parsed.data;
-		const refused = refuseImpersonation(req, r.from);
+		const refused = refuseImpersonation(req, r.from, "owner-data");
 		if (refused) return refused;
 		// Replay before anything else. These writes are ABSOLUTE, so re-running one after a newer
 		// write regresses the field - an update whose reply was lost would set the value back on

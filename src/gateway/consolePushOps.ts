@@ -13,6 +13,7 @@ import {
 	payloadBytes,
 	stampBlobHolder,
 } from "./routeSchemas.js";
+import type { CallerScope } from "./routes.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -28,7 +29,7 @@ export interface ConsolePushOpsDeps {
 	localGatewayId: string;
 	/** The ONE producer of a local session's canonical Address (routes.ts's own). */
 	localAddress: (name: string) => Address;
-	refuseImpersonation: (req: Request, claimed: string) => Response | null;
+	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
 	relayWithRetry: (
 		dstGateway: string,
 		op: FederatedOp,
@@ -185,7 +186,8 @@ export function createConsolePushOps({
 		// here - and the notice then fans out to wherever the owner's console actually polls, so
 		// without the stamp a multi-Gateway owner can never fetch a notify_human attachment.
 		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
-		const refused = refuseImpersonation(req, from);
+		// The owner's mailbox, not the named session's: a notice lands wherever the owner reads.
+		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
@@ -235,7 +237,8 @@ export function createConsolePushOps({
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, pluginId, actionType, payload } = parsed.data;
-		const refused = refuseImpersonation(req, from);
+		// Drives a plugin on the owner's own device, so it is owner data like the notice above.
+		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
 		if (!mailboxStore) {
 			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
