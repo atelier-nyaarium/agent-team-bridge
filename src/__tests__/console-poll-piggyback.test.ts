@@ -1,10 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ServerWebSocket } from "bun";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import { CrossDomainPresenceConsumer } from "../gateway/federation/crossDomainPresence.js";
 import { IntentTracker } from "../gateway/intent.js";
 import { ReadAnchors, readAnchorsPlaneName } from "../gateway/readAnchors.js";
 import type { WsData } from "../gateway/websocket.js";
 import type { CrossDomainPeerEntry } from "../shared/console-protocol.js";
+import { DurableStore } from "../shared/durable-store.js";
 import type { CrossDomainPresenceSession } from "../shared/federation-protocol.js";
 import { PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import type { TeamInfo } from "../shared/types.js";
@@ -533,5 +538,48 @@ describe("report_read + poll: read-anchors piggyback", () => {
 		// (absent knownReadAnchorsVersion always ships current truth, per the scalar-plane convention).
 		expect(result.readAnchors).toEqual([]);
 		expect(result.settled).toBe("readAnchors");
+	});
+});
+
+describe("poll: task-board piggyback", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	function makeBoardStore(registry: PlaneRegistry) {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "poll-board-"));
+		dirs.push(dir);
+		return new BoardStore(new DurableStore(dir, "task-board"), registry, undefined);
+	}
+
+	it("a held poll wakes early on a board write, not the full hold", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const boardStore = makeBoardStore(planeRegistry);
+		const h = makeHarness({}, { planeRegistry, boardStore });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		// Same absent-scalar-ships-current convention as read-anchors: the empty board ships.
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			taskBoard?: unknown[];
+			taskBoardVersion: { epoch: number; version: number };
+			settled?: string;
+		};
+		expect(first.taskBoard).toEqual([]);
+		expect(first.settled).toBe("taskBoard");
+
+		const held = h.handler.handleFrame(
+			frame({ kind: "poll", holdMs: 5_000, knownTaskBoardVersion: first.taskBoardVersion }, "p2"),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		// The store's own coalesced bump (BUMP_WINDOW_MS) is what wakes the poll.
+		boardStore.upsert(OWNER, [{ id: "bd_1", title: "hang shelf", state: "open", rank: "m" }], OWNER_ACTOR);
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on the bump, not the 5s hold
+		const result = reply.result as { taskBoard?: { id: string }[]; settled?: string };
+		expect(result.settled).toBe("taskBoard");
+		expect(result.taskBoard?.map((e) => e.id)).toEqual(["bd_1"]);
 	});
 });

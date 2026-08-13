@@ -104,6 +104,7 @@ export function makeHarness(
 			| "presence"
 			| "intentTracker"
 			| "readAnchors"
+			| "boardStore"
 			| "crossDomainPresenceConsumer"
 			| "linkedDomainIds"
 		>
@@ -153,6 +154,7 @@ export function makeHarness(
 		presence: deps.presence,
 		intentTracker: deps.intentTracker,
 		readAnchors: deps.readAnchors,
+		boardStore: deps.boardStore,
 		crossDomainPresenceConsumer: deps.crossDomainPresenceConsumer,
 		linkedDomainIds: deps.linkedDomainIds,
 	});

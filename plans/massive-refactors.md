@@ -470,3 +470,26 @@ nothing pinned the containment BOUNDARY. Threads, anchors and labels contain per
 sibling blanks the whole map), while scheduled sends and drafts contain per ROW. Both postures are
 now asserted explicitly, so a future edit moving a codec across that line fails a test instead of
 silently changing what a torn file costs.
+
+## Refactor 12 - Poll reply assembly as a fold over participants
+
+The entry named a `buildPollReply` that never existed; the reality was the `poll` case inside
+consoleHandler's dispatcher, ~260 lines. Its premise had STRENGTHENED since filing: a fifth plane
+(task-board) had been added and had to hand-copy the whole five-part convention - gate, presented
+map, scope, hold wait, changed-check plus emission - and its arm in the settled priority chain.
+
+The cut (`pollPlanes.ts`): a `PollParticipant` value per versioned plane, built PRE-hold (plane
+registration and presented maps must precede the hold or a first bump cannot wake it), reading
+lazily POST-hold (memoized, so the settle label and the emission see one answer). The array order
+IS the settled priority, and the poll case became a fold: the hold race, the settle label and the
+reply slice all derive from the one array. Adding a sixth plane is one participant; forgetting any
+part of the convention stopped being expressible. The domain keyring piggyback joined as the one
+participant with no wait, preserving that a rotation alone never wakes a held poll. Same bug class
+as the persist step table and the fence algebra: a rule enforced by each call site remembering.
+
+The audit pair confirmed fidelity (settled order byte-for-byte; emission-order and
+ensureRegistered-order changes proven inert) and earned its fix-then-ship on my test file: the
+priority test omitted taskBoard, whose settle slot turned out to be untested ANYWHERE in the suite,
+and the gate test skipped the per-dep opt-in combos. Both closed, plus the optionals: a keyring
+read-count pin, and taskBoard's first end-to-end held-poll wake test (a pre-existing gap closed
+while the seam was open).
