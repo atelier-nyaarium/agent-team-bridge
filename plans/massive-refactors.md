@@ -323,3 +323,22 @@ One real gap accepted and filed as a board entry instead of half-fixed here: the
 pure stack rules only, and nothing JVM-level exercises OverlayHost's dispatch or the BackHandler
 wiring, because the project has no Compose unit-test harness; the emulator build is its answer, and
 the click-through above is this lap's evidence.
+
+## Refactor 6 - Rehome the ThreadScreen docks and name the status vocabulary
+
+Two pure moves, Opus-executed, audited clean on the first pass (the only clean verdict so far).
+
+Operation set (one commit):
+
+- move ScheduledSendDock, SessionLimitDock, WakingNotice from SessionDialogs.kt into the new
+  ThreadDocks.kt, so the dialogs file holds only dialogs
+- move statusWord, presenceColor, StatusChip from SessionsHeaders.kt into the new SessionStatus.kt,
+  the one vocabulary file its five consumers import
+- forced minimum widening: STATUS_GREEN / STATUS_AMBER private -> internal (presenceColor left the
+  file; HealthHeader and the freshness colors still read them in place)
+
+Byte-identity proven twice: Opus diffed every moved block against the HEAD extract, and the audit
+re-extracted and re-diffed independently, then re-ran the Kotlin gate itself rather than trusting
+the report. Direction (b) from the entry (promote the vocabulary to a sealed type with label+color
+members) was not taken: the single-file vocabulary already makes a second copy unnatural, and the
+type change touches every render site for no defect it closes today.

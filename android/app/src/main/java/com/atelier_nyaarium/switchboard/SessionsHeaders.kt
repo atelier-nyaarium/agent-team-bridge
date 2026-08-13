@@ -78,43 +78,13 @@ fun HealthHeader(state: ChatState) {
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The base board/thread word for a wire status, before any working/waking/login refinement. The
- * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
-internal fun statusWord(status: String): String = when (status) {
-	"online" -> "live"
-	"verifying" -> "verifying"
-	"available" -> "available"
-	else -> "ended"
-}
-
 // Shared status-color tokens: presenceColor, HealthHeader, and crossDomainFreshnessColor all converge
 // on live/caution semantics - named once so a future rebrand can't update one copy and miss another.
-private val STATUS_GREEN = Color(0xFF2EA043)
-private val STATUS_AMBER = Color(0xFFD29922)
+internal val STATUS_GREEN = Color(0xFF2EA043)
+internal val STATUS_AMBER = Color(0xFFD29922)
 
 ////////////////////////////////
 //  Composables
-
-/** Chip color for the board/thread presence vocabulary. */
-@Composable
-internal fun presenceColor(presence: String): Color = when (presence) {
-	"live" -> STATUS_GREEN
-	"working...", "waking...", "verifying" -> STATUS_AMBER
-	"available" -> Color(0xFF0969DA)
-	"check terminal", "limit hit" -> Color(0xFFDA3633)
-	else -> MaterialTheme.colorScheme.outline
-}
-
-@Composable
-internal fun StatusChip(text: String, color: Color) {
-	Surface(color = color.copy(alpha = 0.16f), shape = MaterialTheme.shapes.small) {
-		Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-			Box(Modifier.size(7.dp).clip(CircleShape).background(color))
-			Spacer(Modifier.width(5.dp))
-			Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
-		}
-	}
-}
 
 /** A chevron-driven, collapsible section header with a trailing slot the caller owns entirely (a
  * Create button, online/offline label, freshness chip). Shared by GatewayHeader and LinkedFriendHeader. */
