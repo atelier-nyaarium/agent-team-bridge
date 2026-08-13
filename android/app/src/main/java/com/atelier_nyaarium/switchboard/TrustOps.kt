@@ -377,22 +377,6 @@ internal class TrustOps(private val repo: ChatRepository) {
 			}
 		}
 
-	/** Unlink a friend Domain: forget the local trust + shares for it, then owner-sign + submit
-	 * the link-edge revocation so the Router drops its relay-affinity edge. crossDomainUnlink's own
-	 * server-side removal already bumps the linked-peers plane (see CrossDomainPeers' onChange
-	 * hook), which wakes this device's own currently-held poll for free - no client-side action
-	 * needed for that half. Mesh-wide discovery has no such push (see refreshDiscovery's own doc),
-	 * so an explicit pull is still what makes the unlinked peer's sessions actually disappear from
-	 * the board promptly instead of waiting out DISCOVERY_REFRESH_MS. */
-	suspend fun unlinkDomain(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
-		runCatchingCancellable {
-			repo.client().crossDomainUnlink(domainId)
-			repo.enroll.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), domainId)
-			repo.refreshDiscovery()
-			Unit
-		}
-	}
-
 	private fun newRendezvousPin(): String {
 		val bytes = ByteArray(18)
 		java.security.SecureRandom().nextBytes(bytes)

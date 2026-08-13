@@ -63,14 +63,6 @@ internal class EnrollOps(private val repo: ChatRepository) {
 		}
 	}
 
-	/** The owner key fingerprint the admin confirms when rooting the Domain on the
-	 * host. Reading it mints the owner + console identities on first call. */
-	fun ownerSas(): String = repo.federation.ownerSas()
-
-	fun ownerSignPub(): String = repo.federation.ownerSignPub()
-
-	fun ownerBoxPub(): String = repo.federation.ownerBoxPub()
-
 	/** Owner public material for the settings cards, or null when the stored owner key is
 	 * corrupt. Non-throwing so a corrupt key renders a restore prompt rather than crashing the
 	 * card; an absent key still mints (the silent first-gen). */
