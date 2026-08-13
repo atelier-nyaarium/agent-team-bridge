@@ -557,3 +557,30 @@ message would pass. Pinned to the exact decideWakeCreate string. Fidelity was co
 by line, all five consumer rewires verified, and the synthesis noted the shape answers the
 objection that killed the old fold-into-wake.ts proposal: the collaborators are now named fields
 instead of a closure's ambient scope.
+
+## Refactor 16 - The bridge handshake as a state machine, and the premise check that reshaped it
+
+The entry demanded its premise be verified before planning, and half of it failed: WakeCoordinator
+is a promise-waiter registry while the handshake is a challenge/response protocol with throttle
+windows, attempt caps and identity memory - a surface resemblance, so the mirroring-object
+direction died. The separability half held, PROVIDED the effects stay behind: sends, logs, the
+auth gate, establishRecord and evictSocket are the connection layer's.
+
+`handshakeGate.ts` owns the three maps and every decision: mint (dropping prior coordinates),
+pendingOf/consume split apart so the caller's auth gate runs between them and a spoofed answer
+cannot eat the entry the real session still needs, decideRepush returning a send decision whose
+commit() the caller invokes only after the socket send succeeded (a failed send charges no
+attempt), confirmed-lead bindings held OPAQUELY (the enforced authority residue test covers the
+new file for free), the static byte-identical push builder the MCP's confirm guard keys on, and
+the sweep - which now returns its drop count, since a no-op sweep would otherwise pass every test.
+
+Nine unit tests reach rules only a live socket harness could touch before: id reuse across
+re-pushes, failed-send-charges-nothing, each sibling's first shot escaping the team window that
+gates second attempts, the cap, sweep-never-lifts-an-active-window, and leadClaim precedence.
+Two comment repairs disclosed and audit-confirmed meaning-preserving: HEAD's resolveHandshake had
+a garbled duplicated sentence, and the confirmed-lead comment said "stores null" for what has
+always been the UNBOUND value.
+
+Audit (one fresh Luna, both lenses; synthesis re-verified all four disclosed deltas byte-level and
+ran the gates plus check-module-residue): verdict clean, zero mustFix. The sweep observable was
+its one worthwhile optional, taken.
