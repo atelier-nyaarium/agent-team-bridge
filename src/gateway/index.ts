@@ -8,7 +8,7 @@ import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
-import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
+import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 import { MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
@@ -343,8 +343,7 @@ export async function startGateway(): Promise<void> {
 	);
 	// End-of-life for a session's board entries. Done/cancelled trash either way; the disposition
 	// decides the rest, and every caller states it rather than inheriting one. Own catch: board
-	// trouble must never take down the persist tick (whose uncaught throw exits the gateway) or
-	// block a forget.
+	// trouble must never block a forget (the persist tick has its own containment).
 	const boardSessionEnded = (team: string, disposition: BoardDisposition): number => {
 		try {
 			const count = boardStore.sessionEnded(team, disposition);
@@ -381,45 +380,50 @@ export async function startGateway(): Promise<void> {
 	// counter lineage at all (see PlaneRegistry.persistedState): the regular 3s tick always writes
 	// false (assume dirty until a clean exit proves otherwise); only the synchronous SIGTERM/SIGINT
 	// handler passes true, as its last action before the process exits.
-	const persistDelivery = (cleanShutdown: boolean) => {
-		jobsDurable.save(store.snapshot());
-		mailboxDurable.save(mailboxStore.snapshot());
-		// sweep() deletes TTL-expired records outright - a genuine, hash-affecting change to
-		// presence.snapshot()'s row set (unlike touchLive's lastSeen-only refresh, ambient and
-		// excluded from the identity hash). Announce it like any other mutation rather than leaving
-		// it to the 60s tripwire - but only on the rare tick that actually removed something: a
-		// snapshot()+stableHash recompute runs unconditionally the moment markDirty is called (the
-		// registry only gates the COUNTER BUMP behind the hash compare, not the compute that
-		// produces it), so calling this every 3 seconds regardless of sweep's own result would cost a
-		// full presence rebuild forever for a cutoff (SESSION_RESUME_TTL_MS, 30 days) that removes
-		// something roughly once per record per month.
-		const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
-		if (sweptTeams.length > 0) {
-			presence.markDirty();
-			// A swept session is one nobody decided about, so its work returns to the backlog rather
-			// than being cancelled on its behalf.
-			for (const team of sweptTeams) boardSessionEnded(team, "release");
-		}
-		try {
-			boardStore.sweepTrash();
-		} catch (err) {
-			console.error("[task-board] trash sweep failed:", err);
-		}
-		// Actively removes TTL-expired op records rather than leaving them as dead weight only
-		// masked at read time - see durableOpStore.ts's own sweep() doc for why this matters (every
-		// OTHER conversation's persist() call re-serializes the whole store, so idle dead weight
-		// inflates everyone else's write cost too).
-		durableOpStore.sweep();
-		capabilityStore.sweep();
-		// The blob plane's only reclaim path. Nothing reference-counts a blob, so without this the
-		// store only grows: every ref snapshot, every superseded designer card, every transfer that
-		// died mid-flight stays forever. It shares DATA_DIR with the federation identity, so an
-		// unbounded store is not merely untidy, it eventually stops the gateway persisting its keys.
-		const freed = blobStore.sweep({ maxBytes: MAX_BLOB_STORE_BYTES });
-		if (freed > 0) console.error(`[blobs] swept ${freed} bytes`);
-		sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown));
-		fed()?.replayPersist();
-	};
+	const runPersistSteps = createPersistRunner();
+	// Every save and sweep the tick runs rides this table, so a step is contained by construction
+	// rather than by its call site remembering a try: one failure costs that step alone.
+	const persistDelivery = (cleanShutdown: boolean) =>
+		runPersistSteps([
+			{ name: "pending-jobs", run: () => jobsDurable.save(store.snapshot()) },
+			{ name: "mailboxes", run: () => mailboxDurable.save(mailboxStore.snapshot()) },
+			{
+				name: "session-sweep",
+				// sweep() deletes TTL-expired records outright - a genuine, hash-affecting change to
+				// presence.snapshot()'s row set (unlike touchLive's lastSeen-only refresh, ambient and
+				// excluded from the identity hash). Announce it like any other mutation rather than
+				// leaving it to the 60s tripwire - but only on the rare tick that actually removed
+				// something: a snapshot()+stableHash recompute runs unconditionally the moment markDirty
+				// is called, so announcing every 3 seconds would cost a full presence rebuild forever
+				// for a cutoff that removes something roughly once per record per month.
+				run: () => {
+					const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
+					if (sweptTeams.length === 0) return;
+					presence.markDirty();
+					// A swept session is one nobody decided about, so its work returns to the backlog
+					// rather than being cancelled on its behalf.
+					for (const team of sweptTeams) boardSessionEnded(team, "release");
+				},
+			},
+			{ name: "board-trash-sweep", run: () => boardStore.sweepTrash() },
+			// Actively removes TTL-expired op records rather than leaving them as dead weight only
+			// masked at read time - see durableOpStore.ts's own sweep() doc (every OTHER conversation's
+			// persist() re-serializes the whole store, so idle dead weight inflates everyone's writes).
+			{ name: "op-idempotency-sweep", run: () => durableOpStore.sweep() },
+			{ name: "console-capabilities-sweep", run: () => capabilityStore.sweep() },
+			{
+				name: "blob-sweep",
+				// The blob plane's only reclaim path. Nothing reference-counts a blob, so without this
+				// the store only grows, and it shares DATA_DIR with the federation identity: an
+				// unbounded store eventually stops the gateway persisting its keys.
+				run: () => {
+					const freed = blobStore.sweep({ maxBytes: MAX_BLOB_STORE_BYTES });
+					if (freed > 0) console.error(`[blobs] swept ${freed} bytes`);
+				},
+			},
+			{ name: "session-resume", run: () => sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown)) },
+			{ name: "replay-guard", run: () => fed()?.replayPersist() },
+		]);
 	const persistTimer = setInterval(() => persistDelivery(false), 3_000);
 	persistTimer.unref?.();
 	// Registering a signal listener REPLACES the runtime's default terminate, so this has to exit

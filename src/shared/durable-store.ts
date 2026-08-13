@@ -151,3 +151,41 @@ export function restoreDurable(name: string, restore: () => void): void {
 		console.error(`[durability] ${name} restore failed, starting fresh:`, err);
 	}
 }
+
+/** One contained step of a persist pass: a save, a sweep, or the snapshot build feeding one. */
+export interface PersistStep {
+	name: string;
+	run: () => void;
+}
+
+/**
+ * The write-direction sibling of `restoreDurable`: run every step, each contained to itself, so one
+ * failing save or sweep costs that step alone. A failure reports once per distinct error per step,
+ * cleared on that step's next success (DurableStore.save's own throttle).
+ */
+export function createPersistRunner(): (steps: ReadonlyArray<PersistStep>) => void {
+	const lastErrors = new Map<string, string>();
+	return (steps) => {
+		for (const step of steps) {
+			try {
+				step.run();
+				lastErrors.delete(step.name);
+			} catch (err) {
+				// The coercion and the log are contained too: a thrown value with a poisoned toString
+				// must not escape the runner it was caught by.
+				let msg: string;
+				try {
+					msg = err instanceof Error ? err.message : String(err);
+				} catch {
+					msg = "unstringifiable error";
+				}
+				if (lastErrors.get(step.name) === msg) continue;
+				lastErrors.set(step.name, msg);
+				try {
+					// A real Error keeps its stack; anything else logs as the already-safe string.
+					console.error(`[persist] ${step.name} failed:`, err instanceof Error ? err : msg);
+				} catch {}
+			}
+		}
+	};
+}

@@ -224,3 +224,20 @@ applied. One behavior finding OVERRULED deliberately:
   exists to kill, and the transition is now all-or-nothing by construction. The suggested hoist of
   the replay pieces to boot scope was rejected because it introduces the opposite divergence:
   pure-standalone gateways would persist a replay-guard file they never use.
+
+## Refactor 2 - Guard the delivery loop's saves and sweeps
+
+Operation set (one commit):
+
+- add `createPersistRunner` + `PersistStep` to `src/shared/durable-store.ts`, the write-direction
+  sibling of `restoreDurable`: per-step containment, one report per distinct error per step,
+  cleared on that step's next success (DurableStore.save's own throttle, generalized)
+- replace `persistDelivery`'s statement sequence in `src/gateway/index.ts` with a named step table
+  run through it, folding in the two hand-written catches (board trash sweep; the tick half of
+  boardSessionEnded's)
+- extend `src/__tests__/durable-containment.test.ts` with the runner's behavior suite
+
+Reassessment note: DurableStore.save already swallowed write failures, so the live crash surface
+was the snapshot builders (evaluated before save's try) and the five sweeps. The bug class killed:
+a step added to the tick is contained by construction instead of by its call site remembering a
+try. Same class as the restore boundaries, now closed in both directions in one module.

@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DurableStore, DurableStoreInstalledError, openDurable, restoreDurable } from "../shared/durable-store.js";
+import {
+	createPersistRunner,
+	DurableStore,
+	DurableStoreInstalledError,
+	openDurable,
+	restoreDurable,
+} from "../shared/durable-store.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -76,6 +82,100 @@ describe("restoreDurable", () => {
 		// The real hazard is not the throw, it is the restore AFTER it never running: the persist
 		// tick writes every store back unconditionally, so a skipped restore overwrites a good file.
 		expect(sessions.get("host.abc")).toBe("restored");
+	});
+});
+
+describe("createPersistRunner", () => {
+	it("runs every step in order even when one throws", () => {
+		const runPersistSteps = createPersistRunner();
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		const ran: string[] = [];
+
+		runPersistSteps([
+			{ name: "first", run: () => ran.push("first") },
+			{
+				name: "failing",
+				run: () => {
+					throw new Error("disk full");
+				},
+			},
+			{ name: "last", run: () => ran.push("last") },
+		]);
+
+		// The real hazard is the steps AFTER the throw never running: a failed jobs save must not
+		// cost the session-resume save behind it.
+		expect(ran).toEqual(["first", "last"]);
+		errors.mockRestore();
+	});
+
+	it("reports a repeating failure once, and again only when the error changes or recurs after a success", () => {
+		const runPersistSteps = createPersistRunner();
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		let failWith: string | null = "disk full";
+		const steps = [
+			{
+				name: "flaky",
+				run: () => {
+					if (failWith) throw new Error(failWith);
+				},
+			},
+		];
+
+		runPersistSteps(steps);
+		runPersistSteps(steps);
+		expect(errors).toHaveBeenCalledTimes(1);
+
+		failWith = "read-only filesystem";
+		runPersistSteps(steps);
+		expect(errors).toHaveBeenCalledTimes(2);
+
+		failWith = null;
+		runPersistSteps(steps);
+		failWith = "read-only filesystem";
+		runPersistSteps(steps);
+		expect(errors).toHaveBeenCalledTimes(3);
+		errors.mockRestore();
+	});
+
+	it("contains a thrown value whose own stringification throws", () => {
+		const runPersistSteps = createPersistRunner();
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		const ran: string[] = [];
+
+		runPersistSteps([
+			{
+				name: "poisoned",
+				run: () => {
+					throw {
+						toString() {
+							throw new Error("poisoned");
+						},
+					};
+				},
+			},
+			{ name: "after", run: () => ran.push("after") },
+		]);
+
+		expect(ran).toEqual(["after"]);
+		errors.mockRestore();
+	});
+
+	it("throttles per step, so one step's noise cannot silence another's first failure", () => {
+		const runPersistSteps = createPersistRunner();
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const boom = (name: string) => ({
+			name,
+			run: () => {
+				throw new Error("disk full");
+			},
+		});
+		runPersistSteps([boom("jobs")]);
+		runPersistSteps([boom("jobs"), boom("mailboxes")]);
+
+		expect(errors).toHaveBeenCalledTimes(2);
+		expect(String(errors.mock.calls[1]?.[0])).toContain("mailboxes");
+		errors.mockRestore();
 	});
 });
 
