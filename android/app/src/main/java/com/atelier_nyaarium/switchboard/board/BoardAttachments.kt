@@ -48,7 +48,7 @@ fun BoardAttachments(
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) onPick(uris)
 	}
-	val revision by repo.board.revision
+	val revision by repo.boardOps.boardRevision
 
 	Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
 		if (attachments.isNotEmpty()) {

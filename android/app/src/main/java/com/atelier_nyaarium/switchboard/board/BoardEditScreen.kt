@@ -58,8 +58,8 @@ fun BoardEditScreen(
 	entryId: String,
 	onClose: () -> Unit,
 ) {
-	val revision by repo.board.revision
-	val entry = remember(revision, entryId) { repo.board.mergedEntries(gatewayId).firstOrNull { it.id == entryId } }
+	val revision by repo.boardOps.boardRevision
+	val entry = remember(revision, entryId) { repo.boardOps.boardEntriesOn(gatewayId).firstOrNull { it.id == entryId } }
 	if (entry == null) {
 		onClose()
 		return
@@ -73,7 +73,7 @@ fun BoardEditScreen(
 	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
 	val changedElsewhere = entry.title != baseline.first || entry.body.orEmpty() != baseline.second
 	val children = remember(revision, entryId) {
-		repo.board.mergedEntries(gatewayId).filter { it.parent == entryId && it.trashedAt == null }.sortedBy { it.rank }
+		repo.boardOps.boardEntriesOn(gatewayId).filter { it.parent == entryId && it.trashedAt == null }.sortedBy { it.rank }
 	}
 
 	Scaffold(

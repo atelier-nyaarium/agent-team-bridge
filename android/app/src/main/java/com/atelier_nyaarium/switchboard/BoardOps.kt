@@ -1,9 +1,14 @@
 package com.atelier_nyaarium.switchboard
 
 import android.net.Uri
+import com.atelier_nyaarium.switchboard.board.BoardLiveLine
+import com.atelier_nyaarium.switchboard.board.BoardRefusal
+import com.atelier_nyaarium.switchboard.board.CardBranch
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
+import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.Protocol
+import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.update
@@ -74,6 +79,53 @@ internal class BoardOps(private val repo: ChatRepository) {
 		val gw = repo._state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
 		return gw?.ifEmpty { repo.localGatewayId }
 	}
+
+	////////////////////////////////
+	//  BoardManager pass-throughs
+	//
+	//  The only door to BoardManager: a resolver answer, the query it feeds and the revision Compose
+	//  invalidates on all come from one object.
+
+	fun boardEntriesFor(team: String?): List<BoardEntry> = repo.board.mergedEntries(boardGatewayOf(team))
+
+	fun boardLiveLineFor(team: String): BoardLiveLine? = repo.board.liveLine(boardGatewayOf(team), team)
+
+	fun boardUndoneCountFor(team: String): Int = repo.board.undoneCount(boardGatewayOf(team), team)
+
+	fun boardCardBranchFor(team: String, currentId: String?): CardBranch =
+		repo.board.cardBranch(boardGatewayOf(team), team, currentId)
+
+	fun boardSessionKeyOf(team: String): String = repo.board.sessionKeyOf(team)
+
+	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = repo.board.mergedEntries(gatewayId)
+
+	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds()
+
+	fun boardLastSyncedAt(gatewayId: String): Long = repo.board.lastSyncedAt(gatewayId)
+
+	fun boardTruncatedGateways(): List<String> = repo.board.truncatedGateways()
+
+	fun boardStrugglingEntries(): Set<String> = repo.board.strugglingEntries()
+
+	fun boardDismissRefusal(refusal: BoardRefusal) = repo.board.dismissRefusal(refusal)
+
+	val boardRefusals get() = repo.board.refusals
+
+	val boardRevision get() = repo.board.revision
+
+	val knownBoardVersion get() = repo.board.knownVersion
+
+	fun applyBoardSnapshot(
+		gatewayId: String,
+		entries: List<BoardEntry>,
+		version: TaskBoardVersion?,
+		truncated: Boolean,
+	) = repo.board.applySnapshot(gatewayId, entries, version, truncated)
+
+	suspend fun drainBoard() = repo.board.drain(repo.client())
+
+	////////////////////////////////
+	//  Ops
 
 	/** Capture a thought onto the route Gateway's backlog: root level, after the last root. */
 	fun boardCapture(title: String, body: String?) {

@@ -332,19 +332,19 @@ fun App(
 			LaunchedEffect(openTeam, boardOn, boardGateway) {
 				if (boardOn && repo.boardOps.isNonRouteSession(openTeam!!)) repo.boardOps.refreshBoard()
 			}
-			val boardRevision by repo.board.revision
+			val boardRevision by repo.boardOps.boardRevision
 			// boardGateway is a key here for the same reason the effect above takes it: it answers the
 			// route Gateway until the roster lands, and a failed read never bumps the revision.
 			val boardStripFor = remember(openTeam, boardRevision, boardOn, boardGateway) {
 				if (!boardOn) null
 				else {
-					val key = GroupKey(boardGateway, repo.board.sessionKeyOf(openTeam!!))
-					flattenBoard(listOf(BoardSource(boardGateway, repo.board.mergedEntries(boardGateway))))
+					val key = GroupKey(boardGateway, repo.boardOps.boardSessionKeyOf(openTeam!!))
+					flattenBoard(listOf(BoardSource(boardGateway, repo.boardOps.boardEntriesFor(openTeam))))
 						.sessions.firstOrNull { it.key == key }
 				}
 			}
 			val boardLiveLineFor = remember(openTeam, boardRevision, boardOn, boardGateway) {
-				if (boardOn) repo.board.liveLine(boardGateway, openTeam!!) else null
+				if (boardOn) repo.boardOps.boardLiveLineFor(openTeam!!) else null
 			}
 			ThreadScreen(
 				team = openTeam!!,
@@ -423,7 +423,7 @@ fun App(
 				},
 				// The board gate: the same decision the sessions list asks for, so the two surfaces
 				// cannot disagree about when a forget is safe.
-				undoneTasks = if (boardOn) repo.board.undoneCount(boardGateway, openTeam!!) else 0,
+				undoneTasks = if (boardOn) repo.boardOps.boardUndoneCountFor(openTeam!!) else 0,
 				onForgetWithTasks = { cancelThem ->
 					val forgotten = openTeam!!
 					repo.boardOps.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
@@ -467,10 +467,10 @@ fun App(
 			// whole pending queue over the whole snapshot, and the session list recomposes on every
 			// poll (unread, snippet, presence).
 			val boardOnHere = pluginManager.isActive("taskboard")
-			val boardRevisionForCards by repo.board.revision
+			val boardRevisionForCards by repo.boardOps.boardRevision
 			val boardLines = remember(boardRevisionForCards, state.teams, boardOnHere) {
 				if (!boardOnHere) emptyMap()
-				else state.teams.associate { it.name to repo.board.liveLine(repo.boardOps.boardGatewayOf(it.name), it.name) }
+				else state.teams.associate { it.name to repo.boardOps.boardLiveLineFor(it.name) }
 			}
 			// Alongside the lines rather than inside the card, on the same revision key: the list
 			// recomposes on every poll and a per-card flatten would rebuild every session's tree each time.
@@ -478,7 +478,7 @@ fun App(
 				if (!boardOnHere) emptyMap()
 				else state.teams.mapNotNull { team ->
 					val line = boardLines[team.name] ?: return@mapNotNull null
-					team.name to repo.board.cardBranch(repo.boardOps.boardGatewayOf(team.name), team.name, line.currentId)
+					team.name to repo.boardOps.boardCardBranchFor(team.name, line.currentId)
 				}.toMap()
 			}
 			MainTabsScreen(
@@ -541,7 +541,7 @@ fun App(
 						boardBranch = { team -> boardBranches[team.name] },
 						undoneFor = { team ->
 							if (pluginManager.isActive("taskboard")) {
-								repo.board.undoneCount(repo.boardOps.boardGatewayOf(team.name), team.name)
+								repo.boardOps.boardUndoneCountFor(team.name)
 							} else 0
 						},
 						onForgetWithTasks = { team, cancelThem ->

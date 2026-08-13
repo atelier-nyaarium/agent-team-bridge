@@ -222,7 +222,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					val presentedLinkedPeers = knownLinkedPeersVersion
 					val presentedReadAnchors = knownReadAnchorsVersion
 					val presentedCrossDomainPresence = knownCrossDomainPresenceVersions
-					val presentedTaskBoard = repo.board.knownVersion
+					val presentedTaskBoard = repo.boardOps.knownBoardVersion
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
 					val mb = if (hold > 0) {
 						pollRacingFocusChange {
@@ -292,13 +292,15 @@ internal class PollDrain(private val repo: ChatRepository) {
 					if (mb.taskBoard != null || mb.taskBoardVersion != null) {
 						mb.taskBoard?.let { entries ->
 							DebugLog.log("Plane", "taskBoard settled=${mb.settled} rows=${entries.size}")
-							repo.board.applySnapshot(repo.localGatewayId, entries, mb.taskBoardVersion, mb.taskBoardTruncated == true)
+							repo.boardOps.applyBoardSnapshot(
+								repo.localGatewayId, entries, mb.taskBoardVersion, mb.taskBoardTruncated == true,
+							)
 						}
 					}
 					// Drain the board's pending actions on the poll cadence - the loop already runs at
 					// the right rate foreground and follows the pushback ladder backgrounded, and each
 					// action is its own relay carrying its own targetGateway.
-					launch { runCatching { repo.board.drain(repo.client()) } }
+					launch { runCatching { repo.boardOps.drainBoard() } }
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()

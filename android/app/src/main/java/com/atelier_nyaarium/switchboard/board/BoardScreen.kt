@@ -73,10 +73,10 @@ fun BoardScreen(
 	LaunchedEffect(Unit) { repo.boardOps.refreshBoard() }
 
 	// The revision read is what re-derives rows when the cache, queue or a plane snapshot moves.
-	val revision by repo.board.revision
+	val revision by repo.boardOps.boardRevision
 	val rows = remember(revision, state.teams) {
 		val sessionGateway = { sessionKey: String -> repo.boardOps.boardGatewayOfKey(sessionKey) }
-		val sources = repo.board.sourceGatewayIds().map { gw -> BoardSource(gw, repo.board.mergedEntries(gw)) }
+		val sources = repo.boardOps.boardSourceGatewayIds().map { gw -> BoardSource(gw, repo.boardOps.boardEntriesOn(gw)) }
 		flattenBoard(sources, sessionGateway)
 	}
 
@@ -84,16 +84,16 @@ fun BoardScreen(
 	// otherwise indistinguishable from a current one.
 	val staleColumns = remember(revision) {
 		val route = repo.boardOps.boardGatewayOf(null)
-		repo.board.sourceGatewayIds()
+		repo.boardOps.boardSourceGatewayIds()
 			.filter { it != route }
-			.mapNotNull { gw -> repo.board.lastSyncedAt(gw).takeIf { it > 0 }?.let { gw to it } }
+			.mapNotNull { gw -> repo.boardOps.boardLastSyncedAt(gw).takeIf { it > 0 }?.let { gw to it } }
 			.filter { System.currentTimeMillis() - it.second > STALE_AFTER_MS }
 	}
 
-	val truncatedColumns = remember(revision) { repo.board.truncatedGateways() }
+	val truncatedColumns = remember(revision) { repo.boardOps.boardTruncatedGateways() }
 	// Entries whose queued write keeps failing. A row that looks applied but has not reached the
 	// Gateway in many attempts is worth saying out loud, even though it is still retrying.
-	val struggling = remember(revision) { repo.board.strugglingEntries() }
+	val struggling = remember(revision) { repo.boardOps.boardStrugglingEntries() }
 
 	var sheet by remember { mutableStateOf<BoardSheet?>(null) }
 	var trashOpen by rememberSaveable { mutableStateOf(false) }
@@ -128,17 +128,20 @@ fun BoardScreen(
 		// Silence here reads as success, so each gets its own dismissable line. The two kinds are
 		// OPPOSITE outcomes and must not share wording: a refusal never landed and can simply be redone,
 		// while a drop landed and took the pictures with it for good.
-		for ((index, refusal) in repo.board.refusals.withIndex()) {
+		for ((index, refusal) in repo.boardOps.boardRefusals.withIndex()) {
 			item(key = "refused:$index:${refusal.entryId ?: "none"}") {
 				// Named rather than left as a floating banner: without the task, the owner has no way to
 				// tell which entry lost a picture.
 				val named = refusal.entryId?.let { id ->
-					repo.board.sourceGatewayIds().firstNotNullOfOrNull { gw ->
-						repo.board.mergedEntries(gw).firstOrNull { it.id == id }?.title
+					repo.boardOps.boardSourceGatewayIds().firstNotNullOfOrNull { gw ->
+						repo.boardOps.boardEntriesOn(gw).firstOrNull { it.id == id }?.title
 					}
 				}
 				Row(
-					Modifier.fillMaxWidth().combinedClickable(onClick = { repo.board.dismissRefusal(refusal) }).padding(vertical = 6.dp),
+					Modifier
+						.fillMaxWidth()
+						.combinedClickable(onClick = { repo.boardOps.boardDismissRefusal(refusal) })
+						.padding(vertical = 6.dp),
 					horizontalArrangement = Arrangement.spacedBy(8.dp),
 					verticalAlignment = Alignment.CenterVertically,
 				) {
