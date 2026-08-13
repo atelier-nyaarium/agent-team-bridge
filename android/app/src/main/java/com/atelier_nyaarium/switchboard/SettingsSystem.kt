@@ -118,8 +118,7 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 					enabled = !deleting,
 					onClick = hapticClick {
 						scope.launch {
-							// Biometric-gate this destructive owner-key action, mirroring revoke/admit.
-							if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+							if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 							deleting = true
 							deleteError = null
 							when (val outcome = repo.domainAdmin.deleteDomain()) {

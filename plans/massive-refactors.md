@@ -364,3 +364,27 @@ two wake booleans provably did not cross. The synthesis caught two stale comment
 missed, on top of the one they found; all three fixed. Lesson kept for future prompts: comments
 naming deleted parameters are a class the fidelity thread should grep for mechanically
 (old-name-in-comment survives every compile gate).
+
+## Refactor 8 - One owner-present gate, compiler-enforced
+
+The entry's thesis proved itself before the lap started: the gate line had SIX verbatim copies at
+reassessment, up from the five counted at scoping (SettingsSystem's delete-domain copied it in the
+meantime), which is exactly the added-later-means-copied class the entry predicted.
+
+Operation set (two concerns, one commit each was not needed; gate + extraction commit together
+was avoided by keeping the extraction a pure move in its own file):
+
+- gate (behavior-preserving unification): `requireOwnerPresent(lockOn, activity)` in Biometric.kt;
+  `promptBiometric` file-PRIVATE, so the compiler forbids a seventh direct prompt site; six call
+  sites rewritten; the null-activity posture (DENY) is stated once as the guard's invariant. The
+  audit proved truth-table identity at all six sites including prompt side-effect counts.
+- residue: biometric-gate-residue.test.ts (TS suite on purpose, pre-merge) bans promptBiometric
+  and BiometricPrompt tokens outside Biometric.kt, vacuity-guarded.
+- extraction (Opus, pure move): SttsVoiceSection's six playback-preference blocks into a private
+  PlaybackPreferences(repo) in the same file, 436 -> 255 lines, byte-identity proven by sorted
+  diff; the provider dialog stayed put because it reads four top-half locals.
+
+Audit verdict fix-then-ship with one blocker that was MINE, not the Kotlin's: the new residue test
+itself failed biome's width gate, which the whole pipeline missed until the synthesis ran
+`bun run lint` independently. Pipeline lesson recorded: every stage that adds a TS file must run
+the TS gates, not just the Kotlin ones beside it.

@@ -36,10 +36,15 @@ fun promptUnlock(activity: FragmentActivity, onResult: (Boolean) -> Unit): Biome
 	return prompt
 }
 
-/** Suspends until the user passes the biometric / device-credential prompt; returns false on cancel or
- * error. Gates owner-key actions (admit, revoke, delete) when the app lock is on. */
-suspend fun promptBiometric(activity: FragmentActivity): Boolean =
+/** Suspends until the user passes the biometric / device-credential prompt; returns false on cancel
+ * or error. File-private: every gated action goes through requireOwnerPresent below. */
+private suspend fun promptBiometric(activity: FragmentActivity): Boolean =
 	suspendCancellableCoroutine { cont ->
 		val prompt = promptUnlock(activity) { ok -> if (cont.isActive) cont.resume(ok) }
 		cont.invokeOnCancellation { prompt?.cancelAuthentication() }
 	}
+
+/** The one gate for owner-present actions (admit, revoke, approve, delete, dropping the lock).
+ * Off-lock passes; on-lock requires the prompt, and no activity to prompt on is DENIED. */
+suspend fun requireOwnerPresent(lockOn: Boolean, activity: FragmentActivity?): Boolean =
+	!lockOn || (activity != null && promptBiometric(activity))

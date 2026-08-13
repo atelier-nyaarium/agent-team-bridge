@@ -165,14 +165,13 @@ internal fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> 
 	val activity = LocalContext.current as? FragmentActivity
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 		Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-		// Enabling the lock is direct; DISABLING it requires a scan, so a grabbed unlocked phone can't
-		// drop the lock (then act against the owner key) without the owner present. With nothing enrolled
-		// promptBiometric returns true, matching the "falls back to unlocked" posture.
+		// Enabling the lock is direct; DISABLING it is itself an owner-present action, so a grabbed
+		// unlocked phone can't drop the lock (then act against the owner key) without the owner.
 		Switch(
 			checked = state.biometricLock,
 			onCheckedChange = { wantOn ->
 				if (wantOn) onToggleBiometric(true)
-				else scope.launch { if (activity != null && promptBiometric(activity)) onToggleBiometric(false) }
+				else scope.launch { if (requireOwnerPresent(state.biometricLock, activity)) onToggleBiometric(false) }
 			},
 		)
 	}

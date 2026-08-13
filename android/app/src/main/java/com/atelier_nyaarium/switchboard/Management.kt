@@ -240,7 +240,7 @@ fun GatewaysScreen(
 									onClick = hapticClick {
 										menuOpen = false
 										scope.launch {
-											if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+											if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 											repo.enroll.revokeMember(g.signPub)
 											refresh++
 										}
@@ -341,7 +341,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
-									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) {
+									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) {
 										busy = false
 										status = ""
 										return@launch
@@ -391,7 +391,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 						if (!d.isSelf) {
 							TextButton(onClick = hapticClick {
 								scope.launch {
-									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 									repo.enroll.revokeMember(d.signPub)
 									refresh++
 								}
@@ -483,7 +483,7 @@ fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
 							enabled = !busy,
 							onClick = hapticClick {
 								scope.launch {
-									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 									busy = true
 									status = "Approving..."
 									repo.devices.approveDevice(a!!.approvalId, j)
