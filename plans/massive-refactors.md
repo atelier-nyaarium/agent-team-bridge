@@ -630,3 +630,37 @@ list byte-identical, every wrapper with a call site - and turned its mustFix on 
 raw text, so a comment or log string in BoardOps could satisfy the very case written to catch a
 vacuous pass. Fixed by borrowing the house `code()` stripper the two sibling residue tests already
 use. A guard that can be satisfied by prose is not a guard.
+
+## Refactor 19 - EnrollOps had no subject, so it became three that do
+
+The entry offered a two-move version (split the gateway delivery, rename the rest). Re-reading the
+file said three: what remained after the ceremony engine left was owner facts, the FLOW-1 legs, and
+gateway-bundle delivery, and each had its OWN consumer set, which is what made the third cut honest
+rather than tidy.
+
+`GatewayEnrollment.kt` (repo.gatewayEnroll) is the sharpest one: a self-contained subject with its
+own transport AND its own security surface - TLS pinned to the scanned QR's leaf fingerprint, and
+the private-address-literal check that stops a tampered QR redirecting a sealed bundle to a public
+host. That reasoning was spread through a grab bag; it now has a file to live in.
+`EnrollCeremonyOps.kt` (repo.ceremony) holds the FLOW-1 legs, with the pure engine still in
+SasExchange.kt / EnrollCeremony.kt beneath it. What is left is `OwnerFacts.kt` (repo.ownerFacts):
+firstRootIfPending, the owner key and backup surface, submitOwnerFact and its five submitters,
+admittedMembers. submitOwnerFact finally names the file it always was the cohesion of.
+
+Two call sites re-qualified because their callee stayed an owner fact (enrollGateway's admitGateway,
+enrollConfirm's submitXdomainLink); everything else moved byte-verbatim. The federation residue
+fence grew 5 to 7 files, which is the honest cost of the split and is asserted in both directions.
+Swept while here: the "Split out of ChatRepository" sentence came off all four sibling delegates. It
+narrated a migration, which is exactly what a timeless comment is not.
+
+Audit verdict clean, zero mustFix - the synthesis byte-diffed all three destination ranges against
+HEAD itself and re-derived the fence list with its own grep over 155 files rather than trusting the
+test.
+
+# Closing note
+
+Every entry on the Massive Refactors board is done. The through-line across all nineteen: the bug
+class was almost never a missing check, it was a rule that each call site had to remember - a
+persist step, a target resolution, a fence algebra, a plane's convention, a board resolver. The fix
+that stuck was always the same shape, making the wrong version unspellable rather than detectable,
+and the residue tests are what keep it that way after the lap ends.
