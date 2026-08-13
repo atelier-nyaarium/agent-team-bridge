@@ -27,6 +27,19 @@ internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 }
 
 /**
+ * In-memory state belonging to the CURRENT provisioning.
+ *
+ * A holder states its own wipe beside the fields it clears, rather than exposing them for
+ * [clearAll] to reach one at a time. The SET of holders is [ChatRepository.clearedOnReprovision].
+ */
+internal interface ClearsOnReprovision {
+	/** Drop what the previous provisioning left in memory. Runs AFTER the durable wipe
+	 * (store.clearProvisioning), so nothing here persists anything. Suspending because a holder may
+	 * guard its state with a mutex, and a wipe that skipped the lock would race the poll loop. */
+	suspend fun clearInMemory()
+}
+
+/**
  * Chat state over a ConsoleClient. Holds per-team threads, an unread tally and the open tab set,
  * and routes each drained reply to its team (parsed from the
  * `conv.<id>.<domain>.<gateway>.<spawn>.<session>` session id or the entry's `from`). The poll loop
@@ -43,7 +56,7 @@ class ChatRepository(
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
 	// internal (not private): the voice settings surface (ChatRepositoryStts.kt) reads it.
 	internal val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
-) {
+) : ClearsOnReprovision {
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. Declared before the migration
 	 * init block so the one-shot wipe can purge its cache root. */
 	val stts = SttsPlayer(filesDir)
@@ -221,6 +234,28 @@ class ChatRepository(
 	// (adminEnrollContext) and DomainAdminOps (regenerateInvite, buildInviteBlob).
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	@Volatile internal var sttsClient: SttsClient? = null
+
+	////////////////////////////////
+	//  Re-provision wipe
+
+	/** Every holder of state belonging to the current provisioning; [clearAll] wipes exactly this set.
+	 * A delegate that gains a cache is named here and states its own wipe, rather than leaving clearAll
+	 * a hand-written call per field - a field nobody remembered to reach is how the board went on
+	 * serving the previous owner's entries to the next one. */
+	internal val clearedOnReprovision: List<ClearsOnReprovision>
+		get() = listOf(this, board, presence, trust, drain)
+
+	/** This class's own share: the connection built from the blob, the ids and cursor learned from it,
+	 * the two team-keyed sets, and the invite secrets staged against the outgoing Domain. */
+	override suspend fun clearInMemory() {
+		client = null
+		sttsClient = null
+		localGatewayId = ""
+		mailboxSync.clearInMemory()
+		forgottenUntil.clear()
+		reconciled.clear()
+		enrollInvites.clear()
+	}
 
 	/** True while the Activity is started; drives the poll cadence - chained long-polls while
 	 * visible, a tiered silence ladder otherwise (see [IdlePushbackManager]). The mailbox

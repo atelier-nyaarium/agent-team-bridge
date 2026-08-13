@@ -6,11 +6,16 @@ import kotlinx.coroutines.withContext
 
 /** The cross-Domain trust surface: the roster, the link/share/unlink wizard's REQUESTER and
  * RECEIVER legs, the owner-keyed friend graph, and the FLOW-2 roster-initiated trust rendezvous. */
-internal class TrustOps(private val repo: ChatRepository) {
+internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision {
 	// RECEIVER link state: the requester-minted pin learned from a listen-state poll, keyed by the
 	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
 	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
 	private val receiverPin = mutableMapOf<String, String>()
+
+	/** The pins belong to the outgoing owner's link windows, which the next owner cannot confirm. */
+	override suspend fun clearInMemory() {
+		receiverPin.clear()
+	}
 
 	/** Fetch the cross-tenant roster (the Users surface): every member on this evie, by name +
 	 * presence. evie-direct + signed-proof scoped; a non-member or auth failure surfaces as a

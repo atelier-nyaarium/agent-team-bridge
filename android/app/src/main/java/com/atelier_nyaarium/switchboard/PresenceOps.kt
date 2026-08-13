@@ -12,7 +12,7 @@ import kotlinx.coroutines.withContext
  * presence, and the cross-device read anchors reported back. Owns the raw-snapshot cache, the
  * last-reported anchors and the rebuild mutex, which is why it is a held delegate rather than
  * extensions the way the voice settings and the drafts are. */
-internal class PresenceOps(private val repo: ChatRepository) {
+internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovision {
 	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw -
 	// never persisted (a fresh process starts with no cache and full-resyncs on its first poll).
 	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
@@ -27,6 +27,13 @@ internal class PresenceOps(private val repo: ChatRepository) {
 	// current anchor - a harmless no-op on the Gateway if nothing actually changed (monotonic merge).
 	// Not private: SessionOps.forget drops a forgotten team's entry.
 	@Volatile var lastReportedReadAnchors: Map<String, ReadAnchor> = emptyMap()
+
+	/** A poll re-derives both, but reapplyCachedTeams runs on every tick, so until one lands the
+	 * cached snapshot would merge the previous owner's roster back into state. */
+	override suspend fun clearInMemory() {
+		lastRawTeams = null
+		lastReportedReadAnchors = emptyMap()
+	}
 
 	/** Refresh the cached display name from discovery's LOCAL session (the gateway stamps each
 	 * session's displayName; the local Gateway's is this owner's own). A no-op when no local session
