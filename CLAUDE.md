@@ -429,10 +429,11 @@ The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by
   `board_set_session` alone.
 - **A board session is `(gatewayId, sessionId)`.** The stored `sessionId` is the bare local field,
   unique only within its Gateway, while a chat's `Team.name` is the qualified address. The conversion
-  is one-directional and has exactly one owner per side: `consoleHandler.localSessionKey` inbound
-  (which refuses a foreign Gateway rather than folding it onto a same-named local session) and
-  `BoardManager.sessionKeyOf` on the console. Both resolvers answer NULL for an unknown session; a
-  plausible wrong answer is what merged two machines' boards under one header.
+  is one-directional and has exactly one owner per side: `consoleTargets.boardSessionKey` inbound
+  (which refuses a foreign Gateway rather than folding it onto a same-named local session; a residue
+  test pins `parseTarget` to consoleTargets.ts within console/) and `BoardManager.sessionKeyOf` on
+  the console. Both resolvers answer NULL for an unknown session; a plausible wrong answer is what
+  merged two machines' boards under one header.
 - **A queued console edit retires on a gateway refusal and on nothing else.** No attempt ceiling
   discards it. A lane may step PAST an action that keeps failing, but never onto another write to the
   same entry, because these ops are absolute and reordering would apply the older value last.

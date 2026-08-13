@@ -18,25 +18,13 @@ import {
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
-	isReservedHostSession,
-	isShellSafeName,
-	isTmuxName,
 	isWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import type { PlaneVersion } from "../../shared/plane-registry.js";
 import { DomainStatusSchema } from "../../shared/schemas.js";
-import {
-	Address,
-	composeSessionName,
-	DEFAULT_SESSION,
-	LOCAL_DOMAIN_SENTINEL,
-	parseSessionName,
-	parseTarget,
-	SpawnPoint,
-	storeKey,
-} from "../../shared/session-id.js";
+import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { sanitizeLabel } from "../../shared/session-sanitize.js";
 import type { SessionRecord } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
@@ -54,6 +42,7 @@ import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.
 import { readAnchorsPlaneName } from "../readAnchors.js";
 import { RESERVED_TEAM_NAMES } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
+import { createConsoleTargets } from "./consoleTargets.js";
 import {
 	type ConsoleHandlerDeps,
 	CREATE_SESSION_BOUND_MS,
@@ -109,56 +98,8 @@ export function createConsoleDispatcher({
 	untrustOwner,
 	durableOpStore,
 }: ConsoleHandlerDeps) {
-	// The local Domain segment for every canonical address we mint here. Null (arming mode) maps to
-	// the sentinel, so a key still forms.
-	const localDomain = localDomainId || LOCAL_DOMAIN_SENTINEL;
-
-	/** The canonical Address of a LOCAL session by its team field - the form the share state and the
-	 * pending-job store key by (identical to routes' localAddress and the relay gate's, so a console
-	 * share key matches the gate byte-for-byte). */
-	function localAddress(name: string): Address {
-		const { project, session } = parseSessionName(name);
-		return Address.local(localDomain, localGatewayId, project, session);
-	}
-
-	/** The bare `spawn.session` key a board entry stores, from whatever the console named the session
-	 * as. The console holds the fully-qualified Address (a chat's Team.name), while the board's every
-	 * other reader - the MCP route, sessionEnded, the TTL sweep - keys by the local field, so an
-	 * un-normalized value is stored but never matched again. A session on another Gateway is refused
-	 * rather than folded onto a same-named local one: a cross-Gateway assign moves the entry first, so
-	 * by the time this runs the target is always local. */
-	function localSessionKey(named: string): string {
-		const t = parseTarget(named, localDomain, localGatewayId);
-		if (t.domain !== localDomain || t.gateway !== localGatewayId) throw refusalError("session_missing");
-		return t instanceof SpawnPoint
-			? composeSessionName(t.spawn, DEFAULT_SESSION)
-			: composeSessionName(t.spawn, t.session);
-	}
-
-	/** Resolve a console terminal target to the host tmux it maps to. The target is a local team
-	 * field (`spawn` -> default session, or `spawn.session`) or its fully-qualified Address;
-	 * `explicitSession` (create_session) overrides the derived session. A cross-Gateway target or an
-	 * unknown/loose name is rejected. The grammar is dotless, so a session segment is unambiguous -
-	 * no catalog dot-disambiguation. */
-	function resolveTmuxTarget(qualifiedTarget: string, explicitSession?: string): TmuxTarget {
-		const t = parseTarget(qualifiedTarget, localDomain, localGatewayId);
-		if (t.domain !== localDomain || t.gateway !== localGatewayId) {
-			throw new Error(`terminal view is not available for a session on another Gateway`);
-		}
-		const project = t.spawn;
-		const sessionName = explicitSession ?? (t instanceof SpawnPoint ? DEFAULT_SESSION : t.session);
-		let target: TmuxTarget;
-		if (project === "host") {
-			if (isReservedHostSession(sessionName)) throw new Error(`"${sessionName}" is a reserved host session`);
-			target = { kind: "host", name: "host", sessionName };
-		} else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
-		else throw new Error(`terminal view is not available for "${project}" (only the host and devcontainers)`);
-		// Both name and session reach the host's shell launch command; the grammar makes both strict
-		// dotless slugs, so assert it at the boundary regardless (defense in depth).
-		if (!isShellSafeName(target.name)) throw new Error(`invalid project name "${target.name}"`);
-		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
-		return target;
-	}
+	// The one owner of target resolution and the foreign-Gateway refusal (see consoleTargets.ts).
+	const targets = createConsoleTargets({ localDomainId, localGatewayId, isProjectName });
 
 	/** Reject a terminal-DRIVE op (peek/tmux_send/reload) against a record whose live incarnation is
 	 * an alias (a user-launched `claude --resume` under a different name): there is no daemon pane at
@@ -426,7 +367,7 @@ export function createConsoleDispatcher({
 				// path hands back the same id the in-time path would. The target resolves to its
 				// Address; keyed by ownerId, so every device of the owner shares the one thread. A
 				// spawn-point target has no session (routes rejects it), so it has no pre-computed id.
-				const targetAddr = parseTarget(op.to, localDomain, localGatewayId);
+				const targetAddr = targets.parse(op.to);
 				const expectedSession =
 					targetAddr instanceof SpawnPoint
 						? ""
@@ -879,7 +820,7 @@ export function createConsoleDispatcher({
 					requireBoard().upsert(
 						ownerId,
 						op.entries.map((e) =>
-							e.sessionId === undefined ? e : { ...e, sessionId: localSessionKey(e.sessionId) },
+							e.sessionId === undefined ? e : { ...e, sessionId: targets.boardSessionKey(e.sessionId) },
 						),
 						OWNER_ACTOR,
 					),
@@ -962,7 +903,7 @@ export function createConsoleDispatcher({
 				// The one existence check the store cannot make itself: an assign must name a session
 				// this Gateway knows (a cross-Gateway assign MOVES the entry first, so the target is
 				// always local). Unassign (absent sessionId) needs no such check.
-				const sessionId = op.sessionId === undefined ? undefined : localSessionKey(op.sessionId);
+				const sessionId = op.sessionId === undefined ? undefined : targets.boardSessionKey(op.sessionId);
 				if (sessionId !== undefined && sessionStore && !sessionStore.getByTeam(sessionId)) {
 					throw refusalError("session_missing");
 				}
@@ -980,7 +921,7 @@ export function createConsoleDispatcher({
 
 			case "peek": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const target = resolveTmuxTarget(op.target);
+				const target = targets.tmuxTarget(op.target);
 				assertDaemonDrivable(target);
 				const r = await relayToHost({ kind: "peek", target });
 				if (!r.ok) throw new Error(friendlyPeekError(r.error, r.errorKind));
@@ -1001,7 +942,7 @@ export function createConsoleDispatcher({
 				if ((op.text == null) === (op.key == null)) {
 					throw new Error("tmux_send requires exactly one of text or key");
 				}
-				const target = resolveTmuxTarget(op.target);
+				const target = targets.tmuxTarget(op.target);
 				assertDaemonDrivable(target);
 				// The host replays a completed send for this dedupKey instead of re-injecting, so a
 				// relay timeout or a gateway restart that drops the gateway-side opCache cannot
@@ -1059,13 +1000,9 @@ export function createConsoleDispatcher({
 				// sent (the sessionName-adopted path's sessionLabel legitimately defaults to the id itself,
 				// unrelated to sanitization).
 				const labelSanitized = op.displayLabel != null && sanitizeLabel(op.displayLabel) === null;
-				const createTarget = parseTarget(op.target, localDomain, localGatewayId);
-				// Refused BEFORE the mint below: resolveTmuxTarget rejects a foreign address too, but
-				// only after a local record has been minted under the foreign spawn name.
-				if (createTarget.domain !== localDomain || createTarget.gateway !== localGatewayId) {
-					throw new Error(`terminal view is not available for a session on another Gateway`);
-				}
-				const spawn = createTarget.spawn;
+				// Resolved BEFORE the mint below: tmuxTarget rejects a foreign address too, but only
+				// after a local record has been minted under the foreign spawn name.
+				const spawn = targets.localSpawn(op.target);
 				const dedupKey = `${conversationId}:${opId}`;
 				let sessionId: string;
 				let label: string;
@@ -1130,7 +1067,7 @@ export function createConsoleDispatcher({
 					return current === adopted.record && current.confirmedAt === undefined;
 				};
 				try {
-					const target = resolveTmuxTarget(op.target, sessionId);
+					const target = targets.tmuxTarget(op.target, sessionId);
 					// The host workdir hint (the daemon opens a host session there, ignoring it for a
 					// devcontainer). The store owns the workdirPath-over-workdirHint-over-sessionLabel
 					// precedence, so this matches the wake path: a display-label collision (label deduped
@@ -1249,7 +1186,7 @@ export function createConsoleDispatcher({
 
 			case "reload_plugins": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const target = resolveTmuxTarget(op.target);
+				const target = targets.tmuxTarget(op.target);
 				assertDaemonDrivable(target);
 				const dedupKey = `${conversationId}:${opId}`;
 				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
@@ -1259,21 +1196,10 @@ export function createConsoleDispatcher({
 
 			case "forget": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				// Forget tears down ONE named session; a bare spawn-point (or host) has no session to
-				// kill, so require a composite target and reject the spawn-point with a clear message.
-				const t = parseTarget(op.target, localDomain, localGatewayId);
-				if (t instanceof SpawnPoint) {
-					throw new Error(`cannot forget "${op.target}": name a specific project.session, not a spawn-point`);
-				}
-				// Its OWN check rather than resolveTmuxTarget's, which the kill below deliberately
-				// swallows: without it a foreign address whose gateway segment happens to match this
-				// one reduces to a bare local field and forgets the SAME-NAMED LOCAL session, now
-				// taking that session's board work with it. close_session and rename_session already
-				// reject a foreign address outright; forget was the one that did not.
-				if (t.domain !== localDomain || t.gateway !== localGatewayId) {
-					throw new Error(`cannot forget "${op.target}": that session lives on another Gateway`);
-				}
-				const name = composeSessionName(t.spawn, t.session);
+				// Resolved HERE, ahead of the tmux resolution whose refusal the kill try below
+				// deliberately swallows: the record drop must never run for a foreign or spawn-point
+				// target.
+				const { name } = targets.requireLocalComposite(op.target, "forget");
 				const dedupKey = `${conversationId}:${opId}`;
 				// The tmux kill is best-effort: forget's actual contract is "stop listing this session",
 				// which the record drop below alone guarantees. resolveTmuxTarget can throw (the project
@@ -1283,7 +1209,7 @@ export function createConsoleDispatcher({
 				// board forever with no way to make it go away. An orphaned tmux pane is recoverable; a
 				// permanently-stuck board tile is not.
 				try {
-					const target = resolveTmuxTarget(op.target);
+					const target = targets.tmuxTarget(op.target);
 					const r = await relayToHost({ kind: "killSession", target, dedupKey });
 					if (!r.ok) console.log(`[console] forget "${name}": kill failed - ${r.error ?? "unknown error"}`);
 				} catch (e) {
@@ -1301,14 +1227,9 @@ export function createConsoleDispatcher({
 
 			case "close_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				// Close kills ONE named session's tmux but KEEPS its record (a restart / mop-up); same
-				// composite-target rule as forget.
-				const t = parseTarget(op.target, localDomain, localGatewayId);
-				if (t instanceof SpawnPoint) {
-					throw new Error(`cannot close "${op.target}": name a specific project.session, not a spawn-point`);
-				}
-				const name = composeSessionName(t.spawn, t.session);
-				const target = resolveTmuxTarget(op.target);
+				// Close kills ONE named session's tmux but KEEPS its record (a restart / mop-up).
+				const { name } = targets.requireLocalComposite(op.target, "close");
+				const target = targets.tmuxTarget(op.target);
 				// An alias-served record's live incarnation is a user-launched `claude --resume` under a
 				// different tmux name, so killing the canonical `spawn.id` pane finds nothing and the
 				// record keeps reading online off its alias - a false {closed:true}. Report honestly
@@ -1331,17 +1252,10 @@ export function createConsoleDispatcher({
 			}
 
 			case "rename_session": {
-				// Relabel a session's record. A bare spawn-point has no record to rename, and the record
-				// store is local, so a foreign-Gateway target must be rejected rather than collide with a
-				// same-named local record (the other ops get this via resolveTmuxTarget).
-				const t = parseTarget(op.target, localDomain, localGatewayId);
-				if (t instanceof SpawnPoint) {
-					throw new Error(`cannot rename "${op.target}": name a specific project.session, not a spawn-point`);
-				}
-				if (t.domain !== localDomain || t.gateway !== localGatewayId) {
-					throw new Error(`cannot rename a session on another Gateway`);
-				}
-				const applied = sessionStore?.rename(composeSessionName(t.spawn, t.session), op.sessionLabel) ?? null;
+				// Relabel a session's record. The record store is local, so a foreign-Gateway target
+				// must be refused rather than collide with a same-named local record.
+				const { name } = targets.requireLocalComposite(op.target, "rename");
+				const applied = sessionStore?.rename(name, op.sessionLabel) ?? null;
 				return { renamed: applied !== null, sessionLabel: applied ?? undefined };
 			}
 
@@ -1447,18 +1361,13 @@ export function createConsoleDispatcher({
 		}
 	}
 
-	/** The canonical `domain.gateway.spawn.session` key a session is shared under, the single form
-	 * every read path (the relay gate, the sweep, discovery) compares against. Built via the shared
-	 * localAddress so it matches the relay gate and the pending-job store byte-for-byte. */
+	/** The canonical share key for an unshare, refused for a foreign address: folded to its bare
+	 * field it would resolve the SAME-NAMED local session's share. */
 	function canonicalShareTarget(sessionTarget: string): string {
-		const t = parseTarget(sessionTarget, localDomain, localGatewayId);
-		// Refused, never folded: a foreign address reduced to its bare field would resolve the
-		// SAME-NAMED local session's share.
-		if (t.domain !== localDomain || t.gateway !== localGatewayId) {
-			throw new Error(`cannot unshare "${sessionTarget}": only local sessions have shares`);
-		}
-		const name = t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session);
-		return localAddress(name).canonical;
+		return targets.shareTarget(
+			sessionTarget,
+			() => new Error(`cannot unshare "${sessionTarget}": only local sessions have shares`),
+		).canonical;
 	}
 
 	/** Gate a share request and return the canonical key to store it under: the session must be a
@@ -1472,20 +1381,16 @@ export function createConsoleDispatcher({
 		if (target.kind === "domain" && !crossDomainShare?.isLinkedDomain(target.domainId)) {
 			throw new Error(`cannot share to "${target.domainId}": not a linked Domain`);
 		}
-		const parsedShare = parseTarget(sessionTarget, localDomain, localGatewayId);
-		if (parsedShare.domain !== localDomain || parsedShare.gateway !== localGatewayId) {
-			throw new Error(`cannot share "${sessionTarget}": only local sessions can be shared`);
-		}
-		const name =
-			parsedShare instanceof SpawnPoint
-				? parsedShare.spawn
-				: composeSessionName(parsedShare.spawn, parsedShare.session);
+		const { name, canonical } = targets.shareTarget(
+			sessionTarget,
+			() => new Error(`cannot share "${sessionTarget}": only local sessions can be shared`),
+		);
 		const teams = (await routes.teams().json()) as TeamInfo[];
 		const team = teams.find((t) => t.team === name);
 		if (!team || (team.kind !== "devcontainer" && team.kind !== "loose")) {
 			throw new Error(`cannot share "${name}": only devcontainer and loose sessions can be shared`);
 		}
-		return localAddress(name).canonical;
+		return canonical;
 	}
 
 	async function runFrame(frame: OpenedConsoleFrame, generation = 0): Promise<ConsoleReplyBody> {
