@@ -9,7 +9,7 @@ import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.j
 
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
 
-function setup(options: { project?: string } = {}) {
+function setup(options: { project?: string; dispatch?: boolean; waitBudgetMs?: number } = {}) {
 	let catalogWriter: CodexCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
 		codexCatalogPersistence: {
@@ -39,6 +39,7 @@ function setup(options: { project?: string } = {}) {
 		service,
 		sessionStore,
 		sendToHost: (message) => {
+			if (options.dispatch === false) return false;
 			sent.push(message);
 			return true;
 		},
@@ -48,7 +49,7 @@ function setup(options: { project?: string } = {}) {
 	sessionStore.activateBinding(owner);
 	sessionStore.confirm(sessionStore.teamOf(owner));
 	// Short budget so a non-waiting assertion does not sit on the real nine minutes.
-	const route = new CodexRoute({ service, relay, waitBudgetMs: 20 });
+	const route = new CodexRoute({ service, relay, waitBudgetMs: options.waitBudgetMs ?? 20 });
 	return { route, relay, sent, token, owner, sessionStore, service };
 }
 
@@ -97,6 +98,22 @@ describe("Codex gateway route", () => {
 		expect(() => CodexAgentResultSchema.parse(body)).not.toThrow();
 		expect(body.observation).toBe("unavailable");
 		expect(body.error).toMatchObject({ code: "daemon_unavailable", retryable: true });
+	});
+
+	it("answers a disconnected start without waiting out the budget", async () => {
+		const context = setup({ dispatch: false, waitBudgetMs: 1_000 });
+		const startedAt = performance.now();
+		const response = await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: OPERATION_ID,
+			prompt: "Audit",
+		});
+		const elapsed = performance.now() - startedAt;
+		const body = await response.json();
+
+		expect(elapsed).toBeLessThan(100);
+		expect(body).toMatchObject({ agentState: "creating", observation: "waitTimedOut" });
+		expect(context.sent.filter((message) => message.type === "codex_command")).toEqual([]);
 	});
 
 	it("refuses a message for an agent this session does not own", async () => {

@@ -17,6 +17,7 @@ import {
 	copilotOperationFingerprint,
 } from "../shared/copilot-thinking.js";
 import type { CopilotCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
+import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
 
 ////////////////////////////////
@@ -65,13 +66,7 @@ export interface CopilotTransitionResult extends OwnedCopilotOperation {
 	catalogRevision: number;
 }
 
-export type CopilotTransitionErrorCode =
-	| "invalid_input"
-	| "not_found"
-	| "operation_conflict"
-	| "state_conflict"
-	| "target_unavailable"
-	| "persistence_failed";
+export type CopilotTransitionErrorCode = AgentTransitionErrorCode;
 
 export class CopilotTransitionError extends Error {
 	constructor(

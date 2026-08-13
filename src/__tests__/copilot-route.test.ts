@@ -11,7 +11,7 @@ const START_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
 const MESSAGE_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
 const STOP_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174002";
 
-function setup() {
+function setup(options: { dispatch?: boolean; waitBudgetMs?: number } = {}) {
 	let catalogWriter: CopilotCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
 		copilotCatalogPersistence: {
@@ -41,6 +41,7 @@ function setup() {
 		service,
 		sessionStore,
 		sendToHost: (message) => {
+			if (options.dispatch === false) return false;
 			sent.push(message);
 			return true;
 		},
@@ -49,7 +50,7 @@ function setup() {
 	const token = sessionStore.ensureBindToken(owner);
 	sessionStore.activateBinding(owner);
 	sessionStore.confirm(sessionStore.teamOf(owner));
-	const route = new CopilotRoute({ service, relay, waitBudgetMs: 1_000 });
+	const route = new CopilotRoute({ service, relay, waitBudgetMs: options.waitBudgetMs ?? 1_000 });
 	return { route, relay, sent, owner, token, service, sessionStore };
 }
 
@@ -163,6 +164,26 @@ describe("Copilot gateway route", () => {
 			finalResponse: "Done.",
 		});
 		expect(body.activities[0]).not.toHaveProperty("itemId");
+	});
+
+	it("answers a disconnected start without waiting out the budget", async () => {
+		const context = setup({ dispatch: false, waitBudgetMs: 1_000 });
+		const startedAt = performance.now();
+		const response = await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: START_OPERATION_ID,
+			prompt: "Review the parser",
+		});
+		const elapsed = performance.now() - startedAt;
+		const body = await response.json();
+
+		expect(elapsed).toBeLessThan(100);
+		expect(body).toMatchObject({
+			agentState: "unavailable",
+			observation: "unavailable",
+			error: { code: "daemon_unavailable", retryable: true },
+		});
+		expect(context.sent.filter((message) => message.type === "copilot_command")).toEqual([]);
 	});
 
 	it("does not let a stale terminal settle a newer turn, and closes a racing stop", async () => {

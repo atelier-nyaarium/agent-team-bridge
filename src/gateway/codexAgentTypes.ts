@@ -6,6 +6,7 @@ import type {
 	CodexStoredOperation,
 } from "../shared/codex-thinking.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
+import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
 
 ////////////////////////////////
@@ -103,13 +104,7 @@ export type CodexApplication =
 	 */
 	| { disposition: "failed"; reason: string };
 
-export type CodexTransitionErrorCode =
-	| "invalid_input"
-	| "not_found"
-	| "operation_conflict"
-	| "state_conflict"
-	| "target_unavailable"
-	| "persistence_failed";
+export type CodexTransitionErrorCode = AgentTransitionErrorCode;
 
 ////////////////////////////////
 //  Class

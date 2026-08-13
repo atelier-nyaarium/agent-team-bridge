@@ -13,7 +13,8 @@ import {
 	sanitizeCodexErrorText,
 } from "../shared/codex-thinking.js";
 import type { SessionRecord } from "../shared/session-store.js";
-import { type CodexAgentService, CodexTransitionError, type CodexTransitionErrorCode } from "./codexAgentService.js";
+import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
+import { type CodexAgentService, CodexTransitionError } from "./codexAgentService.js";
 import type { CodexRelay } from "./codexRelay.js";
 
 ////////////////////////////////
@@ -31,36 +32,6 @@ export interface CodexRouteDeps {
 //  Functions & Helpers
 
 const DEFAULT_WAIT_BUDGET_MS = CODEX_WAIT_BUDGET_MS;
-
-/**
- * How each transition failure is answered.
- *
- * The split is not cosmetic. An agent RESULT is a report about an agent, and the schema only lets one
- * carry an error when the agent is genuinely unavailable or recovering. A refused REQUEST says
- * nothing about the agent's health, so it answers with the request-error shape instead: routing a
- * request-level failure through the result envelope fails the envelope's own schema, and the
- * resulting throw escapes the handler's catch as a 500 instead of the intended 400.
- *
- * Keyed by the error union, so a new transition code fails the build rather than at runtime.
- */
-const FAILURE_ANSWERS: Record<
-	CodexTransitionErrorCode,
-	{ kind: "request" } | { kind: "agent"; code: CodexErrorCode; retryable: boolean }
-> = {
-	invalid_input: { kind: "request" },
-	// The operation ID was reused with different input, which no retry of the same call fixes.
-	operation_conflict: { kind: "request" },
-	// The agent cannot take this right now. That is about the REQUEST being wrong for the moment, not
-	// about the agent being broken, and the caller's remedy is to await or stop first.
-	state_conflict: { kind: "request" },
-	not_found: { kind: "agent", code: "not_found", retryable: false },
-	target_unavailable: { kind: "agent", code: "daemon_unavailable", retryable: true },
-	persistence_failed: { kind: "agent", code: "daemon_unavailable", retryable: true },
-};
-
-function json(body: unknown, status = 200): Response {
-	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
 
 /** A result carrying nothing but a failure. Deliberately claims no agent activity, which is what the
  * envelope requires of a contextless error. */
@@ -188,7 +159,7 @@ export class CodexRoute {
 			}
 		} catch (error) {
 			if (error instanceof CodexTransitionError) {
-				const answer = FAILURE_ANSWERS[error.code];
+				const answer = AGENT_FAILURE_ANSWERS[error.code];
 				if (answer.kind === "request") {
 					return json(
 						CodexRequestErrorSchema.parse({
@@ -239,8 +210,9 @@ export class CodexRoute {
 			target,
 			at: this.now(),
 		});
+		let dispatched = true;
 		if (committed.disposition === "committed") {
-			this.deps.relay.dispatch({
+			dispatched = this.deps.relay.dispatch({
 				kind: "start",
 				ownerKey: this.ownerKey(owner),
 				agentId,
@@ -250,7 +222,7 @@ export class CodexRoute {
 				model: request.model,
 			});
 		}
-		return this.settle(owner, agentId, request.operationId);
+		return this.settle(owner, agentId, request.operationId, dispatched);
 	}
 
 	private async message(
@@ -264,9 +236,10 @@ export class CodexRoute {
 			prompt: request.prompt,
 			at: this.now(),
 		});
+		let dispatched = true;
 		if (committed.disposition === "committed") {
 			const agent = committed.agent;
-			this.deps.relay.dispatch({
+			dispatched = this.deps.relay.dispatch({
 				kind: "message",
 				ownerKey: this.ownerKey(owner),
 				agentId: request.agentId,
@@ -277,7 +250,7 @@ export class CodexRoute {
 				prompt: request.prompt,
 			});
 		}
-		return this.settle(owner, request.agentId, request.operationId);
+		return this.settle(owner, request.agentId, request.operationId, dispatched);
 	}
 
 	private async stop(
@@ -335,10 +308,17 @@ export class CodexRoute {
 	 * The turn is whatever the acceptance recorded, so a caller that did not wait still learns which
 	 * turn its prompt landed in, and one that did wait cannot be satisfied by a later turn.
 	 */
-	private async settle(owner: SessionRecord, agentId: string, operationId: string): Promise<CodexAgentResult> {
+	private async settle(
+		owner: SessionRecord,
+		agentId: string,
+		operationId: string,
+		dispatched = true,
+	): Promise<CodexAgentResult> {
 		// ONE deadline for the whole call. Acceptance and the turn are two phases of a single wait, and
 		// giving each its own fresh budget let a documented nine-minute call block for eighteen.
-		const deadline = this.deadline();
+		// A delivery that never left (no host socket) cannot be accepted, so waiting out the budget for
+		// it would only delay the same indeterminate answer by four minutes.
+		const deadline = dispatched ? this.deadline() : this.now();
 		const accepted = await this.waitForAcceptance(owner, agentId, operationId, deadline);
 		const agent = this.current(owner, agentId);
 		if (!agent) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");

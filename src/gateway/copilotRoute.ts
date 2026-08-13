@@ -12,11 +12,8 @@ import {
 	sanitizeCopilotErrorText,
 } from "../shared/copilot-thinking.js";
 import type { SessionRecord } from "../shared/session-store.js";
-import {
-	type CopilotAgentService,
-	CopilotTransitionError,
-	type CopilotTransitionErrorCode,
-} from "./copilotAgentService.js";
+import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
+import { type CopilotAgentService, CopilotTransitionError } from "./copilotAgentService.js";
 import type { CopilotRelay } from "./copilotRelay.js";
 
 export interface CopilotRouteDeps {
@@ -24,10 +21,6 @@ export interface CopilotRouteDeps {
 	relay: CopilotRelay;
 	now?(): number;
 	waitBudgetMs?: number;
-}
-
-function json(body: unknown, status = 200): Response {
-	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 function unavailable(agentId: string, code: CopilotErrorCode, message: string): CopilotAgentResult {
@@ -39,18 +32,6 @@ function unavailable(agentId: string, code: CopilotErrorCode, message: string): 
 		error: { code, message, retryable: code !== "not_found" },
 	});
 }
-
-const FAILURE_ANSWERS: Record<
-	CopilotTransitionErrorCode,
-	{ kind: "request" } | { kind: "agent"; code: CopilotErrorCode; retryable: boolean }
-> = {
-	invalid_input: { kind: "request" },
-	operation_conflict: { kind: "request" },
-	state_conflict: { kind: "request" },
-	not_found: { kind: "agent", code: "not_found", retryable: false },
-	target_unavailable: { kind: "agent", code: "daemon_unavailable", retryable: true },
-	persistence_failed: { kind: "agent", code: "daemon_unavailable", retryable: true },
-};
 
 function turnOf(agent: CopilotPersistedAgent, turnId?: string): CopilotStoredTurn | undefined {
 	return turnId ? agent.turns.find((turn) => turn.id === turnId) : undefined;
@@ -139,7 +120,7 @@ export class CopilotRoute {
 			}
 		} catch (error) {
 			if (error instanceof CopilotTransitionError) {
-				const answer = FAILURE_ANSWERS[error.code];
+				const answer = AGENT_FAILURE_ANSWERS[error.code];
 				if (answer.kind === "request")
 					return json(
 						CopilotRequestErrorSchema.parse({
@@ -183,8 +164,9 @@ export class CopilotRoute {
 			model: request.model,
 			at: this.now(),
 		});
+		let dispatched = true;
 		if (committed.disposition === "committed") {
-			this.deps.relay.dispatch({
+			dispatched = this.deps.relay.dispatch({
 				kind: "start",
 				ownerKey: this.deps.service.ownerKeyOf(owner),
 				agentId,
@@ -194,7 +176,7 @@ export class CopilotRoute {
 				...(request.model ? { model: request.model } : {}),
 			});
 		}
-		return this.settle(owner, agentId, request.operationId, "started", committed.agent);
+		return this.settle(owner, agentId, request.operationId, "started", committed.agent, dispatched);
 	}
 
 	private async message(
@@ -208,9 +190,10 @@ export class CopilotRoute {
 			prompt: request.prompt,
 			at: this.now(),
 		});
+		let dispatched = true;
 		if (committed.disposition === "committed") {
 			const agent = committed.agent;
-			this.deps.relay.dispatch({
+			dispatched = this.deps.relay.dispatch({
 				kind: "message",
 				ownerKey: this.deps.service.ownerKeyOf(owner),
 				agentId: request.agentId,
@@ -220,7 +203,7 @@ export class CopilotRoute {
 				prompt: request.prompt,
 			});
 		}
-		return this.settle(owner, request.agentId, request.operationId, "followup", committed.agent);
+		return this.settle(owner, request.agentId, request.operationId, "followup", committed.agent, dispatched);
 	}
 
 	private async stop(
@@ -304,8 +287,11 @@ export class CopilotRoute {
 		operationId: string,
 		delivery: "started" | "followup",
 		initial: CopilotPersistedAgent,
+		dispatched = true,
 	): Promise<CopilotAgentResult> {
-		const deadline = this.deadline();
+		// A delivery that never left (no host socket) cannot be accepted, so waiting out the budget for
+		// it would only delay the same indeterminate answer by four minutes.
+		const deadline = dispatched ? this.deadline() : this.now();
 		await this.deps.relay.waitFor(
 			this.deps.service.ownerKeyOf(owner),
 			agentId,
