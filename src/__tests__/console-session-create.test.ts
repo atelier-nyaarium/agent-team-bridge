@@ -107,6 +107,20 @@ describe("console terminal ops: create_session", () => {
 		expect(store.size).toBe(0);
 	});
 
+	it("create_session on a foreign-Gateway address refuses before minting any record", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		// A foreign domain with a COLLIDING gateway id is the trap shape: folded to its bare field
+		// it would mint a local record under the foreign spawn name.
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "other-domain.test-host.host", displayLabel: "island" }, "cfg1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("another Gateway");
+		expect(h.hostOps).toHaveLength(0);
+		expect(store.size).toBe(0);
+	});
+
 	it("create_session on a devcontainer target wakes it instead of relaying a raw createSession host op", async () => {
 		const woken: string[] = [];
 		const h = makeTerminalHarness(undefined, undefined, {

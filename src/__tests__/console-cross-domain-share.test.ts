@@ -131,6 +131,35 @@ describe("console cross-Domain share ops", () => {
 		]);
 	});
 
+	it("cross_domain_unshare refuses a foreign-Gateway address instead of folding it onto the local session", async () => {
+		const h = makeShareHarness();
+		await h.handler.handleFrame(
+			frame(
+				{
+					kind: "cross_domain_share",
+					sessionTarget: "test-domain.test-host.app.dev",
+					target: { kind: "domain", domainId: "carol" },
+				},
+				"s1",
+			),
+		);
+		const reply = await h.handler.handleFrame(
+			frame(
+				{
+					kind: "cross_domain_unshare",
+					sessionTarget: "other-domain.test-host.app.dev",
+					target: { kind: "domain", domainId: "carol" },
+				},
+				"u9",
+			),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("only local sessions have shares");
+		// The same-named LOCAL share survives: refused, never folded.
+		expect(h.calls.unshare).toHaveLength(0);
+		expect(h.set.size).toBe(1);
+	});
+
 	it("cross_domain_unshare on an absent share does NOT expire jobs (no-op stays cheap)", async () => {
 		const h = makeShareHarness();
 		// Nothing shared yet: the unshare removes nothing, so it must skip the job expiry.

@@ -1059,7 +1059,13 @@ export function createConsoleDispatcher({
 				// sent (the sessionName-adopted path's sessionLabel legitimately defaults to the id itself,
 				// unrelated to sanitization).
 				const labelSanitized = op.displayLabel != null && sanitizeLabel(op.displayLabel) === null;
-				const spawn = parseTarget(op.target, localDomain, localGatewayId).spawn;
+				const createTarget = parseTarget(op.target, localDomain, localGatewayId);
+				// Refused BEFORE the mint below: resolveTmuxTarget rejects a foreign address too, but
+				// only after a local record has been minted under the foreign spawn name.
+				if (createTarget.domain !== localDomain || createTarget.gateway !== localGatewayId) {
+					throw new Error(`terminal view is not available for a session on another Gateway`);
+				}
+				const spawn = createTarget.spawn;
 				const dedupKey = `${conversationId}:${opId}`;
 				let sessionId: string;
 				let label: string;
@@ -1446,6 +1452,11 @@ export function createConsoleDispatcher({
 	 * localAddress so it matches the relay gate and the pending-job store byte-for-byte. */
 	function canonicalShareTarget(sessionTarget: string): string {
 		const t = parseTarget(sessionTarget, localDomain, localGatewayId);
+		// Refused, never folded: a foreign address reduced to its bare field would resolve the
+		// SAME-NAMED local session's share.
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) {
+			throw new Error(`cannot unshare "${sessionTarget}": only local sessions have shares`);
+		}
 		const name = t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session);
 		return localAddress(name).canonical;
 	}
