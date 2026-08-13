@@ -8,10 +8,10 @@ import {
 	CodexDaemonEventSchema,
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
-	type CodexEventAck,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-thinking.js";
+import { AgentDaemonCore, type AgentEventAck } from "./agentDaemonCore.js";
 import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AppServerSession } from "./codexAppServerSession.js";
 import { defaultOpenClient } from "./codexAppServerSession.js";
@@ -29,11 +29,6 @@ export type { CodexDaemonEvent, CodexDaemonReceipt };
 ////////////////////////////////
 //  Functions & Helpers
 
-// Enough retained receipts to survive a long gateway outage without letting one wedged target grow
-// without bound. Overflow drops the OLDEST, since the newest carry the state a reconcile would
-// otherwise have to rediscover.
-const OUTBOX_MAX_ENTRIES = 1_000;
-
 function describe(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
 	return sanitizeCodexErrorText(text) || "codex command failed";
@@ -50,46 +45,33 @@ function describe(error: unknown): string {
  * an owner is allowed to reach was already made by the gateway before a command arrived here.
  */
 export class CodexDaemonService {
-	private readonly sessions = new Map<string, TargetSession>();
-	private readonly opening = new Map<string, Promise<TargetSession | null>>();
-	private readonly outbox: Array<{ targetId: string; generation: number; eventId: number; message: object }> = [];
-	private readonly inflight = new Map<string, Promise<void>>();
+	private readonly core: AgentDaemonCore<TargetSession>;
 
-	constructor(private readonly deps: CodexDaemonDeps) {}
+	constructor(private readonly deps: CodexDaemonDeps) {
+		this.core = new AgentDaemonCore({
+			backendId: "codex",
+			daemonInstanceId: deps.daemonInstanceId,
+			targets: deps.targets,
+			send: deps.send,
+			isReliable: isReliableCodexMessage,
+		});
+	}
 
 	/** What this daemon is and which children are live, sent on every authenticated reconnect. The
 	 * gateway decides from it what still needs reconciling; the daemon never asks on its own. */
 	hello(): Record<string, unknown> {
-		return {
-			type: "codex_hello",
-			daemonInstanceId: this.deps.daemonInstanceId,
-			targets: [...this.sessions.values()].map((session) => ({
-				targetId: session.targetId,
-				generation: session.generation,
-			})),
-		};
+		return this.core.hello();
 	}
 
 	/** Re-send everything the gateway has not committed, oldest first, so an ordering the reducer
 	 * depends on survives the reconnect that interrupted it. */
 	replay(): void {
-		for (const entry of [...this.outbox].sort((left, right) => left.eventId - right.eventId)) {
-			this.deps.send(entry.message as Record<string, unknown>);
-		}
+		this.core.replay();
 	}
 
 	/** Retire everything the gateway has durably committed for one generation. */
-	acknowledge(ack: CodexEventAck): void {
-		for (let index = this.outbox.length - 1; index >= 0; index -= 1) {
-			const entry = this.outbox[index]!;
-			if (
-				entry.targetId === ack.targetId &&
-				entry.generation === ack.generation &&
-				entry.eventId <= ack.throughEventId
-			) {
-				this.outbox.splice(index, 1);
-			}
-		}
+	acknowledge(ack: AgentEventAck): void {
+		this.core.acknowledge(ack);
 	}
 
 	/**
@@ -102,22 +84,16 @@ export class CodexDaemonService {
 		const parsed = CodexDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
 		const command = parsed.data;
-		// Separated, not concatenated: a bare join lets one owner/agent pair collide with another that
-		// merely splits at a different point, and colliding here serializes two unrelated agents.
-		const key = `${command.ownerKey} ${command.agentId}`;
-		const previous = this.inflight.get(key) ?? Promise.resolve();
-		const next = previous
-			.then(() => this.dispatch(command))
-			.catch((error) => this.reject(command, describe(error)))
-			.finally(() => {
-				if (this.inflight.get(key) === next) this.inflight.delete(key);
-			});
-		this.inflight.set(key, next);
+		this.core.enqueue(
+			command,
+			(next) => this.dispatch(next),
+			(next, error) => this.reject(next, error),
+			describe,
+		);
 	}
 
 	shutdown(): void {
-		for (const session of this.sessions.values()) session.client.close();
-		this.sessions.clear();
+		this.core.shutdown();
 	}
 
 	private async dispatch(command: CodexDaemonCommand): Promise<void> {
@@ -343,28 +319,13 @@ export class CodexDaemonService {
 	 * same child, giving one process two readers of its stdout, two JSON-RPC id spaces that can settle
 	 * each other's requests, and two event counters both starting at zero on one fenced stream.
 	 */
-	private async session(target: AgentResolvedTarget): Promise<TargetSession | null> {
-		const availability = this.deps.targets.acquire(target);
-		if (availability.state !== "running") return null;
-		const generation = availability.lease.generation;
-		const existing = this.sessions.get(target.targetId);
-		if (existing && existing.generation === generation) return existing;
-
-		const key = `${target.targetId} ${generation}`;
-		const inflight = this.opening.get(key);
-		if (inflight) return inflight;
-		const opening = this.open(target, availability.lease).finally(() => {
-			if (this.opening.get(key) === opening) this.opening.delete(key);
-		});
-		this.opening.set(key, opening);
-		return opening;
+	private session(target: AgentResolvedTarget): Promise<TargetSession | null> {
+		return this.core.acquireSession(target, (resolved, lease) => this.open(resolved, lease));
 	}
 
 	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
 		// A new generation is a different child. Nothing the old one knew about threads or turns
 		// survives it, so the session is rebuilt rather than carried over.
-		this.sessions.get(target.targetId)?.client.close();
-
 		const opened = this.deps.openClient ?? defaultOpenClient;
 		let client: AppServerSession;
 		try {
@@ -389,7 +350,6 @@ export class CodexDaemonService {
 			threads: new Map(),
 		};
 		client.onEvent((message) => this.onServerEvent(session, message));
-		this.sessions.set(target.targetId, session);
 		return session;
 	}
 
@@ -406,7 +366,7 @@ export class CodexDaemonService {
 		targetId: string,
 		item: { threadId: string; turnId: string; itemId: string; text: string },
 	): void {
-		const session = this.sessions.get(targetId);
+		const session = this.core.getSession(targetId);
 		const binding = session?.turns.get(item.turnId) ?? session?.threads.get(item.threadId);
 		if (!session || !binding) return;
 		this.emitEvent(session, {
@@ -448,11 +408,11 @@ export class CodexDaemonService {
 	}
 
 	private emitEvent(session: TargetSession, event: Record<string, unknown>): void {
-		this.publish(session, { type: "codex_event", ...event }, CodexDaemonEventSchema);
+		this.core.publish(session, { type: "codex_event", ...event }, CodexDaemonEventSchema);
 	}
 
 	private emitReceipt(session: TargetSession, receipt: Record<string, unknown>): void {
-		this.publish(
+		this.core.publish(
 			session,
 			{
 				type: "codex_receipt",
@@ -465,47 +425,6 @@ export class CodexDaemonService {
 		);
 	}
 
-	/** Number, validate, retain if it matters, send. The schema's own parsed value is what decides
-	 * whether to retain, so the reliability table is consulted against the real union rather than
-	 * against an untyped draft. */
-	private publish(
-		session: TargetSession,
-		partial: Record<string, unknown>,
-		schema: {
-			safeParse(
-				value: unknown,
-			): { success: true; data: CodexDaemonEvent | CodexDaemonReceipt } | { success: false };
-		},
-	): void {
-		const eventId = session.nextEventId;
-		session.nextEventId += 1;
-		const message = {
-			daemonInstanceId: this.deps.daemonInstanceId,
-			targetId: session.targetId,
-			generation: session.generation,
-			...partial,
-			eventId,
-		};
-		// Validated before it can be retained. An unparseable message would be replayed forever and
-		// refused every time, which reads to an owner as a permanently stuck agent.
-		const parsed = schema.safeParse(message);
-		if (!parsed.success) return;
-		if (isReliableCodexMessage(parsed.data)) this.retain(session.targetId, session.generation, eventId, message);
-		this.deps.send(message);
-	}
-
-	private retain(targetId: string, generation: number, eventId: number, message: object): void {
-		this.outbox.push({ targetId, generation, eventId, message });
-		// Counted PER generation, not across the whole outbox. A shared cap would let one wedged target
-		// evict another target's receipts, which is the opposite of what bounding it is for.
-		const sameStream = (entry: { targetId: string; generation: number }) =>
-			entry.targetId === targetId && entry.generation === generation;
-		while (this.outbox.filter(sameStream).length > OUTBOX_MAX_ENTRIES) {
-			const [dropped] = this.outbox.splice(this.outbox.findIndex(sameStream), 1);
-			console.error(`[codex-daemon] outbox overflow, dropped event ${dropped?.eventId} on ${targetId}`);
-		}
-	}
-
 	/** A refusal carries no generation, so it is sent once. An owner whose refusal is lost sees the
 	 * operation stay unproven, which is what its wait budget already means. */
 	private reject(command: CodexDaemonCommand, error: string): void {
@@ -515,7 +434,7 @@ export class CodexDaemonService {
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
 			daemonInstanceId: this.deps.daemonInstanceId,
-			eventId: this.rejectionId(),
+			eventId: this.core.rejectionId(),
 			agentId: command.agentId,
 			operationId: command.kind === "reconcile" ? undefined : command.operationId,
 			error: sanitizeCodexErrorText(error) || "codex command failed",
@@ -526,13 +445,5 @@ export class CodexDaemonService {
 		console.error(`[codex-daemon] refused ${command.kind} for ${command.agentId}: ${message.error}`);
 		if (!CodexDaemonReceiptSchema.safeParse(message).success) return;
 		this.deps.send(message);
-	}
-
-	// Refusals are not fenced by a generation, so they number off their own monotonic counter purely
-	// so two refusals are distinguishable.
-	private rejections = 0;
-	private rejectionId(): number {
-		this.rejections += 1;
-		return this.rejections;
 	}
 }

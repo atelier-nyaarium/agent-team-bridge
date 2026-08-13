@@ -149,7 +149,10 @@ export function createAcpTransport(child: AgentChild): AcpTransport {
 
 export interface CopilotAcpSessionInfo {
 	sessionId: string;
-	model?: string;
+	model:
+		| { state: "applied"; model: string }
+		| { state: "notApplied"; requested: string; reason: string }
+		| { state: "default" };
 }
 
 interface AcpConfigOption {
@@ -185,10 +188,18 @@ export class CopilotAcpClient {
 		};
 		if (typeof result.sessionId !== "string" || result.sessionId.length === 0)
 			throw new Error("ACP returned no session ID");
-		if (model && supportsConfigOption(result.configOptions, "model")) await this.setModel(result.sessionId, model);
+		let modelOutcome: CopilotAcpSessionInfo["model"];
+		if (model === undefined) {
+			modelOutcome = { state: "default" };
+		} else if (!supportsConfigOption(result.configOptions, "model")) {
+			modelOutcome = { state: "notApplied", requested: model, reason: "model option is not offered" };
+		} else {
+			await this.setModel(result.sessionId, model);
+			modelOutcome = { state: "applied", model };
+		}
 		if (supportsConfigOption(result.configOptions, "allow_all"))
 			await this.enableAgentPermissions(result.sessionId);
-		return { sessionId: result.sessionId, model };
+		return { sessionId: result.sessionId, model: modelOutcome };
 	}
 
 	async loadSession(sessionId: string, cwd: string): Promise<void> {

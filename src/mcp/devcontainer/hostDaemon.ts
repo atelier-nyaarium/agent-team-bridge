@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import WebSocket from "ws";
-import { agentEnvPrefix } from "../../shared/agent-backend.js";
+import { agentEnvPrefix, agentFrameType, CODEX_BACKEND, COPILOT_BACKEND } from "../../shared/agent-backend.js";
 import type { LimitNotice } from "../../shared/agent-screen.js";
 import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
 import { CodexEventAckSchema } from "../../shared/codex-thinking.js";
@@ -80,6 +80,10 @@ const copilotDaemon = new CopilotDaemonService({
 	send: safeSend,
 	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
 });
+const AGENT_DAEMON_BINDINGS = [
+	{ descriptor: CODEX_BACKEND, targets: codexTargets, service: codexDaemon, parseAck: CodexEventAckSchema },
+	{ descriptor: COPILOT_BACKEND, targets: copilotTargets, service: copilotDaemon, parseAck: CopilotEventAckSchema },
+] as const;
 // One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
 // second handleWake against a session the first is still bringing up - the reattach branch could
 // otherwise kill a session mid-startup.
@@ -98,10 +102,10 @@ function safeSend(payload: Record<string, unknown>): void {
 /** Reap every supervised App Server. A child outliving its supervisor would hold a thread nothing
  * can reach or stop. */
 export function stopSupervisedChildren(): void {
-	codexDaemon.shutdown();
-	codexTargets.shutdown();
-	copilotDaemon.shutdown();
-	copilotTargets.shutdown();
+	for (const { service, targets } of AGENT_DAEMON_BINDINGS) {
+		service.shutdown();
+		targets.shutdown();
+	}
 }
 
 export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
@@ -140,10 +144,10 @@ function connect(): void {
 
 		// Which supervisor and which children are live, then everything the gateway never committed.
 		// A reconnect changes the socket, not what the children have already produced.
-		safeSend(codexDaemon.hello());
-		codexDaemon.replay();
-		safeSend(copilotDaemon.hello());
-		copilotDaemon.replay();
+		for (const { service } of AGENT_DAEMON_BINDINGS) {
+			safeSend(service.hello());
+			service.replay();
+		}
 
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
@@ -183,22 +187,12 @@ function connect(): void {
 			);
 		}
 
-		if (msg.type === "codex_command") {
-			codexDaemon.handleCommand(msg);
-		}
-
-		if (msg.type === "codex_ack") {
-			const ack = CodexEventAckSchema.safeParse(msg);
-			if (ack.success) codexDaemon.acknowledge(ack.data);
-		}
-
-		if (msg.type === "copilot_command") {
-			copilotDaemon.handleCommand(msg);
-		}
-
-		if (msg.type === "copilot_ack") {
-			const ack = CopilotEventAckSchema.safeParse(msg);
-			if (ack.success) copilotDaemon.acknowledge(ack.data);
+		for (const { descriptor, service, parseAck } of AGENT_DAEMON_BINDINGS) {
+			if (msg.type === agentFrameType(descriptor.id, "command")) service.handleCommand(msg);
+			if (msg.type === agentFrameType(descriptor.id, "ack")) {
+				const ack = parseAck.safeParse(msg);
+				if (ack.success) service.acknowledge(ack.data);
+			}
 		}
 
 		if (msg.type === "presence_watch" && Array.isArray(msg.watch)) {

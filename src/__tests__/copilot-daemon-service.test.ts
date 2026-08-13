@@ -21,7 +21,7 @@ it("streams a Copilot ACP turn into accepted, activity, and terminal frames", as
 			listener = next;
 		},
 		async newSession() {
-			return { sessionId: "session-1", model: "auto" };
+			return { sessionId: "session-1", model: { state: "applied", model: "auto" } };
 		},
 		prompt: () =>
 			new Promise<{ stopReason: string }>((resolve) => {
@@ -75,6 +75,52 @@ it("streams a Copilot ACP turn into accepted, activity, and terminal frames", as
 			kind: "terminal",
 			state: "completed",
 			finalResponse: "Done.",
+		}),
+	);
+});
+
+it("rejects an explicitly requested model that ACP did not apply", async () => {
+	const sent: Record<string, unknown>[] = [];
+	const client = {
+		onEvent: () => {},
+		newSession: async () => ({
+			sessionId: "session-1",
+			model: { state: "notApplied" as const, requested: "unavailable", reason: "model option is not offered" },
+		}),
+		loadSession: async () => {},
+		prompt: async () => ({ stopReason: "end_turn" }),
+		cancel: () => {},
+		close: () => {},
+	} as unknown as CopilotAcpClient;
+	const targets: TargetSupervisor = {
+		acquire: () => ({ state: "running", lease: { generation: 1, child: {} as AgentChild } }),
+		release: () => {},
+	};
+	const service = new CopilotDaemonService({
+		targets,
+		daemonInstanceId: "daemon-1",
+		send: (message) => sent.push(message),
+		openClient: async () => client,
+		resolveHostCwd: () => "/home/agent",
+	});
+
+	service.handleCommand({
+		type: "copilot_command",
+		kind: "start",
+		requestId: REQUEST_ID,
+		ownerKey: OWNER_KEY,
+		agentId: AGENT_ID,
+		operationId: OPERATION_ID,
+		model: "unavailable",
+		target: { kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
+		prompt: "Review the parser",
+	});
+	await settle();
+
+	expect(sent).toContainEqual(
+		expect.objectContaining({
+			kind: "rejected",
+			error: "requested model was not applied: model option is not offered",
 		}),
 	);
 });

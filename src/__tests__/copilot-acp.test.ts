@@ -54,7 +54,7 @@ describe("Copilot ACP transport", () => {
 		context.feed({ id: 3, result: {} });
 		await tick();
 		context.feed({ id: 4, result: {} });
-		expect(await session).toEqual({ sessionId: "session-1", model: "auto" });
+		expect(await session).toEqual({ sessionId: "session-1", model: { state: "applied", model: "auto" } });
 		expect(context.written).toContainEqual({
 			jsonrpc: "2.0",
 			id: 3,
@@ -82,6 +82,59 @@ describe("Copilot ACP transport", () => {
 		await tick();
 		expect(events).toHaveLength(1);
 		expect(events[0]?.method).toBe("session/update");
+	});
+
+	it("reports a requested model as not applied when ACP does not offer it", async () => {
+		const context = fakeChild();
+		const transport = createAcpTransport(context.child);
+		const open = CopilotAcpClient.open(transport);
+		await tick();
+		context.feed({ id: 1, result: { protocolVersion: 1 } });
+		const client = await open;
+
+		const session = client.newSession("/workspace/project", "requested-model");
+		await tick();
+		context.feed({ id: 2, result: { sessionId: "session-2", configOptions: [{ id: "allow_all" }] } });
+		await tick();
+		context.feed({ id: 3, result: {} });
+
+		expect(await session).toEqual({
+			sessionId: "session-2",
+			model: { state: "notApplied", requested: "requested-model", reason: "model option is not offered" },
+		});
+		expect(context.written).not.toContainEqual(
+			expect.objectContaining({
+				method: "session/set_config_option",
+				params: expect.objectContaining({ configId: "model" }),
+			}),
+		);
+		transport.close();
+	});
+
+	it("reports an applied requested model when ACP offers it", async () => {
+		const context = fakeChild();
+		const transport = createAcpTransport(context.child);
+		const open = CopilotAcpClient.open(transport);
+		await tick();
+		context.feed({ id: 1, result: { protocolVersion: 1 } });
+		const client = await open;
+
+		const session = client.newSession("/workspace/project", "requested-model");
+		await tick();
+		context.feed({
+			id: 2,
+			result: { sessionId: "session-3", configOptions: [{ id: "model" }, { id: "allow_all" }] },
+		});
+		await tick();
+		context.feed({ id: 3, result: {} });
+		await tick();
+		context.feed({ id: 4, result: {} });
+
+		expect(await session).toEqual({
+			sessionId: "session-3",
+			model: { state: "applied", model: "requested-model" },
+		});
+		transport.close();
 	});
 
 	it("answers an ACP permission request by cancelling it", async () => {

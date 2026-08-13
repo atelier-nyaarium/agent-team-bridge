@@ -9,10 +9,10 @@ import {
 	type CopilotDaemonFailureCode,
 	type CopilotDaemonReceipt,
 	CopilotDaemonReceiptSchema,
-	type CopilotEventAck,
 	isReliableCopilotMessage,
 	sanitizeCopilotErrorText,
 } from "../../shared/copilot-thinking.js";
+import { AgentDaemonCore, type AgentEventAck } from "./agentDaemonCore.js";
 import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AgentChild, TargetLease, TargetSupervisor } from "./codexTargets.js";
 import { type CopilotAcpClient, defaultOpenCopilotClient } from "./copilotAcp.js";
@@ -71,63 +71,45 @@ function failureCode(error: string): CopilotDaemonFailureCode {
 //  Class
 
 export class CopilotDaemonService {
-	private readonly sessions = new Map<string, TargetSession>();
-	private readonly opening = new Map<string, Promise<TargetSession | null>>();
+	private readonly core: AgentDaemonCore<TargetSession>;
 	private readonly openErrors = new Map<string, string>();
-	private readonly outbox: Array<{ targetId: string; generation: number; eventId: number; message: object }> = [];
-	private readonly inflight = new Map<string, Promise<void>>();
-	private rejections = 0;
 
-	constructor(private readonly deps: CopilotDaemonDeps) {}
+	constructor(private readonly deps: CopilotDaemonDeps) {
+		this.core = new AgentDaemonCore({
+			backendId: "copilot",
+			daemonInstanceId: deps.daemonInstanceId,
+			targets: deps.targets,
+			send: deps.send,
+			isReliable: isReliableCopilotMessage,
+		});
+	}
 
 	hello(): Record<string, unknown> {
-		return {
-			type: "copilot_hello",
-			daemonInstanceId: this.deps.daemonInstanceId,
-			targets: [...this.sessions.values()].map((session) => ({
-				targetId: session.targetId,
-				generation: session.generation,
-			})),
-		};
+		return this.core.hello();
 	}
 
 	replay(): void {
-		for (const entry of [...this.outbox].sort((left, right) => left.eventId - right.eventId)) {
-			this.deps.send(entry.message as Record<string, unknown>);
-		}
+		this.core.replay();
 	}
 
-	acknowledge(ack: CopilotEventAck): void {
-		for (let index = this.outbox.length - 1; index >= 0; index -= 1) {
-			const entry = this.outbox[index]!;
-			if (
-				entry.targetId === ack.targetId &&
-				entry.generation === ack.generation &&
-				entry.eventId <= ack.throughEventId
-			) {
-				this.outbox.splice(index, 1);
-			}
-		}
+	acknowledge(ack: AgentEventAck): void {
+		this.core.acknowledge(ack);
 	}
 
 	handleCommand(raw: unknown): void {
 		const parsed = CopilotDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
 		const command = parsed.data;
-		const key = `${command.ownerKey} ${command.agentId}`;
-		const previous = this.inflight.get(key) ?? Promise.resolve();
-		const next = previous
-			.then(() => this.dispatch(command))
-			.catch((error) => this.reject(command, describe(error)))
-			.finally(() => {
-				if (this.inflight.get(key) === next) this.inflight.delete(key);
-			});
-		this.inflight.set(key, next);
+		this.core.enqueue(
+			command,
+			(next) => this.dispatch(next),
+			(next, error) => this.reject(next, error),
+			describe,
+		);
 	}
 
 	shutdown(): void {
-		for (const session of this.sessions.values()) session.client.close();
-		this.sessions.clear();
+		this.core.shutdown();
 	}
 
 	private async dispatch(command: CopilotDaemonCommand): Promise<void> {
@@ -148,7 +130,10 @@ export class CopilotDaemonService {
 		const session = await this.session(target);
 		if (!session)
 			return this.reject(command, this.openErrors.get(target.targetId) ?? "execution target is unavailable");
-		const info = await session.client.newSession(target.cwd, command.model ?? COPILOT_DEFAULT_MODEL);
+		const requested = command.model;
+		const info = await session.client.newSession(target.cwd, requested ?? COPILOT_DEFAULT_MODEL);
+		if (requested !== undefined && info.model.state === "notApplied")
+			return this.reject(command, `requested model was not applied: ${info.model.reason}`);
 		const turnId = crypto.randomUUID();
 		const binding: Binding = { ownerKey: command.ownerKey, agentId: command.agentId, sessionId: info.sessionId };
 		session.sessions.set(info.sessionId, binding);
@@ -285,24 +270,11 @@ export class CopilotDaemonService {
 		});
 	}
 
-	private async session(target: AgentResolvedTarget): Promise<TargetSession | null> {
-		const availability = this.deps.targets.acquire(target);
-		if (availability.state !== "running") return null;
-		const generation = availability.lease.generation;
-		const existing = this.sessions.get(target.targetId);
-		if (existing && existing.generation === generation) return existing;
-		const key = `${target.targetId} ${generation}`;
-		const inflight = this.opening.get(key);
-		if (inflight) return inflight;
-		const opening = this.open(target, availability.lease).finally(() => {
-			if (this.opening.get(key) === opening) this.opening.delete(key);
-		});
-		this.opening.set(key, opening);
-		return opening;
+	private session(target: AgentResolvedTarget): Promise<TargetSession | null> {
+		return this.core.acquireSession(target, (resolved, lease) => this.open(resolved, lease));
 	}
 
 	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
-		this.sessions.get(target.targetId)?.client.close();
 		const opened = this.deps.openClient ?? defaultOpenCopilotClient;
 		let client: CopilotAcpClient;
 		try {
@@ -322,7 +294,6 @@ export class CopilotDaemonService {
 			active: new Map(),
 		};
 		client.onEvent((event) => this.onEvent(session, event));
-		this.sessions.set(target.targetId, session);
 		return session;
 	}
 
@@ -378,11 +349,11 @@ export class CopilotDaemonService {
 	}
 
 	private emitEvent(session: TargetSession, event: Record<string, unknown>): void {
-		this.publish(session, { type: "copilot_event", ...event }, CopilotDaemonEventSchema);
+		this.core.publish(session, { type: "copilot_event", ...event }, CopilotDaemonEventSchema, "first");
 	}
 
 	private emitReceipt(session: TargetSession, receipt: Record<string, unknown>): void {
-		this.publish(
+		this.core.publish(
 			session,
 			{
 				type: "copilot_receipt",
@@ -392,41 +363,8 @@ export class CopilotDaemonService {
 				...receipt,
 			},
 			CopilotDaemonReceiptSchema,
+			"first",
 		);
-	}
-
-	private publish(
-		session: TargetSession,
-		partial: Record<string, unknown>,
-		schema: {
-			safeParse(
-				value: unknown,
-			): { success: true; data: CopilotDaemonEvent | CopilotDaemonReceipt } | { success: false };
-		},
-	): void {
-		const eventId = session.nextEventId++;
-		const message = {
-			daemonInstanceId: this.deps.daemonInstanceId,
-			targetId: session.targetId,
-			generation: session.generation,
-			eventId,
-			...partial,
-		};
-		const parsed = schema.safeParse(message);
-		if (!parsed.success) return;
-		if (isReliableCopilotMessage(parsed.data)) this.retain(session.targetId, session.generation, eventId, message);
-		this.deps.send(message);
-	}
-
-	private retain(targetId: string, generation: number, eventId: number, message: object): void {
-		this.outbox.push({ targetId, generation, eventId, message });
-		const sameStream = (entry: { targetId: string; generation: number }) =>
-			entry.targetId === targetId && entry.generation === generation;
-		while (this.outbox.filter(sameStream).length > 1_000) {
-			const index = this.outbox.findIndex(sameStream);
-			if (index < 0) break;
-			this.outbox.splice(index, 1);
-		}
 	}
 
 	private reject(command: CopilotDaemonCommand, error: string): void {
@@ -439,7 +377,7 @@ export class CopilotDaemonService {
 			daemonInstanceId: this.deps.daemonInstanceId,
 			agentId: command.agentId,
 			...(command.kind === "reconcile" ? {} : { operationId: command.operationId }),
-			eventId: ++this.rejections,
+			eventId: this.core.rejectionId(),
 			failureCode: failureCode(normalized),
 			error: normalized,
 		};
