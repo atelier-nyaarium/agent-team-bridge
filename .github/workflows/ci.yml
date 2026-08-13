@@ -30,6 +30,11 @@ jobs:
       - name: Module residue guard
         run: bun scripts/check-module-residue.ts
 
+      # Here rather than in the Kotlin workflow: that one runs after merge, where an unused import
+      # is reported rather than blocked. kotlinc only ever reports a MISSING import.
+      - name: Kotlin import guard
+        run: bun scripts/check-kotlin-imports.ts
+
       - name: Synced-leaf faithfulness
         run: >-
           bun scripts/check-sync-hash.ts src/shared/notice.ts src/shared/evie-protocol.ts
