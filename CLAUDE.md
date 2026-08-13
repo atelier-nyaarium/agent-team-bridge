@@ -192,6 +192,12 @@ slot: devcontainer wake, session spawn, and the console terminal view. It carrie
 | 20000 | Gateway (HTTP + WS)               |
 | 20001 | Evie bridge server (tool call WS) |
 | 20002 | MCP connector (game client WS)    |
+| 20003 | Enrollment TLS (arming only)      |
+
+20000 publishes to LOOPBACK only. Local HTTP authorizes a caller by its session binding, which says
+nothing about which machine it is on, so nothing may reach it from the LAN. Containers reach it by
+service name over the compose network, which does not traverse the mapping. 20003 is the one port
+that does need the LAN, and it is pinned-TLS behind a one-time nonce.
 
 ### Channel conversations
 
