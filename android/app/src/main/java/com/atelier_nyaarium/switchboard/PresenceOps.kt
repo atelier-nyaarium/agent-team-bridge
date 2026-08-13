@@ -18,7 +18,7 @@ internal class PresenceOps(private val repo: ChatRepository) {
 	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
 	// tombstone's own expiry resurrect a team locally without waiting for a fresh server push -
 	// see applyPresence.
-	// Not private: connect() (ChatRepository.kt) seeds it from its own initial teams pull.
+	// Not private: connect() (ChatRepositoryDomainLink.kt) seeds it from its own initial teams pull.
 	@Volatile var lastRawTeams: List<Team>? = null
 
 	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
@@ -31,7 +31,7 @@ internal class PresenceOps(private val repo: ChatRepository) {
 	/** Refresh the cached display name from discovery's LOCAL session (the gateway stamps each
 	 * session's displayName; the local Gateway's is this owner's own). A no-op when no local session
 	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
-	// Not private: connect() (ChatRepository.kt) refreshes from its own initial teams pull.
+	// Not private: connect() (ChatRepositoryDomainLink.kt) refreshes from its own initial teams pull.
 	fun refreshDisplayNameFromTeams() {
 		val gw = repo.localGatewayId
 		val local = repo._state.value.teams.firstOrNull {

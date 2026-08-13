@@ -63,12 +63,13 @@ code does not belong here; rationale lives in `git log`.
     presence, and the read anchors this device reports back
   - `SessionOps.kt` (`repo.sessions`) owns the terminal view and session control: peek, tmux send,
     spawn (with its own opId reuse window), wake, relaunch and forget
-  - Three more families are EXTENSIONS on `ChatRepository` rather than delegates, since they hold no
+  - Four more families are EXTENSIONS on `ChatRepository` rather than delegates, since they hold no
     state and an extension has no backing field: `ChatRepositorySend.kt` (send, retry, the single
     `deliver` path, admission and reconcile), `ChatRepositoryThreads.kt` (tabs, labels, rename, and
-    the read-anchor reads), `ChatRepositoryStts.kt` and `ChatRepositoryDrafts.kt` (speech settings,
-    composer drafts). Call sites stay `repo.send(...)`, so the spelling a residue test matches on is
-    the same either way
+    the read-anchor reads), `ChatRepositoryDomainLink.kt` (the provisioning blob, the connection it
+    buys, who that connection says this owner is, and the wipe that undoes it),
+    `ChatRepositoryStts.kt` and `ChatRepositoryDrafts.kt` (speech settings, composer drafts). Call
+    sites stay `repo.send(...)`, so the spelling a residue test matches on is the same either way
   - The federation surface is six more held delegates, reached as `repo.ownerFacts` /
     `.gatewayEnroll` / `.ceremony` / `.devices` / `.domainAdmin` / `.trust`: `OwnerFacts.kt`
     (first-root, the owner key, and every fact submitted through `submitOwnerFact`, plus membership),
