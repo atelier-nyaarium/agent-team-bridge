@@ -8,8 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** This owner's own display name and the guest tenants it hosts: rename/delete the owner's own
- * Domain, and stage/regenerate/remove the hosted-tenant invites (the "Networks you host" surface).
- * Split out of ChatRepository; see its own doc for the collaborator split. */
+ * Domain, and stage/regenerate/remove the hosted-tenant invites (the "Networks you host" surface). */
 internal class DomainAdminOps(private val repo: ChatRepository) {
 	/** Rename this owner's own display name: owner-sign a SET_ADMIN_NAME op over the admin Domain and
 	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a

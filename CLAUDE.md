@@ -54,13 +54,16 @@ code does not belong here; rationale lives in `git log`.
     subscribes to the player from its own init, so it must stay declared after `stts` and `repoScope`
   - `BoardOps.kt` (`repo.boardOps`) is the repository side of the board: capture, the setters, the
     attachment transfers and assignment. The `BoardManager` it wraps stays as `repo.board`
-  - The federation surface is four more held delegates, reached as `repo.enroll` / `.devices` /
-    `.domainAdmin` / `.trust`: `EnrollOps.kt` (owner facts through `submitOwnerFact`, membership, the
-    FLOW-1 ceremony, gateway admit), `DeviceApprovalOps.kt` (the add-a-device rendezvous, both
-    sides), `DomainAdminOps.kt` (own-Domain identity plus hosted tenants), `TrustOps.kt` (the trust
-    graph, the link wizard, FLOW-2, cross-Domain shares). They reach back into the repository for
-    `store` / `_state` / `client()` / `federation`, and `federation-manager-residue.test.ts` fails
-    the build if anything outside these five files touches the owner keys
+  - The federation surface is six more held delegates, reached as `repo.ownerFacts` /
+    `.gatewayEnroll` / `.ceremony` / `.devices` / `.domainAdmin` / `.trust`: `OwnerFacts.kt`
+    (first-root, the owner key, and every fact submitted through `submitOwnerFact`, plus membership),
+    `GatewayEnrollment.kt` (the admit-gateway QR and the pinned LAN bundle delivery),
+    `EnrollCeremonyOps.kt` (the FLOW-1 ceremony's repository side), `DeviceApprovalOps.kt` (the
+    add-a-device rendezvous, both sides), `DomainAdminOps.kt` (own-Domain identity plus hosted
+    tenants), `TrustOps.kt` (the trust graph, the link wizard, FLOW-2, cross-Domain shares). They
+    reach back into the repository for `store` / `_state` / `client()` / `federation`, and
+    `federation-manager-residue.test.ts` fails the build if anything outside these seven files
+    touches the owner keys
     - Both FLOW-1 and FLOW-2 run their commit-reveal compare through `SasExchange.kt`'s
       `runSasExchange`, so a check added there cannot reach one flow and miss the other. Each flow
       supplies its own broker frames and its own out-of-band peer authentication; `EnrollCeremony.kt`

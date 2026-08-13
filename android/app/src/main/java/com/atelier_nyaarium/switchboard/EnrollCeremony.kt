@@ -8,7 +8,7 @@ import com.atelier_nyaarium.switchboard.proto.SasCrypto
  * Pure (Android-free) core of the in-person enroll ceremony: role pairing, role-ordered SAS
  * derivation, the commit-reveal verification, and each flow's out-of-band peer binding, all run
  * against the untrusted evie broker. The networked walk is SasExchange.kt; the transports are
- * EnrollOps.kt and TrustOps.kt.
+ * EnrollCeremonyOps.kt and TrustOps.kt.
  *
  * evie only relays the two phones' commit then reveal frames; it never computes this SAS and never
  * verifies a commitment. Every check below is local to the phone, so a substituted key surfaces as

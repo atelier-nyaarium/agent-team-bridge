@@ -31,7 +31,7 @@ fun OverlayHost(
 				inviteBlob = null,
 				peerLabel = "the admin",
 				onDone = {
-					repo.enroll.markEnrolleeCeremonyDone()
+					repo.ceremony.markEnrolleeCeremonyDone()
 					close()
 				},
 				onCancel = close,
@@ -47,7 +47,7 @@ fun OverlayHost(
 				onRemoved = close,
 				onLink = { open(Overlay.LinkWizard) },
 				onVerify = { blob, label ->
-					repo.enroll.adminEnrollContext(overlay.domainId)?.let {
+					repo.ceremony.adminEnrollContext(overlay.domainId)?.let {
 						open(Overlay.AdminCeremony(it, blob, label))
 					}
 				},

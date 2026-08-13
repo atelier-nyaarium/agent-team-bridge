@@ -126,7 +126,7 @@ fun TrustCompareScreen(
 										step = TrustCompareStep.Failed("Lost the confirmed session; please retry.")
 										return@launch
 									}
-									repo.enroll.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
+									repo.ceremony.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
 										// Both outcomes mean the friend edge is recorded (the relay edge is
 										// best-effort); the Trusted badge appears either way.
 										.onSuccess { step = TrustCompareStep.Done }

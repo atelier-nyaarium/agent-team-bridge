@@ -5,8 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /** The cross-Domain trust surface: the roster, the link/share/unlink wizard's REQUESTER and
- * RECEIVER legs, the owner-keyed friend graph, and the FLOW-2 roster-initiated trust rendezvous.
- * Split out of ChatRepository; see its own doc for the collaborator split. */
+ * RECEIVER legs, the owner-keyed friend graph, and the FLOW-2 roster-initiated trust rendezvous. */
 internal class TrustOps(private val repo: ChatRepository) {
 	// RECEIVER link state: the requester-minted pin learned from a listen-state poll, keyed by the
 	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
@@ -174,7 +173,7 @@ internal class TrustOps(private val repo: ChatRepository) {
 		// The local peer is now written. The relay-affinity edge is a separate Router submit that
 		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
 		// edge alone) rather than letting the wizard show a false "Linked".
-		if (repo.enroll.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
+		if (repo.ownerFacts.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
 			ConfirmOutcome.Linked
 		} else {
 			ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -187,7 +186,7 @@ internal class TrustOps(private val repo: ChatRepository) {
 	 * failure or advance to Done. */
 	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			if (repo.enroll.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
+			if (repo.ownerFacts.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
 				ConfirmOutcome.Linked
 			} else {
 				ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -232,7 +231,7 @@ internal class TrustOps(private val repo: ChatRepository) {
 			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
 			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
 			for (d in peerDomains) {
-				runCatchingCancellable { repo.enroll.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
+				runCatchingCancellable { repo.ownerFacts.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
 			}
 			// Mesh-wide discovery has no push, so an explicit pull is what makes the person's sessions
 			// leave the board promptly instead of waiting out DISCOVERY_REFRESH_MS.

@@ -96,7 +96,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var provisionAttempted by remember { mutableStateOf(false) }
 	// Touch the owner key up front so it exists before any first-root. Non-throwing: a corrupt stored
 	// key must not crash app start, and the connect path surfaces it as a terminal cause.
-	LaunchedEffect(Unit) { repo.enroll.ownerKeysForDisplay() }
+	LaunchedEffect(Unit) { repo.ownerFacts.ownerKeysForDisplay() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()

@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 
 /** The repository-side wiring around [ChatRepository.board] (the console's own board half, owned by
  * BoardManager): board_read fan-out, the assign/capture/edit/trash surface, and attachment
- * upload/download tracking. Split out of ChatRepository; see its own doc for the collaborator split.
+ * upload/download tracking.
  * `board` itself (the BoardManager instance) stays on ChatRepository - this class is the repository's
  * OWN state (attachment transfer tracking) plus the ops that reach it. */
 internal class BoardOps(private val repo: ChatRepository) {

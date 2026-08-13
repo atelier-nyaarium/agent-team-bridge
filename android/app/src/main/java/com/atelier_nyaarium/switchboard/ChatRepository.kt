@@ -225,10 +225,12 @@ class ChatRepository(
 	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) {
 		federation.applyDomainSync(snapshot, version)
 	}
-	// The federation surface, split into four collaborators by concern (see each class's own doc).
-	// Screens call through these (repo.enroll.X, repo.devices.X, ...) rather than on ChatRepository
+	// The federation surface, split into collaborators by concern (see each class's own doc).
+	// Screens call through these (repo.ownerFacts.X, repo.devices.X, ...) rather than on ChatRepository
 	// directly.
-	internal val enroll = EnrollOps(this)
+	internal val ownerFacts = OwnerFacts(this)
+	internal val gatewayEnroll = GatewayEnrollment(this)
+	internal val ceremony = EnrollCeremonyOps(this)
 	internal val devices = DeviceApprovalOps(this)
 	internal val domainAdmin = DomainAdminOps(this)
 	internal val trust = TrustOps(this)
@@ -241,7 +243,7 @@ class ChatRepository(
 	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
 	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
 	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
-	// invite mints fresh secrets (abandoning the old QR's window). internal: shared by EnrollOps
+	// invite mints fresh secrets (abandoning the old QR's window). internal: shared by EnrollCeremonyOps
 	// (adminEnrollContext) and DomainAdminOps (regenerateInvite, buildInviteBlob).
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	@Volatile internal var sttsClient: SttsClient? = null
@@ -557,7 +559,7 @@ class ChatRepository(
 			// admission (evie only trusts the owner-signed admission once the Domain is rooted at that
 			// owner key). A reject (expired / already-claimed invite) is terminal: the root was
 			// decided, not dropped, so stop with the friendly guidance.
-			if (!enroll.firstRootIfPending()) return@withContext
+			if (!ownerFacts.firstRootIfPending()) return@withContext
 			// Reflect the first-root latch into the UI state now, so if the steps below fail with the
 			// no-gateway cause (a freshly-rooted friend has no host yet) the empty board shows the
 			// "set up, now bring up a host" guidance rather than the admin Add-a-Gateway CTA.
@@ -567,7 +569,7 @@ class ChatRepository(
 			// even though the Console is not admitted yet. A THROW here (e.g. the Keystore-backed
 			// store is unavailable, so the member identity cannot be persisted) is the REAL cause;
 			// surface it instead of falling through to register()'s generic "not enrolled".
-			runCatchingCancellable { enroll.submitConsoleAdmission() }.onFailure { e ->
+			runCatchingCancellable { ownerFacts.submitConsoleAdmission() }.onFailure { e ->
 				val (cause, kind) = classifyConnError(e)
 				_state.update {
 					it.copy(

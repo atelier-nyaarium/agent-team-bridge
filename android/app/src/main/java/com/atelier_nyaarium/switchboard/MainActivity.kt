@@ -174,7 +174,7 @@ fun App(
 	// "Verify with the admin" entry, and a completed compare latches it off.
 	LaunchedEffect(state.provisioned, state.firstRooted) {
 		if (state.provisioned && !enrolleeCeremonyOffered) {
-			repo.enroll.pendingEnrolleeCeremony()?.let {
+			repo.ceremony.pendingEnrolleeCeremony()?.let {
 				openOverlay(Overlay.EnrolleeCeremony(it))
 				enrolleeCeremonyOffered = true
 			}
@@ -535,7 +535,7 @@ fun App(
 						onListDirs = { path -> repo.listDirs(path) },
 						// Launch the enrollee compare from the empty board when one is still owed (the
 						// device rooted an enroll invite but has not completed the in-person trust step).
-						onVerifyEnroll = (if (state.provisioned) repo.enroll.pendingEnrolleeCeremony() else null)
+						onVerifyEnroll = (if (state.provisioned) repo.ceremony.pendingEnrolleeCeremony() else null)
 							?.let { c -> { openOverlay(Overlay.EnrolleeCeremony(c)) } },
 						boardLine = { team -> boardLines[team.name] },
 						boardBranch = { team -> boardBranches[team.name] },

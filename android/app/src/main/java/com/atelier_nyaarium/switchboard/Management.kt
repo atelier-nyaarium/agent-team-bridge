@@ -73,7 +73,7 @@ fun OwnerKeysCard(repo: ChatRepository) {
 	val context = LocalContext.current
 	// Non-throwing: a corrupt owner key returns null so the card shows a restore prompt instead
 	// of crashing settings. An absent key still mints (the silent first-gen).
-	val keys = remember { repo.enroll.ownerKeysForDisplay() }
+	val keys = remember { repo.ownerFacts.ownerKeysForDisplay() }
 	Card(Modifier.fillMaxWidth()) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key", style = MaterialTheme.typography.titleMedium)
@@ -136,7 +136,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 				onClick = hapticClick {
 					status = ""
 					scope.launch {
-						val blob = repo.enroll.exportOwnerBackup(pass1)
+						val blob = repo.ownerFacts.exportOwnerBackup(pass1)
 						shareText(context, "Switchboard owner key backup", blob)
 						status = "Saved. Keep it offline."
 					}
@@ -164,7 +164,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 				onClick = hapticClick {
 					status = ""
 					scope.launch {
-						status = when (repo.enroll.importOwnerBackup(restoreBlob.trim(), restorePass)) {
+						status = when (repo.ownerFacts.importOwnerBackup(restoreBlob.trim(), restorePass)) {
 							OwnerRestoreResult.OK -> "Owner key restored."
 							OwnerRestoreResult.DIFFERENT_OWNER ->
 								"That backup is a different owner key. Only restore it on a fresh device."
@@ -194,7 +194,7 @@ fun GatewaysScreen(
 	val activity = LocalContext.current as? FragmentActivity
 	// Re-read after a revoke so the list reflects the change.
 	var refresh by remember { mutableStateOf(0) }
-	val gateways = remember(refresh) { repo.enroll.admittedMembers().filter { it.kind == "gateway" } }
+	val gateways = remember(refresh) { repo.ownerFacts.admittedMembers().filter { it.kind == "gateway" } }
 	Scaffold(topBar = { TopAppBar(title = { Text("Gateways") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
@@ -241,7 +241,7 @@ fun GatewaysScreen(
 										menuOpen = false
 										scope.launch {
 											if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
-											repo.enroll.revokeMember(g.signPub)
+											repo.ownerFacts.revokeMember(g.signPub)
 											refresh++
 										}
 									},
@@ -281,7 +281,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 		// Clear a prior failed attempt's error first, so a good payload's confirm screen never shows
 		// the last "not a Gateway code" message next to the valid SAS.
 		status = ""
-		val parsed = repo.enroll.parseAdmitGateway(payload)
+		val parsed = repo.gatewayEnroll.parseAdmitGateway(payload)
 		if (parsed == null) status = "That $source is not a Gateway enrollment code." else scanned = parsed
 	}
 
@@ -346,7 +346,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 										status = ""
 										return@launch
 									}
-									val result = repo.enroll.enrollGateway(s)
+									val result = repo.gatewayEnroll.enrollGateway(s)
 									busy = false
 									status = result.message
 									pasteBundle = result.pasteBundle
@@ -372,7 +372,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 	val activity = LocalContext.current as? FragmentActivity
 	// Re-read after a revoke so the removed device drops off the list.
 	var refresh by remember { mutableStateOf(0) }
-	val devices = remember(refresh) { repo.enroll.admittedMembers().filter { it.kind == "console" } }
+	val devices = remember(refresh) { repo.ownerFacts.admittedMembers().filter { it.kind == "console" } }
 	val reach = remember { repo.devices.deviceApprovalReach() }
 	Scaffold(topBar = { TopAppBar(title = { Text("Your devices") }) }) { pad ->
 		Column(
@@ -392,7 +392,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 							TextButton(onClick = hapticClick {
 								scope.launch {
 									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
-									repo.enroll.revokeMember(d.signPub)
+									repo.ownerFacts.revokeMember(d.signPub)
 									refresh++
 								}
 							}) { Text("Remove", color = MaterialTheme.colorScheme.error) }

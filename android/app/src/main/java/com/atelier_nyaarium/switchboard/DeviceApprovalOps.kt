@@ -10,8 +10,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** The "Add a device" surface: a held device arms a one-time approval window and a fresh device
- * joins it, all keyed off the console-approval broker (no admin round trip). Split out of
- * ChatRepository; see its own doc for the collaborator split. */
+ * joins it, all keyed off the console-approval broker (no admin round trip). */
 internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	////////////////////////////////
 	//  Add a device (USER self-enroll: the owner authorizes their OWN fresh device, no admin)
@@ -61,7 +60,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	suspend fun approveDevice(approvalId: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			val signed = repo.federation.admitConsole(join.newSignPub, join.newBoxPub, System.currentTimeMillis())
-			if (!repo.enroll.submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Approve failed")) {
+			if (!repo.ownerFacts.submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Approve failed")) {
 				error(repo._state.value.error ?: "The server rejected the new device.")
 			}
 			val transport = buildConsoleTransport()

@@ -77,7 +77,7 @@ fun UsersScreen(
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	// Non-throwing read: a corrupt owner key degrades to empty (no row ever matches it) rather
 	// than crashing the roster. The connect path surfaces a corrupt key as a terminal cause.
-	val myOwnerKeys = remember { repo.enroll.ownerKeysForDisplay() }
+	val myOwnerKeys = remember { repo.ownerFacts.ownerKeysForDisplay() }
 	val myOwner = myOwnerKeys?.signPub.orEmpty()
 	// Bumped on an untrust/trust so the per-row Trusted badge re-reads the friend graph.
 	var trustVersion by remember { mutableIntStateOf(0) }

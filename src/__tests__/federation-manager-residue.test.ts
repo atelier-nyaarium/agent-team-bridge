@@ -32,8 +32,16 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** The manager itself, plus the four collaborators the repository hands it to. */
-const ALLOWED = ["ChatRepository.kt", "DeviceApprovalOps.kt", "DomainAdminOps.kt", "EnrollOps.kt", "TrustOps.kt"];
+/** The manager itself, plus the six collaborators the repository hands it to. */
+const ALLOWED = [
+	"ChatRepository.kt",
+	"DeviceApprovalOps.kt",
+	"DomainAdminOps.kt",
+	"EnrollCeremonyOps.kt",
+	"GatewayEnrollment.kt",
+	"OwnerFacts.kt",
+	"TrustOps.kt",
+];
 
 /** Where the type is declared, so its own file cannot count as a caller. */
 const DECLARING_FILE = "FederationManager.kt";
