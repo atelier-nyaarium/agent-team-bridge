@@ -28,6 +28,19 @@ directions and a foundational rating that had to name which other areas it would
 
 Both are the place every other unit receives its shape from.
 
+## Standing constraint - Accommodate the future Lexicon Transactions pass
+
+The owner's backlog holds a Lexicon Transactions spec: a transactional refactor toolset (get
+content, replace body, move, rename, with graph-diff verification, undo, and commit) that will
+cannibalize lexicon's existing prepare_rename / rename_symbol. It is NOT being implemented now, but
+every refactor in this pass must stay verifiable or redoable by it later:
+
+- Express structural changes as named symbol-level operations (move, extract, rename, replace-body)
+  in the commit message and this record, one operation set per commit.
+- Never blend a move with a behavior edit in one commit; the transaction system verifies moves by
+  symbol-graph diff, and a blended commit is unverifiable by construction.
+- Renames go through lexicon prepare_rename / rename_symbol already.
+
 ## Question 1 - What orders the refactor pass?
 
 Q: Composition roots first, by defect class, by blast radius, or by subsystem?
