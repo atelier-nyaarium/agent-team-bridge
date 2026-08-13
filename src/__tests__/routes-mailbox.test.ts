@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
 
@@ -378,6 +379,65 @@ describe("routes", () => {
 
 			expect(() => consolePush(entry, "dk-1")).not.toThrow();
 			expect(consolePush(entry, "dk-1")).toEqual({ delivered: false });
+		});
+	});
+
+	////////////////////////////////
+	//  Who may author an entry in the owner's mailbox
+	//
+	//  The mirror lands in the owner's console under a session's name, and an unregistered name
+	//  resolves to UNBOUND, which anything satisfies. The mirror is display-only and never
+	//  load-bearing, so an unproven caller loses the mirror rather than the send.
+
+	describe("mirror taps and the owner's mailbox", () => {
+		function fakeChannelWs() {
+			const pushed: Record<string, unknown>[] = [];
+			return { readyState: 1, data: { mode: "channel" }, send: (data: string) => pushed.push(JSON.parse(data)) };
+		}
+
+		function guardedCtx() {
+			const registry = makeRegistry({ "coolib.dev": fakeChannelWs() });
+			const mailboxStore = new DeviceMailboxStore();
+			const sessionStore = new SessionStore();
+			const record = sessionStore.mint({ spawn: "coolapp" });
+			const token = sessionStore.ensureBindToken(record);
+			sessionStore.activateBinding(record);
+			const ctx = makeCtx({ registry, mailboxStore, sessionStore, ownerId: () => "owner-1" });
+			return { ctx, mailboxStore, token };
+		}
+
+		async function sendAs(send: ReturnType<typeof createRoutes>["send"], token: string | undefined, from: string) {
+			const req = new Request("http://localhost/send", {
+				method: "POST",
+				headers: token ? { "x-session-token": token } : {},
+			});
+			return send(req, {
+				from,
+				fromConversationId: "conv-1",
+				to: "coolib.dev",
+				body: "hello",
+				channelOnly: true,
+			});
+		}
+
+		it("an unproven caller's send delivers but authors nothing in the owner's mailbox", async () => {
+			const { ctx, mailboxStore } = guardedCtx();
+			const { send } = createRoutes(ctx);
+
+			const res = await sendAs(send, undefined, "not-a-real-session.dev");
+
+			// The send itself is untouched: "session" scope is what keeps a hand-launched agent sending.
+			expect(res.status).toBe(200);
+			expect(mailboxStore.get("owner-1")?.drain().entries ?? []).toHaveLength(0);
+		});
+
+		it("a caller holding a bound token still mirrors both participants", async () => {
+			const { ctx, mailboxStore, token } = guardedCtx();
+			const { send } = createRoutes(ctx);
+
+			await sendAs(send, token, "coolapp.dev");
+
+			expect(mailboxStore.get("owner-1")!.drain().entries).toHaveLength(2);
 		});
 	});
 });

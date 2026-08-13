@@ -7,6 +7,7 @@ import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway
 import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
+import { SessionStore } from "../shared/session-store.js";
 import { makeCtx } from "./helpers/routes.js";
 
 describe("routes", () => {
@@ -352,6 +353,82 @@ describe("routes", () => {
 			expect((await call(taskBoard, { from: "recipe-app", action: "create", title: "no op id" })).status).toBe(
 				400,
 			);
+		});
+
+		////////////////////////////////
+		//  Who may reach the owner's board
+		//
+		//  The port is published on every interface, and naming a session proves nothing on its own:
+		//  an unregistered name resolves to UNBOUND, which anything satisfies. So the board asks the
+		//  owner-data question instead, and these pin that it actually refuses.
+
+		/** A board context whose gateway has one bound session, the ordinary deployment. */
+		function makeGuardedCtx(): { ctx: RoutesDeps; token: string; boundTeam: string } {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-guard-"));
+			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
+			const sessionStore = new SessionStore();
+			const record = sessionStore.mint({ spawn: "recipe-app" });
+			const token = sessionStore.ensureBindToken(record);
+			sessionStore.activateBinding(record);
+			const ctx = makeCtx({
+				boardStore: board,
+				sessionStore,
+				ownerId: () => "owner-1",
+				carryOver: createRoutesCarryOver(),
+			});
+			// The minted session id, not the bare spawn: a bare name resolves to that spawn's DEFAULT
+			// session, which holds no record and so would be unbound like any invented name.
+			return { ctx, token, boundTeam: sessionStore.teamOf(record) };
+		}
+
+		function callAs(
+			taskBoard: ReturnType<typeof createRoutes>["taskBoard"],
+			body: Record<string, unknown>,
+			token?: string,
+		) {
+			const req = new Request("http://localhost/task-board", {
+				method: "POST",
+				headers: token ? { "x-session-token": token } : {},
+			});
+			const res = taskBoard(req, body);
+			return res.json().then((b) => ({ status: res.status, body: b as Record<string, unknown> }));
+		}
+
+		it("refuses a caller that proves nothing, whatever name it invents", async () => {
+			const { ctx, boundTeam } = makeGuardedCtx();
+			const { taskBoard } = createRoutes(ctx);
+			// An invented slug used to resolve to UNBOUND and be admitted, which listed the backlog.
+			const invented = await callAs(taskBoard, { from: "not-a-real-session", action: "list", scope: "all" });
+			expect(invented.status).toBe(403);
+			expect(invented.body.entries).toBeUndefined();
+			// Naming the session that really is bound is no better: the name was never the proof.
+			expect((await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" })).status).toBe(403);
+		});
+
+		it("refuses before it says whether a name exists, so a scan learns nothing either way", async () => {
+			const { ctx, boundTeam } = makeGuardedCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const real = await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" });
+			const invented = await callAs(taskBoard, { from: "not-a-real-session", action: "list", scope: "all" });
+			// Answering these two differently would tell a scanner which names exist.
+			expect(invented.status).toBe(real.status);
+			expect(invented.body.error).toBe(real.body.error);
+		});
+
+		it("admits a caller holding one of this gateway's bound tokens", async () => {
+			const { ctx, token, boundTeam } = makeGuardedCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const listed = await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" }, token);
+			expect(listed.status).toBe(200);
+			expect(listed.body.entries).toEqual([]);
+		});
+
+		it("stays open where nothing is bound at all, the hand-launched deployment", async () => {
+			// Same posture the byte plane already takes: a gateway with no bound session has no
+			// credential to demand, so demanding one would refuse every legitimate caller it has.
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			expect((await callAs(taskBoard, { from: "recipe-app", action: "list", scope: "all" })).status).toBe(200);
 		});
 	});
 });
