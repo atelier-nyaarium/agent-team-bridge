@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { agentHttpPath } from "../../shared/agent-backend.js";
 import {
 	CopilotAwaitAgentInputSchema,
 	CopilotListAgentsInputSchema,
@@ -30,7 +31,7 @@ export function copilotRequestBody(
 
 async function post(body: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
 	try {
-		const result = await routerPost("/copilot", body);
+		const result = await routerPost(agentHttpPath("copilot"), body);
 		return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

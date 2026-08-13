@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
+import { agentInboundFrameTypes } from "../shared/agent-backend.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode } from "../shared/types.js";
@@ -24,6 +25,9 @@ import {
 // name here only together with its last importer; deleting the re-export is not a cleanup.
 export type { ConversationRegistry, HandshakeRepushOutcome, TeamRegistry, WebSocketDeps, WsData };
 export { getAllActiveRealWs, getAllActiveWs, HANDSHAKE_REPUSH_DEDUPE_MS, RESERVED_TEAM_NAMES, resolveLiveIncarnation };
+
+const CODEX_INBOUND_FRAMES = agentInboundFrameTypes("codex");
+const COPILOT_INBOUND_FRAMES = agentInboundFrameTypes("copilot");
 
 export function createWebSocketHandlers({
 	registry,
@@ -435,17 +439,11 @@ export function createWebSocketHandlers({
 			});
 		}
 
-		if (
-			ws.data.teamName === "host" &&
-			(msg.type === "codex_hello" || msg.type === "codex_receipt" || msg.type === "codex_event")
-		) {
+		if (ws.data.teamName === "host" && typeof msg.type === "string" && CODEX_INBOUND_FRAMES.has(msg.type)) {
 			onCodexHostMessage?.(msg);
 		}
 
-		if (
-			ws.data.teamName === "host" &&
-			(msg.type === "copilot_hello" || msg.type === "copilot_receipt" || msg.type === "copilot_event")
-		) {
+		if (ws.data.teamName === "host" && typeof msg.type === "string" && COPILOT_INBOUND_FRAMES.has(msg.type)) {
 			onCopilotHostMessage?.(msg);
 		}
 

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { agentHttpPath } from "../../shared/agent-backend.js";
 import {
 	CodexAwaitAgentInputSchema,
 	CodexListAgentsInputSchema,
@@ -108,7 +109,7 @@ export function codexRequestBody(
 
 async function post(body: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
 	try {
-		const result = await routerPost("/codex", body);
+		const result = await routerPost(agentHttpPath("codex"), body);
 		return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

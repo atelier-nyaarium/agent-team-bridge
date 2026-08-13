@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { AGENT_BACKENDS, type AgentBackendId, agentCapabilityId, agentEnableEnvVar } from "./agent-backend.js";
 import type { CapabilityBundleSchema, CapabilitySnapshotSchema, EnabledPluginSchema } from "./schemas.js";
 
 ////////////////////////////////
@@ -14,8 +15,8 @@ export type CapabilityBundle = z.infer<typeof CapabilityBundleSchema>;
 /** A source that has never spoken. Distinct from one that spoke and declared nothing. */
 export const UNREPORTED_CAPABILITIES: CapabilitySnapshot = { known: false, capabilities: [], clientVersions: [] };
 
-export const CODEX_THINKING_CAPABILITY_ID = "codex-thinking";
-export const COPILOT_THINKING_CAPABILITY_ID = "copilot-thinking";
+export const CODEX_THINKING_CAPABILITY_ID = agentCapabilityId("codex");
+export const COPILOT_THINKING_CAPABILITY_ID = agentCapabilityId("copilot");
 
 // Served only by switchboard_capabilities. The always-on block carries names alone, so length here
 // is not charged against the MCP server instructions.
@@ -72,17 +73,21 @@ Use \`copilotStartAgent\` for a fresh task, \`copilotMessageAgent\` for an idle 
 Copilot uses the normal CLI login. Run \`copilot\` and \`/login\` if authentication is required.
 `.trim();
 
+// Guidance is capability payload, not a backend fact, so it lives here beside the other capability
+// prose rather than on the descriptor.
+const AGENT_BACKEND_INSTRUCTIONS: Record<AgentBackendId, string> = {
+	codex: CODEX_THINKING_INSTRUCTIONS,
+	copilot: COPILOT_THINKING_INSTRUCTIONS,
+};
+
 // An empty array is an affirmative "nothing enabled" rather than silence, which is what lets a
 // disabled daemon replace a declaration it made while the feature was on.
 export function daemonCapabilityDeclaration(env: Record<string, string | undefined>): Capability[] {
-	return [
-		...(env.CODEX_AGENT_ENABLED === "true"
-			? [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: CODEX_THINKING_INSTRUCTIONS }]
-			: []),
-		...(env.COPILOT_AGENT_ENABLED === "true"
-			? [{ id: COPILOT_THINKING_CAPABILITY_ID, instructions: COPILOT_THINKING_INSTRUCTIONS }]
-			: []),
-	];
+	return AGENT_BACKENDS.flatMap((backend) =>
+		env[agentEnableEnvVar(backend.id)] === "true"
+			? [{ id: agentCapabilityId(backend.id), instructions: AGENT_BACKEND_INSTRUCTIONS[backend.id] }]
+			: [],
+	);
 }
 
 /**

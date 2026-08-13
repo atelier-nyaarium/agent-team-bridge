@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import { COPILOT_BACKEND } from "./agent-backend.js";
 import { CodexExecutionTargetSchema, CodexOwnerKeySchema, CodexResolvedTargetSchema } from "./codex-thinking.js";
 
 ////////////////////////////////
@@ -9,7 +10,7 @@ export const COPILOT_PROMPT_MAX_BYTES = 256 * 1024;
 export const COPILOT_ACTIVITY_MAX_BYTES = 16 * 1024;
 export const COPILOT_ACTIVITY_MAX_ITEMS = 32;
 export const COPILOT_ERROR_MAX_BYTES = 16 * 1024;
-export const COPILOT_WAIT_BUDGET_MS = 240_000;
+export const COPILOT_WAIT_BUDGET_MS = COPILOT_BACKEND.waitBudgetMs;
 export const COPILOT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const COPILOT_AGENT_ID_RE = /^copilot_[0-9a-f]{32}$/;
 

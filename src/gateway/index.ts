@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
+import { agentHttpPath } from "../shared/agent-backend.js";
 import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
@@ -651,6 +652,10 @@ export async function startGateway(): Promise<void> {
 		},
 	});
 	const copilotRoute = new CopilotRoute({ service: copilotAgentService, relay: copilotRelay });
+	const agentRoutes = new Map<string, (req: Request, body: unknown) => Promise<Response>>([
+		[agentHttpPath("codex"), (req, body) => codexRoute.handle(req, body)],
+		[agentHttpPath("copilot"), (req, body) => copilotRoute.handle(req, body)],
+	]);
 
 	async function relayToHost(op: HostOp): Promise<HostOpResult> {
 		const hostWs = liveHostSocket();
@@ -1499,10 +1504,12 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(req, body);
 		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(req, body);
 		if (method === "POST" && url.pathname === "/task-board") return routes.taskBoard(req, body);
-		// One door for all five Codex tools, so session authority and validation cannot drift apart
+		// One door for all five tools across both backends, so session authority and validation cannot drift apart
 		// across them.
-		if (method === "POST" && url.pathname === "/codex") return codexRoute.handle(req, body);
-		if (method === "POST" && url.pathname === "/copilot") return copilotRoute.handle(req, body);
+		if (method === "POST") {
+			const agentRoute = agentRoutes.get(url.pathname);
+			if (agentRoute) return agentRoute(req, body);
+		}
 
 		// Blob transfer for agent callers. The console reaches the same store through its sealed
 		// ops; this is the plain-HTTP door for an in-process MCP, which has no relay to ride.

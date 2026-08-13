@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
-import { CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
+import { AGENT_BACKENDS, type AgentBackendId, agentCapabilityId } from "../shared/agent-backend.js";
 import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
 import { registerBoardTools } from "./board/boardTools.js";
@@ -34,6 +34,12 @@ import { resolveSessionNaming } from "./team-name.js";
 // the first connect is gated; WS reconnects (helpers.ts's reconnector) stay instant, since a warm
 // client has no such race.
 const INITIAL_ROUTER_CONNECT_GRACE_MS = 200;
+
+// Keyed by the backend union, so a backend added to the registry without a registrar fails the build.
+const AGENT_TOOL_REGISTRARS: Record<AgentBackendId, (mcpServer: McpServer) => void> = {
+	codex: registerCodexTools,
+	copilot: registerCopilotTools,
+};
 
 const CHANNEL_INSTRUCTIONS = `
 Cross-team messages arrive as <channel source="..." ...> tags. All metadata rides as tag attributes: session_id, from, and reply_schema when the request specifies one. The tag body is the message. Read the request and do the work.
@@ -91,9 +97,10 @@ export async function startMcp(): Promise<void> {
 	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
 	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
 	// Gated on the HOST DAEMON's declaration rather than a console plugin: these tools reach a
-	// supervised `codex app-server`, which only exists where the daemon was configured to allow one.
-	if (hasCapability(capabilities, CODEX_THINKING_CAPABILITY_ID)) registerCodexTools(mcpServer);
-	if (hasCapability(capabilities, COPILOT_THINKING_CAPABILITY_ID)) registerCopilotTools(mcpServer);
+	// supervised child process, which only exists where the daemon was configured to allow one.
+	for (const backend of AGENT_BACKENDS) {
+		if (hasCapability(capabilities, agentCapabilityId(backend.id))) AGENT_TOOL_REGISTRARS[backend.id](mcpServer);
+	}
 	// Gated on the console plugin that renders the board: without it the owner has no way to see or
 	// answer anything a session writes, so the tools would be a one-way channel into a surface nobody
 	// is looking at.
