@@ -19,14 +19,14 @@ class PlaybackRequestsPurgeTest {
 	/** What a listener actually saw, in the order it saw it. The delivered transcript is the contract
 	 * every consumer reads, and until delivery moved into the registry no test could reach it. */
 	private class Heard {
-		val events = mutableListOf<SttsPlayer.Event>()
+		val events = mutableListOf<Event>()
 
 		fun subscribe(r: PlaybackRequests) = r.addListener { events += it }
 
 		fun transcript() = events.map {
 			when (it) {
-				is SttsPlayer.Event.Started -> "start:${it.tier}:${it.gen}"
-				is SttsPlayer.Event.Ended -> "end:${it.tier}:${it.gen}:${it.outcome}"
+				is Event.Started -> "start:${it.tier}:${it.gen}"
+				is Event.Ended -> "end:${it.tier}:${it.gen}:${it.outcome}"
 			}
 		}
 	}

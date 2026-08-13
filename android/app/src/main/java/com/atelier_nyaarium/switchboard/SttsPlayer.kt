@@ -9,13 +9,8 @@ import java.io.File
 import java.util.concurrent.Executors
 
 /**
- * Synthesis playback with a per-message audio cache. Owns the cache layout and
- * the MediaPlayer; SttsClient owns the wire. Audio is cached per
- * (team, message.at, tier, provider, voice) - `at` is the stable per-message
- * identity (Message.id is reassigned on load), and the voice identity rides
- * the key so a settings change can never replay another voice's audio. The
- * container varies by provider (MP3 or streaming WAV mislabeled as audio/wav),
- * so files keep a neutral extension and MediaPlayer sniffs.
+ * Synthesis playback over a per-message audio cache. Owns the MediaPlayer; [SttsCache] owns where
+ * each rendering is filed and what fills it, and SttsClient owns the wire.
  *
  * Single-flight per entry, so impatient taps cannot fire a second request. A tap CANCELS only what is
  * audible: nothing on screen distinguishes a message that is still synthesizing, so cancelling one
@@ -32,61 +27,6 @@ class SttsPlayer(private val root: File) {
 	 * on STOPPED, so these cannot collapse back into a single "ended" signal: a file that fails to
 	 * DECODE would then pop an entry as though it had been heard, and the retry would never fire. */
 	enum class Outcome { COMPLETED, STOPPED, PREEMPTED, PLAYBACK_ERROR, SYNTH_ERROR }
-
-	/**
-	 * Where a playback is, whose it is, and which AUDIO it is in.
-	 *
-	 * The owner rides along so a caller never has to guess whose position it just read; asking the
-	 * queue instead names the wrong sound for the whole marker sequence at the head of a run.
-	 *
-	 * `audio` is the cache file's name, and it is not redundant with the owner. One message is spoken
-	 * two ways - attributed when played by hand, unattributed inside a run where the sentinel already
-	 * said the session - so an offset filed under the entry alone would be handed to a DIFFERENT
-	 * recording of the same message, of a different length.
-	 */
-	data class Position(val owner: PlaybackId, val audio: String, val positionMs: Long, val durationMs: Long) {
-		/** The (team, at, tier) this playback belongs to, for comparing against a queue entry. */
-		val entry: QueueEntry get() = QueueEntry(owner.team, owner.at, owner.tier)
-
-		internal val key: ResumeKey get() = ResumeKey(entry, audio)
-	}
-
-	/** What a resume offset is filed under: the message it belongs to AND the recording it points
-	 * into. The entry half keeps forget-by-message and purge-by-team expressible; the audio half is
-	 * what stops one rendering's offset being applied to another's. */
-	internal data class ResumeKey(val entry: QueueEntry, val audio: String)
-
-	/** Carries the (team, at, tier) it belongs to, so a consumer can attribute an outcome to the
-	 * entry that caused it. `tier` is null only for the settings voice sample, which is not a
-	 * message. `gen` names the REQUEST: minting and publishing are not one step, so a terminal can be
-	 * delivered after the Started of the request that replaced it, and without a generation a
-	 * consumer cannot tell that apart from its own request ending. */
-	sealed interface Event {
-		val team: String
-		val at: Long
-		val tier: Tier?
-		val gen: Long
-
-		data class Started(
-			override val team: String,
-			override val at: Long,
-			override val tier: Tier?,
-			override val gen: Long,
-		) : Event
-
-		data class Ended(
-			override val team: String,
-			override val at: Long,
-			override val tier: Tier?,
-			override val gen: Long,
-			val outcome: Outcome,
-			val reason: String? = null,
-		) : Event
-	}
-
-	fun interface Listener {
-		fun onPlaybackEvent(event: Event)
-	}
 
 	// Separate lanes: SttsClient blocks for up to 80s, and a stalled synth must never hold up a
 	// playback whose audio is already cached.
@@ -106,6 +46,9 @@ class SttsPlayer(private val root: File) {
 	// MediaPlayer, and it delivers its own events so their order is its transition order. This class
 	// owns only the playback effects and lends it the lane to deliver on.
 	private val requests = PlaybackRequests(eventExec)
+
+	// The cache half, over the same root. Takes `requests` and `warmExec`, so it is declared after both.
+	val cache = SttsCache(root, requests, warmExec)
 
 	@Volatile private var player: MediaPlayer? = null
 	@Volatile private var loudness: LoudnessEnhancer? = null
@@ -214,7 +157,7 @@ class SttsPlayer(private val root: File) {
 		if (text.isBlank()) return false
 		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
 		// difference from "declined, silently", which is a terminal that never arrives.
-		val audio = cacheFile(team, at, tier, provider, voice, text)
+		val audio = cache.cacheFile(team, at, tier, provider, voice, text)
 		return null != synthesizeAndPlay(team, at, tier, audio, volumePct, yielding) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
@@ -227,12 +170,12 @@ class SttsPlayer(private val root: File) {
 		// Each voice is its own entry, so Test toggles the voice you pressed rather than whatever
 		// happens to be audible. Toggling on sound, like the message button: the screen shows no
 		// spinner, so a tap during synthesis must not cancel audio the user is still waiting for.
-		val voiceAt = sampleAt(provider, voice)
+		val voiceAt = cache.sampleAt(provider, voice)
 		if (stopSounding(SAMPLE_TEAM, voiceAt, null)) return
 		// Picking a different voice supersedes instead of just stopping; this voice is left alone so a
 		// second tap on it falls through to single-flight rather than paying for a second synthesis.
 		apply(requests.finishTeamExcept(SAMPLE_TEAM, voiceAt, null, Outcome.PREEMPTED))
-		val dest = File(File(root, "stts/$SAMPLE_TEAM"), "${provider.path}-${safeVoice(voice)}.audio")
+		val dest = File(File(root, "stts/$SAMPLE_TEAM"), "${provider.path}-${cache.safeVoice(voice)}.audio")
 		synthesizeAndPlay(SAMPLE_TEAM, voiceAt, null, dest, volumePct, yielding = false) { d ->
 			client.sample(provider, text, voice, d)
 		}
@@ -257,8 +200,8 @@ class SttsPlayer(private val root: File) {
 		yielding: Boolean = true,
 	): Long? {
 		if (text.isBlank()) return null
-		val at = markerAt(text, provider, voice)
-		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${safeVoice(voice)}.audio")
+		val at = cache.markerAt(text, provider, voice)
+		val dest = File(File(root, "stts/$MARKER_TEAM"), "$at-${provider.path}-${cache.safeVoice(voice)}.audio")
 		// Returns the request's GENERATION, not its entry key. The key is derived from the spoken words
 		// so one session's sentinel is synthesized once and reused - which means two runs of the same
 		// session share it, and a terminal keyed on it cannot say WHICH run it belongs to.
@@ -279,135 +222,6 @@ class SttsPlayer(private val root: File) {
 		playExec.execute {
 			runCatching { Thread.sleep(MARKER_GAP_MS) }
 			then()
-		}
-	}
-
-	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
-	 * cache hit. Blocking - call off the main thread. Dedups tiers that speak the same text:
-	 * synthesize once and copy. Never throws; a failed tier just synthesizes on demand at Play. */
-	fun preloadTiers(
-		client: SttsClient,
-		provider: SttsProvider,
-		voice: String?,
-		team: String,
-		at: Long,
-		titleText: String,
-		summaryText: String,
-		fullText: String,
-	) {
-		// Captured ONCE, before the first claim. This producer re-claims per tier, and a horizon read
-		// per claim always sits after the purge it was meant to notice - including in the gaps between
-		// tiers, where it holds no claim for a sweep to find.
-		val horizon = requests.purgeStamp()
-		val done = mutableMapOf<String, File>()
-		for ((tier, text) in listOf(Tier.SUMMARY to summaryText, Tier.FULL to fullText, Tier.TITLE to titleText)) {
-			val dest = cacheFile(team, at, tier, provider, voice, text)
-			val twin = done[text]
-			if (twin != null) {
-				if (!dest.exists() || dest.length() == 0L) runCatching { twin.copyTo(dest, overwrite = true) }
-				// The copy writes cache under no claim of its own, so it needs the same check.
-				if (requests.purgedSince(team, horizon)) return discardPreload(dest)
-				continue
-			}
-			val ok = synthToCache(client, provider, voice, text, dest)
-			// Purged at any point since this preload began: the write above resurrected a deleted
-			// directory, so undo it. This holds no claim - a warm-up is not a request, and the epoch
-			// covers it in the gaps between tiers where a claim could not.
-			if (requests.purgedSince(team, horizon)) return discardPreload(dest)
-			if (ok) done[text] = dest
-		}
-	}
-
-	// What has been warmed, and how long it turned out to be. The duration is the useful by-product:
-	// until audio exists nothing can say how long a message will take, so a queue tile has nothing to
-	// show but a shrug.
-	private val warmedMs = java.util.concurrent.ConcurrentHashMap<QueueEntry, Long>()
-	private val warming = java.util.concurrent.ConcurrentHashMap.newKeySet<QueueEntry>()
-
-	/** How long a warmed message runs, or null if its audio does not exist yet. */
-	fun warmedDuration(team: String, at: Long, tier: Tier?): Long? = warmedMs[QueueEntry(team, at, tier)]
-
-	/**
-	 * Synthesize one queued entry ahead of its turn, off on the warm pool.
-	 *
-	 * Holds NO claim, deliberately: a warm-up is not something a consumer can see, stop, or advance a
-	 * queue on, and giving it one made a message being pre-generated read as playing. A purge reaches
-	 * it through the epoch instead, which also covers the gap between the write and the measure where
-	 * no claim could exist.
-	 *
-	 * Idempotent per entry, so the repository can call it on every queue change without stacking
-	 * fetches for something already in flight.
-	 */
-	fun warm(
-		client: SttsClient,
-		provider: SttsProvider,
-		voice: String?,
-		team: String,
-		at: Long,
-		tier: Tier,
-		text: String,
-	) {
-		val entry = QueueEntry(team, at, tier)
-		if (warmedMs.containsKey(entry) || !warming.add(entry)) return
-		warmExec.execute {
-			try {
-				val horizon = requests.purgeStamp()
-				val dest = cacheFile(team, at, tier, provider, voice, text)
-				if (!dest.isFile || dest.length() == 0L) {
-					if (!synthToCache(client, provider, voice, text, dest)) return@execute
-					if (requests.purgedSince(team, horizon)) return@execute discardPreload(dest)
-				}
-				durationOf(dest)?.let { warmedMs[entry] = it }
-			} finally {
-				warming.remove(entry)
-			}
-		}
-	}
-
-	/** A cached file's length in milliseconds. Best effort: an unreadable or half-written file simply
-	 * has no duration yet, which the tile shows as waiting rather than as a wrong number. */
-	private fun durationOf(f: File): Long? =
-		runCatching {
-			android.media.MediaMetadataRetriever().use { mmr ->
-				mmr.setDataSource(f.absolutePath)
-				mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-			}
-		}.getOrNull()
-
-	/** Remove what a preload wrote into a directory that a purge had already deleted. The parent goes
-	 * only if it is now empty, so this cannot take a sibling message's cached audio with it. */
-	private fun discardPreload(dest: File) {
-		dest.delete()
-		dest.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
-	}
-
-	/** Synthesize `text` into `dest` (atomic, cache-skip), returning whether
-	 * `dest` holds audio afterward. Uses a preload-specific temp name so it never
-	 * collides with a concurrent play's temp file; a play that races it just
-	 * re-synthesizes (last atomic rename wins, same bytes). Never throws. */
-	private fun synthToCache(
-		client: SttsClient,
-		provider: SttsProvider,
-		voice: String?,
-		text: String,
-		dest: File,
-	): Boolean {
-		if (dest.exists() && dest.length() > 0L) return true
-		if (text.isBlank()) return false
-		return try {
-			dest.parentFile?.mkdirs()
-			val tmp = File(dest.parentFile, "${dest.name}.ptmp")
-			client.stream(provider, text, voice, tmp)
-			if (tmp.length() == 0L || !tmp.renameTo(dest)) {
-				tmp.delete()
-				false
-			} else {
-				true
-			}
-		} catch (e: Exception) {
-			Log.w(TAG, "preload synth failed: ${e.message}")
-			dest.delete()
-			false
 		}
 	}
 
@@ -442,7 +256,7 @@ class SttsPlayer(private val root: File) {
 					// A purge that landed while this was fetching already deleted the directory, and
 					// the write above recreated it. Nothing else collects that, so undo it here.
 					if (requests.isStale(id)) {
-						discardPreload(dest)
+						cache.discardPreload(dest)
 						requests.finish(id, Outcome.PREEMPTED, "purged")
 						return@execute
 					}
@@ -555,7 +369,7 @@ class SttsPlayer(private val root: File) {
 		// deleted, so leaving it behind would seek freshly re-synthesized speech to where the copy that
 		// no longer exists happened to be paused. A measured duration describes that same deleted file.
 		resumeAt.keys.removeAll { it.entry.team == team }
-		warmedMs.keys.removeAll { it.team == team }
+		cache.warmedMs.keys.removeAll { it.team == team }
 		File(root, "stts/$team").deleteRecursively()
 	}
 
@@ -564,7 +378,7 @@ class SttsPlayer(private val root: File) {
 	fun purgeAll() {
 		apply(requests.purgeEverything())
 		resumeAt.clear()
-		warmedMs.clear()
+		cache.warmedMs.clear()
 		File(root, "stts").deleteRecursively()
 	}
 
@@ -689,40 +503,6 @@ class SttsPlayer(private val root: File) {
 		loudness = effect
 		playerOwner = id
 	}
-
-	/**
-	 * Keyed on the spoken WORDS as well as the entry, the same way a marker is.
-	 *
-	 * One entry can be spoken more than one way - a message played by hand carries its own attribution
-	 * while one inside a run does not, because a marker already said it. Without the text in the key,
-	 * whichever variant synthesized first is served to both, and a cache hit never looks at the text it
-	 * was asked for.
-	 */
-	private fun cacheFile(
-		team: String,
-		at: Long,
-		tier: Tier,
-		provider: SttsProvider,
-		voice: String?,
-		text: String,
-	): File = File(
-		File(root, "stts/$team"),
-		"$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}-${text.hashCode()}.audio",
-	)
-
-	/** The sample entry's `at`. The preview is not a message, so this stands in for one, derived from
-	 * provider and voice so two voices are two entries. */
-	private fun sampleAt(provider: SttsProvider, voice: String?): Long =
-		"${provider.path}-${safeVoice(voice)}".hashCode().toLong()
-
-	/** A marker's entry key. Derived from the spoken WORDS, so every message from one session reuses a
-	 * single synthesis instead of paying per message - and two sessions that happen to share a label
-	 * share the audio, which is correct because the audio is the label. */
-	private fun markerAt(text: String, provider: SttsProvider, voice: String?): Long =
-		"$text|${provider.path}-${safeVoice(voice)}".hashCode().toLong()
-
-	private fun safeVoice(voice: String?): String =
-		(voice ?: "default").replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
 
 	companion object {
 		private const val TAG = "SttsPlayer"

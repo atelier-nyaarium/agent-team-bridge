@@ -93,7 +93,7 @@ internal fun SttsVoiceSection(repo: ChatRepository) {
 	// state writes are thread-safe, so the player thread can set it directly).
 	DisposableEffect(Unit) {
 		val errors = repo.stts.addListener { event ->
-			val ended = event as? SttsPlayer.Event.Ended
+			val ended = event as? Event.Ended
 			// Only the sample's own failures belong on this screen; a queue entry failing elsewhere
 			// is not this preview's business.
 			if (ended != null && ended.team == SttsPlayer.SAMPLE_TEAM && ended.reason != null) {

@@ -22,7 +22,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	// screen: a backgrounded burst has no UI listening and must still walk forward.
 	init {
 		repo.stts.addListener { event ->
-			if (event is SttsPlayer.Event.Ended) {
+			if (event is Event.Ended) {
 				val entry = QueueEntry(event.team, event.at, event.tier)
 				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
 				// and a marker's entry key is shared by every run of the same session.
@@ -335,7 +335,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 			// The words the RUN will speak, not the attributed form a hand-play uses - the cache is keyed
 			// on the text, so warming the other one would fill the cache and still synthesize live.
 			val text = ttsTextFramed(state, msg, tier, attributed = false)
-			if (text.isNotBlank()) repo.stts.warm(client, provider, voice, entry.team, entry.at, tier, text)
+			if (text.isNotBlank()) repo.stts.cache.warm(client, provider, voice, entry.team, entry.at, tier, text)
 		}
 	}
 
@@ -425,7 +425,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 				// The live player for the one sounding, otherwise whatever warming measured - a queued
 				// entry knows its own length as soon as its audio exists, which is the point of warming it early.
 				durationMs = current?.takeIf { it.entry == entry }?.durationMs
-					?: repo.stts.warmedDuration(entry.team, entry.at, entry.tier),
+					?: repo.stts.cache.warmedDuration(entry.team, entry.at, entry.tier),
 				generating = generating && entry == head,
 			)
 		}
@@ -539,7 +539,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	/** Where the current BODY is and how long it is, for the sheet's one bar. Scoped to the head, so the
 	 * bar is null through the chime and the sentinel too: neither marker gets a timeline, and a bar
 	 * running over one would invite a seek with nowhere useful to land. */
-	fun playbackPosition(): SttsPlayer.Position? =
+	fun playbackPosition(): Position? =
 		repo.stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
 
 	/** Where the run would pick up while it is held. A pause has no player, so the live snapshot is
@@ -621,7 +621,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 		val provider = repo.currentProvider() ?: return
 		val msg = repo._state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
 		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		repo.stts.preloadTiers(
+		repo.stts.cache.preloadTiers(
 			client,
 			provider,
 			voice,

@@ -16,7 +16,7 @@ data class PlaybackId(val team: String, val at: Long, val tier: SttsPlayer.Tier?
  * owns: the decision is taken here, the effect runs later under a different lock, and in between a
  * newer request can have taken the sound.
  */
-data class PlaybackDrop(val events: List<SttsPlayer.Event.Ended>, val soundingEnded: PlaybackId?) {
+data class PlaybackDrop(val events: List<Event.Ended>, val soundingEnded: PlaybackId?) {
 	companion object {
 		val NONE = PlaybackDrop(emptyList(), null)
 	}
@@ -59,23 +59,23 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	private val purgedAt = mutableMapOf<String, Long>()
 	private var wipedAt = 0L
 
-	private val listeners = CopyOnWriteArrayList<SttsPlayer.Listener>()
-	private val outbox = ArrayDeque<SttsPlayer.Event>()
+	private val listeners = CopyOnWriteArrayList<Listener>()
+	private val outbox = ArrayDeque<Event>()
 
 	/** Add-once per subscriber; a duplicate add would double-deliver. Returns the listener so a caller
 	 * that must later remove it can register a lambda without naming it twice. */
-	fun addListener(listener: SttsPlayer.Listener): SttsPlayer.Listener {
+	fun addListener(listener: Listener): Listener {
 		listeners.addIfAbsent(listener)
 		return listener
 	}
 
-	fun removeListener(listener: SttsPlayer.Listener) {
+	fun removeListener(listener: Listener) {
 		listeners.remove(listener)
 	}
 
 	/** Queue an event for delivery. Called only from inside the monitor, in the same critical section
 	 * as the state change it reports. */
-	private fun publish(event: SttsPlayer.Event?) {
+	private fun publish(event: Event?) {
 		if (event != null) outbox.addLast(event)
 	}
 
@@ -165,9 +165,9 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	/** A Started only exists while the request is still live. Once its terminal has gone out, a
 	 * trailing Started would leave the consumer believing an ended entry is still playing. */
 	@Synchronized
-	fun started(id: PlaybackId): SttsPlayer.Event.Started? {
+	fun started(id: PlaybackId): Event.Started? {
 		if (!isLive(id)) return null
-		val event = SttsPlayer.Event.Started(id.team, id.at, id.tier, id.gen)
+		val event = Event.Started(id.team, id.at, id.tier, id.gen)
 		publish(event)
 		pump()
 		return event
@@ -176,12 +176,12 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	/** The one terminal for `id`. Null when it already ended or a newer claim superseded it, so a
 	 * request can never report twice and a stale hand-off reports nothing. */
 	@Synchronized
-	fun finish(id: PlaybackId, outcome: SttsPlayer.Outcome, reason: String? = null): SttsPlayer.Event.Ended? {
+	fun finish(id: PlaybackId, outcome: SttsPlayer.Outcome, reason: String? = null): Event.Ended? {
 		val entry = entryOf(id)
 		if (live[entry] != id) return null
 		live.remove(entry)
 		if (sounding == id) sounding = null
-		val event = SttsPlayer.Event.Ended(id.team, id.at, id.tier, id.gen, outcome, reason)
+		val event = Event.Ended(id.team, id.at, id.tier, id.gen, outcome, reason)
 		publish(event)
 		pump()
 		return event
