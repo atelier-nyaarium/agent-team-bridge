@@ -174,7 +174,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	}
 
 	/** Arm the single shared "next-due" scheduled-send alarm - always re-armed to the earliest
-	 * pending record across every team (see ChatRepository.rearmScheduledSendAlarm), never a
+	 * pending record across every team (see ScheduledSendOps.rearmScheduledSendAlarm), never a
 	 * per-team alarm the way the retry below is. */
 	override fun scheduleNext(atMillis: Long) {
 		if (destroyed) return
@@ -211,7 +211,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			return
 		}
 		repo.onInbound = { team, messages -> notifications.notifyBurst(repo, team, messages) }
-		repo.onScheduledSendFailed = { team, opId -> notifications.notifyScheduledSendFailed(repo, team, opId) }
+		repo.scheduled.onScheduledSendFailed = { team, opId -> notifications.notifyScheduledSendFailed(repo, team, opId) }
 		repo.playback.chimeSource = { resolveChime() }
 		// Transport surfaces send commands and show state; they never hold state of their own, so the
 		// lockscreen and the in-thread row cannot disagree about what is playing.
@@ -242,7 +242,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		)
 		repo.playback.onTransportChanged = { publishTransport() }
 		repo.pushback.scheduler = this
-		repo.scheduledSendScheduler = this
+		repo.scheduled.scheduledSendScheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
 		// onto the repo (once per process), so no inbound message is drained-and-committed before a
 		// subscriber exists (the cursor never re-delivers). Idempotent - the Activity may also boot it.
@@ -267,7 +267,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			repo.connect()
 			repo.reconcilePending()
 			repo.attachments.sweepOrphanAttachments()
-			repo.fireDueScheduledSends()
+			repo.scheduled.fireDueScheduledSends()
 			repo.drain.start(scope)
 		}
 
@@ -416,7 +416,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		destroyed = true
 		val repo = Repo.get(this)
 		repo.onInbound = null
-		repo.onScheduledSendFailed = null
+		repo.scheduled.onScheduledSendFailed = null
 		repo.playback.chimeSource = null
 		repo.playback.onTransportChanged = null
 		// Captured into a local first: the field is cleared below, and a lambda referencing the FIELD
@@ -438,7 +438,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// lifecycle callbacks - a newer instance's onCreate can never run concurrently with this
 		// one's onDestroy, so an unconditional null here can never race a live registration either.
 		repo.pushback.scheduler = null
-		repo.scheduledSendScheduler = null
+		repo.scheduled.scheduledSendScheduler = null
 		// A deliberate stop (unprovision) kills the pending alarm; a system process kill skips
 		// onDestroy entirely, so the alarm PendingIntent survives and revives the service on its
 		// own - the split this design relies on. Same story for the scheduled-send alarm: a

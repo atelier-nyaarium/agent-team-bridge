@@ -71,7 +71,7 @@ import kotlinx.coroutines.launch
 /** Mint content:// Uris over a draft's already-copied files - the one remaining FileProvider mint
  * site, feeding them back through the ordinary Uri-based send/schedule API exactly like a fresh
  * pick. Restore never touches a Uri (MessageFile is the sole currency between the store and the
- * draft); only Send and Schedule Send need one, to reach ChatRepository.send/scheduleSend. */
+ * draft); only Send and Schedule Send need one, to reach send/scheduleSend. */
 private fun draftFileUris(context: Context, files: List<MessageFile>): List<Uri> = files.mapNotNull { f ->
 	Attachments.fileFor(context.filesDir, f.src)?.let { file ->
 		FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)

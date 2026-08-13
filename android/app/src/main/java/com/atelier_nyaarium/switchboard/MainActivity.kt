@@ -411,9 +411,9 @@ fun App(
 				),
 				scheduled = ScheduledSendState(
 					record = state.scheduledSends[openTeam!!],
-					onSchedule = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
-					onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
-					onCancel = { repo.cancelScheduledSendForEdit(openTeam!!) },
+					onSchedule = { text, uris, at -> repo.scheduled.scheduleSend(openTeam!!, text, uris, at) },
+					onReschedule = { at -> repo.scheduled.rescheduleSend(openTeam!!, at) },
+					onCancel = { repo.scheduled.cancelScheduledSendForEdit(openTeam!!) },
 				),
 				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {

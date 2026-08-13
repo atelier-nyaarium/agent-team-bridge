@@ -96,7 +96,7 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 	// user actually taps Schedule. The DatePicker itself has no upper bound of its own (Material3's
 	// default year range is 1900-2100), so a stray far-future pick is rejected too - this feature is
 	// for hours-to-days-out reminders, not an unbounded storage commitment (SCHEDULED_SEND_MAX_HORIZON_MS,
-	// which ChatRepository.scheduleSend/rescheduleSend also enforce as the authoritative check).
+	// which ScheduledSendOps.scheduleSend/rescheduleSend also enforce as the authoritative check).
 	val tooSoon = pickedMillis == null || pickedMillis <= System.currentTimeMillis() + 60_000
 	val tooFarOut = pickedMillis != null && pickedMillis - System.currentTimeMillis() > ChatRepository.SCHEDULED_SEND_MAX_HORIZON_MS
 	val isFarEnoughOut = !tooSoon && !tooFarOut

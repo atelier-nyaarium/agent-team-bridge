@@ -44,7 +44,9 @@ class OutgoingFileResidueTest {
 		// Matched across the whole launch body, not just its first token: `\s*` cannot span a
 		// statement, so the old form was evaded by any line appearing before the repo call - which is
 		// exactly what a regression looks like, since nobody reintroduces this on line one. Any
-		// `<something>.launch` counts; the scope does not have to be spelled `scope`.
+		// `<something>.launch` counts; the scope does not have to be spelled `scope`. One optional
+		// segment between `repo.` and the call name covers a member reached through a held delegate
+		// (repo.scheduled.scheduleSend), which allocates exactly as much as the plain spelling.
 		//
 		// A file that builds its own CoroutineExceptionHandler is exempt, because that is precisely
 		// the thing whose absence makes a launch dangerous. This is what the rule is really about: a
@@ -56,7 +58,7 @@ class OutgoingFileResidueTest {
 			.flatMap { f ->
 				val text = f.readText()
 				hazardous.filter { call ->
-					Regex("""\w+\.launch(\([^)]*\))?\s*\{[^}]*\brepo\.$call\b""", RegexOption.DOT_MATCHES_ALL)
+					Regex("""\w+\.launch(\([^)]*\))?\s*\{[^}]*\brepo\.(\w+\.)?$call\b""", RegexOption.DOT_MATCHES_ALL)
 						.containsMatchIn(text)
 				}.map { "${f.name}:$it" }
 			}
