@@ -5,6 +5,7 @@ import android.widget.Toast
 import com.atelier_nyaarium.switchboard.Repo
 import com.atelier_nyaarium.switchboard.plugins.ThreadDockScope
 import com.atelier_nyaarium.switchboard.saveFileToDownloads
+import com.atelier_nyaarium.switchboard.send
 import java.io.File
 import kotlinx.coroutines.launch
 

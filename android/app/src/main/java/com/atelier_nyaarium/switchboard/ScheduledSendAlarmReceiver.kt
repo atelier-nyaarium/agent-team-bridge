@@ -30,7 +30,7 @@ internal const val SCHEDULED_SEND_PASS_TIMEOUT_MS =
 		35_000L
 
 /** Fires the scheduled-send alarm - either the single shared "next-due" wakeup (ACTION_FIRE_DUE,
- * see ChatRepository.fireDueScheduledSends) or one team's bounded one-shot retry after a failed
+ * see ScheduledSendOps.fireDueScheduledSends) or one team's bounded one-shot retry after a failed
  * fire (ACTION_RETRY, carrying team/opId/targetDomainId as extras - see ChatRepository.
  * kickScheduledSendRetry). The service is usually already running (a persistent START_STICKY
  * foreground service), so this is primarily the WARM kick; the dead-process revival below mirrors
@@ -69,9 +69,9 @@ class ScheduledSendAlarmReceiver : BroadcastReceiver() {
 			ACTION_RETRY -> {
 				val team = intent.getStringExtra(EXTRA_TEAM) ?: return
 				val opId = intent.getStringExtra(EXTRA_OP_ID) ?: return
-				Repo.get(context).kickScheduledSendRetry(team, opId, intent.getStringExtra(EXTRA_TARGET_DOMAIN))
+				Repo.get(context).scheduled.kickScheduledSendRetry(team, opId, intent.getStringExtra(EXTRA_TARGET_DOMAIN))
 			}
-			else -> Repo.get(context).kickScheduledSendFire()
+			else -> Repo.get(context).scheduled.kickScheduledSendFire()
 		}
 	}
 }

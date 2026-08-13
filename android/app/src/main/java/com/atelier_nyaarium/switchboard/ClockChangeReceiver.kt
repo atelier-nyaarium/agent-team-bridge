@@ -30,12 +30,12 @@ class ClockChangeReceiver : BroadcastReceiver() {
 		// The service may already be running (the mainline case - a clock change happens while the
 		// app is alive far more often than while the process is dead) or not; start() is a no-op if
 		// it already is, and kickScheduledSendFire() needs a live scheduledSendScheduler wiring either
-		// way (see ChatRepository.awaitSchedulerWired), which only a running service provides.
+		// way (see ScheduledSendOps.awaitSchedulerWired), which only a running service provides.
 		try {
 			SwitchboardService.start(context)
 		} catch (e: Exception) {
 			DebugLog.log("ClockChange", "service start refused: $e")
 		}
-		Repo.get(context).kickScheduledSendFire()
+		Repo.get(context).scheduled.kickScheduledSendFire()
 	}
 }

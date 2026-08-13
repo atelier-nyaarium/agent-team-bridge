@@ -36,7 +36,7 @@ fun DesignerDock(scope: ThreadDockScope) {
 	// after its message reaches the same rendered end state with no moment to miss.
 	val stored by androidx.compose.runtime.key(team) { DesignStore.cards(team).collectAsState() }
 	val appState by repo.state.collectAsState()
-	val failedFetches by repo.failedAttachmentFetches.collectAsState()
+	val failedFetches by repo.attachments.failedAttachmentFetches.collectAsState()
 	val cards = remember(stored, appState.threads[team], failedFetches) {
 		val rows = appState.threads[team].orEmpty()
 		stored.map { c ->
@@ -98,7 +98,7 @@ fun DesignerDock(scope: ThreadDockScope) {
 				expanded = false
 			},
 			onAction = { card, action -> runAction(context, scope, filesDir, card, action) {} },
-			onRetry = { card -> card.blobId?.let { repo.retryAttachmentFetch(it) } },
+			onRetry = { card -> card.blobId?.let { repo.attachments.retryAttachmentFetch(it) } },
 			onDismiss = { expanded = false },
 		)
 	}
@@ -127,7 +127,7 @@ fun DesignerDock(scope: ThreadDockScope) {
 						if (action == CardAction.DELETE) viewer = null
 					}
 				},
-				onRetry = { card -> card.blobId?.let { repo.retryAttachmentFetch(it) } },
+				onRetry = { card -> card.blobId?.let { repo.attachments.retryAttachmentFetch(it) } },
 				onClose = { viewer = null },
 			)
 		}

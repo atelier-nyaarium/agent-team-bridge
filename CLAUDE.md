@@ -49,11 +49,27 @@ code does not belong here; rationale lives in `git log`.
     plane version cursors this device presents back, and both drain-gate subscriber lists. Inbound
     subscribers fire inside the drain before `mailboxSync.commit`, so the exactly-once they inherit
     is a property of living here rather than of where the code happens to sit
-  - `PlaybackOps.kt` (`repo.playback`) owns the whole playback serialization boundary: the autoplay
-    queue, its advance mutex, the marker sequence and every transport control and read model. It
-    subscribes to the player from its own init, so it must stay declared after `stts` and `repoScope`
+  - `PlaybackOps.kt` (`repo.playback`) owns the playback serialization boundary: the autoplay queue,
+    its advance mutex, the marker sequence and the transport controls. It subscribes to the player
+    from its own init, so it must stay declared after `stts` and `repoScope`. `PlaybackReadModels.kt`
+    holds what a UI surface asks about, which takes no lock and mutates nothing
   - `BoardOps.kt` (`repo.boardOps`) is the repository side of the board: capture, the setters, the
     attachment transfers and assignment. The `BoardManager` it wraps stays as `repo.board`
+  - `AttachmentOps.kt` (`repo.attachments`) owns the fetch-and-sweep state: the in-flight flag, the
+    per-blob failure counts and the failed-fetch flow the designer dock collects
+  - `ScheduledSendOps.kt` (`repo.scheduled`) owns the banked sends, the alarm seam the service wires,
+    and the one mutex every fire path funnels through so a warm kick cannot double-convert
+  - `PresenceOps.kt` (`repo.presence`) owns the team list rebuild and its mutex, cross-Domain
+    presence, and the read anchors this device reports back
+  - `SessionOps.kt` (`repo.sessions`) owns the terminal view and session control: peek, tmux send,
+    spawn (with its own opId reuse window), wake, relaunch and forget
+  - Four more families are EXTENSIONS on `ChatRepository` rather than delegates, since they hold no
+    state and an extension has no backing field: `ChatRepositorySend.kt` (send, retry, the single
+    `deliver` path, admission and reconcile), `ChatRepositoryThreads.kt` (tabs, labels, rename, and
+    the read-anchor reads), `ChatRepositoryDomainLink.kt` (the provisioning blob, the connection it
+    buys, who that connection says this owner is, and the wipe that undoes it),
+    `ChatRepositoryStts.kt` and `ChatRepositoryDrafts.kt` (speech settings, composer drafts). Call
+    sites stay `repo.send(...)`, so the spelling a residue test matches on is the same either way
   - The federation surface is six more held delegates, reached as `repo.ownerFacts` /
     `.gatewayEnroll` / `.ceremony` / `.devices` / `.domainAdmin` / `.trust`: `OwnerFacts.kt`
     (first-root, the owner key, and every fact submitted through `submitOwnerFact`, plus membership),

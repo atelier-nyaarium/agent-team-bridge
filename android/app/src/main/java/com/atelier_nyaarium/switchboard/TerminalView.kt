@@ -67,7 +67,7 @@ fun TerminalView(
 	sessionStatus: String?,
 	onWake: () -> Unit,
 	// Force-relaunch claude in a pane that still exists (close_session + create_session composed -
-	// see ChatRepository.relaunchSession for why a bare wake cannot). Throws on failure.
+	// see SessionOps.relaunchSession for why a bare wake cannot). Throws on failure.
 	onRelaunch: suspend () -> Unit,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
 	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,

@@ -208,7 +208,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					val now = System.currentTimeMillis()
 					if (now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
 						lastDiscoveryAt = now
-						repo.refreshDiscovery()
+						repo.presence.refreshDiscovery()
 					}
 					if (repo.pluginReportPending) repo.reportEnabledPlugins()
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
@@ -255,7 +255,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 						mb.presence?.let { rows ->
 							val bumpAt = System.currentTimeMillis()
 							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							repo.applyPresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
+							repo.presence.applyPresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
 						}
 					}
 					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
@@ -266,7 +266,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
 						mb.linkedPeers?.let { peers ->
 							DebugLog.log("Plane", "linkedPeers settled=${mb.settled} rows=${peers.size}")
-							repo.applyLinkedPeers(peers)
+							repo.presence.applyLinkedPeers(peers)
 						}
 					}
 					// Cross-Domain-presence plane: unlike every plane above, genuinely N independently-
@@ -276,7 +276,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// wholesale replace.
 					mb.crossDomainPresence?.let { entries ->
 						DebugLog.log("Plane", "crossDomainPresence settled=${mb.settled} rows=${entries.size}")
-						repo.applyCrossDomainPresence(entries)
+						repo.presence.applyCrossDomainPresence(entries)
 					}
 					// Read-anchors plane: same generalized shape again, one plane per owner. The version
 					// bumps now, but applying the entries themselves waits until AFTER this poll's own
@@ -308,7 +308,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
 					// team locally on its own schedule rather than waiting for the next unrelated bump.
-					repo.reapplyCachedTeams()
+					repo.presence.reapplyCachedTeams()
 					// An old gateway ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
@@ -424,12 +424,12 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// are already folded into `_state.threads` above - see pendingReadAnchors' own doc.
 					pendingReadAnchors?.let { entries ->
 						DebugLog.log("Plane", "readAnchors settled=${mb.settled} rows=${entries.size}")
-						repo.applyReadAnchors(entries)
+						repo.presence.applyReadAnchors(entries)
 					}
 					// Report this device's own local read advances (scroll-driven reads since the last
 					// cycle) back to the Gateway - the write half of the same plane. Never allowed to
 					// fail the poll itself (see reportLocalReadAdvances' own doc).
-					repo.reportLocalReadAdvances()
+					repo.presence.reportLocalReadAdvances()
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
@@ -504,7 +504,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// Off the drain, never inside it: the rows are durable and on screen at this point,
 					// so their bytes can take as long as they take. Also the heal for a fetch that a
 					// process death cut short, since it re-derives what is outstanding every pass.
-					repo.fetchPendingAttachments()
+					repo.attachments.fetchPendingAttachments()
 					pollFails = 0
 					if (repo._state.value.error != null || repo._state.value.pollFailStreak != 0) {
 						repo._state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }

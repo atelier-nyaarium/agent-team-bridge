@@ -5,7 +5,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 
 /**
  * Pure helpers for the cross-Domain-presence UI (a linked friend's live sessions, pushed/pulled via
- * the Gateway's crossDomainPresence poll plane - see ChatRepository.applyCrossDomainPresence). Kept
+ * the Gateway's crossDomainPresence poll plane - see PresenceOps.applyCrossDomainPresence). Kept
  * Android-free so a JVM unit test can pin the upsert and freshness rules without a full repository.
  */
 

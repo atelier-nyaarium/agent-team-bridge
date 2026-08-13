@@ -411,14 +411,14 @@ fun App(
 				),
 				scheduled = ScheduledSendState(
 					record = state.scheduledSends[openTeam!!],
-					onSchedule = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
-					onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
-					onCancel = { repo.cancelScheduledSendForEdit(openTeam!!) },
+					onSchedule = { text, uris, at -> repo.scheduled.scheduleSend(openTeam!!, text, uris, at) },
+					onReschedule = { at -> repo.scheduled.rescheduleSend(openTeam!!, at) },
+					onCancel = { repo.scheduled.cancelScheduledSendForEdit(openTeam!!) },
 				),
 				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
-					repo.forget(forgotten)
+					repo.sessions.forget(forgotten)
 					forgetTeardown(forgotten)
 				},
 				// The board gate: the same decision the sessions list asks for, so the two surfaces
@@ -443,12 +443,12 @@ fun App(
 					// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so
 					// the terminal seeds "Waking..." rather than "asleep".
 					wakeInFlight = session?.status == "verifying",
-					onWake = { repo.wakeSession(openTeam!!) },
-					onRelaunch = { repo.relaunchSession(openTeam!!) },
-					refreshMs = repo.terminalRefreshMs,
-					onPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
-					onSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
-					onResumeAfterLimit = { repo.resumeAfterLimit(openTeam!!) },
+					onWake = { repo.sessions.wakeSession(openTeam!!) },
+					onRelaunch = { repo.sessions.relaunchSession(openTeam!!) },
+					refreshMs = repo.sessions.terminalRefreshMs,
+					onPeek = { hash -> repo.sessions.peekTerminal(openTeam!!, hash) },
+					onSend = { text, key, submit -> repo.sessions.tmuxSend(openTeam!!, text, key, submit) },
+					onResumeAfterLimit = { repo.sessions.resumeAfterLimit(openTeam!!) },
 				),
 				onFocusChange = repo::declareFocus,
 			)
@@ -459,7 +459,7 @@ fun App(
 			// connection-health state.error, so it never bleeds into an unrelated later health render.
 			LaunchedEffect(state.transientMessage) {
 				state.transientMessage?.let {
-					repo.consumeTransientMessage()
+					repo.sessions.consumeTransientMessage()
 					snackbarHostState.showSnackbar(it)
 				}
 			}
@@ -486,7 +486,7 @@ fun App(
 				boardEnabled = pluginManager.isActive("taskboard"),
 				snackbarHostState = snackbarHostState,
 				onRefresh = {
-					repo.command { refreshTeams() }
+					repo.command { presence.refreshTeams() }
 					// The board's non-route columns have no live plane, so Refresh is their only
 					// manual retry.
 					repo.boardOps.refreshBoard()
@@ -510,7 +510,7 @@ fun App(
 					SessionsScreen(
 						state = state,
 						modifier = modifier,
-						onRefresh = { repo.command { refreshTeams() } },
+						onRefresh = { repo.command { presence.refreshTeams() } },
 						onManage = { openOverlay(Overlay.Manage) },
 						onAddGateway = { openOverlay(Overlay.AddGateway) },
 						onHostHelp = { openOverlay(Overlay.HostHelp) },
@@ -523,7 +523,7 @@ fun App(
 							pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
 								it.onForget(context, team)
 							}
-							repo.forget(team)
+							repo.sessions.forget(team)
 							SwitchboardService.cancelTeamNotification(context, team)
 							SwitchboardService.cancelScheduledSendFailedNotification(context, team)
 						},
@@ -531,8 +531,8 @@ fun App(
 						// synchronously and bumps the presence plane with it, so its own tile appears via
 						// this device's own next poll (spinner while it boots) with no separate refresh.
 						// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
-						onSpawn = { project, label, workdir -> repo.command { spawnSession(project, label, workdir) } },
-						onListDirs = { path -> repo.listDirs(path) },
+						onSpawn = { project, label, workdir -> repo.command { sessions.spawnSession(project, label, workdir) } },
+						onListDirs = { path -> repo.sessions.listDirs(path) },
 						// Launch the enrollee compare from the empty board when one is still owed (the
 						// device rooted an enroll invite but has not completed the in-person trust step).
 						onVerifyEnroll = (if (state.provisioned) repo.ceremony.pendingEnrolleeCeremony() else null)

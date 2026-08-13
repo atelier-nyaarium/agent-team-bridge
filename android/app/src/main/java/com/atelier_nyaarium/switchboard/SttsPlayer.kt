@@ -356,7 +356,7 @@ class SttsPlayer(private val root: File) {
 	 */
 	private fun isResumable(id: PlaybackId): Boolean = id.team != MARKER_TEAM && id.tier != null
 
-	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
+	/** Delete a team's cached audio; wired into SessionOps.forget. Under the dot grammar a
 	 * team address ("domain.gateway.spawn.session") is a flat path segment with no slash, so it
 	 * does not nest a subdir: the team string is the unique path, so two distinct sessions never
 	 * share a cache dir. */

@@ -30,7 +30,7 @@ data class Draft(
 internal fun ChatState.withDraft(team: String, draft: Draft): ChatState =
 	copy(drafts = if (draft.isOccupied) drafts + (team to draft) else drafts - team)
 
-/** The merge [ChatRepository.takeBackIntoDraft] applies. Files always UNION, since a list has a
+/** The merge `takeBackIntoDraft` applies. Files always UNION, since a list has a
  * meaningful merge and no caller should drop a pick; text lands only on a blank draft, since it has
  * no merge and anything already typed wins. The taken-back files bring no locations of their own: a
  * sent file's origin was never recoverable, being read from a content Uri that is gone by then. */
