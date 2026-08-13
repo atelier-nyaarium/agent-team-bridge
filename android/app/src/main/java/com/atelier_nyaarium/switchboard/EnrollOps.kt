@@ -230,9 +230,7 @@ internal class EnrollOps(private val repo: ChatRepository) {
 		repo.store.enrollCeremonyDone = true
 	}
 
-	/** Run the FLOW-1 leg to the human compare through the shared engine. evie is a dumb broker
-	 * throughout: every check is on the phone. A terminal failure (broker reject, tamper, timeout)
-	 * surfaces as Result.failure; cancellation (leaving the screen) cancels the suspend. */
+	/** The FLOW-1 leg to the human compare. evie is a dumb broker: every check is on the phone. */
 	suspend fun enrollExchange(ctx: EnrollCeremonyContext): Result<EnrollExchange> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			runSasExchange(
@@ -240,6 +238,8 @@ internal class EnrollOps(private val repo: ChatRepository) {
 				myRole = ctx.role,
 				pin = ctx.pin,
 				salt = repo.federation.freshEnrollSalt(),
+				// This flow's recovery is the QR the enrollee still has.
+				retryHint = "Rescan to restart.",
 				transport = object : SasTransport {
 					override suspend fun commit(commitment: String): String? {
 						val r = repo.client().enrollHandshake(EnrollHandshakeOp.Commit(ctx.handshakeId, ctx.role, commitment))
@@ -253,16 +253,7 @@ internal class EnrollOps(private val repo: ChatRepository) {
 							it.peerReveal
 						}
 				},
-				// Enrollee side: the admin's revealed keys MUST equal the in-person QR (the OOB
-				// admin -> user authentication). A mismatch is an evie substitution of the admin reveal.
-				authenticatePeer = { peerParty ->
-					val expected = ctx.expectedPeer
-					if (expected != null && peerParty != expected) {
-						"The admin keys did not match the scanned code (possible tampering). Rescan to restart."
-					} else {
-						null
-					}
-				},
+				authenticatePeer = { EnrollCeremony.qrMismatch(ctx.expectedPeer, it) },
 			)
 		}
 	}

@@ -261,11 +261,8 @@ internal class TrustOps(private val repo: ChatRepository) {
 			}
 		}
 
-	/** Run one side of the FLOW-2 commit-reveal compare over the rendezvous. `mySide` is INITIATOR (I
-	 * armed) or TARGET (I joined a highlighted arm). Mirrors `enrollExchange`: commit (arm/join) ->
-	 * poll peerCommit -> reveal -> poll peerReveal -> verify the commit-reveal binding + that the peer
-	 * revealed the OWNER the rendezvous named -> compute the SAS. The result's `peerParty`/`peerDomainId`
-	 * feed `enrollConfirm` (shared trust-confirm) on a [Yes]. */
+	/** The FLOW-2 leg to the human compare, over the rendezvous. `mySide` is INITIATOR (I armed) or
+	 * TARGET (I joined a highlighted arm). The result feeds `enrollConfirm` on a [Yes]. */
 	suspend fun trustExchange(
 		rendezvousId: String,
 		mySide: String,
@@ -280,6 +277,8 @@ internal class TrustOps(private val repo: ChatRepository) {
 					// The rendezvousId IS this flow's SAS pin, so no new SAS scheme.
 					pin = rendezvousId,
 					salt = repo.federation.freshEnrollSalt(),
+					// No QR here, so the recovery is re-arming from the roster.
+					retryHint = "Try again.",
 					transport = object : SasTransport {
 						override suspend fun commit(commitment: String): String? {
 							val op = if (mySide == TRUST_SIDE_INITIATOR) {
@@ -298,15 +297,7 @@ internal class TrustOps(private val repo: ChatRepository) {
 								it.peerReveal
 							}
 					},
-					// Anti-substitution: the peer must reveal the OWNER the rendezvous named (the arm /
-					// highlight bound peerOwnerSignPub), so evie cannot splice in a different person.
-					authenticatePeer = { peerParty ->
-						if (peerParty.ownerSignPub != peerOwnerSignPub) {
-							"The other person's identity did not match the trust request. Try again."
-						} else {
-							null
-						}
-					},
+					authenticatePeer = { EnrollCeremony.ownerMismatch(peerOwnerSignPub, it) },
 				)
 			}
 		}

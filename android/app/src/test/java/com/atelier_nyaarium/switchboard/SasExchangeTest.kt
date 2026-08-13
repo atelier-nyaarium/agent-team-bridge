@@ -9,11 +9,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/**
- * Drives the shared commit-reveal engine both federation flows run, against a fake broker. These are
- * the checks an untrusted broker cannot influence, and until the engine existed they could only be
- * reached on a device with two phones.
- */
+/** Drives the shared commit-reveal engine both federation flows run against a fake broker: the
+ * checks that hold even when the broker is the attacker. */
 class SasExchangeTest {
 	private val me = EnrollParty(ownerSignPub = "meSign", ownerBoxPub = "meBox", domainId = "mine")
 	private val peer = EnrollParty(ownerSignPub = "peerSign", ownerBoxPub = "peerBox", domainId = "theirs")
@@ -30,9 +27,11 @@ class SasExchangeTest {
 		var commits = 0
 		var reveals = 0
 		lateinit var sentReveal: EnrollReveal
+		lateinit var sentCommitment: String
 
 		override suspend fun commit(commitment: String): String? {
 			commits++
+			sentCommitment = commitment
 			return if (commits <= silentRounds) null else peerCommitment
 		}
 
@@ -50,7 +49,7 @@ class SasExchangeTest {
 		)
 
 	private fun run(broker: SasTransport, authenticatePeer: (EnrollParty) -> String? = { null }) = runBlocking {
-		runSasExchange(me, EnrollCeremony.ADMIN, pin, salt, broker, authenticatePeer)
+		runSasExchange(me, EnrollCeremony.ADMIN, pin, salt, "Try again.", broker, authenticatePeer)
 	}
 
 	@Test
@@ -61,8 +60,22 @@ class SasExchangeTest {
 		assertEquals(SasCrypto.enrollSas(me, peer, pin), exchange.sas)
 		assertEquals("theirs", exchange.peerDomainId)
 		assertEquals(peer, exchange.peerParty)
-		// The reveal carries this side's own salt, which is what binds it to the commitment sent.
+		// The commitment sent and the reveal that opens it must be over the SAME salt, or the peer
+		// could not verify this side at all.
+		assertEquals(SasCrypto.enrollCommitment(me, EnrollCeremony.ADMIN, salt), broker.sentCommitment)
 		assertEquals(salt, broker.sentReveal.salt)
+	}
+
+	@Test
+	fun theTamperMessageCarriesTheCallersOwnRecovery() {
+		val broker = FakeBroker(
+			peerCommitment = SasCrypto.enrollCommitment(peer, EnrollCeremony.ENROLLEE, peerSalt),
+			peerReveal = EnrollReveal("attacker", peer.ownerBoxPub, peer.domainId, peerSalt),
+		)
+		val message = runCatching {
+			runBlocking { runSasExchange(me, EnrollCeremony.ADMIN, pin, salt, "Rescan to restart.", broker) { null } }
+		}.exceptionOrNull()?.message
+		assertTrue("$message", "$message".endsWith("Rescan to restart."))
 	}
 
 	@Test
@@ -118,6 +131,7 @@ class SasExchangeTest {
 				EnrollCeremony.ENROLLEE,
 				pin,
 				peerSalt,
+				"Try again.",
 				FakeBroker(
 					peerCommitment = SasCrypto.enrollCommitment(me, EnrollCeremony.ADMIN, salt),
 					peerReveal = EnrollReveal(me.ownerSignPub, me.ownerBoxPub, me.domainId, salt),
@@ -125,5 +139,26 @@ class SasExchangeTest {
 			) { null }
 		}
 		assertEquals(mine.sas, theirs.sas)
+	}
+
+	////////////////////////////////
+	//  The two flows' out-of-band bindings, the only thing that catches a consistent WRONG peer
+
+	@Test
+	fun theEnrollFlowRejectsAPeerThatIsNotTheScannedAdmin() {
+		val scanned = EnrollParty("adminSign", "adminBox", "alice")
+		assertEquals(null, EnrollCeremony.qrMismatch(scanned, scanned))
+		assertTrue(EnrollCeremony.qrMismatch(scanned, scanned.copy(ownerBoxPub = "swapped")) != null)
+		assertTrue(EnrollCeremony.qrMismatch(scanned, scanned.copy(domainId = "elsewhere")) != null)
+		// The admin's own leg scanned nothing, so it has no out-of-band peer to bind against.
+		assertEquals(null, EnrollCeremony.qrMismatch(null, peer))
+	}
+
+	@Test
+	fun theTrustFlowRejectsAPeerThatIsNotTheOwnerTheRendezvousNamed() {
+		assertEquals(null, EnrollCeremony.ownerMismatch(peer.ownerSignPub, peer))
+		assertTrue(EnrollCeremony.ownerMismatch(peer.ownerSignPub, peer.copy(ownerSignPub = "someoneElse")) != null)
+		// Only the owner key is bound here: the rendezvous named a person, not a Domain.
+		assertEquals(null, EnrollCeremony.ownerMismatch(peer.ownerSignPub, peer.copy(domainId = "another")))
 	}
 }

@@ -259,3 +259,34 @@ Three commits, in order:
 Audit (2 fresh Luna threads + Sonnet synthesis): fix-then-ship; one stale comment naming the
 extracted resolveTmuxTarget, fixed. The fold class here is the entry's own thesis confirmed: a
 rule with one right answer and six independent implementations had already drifted at two of them.
+
+## Refactor 4 - One commit-reveal engine under both federation ceremonies
+
+The entry called EnrollOps a grab bag AND the ceremony engine split across two collaborators. The
+second half was the real defect: FLOW-1 (enroll) and FLOW-2 (trust rendezvous) each carried their
+own copy of the same commit-reveal walk, so a check added to one could miss the other. In security
+ceremony that is not a legibility complaint.
+
+Operation set (one commit, 4c39c85):
+
+- add `SasExchange.kt`: `SasTransport` (a flow's broker frames) and `runSasExchange` (commit, poll,
+  reveal, poll, verify the binding, authenticate the peer, derive the SAS). Android-free.
+- move `pollEnroll` from EnrollOps.kt into it
+- rewrite `EnrollOps.enrollExchange` and `TrustOps.trustExchange` as transport + peer-binding only
+- add `SasExchangeTest.kt`, the first JVM coverage of the networked walk
+
+Audit (2 fresh Luna threads + Sonnet synthesis): NO security findings, both originals reproduced
+exactly. Three real items, all fixed in a follow-up commit:
+
+- A behavior regression I introduced and only the audit caught: merging the two tamper messages
+  lost FLOW-1's "Rescan to restart." (the enrollee HAS a QR; the trust flow does not). The recovery
+  hint is now the caller's, pinned by a test.
+- Each flow's out-of-band binding was still an inline lambda, so deleting it would pass CI. Both
+  are now named pure functions on EnrollCeremony (`qrMismatch`, `ownerMismatch`) with their own
+  tests. Honest residual: the one-line wiring that passes them is still unverified, since a real
+  call-site test needs a fake ChatRepository the Ops layer cannot take today.
+- The fake broker discarded the commitment, so nothing proved the commitment and the reveal were
+  over the same salt. Now asserted.
+
+Also fixed here, unrelated and separately committed (94a0c7f): a redundant `!!` in ChatRepository
+that the eligibility check already proves, which had been flagged for autonomous cleanup.

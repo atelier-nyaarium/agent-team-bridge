@@ -6,9 +6,9 @@ import com.atelier_nyaarium.switchboard.proto.SasCrypto
 
 /**
  * Pure (Android-free) core of the in-person enroll ceremony: role pairing, role-ordered SAS
- * derivation, and the commit-reveal verification a phone runs against the untrusted evie broker.
- * Kept here so a JVM unit test can pin the security-critical decisions without a device. The
- * networked commit/reveal/submit orchestration lives in ChatRepository.
+ * derivation, the commit-reveal verification, and each flow's out-of-band peer binding, all run
+ * against the untrusted evie broker. The networked walk is SasExchange.kt; the transports are
+ * EnrollOps.kt and TrustOps.kt.
  *
  * evie only relays the two phones' commit then reveal frames; it never computes this SAS and never
  * verifies a commitment. Every check below is local to the phone, so a substituted key surfaces as
@@ -87,4 +87,23 @@ object EnrollCeremony {
 		val enrollee = if (role == ADMIN) peerParty else myParty
 		return SasCrypto.enrollSas(admin, enrollee, pin)
 	}
+
+	/** FLOW-1's out-of-band binding: the admin's revealed keys must equal the scanned QR, so evie
+	 * cannot substitute the admin reveal. A null [expectedPeer] is the admin's own leg, which has no
+	 * out-of-band knowledge of the enrollee and relies on the compare. Returns the abort message. */
+	fun qrMismatch(expectedPeer: EnrollParty?, peerParty: EnrollParty): String? =
+		if (expectedPeer != null && peerParty != expectedPeer) {
+			"The admin keys did not match the scanned code (possible tampering). Rescan to restart."
+		} else {
+			null
+		}
+
+	/** FLOW-2's out-of-band binding: the peer must reveal the OWNER the rendezvous named, so evie
+	 * cannot splice in a different person. Returns the abort message. */
+	fun ownerMismatch(expectedOwnerSignPub: String, peerParty: EnrollParty): String? =
+		if (peerParty.ownerSignPub != expectedOwnerSignPub) {
+			"The other person's identity did not match the trust request. Try again."
+		} else {
+			null
+		}
 }

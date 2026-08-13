@@ -5,14 +5,8 @@ import com.atelier_nyaarium.switchboard.proto.EnrollReveal
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import kotlinx.coroutines.delay
 
-/**
- * The networked half of the commit-reveal compare, run identically by the FLOW-1 enroll ceremony and
- * the FLOW-2 trust rendezvous: commit, poll for the peer's commitment, reveal, poll for the peer's
- * reveal, verify the binding, authenticate the peer, then derive the SAS locally.
- *
- * Android-free so a JVM test drives the security decisions with fake transports. Both flows call
- * [runSasExchange], so a check added here cannot reach one flow and miss the other.
- */
+/** The networked half of the commit-reveal compare, run by both federation flows: a check added
+ * here cannot reach one and miss the other. Android-free, so a JVM test drives it with a fake broker. */
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -29,17 +23,15 @@ internal interface SasTransport {
 ////////////////////////////////
 //  Functions & Helpers
 
-/**
- * Run one leg to the human compare. [authenticatePeer] is the flow's own out-of-band binding
- * (FLOW-1 pins the admin party from the QR; FLOW-2 pins the owner key the rendezvous named) and
- * returns a message to abort with, so an unauthenticated peer can never reach the compare.
- * Throws on a terminal broker reject, tamper, or timeout; cancellation propagates.
- */
+/** Run one leg to the human compare. [authenticatePeer] is the flow's own out-of-band binding and
+ * returns an abort message, so an unauthenticated peer can never reach the compare. [retryHint] ends
+ * the tamper message with the recovery this flow actually has. Cancellation propagates. */
 internal suspend fun runSasExchange(
 	myParty: EnrollParty,
 	myRole: String,
 	pin: String,
 	salt: String,
+	retryHint: String,
 	transport: SasTransport,
 	authenticatePeer: (EnrollParty) -> String?,
 ): EnrollExchange {
@@ -53,7 +45,7 @@ internal suspend fun runSasExchange(
 	val peerParty = EnrollCeremony.partyOf(peerReveal)
 	// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
 	if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
-		error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Try again.")
+		error("The other phone's keys did not match its commitment (the relay tampered with the exchange). $retryHint")
 	}
 	authenticatePeer(peerParty)?.let { error(it) }
 	return EnrollExchange(
