@@ -16,7 +16,6 @@ import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
-import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
@@ -81,7 +80,8 @@ import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
 import { createRoutes, createRoutesCarryOver } from "./routes.js";
 import { createSessionAuthority, presentedByRequest } from "./sessionAuthority.js";
-import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
+import { WakeCoordinator } from "./wake.js";
+import { WakeService } from "./wakeService.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
 ////////////////////////////////
@@ -450,158 +450,22 @@ export async function startGateway(): Promise<void> {
 		process.exit(1);
 	});
 
-	// Concurrent sends to the same sleeping team must share ONE wake: two
-	// parallel `devcontainer up` runs for the same project race each other and
-	// both error out, failing sends whose container actually comes up.
-	const inflightWakes = new Map<string, Promise<WakeResult>>();
-	// create_session's relayToHost branch (a host target, or any target with no tryWakeTeam wired)
-	// never touches inflightWakes above, so isWakeInFlight needs a separate signal for that branch
-	// covering "launch requested" through "MCP registered" (consoleHandler.ts's create_session pairs
-	// this with awaitRegister below to keep it set through the actual registration, not just the
-	// host-op's own near-instant tmux-spawn ack). Tracked separately (rather than folded into
-	// inflightWakes) so it never interferes with tryWakeTeam's own dedup-by-team join semantics.
-	const inflightCreates = new Set<string>();
-	/** Either half of "a launch is under way for this team". Named once so its three readers cannot
-	 * drift; deliberately NOT presence's own wakeInFlight, which tracks the same thing on its own
-	 * lifecycle for the presence plane. */
-	const isWakeInFlight = (team: string): boolean => inflightWakes.has(team) || inflightCreates.has(team);
-
-	function tryWakeTeam(
-		team: string,
-		createOpts?: { displayLabel?: string; mintedFrom?: string },
-	): Promise<WakeResult> {
-		const existing = inflightWakes.get(team);
-		if (existing) {
-			console.log(`[wake] ${team} wake already in flight; joining it`);
-			return existing;
-		}
-		// Presence-facade wake-in-flight tracking: a SEPARATE signal from inflightWakes below (which
-		// exists purely for promise-joining) with a correlated but independently-owned lifecycle - see
-		// presence.ts's own doc comment. Started only on a genuinely NEW wake (a join must not
-		// re-announce what is already showing verifying).
-		presence.wakeStart(team);
-		const wake = doWakeTeam(team, createOpts);
-		inflightWakes.set(team, wake);
-		// `.catch` before `.finally` so this cleanup-chain promise resolves; callers still receive
-		// the original `wake` (unchanged) and see any rejection via their own await.
-		void wake
-			.catch(() => {})
-			.finally(() => {
-				inflightWakes.delete(team);
-				presence.wakeEnd(team);
-			});
-		return wake;
-	}
-
-	async function doWakeTeam(
-		team: string,
-		createOpts: { displayLabel?: string; mintedFrom?: string } = {},
-	): Promise<WakeResult> {
-		// Clean break: a catalog project is a non-chat spawn-point, not a session. A send to it has no
-		// destination (the daemon would launch project.<default> under a name the waiter never sees),
-		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Catalog membership is the signal (a
-		// dotted dir name "my.app" is still a project); named sessions are never in the catalog. A
-		// definitive "no" - there is no ambiguity to wait out, so no errorKind.
-		if (isCatalogProject(team)) {
-			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
-			return { ok: false };
-		}
-
-		// A live incarnation already serves this record - its canonical pane, or an alias re-incarnation
-		// (a manual `claude --resume` under a different name) stamped as liveTeam. Routing reaches it, so
-		// relaunching would spawn a duplicate on the same transcript. Report it up rather than wake.
-		if (resolveLiveIncarnation(registry, sessionStore, team)) {
-			console.log(`[wake] ${team} already has a live incarnation; not waking`);
-			return { ok: true };
-		}
-
-		// A composite `project.session` resolves its container/path by the PROJECT segment (composites
-		// are never in knownTeamPaths); a mapped Claude id lets the daemon `--resume` the session.
-		const { project, session } = parseSessionName(team);
-		// Never dispatch a wake that would relaunch over the host-daemon's own supervisor pane (the
-		// daemon refuses it too; this stops the wake message at the source).
-		if (project === "host" && isReservedHostSession(session)) {
-			console.log(`[wake] ${team} is a reserved host session; not waking`);
-			return { ok: false };
-		}
-		// A send-woken composite with an existing record just reattaches (idempotent - a re-wake lands
-		// on the same record, and a displayLabel is ignored - the target is addressed, not (re)created).
-		// One with no record yet is a genuine creation: a displayLabel mints a fresh opaque id under the
-		// addressed spawn (the SAME mint-and-provenance path create_session uses, via mintOrReattach -
-		// mintedFrom lets a retry sharing the same provenance key reattach instead of minting again)
-		// rather than adopting the typed segment as-is - no silent typed-text-becomes-the-id. No
-		// displayLabel refuses outright rather than adopt. The decision itself is pure and side-effect-
-		// free, so it is checked BEFORE the host-connectivity check below (a doomed-either-way send gets
-		// the more specific, more actionable reason) - but the actual mint is DEFERRED until after that
-		// check passes, so a disconnected host can never leave a freshly-minted, never-to-be-woken record
-		// behind (the rollback below only runs once a wake was actually attempted). Minting means the
-		// address actually launched is NOT necessarily the one the caller typed - wakeTeam tracks the
-		// real one, and the caller must address that for everything downstream of this wake. A bare
-		// (non-composite) wake keeps the legacy convention and gets no record either way.
-		let pendingMintLabel: string | undefined;
-		if (isComposite(team)) {
-			const decision = decideWakeCreate(team, sessionStore.getByTeam(team) != null, createOpts.displayLabel);
-			if (decision.kind === "refuse") {
-				console.log(`[wake] ${team} has no record and no displayLabel; refusing to adopt the typed name`);
-				return { ok: false, error: decision.error };
-			}
-			if (decision.kind === "mint") pendingMintLabel = decision.sessionLabel;
-		}
-
+	function liveHostSocket() {
 		const hostSubs = registry.get("host");
-		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
-
-		if (!hostWs) {
-			console.log(`[wake] cannot wake ${team} - host is not connected`);
-			return { ok: false, errorKind: "disconnected" };
-		}
-
-		let provisionalCreated = false;
-		let wakeTeam = team;
-		if (pendingMintLabel !== undefined) {
-			const minted = presence.mintOrReattach({
-				spawn: project,
-				sessionLabel: pendingMintLabel,
-				workdirHint: pendingMintLabel,
-				mintedFrom: createOpts.mintedFrom,
-			});
-			provisionalCreated = minted.created;
-			wakeTeam = sessionStore.teamOf(minted.record);
-		}
-
-		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
-		const record = sessionStore.getByTeam(wakeTeam);
-		const resumeSessionId = record?.claudeSessionId;
-		// The host workdir hint: the record's hint (workdirHint ?? sessionLabel, owned by the store).
-		// A devcontainer ignores the hint; a bare (non-composite, recordless) host wake has none.
-		const workdirHint = record ? sessionStore.hostWorkdirHint(record) : undefined;
-		hostWs.send(
-			JSON.stringify({
-				type: "wake",
-				team: wakeTeam,
-				...(projectPath ? { projectPath } : {}),
-				...(resumeSessionId ? { resumeSessionId } : {}),
-				...(workdirHint ? { workdirHint } : {}),
-				...(record ? { sessionToken: sessionStore.ensureBindToken(record) } : {}),
-			}),
-		);
-
-		console.log(`[wake] requesting ${wakeTeam} startup${projectPath ? ` (${projectPath})` : " (convention)"}`);
-
-		const result = await wakeCoordinator.waitFor(wakeTeam, WAKE_TIMEOUT_MS);
-		console.log(`[wake] ${wakeTeam} ${result.ok ? "is now online" : "failed to come online"}`);
-		// Roll back a provisional record THIS wake created if the launch never came online (a bogus or
-		// removed project, a dead launch), so a failed send-wake leaves no persisted phantom "available"
-		// card (mirrors create_session). A record a confirm has since bound (confirmedAt set, or a live
-		// incarnation) is left intact - the wake may have timed out while a slow session was confirming.
-		if (!result.ok && provisionalCreated) {
-			const rec = sessionStore.getByTeam(wakeTeam);
-			if (rec && rec.confirmedAt === undefined && !resolveLiveIncarnation(registry, sessionStore, wakeTeam)) {
-				presence.forget(wakeTeam);
-			}
-		}
-		return wakeTeam !== team ? { ...result, resolvedTeam: wakeTeam } : result;
+		return hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
 	}
+
+	const wakeService = new WakeService({
+		registry,
+		sessionStore,
+		presence,
+		wakeCoordinator,
+		isCatalogProject,
+		knownTeamPaths,
+		offlineCatalog,
+		liveHostSocket,
+		wakeTimeoutMs: WAKE_TIMEOUT_MS,
+	});
 
 	// The host op timeout must EXCEED the host's worst-case work so a succeeding-but-slow op
 	// never spuriously times out (a sendText runs two sequential 8s execs = up to 16s, and a
@@ -610,11 +474,6 @@ export async function startGateway(): Promise<void> {
 	// ConsoleClient.PROXY_CEILING_MS 60s - the full chain is pinned in
 	// ChatRepositoryConstantsTest, not here; this comment is context, not a source of truth).
 	const HOST_OP_TIMEOUT_MS = 20_000;
-
-	function liveHostSocket() {
-		const hostSubs = registry.get("host");
-		return hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
-	}
 
 	const codexRelay = new CodexRelay({
 		service: codexAgentService,
@@ -659,8 +518,7 @@ export async function startGateway(): Promise<void> {
 	// happens to match what was last pushed to a PRIOR connection.
 	let lastPushedWatch = "";
 	function pushPresenceWatch(force = false): void {
-		const hostSubs = registry.get("host");
-		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
+		const hostWs = liveHostSocket();
 		if (!hostWs) return;
 		const liveTeams = presence
 			.snapshot()
@@ -685,7 +543,7 @@ export async function startGateway(): Promise<void> {
 		liveness: (sessionKey) => {
 			const live = resolveLiveIncarnation(registry, sessionStore, sessionKey);
 			if (live?.data.handshakeConfirmed) return "live";
-			if (live || isWakeInFlight(sessionKey)) return "waking";
+			if (live || wakeService.isWakeInFlight(sessionKey)) return "waking";
 			return "gone";
 		},
 		deliver: (sessionKey, payload) => {
@@ -1115,7 +973,7 @@ export async function startGateway(): Promise<void> {
 			blobStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
-			tryWakeTeam,
+			tryWakeTeam: (team, createOpts) => wakeService.tryWakeTeam(team, createOpts),
 			sessionStore,
 			presence,
 			mailboxStore,
@@ -1232,16 +1090,9 @@ export async function startGateway(): Promise<void> {
 			crossDomainPresenceConsumer,
 			linkedDomainIds: () => [...new Set(federation.crossDomainPeers.all().map((p) => p.friendDomainId))],
 			relayToHost,
-			tryWakeTeam,
-			isWakeInFlight,
-			markCreateInFlight: (team) => {
-				inflightCreates.add(team);
-				presence.createStart(team);
-				return () => {
-					inflightCreates.delete(team);
-					presence.createEnd(team);
-				};
-			},
+			tryWakeTeam: (team) => wakeService.tryWakeTeam(team),
+			isWakeInFlight: (team) => wakeService.isWakeInFlight(team),
+			markCreateInFlight: (team) => wakeService.markCreateInFlight(team),
 			awaitRegister: (team) => wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS),
 			crossDomain: {
 				listen: () => federation.coordinator.listen(),
@@ -1325,7 +1176,7 @@ export async function startGateway(): Promise<void> {
 		// cross-Domain caller's list_teams to shared sessions only.
 		const gatewayRelayHandler = createGatewayRelayHandler({
 			routes,
-			tryWakeTeam,
+			tryWakeTeam: (team) => wakeService.tryWakeTeam(team),
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
 			shareState: {
