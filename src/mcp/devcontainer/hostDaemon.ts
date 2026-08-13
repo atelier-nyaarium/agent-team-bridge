@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import WebSocket from "ws";
+import { agentEnvPrefix } from "../../shared/agent-backend.js";
 import type { LimitNotice } from "../../shared/agent-screen.js";
 import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
 import { CodexEventAckSchema } from "../../shared/codex-thinking.js";
@@ -66,7 +67,13 @@ const codexDaemon = new CodexDaemonService({
 	send: safeSend,
 	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
 });
-const copilotTargets = new ExecutionTargetManager(copilotLauncher, undefined, targetLogger("copilot-target"));
+const copilotTargets = new ExecutionTargetManager(
+	copilotLauncher,
+	undefined,
+	targetLogger("copilot-target"),
+	undefined,
+	agentEnvPrefix("copilot"),
+);
 const copilotDaemon = new CopilotDaemonService({
 	targets: copilotTargets,
 	daemonInstanceId,

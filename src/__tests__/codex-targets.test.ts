@@ -76,26 +76,34 @@ function harness(options: { failWith?: Error } = {}) {
 
 describe("what a Codex child inherits", () => {
 	it("drops Switchboard's own secrets", () => {
-		const env = scrubChildEnv({ HOST_WS_TOKEN: "x", BRIDGE_ROUTER_URL: "y", CONSOLE_BRIDGE_TOKEN: "z" });
+		const env = scrubChildEnv({ HOST_WS_TOKEN: "x", BRIDGE_ROUTER_URL: "y", CONSOLE_BRIDGE_TOKEN: "z" }, "CODEX_");
 
 		expect(Object.keys(env)).toEqual([]);
 	});
 
 	it("keeps what the toolchain needs", () => {
-		const env = scrubChildEnv({ PATH: "/usr/bin", HOME: "/home/dev", LANG: "C.UTF-8" });
+		const env = scrubChildEnv({ PATH: "/usr/bin", HOME: "/home/dev", LANG: "C.UTF-8" }, "CODEX_");
 
 		expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/dev", LANG: "C.UTF-8" });
 	});
 
 	it("drops an unfamiliar secret-shaped variable", () => {
-		expect(scrubChildEnv({ ACME_API_KEY: "x", GH_TOKEN: "y" })).toEqual({});
+		expect(scrubChildEnv({ ACME_API_KEY: "x", GH_TOKEN: "y" }, "CODEX_")).toEqual({});
 	});
 
 	it("keeps a Codex variable that is itself secret-shaped", () => {
 		// The carve-out only shows up on a name that would otherwise match, so the case has to use one.
-		expect(scrubChildEnv({ CODEX_API_KEY: "k", CODEX_THINKING_MODEL: "gpt-5.6-luna" })).toEqual({
+		expect(scrubChildEnv({ CODEX_API_KEY: "k", CODEX_THINKING_MODEL: "gpt-5.6-luna" }, "CODEX_")).toEqual({
 			CODEX_API_KEY: "k",
 			CODEX_THINKING_MODEL: "gpt-5.6-luna",
+		});
+	});
+
+	it("withholds the other backend's secret-shaped variables from this backend's child", () => {
+		// The audited leak: a union exemption handed a Codex host child COPILOT_API_KEY.
+		expect(scrubChildEnv({ COPILOT_API_KEY: "k", CODEX_API_KEY: "c" }, "CODEX_")).toEqual({ CODEX_API_KEY: "c" });
+		expect(scrubChildEnv({ COPILOT_API_KEY: "k", CODEX_API_KEY: "c" }, "COPILOT_")).toEqual({
+			COPILOT_API_KEY: "k",
 		});
 	});
 
@@ -112,11 +120,11 @@ describe("what a Codex child inherits", () => {
 			AGENT_TYPE: "i",
 		};
 
-		expect(scrubChildEnv(denied)).toEqual({});
+		expect(scrubChildEnv(denied, "CODEX_")).toEqual({});
 	});
 
 	it("carries no undefined values through to the child", () => {
-		expect(scrubChildEnv({ PATH: "/usr/bin", EMPTY: undefined })).toEqual({ PATH: "/usr/bin" });
+		expect(scrubChildEnv({ PATH: "/usr/bin", EMPTY: undefined }, "CODEX_")).toEqual({ PATH: "/usr/bin" });
 	});
 });
 

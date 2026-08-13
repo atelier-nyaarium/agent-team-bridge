@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { AGENT_BACKENDS, agentEnvPrefix } from "../../shared/agent-backend.js";
+import { agentEnvPrefix } from "../../shared/agent-backend.js";
 import { type AgentResolvedTarget, parseAgentTargetId } from "../../shared/agent-execution-target.js";
 
 ////////////////////////////////
@@ -75,16 +75,22 @@ const SCRUBBED_EXACT = new Set([
 	"AGENT_TYPE",
 ]);
 const SCRUBBED_PATTERN = /token|secret|password|credential|api[_-]?key/i;
-const AGENT_ENV_PREFIXES = AGENT_BACKENDS.map((backend) => agentEnvPrefix(backend.id));
 
-/** The child's environment: the target's own, minus anything of Switchboard's. A deny list rather
- * than an allow list, so a variable Codex needs for its toolchain is never stripped by surprise. */
-export function scrubChildEnv(source: Record<string, string | undefined>): Record<string, string> {
+/**
+ * The child's environment: the target's own, minus anything of Switchboard's. A deny list rather
+ * than an allow list, so a variable a backend needs for its toolchain is never stripped by surprise.
+ * Only the LAUNCHING backend's prefix is exempt from the secret pattern: exempting every backend's
+ * prefix handed one backend's operator-provided credentials to the other's host child.
+ */
+export function scrubChildEnv(
+	source: Record<string, string | undefined>,
+	exemptPrefix: string,
+): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [key, value] of Object.entries(source)) {
 		if (value === undefined) continue;
 		if (SCRUBBED_EXACT.has(key)) continue;
-		if (SCRUBBED_PATTERN.test(key) && !AGENT_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+		if (SCRUBBED_PATTERN.test(key) && !key.startsWith(exemptPrefix)) continue;
 		out[key] = value;
 	}
 	return out;
@@ -98,7 +104,7 @@ export function scrubChildEnv(source: Record<string, string | undefined>): Recor
  * forwarding, and scrubbing them first keeps the deny list authoritative for both launch paths.
  */
 export function containerEnvArgs(source: Record<string, string | undefined>, envPrefix: string): string[] {
-	return Object.entries(scrubChildEnv(source))
+	return Object.entries(scrubChildEnv(source, envPrefix))
 		.filter(([key]) => key.startsWith(envPrefix))
 		.flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
@@ -250,6 +256,8 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		private readonly now: () => number = () => Date.now(),
 		private readonly log: (event: TargetLogEvent) => void = defaultLog,
 		private readonly baseEnv: Record<string, string | undefined> = process.env,
+		/** The one prefix the secret scrub exempts for this manager's children. */
+		private readonly envPrefix: string = agentEnvPrefix("codex"),
 	) {}
 
 	/** The target's child, started if this is its first use. Never throws: a target that cannot run
@@ -296,7 +304,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 
 		let child: AgentChild;
 		try {
-			child = this.launcher.launch(target, scrubChildEnv(this.baseEnv));
+			child = this.launcher.launch(target, scrubChildEnv(this.baseEnv, this.envPrefix));
 		} catch (err) {
 			return this.recordFailure(target.targetId, classify(err));
 		}
