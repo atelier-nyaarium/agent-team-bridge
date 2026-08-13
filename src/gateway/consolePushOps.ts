@@ -266,5 +266,5 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	return { landMailboxEntry, mirrorPeer, consolePush, fanOutConsolePush, humanNotify, pluginAction };
+	return { mirrorPeer, consolePush, humanNotify, pluginAction };
 }

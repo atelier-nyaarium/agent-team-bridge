@@ -493,3 +493,26 @@ priority test omitted taskBoard, whose settle slot turned out to be untested ANY
 and the gate test skipped the per-dep opt-in combos. Both closed, plus the optionals: a keyring
 read-count pin, and taskBoard's first end-to-end held-poll wake test (a pre-existing gap closed
 while the seam was open).
+
+## Refactor 13 - routes.ts cut by concern
+
+Direction (a) from the entry, executed as one Opus move against a seam spec drawn first: three
+factories, each constructed per createRoutes call so the rebuild-at-federation-activation posture
+is unchanged. `consolePushOps.ts` (landMailboxEntry, mirrorPeer, consolePush, fanOutConsolePush,
+humanNotify, pluginAction - the group sharing the mailbox deps), `blobFetch.ts` (the single-flight
+coalescer; the in-flight Map still flows from RoutesCarryOver, so a rebuild does not un-coalesce
+running fetches), `presenceExchange.ts` (the burst cache and its invalidator, the cross-Domain
+push/pull/land, relayListTeams). routes.ts went 1898 to 1459; the 18-key return table is
+byte-identical; teams() deliberately still reads presence.snapshot() direct, never the burst cache.
+
+The seal-and-relay stack (sealTargetFor through relayWithRetry) STAYED, deliberately: it is the
+seal-target entry's own subject and that entry wants a pure function, not a module holding
+activation-dependent fields.
+
+Synthesis verdict clean with zero mustFix - it range-diffed the ENTIRE original file against the
+landing spots, every line accounted for, byte-identical except three disclosed deltas (a local
+rename forced by a deps field name, one appended doc sentence, one reindent). Optionals taken in
+the follow-up commit: the module returns trimmed to what consumers reach, the dangling "above"
+cross-file comment fixed, and the coalescer got its first tests ever (single-flight shared promise,
+cleared-on-settle, holder-candidate Domain order, the stalled-cursor refusal) - reachable cheaply
+for the first time now that the factory stands alone.

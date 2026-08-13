@@ -77,7 +77,7 @@ export function createPresenceExchange({
 	}
 
 	/** Land a linked friend's presence_push - the cross-Domain-presence landing side (mirrors
-	 * consolePush's own shape and posture above: local-append only, never fans out further).
+	 * consolePushOps.ts's consolePush shape and posture: local-append only, never fans out further).
 	 * `srcDomainId` is the sealer-VERIFIED sender (see gatewayRelay.ts's presence_push case),
 	 * never a payload-supplied value. A no-op pre-enrollment or when federation is not wired. */
 	function landCrossDomainPresence(srcDomainId: string, sessions: CrossDomainPresenceSession[]): void {
