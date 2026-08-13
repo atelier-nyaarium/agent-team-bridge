@@ -1,20 +1,11 @@
 import crypto from "node:crypto";
-import { z } from "zod";
-import { createBurstCache } from "../shared/burst-cache.js";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
-import {
-	type ConsolePushEntry,
-	type CrossDomainPresenceSession,
-	type FederatedOp,
-	MAX_CROSSDOMAIN_PRESENCE_SESSIONS,
-} from "../shared/federation-protocol.js";
-import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
+import type { FederatedOp } from "../shared/federation-protocol.js";
+import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { TeamInfoSchema } from "../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
@@ -27,6 +18,7 @@ import {
 	storeKey,
 } from "../shared/session-id.js";
 import type { ChannelFile, GatewayConfig, ResponsePayload, ResponsePushPayload, TeamInfo } from "../shared/types.js";
+import { createBlobFetcher } from "./blobFetch.js";
 import type { CascadeChange } from "./boardCascade.js";
 import {
 	type BoardActor,
@@ -36,21 +28,19 @@ import {
 	mayWrite,
 	visibleTo,
 } from "./boardStore.js";
+import { createConsolePushOps } from "./consolePushOps.js";
 import { isNoAckSessionId } from "./noAckPush.js";
+import { createPresenceExchange } from "./presenceExchange.js";
 import {
 	type AgentBoardEntry,
 	BoardRouteRequestSchema,
 	fileBytes,
 	getTeamMode,
-	HumanNotifySchema,
 	jsonResponse,
 	MAX_BOARD_REPLIES,
-	MAX_PLUGIN_ACTION_PAYLOAD_BYTES,
 	MAX_RESPONSE_FILE_BYTES,
-	PluginActionRequestSchema,
 	POST_WAKE_SETTLE_MS,
 	PollRequestSchema,
-	payloadBytes,
 	RespondBodySchema,
 	SendRequestSchema,
 	stampBlobHolder,
@@ -246,129 +236,6 @@ export function createRoutes({
 		}
 	}
 
-	/** THE single writer of a mailbox append that embeds `dedupeKey` onto the entry (the
-	 * MailboxEntrySchema field, carried verbatim through any further relay) AND passes the
-	 * identical value as `append()`'s own dedup parameter (DeviceMailbox's seenKeys map) - the
-	 * two necessarily-equal uses of one key can never independently drift by going through two
-	 * separate call sites. Never throws; swallows and logs under `label`, since every caller of
-	 * this (mirrorPeer, consolePush, humanNotify) treats console-mailbox delivery as best-effort. */
-	function landMailboxEntry(owner: string, entry: ConsolePushEntry, dedupeKey: string, label: string): boolean {
-		if (!mailboxStore) return false;
-		try {
-			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
-			return true;
-		} catch (err) {
-			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
-			return false;
-		}
-	}
-
-	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
-	 * `threadAddr`'s own thread, then fan the same entry out to every other same-Domain Gateway
-	 * (fanOutConsolePush) so it lands wherever the owner's console actually polls. A no-op
-	 * pre-enrollment (no owner id) or when the console bridge is off (no mailboxStore) - the
-	 * mirror is purely additive display, never load-bearing. */
-	function mirrorPeer(
-		threadAddr: Address,
-		from: string,
-		to: string,
-		payload: NoticeTierWire & {
-			body?: string;
-			files?: ChannelFile[];
-			status?: string;
-		},
-		// A stable id lets an at-least-once RELAY of this same already-composed entry (the
-		// console_push convergence hop, see fanOutConsolePush) dedupe against the same key on
-		// each receiving gateway. It does NOT protect against a caller-level HTTP retry of
-		// send()/respond() itself - that gap is pre-existing (the channel_push/response_push it
-		// mirrors has no such protection either) and is not solved here. Defaults to a fresh id
-		// when no caller has one to give.
-		dedupeKey: string = crypto.randomUUID(),
-	): void {
-		const owner = ownerId?.();
-		if (!owner || !mailboxStore) return;
-		const entry: ConsolePushEntry = {
-			kind: "peer",
-			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
-			from,
-			to,
-			...payload,
-		};
-		// Never load-bearing: a failure here must not turn an already-delivered/already-relayed
-		// primary operation into a spurious failure for the caller, so the local outcome is
-		// ignored and the fan-out is attempted regardless.
-		landMailboxEntry(owner, entry, dedupeKey, "mirror");
-		void fanOutConsolePush(entry, dedupeKey);
-	}
-
-	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
-	 * relayed from ANOTHER same-Domain Gateway) onto THIS Gateway's own owner mailbox - the
-	 * console_push LANDING side. Idempotent per dedupeKey. Local-append only: this function never
-	 * fans out further, so a receiving Gateway can never gossip-loop an entry back out to the mesh
-	 * (only fanOutConsolePush calls the relay, and nothing calls it from here). A no-op (not an
-	 * error, so the origin's relayWithRetry does not burn retries on it) pre-enrollment, when the
-	 * console bridge is off, when the attached files exceed the same byte cap every other
-	 * mailbox-writing path enforces (send/respond/humanNotify - this is the only path that lands
-	 * relayed-in content rather than a request this Gateway already validated itself), when a
-	 * plugin_action payload exceeds its own byte cap, or if the append itself fails - mirroring
-	 * mirrorPeer's own "purely additive, never load-bearing" posture. */
-	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
-		const owner = ownerId?.();
-		if (!owner || !mailboxStore) return { delivered: false };
-		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
-			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
-			return { delivered: false };
-		}
-		if (entry.payload && payloadBytes(entry.payload) > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
-			console.warn(
-				`[console_push] dropped an oversized plugin_action payload (over ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes)`,
-			);
-			return { delivered: false };
-		}
-		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
-	}
-
-	/** Land a linked friend's presence_push - the cross-Domain-presence landing side (mirrors
-	 * consolePush's own shape and posture above: local-append only, never fans out further).
-	 * `srcDomainId` is the sealer-VERIFIED sender (see gatewayRelay.ts's presence_push case),
-	 * never a payload-supplied value. A no-op pre-enrollment or when federation is not wired. */
-	function landCrossDomainPresence(srcDomainId: string, sessions: CrossDomainPresenceSession[]): void {
-		crossDomainPresenceConsumer?.land(srcDomainId, sessions);
-	}
-
-	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
-	 * same-Domain Gateway, so it lands wherever the owner's console actually polls - not just the
-	 * Gateway that composed it. Same-Domain peers are enumerated the same way discover() already
-	 * does (evie's list_gateways; no new discovery machinery), filtered through the
-	 * locally-mirrored Allowlist where available (a mailbox WRITE deserves the extra check
-	 * discover()'s read-only list_teams fan-out doesn't bother with) and self-excluded as cheap
-	 * insurance against evie ever including the caller in its own roster. Fire-and-forget with
-	 * retry (relayWithRetry); never throws. ORIGIN-ONLY: call this from an origination tap point
-	 * (mirrorPeer, humanNotify) alone - never from console_push's own landing case in handleOp, or
-	 * an entry would gossip-loop around the mesh forever. */
-	async function fanOutConsolePush(entry: ConsolePushEntry, dedupeKey: string): Promise<void> {
-		if (!evieClient?.isConnected()) return;
-		if (!resolvesLocalGateway) {
-			// Not just "no extra check" - trusting evie's roster alone for a mailbox WRITE is a
-			// deliberately bigger trust extension than list_teams' read-only fan-out takes, so a
-			// missing filter is worth a log, not a silent downgrade.
-			console.warn("[console_push] fan-out running with no allowlist filter (resolvesLocalGateway unset)");
-		}
-		try {
-			const rosterCall = await evieClient.callTool("list_gateways", {});
-			const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
-			for (const { gatewayId } of roster) {
-				if (gatewayId === localGatewayId) continue;
-				if (resolvesLocalGateway && !resolvesLocalGateway(gatewayId)) continue;
-				void relayWithRetry(gatewayId, { kind: "console_push", entry, dedupeKey }, "console_push");
-			}
-		} catch (err) {
-			console.warn(
-				`[console_push] fan-out roster fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
 	/** Resolve a target Gateway id to a SealTarget, LOCAL-FIRST (mirroring the sealer's own
 	 * resolution order). A gateway id the local single-owner allowlist resolves is the
 	 * bare-string shorthand and seals v1 - checked BEFORE the cross-Domain scan, so a send to
@@ -476,86 +343,6 @@ export function createRoutes({
 		}
 	}
 
-	/** In-progress cross-Gateway fetches, keyed by blob. Cleared on settle, so this is a coalescer
-	 * rather than a cache: a later reader of an absent blob still triggers a fresh attempt. */
-	const blobFetches = carryOver.blobFetches;
-
-	/**
-	 * Pull a whole blob in from the Gateway that holds it, and report whether this Gateway now has it.
-	 *
-	 * The hop that makes an attachment survive routing. Bytes live on ONE Gateway while the message
-	 * naming them routes by its own rules, so a receiver regularly asks a Gateway that never had
-	 * them. Rather than teaching every client which Gateway holds what, a client always asks its own
-	 * and this fills the gap behind it, caching the result. Content addressing means the cache needs
-	 * no invalidation, and a re-fetch of something already held costs one stat.
-	 *
-	 * Bounded exactly like every other transfer: a range at a time, against MAX_BLOB_BYTES, refusing
-	 * a peer whose cursor stops advancing. A failure returns false rather than throwing, because the
-	 * caller's next move is to report the file unavailable, not to fail the whole message.
-	 */
-	function fetchBlobFromGateway(blobId: string, fromGateway: string): Promise<boolean> {
-		// Single-flight per blob. A client-facing door now initiates outbound mesh traffic, and while
-		// the bytes are absent every request re-enters here, so concurrent readers of one attachment
-		// would each open their own 16-round-trip relay loop for identical content. They share one.
-		const inFlight = blobFetches.get(blobId);
-		if (inFlight) return inFlight;
-		const started = runBlobFetch(blobId, fromGateway).finally(() => blobFetches.delete(blobId));
-		blobFetches.set(blobId, started);
-		return started;
-	}
-
-	/**
-	 * Every Domain a holder's gateway id could mean, most likely first.
-	 *
-	 * A gateway id defaults to the machine's hostname and duplicates are an anticipated condition
-	 * (see GATEWAY_ID in docker-compose.yml), so a friend's `desktop` and my own `desktop` are the
-	 * same string. `sealTargetFor` is local-first by deliberate design, which is right for a SEND -
-	 * misrouting a message is a disclosure - but wrong for a fetch, where local-first silently asks a
-	 * sibling that never held the file.
-	 *
-	 * So a fetch tries every candidate rather than betting on one. That is safe here and nowhere else
-	 * in this file: a blob is named by the digest of its own contents, so a wrong guess cannot return
-	 * wrong bytes, only no bytes. Asking is the cheap half; being wrong about who to ask was costing
-	 * the attachment entirely.
-	 */
-	function holderCandidates(fromGateway: string): Array<string | undefined> {
-		const domains = (crossDomainPeers?.all() ?? [])
-			.filter((p) => p.friendGatewayId === fromGateway)
-			.map((p) => p.friendDomainId);
-		// Undefined first: the bare form is the local/same-Domain resolution and the common case.
-		return [undefined, ...domains];
-	}
-
-	async function runBlobFetch(blobId: string, fromGateway: string): Promise<boolean> {
-		if (!blobStore || fromGateway === localGatewayId) return false;
-		for (const domain of holderCandidates(fromGateway)) {
-			if (await fetchBlobFrom(blobId, fromGateway, domain)) return true;
-		}
-		return false;
-	}
-
-	async function fetchBlobFrom(blobId: string, fromGateway: string, fromDomain?: string): Promise<boolean> {
-		if (!blobStore) return false;
-		let offset = blobStore.stat(blobId).have;
-		for (;;) {
-			if (offset > MAX_BLOB_BYTES) return false;
-			const relay = await relayToGateway(
-				fromGateway,
-				{ kind: "blob_fetch", blobId, offset, length: BLOB_CHUNK_BYTES },
-				fromDomain,
-			);
-			if (!relay.ok) return false;
-			const res = relay.result as { chunk?: string; eof?: boolean } | undefined;
-			if (!res) return false;
-			const bytes = Buffer.from(res.chunk ?? "", "base64");
-			if (bytes.length === 0 && !res.eof) return false;
-			const written = blobStore.write(blobId, offset, bytes, !!res.eof);
-			if (res.eof) return written.complete;
-			if (written.have <= offset) return false;
-			offset = written.have;
-		}
-	}
-
 	/** Relay a cross-Gateway op in the background, retrying on transient failure (evie
 	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
@@ -596,6 +383,42 @@ export function createRoutes({
 			void tryOnce();
 		});
 	}
+
+	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session)
+	// hands each module the freshly-captured deps, so nothing here keeps serving the pre-federation
+	// closure. Anything whose loss would change behaviour rides carryOver instead.
+	const { mirrorPeer, consolePush, humanNotify, pluginAction } = createConsolePushOps({
+		mailboxStore,
+		ownerId,
+		evieClient,
+		resolvesLocalGateway,
+		localGatewayId,
+		localAddress,
+		refuseImpersonation,
+		relayWithRetry,
+	});
+	const { fetchBlobFromGateway } = createBlobFetcher({
+		blobStore,
+		crossDomainPeers,
+		localGatewayId,
+		relayToGateway,
+		inFlight: carryOver.blobFetches,
+	});
+	const {
+		presenceForDomain,
+		pushPresenceToDomain,
+		pullPresenceFromDomain,
+		relayListTeams,
+		landCrossDomainPresence,
+		invalidatePresenceSnapshotCache,
+	} = createPresenceExchange({
+		presence,
+		sharesFor,
+		crossDomainPeers,
+		crossDomainPresenceConsumer,
+		tryLocalAddress,
+		relayToGateway,
+	});
 
 	/** Origin side of a cross-Gateway channel send. Keeps a local pollable anchor keyed
 	 * by the canonical session id (so the sender can poll and the eventual
@@ -719,167 +542,6 @@ export function createRoutes({
 			sessionStore?.touchLive(row.team);
 		}
 		return jsonResponse(rows);
-	}
-
-	// presence.snapshot() is domain-INDEPENDENT (an O(local sessions) walk + sort, per
-	// presence.ts), but presenceForDomain below is invoked once per linked-and-shared Domain from
-	// crossDomainPresence.ts's recomputeAll() - up to MAX_LINKED_DOMAINS_FOR_PRESENCE (500) calls
-	// in one fully-synchronous pass triggered by a single, ordinary local presence mutation (any
-	// session's working-state flip). createBurstCache makes that whole burst pay for one
-	// computation, not one per Domain, while any OTHER, later caller (a plain GET /teams) still
-	// gets a fresh one.
-	const presenceSnapshotCache = createBurstCache<TeamInfo[]>(() => presence?.snapshot() ?? []);
-	function presenceSnapshotForThisTick(): TeamInfo[] {
-		return presenceSnapshotCache.get();
-	}
-
-	/** Force the next `presenceSnapshotForThisTick()` call to recompute rather than reuse a cached
-	 * read. Two genuinely separate local presence mutations (e.g. a reconnect's evict-then-confirm)
-	 * can each synchronously trigger their own `recomputeAll()` pass within the SAME tick, before the
-	 * microtask that clears the cache ever runs - without this, the second pass would silently
-	 * compare against the first pass's now-stale intermediate snapshot and conclude nothing changed.
-	 * Called once at the start of every `recomputeAll`/`recomputeDomain` entry (crossDomainPresence.ts)
-	 * so each TOP-LEVEL call sees fresh state while still sharing one computation across its own
-	 * per-Domain loop. */
-	function invalidatePresenceSnapshotCache(): void {
-		presenceSnapshotCache.invalidate();
-	}
-
-	/** Kind-filter + slug-validate + field-slice one TeamInfo row down to a CrossDomainPresenceSession
-	 * - shared by `presenceForDomain` (this Gateway's own outbound rows, still needing its own
-	 * `sharesFor` gate on top) and the backstop-pull reconciler (a linked peer's OWN already-shared-
-	 * filtered `list_teams` response, needing no further gate). Only devcontainer/loose sessions are
-	 * ever shareable (matching `gateCrossDomainTarget`'s own kind check); free-text fields are
-	 * truncated - this crosses a cross-Domain trust boundary TeamInfo itself was never scoped for.
-	 * `tryLocalAddress`, not the throwing `localAddress`: a row's team name is not always
-	 * slug-validated at intake (an ordinary devcontainer directory name can be uppercase, contain an
-	 * underscore/space, or exceed 64 chars), so an invalid one is skipped here, never an uncaught
-	 * throw. Returns null for a row that fails either check. */
-	function toCrossDomainPresenceSession(t: TeamInfo): CrossDomainPresenceSession | null {
-		if (t.kind !== "devcontainer" && t.kind !== "loose") return null;
-		if (!tryLocalAddress(t.team)) return null;
-		return {
-			team: t.team,
-			gatewayId: t.gatewayId,
-			status: t.status,
-			kind: t.kind,
-			sessionLabel: t.sessionLabel?.slice(0, 64),
-			description: t.description?.slice(0, 120),
-			lastActive: t.lastActive,
-			queueDepth: t.queue_depth,
-			working: t.working,
-			needsLogin: t.needsLogin,
-		};
-	}
-
-	/** What Domain `toDomainId` currently sees of this Gateway's own sessions - the exact
-	 * `sharesFor` filter gatewayRelay.ts's list_teams case already applies for a PULL, reused
-	 * here for the cross-Domain-presence PUSH (see crossDomainPresence.ts's source side). The
-	 * underlying local snapshot is cached for the current synchronous tick only (see
-	 * presenceSnapshotForThisTick) - never across ticks. */
-	function presenceForDomain(toDomainId: string): CrossDomainPresenceSession[] {
-		const local = presenceSnapshotForThisTick();
-		const shared = new Set(sharesFor?.(toDomainId) ?? []);
-		const out: CrossDomainPresenceSession[] = [];
-		for (const t of local) {
-			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
-			const addr = tryLocalAddress(t.team);
-			if (!addr || !shared.has(addr.canonical)) continue;
-			const session = toCrossDomainPresenceSession(t);
-			if (session) out.push(session);
-		}
-		return out;
-	}
-
-	/** Push this Gateway's current presenceForDomain(toDomainId) content to EVERY gateway linked
-	 * peer under that Domain (a Domain may run more than one, mirroring discover()'s own "one
-	 * gateway is queried once even if a Domain runs several" fan-out) - a single-shot attempt (no
-	 * retry of its own; the caller, crossDomainPresence.ts's coalesced pusher, owns backoff/retry
-	 * so the two retry loops never compound). Resolves ok once at least one gateway accepts it;
-	 * partial delivery to a Domain's other gateway(s) is not itself a failure. Threads the
-	 * explicit dstDomain through relayToGateway's 3-argument form so an ambiguous bare-gateway-id
-	 * collision across two different linked Domains can never misroute it. */
-	async function pushPresenceToDomain(
-		toDomainId: string,
-		sessions: CrossDomainPresenceSession[],
-	): Promise<{ ok: boolean; error?: string }> {
-		const gateways = (crossDomainPeers?.all() ?? [])
-			.filter((p) => p.friendDomainId === toDomainId)
-			.map((p) => p.friendGatewayId);
-		if (gateways.length === 0) return { ok: false, error: `no linked gateway for Domain "${toDomainId}"` };
-		const results = await Promise.all(
-			gateways.map((g) => relayToGateway(g, { kind: "presence_push", sessions }, toDomainId)),
-		);
-		const ok = results.some((r) => r.ok);
-		return ok ? { ok: true } : { ok: false, error: results[0]?.error };
-	}
-
-	/** The shape every `{kind:"list_teams"}` relay reply must match before any caller trusts it as
-	 * typed content - capped at `MAX_CROSSDOMAIN_PRESENCE_SESSIONS` as a blanket sanity bound on how
-	 * much one reply can cost to process, matching the push path's own wire-level `.max()`. */
-	const ListTeamsRelayResultSchema = z.object({
-		teams: z.array(TeamInfoSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS).optional(),
-	});
-
-	/** Relay a `{kind:"list_teams"}` call to `dstGateway` and validate the reply against
-	 * `ListTeamsRelayResultSchema` before any caller treats it as typed content. `relayToGateway`
-	 * itself returns `result` as `unknown` by design (the reply is a PEER's content, not this
-	 * process's own), so every caller that reads it as `TeamInfo[]` has to remember to validate it -
-	 * this is the one place that discipline lives, rather than being a convention each call site can
-	 * separately forget (as `pullPresenceFromDomain` initially did). Resolves `{ok:false}` for either
-	 * a relay failure OR a reply that fails validation - a version-skewed or buggy peer omitting a
-	 * required field must never land as if it were a legitimate empty answer. */
-	async function relayListTeams(
-		dstGateway: string,
-		dstDomain?: string,
-	): Promise<{ ok: true; teams: TeamInfo[] } | { ok: false; error: string }> {
-		const r = await relayToGateway(dstGateway, { kind: "list_teams" }, dstDomain);
-		if (!r.ok) return { ok: false, error: r.error ?? "relay failed" };
-		const parsed = ListTeamsRelayResultSchema.safeParse(r.result);
-		if (!parsed.success) {
-			const error = `malformed list_teams reply from "${dstGateway}": ${parsed.error.message}`;
-			console.warn(`[relay] ${error}`);
-			return { ok: false, error };
-		}
-		return { ok: true, teams: parsed.data.teams ?? [] };
-	}
-
-	/** The cross-Domain-presence backstop pull: query every one of `fromDomainId`'s gateways for its
-	 * OWN `list_teams` at once (a sequential await-per-gateway loop would let one hung gateway delay
-	 * even STARTING the request to that Domain's other, possibly healthy, gateways by up to the full
-	 * relay timeout, degrading this Domain's own backstop cadence far below the reconciler's intended
-	 * 10s tick), deduped by gateway id like `discover()`'s own fan-out, converted through the same
-	 * `toCrossDomainPresenceSession` filter the push side uses - no `sharesFor` gate here, since the
-	 * peer's own gateway already decided what to share to this Domain before answering. Resolves
-	 * `null` if every gateway for this Domain was unreachable OR answered with something that failed
-	 * validation this attempt (the caller must not overwrite existing landed state with emptiness on
-	 * a failed pull); an array (possibly empty, if the Domain genuinely shares nothing back) once at
-	 * least one gateway answered with a valid reply. */
-	async function pullPresenceFromDomain(fromDomainId: string): Promise<CrossDomainPresenceSession[] | null> {
-		const peers = (crossDomainPeers?.all() ?? []).filter((p) => p.friendDomainId === fromDomainId);
-		if (peers.length === 0) return null;
-		const seenGateways = new Set<string>();
-		const toQuery = peers.filter((peer) => {
-			if (seenGateways.has(peer.friendGatewayId)) return false;
-			seenGateways.add(peer.friendGatewayId);
-			return true;
-		});
-		const results = await Promise.all(toQuery.map((peer) => relayListTeams(peer.friendGatewayId)));
-		const rows: TeamInfo[] = [];
-		let anyOk = false;
-		for (const r of results) {
-			if (!r.ok) continue;
-			anyOk = true;
-			rows.push(...r.teams);
-		}
-		if (!anyOk) return null;
-		const out: CrossDomainPresenceSession[] = [];
-		for (const t of rows) {
-			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
-			const session = toCrossDomainPresenceSession(t);
-			if (session) out.push(session);
-		}
-		return out;
 	}
 
 	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
@@ -1606,64 +1268,6 @@ export function createRoutes({
 		});
 	}
 
-	/** Broadcast a notice to the owner's mailbox (one shared inbox drained by every one of their
-	 * devices). Notices thread under the sender on the console and are never respondable: they
-	 * are appended directly here (not via a peer push), so no inbound session is recorded.
-	 * Ensures the mailbox by owner id rather than iterating whatever conversations already happen
-	 * to be registered ON THIS GATEWAY: a Gateway with zero consoles ever registered against it
-	 * (the ordinary shape for a multi-gateway Domain's non-home Gateway) would otherwise have an
-	 * empty mailbox map, silently dropping the notice instead of landing it somewhere the owner
-	 * will eventually poll. fanOutConsolePush then relays the same entry to every other
-	 * same-Domain Gateway too, so it reaches wherever the console actually is. */
-	function humanNotify(req: Request, body: Record<string, unknown>): Response {
-		const parsed = HumanNotifySchema.safeParse(body);
-		if (!parsed.success) {
-			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
-		}
-		const { from, title, summary, full, fullSpoken, files: rawNoticeFiles } = parsed.data;
-		// Stamped like every other locally-composed message. This route has no federated or console
-		// caller - a notice is always posted by an agent on this machine, whose bytes are therefore
-		// here - and the notice then fans out to wherever the owner's console actually polls, so
-		// without the stamp a multi-Gateway owner can never fetch a notify_human attachment.
-		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
-		const refused = refuseImpersonation(req, from);
-		if (refused) return refused;
-		if (files && files.length > 0) {
-			const total = fileBytes(files);
-			if (total > MAX_RESPONSE_FILE_BYTES) {
-				return jsonResponse(
-					{ error: `Attachments total ${total} bytes, over the ${MAX_RESPONSE_FILE_BYTES}-byte limit` },
-					413,
-				);
-			}
-		}
-		if (!mailboxStore) {
-			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
-		}
-		const owner = ownerId?.();
-		if (!owner) {
-			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
-		}
-		const dedupeKey = crypto.randomUUID();
-		const entry: ConsolePushEntry = {
-			kind: "notice",
-			// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
-			// never throws here - unlike a console send's free-form Device Name. notify_human is an
-			// agent-only tool; a console never posts a notice, so the sender is always a slug.
-			session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
-			from,
-			body: full,
-			...pickTiers({ title, summary, fullSpoken }),
-			...(files && files.length > 0 ? { files } : {}),
-		};
-		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {
-			return jsonResponse({ error: "failed to store notice" }, 500);
-		}
-		void fanOutConsolePush(entry, dedupeKey);
-		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
-		return jsonResponse({ delivered: true });
-	}
-
 	/** The one task-board route behind all six taskBoard* tools. `from` (hardcoded MCP-side) is both
 	 * the impersonation gate's claim and the only scoping key, so a session touches the backlog plus
 	 * its own entries and nothing else. A refusal answers 200 with `applied:false` + `refused` (a
@@ -1830,49 +1434,6 @@ export function createRoutes({
 				return done({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });
 			}
 		}
-	}
-
-	/** Land a generic plugin-action envelope (pluginId/actionType/payload) into the owner's mailbox
-	 * as a `plugin_action` entry, threaded under the CALLING agent's own address - never a
-	 * client-suppliable target - so a caller can only ever act on its own conversation.
-	 * Best-effort/never-load-bearing, matching every other mailbox-writing path here: the console
-	 * routes an unclaimed pluginId:actionType to nothing (silently skipped), so a dropped write here
-	 * is no worse than a dropped claim there. */
-	function pluginAction(req: Request, body: Record<string, unknown>): Response {
-		const parsed = PluginActionRequestSchema.safeParse(body);
-		if (!parsed.success) {
-			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
-		}
-		const { from, pluginId, actionType, payload } = parsed.data;
-		const refused = refuseImpersonation(req, from);
-		if (refused) return refused;
-		if (!mailboxStore) {
-			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
-		}
-		const owner = ownerId?.();
-		if (!owner) {
-			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
-		}
-		let threadAddr: Address;
-		try {
-			threadAddr = localAddress(from);
-		} catch {
-			return jsonResponse({ error: `invalid "from" session name: ${from}` }, 400);
-		}
-		const dedupeKey = crypto.randomUUID();
-		const entry: ConsolePushEntry = {
-			kind: "plugin_action",
-			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
-			pluginId,
-			actionType,
-			...(payload ? { payload } : {}),
-		};
-		if (!landMailboxEntry(owner, entry, dedupeKey, "plugin_action")) {
-			return jsonResponse({ error: "failed to store plugin action" }, 500);
-		}
-		void fanOutConsolePush(entry, dedupeKey);
-		console.log(`[plugin_action] ${pluginId}:${actionType} from ${from} delivered to owner ${owner}`);
-		return jsonResponse({ delivered: true });
 	}
 
 	return {
