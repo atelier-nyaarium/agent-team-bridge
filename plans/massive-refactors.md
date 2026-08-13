@@ -28,18 +28,14 @@ directions and a foundational rating that had to name which other areas it would
 
 Both are the place every other unit receives its shape from.
 
-## Standing constraint - Accommodate the future Lexicon Transactions pass
+## Commit hygiene for this pass
 
-The owner's backlog holds a Lexicon Transactions spec: a transactional refactor toolset (get
-content, replace body, move, rename, with graph-diff verification, undo, and commit) that will
-cannibalize lexicon's existing prepare_rename / rename_symbol. It is NOT being implemented now, but
-every refactor in this pass must stay verifiable or redoable by it later:
+(The Lexicon Transactions constraint recorded here earlier was retracted by the owner; it belonged
+to a different team. The hygiene it endorsed stays because it is good on its own.)
 
-- Express structural changes as named symbol-level operations (move, extract, rename, replace-body)
-  in the commit message and this record, one operation set per commit.
-- Never blend a move with a behavior edit in one commit; the transaction system verifies moves by
-  symbol-graph diff, and a blended commit is unverifiable by construction.
-- Renames go through lexicon prepare_rename / rename_symbol already.
+- Express structural changes as named operation sets in the commit message and this record, one
+  operation set per commit.
+- Never blend a structural move with a behavior edit in one commit.
 
 ## Question 1 - What orders the refactor pass?
 
@@ -197,7 +193,7 @@ the one that matters: it is what makes a retried board mutation a replay rather 
 
 ## Refactor 1 - Gateway boot as an explicit state machine
 
-Operation set (one commit, per the Lexicon Transactions constraint):
+Operation set (one commit):
 
 - add `src/gateway/boot.ts`: `BootState` (standalone | arming | federationActive), `ArmingSlice`,
   `FederationSlice`, `EvieHandlers`, `DomainMeta`, `decideBootPhase`, `federationOf`, `armingOf`
@@ -241,3 +237,25 @@ Reassessment note: DurableStore.save already swallowed write failures, so the li
 was the snapshot builders (evaluated before save's try) and the five sweeps. The bug class killed:
 a step added to the tick is contained by construction instead of by its call site remembering a
 try. Same class as the restore boundaries, now closed in both directions in one module.
+
+## Refactor 3 - Console dispatcher: target resolver and device registry
+
+Three commits, in order:
+
+1. Behavior (a11592a): two sites FOLDED a foreign-Gateway address onto the same-named local
+   session instead of refusing. cross_domain_unshare's canonicalShareTarget would have unshared
+   the local session; create_session minted a local record under the foreign spawn before
+   resolveTmuxTarget refused, relying on rollback to undo it. Both now refuse first, pinned by
+   dispatcher-level tests using the colliding-gateway trap shape.
+2. Move (df38ee5): all target resolution into consoleTargets.ts, the ONE owner of parseTarget and
+   the foreign-Gateway refusal. forget/close/rename resolve through requireLocalComposite(verb).
+   console-target-residue.test.ts fails the build on any parseTarget outside it under console/,
+   with a vacuity guard. Deliberate message change recorded: foreign is checked before spawn-point,
+   because telling a caller to name a session on a target no session name could fix would lie.
+3. Move (Opus-executed, audited): the device registry (bindings/signers/opCache/deviceOwner/
+   ownerDevices + peer lifecycle) into consoleDevices.ts, byte-identical block, opCache behind
+   three narrow methods. consoleHandler.ts 1614 -> 1348 lines.
+
+Audit (2 fresh Luna threads + Sonnet synthesis): fix-then-ship; one stale comment naming the
+extracted resolveTmuxTarget, fixed. The fold class here is the entry's own thesis confirmed: a
+rule with one right answer and six independent implementations had already drifted at two of them.
