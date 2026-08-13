@@ -610,3 +610,23 @@ entry for a 570-line delegate.
 
 Pain point worth naming: an unused Kotlin import is invisible to every gate this repo has, and only
 a reader (or a Luna audit) catches it. Filed as its own tooling entry rather than folded here.
+
+## Refactor 18 - One door to the board, so the three seams cannot be crossed
+
+Direction (a) from the entry, and the reason it beat the cheaper two: all three hazards were the
+same shape, a consumer holding one object's answer and asking the other object the question.
+BoardOps is now the SOLE door to BoardManager. Team-keyed wrappers resolve the gateway INTERNALLY,
+so hazard 1 is not expressible - the gatewayId never reaches the call site to be composed. The
+revision is served from the same object as the queries it invalidates (hazard 2). A board-tree
+screen reads entries and writes its absolute setters through one object (hazard 3). PollDrain's
+three plane-side calls went through the door too, so the rule has no exception to remember.
+
+`board-door-residue.test.ts` makes it permanent, in the TS suite where it gates PRE-merge (a Kotlin
+test would only run after). Three cases: no file but the door reaches, the door really does reach
+(so the rule cannot pass by everyone giving up), and the declaration still exists.
+
+The audit found the Kotlin side clean on both lenses - identical resolved values, every Compose key
+list byte-identical, every wrapper with a call site - and turned its mustFix on MY fence: it matched
+raw text, so a comment or log string in BoardOps could satisfy the very case written to catch a
+vacuous pass. Fixed by borrowing the house `code()` stripper the two sibling residue tests already
+use. A guard that can be satisfied by prose is not a guard.
