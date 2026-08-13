@@ -51,7 +51,8 @@ class ChatRepository(
 	private val contentResolver: ContentResolver,
 	// STTS provider catalog, parsed + validated once from the bundled asset by
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
-	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
+	// internal (not private): the voice settings surface (ChatRepositoryStts.kt) reads it.
+	internal val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. Declared before the migration
 	 * init block so the one-shot wipe can purge its cache root. */
@@ -65,7 +66,8 @@ class ChatRepository(
 	@Volatile internal var localGatewayId: String = store.loadGatewayId()
 
 	/** The JSON codec over [store]. Declared before _state so its loads can seed the initial state. */
-	private val persistence = ChatPersistence(store)
+	// internal (not private): the drafts surface (ChatRepositoryDrafts.kt) and AttachmentOps write through it.
+	internal val persistence = ChatPersistence(store)
 
 	// One-shot grammar-version wipe. MUST run BEFORE the first thread/label load-parse below, so a
 	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
@@ -160,30 +162,6 @@ class ChatRepository(
 	// only the fire path's check-then-convert sequence needs the exclusion.
 	private val scheduledSendFireMutex = Mutex()
 
-	// Single-flight latch for fetchPendingAttachments, which the poll loop fires once per pass while
-	// a transfer routinely spans several. Not a Mutex: an overlapping pass has nothing to add, since
-	// the in-flight run re-derives the same pending set, so it should be dropped rather than queued.
-	private val fetchingAttachments = java.util.concurrent.atomic.AtomicBoolean(false)
-
-	// Consecutive failed fetches per blobId. Keyed by blob rather than by row because one unreachable
-	// reference can appear on several rows and is one unfetchable thing. In-memory on purpose: a
-	// restart is exactly when a previously-hopeless fetch deserves another try.
-	private val attachmentFetchFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
-
-	// Blobs the fetch has GIVEN UP on (bounded tries exhausted), for any UI that must distinguish
-	// "arriving" from "will never arrive" - the two were previously the same invisible nothing.
-	private val _failedAttachmentFetches = MutableStateFlow<Set<String>>(emptySet())
-	val failedAttachmentFetches: StateFlow<Set<String>> = _failedAttachmentFetches
-
-	/** Give a permanently-failed blob another bounded round of tries, deliberately: clears its
-	 * failure count (the fetch loop skips anything at the cap, so a retry that does not clear it
-	 * would be a button that does nothing) and kicks the fetch. */
-	fun retryAttachmentFetch(blobId: String) {
-		attachmentFetchFailures.remove(blobId)
-		_failedAttachmentFetches.update { it - blobId }
-		fetchPendingAttachments()
-	}
-
 	// Always available from construction, independent of the drain's scope (null until the loop
 	// starts) and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be
 	// a silent no-op the way scheduleAttachmentDelete's best-effort drain.scope?.launch is allowed to be
@@ -240,6 +218,9 @@ class ChatRepository(
 	// own init, so constructing it earlier reads those fields before they exist.
 	internal val playback = PlaybackOps(this)
 	internal val boardOps = BoardOps(this)
+	// The inbound-attachment surface (fetch, land, sweep). Reads nothing here while constructing, so
+	// unlike the two above it may be declared anywhere.
+	internal val attachments = AttachmentOps(this)
 	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
 	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
 	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
@@ -378,102 +359,6 @@ class ChatRepository(
 		}
 	}
 
-	/** STTS client from the settings-backed creds (NOT the blob), or null when not
-	 * configured. The cache is invalidated by setSttsCreds() on an in-app edit, the
-	 * one mutation point - so an edited key takes effect without an app restart. */
-	// internal (not private): PlaybackOps resolves the client for every actual playback call.
-	internal fun sttsClient(): SttsClient? {
-		sttsClient?.let { return it.takeIf { c -> c.isConfigured } }
-		// Cache only a configured client, so an unconfigured build (fresh install, no key yet)
-		// is not retained as an idle OkHttpClient until creds arrive.
-		return SttsClient(store.sttsUrl, store.sttsKey).takeIf { it.isConfigured }?.also { sttsClient = it }
-	}
-
-	/** Gates the Play surfaces; true once settings carry sttsUrl + sttsKey AND the
-	 * bundled catalog parsed (without descriptors there is nothing to play). */
-	fun sttsReady(): Boolean = sttsClient() != null && sttsCatalog.isNotEmpty()
-
-	/** True when settings carry a non-empty url + key (the Connection block is
-	 * configured), independent of catalog/health. */
-	fun sttsConfigured(): Boolean = store.sttsUrl.isNotEmpty() && store.sttsKey.isNotEmpty()
-
-	/** The current in-app voice creds, for seeding the settings Connection fields. */
-	val sttsUrl: String get() = store.sttsUrl
-	val sttsKey: String get() = store.sttsKey
-
-	/** The single mutation choke for the in-app voice creds: validate+normalize the URL
-	 * (via normalizeSttsUrl, so the key is never persisted to an unvalidated host), store the
-	 * clean origin + trimmed key, and invalidate the cached client so the next sttsClient()
-	 * rebuilds. Returns the stored origin, or null if the URL is invalid (nothing persisted),
-	 * which the caller surfaces. Enforcing validation HERE means no caller can bypass it. */
-	fun setSttsCreds(url: String, key: String): String? {
-		val origin = normalizeSttsUrl(url) ?: return null
-		store.sttsUrl = origin
-		store.sttsKey = key.trim()
-		sttsClient = null
-		return origin
-	}
-
-	/** The provider descriptors for the settings picker. */
-	fun sttsProviders(): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = sttsCatalog
-
-	/** The selected provider id (the descriptor id, e.g. "XAI"). Unset resolves
-	 * to XAI when present, else the first descriptor. */
-	var sttsProviderId: String
-		get() {
-			val stored = store.sttsProvider
-			if (stored.isNotEmpty()) return stored
-			return sttsCatalog.firstOrNull { it.id == "XAI" }?.id ?: sttsCatalog.firstOrNull()?.id ?: ""
-		}
-		set(value) {
-			store.sttsProvider = value
-		}
-
-	/** The descriptor for the current selection, or null if the stored id is not
-	 * in the catalog (a removed provider) - the Play surfaces disable loudly
-	 * rather than silently substituting another voice. */
-	// internal (not private): PlaybackOps resolves the provider for every actual playback call.
-	internal fun currentProvider(): com.atelier_nyaarium.switchboard.proto.SttsProvider? {
-		val id = sttsProviderId
-		return sttsCatalog.firstOrNull { it.id == id }
-	}
-
-	/** True when the stored provider id is non-empty but absent from the catalog. */
-	fun sttsProviderMissing(): Boolean {
-		val id = store.sttsProvider
-		return id.isNotEmpty() && sttsCatalog.none { it.id == id }
-	}
-
-	/** Per-provider voice; blank uses the descriptor default. */
-	fun sttsVoiceFor(providerId: String): String = store.sttsVoiceFor(providerId)
-
-	fun setSttsVoiceFor(providerId: String, voice: String) = store.setSttsVoiceFor(providerId, voice.trim())
-
-	/** The run-start sound, as a content Uri. Empty means the bundled asset; [CHIME_SILENT] means the
-	 * user chose no sound at all, which is a decision rather than an unset preference. Persisted. */
-	var sttsChimeUri: String
-		get() = store.chimeUri
-		set(value) {
-			store.chimeUri = value
-		}
-
-	/** When on, an incoming message for a followed (open) thread is
-	 * pre-synthesized before its notification. Persisted in prefs. */
-	var sttsAutoGen: Boolean
-		get() = store.autoTts
-		set(value) {
-			store.autoTts = value
-		}
-
-	/** Which tier of a new message plays aloud automatically the moment it
-	 * arrives. One of "off", "title", "summary", "full". Independent of
-	 * sttsAutoGen. Persisted in prefs. */
-	var sttsAutoPlay: String
-		get() = store.autoPlay
-		set(value) {
-			store.autoPlay = value
-		}
-
 	/** The SAF tree the user chose to save attachments into. Raw string: whether the grant behind it
 	 * is still alive is SaveTarget's question, and a caller must ask it rather than trust this. */
 	var saveTreeUri: String
@@ -481,25 +366,6 @@ class ChatRepository(
 		set(value) {
 			store.saveTreeUri = value
 		}
-
-	/** TTS playback volume, 0-200% (100 = unchanged). Persisted in prefs. */
-	var sttsVolume: Int
-		get() = store.sttsVolume
-		set(value) {
-			store.sttsVolume = value
-		}
-
-	/** The chime's own volume, 0-200%. Its own control because it is balanced against the speech that
-	 * follows it, not against whatever else the phone is playing. */
-	var sttsChimeVolume: Int
-		get() = store.sttsChimeVolume
-		set(value) {
-			store.sttsChimeVolume = value
-		}
-
-	/** STTS service liveness WITH the failure cause, for the settings Connection status line. */
-	suspend fun sttsProbe(): SttsProbe =
-		withContext(Dispatchers.IO) { sttsClient()?.probe() ?: SttsProbe.Unreachable("not configured") }
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
 		// Strict wire parse: reject before persisting. Surfaced as state.error
@@ -1097,7 +963,7 @@ class ChatRepository(
 			// A replace's old bucket is now unreferenced - clean it up the same way forget() does,
 			// never inline (best-effort, off the drain's scope, healed by the next sweepOrphanAttachments
 			// if this misses its narrow scope-null window).
-			prior?.let { scheduleAttachmentDelete(it.fileRefs.mapNotNull { f -> f.src }) }
+			prior?.let { attachments.scheduleAttachmentDelete(it.fileRefs.mapNotNull { f -> f.src }) }
 			true
 		}
 
@@ -1112,7 +978,7 @@ class ChatRepository(
 	fun cancelScheduledSend(team: String) {
 		val prior = clearScheduledSendRecord(team) ?: return
 		val claimedByLiveRow = _state.value.threads[team]?.any { it.opId == prior.opId } == true
-		if (!claimedByLiveRow) scheduleAttachmentDelete(prior.fileRefs.mapNotNull { it.src })
+		if (!claimedByLiveRow) attachments.scheduleAttachmentDelete(prior.fileRefs.mapNotNull { it.src })
 	}
 
 	/** Cancel team's scheduled send and hand its content back into the composer instead of deleting
@@ -1471,60 +1337,6 @@ class ChatRepository(
 		}
 	}
 
-	/** Cold-start completeness backstop for the per-forget/per-send file deletes (Attachments.
-	 * deleteFiles): removes any attachment bucket no surviving row references. The caller MUST
-	 * run this to completion before the poll loop starts (see SwitchboardService.onCreate) -
-	 * concurrently with a drain, a bucket this sweep captures as unreferenced could be
-	 * re-decoded into by a crash re-drain before the delete lands, which Attachments.
-	 * sweepOrphanBuckets's own age/mtime guard alone cannot prevent. A scheduled send's own eagerly-
-	 * copied bucket is deliberately not a thread row until it fires, so its fileRefs must join the
-	 * referenced set too - otherwise a record waiting out a long alarm (or several service restarts)
-	 * looks orphaned and gets swept out from under it, and the eventual fire sends text-only. An open
-	 * draft's picked files are the same shape of gap: they never become a thread row until Send, so
-	 * they must join the referenced set too, or an open draft left untouched past this sweep's age
-	 * floor loses its attachments out from under it. */
-	suspend fun sweepOrphanAttachments() = withContext(Dispatchers.IO) {
-		val referencedSrcs = _state.value.threads.values.asSequence()
-			.flatMap { it.asSequence() }
-			.flatMap { it.files.asSequence() }
-			.map { it.src }
-			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
-			_state.value.drafts.values.flatMap { it.files }.map { it.src }
-		// A video's frame set lives in its own bucket that no src points at, so it has to be named
-		// separately or every restart wipes the sets and re-runs the seeks that filled them.
-		val frameBuckets = (
-			_state.value.threads.values.asSequence().flatMap { it.asSequence() }.flatMap { it.files.asSequence() } +
-				_state.value.drafts.values.asSequence().flatMap { it.files.asSequence() } +
-				// Every source referencedSrcs draws from, or a banked send keeps its video and loses the
-				// frames for it.
-				_state.value.scheduledSends.values.asSequence().flatMap { it.fileRefs.asSequence() }
-			)
-			.filter { it.mime.startsWith("video/") }
-			.mapNotNull { VideoThumbs.keyFor(it) }
-			.map { VideoThumbs.bucketFor(it) }
-			.toSet()
-		// Board buckets are named by their entry rather than pointed at by a src, so they need the keep
-		// set: a committed attachment has no queued action left to reference it, and Question 4 says the
-		// attaching device holds its copy so the peek stays instant.
-		//
-		// A board that could not be DECODED answers the empty set, which would turn this into "delete
-		// what the live board does not reference" over a board that restored empty - the reclaim shape
-		// the gateway explicitly refuses, and here it would take every picture on the device in one
-		// pass. Unknown is not empty: skip the board's share of the sweep entirely.
-		val keep = frameBuckets + board.attachmentBuckets()
-		if (board.boardIsKnown) {
-			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep)
-		} else {
-			Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, keep + boardOps.existingBoardBuckets())
-		}
-		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
-		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
-		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs
-		// strictly before the drain starts, same as the bucket sweep, so no in-flight fetch is underfoot.
-		val freed = client?.pruneStaleBlobs(STALE_BLOB_MAX_AGE_MS) ?: 0L
-		if (freed > 0) DebugLog.log("Attachments", "pruned $freed bytes of transfer residue")
-	}
-
 	/** Mark a team fully read without opening it (swipe-away on its notification reads the burst).
 	 * Advances the persisted anchor to the thread's tail - not just the volatile `unread` count -
 	 * so a deliberate dismiss survives a process restart instead of resurrecting. */
@@ -1658,111 +1470,6 @@ class ChatRepository(
 		}
 	}
 
-	// Per-thread composer state (ChatState.drafts), persisted so a power-management kill (or any
-	// process death) never loses a half-typed message or a picked-but-unsent file. Every writer
-	// below reads-modifies-writes the SAME _state.drafts map through withDraft and persists via
-	// persistence.persistDrafts, so text, files, and the two restore paths (cancelFailedSend,
-	// cancelScheduledSendForEdit, both above) can never observe or clobber a stale copy of the map.
-
-	/** Set a team's composer text, replacing whatever text was there; files are untouched. */
-	fun setDraftText(team: String, text: String) {
-		val next = _state.updateAndGet { s ->
-			s.withDraft(team, (s.drafts[team] ?: Draft()).copy(text = text))
-		}.drafts
-		persistence.persistDrafts(next)
-	}
-
-	/** Pick files into a team's draft, eagerly copying them into their own bucket - mirroring
-	 * scheduleSend's own eager copy at schedule time, since a transient content:// grant may not
-	 * outlive the wait between picking and Send. Each call mints its OWN bucket (never reused
-	 * across calls, unlike a row's single out-$opId bucket), so two picks that happen to share a
-	 * basename cannot overwrite each other on disk. */
-	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
-		// Admitted like any other pick: a draft is just a send that has not happened yet, so the
-		// same admission bound applies here too.
-		val (picked, refused) = admitPicked(uris, "pick-${UUID.randomUUID()}")
-		if (refused != null) {
-			_state.update { it.copy(error = refused.message()) }
-			return@withContext
-		}
-		if (picked.isEmpty()) return@withContext
-		// admitPicked is all-or-nothing, so on success these line up with the uris that produced them
-		// and each picked file can be asked where it came from. Read now: the content Uri is gone
-		// after this call and nothing downstream can recover it.
-		val origins = uris.map { PickedLocation.of(it) }
-		val paired = Attachments.storeOutgoingPaired(filesDir, "draft-${UUID.randomUUID()}", picked)
-		val copied = paired.map { (_, stored) -> stored }
-		val located = paired.mapNotNull { (out, stored) ->
-			val src = stored.src ?: return@mapNotNull null
-			origins.getOrNull(picked.indexOf(out))?.let { src to it }
-		}.toMap()
-		val next = _state.updateAndGet { s ->
-			val current = s.drafts[team] ?: Draft()
-			s.withDraft(team, current.copy(files = current.files + copied, locations = current.locations + located))
-		}.drafts
-		persistence.persistDrafts(next)
-	}
-
-	/** Drop one picked file from a team's draft (the attachment chip's remove) and delete its
-	 * now-unreferenced copy. */
-	fun removeDraftFile(team: String, src: String) {
-		val next = _state.updateAndGet { s ->
-			val current = s.drafts[team] ?: return@updateAndGet s
-			s.withDraft(
-				team,
-				current.copy(
-					files = current.files.filterNot { it.src == src },
-					locations = current.locations - src,
-				),
-			)
-		}.drafts
-		persistence.persistDrafts(next)
-		scheduleAttachmentDelete(listOf(src))
-	}
-
-	/** Append text to a team's composer draft - the plugin seam (e.g. the Designer's "Reference in
-	 * chat"). Goes straight through the same drafts map every other writer here uses, so the team
-	 * binding is enforced by the call itself rather than incidental on an ambient composable var. */
-	fun appendDraftText(team: String, insert: String) {
-		val current = _state.value.drafts[team] ?: Draft()
-		val spaced = current.text.isEmpty() || current.text.endsWith(" ") || current.text.endsWith("\n")
-		setDraftText(team, (if (spaced) current.text else "${current.text} ") + insert)
-	}
-
-	/**
-	 * Hand a not-yet-sent message's content back to a thread's composer. Files always UNION: a list
-	 * has a meaningful merge, so no caller can drop a pick. Text lands only on a blank draft: it has
-	 * no merge, so anything already typed wins. Callers may disable their button as UX, but this
-	 * write is what makes destroying composer contents unexpressible.
-	 */
-	fun takeBackIntoDraft(team: String, text: String, files: List<MessageFile>) {
-		val next = _state.updateAndGet { s ->
-			s.withDraft(team, mergeTakenBackDraft(s.drafts[team] ?: Draft(), text, files))
-		}.drafts
-		persistence.persistDrafts(next)
-	}
-
-	/**
-	 * Drop a team's draft. Every caller reaches here right after handing the draft's contents to a
-	 * send or a schedule.
-	 *
-	 * The draft's own copies of its picked files are deliberately NOT deleted. Send does re-bucket
-	 * its own copy under `out-$opId`, but it does that on a coroutine, and the Send handler clears
-	 * the draft on the tap thread immediately after launching it. So a delete here does not follow
-	 * the re-bucket, it races it, and the send loses: it opened a file that had existed a millisecond
-	 * earlier, got ENOENT, and dropped the attachment through a `mapNotNull` that raises nothing.
-	 * Every attachment sent from this composer was lost that way, with no error anywhere.
-	 *
-	 * Once the send has stored its own copy the draft's bucket is unreferenced, and the cold-start
-	 * `sweepOrphanAttachments` reclaims it. Discarding a single pick before sending stays immediate,
-	 * through [removeDraftFile], which races nothing.
-	 */
-	fun clearDraft(team: String) {
-		if (_state.value.drafts[team] == null) return
-		val next = _state.updateAndGet { s -> s.copy(drafts = s.drafts - team) }.drafts
-		persistence.persistDrafts(next)
-	}
-
 	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
 	 * cache that shows immediately and the fallback against a gateway with no server label. */
 	fun setLabel(team: String, name: String) {
@@ -1838,114 +1545,6 @@ class ChatRepository(
 				_state.update { it.copy(transientMessage = message) }
 			}
 		}
-	}
-
-	/** Best-effort background delete of no-longer-referenced attachment srcs, off the poll
-	 * scope's own lifecycle (Dispatchers.IO). A no-op for an empty list. The drain's scope is null
-	 * until the loop starts, so this is a silent skip (not a defer) in that window - either way the
-	 * next cold-start sweepOrphanAttachments heals any bucket left behind. */
-	private fun scheduleAttachmentDelete(srcs: List<String>) {
-		if (srcs.isEmpty()) return
-		drain.scope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
-	}
-
-	/**
-	 * Fetch the bytes for every attachment whose message has arrived but whose file has not, and
-	 * fill in the src that makes it render.
-	 *
-	 * A message is prose plus references, so delivery never waits on bytes. This is the second half:
-	 * it runs off the drain, one file at a time so a thread of large attachments cannot open a dozen
-	 * concurrent transfers, and it is safe to call at any time because the work it looks for is
-	 * exactly the work still outstanding. That also makes it the recovery path: a fetch cut off by a
-	 * process death is simply still pending on the next pass, and resumes from the bytes already on
-	 * disk rather than restarting.
-	 *
-	 * Single-flight, because the caller fires once per poll pass and a transfer routinely outlives
-	 * one. Overlapping passes would re-derive the same pending set, re-download the same blobs, and
-	 * race each other inside [Attachments.land].
-	 */
-	internal fun fetchPendingAttachments() {
-		val client = this.client ?: return
-		// Claim the latch only once there is somewhere to run, and hand it back if the dispatch does
-		// not happen. Claiming first would strand it forever on a null or already-cancelled scope,
-		// because the release lives in the coroutine body and a body that never runs never releases:
-		// attachments would then stop arriving for the life of the process, silently, since this
-		// singleton outlives every Activity and service restart.
-		val scope = drain.scope ?: return
-		if (!fetchingAttachments.compareAndSet(false, true)) return
-		val job = scope.launch(Dispatchers.IO) {
-			try {
-				// Snapshot the work first: the state can change under a long transfer, and each landing
-				// re-reads the live row anyway.
-				val pending = _state.value.threads.flatMap { (team, msgs) ->
-					msgs.flatMap { m ->
-						m.files.filter { it.blobId != null && it.src == null }.map { Triple(team, m, it) }
-					}
-				}
-				for ((team, message, file) in pending) {
-					val blobId = file.blobId ?: continue
-					if (attachmentFetchFailures.getOrDefault(blobId, 0) >= MAX_ATTACHMENT_FETCH_TRIES) continue
-					val source = runCatchingCancellable { client.downloadBlob(blobId, file.blobGateway) }
-						.onFailure {
-							// Count against the blob, not the row: the same reference on several rows is
-							// one unfetchable thing, and a bounded count is what stops a blob no Gateway
-							// holds from being re-requested on every pass for the life of the install.
-							val tries = attachmentFetchFailures.getOrDefault(blobId, 0) + 1
-							attachmentFetchFailures[blobId] = tries
-							if (tries >= MAX_ATTACHMENT_FETCH_TRIES) _failedAttachmentFetches.update { s -> s + blobId }
-							DebugLog.log("Attachments", "fetch of ${file.name} failed ($tries): $it")
-						}
-						.getOrNull() ?: continue
-					attachmentFetchFailures.remove(blobId)
-					_failedAttachmentFetches.update { s -> s - blobId }
-					val src =
-						Attachments.land(filesDir, Attachments.bucketFor(message.epoch, message.seq), file.name, source)
-							?: continue
-					landFetchedAttachment(team, message.id, file.name, src)
-					// The bytes now live in the attachments bucket, which is the copy the renderer reads
-					// and the orphan sweep owns. Keeping the blob as well would hold every attachment
-					// twice on the device with the least room for it.
-					client.forgetBlob(blobId)
-				}
-			} finally {
-				fetchingAttachments.set(false)
-			}
-		}
-		// A scope cancelled between the claim above and the dispatch creates a job whose body never
-		// runs, so its finally never fires. Releasing on completion covers that too, and is a no-op
-		// when the body did run and already released.
-		job.invokeOnCompletion { fetchingAttachments.set(false) }
-	}
-
-	/** Point one already-rendered row's file at its now-present bytes. Matched by name within the
-	 * row, the same pairing [Attachments.mergeSentEchoFiles] uses, since both sides derive names
-	 * through one safeName/uniqueName chain. */
-	private fun landFetchedAttachment(team: String, messageId: Long, name: String, src: String) {
-		var changed = false
-		val threads = _state.updateAndGet { s ->
-			// Re-established on EVERY invocation, not just the matching one: updateAndGet re-runs this
-			// lambda on a failed CAS, so a value carried over from a losing attempt would describe work
-			// the winning attempt did not do (see the same rule spelled out in reconcileSent).
-			changed = false
-			val thread = s.threads[team] ?: return@updateAndGet s
-			val idx = thread.indexOfFirst { it.id == messageId }
-			// The row can be gone (a forget, a replace) by the time the bytes land. Its blob stays in
-			// the store for the sweep; nothing here has to unwind.
-			if (idx < 0) {
-				changed = false
-				return@updateAndGet s
-			}
-			val row = thread[idx]
-			val files = row.files.map { if (it.name == name && it.src == null) it.copy(src = src) else it }
-			if (files == row.files) {
-				changed = false
-				return@updateAndGet s
-			}
-			changed = true
-			val next = thread.toMutableList().also { it[idx] = row.copy(files = files) }
-			s.copy(threads = s.threads + (team to next))
-		}.threads
-		if (changed) persistence.persistThreads(threads)
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
@@ -2040,8 +1639,8 @@ class ChatRepository(
 		}
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
 		// the files are local no matter where the session lives, unlike the gateway RPC.
-		scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
-		priorDraft?.let { scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
+		attachments.scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
+		priorDraft?.let { attachments.scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
 		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
@@ -2215,7 +1814,7 @@ class ChatRepository(
 			// The old row's now-orphaned bucket copies (see Attachments.mergeSentEchoFiles) -
 			// deleted here, not left for the cold-start sweep, so the common case never leaks
 			// even transiently.
-			scheduleAttachmentDelete(deleteSrcs)
+			attachments.scheduleAttachmentDelete(deleteSrcs)
 		} else {
 			append(team, echo)
 		}

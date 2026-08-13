@@ -324,7 +324,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 	}
 
 	/** Every board bucket already on disk, for the one case where the board cannot say which are live. */
-	// internal (not private): ChatRepository.sweepOrphanAttachments (a cold-start pass over ALL
+	// internal (not private): AttachmentOps.sweepOrphanAttachments (a cold-start pass over ALL
 	// attachment kinds, not just the board's) falls back to this when the board itself cannot say
 	// which buckets are live.
 	internal fun existingBoardBuckets(): Set<String> =
@@ -332,6 +332,16 @@ internal class BoardOps(private val repo: ChatRepository) {
 			?.filter { it.isDirectory && it.name.startsWith("board-") }
 			?.mapTo(mutableSetOf()) { it.name }
 			?: emptySet()
+
+	/** Whether the board decoded, so a caller can tell an empty board from an unknown one. */
+	// internal (not private): AttachmentOps.sweepOrphanAttachments asks before it treats the live
+	// board's bucket list as complete. Through this door rather than BoardManager directly, so the
+	// board keeps one reacher.
+	internal val boardIsKnown: Boolean get() = repo.board.boardIsKnown
+
+	/** The buckets the live board still references. */
+	// internal (not private): the same sweep's keep set - see boardIsKnown above.
+	internal fun attachmentBuckets(): Set<String> = repo.board.attachmentBuckets()
 
 	/** Restart the transfers whose kick died with the process, or with a failure that only logged.
 	 * The queued action survived either way, so without this the drain would check forever and the

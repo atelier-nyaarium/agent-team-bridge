@@ -504,7 +504,7 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// Off the drain, never inside it: the rows are durable and on screen at this point,
 					// so their bytes can take as long as they take. Also the heal for a fetch that a
 					// process death cut short, since it re-derives what is outstanding every pass.
-					repo.fetchPendingAttachments()
+					repo.attachments.fetchPendingAttachments()
 					pollFails = 0
 					if (repo._state.value.error != null || repo._state.value.pollFailStreak != 0) {
 						repo._state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }

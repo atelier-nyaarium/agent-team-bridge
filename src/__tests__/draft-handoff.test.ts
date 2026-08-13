@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
  * regression from landing. `clearDraft` needs a live repository to exercise behaviourally, which is
  * out of reach here, so this pins the one line whose presence caused the bug instead.
  */
-const CHAT_REPOSITORY = path.join(
+const ANDROID_SRC = path.join(
 	import.meta.dirname,
 	"..",
 	"..",
@@ -24,19 +24,35 @@ const CHAT_REPOSITORY = path.join(
 	"com",
 	"atelier_nyaarium",
 	"switchboard",
-	"ChatRepository.kt",
 );
 
-/** The body of a top-level `fun <name>` in the repository class, by brace matching. */
-function functionBody(source: string, name: string): string {
-	const start = source.indexOf(`fun ${name}(`);
-	if (start === -1) throw new Error(`ChatRepository.kt no longer declares ${name}`);
+/** The declaration, as a member or as an extension on the repository. */
+function declaration(name: string): RegExp {
+	return new RegExp(String.raw`fun\s+(?:ChatRepository\.)?${name}\s*\(`);
+}
 
-	const open = source.indexOf("{", start);
+/**
+ * The body of a draft writer, found anywhere under the android sources.
+ *
+ * Searched rather than read from a named file: these functions move between files as the sources
+ * are split, and a path pinned here fails as a missing declaration, which reads identically to the
+ * declaration being deleted. Throws when there is no single match, so a rename cannot pass silently.
+ */
+function functionBody(name: string): string {
+	const decl = declaration(name);
+	const hits = fs
+		.readdirSync(ANDROID_SRC, { recursive: true, encoding: "utf8" })
+		.filter((f) => f.endsWith(".kt"))
+		.map((f) => fs.readFileSync(path.join(ANDROID_SRC, f), "utf8"))
+		.filter((source) => decl.test(source));
+
+	if (hits.length !== 1) throw new Error(`expected exactly one declaration of ${name}, found ${hits.length}`);
+
+	const open = hits[0].indexOf("{", hits[0].search(decl));
 	let depth = 0;
-	for (let i = open; i < source.length; i++) {
-		if (source[i] === "{") depth++;
-		else if (source[i] === "}" && --depth === 0) return source.slice(open, i + 1);
+	for (let i = open; i < hits[0].length; i++) {
+		if (hits[0][i] === "{") depth++;
+		else if (hits[0][i] === "}" && --depth === 0) return hits[0].slice(open, i + 1);
 	}
 	throw new Error(`could not find the end of ${name}`);
 }
@@ -50,14 +66,10 @@ describe("clearing a draft that was just handed to a send", () => {
 	// existed a millisecond earlier, got ENOENT, and dropped the attachment with no error anywhere.
 	// That silently lost every attachment sent from the composer.
 	it("does not delete the picked copies the send is still reading", () => {
-		const body = functionBody(fs.readFileSync(CHAT_REPOSITORY, "utf8"), "clearDraft");
-
-		expect(body).not.toContain("scheduleAttachmentDelete");
+		expect(functionBody("clearDraft")).not.toContain("scheduleAttachmentDelete");
 	});
 
 	it("still deletes a pick discarded one at a time, which races nothing", () => {
-		const body = functionBody(fs.readFileSync(CHAT_REPOSITORY, "utf8"), "removeDraftFile");
-
-		expect(body).toContain("scheduleAttachmentDelete");
+		expect(functionBody("removeDraftFile")).toContain("scheduleAttachmentDelete");
 	});
 });
