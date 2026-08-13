@@ -6,6 +6,12 @@ import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.j
 import { setup } from "./helpers/codex-persistence.js";
 import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
+const DEVCONTAINER_TARGET = {
+	kind: "devcontainer",
+	project: "recipe-app",
+	hostProjectPath: "/trusted/recipe-app",
+} as const;
+
 describe("Codex checked persistence failure recovery", () => {
 	it("returns indeterminate and retains the durable intent when acceptance persistence fails", () => {
 		const { request, owner, service, sessionStore, saves } = setup({ failSave: (save) => save === 2 });
@@ -13,6 +19,7 @@ describe("Codex checked persistence failure recovery", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 
@@ -36,6 +43,7 @@ describe("Codex checked persistence failure recovery", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 22,
 		});
 		expect(retry.disposition).toBe("indeterminate");
@@ -74,6 +82,7 @@ describe("Codex checked persistence failure recovery", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 23,
 			}).disposition,
 		).toBe("indeterminate");
@@ -88,6 +97,7 @@ describe("Codex checked persistence failure recovery", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		const receipt = {
@@ -153,6 +163,7 @@ describe("Codex checked persistence failure recovery", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 23,
 			}).disposition,
 		).toBe("replayed");
@@ -168,6 +179,7 @@ describe("Codex checked persistence failure recovery", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		const receipt = {
@@ -202,6 +214,7 @@ describe("Codex checked persistence failure recovery", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 20,
 			}),
 		).toThrowError(CodexTransitionError);
@@ -219,6 +232,7 @@ describe("Codex checked persistence failure recovery", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 20,
 			}),
 		).toThrowError(CodexTransitionError);
@@ -231,6 +245,7 @@ describe("Codex checked persistence failure recovery", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 21,
 			}).disposition,
 		).toBe("indeterminate");

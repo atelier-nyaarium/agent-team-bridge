@@ -302,7 +302,7 @@ export class CodexRelay {
 	private defer(message: CodexDaemonEvent | CodexDaemonReceipt): void {
 		const key = agentKey(message.ownerKey, message.agentId);
 		const held = this.deferred.get(key) ?? [];
-		// The daemon replays every unacknowledged frame on each reconnect, so without this the same
+		// The daemon replays every retained reliable frame on each reconnect, so without this the same
 		// frame accumulates a copy per reconnect and the cap is reached by churn rather than by news.
 		if (held.some((existing) => existing.type === message.type && existing.eventId === message.eventId)) return;
 		held.push(message);

@@ -41,7 +41,7 @@ import {
 	type CodexDaemonDeliveryAcceptance,
 	type CodexDeliveryAcceptance,
 	type CodexExistingAgentIntentInput,
-	type CodexIntentInput,
+	type CodexStartIntentInput,
 	type CodexStopIntentInput,
 	CodexTransitionError,
 	type CodexTransitionResult,
@@ -58,6 +58,7 @@ export type {
 	CodexDeliveryAcceptance,
 	CodexExistingAgentIntentInput,
 	CodexIntentInput,
+	CodexStartIntentInput,
 	CodexStopIntentInput,
 	CodexTransitionErrorCode,
 	CodexTransitionResult,
@@ -129,17 +130,18 @@ export class CodexAgentService {
 		return matches.length === 1 ? { ...owned, operation: matches[0]! } : null;
 	}
 
-	beginStart(req: Request, input: CodexIntentInput): CodexTransitionResult {
+	beginStart(req: Request, input: CodexStartIntentInput): CodexTransitionResult {
 		const owner = this.requireOwner(req);
 		const agentId = CodexAgentIdSchema.parse(input.agentId);
 		const operationId = CodexOperationIdSchema.parse(input.operationId);
 		const prompt = CodexPromptSchema.parse(input.prompt);
+		// Taken from the caller rather than re-resolved: the route resolves with the request's cwd,
+		// and a second resolve here would persist a different target than the one dispatched.
+		const target = CodexExecutionTargetSchema.parse(input.target);
 		const at = validateTimestamp(input.at);
 		const fingerprint = codexOperationFingerprint("start", agentId, prompt);
 		const replay = this.replay(owner, operationId, fingerprint);
 		if (replay) return replay;
-		const target = this.resolveExecutionTarget(owner);
-		if (!target) throw new CodexTransitionError("target_unavailable", "trusted execution target is unavailable");
 		const catalog = this.catalog(owner);
 		if (catalog.agents.some((agent) => agent.agentId === agentId)) {
 			throw new CodexTransitionError("operation_conflict", "agent ID is already in use");

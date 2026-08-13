@@ -3,6 +3,7 @@ import { CodexTransitionError } from "../gateway/codexAgentService.js";
 import {
 	AGENT_ID,
 	currentAgent,
+	DEVCONTAINER_TARGET,
 	eventBase,
 	RESOLVED_TARGET,
 	receiptBase,
@@ -83,6 +84,7 @@ describe("Codex daemon receipt application", () => {
 			agentId: AGENT_ID,
 			operationId: START_OPERATION,
 			prompt: "Audit",
+			target: DEVCONTAINER_TARGET,
 			at: 10,
 		});
 		const refused = context.service.applyReceipt(

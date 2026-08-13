@@ -14,6 +14,11 @@ import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-thinking
 
 const OTHER_AGENT_ID = "codex_ffffffffffffffffffffffffffffffff";
 const OTHER_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
+const DEVCONTAINER_TARGET = {
+	kind: "devcontainer",
+	project: "recipe-app",
+	hostProjectPath: "/trusted/recipe-app",
+} as const;
 
 function storeWithCatalogWriter(persistChecked: () => void = () => {}) {
 	let catalogWriter: CodexCatalogWriter | undefined;
@@ -192,6 +197,7 @@ describe("session-owned Codex catalog", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Review",
+				target: DEVCONTAINER_TARGET,
 				at: 13,
 			}).disposition,
 		).toBe("indeterminate");

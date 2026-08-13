@@ -6,6 +6,11 @@ import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
 const OTHER_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
 const THIRD_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174002";
+const DEVCONTAINER_TARGET = {
+	kind: "devcontainer",
+	project: "recipe-app",
+	hostProjectPath: "/trusted/recipe-app",
+} as const;
 
 describe("Codex checked delivery ordering guards", () => {
 	it("serializes unresolved prompt delivery ahead of messages and stops", () => {
@@ -14,6 +19,7 @@ describe("Codex checked delivery ordering guards", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		service.acceptDelivery(request, {
@@ -70,6 +76,7 @@ describe("Codex checked delivery ordering guards", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		service.acceptDelivery(request, {
@@ -135,6 +142,7 @@ describe("Codex checked delivery ordering guards", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		service.acceptDelivery(request, {
@@ -194,6 +202,7 @@ describe("Codex checked delivery ordering guards", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		service.acceptDelivery(request, {
@@ -224,6 +233,7 @@ describe("Codex checked delivery ordering guards", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 
@@ -232,6 +242,7 @@ describe("Codex checked delivery ordering guards", () => {
 				agentId: AGENT_ID,
 				operationId: OPERATION_ID,
 				prompt: "Change the project",
+				target: DEVCONTAINER_TARGET,
 				at: 21,
 			}),
 		).toThrowError(CodexTransitionError);

@@ -11,6 +11,11 @@ export const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";
 export const START_OPERATION = "123e4567-e89b-42d3-a456-426614174000";
 export const STOP_OPERATION = "123e4567-e89b-42d3-a456-426614174009";
 export const TARGET_ID = "container:recipe-app";
+export const DEVCONTAINER_TARGET = {
+	kind: "devcontainer",
+	project: "recipe-app",
+	hostProjectPath: "/trusted/recipe-app",
+} as const;
 export const RESOLVED_TARGET = { kind: "devcontainer" as const, targetId: TARGET_ID, cwd: "/workspace/recipe-app" };
 
 ////////////////////////////////
@@ -79,6 +84,7 @@ export function working(context: ReturnType<typeof setup>) {
 		agentId: AGENT_ID,
 		operationId: START_OPERATION,
 		prompt: "Audit the parser",
+		target: DEVCONTAINER_TARGET,
 		at: 10,
 	});
 	context.service.acceptDelivery(context.request, {

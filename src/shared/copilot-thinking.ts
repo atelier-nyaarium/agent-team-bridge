@@ -606,13 +606,28 @@ export type CopilotEventAck = z.infer<typeof CopilotEventAckSchema>;
 export type CopilotExecutionTarget = z.infer<typeof CopilotExecutionTargetSchema>;
 export type CopilotResolvedTarget = z.infer<typeof CopilotResolvedTargetSchema>;
 
+/**
+ * Whether losing one daemon message would change what an owner believes about an outcome.
+ *
+ * Stated per kind and keyed by the unions themselves, so a new kind added above without an entry
+ * here fails the build. Activity is best-effort: retaining it fills the outbox with narration and
+ * evicts the receipts that carry outcomes.
+ */
+export const COPILOT_RELIABLE_EVENT_KIND: Record<CopilotDaemonEvent["kind"], boolean> = {
+	activity: false,
+	terminal: true,
+};
+export const COPILOT_RELIABLE_RECEIPT_KIND: Record<CopilotDaemonReceipt["kind"], boolean> = {
+	accepted: true,
+	rejected: false,
+	interruptResult: true,
+	reconciled: true,
+};
+
 export function isReliableCopilotMessage(message: CopilotDaemonEvent | CopilotDaemonReceipt): boolean {
-	return (
-		message.type === "copilot_event" ||
-		message.kind === "accepted" ||
-		message.kind === "interruptResult" ||
-		message.kind === "reconciled"
-	);
+	return message.type === "copilot_event"
+		? COPILOT_RELIABLE_EVENT_KIND[message.kind]
+		: COPILOT_RELIABLE_RECEIPT_KIND[message.kind];
 }
 
 export type CopilotAgentId = z.infer<typeof CopilotAgentIdSchema>;

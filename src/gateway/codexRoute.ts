@@ -236,6 +236,7 @@ export class CodexRoute {
 			agentId,
 			operationId: request.operationId,
 			prompt: request.prompt,
+			target,
 			at: this.now(),
 		});
 		if (committed.disposition === "committed") {

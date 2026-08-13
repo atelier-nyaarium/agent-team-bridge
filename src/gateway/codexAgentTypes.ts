@@ -1,4 +1,5 @@
 import type {
+	CodexExecutionTarget,
 	CodexPersistedAgent,
 	CodexReconciliationFence,
 	CodexResolvedTarget,
@@ -31,6 +32,12 @@ export interface CodexIntentInput {
 	operationId: string;
 	prompt: string;
 	at: number;
+}
+
+export interface CodexStartIntentInput extends CodexIntentInput {
+	/** Resolved by the route with any cwd applied, so the persisted record and the dispatched
+	 * command cannot name different targets. */
+	target: CodexExecutionTarget;
 }
 
 export interface CodexExistingAgentIntentInput extends CodexIntentInput {

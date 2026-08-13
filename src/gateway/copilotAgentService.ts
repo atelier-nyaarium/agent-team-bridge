@@ -77,8 +77,9 @@ export class CopilotTransitionError extends Error {
 	constructor(
 		readonly code: CopilotTransitionErrorCode,
 		message: string,
+		options?: ErrorOptions,
 	) {
-		super(message);
+		super(message, options);
 		this.name = "CopilotTransitionError";
 	}
 }
@@ -586,12 +587,15 @@ export class CopilotAgentService {
 	): CopilotApplication {
 		const catalog = this.catalog(owner);
 		const index = this.indexOf(catalog, previous.agentId);
-		const committed = this.deps.catalogWriter.commit(
-			owner,
-			catalog.revision,
-			replaceAt(catalog.agents, index, next),
-		);
-		if (!committed.committed) return { disposition: "failed", reason: "Copilot catalog revision changed" };
+		let committed;
+		try {
+			committed = this.deps.catalogWriter.commit(owner, catalog.revision, replaceAt(catalog.agents, index, next));
+		} catch {
+			// Deliberately NOT ignored: an unpersisted event must not be acknowledged, or the daemon
+			// retires the only copy of it. Reconcile rather than fail, so the record self-heals.
+			return { disposition: "reconcile", owner, agent: next };
+		}
+		if (!committed.committed) return { disposition: "reconcile", owner, agent: next };
 		return {
 			disposition: "applied",
 			owner,
@@ -607,7 +611,14 @@ export class CopilotAgentService {
 		agent: CopilotPersistedAgent,
 		operationId: string,
 	): CopilotTransitionResult {
-		const committed = this.deps.catalogWriter.commit(owner, catalog.revision, agents);
+		let committed;
+		try {
+			committed = this.deps.catalogWriter.commit(owner, catalog.revision, agents);
+		} catch (error) {
+			throw new CopilotTransitionError("persistence_failed", "Copilot transition could not be persisted", {
+				cause: error,
+			});
+		}
 		if (!committed.committed)
 			throw new CopilotTransitionError("persistence_failed", "Copilot catalog changed while saving");
 		const storedAgent = committed.catalog.agents.find((candidate) => candidate.agentId === agent.agentId)!;

@@ -21,10 +21,10 @@ export function copilotRequestBody(
 	return {
 		kind,
 		...(mutating ? { operationId: operationId() } : {}),
-		...(args.agentId ? { agentId: args.agentId } : {}),
-		...(args.prompt ? { prompt: args.prompt } : {}),
-		...(kind === "start" && args.model ? { model: args.model } : {}),
-		...(kind === "start" && args.cwd ? { cwd: args.cwd } : {}),
+		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
+		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+		...(kind === "start" && args.model !== undefined ? { model: args.model } : {}),
+		...(kind === "start" && args.cwd !== undefined ? { cwd: args.cwd } : {}),
 	};
 }
 

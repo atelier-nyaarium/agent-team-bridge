@@ -44,6 +44,13 @@ describe("Copilot tool contracts", () => {
 		);
 	});
 
+	it("forwards a supplied cwd and omits an absent cwd", () => {
+		const withCwd = copilotRequestBody("start", { prompt: "p", cwd: "/x" });
+		expect(withCwd).toMatchObject({ cwd: "/x" });
+		expect("cwd" in copilotRequestBody("start", { prompt: "p", cwd: "" })).toBe(true);
+		expect("cwd" in copilotRequestBody("start", { prompt: "p" })).toBe(false);
+	});
+
 	it("bounds prompts and normalizes errors", () => {
 		const prompt = "x".repeat(COPILOT_PROMPT_MAX_BYTES);
 		expect(CopilotStartAgentInputSchema.parse({ prompt }).prompt).toBe(prompt);

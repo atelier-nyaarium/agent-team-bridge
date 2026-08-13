@@ -93,7 +93,7 @@ function operationId(): string {
  * gateway's request schemas are strict. */
 export function codexRequestBody(
 	kind: "start" | "message" | "await" | "stop" | "list",
-	args: { agentId?: string; prompt?: string; model?: string } = {},
+	args: { agentId?: string; prompt?: string; model?: string; cwd?: string } = {},
 ): Record<string, unknown> {
 	const mutating = kind === "start" || kind === "message" || kind === "stop";
 	return {
@@ -101,7 +101,8 @@ export function codexRequestBody(
 		...(mutating ? { operationId: operationId() } : {}),
 		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
 		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
-		...(kind === "start" && args.model ? { model: args.model } : {}),
+		...(kind === "start" && args.model !== undefined ? { model: args.model } : {}),
+		...(kind === "start" && args.cwd !== undefined ? { cwd: args.cwd } : {}),
 	};
 }
 

@@ -47,6 +47,21 @@ describe("what a tool actually sends", () => {
 			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x", model: "s" }),
 		).not.toHaveProperty("model");
 	});
+
+	it("keeps model and cwd on start only", () => {
+		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol", cwd: "/work/tree" })).toMatchObject({
+			model: "gpt-5.6-sol",
+			cwd: "/work/tree",
+		});
+		const message = codexRequestBody("message", {
+			agentId: "codex_0123456789abcdef0123456789abcdef",
+			prompt: "x",
+			model: "s",
+			cwd: "/work/tree",
+		});
+		expect(message).not.toHaveProperty("model");
+		expect(message).not.toHaveProperty("cwd");
+	});
 });
 
 describe("what a caller reads back from the gateway", () => {

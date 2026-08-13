@@ -3,6 +3,12 @@ import { CodexTransitionError } from "../gateway/codexAgentService.js";
 import { setup } from "./helpers/codex-persistence.js";
 import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-thinking.js";
 
+const DEVCONTAINER_TARGET = {
+	kind: "devcontainer",
+	project: "recipe-app",
+	hostProjectPath: "/trusted/recipe-app",
+} as const;
+
 describe("Codex checked start and delivery correlation", () => {
 	it("durably records the full start intent before native dispatch", () => {
 		const { request, owner, service, sessionStore, offlineCatalog, savedSnapshots } = setup();
@@ -10,6 +16,7 @@ describe("Codex checked start and delivery correlation", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review every authorization boundary",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 
@@ -29,6 +36,7 @@ describe("Codex checked start and delivery correlation", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review every authorization boundary",
+			target: DEVCONTAINER_TARGET,
 			at: 21,
 		});
 		expect(retry.disposition).toBe("indeterminate");
@@ -41,6 +49,7 @@ describe("Codex checked start and delivery correlation", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 
@@ -106,6 +115,7 @@ describe("Codex checked start and delivery correlation", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 
@@ -131,6 +141,7 @@ describe("Codex checked start and delivery correlation", () => {
 			agentId: AGENT_ID,
 			operationId: OPERATION_ID,
 			prompt: "Review",
+			target: DEVCONTAINER_TARGET,
 			at: 20,
 		});
 		const otherOwner = sessionStore.mint({ spawn: "other-project" });
