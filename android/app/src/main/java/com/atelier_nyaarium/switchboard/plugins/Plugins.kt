@@ -38,7 +38,7 @@ object Plugins {
 		// Bridge the repo's data-plane fan-out into the plugin registry, ONCE per process (this build
 		// runs once). Maps each raw Message to a coordinate-free InboundMessage and delivers to every
 		// currently-claimed handler (a disabled plugin's claim is swept, so it stops receiving).
-		Repo.get(app).addInboundSubscriber(
+		Repo.get(app).drain.addInboundSubscriber(
 			InboundSubscriber { team, msg ->
 				val inbound = InboundMessage(team, msg.fromMe, msg.isPeer, msg.at, msg.files, msg.text)
 				host.inboundMessages.values().forEach { handler ->
@@ -50,7 +50,7 @@ object Plugins {
 		// Bridge plugin-action entries the same way: dispatch to the ONE handler claimed under the
 		// exact "pluginId:actionType" key (a registry claim is unique, so at most one handler ever
 		// exists for a given key); an unclaimed key is silently skipped.
-		Repo.get(app).addPluginActionSubscriber(
+		Repo.get(app).drain.addPluginActionSubscriber(
 			PluginActionSubscriber { team, pluginId, actionType, payload ->
 				host.pluginActions.get("$pluginId:$actionType")?.let { handler ->
 					runCatching { handler.onAction(PluginAction(team, payload)) }

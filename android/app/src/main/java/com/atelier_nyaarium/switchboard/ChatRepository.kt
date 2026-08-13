@@ -5,60 +5,44 @@ import android.net.Uri
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
-import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
-import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
-import com.atelier_nyaarium.switchboard.proto.PresenceVersion
-import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
-import com.atelier_nyaarium.switchboard.proto.SessionKey
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
-import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.Protocol
-import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.time.ZoneId
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
  * by seq while the poll loop keeps the full entry to render. */
-private data class Drained(val entry: MailboxEntry) : SyncEntry {
+internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 	override val seq: Long get() = entry.seq
 }
 
 /**
- * Chat state over a ConsoleClient. Holds per-team threads, an unread tally, the open
- * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
- * and routes each reply to its team (parsed from the `conv.<id>.<domain>.<gateway>.<spawn>.<session>`
- * session id or the entry's `from`). Transcripts persist encrypted so history survives restarts.
+ * Chat state over a ConsoleClient. Holds per-team threads, an unread tally and the open tab set,
+ * and routes each drained reply to its team (parsed from the
+ * `conv.<id>.<domain>.<gateway>.<spawn>.<session>` session id or the entry's `from`). The poll loop
+ * and mailbox drain itself is the [drain] delegate (PollDrain.kt). Transcripts persist encrypted so
+ * history survives restarts.
  */
 class ChatRepository(
 	internal val store: AppStateStore,
@@ -143,13 +127,13 @@ class ChatRepository(
 	 * for thread attribution, or null when it is not an address (a free-form Device Name). Null lets
 	 * the caller fall back to the store-key sender instead of keying a thread by a non-address - which
 	 * would otherwise become an unsendable ghost chat. */
-	private fun fromCanonical(from: String): String? =
+	internal fun fromCanonical(from: String): String? =
 		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrNull()
 
 	/** This device's own session address. The spawn segment is the OWNER id (matching the gateway's
 	 * consoleSelfAddress), NOT the free-form device name, so a device name with spaces/capitals no
 	 * longer breaks the self-thread check. Null only when the owner key is not yet available. */
-	private fun thisDeviceAddress(): Address? =
+	internal fun thisDeviceAddress(): Address? =
 		runCatching {
 			Address.local(localDomain(), localGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
 		}.getOrNull()
@@ -161,7 +145,7 @@ class ChatRepository(
 	// The mailbox cursor is console-owned and durable: MailboxSync loads it from the store
 	// and the console resumes from its own consumption point, never re-adopting a server-
 	// dictated cursor that would ack away the offline backlog on the next poll.
-	private val mailboxSync = MailboxSync(store)
+	internal val mailboxSync = MailboxSync(store)
 	// The background poll cadence ladder. `store` already implements IdleSilenceStore; the
 	// service wires its own scheduler (alarm + wakelock side effects) in after construction, the
 	// same pattern as onInbound below.
@@ -200,9 +184,9 @@ class ChatRepository(
 		fetchPendingAttachments()
 	}
 
-	// Always available from construction, independent of pollScope (null until startPolling runs)
-	// and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be a
-	// silent no-op the way scheduleAttachmentDelete's best-effort pollScope?.launch is allowed to be
+	// Always available from construction, independent of the drain's scope (null until the loop
+	// starts) and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be
+	// a silent no-op the way scheduleAttachmentDelete's best-effort drain.scope?.launch is allowed to be
 	// (a missed scheduled send has no "next cold start heals it" backstop the way an orphan
 	// attachment delete does). Never cancelled: ChatRepository is a bare process singleton with no
 	// teardown of its own, so this lives for the process's lifetime, same as the singleton itself.
@@ -235,6 +219,12 @@ class ChatRepository(
 	// The Domain trust anchor: owner root key, console member identity, and the keyring
 	// the Console resolves every Gateway against before sealing to it.
 	internal val federation = FederationManager(store)
+
+	/** The poll loop's keyring-sync landing, wrapped so the federation surface stays confined to
+	 * this class and its federation delegates (federation-manager-residue pins that reach). */
+	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) {
+		federation.applyDomainSync(snapshot, version)
+	}
 	// The federation surface, split into four collaborators by concern (see each class's own doc).
 	// Screens call through these (repo.enroll.X, repo.devices.X, ...) rather than on ChatRepository
 	// directly.
@@ -254,12 +244,6 @@ class ChatRepository(
 	// invite mints fresh secrets (abandoning the old QR's window). internal: shared by EnrollOps
 	// (adminEnrollContext) and DomainAdminOps (regenerateInvite, buildInviteBlob).
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
-	private var pollFails = 0
-	private var pollJob: Job? = null
-	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
-	// notification (so the audio is cached before the user is pinged).
-	private var pollScope: CoroutineScope? = null
-
 	@Volatile internal var sttsClient: SttsClient? = null
 
 	/** True while the Activity is started; drives the poll cadence - chained long-polls while
@@ -267,13 +251,6 @@ class ChatRepository(
 	 * accumulates server-side either way. */
 	@Volatile private var visible = false
 	val isVisible: Boolean get() = visible
-	// Set alongside `visible = true`: onForeground front-runs the resume-kicked drain, so every
-	// message still sitting in the mailbox at resume would otherwise tag arrivedVisible=true (the
-	// user never actually saw it). Cleared once the first poll pass since the transition commits,
-	// so only the genuinely-backgrounded backlog is tagged not-visible; a live message the NEXT
-	// pass drains while still foregrounded tags normally.
-	@Volatile private var resumeBacklogPending = false
-	private val kick = Channel<Unit>(Channel.CONFLATED)
 	// Bounds the optimistic-forget/board-resurrection race: a wholesale teams() snapshot dispatched
 	// BEFORE forget() completes server-side can still list the just-forgotten team when it resolves
 	// AFTER the optimistic local removal below. A short-lived tombstone masks that one stale
@@ -297,38 +274,12 @@ class ChatRepository(
 	// This device's currently-declared focus (what poll() presents as `focus`), read fresh on every
 	// poll - see declareFocus. Starts "background": a cold app has not yet observed the board or a
 	// terminal, so it should not falsely claim the board's ramped cadence before the UI ever renders.
-	@Volatile private var currentFocus: FocusIntent = FocusIntent(screen = "background")
+	@Volatile internal var currentFocus: FocusIntent = FocusIntent(screen = "background")
 
-	// Non-null only while a poll is actually held open; completing it interrupts that SPECIFIC held
-	// poll so a focus transition (declareFocus) or a manual refresh (refreshTeams) reaches the
-	// Gateway within about one RTT instead of waiting out the remainder of the current hold (see
-	// pollRacingFocusChange). Never touched by anything other than the poll loop's own iteration
-	// and those two callers.
-	@Volatile private var pollInterrupt: CompletableDeferred<Unit>? = null
-
-	// The presence-plane version(s) this device last applied, presented back as knownPresenceVersions
-	// on the NEXT poll so the Gateway ships the snapshot again only once it actually changed. Never
-	// persisted (see lastRawTeams) - a fresh process presents an empty list, which the Gateway treats
-	// as a cold boot and ships everything once.
-	@Volatile private var knownPresenceVersions: List<PresenceVersion> = emptyList()
-
-	// The linked-peers plane version this device last applied, presented back on the NEXT poll -
-	// same role as knownPresenceVersions, a single scalar since this Gateway's own roster has no
-	// multi-source concept. Null (never persisted) means this session has not applied one yet, which
-	// the Gateway treats the same as a legacy client - ship the current roster unconditionally.
-	@Volatile private var knownLinkedPeersVersion: LinkedPeersVersion? = null
-
-	// This owner's read-anchors plane version last applied - same role/shape as
-	// knownLinkedPeersVersion, for the cross-device read-position sync plane (see applyReadAnchors).
-	@Volatile private var knownReadAnchorsVersion: ReadAnchorsVersion? = null
-
-	// Every linked Domain's cross-Domain-presence plane version this device last applied - same
-	// ARRAY shape as knownPresenceVersions (genuinely N independently-versioned planes), not a
-	// single scalar like knownLinkedPeersVersion/knownReadAnchorsVersion. Updated by a per-domainId
-	// UPSERT (see applyCrossDomainPresence), never a wholesale replace, since the wire only ships the
-	// changed subset each poll - replacing this list outright would forget every OTHER already-known
-	// Domain's version and cause the Gateway to needlessly re-ship them as "unknown" next poll.
-	@Volatile private var knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion> = emptyList()
+	/** The poll loop and mailbox drain (see PollDrain.kt): the loop lifecycle, the plane version
+	 * cursors and both drain-gate subscriber lists live there; it reaches back into this class the
+	 * way the federation Ops delegates do. */
+	internal val drain = PollDrain(this)
 
 	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
 	// reports a team's local anchor only once per genuine local advance instead of every cycle.
@@ -340,36 +291,14 @@ class ChatRepository(
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
 
-	/** Data-plane subscribers, invoked once per genuinely-new inbound message at the drain gate
-	 * (see the poll loop). Delivery is synchronous and pre-commit, so a subscriber inherits the
-	 * mailbox cursor's exactly-once + crash-safety; it must be fast, non-blocking, and idempotent. */
-	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
-
-	/** Register a data-plane subscriber. Add-once per process (the caller is a singleton); a
-	 * duplicate add would double-deliver. */
-	fun addInboundSubscriber(subscriber: InboundSubscriber) {
-		inboundSubscribers.addIfAbsent(subscriber)
-	}
-
-	/** Plugin-action subscribers, invoked once per `plugin_action` mailbox entry at the drain gate.
-	 * Delivery is at-least-once (this entry never renders a chat message, so it has no persisted
-	 * fold to dedupe a redraw against); a subscriber must be fast, non-blocking, and idempotent. */
-	private val pluginActionSubscribers = java.util.concurrent.CopyOnWriteArrayList<PluginActionSubscriber>()
-
-	/** Register a plugin-action subscriber. Add-once per process, same as [addInboundSubscriber]. */
-	fun addPluginActionSubscriber(subscriber: PluginActionSubscriber) {
-		pluginActionSubscribers.addIfAbsent(subscriber)
-	}
-
 	/** The Activity came on screen: gateway to the fast cadence, optimistically
 	 * clear a doze-corpse failure banner (the kicked poll re-raises it within
 	 * seconds if the bridge is genuinely down), and poll right now. */
 	fun onForeground() {
 		visible = true
-		resumeBacklogPending = true
-		pollFails = 0
+		drain.onForegroundResume()
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
-		kick.trySend(Unit)
+		drain.kickPoll()
 	}
 
 	fun onBackground() {
@@ -381,7 +310,7 @@ class ChatRepository(
 
 	/** Wakes the poll loop immediately - the alarm receiver's bridge into a possibly-parked pass. */
 	fun kickPoll() {
-		kick.trySend(Unit)
+		drain.kickPoll()
 	}
 
 	/** Declares this device's current UI focus - what the board/thread/terminal composables are
@@ -394,7 +323,7 @@ class ChatRepository(
 	fun declareFocus(focus: FocusIntent) {
 		val prior = currentFocus
 		currentFocus = focus
-		if (prior != focus) pollInterrupt?.complete(Unit)
+		if (prior != focus) drain.interrupt()
 	}
 
 	internal fun client(): ConsoleClient {
@@ -415,7 +344,7 @@ class ChatRepository(
 	// self-correcting the way most staleness here is: the gateway keeps serving an AFFIRMATIVE
 	// union, and an affirmative union is precisely what a starting session does not second-guess,
 	// so the owner would silently lose a tool they had just switched on. Retried from the poll loop.
-	@Volatile private var pluginReportPending = false
+	@Volatile internal var pluginReportPending = false
 
 	/**
 	 * Re-report after the owner toggles a plugin, so the change reaches the gateway now instead of
@@ -779,20 +708,11 @@ class ChatRepository(
 		if (local != _state.value.displayName) _state.update { it.copy(displayName = local) }
 	}
 
-	/** Serializes every read-modify-write of knownCrossDomainPresenceVersions: applyLinkedPeers and
-	 * applyCrossDomainPresence both merge against its OWN prior value (a filter/upsert, not a plain
-	 * replace like the sibling knownPresenceVersions/knownLinkedPeersVersion fields), and refreshTeams()
-	 * resets it from a DIFFERENT coroutine (a manual pull-to-refresh, not the poll loop) - both run on
-	 * Dispatchers.IO's multi-threaded pool, so an unguarded compound operation could lose the reset
-	 * underneath a poll response still applying stale pre-reset data. Mirrors freshTeamsMutex's own
-	 * rationale for the identical concurrent-caller pair below. */
-	private val crossDomainVersionsMutex = Mutex()
-
 	/** Apply the linked-peers plane's pushed snapshot into state, so TrustOps.linkedDomains() can union it
 	 * with discovery. The one writer of linkedPeerOwners - the poll loop calls this when a poll
 	 * response carries `linkedPeers` (a real change; see PlaneRegistry). Folds the per-gateway peer
 	 * rows to their distinct Domain ids (a Domain may run more than one gateway). */
-	private suspend fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
+	internal suspend fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
 		// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
 		val owners = peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
 		_state.update {
@@ -804,9 +724,7 @@ class ChatRepository(
 				crossDomainPeerSessions = it.crossDomainPeerSessions.filterKeys { domainId -> domainId in owners },
 			)
 		}
-		crossDomainVersionsMutex.withLock {
-			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions.filter { it.domainId in owners }
-		}
+		drain.pruneCrossDomainVersions(owners.keys)
 	}
 
 	/** Apply the cross-Domain-presence plane's pushed/pulled entries into state: a per-domainId
@@ -814,10 +732,8 @@ class ChatRepository(
 	 * carries the SUBSET of linked Domains whose plane actually changed this poll. The one writer of
 	 * crossDomainPeerSessions - the poll loop calls this when a poll response carries
 	 * `crossDomainPresence`. */
-	private suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
-		crossDomainVersionsMutex.withLock {
-			knownCrossDomainPresenceVersions = upsertKnownCrossDomainPresenceVersions(knownCrossDomainPresenceVersions, entries)
-		}
+	internal suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
+		drain.upsertCrossDomainVersions(entries)
 		_state.update { it.copy(crossDomainPeerSessions = it.crossDomainPeerSessions + entries.associateBy { e -> e.domainId }) }
 	}
 
@@ -833,7 +749,7 @@ class ChatRepository(
 	 * so a row that arrived in the SAME response as its own read-anchor bump already resolves. Marks
 	 * every applied entry as already-reported too, so the very next cycle's outbound report pass does
 	 * not immediately bounce a just-adopted synced value straight back to the Gateway. */
-	private fun applyReadAnchors(entries: List<com.atelier_nyaarium.switchboard.proto.ReadAnchorWireEntry>) {
+	internal fun applyReadAnchors(entries: List<com.atelier_nyaarium.switchboard.proto.ReadAnchorWireEntry>) {
 		var anyChanged = false
 		val next = _state.updateAndGet { s ->
 			var st = s
@@ -860,7 +776,7 @@ class ChatRepository(
 	 * `advanced` verdict - even a false (another device already reported further) means THIS device
 	 * has successfully told the Gateway its own position, so re-sending it every cycle would be
 	 * pure waste. */
-	private suspend fun reportLocalReadAdvances() {
+	internal suspend fun reportLocalReadAdvances() {
 		val anchors = _state.value.readAnchors
 		for (team in teamsNeedingReadReport(anchors, lastReportedReadAnchors)) {
 			val anchor = anchors.getValue(team)
@@ -879,11 +795,8 @@ class ChatRepository(
 	 * discovery immediately (see refreshDiscovery) rather than waiting out its own bounded
 	 * interval, so a manual refresh covers everything a user would expect it to. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		knownPresenceVersions = emptyList()
-		knownLinkedPeersVersion = null
-		knownReadAnchorsVersion = null
-		crossDomainVersionsMutex.withLock { knownCrossDomainPresenceVersions = emptyList() }
-		pollInterrupt?.complete(Unit)
+		drain.resetPlaneCursors()
+		drain.interrupt()
 		refreshDiscovery()
 	}
 
@@ -904,7 +817,7 @@ class ChatRepository(
 	 * `teams` from it directly (see reapplyCachedTeams) without waiting for a fresh server push -
 	 * a failed or remote forget then resurrects locally on its own tombstone's schedule, not the
 	 * next unrelated bump. */
-	private suspend fun applyPresence(fresh: List<Team>) {
+	internal suspend fun applyPresence(fresh: List<Team>) {
 		lastRawTeams = fresh
 		reapplyCachedTeams()
 	}
@@ -922,7 +835,7 @@ class ChatRepository(
 	 * from the newer fetch" once two independent capture-then-persist sequences interleave. */
 	private val freshTeamsMutex = Mutex()
 
-	private suspend fun reapplyCachedTeams() {
+	internal suspend fun reapplyCachedTeams() {
 		val raw = lastRawTeams ?: return
 		freshTeamsMutex.withLock {
 			val visible = filterTombstoned(raw, forgottenUntil, System.currentTimeMillis())
@@ -1180,8 +1093,8 @@ class ChatRepository(
 			persistence.persistScheduledSends(next)
 			rearmScheduledSendAlarm(next)
 			// A replace's old bucket is now unreferenced - clean it up the same way forget() does,
-			// never inline (best-effort, off pollScope, healed by the next sweepOrphanAttachments if
-			// this misses its narrow pollScope-null window).
+			// never inline (best-effort, off the drain's scope, healed by the next sweepOrphanAttachments
+			// if this misses its narrow scope-null window).
 			prior?.let { scheduleAttachmentDelete(it.fileRefs.mapNotNull { f -> f.src }) }
 			true
 		}
@@ -1284,7 +1197,7 @@ class ChatRepository(
 	}
 
 	/** Entry point for a WARM alarm kick - a BroadcastReceiver cannot suspend, so this launches on
-	 * [repoScope] (always available, unlike [pollScope]) rather than awaiting inline. The cold-boot
+	 * [repoScope] (always available, unlike the drain's own scope) rather than awaiting inline. The cold-boot
 	 * chain instead awaits [fireDueScheduledSends] directly as its own unconditional step (see
 	 * SwitchboardService.onCreate). Both funnel through the same mutex-guarded function, so a warm
 	 * kick can never double-convert the same due record with a concurrent cold-chain call - but the
@@ -1504,409 +1417,6 @@ class ChatRepository(
 		return staged to null
 	}
 
-	/** Runs [block] (the poll call), but abandons it early - returning null - if a focus transition
-	 * (declareFocus) or a manual refresh (refreshTeams) interrupts it mid-hold. The caller simply
-	 * loops again immediately with the fresh focus/knownPresenceVersions: an ordinary
-	 * abandoned-request disconnect from the Gateway's own side (nothing to reconcile - the
-	 * interrupted call never reached mailboxSync.advance at all). `select` races the poll against
-	 * the interrupt signal so the LOSER is cancelled by construction rather than hand-rolled
-	 * exception matching: coroutineScope waits for both children (the poll and the interrupt
-	 * watcher) to fully settle before this function returns, so a cancelled poll's underlying
-	 * OkHttp call is guaranteed torn down, never orphaned, before the loop re-issues a fresh one -
-	 * and since the CancellationException this produces never escapes past the `select` itself,
-	 * the outer poll loop's own teardown-detection (e.rethrowIfCancellation) never mistakes this
-	 * intentional, self-contained interrupt for the whole pollJob being torn down. */
-	private suspend fun pollRacingFocusChange(block: suspend () -> ConsolePollResult): ConsolePollResult? =
-		coroutineScope {
-			val signal = CompletableDeferred<Unit>()
-			pollInterrupt = signal
-			try {
-				val pollDeferred = async { block() }
-				select<ConsolePollResult?> {
-					pollDeferred.onAwait { it }
-					signal.onAwait {
-						pollDeferred.cancel()
-						null
-					}
-				}
-			} finally {
-				pollInterrupt = null
-			}
-		}
-
-	fun startPolling(scope: CoroutineScope) {
-		if (pollJob?.isActive == true) return
-		pollScope = scope
-		pollJob = scope.launch(Dispatchers.IO) {
-			var lastDiscoveryAt = 0L
-			pollLoop@ while (isActive) {
-				var failed = false
-				var heldEmpty = false
-				var hold = 0L
-				try {
-					// Mesh-wide discovery (see DISCOVERY_REFRESH_MS's own doc): the one thing left with
-					// no push mechanism, so it still needs its own bounded-interval pull, independent of
-					// the presence/linked-peers planes above and unconditional (no capability gate - a
-					// gateway that cannot push presence can still relay discovery just fine, and this
-					// covers OTHER gateways regardless of this one's own plane support).
-					val now = System.currentTimeMillis()
-					if (now - lastDiscoveryAt >= DISCOVERY_REFRESH_MS) {
-						lastDiscoveryAt = now
-						refreshDiscovery()
-					}
-					if (pluginReportPending) reportEnabledPlugins()
-					// Visible: long-poll (the hold IS the wait; re-poll immediately).
-					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
-					// ladder's decision, not a flat interval - the mailbox batches either way.
-					hold = if (visible) LONG_POLL_HOLD_MS else 0L
-					val started = System.currentTimeMillis()
-					val params = mailboxSync.pollParams()
-					val focus = currentFocus
-					val presented = knownPresenceVersions
-					val presentedLinkedPeers = knownLinkedPeersVersion
-					val presentedReadAnchors = knownReadAnchorsVersion
-					val presentedCrossDomainPresence = knownCrossDomainPresenceVersions
-					val presentedTaskBoard = board.knownVersion
-					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
-					val mb = if (hold > 0) {
-						pollRacingFocusChange {
-							client().poll(
-								params.cursor, params.epoch, hold, presented, focus,
-								presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
-								presentedTaskBoard,
-							)
-						}
-					} else {
-						client().poll(
-							params.cursor, params.epoch, hold, presented, focus,
-							presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
-							presentedTaskBoard,
-						)
-					}
-					if (mb == null) {
-						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
-						continue@pollLoop
-					}
-					// Keyring sync: the route Gateway returns the snapshot only when it changed.
-					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
-					mb.domain?.let { federation.applyDomainSync(it, mb.domainVersion ?: "") }
-					// Presence plane: the same piggyback shape as domainVersion above, generalized.
-					// Present only when at least one source's version differs from what this device
-					// presented - an empty presented list (this session's first poll) always ships
-					// everything (cold boot).
-					if (mb.presence != null || mb.presenceVersions != null) {
-						if (mb.presenceVersions != null) knownPresenceVersions = mb.presenceVersions
-						mb.presence?.let { rows ->
-							val bumpAt = System.currentTimeMillis()
-							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							applyPresence(rows.map { teamInfoToTeam(it, localGatewayId) })
-						}
-					}
-					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
-					// vs cold-boot distinction - see knownLinkedPeersVersion's own doc). A link/unlink/
-					// untrust bumps the Gateway's own plane synchronously, so this device's next poll
-					// reflects it.
-					if (mb.linkedPeers != null || mb.linkedPeersVersion != null) {
-						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
-						mb.linkedPeers?.let { peers ->
-							DebugLog.log("Plane", "linkedPeers settled=${mb.settled} rows=${peers.size}")
-							applyLinkedPeers(peers)
-						}
-					}
-					// Cross-Domain-presence plane: unlike every plane above, genuinely N independently-
-					// versioned planes (one per linked Domain, see knownCrossDomainPresenceVersions' own
-					// doc) - the response carries only the SUBSET of linked Domains whose plane actually
-					// changed, applied as a per-domainId upsert (applyCrossDomainPresence), never a
-					// wholesale replace.
-					mb.crossDomainPresence?.let { entries ->
-						DebugLog.log("Plane", "crossDomainPresence settled=${mb.settled} rows=${entries.size}")
-						applyCrossDomainPresence(entries)
-					}
-					// Read-anchors plane: same generalized shape again, one plane per owner. The version
-					// bumps now, but applying the entries themselves waits until AFTER this poll's own
-					// fresh mailbox entries are folded into `_state.threads` below (applyReadAnchors
-					// resolves each synced position by ROW in that thread, so a message that arrived in
-					// this SAME response must already be appended before its own read-anchor bump can
-					// resolve).
-					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
-					val pendingReadAnchors = mb.readAnchors
-					// Task-board plane: same generalized shape, one plane per owner. The route Gateway's
-					// half only - a non-route Gateway's entries arrive through board_read. Applying the
-					// snapshot never clobbers a pending local edit; mergedEntries re-applies the queue.
-					if (mb.taskBoard != null || mb.taskBoardVersion != null) {
-						mb.taskBoard?.let { entries ->
-							DebugLog.log("Plane", "taskBoard settled=${mb.settled} rows=${entries.size}")
-							board.applySnapshot(localGatewayId, entries, mb.taskBoardVersion, mb.taskBoardTruncated == true)
-						}
-					}
-					// Drain the board's pending actions on the poll cadence - the loop already runs at
-					// the right rate foreground and follows the pushback ladder backgrounded, and each
-					// action is its own relay carrying its own targetGateway.
-					launch { runCatching { board.drain(client()) } }
-					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
-					// against a second transfer of the same file, and a no-op when nothing is queued.
-					boardOps.resumeBoardUploads()
-					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
-					// against the CURRENT tombstone set on every tick, fresh presence or not - see
-					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
-					// team locally on its own schedule rather than waiting for the next unrelated bump.
-					reapplyCachedTeams()
-					// An old gateway ignores holdMs and returns empty instantly; floor
-					// the cadence so that degradation never becomes a tight spin.
-					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
-						System.currentTimeMillis() - started < INSTANT_EMPTY_THRESHOLD_MS
-					// Fold the result through the durable cursor: epoch flip, seq dedupe (a
-					// lost-ack re-drain), and the dropped-gap DELTA all live in advance(), which
-					// returns only genuinely-fresh entries. commit() advances the cursor LAST,
-					// after the fresh entries are rendered + persisted (two-phase: a crash
-					// re-delivers rather than skips).
-					val adv = mailboxSync.advance(
-						SyncPollResult(mb.entries.map { Drained(it) }, mb.cursor, mb.epoch, mb.dropped),
-					)
-					if (mb.entries.isEmpty()) {
-						DebugLog.log("Poll", "empty (held=$heldEmpty epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped})")
-					} else {
-						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
-					}
-					if (adv.gap) _state.update { it.copy(gap = true) }
-					// Idle pushback: any genuinely-fresh entry is comms activity, resetting the silence
-					// clock back to the fast cadence.
-					if (adv.fresh.isNotEmpty()) pushback.onCommsActivity(System.currentTimeMillis(), visible)
-					val burst = mutableMapOf<String, MutableList<Message>>()
-					val deviceAddr = thisDeviceAddress()
-					for (d in adv.fresh) {
-						val e = d.entry
-						// Resolve the thread key for this entry; null means drop it. Notices thread under
-						// the sender's canonical address; conv sessions use the session address, except
-						// when that address is THIS device (an agent-initiated push to our own session
-						// threads under `from`, the sender, not under ourselves).
-						val team: String? = if (e.kind == "notice") {
-							// Notice: prefer `from`, fall back to the notice store key's sender.
-							e.from?.let { fromCanonical(it) }
-								?: (parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
-						} else {
-							when (val sk = parseStoreKey(e.session_id)) {
-								is SessionKey.Conv ->
-									if (deviceAddr != null && sk.address == deviceAddr) {
-										// Push to our own session: thread under the sender, falling back to our own
-										// self-address - a non-address `from` (a raw Device Name) would otherwise become
-										// an unsendable ghost-chat key.
-										e.from?.let { fromCanonical(it) } ?: sk.address.canonical
-									} else {
-										sk.address.canonical
-									}
-								// Not a conv store key; fall back to `from` if present.
-								else -> e.from?.let { fromCanonical(it) }
-							}
-						}
-						if (team == null) {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} from=${e.from} -> DROPPED (unresolvable team)")
-							continue
-						}
-						val files = Attachments.decode(e.files)
-						// status-only entries still land (e.g. a wake-failure error
-						// with no body would otherwise vanish).
-						val bodyText = e.body.orEmpty()
-						val snippet = bodyText.replace(Regex("\\s+"), " ").trim().take(80)
-						if (e.kind == "sent") {
-							// The owner's own outgoing message, mirrored to all their devices.
-							DebugLog.log("Drain", "seq=${e.seq} kind=sent session=${e.session_id} -> thread=$team (own mirror) opId=${e.opId} \"$snippet\"")
-							val echo = Message(true, bodyText, e.at, files = files, status = null, opId = e.opId, epoch = mb.epoch, seq = e.seq)
-							reconcileSent(team, echo)
-							continue
-						}
-						if (e.kind == "plugin_action") {
-							// Never rendered as a chat message, so it never depends on a nonempty body.
-							val pluginId = e.pluginId
-							val actionType = e.actionType
-							if (pluginId != null && actionType != null) {
-								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action session=${e.session_id} -> thread=$team $pluginId:$actionType")
-								pluginActionSubscribers.forEach { sub ->
-									runCatching { sub.onAction(team, pluginId, actionType, e.payload) }
-										.onFailure { DebugLog.log("Drain", "plugin action subscriber threw: $it") }
-								}
-							}
-							continue
-						}
-						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
-							val attribution = resolveMessageAttribution(e.kind, e.from, e.to, team, ::fromCanonical)
-							val msg = Message(
-								false, bodyText, e.at, files = files, status = e.status,
-								title = e.title.tierOrNull(), summary = e.summary.tierOrNull(), fullSpoken = e.fullSpoken.tierOrNull(),
-								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
-								arrivedVisible = visible && !resumeBacklogPending,
-							)
-							// appendInbound folds an at-least-once re-drain in place and returns
-							// false, so a redelivered entry never re-bumps unread or re-notifies. unread
-							// itself is recomputed from the anchor inside appendInbound's own state update
-							// (the single-writer derivation), not bumped here.
-							//
-							// Data-plane fan-out rides appendInbound's beforeCommit hook: synchronous, still
-							// inside the mailbox cursor's exactly-once, and ordered BEFORE the row reaches
-							// `_state` so a subscriber that feeds a render-time lookup (the references chip
-							// index) is always seeded before the main thread can serialize the row. A
-							// subscriber must never throw upward (a throw here would break the drain for
-							// every team), so a throw is caught and logged rather than escaping.
-							if (
-								appendInbound(team, msg) {
-									inboundSubscribers.forEach { sub ->
-										runCatching { sub.onMessage(team, msg) }
-											.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
-									}
-								}
-							) {
-								burst.getOrPut(team) { mutableListOf() }.add(msg)
-							}
-						} else {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
-						}
-					}
-					// Apply the read-anchors piggyback now that this poll's own fresh entries (if any)
-					// are already folded into `_state.threads` above - see pendingReadAnchors' own doc.
-					pendingReadAnchors?.let { entries ->
-						DebugLog.log("Plane", "readAnchors settled=${mb.settled} rows=${entries.size}")
-						applyReadAnchors(entries)
-					}
-					// Report this device's own local read advances (scroll-driven reads since the last
-					// cycle) back to the Gateway - the write half of the same plane. Never allowed to
-					// fail the poll itself (see reportLocalReadAdvances' own doc).
-					reportLocalReadAdvances()
-					val burstJobs = mutableListOf<Job>()
-					val autoPlayedPeerPairs = mutableSetOf<String>()
-					for ((team, msgs) in burst) {
-						val lastAgent = msgs.lastOrNull { !it.fromMe }
-						// Only spend synthesis on followed threads (open tabs); a
-						// never-opened or forgotten session is not in openTabs, so it
-						// notifies without preloading.
-						val followed = team in _state.value.openTabs
-						val scope = pollScope
-						// Pre-generate and auto-play are independent: enter the launch
-						// path when either is active for this followed thread.
-						val autoTier = playback.autoPlayTier(sttsAutoPlay)
-						val eligible =
-							scope != null && lastAgent != null && sttsReady() && followed && (sttsAutoGen || autoTier != null)
-						// EVERY agent message, in arrival order, addressed by the thread it actually
-						// lives in. A peer copy is NOT re-attributed to its `to`: the two mirror copies
-						// carry different timestamps, so (to, at) names a row that thread does not hold,
-						// and the engine would decline an entry the queue is waiting on.
-						//
-						// Claimed only by a thread that can actually speak. The peer dedupe hands the
-						// slot to the first claimant, so letting an ineligible thread run it would let a
-						// muted session silently suppress the followed one showing the same exchange.
-						val agentMsgs = if (!eligible) {
-							emptyList()
-						} else {
-							msgs.filter { !it.fromMe }
-								.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
-								.map { it to team }
-						}
-						if (eligible && agentMsgs.isNotEmpty()) {
-							val t = team
-							val ms = msgs
-							val at = lastAgent.at
-							val queueable = agentMsgs
-							// The message that will speak FIRST, which is the one worth waiting on.
-							// Warming the burst's last message instead would leave the one actually
-							// about to play as a live cache miss.
-							val warm = agentMsgs.firstOrNull()?.let { (m, owner) -> owner to m.at } ?: (t to at)
-							burstJobs += scope.launch(Dispatchers.IO) {
-								// When pre-generate is on, wait fully for synthesis so the
-								// cache is warm when the notification lands. preloadMessage
-								// never throws and is bounded by the STTS client's own
-								// timeouts, so a failed or slow synth still falls through and
-								// the notification fires. The rest of the burst warms as the
-								// queue reaches it.
-								if (sttsAutoGen) playback.preloadMessage(warm.first, warm.second)
-								onInbound?.invoke(t, ms)
-								// Hands-free: queue every arriving message in order. The queue
-								// speaks the first immediately and the rest as each terminal
-								// lands, so a burst is heard whole instead of only its last.
-								if (autoTier != null) {
-									for ((msg, owner) in queueable) {
-									playback.enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
-								}
-								}
-							}
-						} else {
-							onInbound?.invoke(team, msgs)
-						}
-					}
-					mailboxSync.commit(adv.next)
-					// Idle pushback: decide() (the loop tail, below) can release the wakelock right after
-					// this pass in a deep tier. Join the launched notification/STTS work first so it can
-					// never get cut off mid-flight - most passes have an empty burst and skip this
-					// entirely; the rare pass with real content is the one worth joining on. Bounded: a
-					// stalled synth leaks that one coroutine rather than wedging every future pass - see
-					// BURST_JOIN_TIMEOUT_MS.
-					withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
-					// This pass's own drain (just committed) is the "first completed pass" the resume
-					// flag exists to cover; the NEXT pass's rows tag by live visibility again.
-					resumeBacklogPending = false
-					// Off the drain, never inside it: the rows are durable and on screen at this point,
-					// so their bytes can take as long as they take. Also the heal for a fetch that a
-					// process death cut short, since it re-derives what is outstanding every pass.
-					fetchPendingAttachments()
-					pollFails = 0
-					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
-						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
-					}
-					// Flush buffered debug lines to the ingest endpoint once per cycle.
-					DebugLog.flushToIngest()
-				} catch (e: Exception) {
-					// MUST be the first statement: cancellable transport (executeCancellable) throws
-					// CancellationException on teardown, and JVM CancellationException extends
-					// Exception - classifyConnError must never see one, and a swallowed cancel here
-					// would fall through to pushback.decide(..., lastPassFailed = true) and can
-					// re-acquire an already-released wakelock.
-					e.rethrowIfCancellation()
-					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
-						// A relay-timeout during a hold is an empty long-poll, not an
-						// outage: an evie still on the shorter hold (upgrade window) or
-						// a transient gateway drop mid-hold. Back off, do not alarm.
-						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
-						heldEmpty = true
-					} else {
-						// Name the SPECIFIC cause instead of a blanket "Connection issue". A
-						// TERMINAL cause (not enrolled, bridge not deployed, bad creds) cannot
-						// clear by retrying, so surface it on the first failure; a TRANSIENT blip
-						// waits for a second failure so one hiccup never alarms; an ENROLLING
-						// sync-lag shows the calm "Finishing up enrollment..." at once and the
-						// poll loop's own retry clears it the moment an op succeeds.
-						val (cause, kind) = classifyConnError(e)
-						DebugLog.log("Poll", "error streak=${ pollFails + 1 } [$kind]: ${e.message?.take(120)}")
-						failed = true
-						pollFails++
-						_state.update { s ->
-							when (kind) {
-								ConnKind.ENROLLING -> {
-									val (override, since) = enrollFold(s.enrollingSince)
-									s.copy(pollFailStreak = pollFails, error = override ?: cause, enrollingSince = since)
-								}
-								ConnKind.TERMINAL -> s.copy(pollFailStreak = pollFails, error = cause, enrollingSince = 0L)
-								ConnKind.TRANSIENT ->
-									s.copy(pollFailStreak = pollFails, error = if (pollFails >= 2) cause else s.error, enrollingSince = 0L)
-							}
-						}
-					}
-					DebugLog.flushToIngest()
-				}
-				// The wait tier (and its alarm/wakelock side effects) comes from the silence ladder.
-				// A foreground kick interrupts any wait so the user never stares at stale state;
-				// visible long-polls chain back-to-back, failures and ignored holds back off to 5s.
-				when (val wait = pushback.decide(System.currentTimeMillis(), visible, failed)) {
-					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(POLL_INTERVAL_MS) { kick.receive() }
-					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
-					// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below
-					// is only a backstop against a lost alarm. Floored at 0 so a pass finishing near
-					// the mark never hands withTimeoutOrNull a negative duration.
-					is PollWait.Alarm ->
-						withTimeoutOrNull((wait.atMillis - System.currentTimeMillis() + PARK_SLACK_MS).coerceAtLeast(0)) { kick.receive() }
-				}
-			}
-		}
-	}
-
 	/** Re-deliver echoes stranded "pending" (process death, doze-killed socket)
 	 * once each, using their original opId: the gateway replays the cached result
 	 * if the send actually landed, so this can never double-deliver. A row whose
@@ -2008,7 +1518,7 @@ class ChatRepository(
 		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
 		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
 		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs
-		// strictly before startPolling, same as the bucket sweep, so no in-flight fetch is underfoot.
+		// strictly before the drain starts, same as the bucket sweep, so no in-flight fetch is underfoot.
 		val freed = client?.pruneStaleBlobs(STALE_BLOB_MAX_AGE_MS) ?: 0L
 		if (freed > 0) DebugLog.log("Attachments", "pruned $freed bytes of transfer residue")
 	}
@@ -2108,7 +1618,7 @@ class ChatRepository(
 		repoScope.launch { playback.dropQueuedFor(key) }
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
-			pollScope?.launch(Dispatchers.IO) {
+			drain.scope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { client().closeSession(team) }
 					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
 			}
@@ -2122,7 +1632,7 @@ class ChatRepository(
 	fun wakeSession(team: String) {
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t !is Address || t.gateway != _state.value.localGatewayId) return
-		pollScope?.launch(Dispatchers.IO) {
+		drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable { client().createSession(target = t.spawn, sessionName = t.session) }
 				.onFailure { e ->
 					_state.update { it.copy(transientMessage = e.message ?: "wake failed") }
@@ -2329,12 +1839,12 @@ class ChatRepository(
 	}
 
 	/** Best-effort background delete of no-longer-referenced attachment srcs, off the poll
-	 * scope's own lifecycle (Dispatchers.IO). A no-op for an empty list. pollScope is null until
-	 * startPolling runs, so this is a silent skip (not a defer) in that window - either way the
+	 * scope's own lifecycle (Dispatchers.IO). A no-op for an empty list. The drain's scope is null
+	 * until the loop starts, so this is a silent skip (not a defer) in that window - either way the
 	 * next cold-start sweepOrphanAttachments heals any bucket left behind. */
 	private fun scheduleAttachmentDelete(srcs: List<String>) {
 		if (srcs.isEmpty()) return
-		pollScope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
+		drain.scope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
 	}
 
 	/**
@@ -2352,14 +1862,14 @@ class ChatRepository(
 	 * one. Overlapping passes would re-derive the same pending set, re-download the same blobs, and
 	 * race each other inside [Attachments.land].
 	 */
-	private fun fetchPendingAttachments() {
+	internal fun fetchPendingAttachments() {
 		val client = this.client ?: return
 		// Claim the latch only once there is somewhere to run, and hand it back if the dispatch does
 		// not happen. Claiming first would strand it forever on a null or already-cancelled scope,
 		// because the release lives in the coroutine body and a body that never runs never releases:
 		// attachments would then stop arriving for the life of the process, silently, since this
 		// singleton outlives every Activity and service restart.
-		val scope = pollScope ?: return
+		val scope = drain.scope ?: return
 		if (!fetchingAttachments.compareAndSet(false, true)) return
 		val job = scope.launch(Dispatchers.IO) {
 			try {
@@ -2538,7 +2048,7 @@ class ChatRepository(
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		val reachable = (otherKeyringGateways(localGatewayId) + localGatewayId).toSet()
 		if (t is Address && t.domain == localDomain() && t.gateway in reachable) {
-			pollScope?.launch(Dispatchers.IO) {
+			drain.scope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { client().forget(team, boardDisposition) }
 					// The record drop already bumps the presence plane server-side, which wakes this
 					// device's own currently-held poll for free (same as closeTab/wakeSession/
@@ -2590,7 +2100,7 @@ class ChatRepository(
 		// ahead and reset state while that tail is still about to persist mail and re-touch _state.
 		// Joining serializes against it, so the worst case is this function waiting out that tail
 		// (bounded in practice, not in principle), not a silent resurrection of wiped state.
-		pollJob?.cancelAndJoin()
+		drain.stopAndJoin()
 		// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
 		// provisioning/identity/history, never voice (clear() is the full factory wipe).
 		store.clearProvisioning()
@@ -2636,7 +2146,7 @@ class ChatRepository(
 	 * here, not after the append, or the row can render against an index that has not been seeded
 	 * yet - and since a row's fingerprint does not cover its decoration, such a row is never
 	 * re-pushed and stays wrong for the life of that renderer. */
-	private fun appendInbound(team: String, msg: Message, beforeCommit: () -> Unit = {}): Boolean {
+	internal fun appendInbound(team: String, msg: Message, beforeCommit: () -> Unit = {}): Boolean {
 		if (!msg.isPeer) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
 		// At-least-once dedup: an entry with the same mailbox (epoch, seq) was already
 		// rendered, so fold it in place and report no new render (no re-notify/TTS).
@@ -2676,7 +2186,7 @@ class ChatRepository(
 	 * it; on the owner's OTHER devices it appends a fresh settled row. An at-least-once re-drain
 	 * folds by (epoch, seq). Never bumps unread or notifies: it is the owner's own message, so the
 	 * sender does not double-render and the other devices just reflect it. */
-	private fun reconcileSent(team: String, echo: Message) {
+	internal fun reconcileSent(team: String, echo: Message) {
 		// Both reset in the else branch (matching appendInbound's folded/replaced pattern above) -
 		// updateAndGet re-invokes this lambda on a failed CAS, so a captured var must be
 		// re-established on EVERY invocation, not just the one that happened to match.
