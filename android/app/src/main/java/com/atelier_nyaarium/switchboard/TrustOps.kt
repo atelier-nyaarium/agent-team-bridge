@@ -235,7 +235,7 @@ internal class TrustOps(private val repo: ChatRepository) {
 			}
 			// Mesh-wide discovery has no push, so an explicit pull is what makes the person's sessions
 			// leave the board promptly instead of waiting out DISCOVERY_REFRESH_MS.
-			repo.refreshDiscovery()
+			repo.presence.refreshDiscovery()
 			Unit
 		}
 	}

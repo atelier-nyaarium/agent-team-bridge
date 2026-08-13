@@ -1,30 +1,24 @@
 package com.atelier_nyaarium.switchboard
 
 import android.content.ContentResolver
-import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.time.ZoneId
-import java.util.UUID
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -82,7 +76,8 @@ class ChatRepository(
 
 	// Canned directory listings for the create dialog's picker, installed only by seedSandbox
 	// (emulator build). Null on every real device, so listDirs always asks the gateway there.
-	@Volatile private var sandboxDirs: Map<String, List<String>>? = null
+	// internal (not private): SessionOps.listDirs reads them; seedSandbox below is the only writer.
+	@Volatile internal var sandboxDirs: Map<String, List<String>>? = null
 	private val loadedThreadsAtStartup: Map<String, List<Message>> = persistence.loadPersistedThreads()
 	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = persistence.loadPersistedReadAnchors(loadedThreadsAtStartup)
 
@@ -115,7 +110,9 @@ class ChatRepository(
 	/** The local Domain id for minting/comparing local addresses, learned from a local session. Empty
 	 * (arming mode / not yet confirmed) is passed through to parseTarget, which maps it to the sentinel
 	 * - the same fallback the gateway uses. */
-	private fun localDomain(): String = confirmedDomainId() ?: ""
+	// internal (not private): SessionOps and the thread surface (ChatRepositoryThreads.kt) resolve a
+	// target against the same Domain.
+	internal fun localDomain(): String = confirmedDomainId() ?: ""
 
 	/** Canonicalize a target to its full address key. Accepts a local `spawn`/`spawn.session` (from the
 	 * spawn dialog) or an already-canonical address (from the board). Guarded so a malformed value
@@ -213,6 +210,12 @@ class ChatRepository(
 	// Sends banked to fire later, holding the fire mutex and the two fields the service wires in
 	// after construction (see ScheduledSendOps' own doc).
 	internal val scheduled = ScheduledSendOps(this)
+	// The team roster and the plane snapshots that keep it true, holding the raw-snapshot cache and
+	// the read anchors this device last reported (see PresenceOps' own doc).
+	internal val presence = PresenceOps(this)
+	// A session's life beyond its transcript: terminal view, spawn, wake, forget (see SessionOps'
+	// own doc). Both read nothing here while constructing, so both may be declared anywhere.
+	internal val sessions = SessionOps(this)
 	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
 	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
 	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
@@ -234,18 +237,12 @@ class ChatRepository(
 	// of staying hidden forever (neither ever produces a snapshot confirming the team's absence).
 	// Written on the main thread (forget() is a UI callback); read/pruned on Dispatchers.IO (the
 	// poll loop and connect()) - a plain HashMap would race across that split.
-	private val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
+	// internal (not private): SessionOps.forget stamps a tombstone and PresenceOps sweeps them.
+	internal val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
 	// Rows already given their one reconcile attempt this process. Synchronized:
 	// the service's start and the Activity's foreground transition can race here.
 	// internal (not private): reconcilePending (ChatRepositorySend.kt) is its only reader.
 	internal val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw -
-	// never persisted (a fresh process starts with no cache and full-resyncs on its first poll).
-	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
-	// tombstone's own expiry resurrect a team locally without waiting for a fresh server push -
-	// see applyPresence.
-	@Volatile private var lastRawTeams: List<Team>? = null
 
 	// This device's currently-declared focus (what poll() presents as `focus`), read fresh on every
 	// poll - see declareFocus. Starts "background": a cold app has not yet observed the board or a
@@ -256,12 +253,6 @@ class ChatRepository(
 	 * cursors and both drain-gate subscriber lists live there; it reaches back into this class the
 	 * way the federation Ops delegates do. */
 	internal val drain = PollDrain(this)
-
-	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
-	// reports a team's local anchor only once per genuine local advance instead of every cycle.
-	// Never persisted: a fresh process starts empty, so its first cycle re-reports every team's
-	// current anchor - a harmless no-op on the Gateway if nothing actually changed (monotonic merge).
-	@Volatile private var lastReportedReadAnchors: Map<String, ReadAnchor> = emptyMap()
 
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
@@ -345,7 +336,7 @@ class ChatRepository(
 		val route = localGatewayId
 		// From the KEYRING, not the session roster: a Gateway with no sessions listed still needs
 		// the report, and the first session created there would otherwise start with no tools.
-		val others = otherKeyringGateways(route)
+		val others = sessions.otherKeyringGateways(route)
 		for (gw in others) {
 			runCatchingCancellable { client().reportPluginsTo(gw, plugins) }
 				.onFailure { DebugLog.log("Plugins", "report to $gw failed (keeps its last): ${it.message?.take(80)}") }
@@ -466,7 +457,7 @@ class ChatRepository(
 			}
 			// Seed the merge path's raw cache so a tombstone expiring before the first poll lands
 			// still has something to self-heal from (see applyPresence/reapplyCachedTeams).
-			lastRawTeams = teams
+			presence.lastRawTeams = teams
 			_state.update {
 				it.copy(
 					teams = teams.withoutTombstoned(),
@@ -478,7 +469,7 @@ class ChatRepository(
 					enrollingSince = 0L,
 				)
 			}
-			refreshDisplayNameFromTeams()
+			presence.refreshDisplayNameFromTeams()
 			DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 		} catch (e: Exception) {
 			// MUST be the first statement: this catch spans the whole connect() attempt (register(),
@@ -557,506 +548,11 @@ class ChatRepository(
 	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
 	fun localDisplayName(): String = _state.value.displayName
 
-	/** Refresh the cached display name from discovery's LOCAL session (the gateway stamps each
-	 * session's displayName; the local Gateway's is this owner's own). A no-op when no local session
-	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
-	private fun refreshDisplayNameFromTeams() {
-		val gw = localGatewayId
-		val local = _state.value.teams.firstOrNull {
-			(it.gatewayId.ifEmpty { gw }) == gw && !it.displayName.isNullOrEmpty()
-		}?.displayName ?: return
-		if (local != store.displayName) store.displayName = local
-		if (local != _state.value.displayName) _state.update { it.copy(displayName = local) }
-	}
-
-	/** Apply the linked-peers plane's pushed snapshot into state, so TrustOps.linkedDomains() can union it
-	 * with discovery. The one writer of linkedPeerOwners - the poll loop calls this when a poll
-	 * response carries `linkedPeers` (a real change; see PlaneRegistry). Folds the per-gateway peer
-	 * rows to their distinct Domain ids (a Domain may run more than one gateway). */
-	internal suspend fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
-		// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
-		val owners = peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
-		_state.update {
-			it.copy(
-				linkedPeerOwners = owners,
-				// crossDomainPeerSessions is a per-domainId UPSERT (applyCrossDomainPresence), which has
-				// no other way to notice an unlinked/untrusted friend's cached entry should disappear -
-				// this roster change is the authoritative signal to prune it.
-				crossDomainPeerSessions = it.crossDomainPeerSessions.filterKeys { domainId -> domainId in owners },
-			)
-		}
-		drain.pruneCrossDomainVersions(owners.keys)
-	}
-
-	/** Apply the cross-Domain-presence plane's pushed/pulled entries into state: a per-domainId
-	 * UPSERT (never a wholesale replace - see crossDomainPeerSessions' own doc), since the wire only
-	 * carries the SUBSET of linked Domains whose plane actually changed this poll. The one writer of
-	 * crossDomainPeerSessions - the poll loop calls this when a poll response carries
-	 * `crossDomainPresence`. */
-	internal suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
-		drain.upsertCrossDomainVersions(entries)
-		_state.update { it.copy(crossDomainPeerSessions = it.crossDomainPeerSessions + entries.associateBy { e -> e.domainId }) }
-	}
-
-	/** Apply the read-anchors plane's pushed snapshot: another of this owner's OWN devices may have
-	 * read further than this one has locally recorded. Monotonic, mirroring the Gateway's own merge
-	 * (readAnchors.ts) but resolved by ROW POSITION rather than numeric epoch/seq (this device's
-	 * thread is its own local render order - see isAnchorAdvance's own doc on why equality/position,
-	 * not numeric comparison, is the sound check here). A synced entry whose row this device has not
-	 * drained yet simply does not resolve (isAnchorAdvance returns false) and is silently skipped -
-	 * low-stakes by design (see readAnchors.ts): it self-heals the moment this device's OWN reading
-	 * catches up and reports past it, so there is nothing to retry or queue here. Called AFTER this
-	 * poll's own fresh entries are folded into `_state.threads` (the poll loop's burst-append loop),
-	 * so a row that arrived in the SAME response as its own read-anchor bump already resolves. Marks
-	 * every applied entry as already-reported too, so the very next cycle's outbound report pass does
-	 * not immediately bounce a just-adopted synced value straight back to the Gateway. */
-	internal fun applyReadAnchors(entries: List<com.atelier_nyaarium.switchboard.proto.ReadAnchorWireEntry>) {
-		var anyChanged = false
-		val next = _state.updateAndGet { s ->
-			var st = s
-			for (e in entries) {
-				val team = e.team
-				val thread = st.threads[team].orEmpty()
-				val candidate = ReadAnchor(e.epoch, e.seq, e.at)
-				if (isAnchorAdvance(thread, st.readAnchors[team], candidate)) {
-					anyChanged = true
-					lastReportedReadAnchors = lastReportedReadAnchors + (team to candidate)
-					st = st.copy(readAnchors = st.readAnchors + (team to candidate)).recomputeUnread(team, thread)
-				}
-			}
-			st
-		}
-		if (anyChanged) persistence.persistReadAnchors(next.readAnchors)
-	}
-
-	/** Report every team whose local read anchor has advanced past what this device last told the
-	 * Gateway (see lastReportedReadAnchors). Fire-and-forget per team: a failure here must never
-	 * surface as a poll failure (it would wrongly trip the offline/reconnect UI for what is, per
-	 * readAnchors.ts, low-stakes data that self-heals on the next successful report), so each report
-	 * is individually caught and logged. Marks a team reported regardless of the Gateway's own
-	 * `advanced` verdict - even a false (another device already reported further) means THIS device
-	 * has successfully told the Gateway its own position, so re-sending it every cycle would be
-	 * pure waste. */
-	internal suspend fun reportLocalReadAdvances() {
-		val anchors = _state.value.readAnchors
-		for (team in teamsNeedingReadReport(anchors, lastReportedReadAnchors)) {
-			val anchor = anchors.getValue(team)
-			runCatching { client().reportRead(team, anchor.epoch, anchor.seq) }
-				.onSuccess { lastReportedReadAnchors = lastReportedReadAnchors + (team to anchor) }
-				.onFailure { DebugLog.log("Plane", "report_read failed for $team: ${it.message?.take(120)}") }
-		}
-	}
-
-	/** Pull-to-refresh: forget the known presence AND linked-peers
-	 * versions so the NEXT poll looks like a cold boot (ships everything for both planes), and
-	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
-	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
-	 * version clear underneath a still-running held poll would otherwise wait for that poll's own
-	 * natural expiry before the cleared version even reaches the server. Also pulls mesh-wide
-	 * discovery immediately (see refreshDiscovery) rather than waiting out its own bounded
-	 * interval, so a manual refresh covers everything a user would expect it to. */
-	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		drain.resetPlaneCursors()
-		drain.interrupt()
-		refreshDiscovery()
-	}
-
-	/** Mesh-wide discovery: this Gateway's own live relay to every other same-Domain gateway and
-	 * linked cross-Domain peer (routes.discover(), via the list_teams op). Unlike presence and
-	 * linked-peers, this has no push mechanism yet, so it needs an explicit pull, on the poll
-	 * loop's own bounded interval (DISCOVERY_REFRESH_MS) or immediately after an action that
-	 * changes what should be discoverable (a manual refresh, an unlink). Routes through the same
-	 * merge path as everything else (applyPresence), so tombstones/label-overrides/absence-streaks
-	 * apply uniformly regardless of source. Best-effort: a relay failure keeps the prior list. */
-	internal suspend fun refreshDiscovery() {
-		runCatchingCancellable { client().teams(localGatewayId) }
-			.onSuccess { applyPresence(it) }
-	}
-
-	/** The one plane-merge path: every fresh presence-plane snapshot lands in state through here
-	 * and only here. Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive
-	 * `teams` from it directly (see reapplyCachedTeams) without waiting for a fresh server push -
-	 * a failed or remote forget then resurrects locally on its own tombstone's schedule, not the
-	 * next unrelated bump. */
-	internal suspend fun applyPresence(fresh: List<Team>) {
-		lastRawTeams = fresh
-		reapplyCachedTeams()
-	}
-
-	/** Re-derives `teams` from the cached raw snapshot (see applyPresence) against the CURRENT
-	 * tombstone set: filterTombstoned's own sweep (forgottenUntil.entries.removeIf) means a
-	 * tombstone that has since expired no longer masks its team, so calling this on every poll
-	 * loop tick - fresh presence or not - is what makes a tombstone's expiry self-heal instead of
-	 * waiting for the next unrelated bump. Folds in ChatState.withFreshTeams' label-override
-	 * pruning + absence-streak rules. A no-op before anything has ever been cached. Serialized
-	 * against a concurrent call (the poll loop's own tick and a manual refreshTeams() both run on
-	 * Dispatchers.IO) so two overlapping snapshots cannot each persist their own labels/streaks
-	 * with no ordering guarantee between them - SharedPreferences.apply() only guarantees the
-	 * LAST-CALLED write for a key eventually wins, not that "last called" lines up with "computed
-	 * from the newer fetch" once two independent capture-then-persist sequences interleave. */
-	private val freshTeamsMutex = Mutex()
-
-	internal suspend fun reapplyCachedTeams() {
-		val raw = lastRawTeams ?: return
-		freshTeamsMutex.withLock {
-			val visible = filterTombstoned(raw, forgottenUntil, System.currentTimeMillis())
-			val next = _state.updateAndGet { it.withFreshTeams(visible) }
-			persistence.persistLabels(next.labels)
-			persistence.persistAbsenceStreaks(next.teamAbsenceStreaks)
-		}
-		refreshDisplayNameFromTeams()
-	}
-
 	// connect()'s own initial fetch stays a direct teams() pull (a cold-boot fetch has no presence
 	// version to present yet either way); withoutTombstoned is used only there now, since every
-	// OTHER wholesale-apply path routes through the merge path above.
+	// OTHER wholesale-apply path routes through PresenceOps.reapplyCachedTeams.
 	private fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
 
-	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
-	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
-	 * when the pane never loaded. */
-	suspend fun peekTerminal(team: String, sinceHash: String?): Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult> =
-		withContext(Dispatchers.IO) {
-			runCatchingCancellable { client().peek(team, sinceHash) }
-		}
-			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
-
-	/** Update a session's working + needs-login flags from a captured pane (the spinner and auth
-	 * footer markers are the truth). */
-	fun noteScreen(team: String, ansi: String) {
-		if (ansi.isEmpty()) return
-		_state.update {
-			it.copy(
-				sessionWorking = it.sessionWorking + (team to AgentScreen.isWorking(ansi)),
-				sessionNeedsLogin = it.sessionNeedsLogin + (team to AgentScreen.isLoggedOut(ansi)),
-			)
-		}
-	}
-
-	// The opId of the most recent still-unresolved spawnSession attempt per (project, label), so a
-	// retry within the window reuses it instead of drawing a fresh one - letting the gateway's
-	// mintedFrom provenance reattach the first attempt's record (or cleanly mint a new one if that
-	// attempt genuinely failed) rather than always minting a second, redundant session. Cleared on a
-	// confirmed success; a stale entry past the window is treated as absent. In-memory only.
-	private val recentSpawnOpIds = mutableMapOf<Pair<String, String>, Pair<String, Long>>()
-
-	/** Spawn a session in a spawn-point project with a free-form label. The gateway adopts the
-	 * session's record synchronously and bumps the presence plane with it, so its own tile (or its
-	 * rollback, on a failed launch) appears via this device's own next poll - there is no separate
-	 * placeholder and no manual refresh nudge. A failure also surfaces as a transient Snackbar
-	 * message; a retry with the same project + label shortly after reuses the prior attempt's opId
-	 * (see recentSpawnOpIds) so it reattaches instead of duplicating. A label the gateway could not
-	 * use as-is (unsupported characters) still creates the session under its minted id, surfaced with
-	 * its own transient message rather than silently losing the typed name. A call for a (project,
-	 * label) still pending from an earlier, unresolved call is a silent no-op (see pendingSpawns)
-	 * rather than a second, ambiguous create. Runs on the caller's scope (the Activity's), so a tap
-	 * always fires even before the poll loop's scope exists. */
-	suspend fun spawnSession(project: String, label: String, workdir: String? = null) = coroutineScope {
-		val key = project to label
-		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
-		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
-		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
-		// or bypasses the dialog entirely.
-		if (key in _state.value.pendingSpawns) return@coroutineScope
-		val now = System.currentTimeMillis()
-		recentSpawnOpIds.entries.removeAll { now - it.value.second >= SPAWN_RETRY_WINDOW_MS }
-		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
-		recentSpawnOpIds[key] = opId to now
-		_state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
-		try {
-			// The gateway's mint/adopt bumps the presence plane synchronously with the create, so the
-			// just-adopted record's tile shows on this device's own NEXT poll with no manual nudge -
-			// unlike the pre-plane teams() pull, a fresh presence snapshot needs no explicit trigger.
-			runCatchingCancellable {
-				withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, workdir = workdir, opId = opId) }
-			}
-				.onSuccess { result ->
-					recentSpawnOpIds.remove(key)
-					_state.update {
-						it.copy(
-							transientMessage = if (result.labelSanitized == true) {
-								"\"$label\" has unsupported characters; the session was created using its id as the name instead"
-							} else it.transientMessage,
-						)
-					}
-				}
-				.onFailure { e ->
-					_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
-				}
-		} finally {
-			// The removal point: cleared once createSession itself settles (success or failure), or on
-			// cancellation, so a retry within the window can reuse this opId (see recentSpawnOpIds)
-			// rather than racing a still-claimed key.
-			_state.update { it.copy(pendingSpawns = it.pendingSpawns - key) }
-		}
-	}
-
-	/** Take and clear the one-shot transient message, so a recomposition never re-shows it. */
-	fun consumeTransientMessage(): String? {
-		val msg = _state.value.transientMessage
-		if (msg != null) _state.update { it.copy(transientMessage = null) }
-		return msg
-	}
-
-	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
-	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
-		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key, submit) }
-
-	/**
-	 * Clear a usage-limit dialog and pick the work back up: answer it with choice 1 (wait for the
-	 * reset), then type "resume" and submit that as its own keypress.
-	 *
-	 * Three separate sends, none of them auto-submitting. A digit alone both selects and confirms in
-	 * that dialog, so appending Enter to it would submit the composer underneath as well. Enter also
-	 * only registers as Enter when delivered on its own rather than as a trailing byte on the text.
-	 */
-	suspend fun resumeAfterLimit(team: String) = withContext(Dispatchers.IO) {
-		tmuxSend(team, text = "1", submit = false)
-		tmuxSend(team, text = "resume", submit = false)
-		tmuxSend(team, key = "Enter")
-	}
-
-	/** The directory picker's type-ahead read: subdirectories of one host dir. Failures collapse to
-	 * an empty list - the picker just shows no suggestions. */
-	suspend fun listDirs(path: String): List<String> = withContext(Dispatchers.IO) {
-		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
-		// picker inspectable with no gateway behind it.
-		sandboxDirs?.let { return@withContext it[path].orEmpty() }
-		runCatchingCancellable { client().listDirs(path).entries }.getOrDefault(emptyList())
-	}
-
-	/** This owner's admitted Gateways other than the route one. Keyring-derived, so a Gateway with
-	 * no sessions in the roster is still reached, and a linked friend's is never included. */
-	// internal (not private): BoardOps.refreshBoard and BoardOps.boardAssignTargets fan out to every
-	// other Gateway the same way reportPluginsToOtherGateways and forget do here.
-	internal fun otherKeyringGateways(route: String): List<String> =
-		(Keyring.parse(store.loadDomain())?.admittedGatewayIds() ?: emptyList()).filter { it != route }
-
-	val terminalRefreshMs: Long get() = store.terminalRefreshMs
-
-	fun setTerminalRefreshMs(ms: Long) {
-		store.terminalRefreshMs = ms
-	}
-
-	/** Mark a team fully read without opening it (swipe-away on its notification reads the burst).
-	 * Advances the persisted anchor to the thread's tail - not just the volatile `unread` count -
-	 * so a deliberate dismiss survives a process restart instead of resurrecting. */
-	fun markRead(team: String) {
-		var anchorChanged = false
-		val next = _state.updateAndGet { s ->
-			val thread = s.threads[team].orEmpty()
-			val candidate = lastInboundAnchor(thread)
-			val withAnchor = if (candidate != null && isAnchorAdvance(thread, s.readAnchors[team], candidate)) {
-				anchorChanged = true
-				s.copy(readAnchors = s.readAnchors + (team to candidate))
-			} else {
-				anchorChanged = false
-				s
-			}
-			withAnchor.recomputeUnread(team, thread)
-		}
-		if (anchorChanged) persistence.persistReadAnchors(next.readAnchors)
-	}
-
-	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a local
-	 * `spawn.session` while the board and inbound replies use the full canonical address, so
-	 * canonicalize before adding or the same session lands as two tabs. Returns the canonical key so
-	 * the caller can point its active-tab pointer at the same value. Does NOT clear unread - reading
-	 * a thread is what clears it now (the scroll-driven receipt model), not the act of opening it. */
-	fun openThread(team: String): String {
-		val key = canonicalTarget(team)
-		_state.update { s ->
-			s.copy(
-				openTabs = if (key in s.openTabs) s.openTabs else s.openTabs + key,
-				// Reopening un-mutes: a previously-closed team goes back to full notification treatment.
-				closedTeams = s.closedTeams - key,
-			)
-		}
-		return key
-	}
-
-	/** Replace the open-tabs order wholesale (drag-to-reorder in the tab row). Only applied when
-	 * `newOrder` is still a permutation of the CURRENT tabs: a drag that resolves after a tab closed
-	 * or opened elsewhere (e.g. a notification landing mid-drag) must not resurrect a dropped tab or
-	 * silently drop the new one, so a stale commit is a no-op rather than corrupting the set. */
-	fun reorderTabs(newOrder: List<String>) {
-		_state.update { s -> if (newOrder.toSet() == s.openTabs.toSet()) s.copy(openTabs = newOrder) else s }
-	}
-
-	/** The current first-unread row id and the pointer-region ids (rows still counting toward
-	 * unread) for `team`, derived from the live anchor. Used by the reveal trigger - always AFTER
-	 * flushing any pending debounced receipt, so this reflects what was just read rather than a
-	 * stale pre-flush anchor. */
-	fun unreadBoundary(team: String): Pair<Long?, List<Long>> {
-		val s = _state.value
-		val thread = s.threads[team].orEmpty()
-		val anchor = s.readAnchors[team]
-		return firstUnreadId(thread, anchor) to unreadRows(thread, anchor).map { it.id }
-	}
-
-	/** A scroll-driven read receipt: the highest row the reader has scrolled past, reported by id
-	 * with its `at` (guards against a forget-freed id being reused by a later append before this
-	 * debounced report lands). Resolves to the nearest inbound row at-or-before the report, and
-	 * only advances the anchor when that resolves to a genuinely later position - so a stale or
-	 * duplicate report is a harmless no-op. */
-	fun readUpTo(team: String, rowId: Long, at: Long) {
-		var changed = false
-		val next = _state.updateAndGet { s ->
-			val thread = s.threads[team].orEmpty()
-			val candidate = resolveReportedAnchor(thread, rowId, at)
-			if (candidate != null && isAnchorAdvance(thread, s.readAnchors[team], candidate)) {
-				changed = true
-				s.copy(readAnchors = s.readAnchors + (team to candidate)).recomputeUnread(team, thread)
-			} else {
-				changed = false
-				s
-			}
-		}
-		if (changed) persistence.persistReadAnchors(next.readAnchors)
-	}
-
-	/** Close a tab: drop it locally AND, for a local addressable session, kill its tmux on the gateway
-	 * while KEEPING its resume record (so it stays listed as available for a re-wake). The record
-	 * surviving is what distinguishes Close from Forget. Best-effort; a gateway rejection (e.g. mid-
-	 * wake, or a user-launched session) surfaces as a transient message rather than blocking the local
-	 * tab close. */
-	fun closeTab(team: String) {
-		// Canonicalize before touching openTabs/closedTeams (matching openThread's own key), so a
-		// non-canonical spelling of an already-open team can't silently miss the removal and mute
-		// the wrong (uncanonicalized) key instead.
-		val key = canonicalTarget(team)
-		// Muted until reopened: full notification treatment (banner + TTS) downgrades to a
-		// quiet mailbox/unread-count bump for this team.
-		_state.update { it.copy(openTabs = it.openTabs - key, closedTeams = it.closedTeams + key) }
-		// Stop speaking a thread the user just closed, but KEEP its cache: a close is reopenable and
-		// the audio was already paid for. Only `forget` deletes.
-		repoScope.launch { playback.dropQueuedFor(key) }
-		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-		if (t is Address && t.gateway == _state.value.localGatewayId) {
-			drain.scope?.launch(Dispatchers.IO) {
-				runCatchingCancellable { client().closeSession(team) }
-					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
-			}
-		}
-	}
-
-	/** Wake an asleep session (the terminal-view Wake button): reattach its record and bring its
-	 * container/tmux back up. Reuses create_session's reattach-and-wake path keyed on the session's
-	 * own spawn + leaf, so an existing record resumes rather than a duplicate being minted.
-	 * Best-effort; a failure surfaces as a transient message. */
-	fun wakeSession(team: String) {
-		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-		if (t !is Address || t.gateway != _state.value.localGatewayId) return
-		drain.scope?.launch(Dispatchers.IO) {
-			runCatchingCancellable { client().createSession(target = t.spawn, sessionName = t.session) }
-				.onFailure { e ->
-					_state.update { it.copy(transientMessage = e.message ?: "wake failed") }
-				}
-		}
-	}
-
-	/** Relaunch claude inside team's still-existing pane (the terminal palette's Wake up button):
-	 * close_session (kill the tmux, KEEP the record) then create_session (fresh launch, resuming the
-	 * record's transcript). Composed from those two existing ops because a bare create cannot do
-	 * this - the daemon's ensureSession no-ops whenever the tmux session still exists, whether or
-	 * not claude is still running inside it (a Ctrl-C-killed pane is exactly that state). Local
-	 * addressable sessions only; throws on failure so the terminal surfaces it inline (tmuxSend's
-	 * contract). */
-	suspend fun relaunchSession(team: String) {
-		withContext(Dispatchers.IO) {
-			val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-			if (t !is Address || t.gateway != _state.value.localGatewayId) error("not a local session")
-			client().closeSession(team)
-			client().createSession(target = t.spawn, sessionName = t.session)
-		}
-	}
-
-	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
-	 * cache that shows immediately and the fallback against a gateway with no server label. */
-	fun setLabel(team: String, name: String) {
-		val labels = _state.updateAndGet { s ->
-			val next = if (name.isBlank()) s.labels - team else s.labels + (team to name.trim())
-			s.copy(labels = next)
-		}.labels
-		persistence.persistLabels(labels)
-	}
-
-	/** Rename a session: set it locally for immediate feedback, then push it to the gateway so the
-	 * label persists server-side, and reconcile the local label to whatever the gateway actually
-	 * applied (it sanitizes and per-spawn dedups, so "foo" may land as "foo-2"). A blank name clears
-	 * the local label only, unconditionally - like closeTab's own local-only mutation, clearing never
-	 * needs the network or an ownership check. On an unreachable/older gateway the optimistic local
-	 * label stays - the gateway is presumed to apply it eventually. The optimistic non-blank write is
-	 * withheld for a target that does not resolve to THIS Gateway's own Domain (closeTab/wakeSession's
-	 * "is this mine" check compares gateway alone; a federated peer's session can coincidentally share
-	 * this Gateway's id, so this matches the gateway's own rename_session guard, which checks both) -
-	 * a federated peer's session can otherwise pass the board's own, more permissive Rename-menu gates
-	 * and flash a label that was never actually applied anywhere; the round trip is still attempted
-	 * regardless (a second, reactive line of defense - the server's own rejection is the backstop even
-	 * if this check has a gap). An outright rejection (a successful round trip that still reports
-	 * renamed:false) reverts the optimistic write, but ONLY if the label still holds exactly what this
-	 * call wrote - a fresher server value landing via withFreshTeams, or a newer overlapping rename,
-	 * must never be clobbered by a stale rejection arriving late, and the transient message mirrors that
-	 * same guard (no revert happened -> nothing to report). A foreign target is always refused server-side
-	 * as a thrown error (not a clean renamed:false reply - there is no local record to even consider
-	 * renaming), so it is treated the same as an explicit rejection instead of the quiet
-	 * presumed-eventually-applied handling a genuinely unreachable LOCAL gateway gets - otherwise that
-	 * case is a silent no-op indistinguishable from success. */
-	suspend fun rename(team: String, name: String) {
-		val trimmed = name.trim()
-		if (trimmed.isEmpty()) {
-			setLabel(team, "")
-			return
-		}
-		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-		val isLocal = t is Address && t.domain == localDomain() && t.gateway == _state.value.localGatewayId
-		val previous = _state.value.labels[team]
-		if (isLocal) setLabel(team, trimmed)
-		val result = withContext(Dispatchers.IO) {
-			runCatchingCancellable { client().renameSession(team, trimmed) }
-		}
-		val reply = result.getOrNull()
-		val applied = reply?.takeIf { it.renamed }?.sessionLabel
-		if (applied != null && applied != trimmed) {
-			// A confirmed, authoritative server value always wins over "nothing was protecting the
-			// label to begin with" (isLocal false - no optimistic write was ever made to clobber).
-			// When there WAS an optimistic write, only overwrite it while it still holds exactly what
-			// this call itself set - never stomp a fresher value a concurrent self-heal or a later
-			// rename already landed in the meantime.
-			val next = _state.updateAndGet { s ->
-				if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
-			}
-			persistence.persistLabels(next.labels)
-		} else if (reply?.renamed == false || (!isLocal && result.isFailure)) {
-			var reverted = true
-			if (isLocal) {
-				val before = _state.value.labels[team]
-				val next = _state.updateAndGet { s ->
-					if (s.labels[team] == trimmed) {
-						s.copy(labels = if (previous != null) s.labels + (team to previous) else s.labels - team)
-					} else {
-						s
-					}
-				}
-				persistence.persistLabels(next.labels)
-				reverted = next.labels[team] != before
-			}
-			if (reverted) {
-				val message = result.exceptionOrNull()?.message ?: "Could not rename to \"$trimmed\""
-				_state.update { it.copy(transientMessage = message) }
-			}
-		}
-	}
-
-	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
-	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). Threads AND
-	 * read anchors change in this ONE transition (the peer sweep can orphan a sibling thread's
-	 * anchor row, re-anchored below), so both persist in a single batch - a process kill between
-	 * two separate writes could otherwise strand a sibling's anchor against its already-updated
-	 * (shrunk) thread. `unread` is recomputed for every team, not just the forgotten one: the sweep
-	 * can remove rows another thread was counting, so its count must be re-derived too. Also drops
-	 * the team from the board tile list immediately (see forgottenUntil above for why that needs a
-	 * tombstone rather than a bare filter). */
 	/**
 	 * Install canned sessions and threads, for the `emulator` sandbox build only.
 	 *
@@ -1095,83 +591,6 @@ class ChatRepository(
 				localGatewayId = localGatewayId,
 				drafts = drafts,
 			)
-		}
-	}
-
-	fun forget(team: String, boardDisposition: String? = null, onForgotten: (() -> Unit)? = null) {
-		// Canonicalize once and key every field removal by it (matching openThread's own key), so
-		// a non-canonical spelling can't leave a field's entry behind while the others clear.
-		val key = canonicalTarget(team)
-		forgottenUntil[key] = System.currentTimeMillis() + FORGET_TOMBSTONE_MS
-		var dropped: List<Message> = emptyList()
-		val priorDraft = _state.value.drafts[key]
-		val next = _state.updateAndGet { s ->
-			val afterForget = threadsAfterForget(s.threads, key)
-			dropped = afterForget.dropped
-			val newThreads = afterForget.threads
-			val newAnchors = (s.readAnchors - key).mapValues { (t, anchor) ->
-				reanchorAfterForget(newThreads[t].orEmpty(), anchor) ?: anchor
-			}
-			lastReportedReadAnchors = lastReportedReadAnchors - key
-			s.copy(
-				teams = s.teams.filterNot { it.name == key },
-				threads = newThreads,
-				labels = s.labels - key,
-				unread = newThreads.mapValues { (t, msgs) -> unreadCount(msgs, newAnchors[t]) },
-				readAnchors = newAnchors,
-				openTabs = s.openTabs - key,
-				closedTeams = s.closedTeams - key,
-				sessionWorking = s.sessionWorking - key,
-				sessionNeedsLogin = s.sessionNeedsLogin - key,
-				drafts = s.drafts - key,
-			)
-		}
-		persistence.persistThreadsAndReadAnchors(next.threads, next.readAnchors)
-		persistence.persistLabels(next.labels)
-		persistence.persistDrafts(next.drafts)
-		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
-		scheduled.cancelScheduledSend(key)
-		// Queue first, cache second. Dropping under the advance mutex stops the player only once the
-		// queue no longer points at it, so the stop's own terminal cannot advance into an entry whose
-		// audio `purge` is about to delete.
-		repoScope.launch {
-			playback.dropQueuedFor(key)
-			stts.purge(key)
-		}
-		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
-		// the files are local no matter where the session lives, unlike the gateway RPC.
-		attachments.scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
-		priorDraft?.let { attachments.scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
-		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
-		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
-		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
-		// gating this on the route Gateway left its record alive to return when the tombstone expired.
-		// Best-effort, the gateway no-ops an absent session.
-		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-		val reachable = (otherKeyringGateways(localGatewayId) + localGatewayId).toSet()
-		if (t is Address && t.domain == localDomain() && t.gateway in reachable) {
-			drain.scope?.launch(Dispatchers.IO) {
-				runCatchingCancellable { client().forget(team, boardDisposition) }
-					// The record drop already bumps the presence plane server-side, which wakes this
-					// device's own currently-held poll for free (same as closeTab/wakeSession/
-					// spawnSession, none of which nudge the poll loop either) - no client-side action
-					// needed on success.
-					.onSuccess { applied ->
-						// A Gateway that predates the field strips the request's copy and answers
-						// without one, so it RELEASED work the owner asked to cancel. Say so; the
-						// session is gone either way and there is nothing left to retry against.
-						if (boardDisposition != null && applied != boardDisposition) {
-							_state.update {
-								it.copy(transientMessage = "Gateway needs an update; that session's tasks went back to the backlog.")
-							}
-						}
-						withContext(Dispatchers.Main) { onForgotten?.invoke() }
-					}
-					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
-			}
-		} else {
-			// Nothing to send it to, so the local drop IS the whole forget.
-			onForgotten?.invoke()
 		}
 	}
 

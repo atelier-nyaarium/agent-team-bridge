@@ -57,7 +57,7 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 	var deleting by remember { mutableStateOf(false) }
 	var deleteError by remember { mutableStateOf<String?>(null) }
 	var wipedUnconfirmed by remember { mutableStateOf(false) }
-	var refreshText by remember { mutableStateOf((repo.terminalRefreshMs / 1000.0).toString()) }
+	var refreshText by remember { mutableStateOf((repo.sessions.terminalRefreshMs / 1000.0).toString()) }
 	BatteryExemptionRow()
 	HorizontalDivider()
 	AppUpdateRow()
@@ -71,10 +71,10 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		trailingIcon = {
 			TextButton(onClick = hapticClick {
 				val secs = refreshText.toDoubleOrNull()
-				if (secs != null) repo.setTerminalRefreshMs((secs * 1000).toLong())
+				if (secs != null) repo.sessions.setTerminalRefreshMs((secs * 1000).toLong())
 				// Always re-seed from the stored value: a valid entry reflects the clamp, and
 				// invalid input visibly reverts to the last-saved value instead of looking saved.
-				refreshText = (repo.terminalRefreshMs / 1000.0).toString()
+				refreshText = (repo.sessions.terminalRefreshMs / 1000.0).toString()
 			}) { Text("Save") }
 		},
 	)

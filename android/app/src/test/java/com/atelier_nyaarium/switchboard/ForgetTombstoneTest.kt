@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * Unit tests for `filterTombstoned`, the guard that masks the forget/board-resurrection race: a
- * wholesale teams() snapshot dispatched before `ChatRepository.forget()` reaches the server can
+ * wholesale teams() snapshot dispatched before `SessionOps.forget()` reaches the server can
  * still resolve carrying the just-forgotten team, which would otherwise overwrite the optimistic
  * local removal and bring the tile back. Bounded by a TTL rather than cleared on confirmation, since
  * a confirming snapshot never arrives for a failed forget or a same-address recreate.

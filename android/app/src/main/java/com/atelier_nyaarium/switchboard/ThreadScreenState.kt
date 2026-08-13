@@ -51,10 +51,10 @@ data class TerminalState(
 	val limitDetail: String?,
 	val refreshMs: Long,
 	val onWake: () -> Unit,
-	/** Force-relaunch claude in a still-existing pane (ChatRepository.relaunchSession). */
+	/** Force-relaunch claude in a still-existing pane (SessionOps.relaunchSession). */
 	val onRelaunch: suspend () -> Unit,
 	val onPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
 	val onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
-	/** Clear a usage-limit dialog and pick the work back up (ChatRepository.resumeAfterLimit). */
+	/** Clear a usage-limit dialog and pick the work back up (SessionOps.resumeAfterLimit). */
 	val onResumeAfterLimit: suspend () -> Unit,
 )
