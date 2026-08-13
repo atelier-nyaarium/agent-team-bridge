@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -275,48 +274,39 @@ internal class TrustOps(private val repo: ChatRepository) {
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
 				val myParty = repo.federation.trustParty(repo.confirmedDomainIdOrThrow())
-				val myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub)
-				val peerRole = EnrollCeremony.peerRole(myRole)
-				val salt = repo.federation.freshEnrollSalt()
-				val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
-					myParty.ownerSignPub,
-					myParty.ownerBoxPub,
-					myParty.domainId,
-					salt,
-				)
-				val commitment = SasCrypto.enrollCommitment(myParty, myRole, salt)
+				runSasExchange(
+					myParty = myParty,
+					myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub),
+					// The rendezvousId IS this flow's SAS pin, so no new SAS scheme.
+					pin = rendezvousId,
+					salt = repo.federation.freshEnrollSalt(),
+					transport = object : SasTransport {
+						override suspend fun commit(commitment: String): String? {
+							val op = if (mySide == TRUST_SIDE_INITIATOR) {
+								TrustHandshakeOp.Arm(rendezvousId, myParty.ownerSignPub, peerOwnerSignPub, commitment)
+							} else {
+								TrustHandshakeOp.Join(rendezvousId, myParty.ownerSignPub, commitment)
+							}
+							val r = repo.client().trustHandshake(op)
+							if (!r.ok) error(r.error ?: "trust commit rejected")
+							return r.peerCommitment
+						}
 
-				// Round 1: commit (the initiator ARMs, the target JOINs), then poll for the peer's.
-				val peerCommitment = pollEnroll("commit") {
-					val op = if (mySide == TRUST_SIDE_INITIATOR) {
-						TrustHandshakeOp.Arm(rendezvousId, myParty.ownerSignPub, peerOwnerSignPub, commitment)
-					} else {
-						TrustHandshakeOp.Join(rendezvousId, myParty.ownerSignPub, commitment)
-					}
-					val r = repo.client().trustHandshake(op)
-					if (!r.ok) error(r.error ?: "trust commit rejected")
-					r.peerCommitment
-				}
-				// Round 2: reveal, then poll for the peer's reveal.
-				val peerReveal = pollEnroll("reveal") {
-					val r = repo.client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal))
-					if (!r.ok) error(r.error ?: "trust reveal rejected")
-					r.peerReveal
-				}
-				val peerParty = EnrollCeremony.partyOf(peerReveal)
-				// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
-				if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
-					error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Try again.")
-				}
-				// Anti-substitution: the peer must reveal the OWNER the rendezvous named (the arm /
-				// highlight bound peerOwnerSignPub), so evie cannot splice in a different person.
-				if (peerParty.ownerSignPub != peerOwnerSignPub) {
-					error("The other person's identity did not match the trust request. Try again.")
-				}
-				EnrollExchange(
-					sas = EnrollCeremony.sas(myRole, myParty, peerParty, rendezvousId),
-					peerDomainId = peerReveal.domainId,
-					peerParty = peerParty,
+						override suspend fun reveal(myReveal: com.atelier_nyaarium.switchboard.proto.EnrollReveal) =
+							repo.client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal)).let {
+								if (!it.ok) error(it.error ?: "trust reveal rejected")
+								it.peerReveal
+							}
+					},
+					// Anti-substitution: the peer must reveal the OWNER the rendezvous named (the arm /
+					// highlight bound peerOwnerSignPub), so evie cannot splice in a different person.
+					authenticatePeer = { peerParty ->
+						if (peerParty.ownerSignPub != peerOwnerSignPub) {
+							"The other person's identity did not match the trust request. Try again."
+						} else {
+							null
+						}
+					},
 				)
 			}
 		}

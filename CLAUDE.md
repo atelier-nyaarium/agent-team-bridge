@@ -57,6 +57,10 @@ code does not belong here; rationale lives in `git log`.
     graph, the link wizard, FLOW-2, cross-Domain shares). They reach back into the repository for
     `store` / `_state` / `client()` / `federation`, and `federation-manager-residue.test.ts` fails
     the build if anything outside these five files touches the owner keys
+    - Both FLOW-1 and FLOW-2 run their commit-reveal compare through `SasExchange.kt`'s
+      `runSasExchange`, so a check added there cannot reach one flow and miss the other. Each flow
+      supplies its own broker frames and its own out-of-band peer authentication; `EnrollCeremony.kt`
+      stays the pure SAS and commitment core beneath both
 - `android/.../MainActivity.kt` - the `Repo` singleton, the activity, and the `App` composable that
   routes between screens. Each screen is its own sibling file: `SessionsScreen.kt`,
   `SettingsScreen.kt`, `ThreadScreen.kt`, `Onboarding.kt` (lock, provision, add-device, host setup),

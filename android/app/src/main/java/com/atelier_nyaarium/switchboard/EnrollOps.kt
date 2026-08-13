@@ -7,10 +7,8 @@ import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
-import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -232,52 +230,39 @@ internal class EnrollOps(private val repo: ChatRepository) {
 		repo.store.enrollCeremonyDone = true
 	}
 
-	/** Run the commit-reveal exchange up to the human compare: commit this side, poll the broker for
-	 * the peer's commitment, reveal, poll for the peer's reveal, verify the peer's reveal opens to its
-	 * commitment (and, on the enrollee side, matches the QR-pinned admin keys), then compute the SAS
-	 * locally. evie is a dumb broker throughout - every check here is on the phone. A terminal failure
-	 * (broker reject, tamper, timeout) surfaces as Result.failure; cancellation (leaving the screen)
-	 * cancels the suspend. */
+	/** Run the FLOW-1 leg to the human compare through the shared engine. evie is a dumb broker
+	 * throughout: every check is on the phone. A terminal failure (broker reject, tamper, timeout)
+	 * surfaces as Result.failure; cancellation (leaving the screen) cancels the suspend. */
 	suspend fun enrollExchange(ctx: EnrollCeremonyContext): Result<EnrollExchange> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			val salt = repo.federation.freshEnrollSalt()
-			val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
-				ctx.myParty.ownerSignPub,
-				ctx.myParty.ownerBoxPub,
-				ctx.myParty.domainId,
-				salt,
-			)
-			val commitment = SasCrypto.enrollCommitment(ctx.myParty, ctx.role, salt)
-			val peerRole = EnrollCeremony.peerRole(ctx.role)
+			runSasExchange(
+				myParty = ctx.myParty,
+				myRole = ctx.role,
+				pin = ctx.pin,
+				salt = repo.federation.freshEnrollSalt(),
+				transport = object : SasTransport {
+					override suspend fun commit(commitment: String): String? {
+						val r = repo.client().enrollHandshake(EnrollHandshakeOp.Commit(ctx.handshakeId, ctx.role, commitment))
+						if (!r.ok) error(r.error ?: "enroll commit rejected")
+						return r.peerCommitment
+					}
 
-			// Round 1: commit, then poll (re-POSTing the same commit is idempotent) for the peer's.
-			val peerCommitment = pollEnroll("commit") {
-				val r = repo.client().enrollHandshake(EnrollHandshakeOp.Commit(ctx.handshakeId, ctx.role, commitment))
-				if (!r.ok) error(r.error ?: "enroll commit rejected")
-				r.peerCommitment
-			}
-			// Round 2: reveal, then poll for the peer's reveal.
-			val peerReveal = pollEnroll("reveal") {
-				val r = repo.client().enrollHandshake(EnrollHandshakeOp.Reveal(ctx.handshakeId, ctx.role, myReveal))
-				if (!r.ok) error(r.error ?: "enroll reveal rejected")
-				r.peerReveal
-			}
-			val peerParty = EnrollCeremony.partyOf(peerReveal)
-			// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
-			if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
-				error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Rescan to restart.")
-			}
-			// Enrollee side: the admin's revealed keys MUST equal the in-person QR (the OOB
-			// admin -> user authentication). A mismatch is an evie substitution of the admin reveal.
-			ctx.expectedPeer?.let { expected ->
-				if (peerParty != expected) {
-					error("The admin keys did not match the scanned code (possible tampering). Rescan to restart.")
-				}
-			}
-			EnrollExchange(
-				sas = EnrollCeremony.sas(ctx.role, ctx.myParty, peerParty, ctx.pin),
-				peerDomainId = peerReveal.domainId,
-				peerParty = peerParty,
+					override suspend fun reveal(myReveal: com.atelier_nyaarium.switchboard.proto.EnrollReveal) =
+						repo.client().enrollHandshake(EnrollHandshakeOp.Reveal(ctx.handshakeId, ctx.role, myReveal)).let {
+							if (!it.ok) error(it.error ?: "enroll reveal rejected")
+							it.peerReveal
+						}
+				},
+				// Enrollee side: the admin's revealed keys MUST equal the in-person QR (the OOB
+				// admin -> user authentication). A mismatch is an evie substitution of the admin reveal.
+				authenticatePeer = { peerParty ->
+					val expected = ctx.expectedPeer
+					if (expected != null && peerParty != expected) {
+						"The admin keys did not match the scanned code (possible tampering). Rescan to restart."
+					} else {
+						null
+					}
+				},
 			)
 		}
 	}
@@ -441,15 +426,4 @@ internal class EnrollOps(private val repo: ChatRepository) {
 		android.net.InetAddresses.isNumericAddress(host) &&
 			java.net.InetAddress.getByName(host).let { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
 	}.getOrDefault(false)
-}
-
-/** Poll one handshake step: call [step] (re-POSTing the same frame is idempotent at the broker)
- * until it returns the peer's frame, with a bounded number of attempts so a vanished peer fails
- * rather than hangs. [step] throws on a terminal broker reject, which propagates out. */
-internal suspend fun <T> pollEnroll(label: String, step: suspend () -> T?): T {
-	repeat(ENROLL_POLL_MAX) {
-		step()?.let { return it }
-		delay(ENROLL_POLL_MS)
-	}
-	error("Timed out waiting for the other phone ($label). Make sure you are both on this screen, then rescan.")
 }
