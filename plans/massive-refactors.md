@@ -192,3 +192,35 @@ Federation activation mid-session runs `routes = buildRoutes()`, and `createRout
 board-reply replay map, in-flight blob-fetch coalescing map and presence snapshot cache per call.
 Completing enrollment while running therefore discards all three silently. The board-reply map is
 the one that matters: it is what makes a retried board mutation a replay rather than a second write.
+
+# Executed refactors
+
+## Refactor 1 - Gateway boot as an explicit state machine
+
+Operation set (one commit, per the Lexicon Transactions constraint):
+
+- add `src/gateway/boot.ts`: `BootState` (standalone | arming | federationActive), `ArmingSlice`,
+  `FederationSlice`, `EvieHandlers`, `DomainMeta`, `decideBootPhase`, `federationOf`, `armingOf`
+- replace 17 nullable lifecycle bindings in `startGateway` (evieClient, sealer, consoleSealer,
+  allowlistForConsole, crossDomainCoordinator, crossDomainShareState, crossDomainPeersForConsole,
+  crossDomainPresenceSourceRef, replayPersist, evieStop, domainMeta, handleConsoleRelay,
+  handleGatewayRelay, handleCrossDomainHandshake, evictConsolePeer, enrollInstall,
+  armedAdmitPayload) with one `let boot: BootState` read through `fed()`
+- rename + reshape `activateFederation` to `buildFederationSlice` (returns the slice)
+- rename + reshape `activateEvieHandlers` to `buildEvieHandlers(federation)` (returns EvieHandlers,
+  installed on the slice by the transition)
+- rename `activateEvieBridge` to `enterFederationActive`; extract the enroll block as
+  `enterArming(nonce)`
+- add `src/__tests__/gateway-boot.test.ts` pinning `decideBootPhase`'s 8 rows and the accessors
+
+Audit (2 fresh Luna threads, adversarial, then Sonnet synthesis): fix-then-ship. Comment findings
+applied. One behavior finding OVERRULED deliberately:
+
+- Finding: on a synchronous `startEvieClient` throw inside the slice build, HEAD had already
+  assigned `replayPersist` (and sealer, peers, coordinator, shareState), so the persist tick kept
+  saving a replay guard for a federation that failed to activate. The new code discards the whole
+  slice and stays standalone, so that save no longer happens.
+- Ruling: keep the new semantics. HEAD's behavior was the torn half-activated state this refactor
+  exists to kill, and the transition is now all-or-nothing by construction. The suggested hoist of
+  the replay pieces to boot scope was rejected because it introduces the opposite divergence:
+  pure-standalone gateways would persist a replay-guard file they never use.

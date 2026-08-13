@@ -1,0 +1,86 @@
+// The gateway's boot lifecycle as ONE value: Standalone (no mesh), Arming (enrollment window
+// open), FederationActive (evie bridge up). The phase is a value a reader receives, never a
+// null check each site re-derives.
+
+import type { ConsoleSealer } from "./console/consoleSealer.js";
+import type { EvieClient } from "./evie/evieClient.js";
+import type { Allowlist } from "./federation/allowlist.js";
+import type { CrossDomainHandshakeCoordinator } from "./federation/crossDomainHandshake.js";
+import type { CrossDomainPeers } from "./federation/crossDomainPeers.js";
+import type { CrossDomainPresenceSource } from "./federation/crossDomainPresence.js";
+import type { CrossDomainShareState } from "./federation/crossDomainShareState.js";
+import type { AdmitGatewayPayload } from "./federation/enrollQr.js";
+import type { Sealer } from "./federation/sealer.js";
+
+////////////////////////////////
+//  Interfaces & Types
+
+/** This Gateway's Domain lifecycle metadata, learned from evie's register reply. */
+export interface DomainMeta {
+	domainStatus?: string;
+	displayName?: string | null;
+	isAdminDomain?: boolean;
+}
+
+/** The evie-frame handlers, built against the federation-aware routes after the rebuild.
+ * A frame arriving before they land on the slice is dropped (the console re-polls). */
+export interface EvieHandlers {
+	consoleRelay: (frame: unknown) => void;
+	gatewayRelay: (frame: unknown) => void;
+	crossDomainHandshake: (frame: unknown) => void;
+	evictConsolePeer: (conversationId: string) => void;
+	presenceSource: CrossDomainPresenceSource;
+}
+
+/** Everything FederationActive owns. Only domainMeta (evie's first register reply) and
+ * handlers (built against the rebuilt routes) populate after construction. */
+export interface FederationSlice {
+	allowlist: Allowlist;
+	crossDomainPeers: CrossDomainPeers;
+	shareState: CrossDomainShareState;
+	coordinator: CrossDomainHandshakeCoordinator;
+	sealer: Sealer;
+	consoleSealer: ConsoleSealer;
+	evieClient: EvieClient;
+	replayPersist: () => void;
+	domainMeta: DomainMeta | null;
+	handlers: EvieHandlers | null;
+}
+
+/** The open enrollment window. Leaving the arming phase is what closes it: both fields die with
+ * the state, so install and payload cannot outlive each other. */
+export interface ArmingSlice {
+	/** Opens the sealed bootstrap bundle and installs credentials; returns this gateway's id. */
+	install: (frame: unknown) => string;
+	admitPayload: AdmitGatewayPayload;
+}
+
+export type BootState =
+	| { phase: "standalone" }
+	| { phase: "arming"; arming: ArmingSlice }
+	| { phase: "federationActive"; federation: FederationSlice };
+
+export type BootPhaseDecision = "activate" | "arm" | "standalone";
+
+////////////////////////////////
+//  Functions & Helpers
+
+/** The whole boot-time decision. Arming requires NO installed transport, since re-arming over one
+ * would fork the gateway's identity; a transport with no Domain id boots standalone (re-enroll only). */
+export function decideBootPhase(input: {
+	hasTransport: boolean;
+	hasDomainId: boolean;
+	hasEnrollNonce: boolean;
+}): BootPhaseDecision {
+	if (input.hasTransport && input.hasDomainId) return "activate";
+	if (input.hasEnrollNonce && !input.hasTransport) return "arm";
+	return "standalone";
+}
+
+export function federationOf(state: BootState): FederationSlice | null {
+	return state.phase === "federationActive" ? state.federation : null;
+}
+
+export function armingOf(state: BootState): ArmingSlice | null {
+	return state.phase === "arming" ? state.arming : null;
+}
