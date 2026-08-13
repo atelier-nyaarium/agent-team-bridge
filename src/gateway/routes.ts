@@ -496,7 +496,15 @@ export function createRoutes({
 		});
 	}
 
-	function pending(): Response {
+	/**
+	 * Every live job, which is why it is gated: a `session_id` is the credential `/poll` and
+	 * `/respond` accept, and a console-originated one embeds the owner's own mailbox key, so
+	 * enumerating them hands out the keys to both doors.
+	 */
+	function pending(req: Request): Response {
+		if (!provedLocalSession(req)) {
+			return jsonResponse({ error: "the job list is not open to this caller" }, 403);
+		}
 		const list = store.listAll().map((e) => ({
 			session_id: e.id,
 			from: e.from,
@@ -577,14 +585,14 @@ export function createRoutes({
 	 * no armed binding, which is what keeps hand-launched sessions and a purged store working.
 	 */
 	/**
-	 * May this caller's message be MIRRORED into the owner's own mailbox?
+	 * Has this caller proved it is one of THIS gateway's own sessions?
 	 *
-	 * The mirror lands in the owner's console under a session's name, and a session name proves
-	 * nothing on its own (see CallerScope), so an unproven caller could otherwise author entries
-	 * there. It is display-only and explicitly never load-bearing, so an unproven caller loses the
-	 * mirror rather than the delivery - the send or reply itself still lands.
+	 * The question every owner-scoped door asks, since a session NAME proves nothing on its own: an
+	 * unregistered name resolves to UNBOUND, which anything satisfies (see CallerScope). True while
+	 * no session is bound at all, matching the byte plane's own posture - a gateway with no
+	 * credential to demand cannot demand one without refusing every legitimate caller it has.
 	 */
-	function mayMirrorToOwner(req: Request): boolean {
+	function provedLocalSession(req: Request): boolean {
 		return !auth || auth.mayUseLocalPlane(presentedByRequest(req));
 	}
 
@@ -593,7 +601,7 @@ export function createRoutes({
 		// Owner data is not addressed to a session, so naming one proves nothing about the right to
 		// read or write it: an unregistered name resolves to UNBOUND, which anything satisfies. Ask
 		// the local-plane question first, so an unproven caller learns nothing about which names exist.
-		if (scope === "owner-data" && !auth.mayUseLocalPlane(presentedByRequest(req))) {
+		if (scope === "owner-data" && !provedLocalSession(req)) {
 			console.warn(`[auth] refused an owner-data call claiming "${claimed}" without any session binding`);
 			return jsonResponse({ error: "the owner's own data is not open to this caller" }, 403);
 		}
@@ -899,7 +907,7 @@ export function createRoutes({
 						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must
 						// not turn an already-delivered channel_push into a spurious 500 for the caller.
 						const fromAddr = tryLocalAddress(from);
-						if (fromAddr && mayMirrorToOwner(req)) {
+						if (fromAddr && provedLocalSession(req)) {
 							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
 							mirrorPeer(toAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
 						}
@@ -1106,7 +1114,7 @@ export function createRoutes({
 			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
 			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
 			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
-			if (localAddr && mayMirrorToOwner(req)) {
+			if (localAddr && provedLocalSession(req)) {
 				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
 					body: response.response,
 					files,
@@ -1178,7 +1186,7 @@ export function createRoutes({
 				// own cross-Gateway origin anchor: the anchor's own session key embeds the REMOTE
 				// target's address, never a local one.
 				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
-				if (askerAddr && mayMirrorToOwner(req)) {
+				if (askerAddr && provedLocalSession(req)) {
 					const key = parseStoreKey(respondSessionId);
 					const isRemoteAnchor =
 						key?.kind === "conv" &&

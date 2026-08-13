@@ -1310,7 +1310,7 @@ export async function startGateway(): Promise<void> {
 				headers: { "Content-Type": "application/json" },
 			});
 		}
-		if (method === "GET" && url.pathname === "/pending") return routes.pending();
+		if (method === "GET" && url.pathname === "/pending") return routes.pending(req);
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
 		if (method === "GET" && url.pathname === "/capabilities") return routes.capabilities();
 		if (method === "GET" && url.pathname === "/discover") return routes.discover();
