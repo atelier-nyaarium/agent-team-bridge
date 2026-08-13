@@ -1,3 +1,4 @@
+import { classifyAcceptanceFence, fenceOf } from "../shared/agent-fence.js";
 import {
 	type CopilotAgentCatalog,
 	CopilotAgentIdSchema,
@@ -10,7 +11,6 @@ import {
 	type CopilotPersistedAgent,
 	CopilotPersistedAgentSchema,
 	CopilotPromptSchema,
-	type CopilotReconciliationFence,
 	type CopilotResolvedTarget,
 	type CopilotStoredOperation,
 	type CopilotStoredTurn,
@@ -96,34 +96,6 @@ function validateTimestamp(at: number): number {
 
 function replaceAt<T>(values: readonly T[], index: number, value: T): T[] {
 	return values.map((current, currentIndex) => (currentIndex === index ? value : current));
-}
-
-function fenceOf(message: {
-	daemonInstanceId: string;
-	targetId: string;
-	generation: number;
-	eventId: number;
-}): CopilotReconciliationFence {
-	return {
-		daemonInstanceId: message.daemonInstanceId,
-		targetId: message.targetId,
-		generation: message.generation,
-		lastEventId: message.eventId,
-	};
-}
-
-function fenceAccepts(
-	current: CopilotReconciliationFence | undefined,
-	next: CopilotReconciliationFence,
-): "advance" | "duplicate" | "foreign" {
-	if (!current) return "advance";
-	if (
-		current.daemonInstanceId !== next.daemonInstanceId ||
-		current.targetId !== next.targetId ||
-		current.generation !== next.generation
-	)
-		return "foreign";
-	return next.lastEventId > current.lastEventId ? "advance" : "duplicate";
 }
 
 function sameResolvedTarget(left: CopilotResolvedTarget, right: CopilotResolvedTarget): boolean {
@@ -335,7 +307,7 @@ export class CopilotAgentService {
 		)
 			return { disposition: "reconcile", owner, agent: current };
 		const fence = fenceOf(event);
-		const position = fenceAccepts(current.fence, fence);
+		const position = classifyAcceptanceFence(current.fence, fence);
 		if (position === "duplicate") return { disposition: "ignored", reason: "duplicate event" };
 		if (position === "foreign") return { disposition: "reconcile", owner, agent: current };
 		const turnIndex = current.turns.findIndex((turn) => turn.id === event.turnId);
@@ -432,7 +404,7 @@ export class CopilotAgentService {
 		if (current.turns.some((turn) => turn.id === receipt.turnId))
 			return { disposition: "reconcile", owner, agent: current };
 		const fence = fenceOf(receipt);
-		const fencePosition = fenceAccepts(current.fence, fence);
+		const fencePosition = classifyAcceptanceFence(current.fence, fence);
 		if (fencePosition === "duplicate") return { disposition: "ignored", reason: "duplicate acceptance fence" };
 		if (fencePosition === "foreign") return { disposition: "reconcile", owner, agent: current };
 		if (
@@ -487,7 +459,7 @@ export class CopilotAgentService {
 		if (operation.state !== "requested" || operation.kind !== "stop")
 			return { disposition: "ignored", reason: "interrupt operation already settled" };
 		const fence = fenceOf(receipt);
-		const fencePosition = fenceAccepts(current.fence, fence);
+		const fencePosition = classifyAcceptanceFence(current.fence, fence);
 		if (fencePosition === "duplicate") return { disposition: "ignored", reason: "duplicate interrupt fence" };
 		if (fencePosition === "foreign") return { disposition: "reconcile", owner, agent: current };
 		if (current.activeTurnId !== receipt.turnId) return { disposition: "reconcile", owner, agent: current };
@@ -520,7 +492,7 @@ export class CopilotAgentService {
 		)
 			return { disposition: "ignored", reason: "reconciliation names a different session" };
 		const fence = fenceOf(receipt);
-		if (fenceAccepts(current.fence, fence) === "duplicate")
+		if (classifyAcceptanceFence(current.fence, fence) === "duplicate")
 			return { disposition: "ignored", reason: "duplicate reconciliation" };
 		const activeTurn = receipt.active && receipt.turnId ? receipt.turnId : undefined;
 		if (current.activeTurnId && activeTurn && current.activeTurnId !== activeTurn)

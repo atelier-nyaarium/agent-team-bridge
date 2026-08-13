@@ -388,3 +388,38 @@ Audit verdict fix-then-ship with one blocker that was MINE, not the Kotlin's: th
 itself failed biome's width gate, which the whole pipeline missed until the synthesis ran
 `bun run lint` independently. Pipeline lesson recorded: every stage that adds a TS file must run
 the TS gates, not just the Kotlin ones beside it.
+
+## Refactor 9 - One fence algebra, and the acceptance verdict out of the critical section
+
+Reassessment sharpened the entry again: the two families' fence rules had ALREADY diverged on the
+unfenced record (Copilot's fenceAccepts answered advance where Codex's classifyFence answered
+foreign). The live cases differ by SIDE, not by family, so the shared home carries both rules under
+names that say which side they serve.
+
+Operation set (one commit):
+
+- add `shared/agent-fence.ts`: AgentFence, fenceOf, sameFence, classifyAcceptanceFence (an
+  acceptance INSTALLS a first fence), advancesFence, classifyEventFence (an event on an unfenced
+  record is held foreign until reconciliation or an acceptance fences it)
+- move Codex's four fence functions there (classifyFence renamed classifyEventFence at its three
+  call sites); delete Copilot's file-local fenceOf/fenceAccepts (byte-equivalent to the acceptance
+  rule; its call sites never compared the advance spelling)
+- extract `decideAcceptance` into codexAgentReducers.ts: the full acceptance verdict as a pure
+  function (replayed | unplaceable | conflict | refuse | unresolved | accept), with the service
+  reduced to parse, look up, decide, apply
+- move the two stragglers withActivity/withTerminal into codexAgentReducers.ts verbatim
+- add agent-fence.test.ts and codex-acceptance-verdict.test.ts: the refuse-vs-unresolved boundary
+  is directly pinned for the first time, including the minimal pair (a record an activity moved
+  refuses; a non-advancing fence holds)
+
+Audit (2 fresh Luna threads + Sonnet synthesis, both now REQUIRED to run the gates themselves after
+last lap's lesson): zero behavior findings; the decision-path mapping rebuilt line by line from
+HEAD and confirmed verbatim. Its real catches were three coverage gaps in MY new tests (a
+confounded stop case, the unisolated refuse/unresolved minimal pair, sameFence's untested
+coordinates), all closed. Two fixture attempts were rejected by the record schema's own
+cross-invariants before landing on a reachable one, which is the schema earning its keep.
+
+Not taken, recorded: the fold-the-whole-service-pure direction (b), since the apply half's side
+effects (durability check, commit, refusal write) are exactly what the service is for; and the
+relay progress-bookkeeping duplication (copilotRelay vs codexRelay) stays for a later entry, being
+reliability plumbing rather than the retiring decision.
