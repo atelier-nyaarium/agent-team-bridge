@@ -1,8 +1,7 @@
 import { expect, it } from "vitest";
-import type { TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
+import type { AgentChild, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
 import type { CopilotAcpClient } from "../mcp/devcontainer/copilotAcp.js";
 import { CopilotDaemonService } from "../mcp/devcontainer/copilotDaemonService.js";
-import type { CopilotChild } from "../mcp/devcontainer/copilotTargets.js";
 
 const OWNER_KEY = "recipe-app.work";
 const AGENT_ID = "copilot_0123456789abcdef0123456789abcdef";
@@ -13,7 +12,7 @@ async function settle(): Promise<void> {
 }
 
 it("streams a Copilot ACP turn into accepted, activity, and terminal frames", async () => {
-	const child = {} as CopilotChild;
+	const child = {} as AgentChild;
 	const sent: Record<string, unknown>[] = [];
 	let listener: (event: { method: string; params?: unknown }) => void = () => {};
 	let finishPrompt: ((result: { stopReason: string }) => void) | undefined;
@@ -83,7 +82,7 @@ it("streams a Copilot ACP turn into accepted, activity, and terminal frames", as
 it("classifies login failures in rejected receipts", async () => {
 	const sent: Record<string, unknown>[] = [];
 	const targets: TargetSupervisor = {
-		acquire: () => ({ state: "running", lease: { generation: 1, child: {} as CopilotChild } }),
+		acquire: () => ({ state: "running", lease: { generation: 1, child: {} as AgentChild } }),
 		release: () => {},
 	};
 	const service = new CopilotDaemonService({

@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { type CodexResolvedTarget, parseCodexTargetId } from "../../shared/codex-thinking.js";
+import { AGENT_BACKENDS, agentEnvPrefix } from "../../shared/agent-backend.js";
+import { type AgentResolvedTarget, parseAgentTargetId } from "../../shared/agent-execution-target.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
 /** One live `codex app-server` process. The manager owns its lifetime and knows nothing of the
  * protocol spoken over these streams. */
-export interface CodexChild {
+export interface AgentChild {
 	readonly stdin: Writable;
 	readonly stdout: Readable;
 	kill(): void;
@@ -15,20 +16,22 @@ export interface CodexChild {
 	onExit(listener: (info: { code: number | null; signal: string | null; reason?: string }) => void): void;
 }
 
+export type CodexChild = AgentChild;
+
 export interface ExecutionTargetLauncher {
-	launch(target: CodexResolvedTarget, env: Record<string, string>): CodexChild;
+	launch(target: AgentResolvedTarget, env: Record<string, string>): AgentChild;
 }
 
 /** A running child plus the fence that tells a late event which child it came from. */
 export interface TargetLease {
 	generation: number;
-	child: CodexChild;
+	child: AgentChild;
 }
 
 /** What a consumer of supervised children actually needs. Narrower than the manager on purpose: the
  * daemon service must not be able to reach backoff or generation counters it does not own. */
 export interface TargetSupervisor {
-	acquire(target: CodexResolvedTarget): TargetAvailability;
+	acquire(target: AgentResolvedTarget): TargetAvailability;
 	release(targetId: string): void;
 }
 
@@ -57,8 +60,9 @@ const MAX_FAST_FAILS = 5;
 // repairing auth would need a daemon restart, which would take every healthy target down with it.
 const GIVE_UP_COOLDOWN_MS = 5 * 60_000;
 
-// Switchboard's own secrets, which a Codex child has no business seeing. Codex authenticates from
-// ~/.codex/auth.json rather than the environment, so nothing it needs is in here.
+// Switchboard's own secrets, which an agent child has no business seeing. Agent backends authenticate
+// from their own config files (Codex from ~/.codex/auth.json), so their prefixed vars are toolchain
+// settings, not Switchboard secrets.
 const SCRUBBED_EXACT = new Set([
 	"HOST_WS_TOKEN",
 	"BRIDGE_ROUTER_URL",
@@ -71,6 +75,7 @@ const SCRUBBED_EXACT = new Set([
 	"AGENT_TYPE",
 ]);
 const SCRUBBED_PATTERN = /token|secret|password|credential|api[_-]?key/i;
+const AGENT_ENV_PREFIXES = AGENT_BACKENDS.map((backend) => agentEnvPrefix(backend.id));
 
 /** The child's environment: the target's own, minus anything of Switchboard's. A deny list rather
  * than an allow list, so a variable Codex needs for its toolchain is never stripped by surprise. */
@@ -79,7 +84,7 @@ export function scrubChildEnv(source: Record<string, string | undefined>): Recor
 	for (const [key, value] of Object.entries(source)) {
 		if (value === undefined) continue;
 		if (SCRUBBED_EXACT.has(key)) continue;
-		if (SCRUBBED_PATTERN.test(key) && !key.startsWith("CODEX_")) continue;
+		if (SCRUBBED_PATTERN.test(key) && !AGENT_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
 		out[key] = value;
 	}
 	return out;
@@ -89,19 +94,19 @@ export function scrubChildEnv(source: Record<string, string | undefined>): Recor
  * What to carry INTO a container, as `docker exec -e` pairs.
  *
  * A container child inherits the container's own environment, not this process's, so the host's
- * variables are both unreachable and meaningless there. Only Codex's own settings are worth
+ * variables are both unreachable and meaningless there. Only the selected agent's own settings are worth
  * forwarding, and scrubbing them first keeps the deny list authoritative for both launch paths.
  */
-export function containerEnvArgs(source: Record<string, string | undefined>): string[] {
+export function containerEnvArgs(source: Record<string, string | undefined>, envPrefix: string): string[] {
 	return Object.entries(scrubChildEnv(source))
-		.filter(([key]) => key.startsWith("CODEX_"))
+		.filter(([key]) => key.startsWith(envPrefix))
 		.flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
 
 // The project comes from the shared targetId grammar rather than from reading the field directly, so
 // this cannot drift from whatever else builds one. The name is an argv element, never a shell string.
 function containerProject(targetId: string): string {
-	const parsed = parseCodexTargetId(targetId);
+	const parsed = parseAgentTargetId(targetId);
 	if (parsed?.kind !== "devcontainer") {
 		throw Object.assign(new Error("target is not a container id"), { code: "badTarget" });
 	}
@@ -120,7 +125,7 @@ const STDERR_CLASSES: Array<[RegExp, string]> = [
 	[/unauthor|not logged in|auth/i, "authFailed"],
 ];
 
-function adoptProcess(proc: ReturnType<typeof spawn>): CodexChild {
+function adoptProcess(proc: ReturnType<typeof spawn>): AgentChild {
 	let stderrTail = "";
 	proc.stderr?.on("data", (chunk: Buffer) => {
 		stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_KEEP_BYTES);
@@ -169,7 +174,7 @@ export const realLauncher: ExecutionTargetLauncher = {
 					"vscode",
 					"-w",
 					`/workspace/${project}`,
-					...containerEnvArgs(env),
+					...containerEnvArgs(env, agentEnvPrefix("codex")),
 					`${project}_devcontainer-dev-1`,
 					"codex",
 					"app-server",
@@ -180,7 +185,7 @@ export const realLauncher: ExecutionTargetLauncher = {
 				// The id has to agree with the kind in both directions. Without this, a container-shaped
 				// id paired with kind "host" runs on the host under the daemon's own user, which is the
 				// one direction the container branch already refuses.
-				if (parseCodexTargetId(target.targetId)?.kind !== "host") {
+				if (parseAgentTargetId(target.targetId)?.kind !== "host") {
 					throw Object.assign(new Error("target is not a host id"), { code: "badTarget" });
 				}
 				return adoptProcess(spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "pipe"] }));
@@ -206,10 +211,14 @@ function describeExit(info: { code: number | null; signal: string | null; reason
 	return info.code === null ? "spawnError" : `exit:${info.code}`;
 }
 
-function defaultLog(event: TargetLogEvent): void {
-	const suffix = event.errorClass ? ` error=${event.errorClass}` : "";
-	console.error(`[codex-target] ${event.targetId} gen=${event.generation} ${event.state}${suffix}`);
+export function targetLogger(tag: string): (event: TargetLogEvent) => void {
+	return (event) => {
+		const suffix = event.errorClass ? ` error=${event.errorClass}` : "";
+		console.error(`[${tag}] ${event.targetId} gen=${event.generation} ${event.state}${suffix}`);
+	};
 }
+
+const defaultLog = targetLogger("codex-target");
 
 ////////////////////////////////
 //  Class
@@ -225,7 +234,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		string,
 		{
 			lease?: TargetLease;
-			launchedFor?: CodexResolvedTarget;
+			launchedFor?: AgentResolvedTarget;
 			generation: number;
 			fastFails: number;
 			backoffMs: number;
@@ -245,7 +254,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 
 	/** The target's child, started if this is its first use. Never throws: a target that cannot run
 	 * reports why, so the caller answers `unavailable` rather than failing the whole daemon. */
-	acquire(target: CodexResolvedTarget): TargetAvailability {
+	acquire(target: AgentResolvedTarget): TargetAvailability {
 		const entry = this.targets.get(target.targetId) ?? {
 			generation: 0,
 			fastFails: 0,
@@ -285,7 +294,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		entry.startedAt = this.now();
 		this.log({ targetId: target.targetId, generation: entry.generation, state: "launching" });
 
-		let child: CodexChild;
+		let child: AgentChild;
 		try {
 			child = this.launcher.launch(target, scrubChildEnv(this.baseEnv));
 		} catch (err) {

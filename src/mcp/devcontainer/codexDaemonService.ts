@@ -1,3 +1,4 @@
+import type { AgentResolvedTarget } from "../../shared/agent-execution-target.js";
 import {
 	CODEX_DEFAULT_MODEL,
 	CodexAppServerThreadReadResultSchema,
@@ -8,22 +9,21 @@ import {
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
 	type CodexEventAck,
-	type CodexResolvedTarget,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-thinking.js";
+import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AppServerSession } from "./codexAppServerSession.js";
 import { defaultOpenClient } from "./codexAppServerSession.js";
 import type { CodexDaemonDeps, TargetSession, TurnBinding } from "./codexDaemonTypes.js";
-import { resolveCodexTarget } from "./codexTargetResolve.js";
 import type { TargetLease } from "./codexTargets.js";
 import type { ReadOutcome, TerminalOutcome } from "./codexTurnOutcome.js";
 import { outcomeFromRead, terminalOf } from "./codexTurnOutcome.js";
 import { CodexTurnTracker } from "./codexTurnTracker.js";
 
+export { agentTargetIdFor, resolveAgentTarget } from "./agentTargetResolve.js";
 export type { AppServerSession } from "./codexAppServerSession.js";
 export type { CodexDaemonDeps } from "./codexDaemonTypes.js";
-export { codexTargetIdFor, resolveCodexTarget } from "./codexTargetResolve.js";
 export type { CodexDaemonEvent, CodexDaemonReceipt };
 
 ////////////////////////////////
@@ -138,7 +138,7 @@ export class CodexDaemonService {
 	}
 
 	private async runStart(command: Extract<CodexDaemonCommand, { kind: "start" }>): Promise<void> {
-		const resolved = resolveCodexTarget(command.target, this.deps.resolveHostCwd);
+		const resolved = resolveAgentTarget(command.target, this.deps.resolveHostCwd);
 		const session = await this.session(resolved);
 		if (!session) return this.reject(command, "execution target is unavailable");
 
@@ -343,7 +343,7 @@ export class CodexDaemonService {
 	 * same child, giving one process two readers of its stdout, two JSON-RPC id spaces that can settle
 	 * each other's requests, and two event counters both starting at zero on one fenced stream.
 	 */
-	private async session(target: CodexResolvedTarget): Promise<TargetSession | null> {
+	private async session(target: AgentResolvedTarget): Promise<TargetSession | null> {
 		const availability = this.deps.targets.acquire(target);
 		if (availability.state !== "running") return null;
 		const generation = availability.lease.generation;
@@ -360,7 +360,7 @@ export class CodexDaemonService {
 		return opening;
 	}
 
-	private async open(target: CodexResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
+	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
 		// A new generation is a different child. Nothing the old one knew about threads or turns
 		// survives it, so the session is rebuilt rather than carried over.
 		this.sessions.get(target.targetId)?.client.close();

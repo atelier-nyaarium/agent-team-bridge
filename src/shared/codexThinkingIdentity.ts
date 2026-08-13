@@ -4,7 +4,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { CODEX_BACKEND } from "./agent-backend.js";
-import { isComposite, isSlug, parseSessionName } from "./session-id.js";
+import { AgentOwnerKeySchema } from "./agent-execution-target.js";
 
 ////////////////////////////////
 //  Bounds
@@ -73,15 +73,7 @@ export const CodexErrorTextSchema = boundedUtf8(CODEX_ERROR_MAX_BYTES, "error")
 //  Identity
 
 export const CodexAgentIdSchema = z.string().regex(CODEX_AGENT_ID_RE);
-export const CodexOwnerKeySchema = z
-	.string()
-	.min(3)
-	.max(129)
-	.refine((value) => {
-		if (!isComposite(value)) return false;
-		const { project, session } = parseSessionName(value);
-		return isSlug(project) && isSlug(session);
-	}, "owner key must contain two canonical slugs");
+export const CodexOwnerKeySchema = AgentOwnerKeySchema;
 export const CodexPromptSchema = z
 	.string()
 	.refine((value) => value.trim().length > 0, "prompt must not be blank")

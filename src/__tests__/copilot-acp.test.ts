@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import type { AgentChild } from "../mcp/devcontainer/codexTargets.js";
 import { CopilotAcpClient, createAcpTransport } from "../mcp/devcontainer/copilotAcp.js";
-import type { CopilotChild } from "../mcp/devcontainer/copilotTargets.js";
 
 function fakeChild() {
 	const stdin = new PassThrough();
@@ -9,7 +9,7 @@ function fakeChild() {
 	const written: unknown[] = [];
 	stdin.on("data", (chunk: Buffer) => written.push(JSON.parse(chunk.toString())));
 	let onExit: (info: { code: number | null; signal: string | null }) => void = () => {};
-	const child: CopilotChild = {
+	const child: AgentChild = {
 		stdin,
 		stdout,
 		kill: () => {},

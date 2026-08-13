@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AgentResolvedTarget } from "../../shared/agent-execution-target.js";
 import {
 	COPILOT_DEFAULT_MODEL,
 	type CopilotDaemonCommand,
@@ -9,14 +10,12 @@ import {
 	type CopilotDaemonReceipt,
 	CopilotDaemonReceiptSchema,
 	type CopilotEventAck,
-	type CopilotResolvedTarget,
 	isReliableCopilotMessage,
 	sanitizeCopilotErrorText,
 } from "../../shared/copilot-thinking.js";
-import { resolveCodexTarget } from "./codexTargetResolve.js";
-import type { TargetLease, TargetSupervisor } from "./codexTargets.js";
+import { resolveAgentTarget } from "./agentTargetResolve.js";
+import type { AgentChild, TargetLease, TargetSupervisor } from "./codexTargets.js";
 import { type CopilotAcpClient, defaultOpenCopilotClient } from "./copilotAcp.js";
-import type { CopilotChild } from "./copilotTargets.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -25,7 +24,7 @@ export interface CopilotDaemonDeps {
 	targets: TargetSupervisor;
 	daemonInstanceId: string;
 	send(message: Record<string, unknown>): void;
-	openClient?(child: CopilotChild): Promise<CopilotAcpClient>;
+	openClient?(child: AgentChild): Promise<CopilotAcpClient>;
 	resolveHostCwd(hint: string | undefined): string;
 	now?(): number;
 }
@@ -66,13 +65,6 @@ function failureCode(error: string): CopilotDaemonFailureCode {
 	if (/timed out|timeout|exited|closed|broken pipe/i.test(error)) return "app_server_unavailable";
 	if (/target|container|binary|unavailable/i.test(error)) return "daemon_unavailable";
 	return "protocol_error";
-}
-
-export function resolveCopilotTarget(
-	target: Parameters<typeof resolveCodexTarget>[0],
-	resolveHostCwd: (hint: string | undefined) => string,
-): CopilotResolvedTarget {
-	return resolveCodexTarget(target, resolveHostCwd);
 }
 
 ////////////////////////////////
@@ -152,7 +144,7 @@ export class CopilotDaemonService {
 	}
 
 	private async runStart(command: Extract<CopilotDaemonCommand, { kind: "start" }>): Promise<void> {
-		const target = resolveCopilotTarget(command.target, this.deps.resolveHostCwd);
+		const target = resolveAgentTarget(command.target, this.deps.resolveHostCwd);
 		const session = await this.session(target);
 		if (!session)
 			return this.reject(command, this.openErrors.get(target.targetId) ?? "execution target is unavailable");
@@ -293,7 +285,7 @@ export class CopilotDaemonService {
 		});
 	}
 
-	private async session(target: CopilotResolvedTarget): Promise<TargetSession | null> {
+	private async session(target: AgentResolvedTarget): Promise<TargetSession | null> {
 		const availability = this.deps.targets.acquire(target);
 		if (availability.state !== "running") return null;
 		const generation = availability.lease.generation;
@@ -309,7 +301,7 @@ export class CopilotDaemonService {
 		return opening;
 	}
 
-	private async open(target: CopilotResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
+	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
 		this.sessions.get(target.targetId)?.client.close();
 		const opened = this.deps.openClient ?? defaultOpenCopilotClient;
 		let client: CopilotAcpClient;

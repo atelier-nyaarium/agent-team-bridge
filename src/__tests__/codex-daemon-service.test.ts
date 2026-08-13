@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
-import { CodexDaemonService, resolveCodexTarget } from "../mcp/devcontainer/codexDaemonService.js";
+import { CodexDaemonService, resolveAgentTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
 import type { CodexResolvedTarget } from "../shared/codex-thinking.js";
 
@@ -114,7 +114,7 @@ describe("Codex execution targets", () => {
 		// A host hint is NOT a path: it can be a bare human label. Passing one straight through as a cwd
 		// makes the resolved target fail its own schema, which the daemon reports as an unavailable
 		// target and an owner sees as a start that refused itself for no stated reason.
-		expect(resolveCodexTarget({ kind: "host", workdirHint: "Codex Support" }, () => "/home/agent")).toEqual({
+		expect(resolveAgentTarget({ kind: "host", workdirHint: "Codex Support" }, () => "/home/agent")).toEqual({
 			kind: "host",
 			targetId: "host",
 			cwd: "/home/agent",
@@ -123,7 +123,7 @@ describe("Codex execution targets", () => {
 
 	it("resolves a container target to its workspace without consulting the host rule", () => {
 		expect(
-			resolveCodexTarget(
+			resolveAgentTarget(
 				{ kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
 				() => {
 					throw new Error("host rule must not be consulted for a container");

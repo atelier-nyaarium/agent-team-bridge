@@ -1,4 +1,4 @@
-import type { CopilotChild } from "./copilotTargets.js";
+import type { AgentChild } from "./codexTargets.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -31,7 +31,7 @@ function serverRequestResult(method: string): unknown | undefined {
 	return undefined;
 }
 
-export function createAcpTransport(child: CopilotChild): AcpTransport {
+export function createAcpTransport(child: AgentChild): AcpTransport {
 	let nextId = 1;
 	let buffered = "";
 	let closed = false;
@@ -231,7 +231,7 @@ export class CopilotAcpClient {
 	}
 }
 
-export async function defaultOpenCopilotClient(child: CopilotChild): Promise<CopilotAcpClient> {
+export async function defaultOpenCopilotClient(child: AgentChild): Promise<CopilotAcpClient> {
 	const transport = createAcpTransport(child);
 	try {
 		return await CopilotAcpClient.open(transport);

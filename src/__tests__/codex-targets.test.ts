@@ -294,14 +294,13 @@ describe("a target that cannot launch at all", () => {
 
 describe("what reaches a container", () => {
 	it("forwards only Codex's own settings, since the container has its own environment", () => {
-		expect(containerEnvArgs({ CODEX_THINKING_MODEL: "gpt-5.6-luna", PATH: "/usr/bin", HOME: "/root" })).toEqual([
-			"-e",
-			"CODEX_THINKING_MODEL=gpt-5.6-luna",
-		]);
+		expect(
+			containerEnvArgs({ CODEX_THINKING_MODEL: "gpt-5.6-luna", PATH: "/usr/bin", HOME: "/root" }, "CODEX_"),
+		).toEqual(["-e", "CODEX_THINKING_MODEL=gpt-5.6-luna"]);
 	});
 
 	it("forwards nothing of Switchboard's, even under a Codex-shaped name", () => {
-		expect(containerEnvArgs({ HOST_WS_TOKEN: "secret", GH_TOKEN: "t" })).toEqual([]);
+		expect(containerEnvArgs({ HOST_WS_TOKEN: "secret", GH_TOKEN: "t" }, "CODEX_")).toEqual([]);
 	});
 
 	it("reads the container name through the shared target grammar", () => {

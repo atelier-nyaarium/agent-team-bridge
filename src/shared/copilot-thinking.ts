@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { COPILOT_BACKEND } from "./agent-backend.js";
-import { CodexExecutionTargetSchema, CodexOwnerKeySchema, CodexResolvedTargetSchema } from "./codex-thinking.js";
+import {
+	AgentExecutionTargetSchema,
+	AgentOwnerKeySchema,
+	AgentResolvedTargetSchema,
+} from "./agent-execution-target.js";
 
 ////////////////////////////////
 //  Bounds
@@ -16,9 +20,9 @@ export const COPILOT_AGENT_ID_RE = /^copilot_[0-9a-f]{32}$/;
 
 export const CopilotAgentIdSchema = z.string().regex(COPILOT_AGENT_ID_RE);
 export const CopilotOperationIdSchema = z.string().uuid();
-export const CopilotOwnerKeySchema = CodexOwnerKeySchema;
-export const CopilotExecutionTargetSchema = CodexExecutionTargetSchema;
-export const CopilotResolvedTargetSchema = CodexResolvedTargetSchema;
+export const CopilotOwnerKeySchema = AgentOwnerKeySchema;
+export const CopilotExecutionTargetSchema = AgentExecutionTargetSchema;
+export const CopilotResolvedTargetSchema = AgentResolvedTargetSchema;
 export const CopilotOpaqueIdSchema = z.string().min(1).max(512);
 
 function boundedUtf8(maxBytes: number, name: string) {

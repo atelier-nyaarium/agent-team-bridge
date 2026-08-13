@@ -1,16 +1,16 @@
 import {
-	CODEX_HOST_TARGET_ID,
-	type CodexExecutionTarget,
-	type CodexResolvedTarget,
-	CodexResolvedTargetSchema,
-	codexContainerTargetId,
-} from "../../shared/codex-thinking.js";
+	AGENT_HOST_TARGET_ID,
+	type AgentExecutionTarget,
+	type AgentResolvedTarget,
+	AgentResolvedTargetSchema,
+	agentContainerTargetId,
+} from "../../shared/agent-execution-target.js";
 
 ////////////////////////////////
 //  Functions & Helpers
 
-export function codexTargetIdFor(target: CodexExecutionTarget): string {
-	return target.kind === "host" ? CODEX_HOST_TARGET_ID : codexContainerTargetId(target.project);
+export function agentTargetIdFor(target: AgentExecutionTarget): string {
+	return target.kind === "host" ? AGENT_HOST_TARGET_ID : agentContainerTargetId(target.project);
 }
 
 /**
@@ -21,13 +21,13 @@ export function codexTargetIdFor(target: CodexExecutionTarget): string {
  * and `resolveHostWorkdir` is the one place that knows which is which. Passing the hint through as a
  * cwd made every host start fail its own schema and be refused as an unavailable target.
  */
-export function resolveCodexTarget(
-	target: CodexExecutionTarget,
+export function resolveAgentTarget(
+	target: AgentExecutionTarget,
 	resolveHostCwd: (hint: string | undefined) => string,
-): CodexResolvedTarget {
-	return CodexResolvedTargetSchema.parse({
+): AgentResolvedTarget {
+	return AgentResolvedTargetSchema.parse({
 		kind: target.kind,
-		targetId: codexTargetIdFor(target),
+		targetId: agentTargetIdFor(target),
 		cwd: target.kind === "host" ? resolveHostCwd(target.workdirHint) : `/workspace/${target.project}`,
 	});
 }

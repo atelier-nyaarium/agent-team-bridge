@@ -15,9 +15,9 @@ import {
 import { createReconnector } from "../../shared/reconnect.js";
 import { parseSessionName } from "../../shared/session-id.js";
 import { CodexDaemonService } from "./codexDaemonService.js";
-import { ExecutionTargetManager } from "./codexTargets.js";
+import { ExecutionTargetManager, targetLogger } from "./codexTargets.js";
 import { CopilotDaemonService } from "./copilotDaemonService.js";
-import { CopilotTargetManager } from "./copilotTargets.js";
+import { copilotLauncher } from "./copilotTargets.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import {
@@ -66,7 +66,7 @@ const codexDaemon = new CodexDaemonService({
 	send: safeSend,
 	resolveHostCwd: (hint) => resolveHostWorkdir(hint),
 });
-const copilotTargets = new CopilotTargetManager();
+const copilotTargets = new ExecutionTargetManager(copilotLauncher, undefined, targetLogger("copilot-target"));
 const copilotDaemon = new CopilotDaemonService({
 	targets: copilotTargets,
 	daemonInstanceId,
