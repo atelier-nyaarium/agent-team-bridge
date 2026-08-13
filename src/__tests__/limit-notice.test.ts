@@ -123,23 +123,33 @@ describe("limitNotice", () => {
 		});
 	});
 
-	describe("stays silent while the session can still make progress", () => {
+	describe("the dialog is the signal, so a missing headline costs only the detail", () => {
 		it.each([
 			"You've used 90% of your weekly limit",
 			"You're close to your usage limit",
 			"You're now using usage credits · Your weekly limit resets Monday",
 			"Now using extra usage",
-		])("ignores the non-blocking notice %j", (headline) => {
-			expect(limitNotice(dialog(headline))).toBeNull();
+		])("still blocks with no detail when the line above is only %j", (line) => {
+			// These are warning and transition notices, not limit headlines. The dialog below still
+			// holds the pane, so the session is blocked; the line above simply says nothing about why.
+			expect(limitNotice(dialog(line))).toEqual({ headline: null, detail: null });
 		});
 
+		it("blocks with no detail when the headline has scrolled off entirely", () => {
+			const screen = ["● nothing relevant", rule("━"), " ❯ 1. Stop and wait for limit to reset"].join("\n");
+			expect(limitNotice(screen)).toEqual({ headline: null, detail: null });
+		});
+
+		it("reads a block-element divider, which is what the dialog actually draws", () => {
+			// U+2594, not box drawing. A Box-Drawing-only range finds no rule at all here.
+			const screen = ["● earlier output", "▔".repeat(58), " ❯ 1. Stop and wait for limit to reset"].join("\n");
+			expect(limitNotice(screen)).not.toBeNull();
+		});
+	});
+
+	describe("stays silent when no limit dialog is holding the pane", () => {
 		it("ignores a dialog whose cancel choice collapsed to a bare Stop", () => {
 			const screen = dialog("You've hit your session limit · resets 3pm", { cancel: "Stop" });
-			expect(limitNotice(screen)).toBeNull();
-		});
-
-		it("ignores a menu carrying the limit choice with no headline above it", () => {
-			const screen = ["● nothing relevant", rule("━"), " ❯ 1. Stop and wait for limit to reset"].join("\n");
 			expect(limitNotice(screen)).toBeNull();
 		});
 

@@ -23,12 +23,12 @@ object AgentScreen {
 	private const val WORKING_CIRCLE_HINT = "◯"
 	private const val TOOLBAR_RULE = "───"
 
-	// A rule row for the usage-limit check, as any run of box-drawing characters rather than the
-	// specific glyph: that dialog's divider is heavier than the composer's U+2500 border, and a
-	// restyle must not silently disable detection. titledBorderRe is the same run leading a row that
-	// also carries text, which the composer's top border does once a session has a name.
-	private val anyRuleRe = Regex("^[\\u2500-\\u257F]+$")
-	private val titledBorderRe = Regex("^[\\u2500-\\u257F]{3,}")
+	// A rule row for the usage-limit check. Spans Box Drawing AND Block Elements: the limit dialog's
+	// own divider is U+2594, a block element, so a Box-Drawing-only range matches nothing on a real
+	// pane and detection never starts. titledBorderRe is the same run leading a row that also carries
+	// text, which the composer's top border does once a session has a name.
+	private val anyRuleRe = Regex("^[\\u2500-\\u259F]+$")
+	private val titledBorderRe = Regex("^[\\u2500-\\u259F]{3,}")
 	// An INDENTED prompt followed by a numbered option, i.e. a selectable dialog holds the pane.
 	// Column 0 would be the composer, so the leading whitespace is load-bearing.
 	private val menuCursorRe = Regex("^\\s+\\u276F\\s*\\d+\\.", RegexOption.MULTILINE)
@@ -85,19 +85,21 @@ object AgentScreen {
 	}
 
 	/** The headline of a usage-limit dialog plus the text after its middle dot, e.g. "resets 5pm". */
-	data class LimitNotice(val headline: String, val detail: String?)
+	/** `headline` is null when it has already scrolled off the pane, which is common. The dialog itself
+	 * is what proves the session is blocked, so neither field is load-bearing. */
+	data class LimitNotice(val headline: String?, val detail: String?)
 
 	/**
 	 * The usage-limit dialog, i.e. the agent has stopped and cannot progress until the choice is
 	 * answered. Twin of limitNotice in agent-screen.ts, held equivalent by
 	 * tests/fixtures/limit-notice/vectors.json.
 	 *
-	 * Detected by POSITION rather than by scanning the screen, because the headline renders in the
-	 * transcript and lingers in scrollback after the dialog closes; a whole-screen match would latch
-	 * permanently and would also trip on a session that merely quotes the wording while discussing it.
-	 * Both below-divider signals are required before the headline pattern runs, since neither is
-	 * sufficient alone: the dialog title is reused by unrelated dialogs, and a numbered menu is just as
-	 * present on a permission prompt.
+	 * The DIALOG is the signal, never the headline. Both below-divider markers are required, since
+	 * neither is sufficient alone: the dialog title is reused by unrelated dialogs and a numbered menu
+	 * is just as present on a permission prompt, but together they appear nowhere else.
+	 *
+	 * The headline only enriches the notice and is frequently absent, since the dialog is pinned to the
+	 * bottom of the pane and the headline has usually scrolled past. Requiring it missed the common case.
 	 */
 	fun limitNotice(screen: String): LimitNotice? {
 		val lines = strip(screen).split("\n")
@@ -134,6 +136,7 @@ object AgentScreen {
 			val detail = if (dot < 0) null else headline.substring(dot + 1).trim().ifEmpty { null }
 			return LimitNotice(headline, detail)
 		}
-		return null
+		// Blocked regardless: the dialog is up, the headline just is not on screen to say why.
+		return LimitNotice(null, null)
 	}
 }

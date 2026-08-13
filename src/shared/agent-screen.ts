@@ -2,9 +2,11 @@
 //  Interfaces & Types
 
 export interface LimitNotice {
-	/** The matched headline, rejoined across wrap rows. */
-	headline: string;
-	/** Everything after the headline's first middle dot, e.g. "resets 5pm". Null when it has no dot. */
+	/** The matched headline, rejoined across wrap rows. Null when it has already scrolled off the pane,
+	 * which is common: the dialog is pinned to the bottom and the transcript above it is whatever was
+	 * on screen. Never load-bearing - the dialog itself is what proves the session is blocked. */
+	headline: string | null;
+	/** Everything after the headline's first middle dot, e.g. "resets 5pm". Null without a headline. */
 	detail: string | null;
 }
 
@@ -32,12 +34,12 @@ const WORKING_CIRCLE_HINT = "◯";
 const TOOLBAR_RULE = "───";
 const LOGGED_OUT_RE = /Not logged in|Run \/login/;
 
-// A rule row for the usage-limit check, as any run of box-drawing characters rather than the specific
-// glyph: that dialog's divider is heavier than the composer's U+2500 border, and a restyle must not
-// silently disable detection. TITLED_BORDER_RE is the same run leading a row that also carries text,
-// which the composer's top border does once a session has a name.
-const ANY_RULE_RE = /^[─-╿]+$/u;
-const TITLED_BORDER_RE = /^[─-╿]{3,}/u;
+// A rule row for the usage-limit check. Spans Box Drawing AND Block Elements (U+2500-U+259F): the
+// limit dialog's own divider is U+2594, a block element, so a Box-Drawing-only range matches nothing
+// on a real pane and detection never starts. TITLED_BORDER_RE is the same run leading a row that
+// also carries text, which the composer's top border does once a session has a name.
+const ANY_RULE_RE = /^[─-▟]+$/u;
+const TITLED_BORDER_RE = /^[─-▟]{3,}/u;
 // An INDENTED prompt followed by a numbered option, i.e. a selectable dialog holds the pane. Column 0
 // would be the composer, so the leading whitespace is load-bearing.
 const MENU_CURSOR_RE = /^\s+❯\s*\d+\./mu;
@@ -113,14 +115,15 @@ export function isLoggedOut(screen: string): boolean {
 /** The usage-limit dialog, i.e. the agent has stopped and cannot progress until the choice is answered.
  * Returns the headline and the text after its middle dot, or null.
  *
- * Detected by POSITION rather than by scanning the screen, because the headline renders in the
- * transcript and lingers in scrollback after the dialog closes; a whole-screen match would latch
- * permanently and would also trip on a session that merely quotes the wording while discussing it.
+ * The DIALOG is the signal, never the headline. Both below-divider markers are required: an indented
+ * numbered menu, and that dialog's own wait-for-reset choice. Neither is sufficient alone, since the
+ * dialog title is reused by unrelated dialogs and a numbered menu is just as present on a permission
+ * prompt, but together they appear nowhere else. Once the choice is answered the menu goes with it, so
+ * the notice clears itself with no state to expire.
  *
- * Both below-divider signals are required before the headline pattern runs at all. Neither is
- * sufficient alone: the dialog's title is reused by unrelated dialogs, and a numbered menu is just as
- * present on a permission prompt. Once the choice is answered the composer returns, which puts the
- * headline out of window, so the notice clears itself with no state to expire.
+ * The headline is read only to enrich the notice and is frequently absent: the dialog is pinned to the
+ * bottom of the pane, so whatever sits above it is whatever happened to be on screen, and the headline
+ * has usually scrolled past. Requiring it missed the common case entirely.
  *
  * The Kotlin twin lives in AgentScreen.kt. */
 export function limitNotice(screen: string): LimitNotice | null {
@@ -160,5 +163,6 @@ export function limitNotice(screen: string): LimitNotice | null {
 		const dot = headline.indexOf("·");
 		return { headline, detail: dot < 0 ? null : headline.slice(dot + 1).trim() || null };
 	}
-	return null;
+	// Blocked regardless: the dialog is up, the headline just is not on screen to say why.
+	return { headline: null, detail: null };
 }

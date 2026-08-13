@@ -290,7 +290,9 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			}
 			const live = res.ready || isAgentWorking(res.screen);
 			if (res.limit) {
-				console.error(`[host-wake] ${msg.team} hit a usage limit: ${res.limit.headline}`);
+				console.error(
+					`[host-wake] ${msg.team} hit a usage limit: ${res.limit.headline ?? "no headline on screen"}`,
+				);
 			} else {
 				console.error(`[host-wake] ${msg.team} ${live ? "Claude is up" : "did not reach the REPL"}`);
 			}
@@ -342,7 +344,10 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			lastScreen = res.screen;
 			launchAlive = res.alive;
 			limit = res.limit;
-			if (limit) console.error(`[host-wake] ${msg.team} hit a usage limit: ${limit.headline}`);
+			if (limit)
+				console.error(
+					`[host-wake] ${msg.team} hit a usage limit: ${limit.headline ?? "no headline on screen"}`,
+				);
 			else console.error(`[host-wake] ${msg.team} ${res.ready ? "Claude is ready" : "did not reach the REPL"}`);
 		} else {
 			try {

@@ -2,6 +2,24 @@
 	"_comment": "Cross-runtime vectors for usage-limit dialog detection. Read by BOTH src/__tests__/limit-notice.test.ts and android/.../AgentScreenLimitVectorsTest.kt, so the hand-authored Kotlin twin cannot drift from the TS source. Pane geometry follows a live capture: 58 columns, a titled top border once the session has a name, the composer prompt, a solid bottom border, then the toolbar. `expect` is null when nothing is detected, otherwise an object whose `detail` is the text after the headline's middle dot (null when the headline has no dot).",
 	"vectors": [
 		{
+			"name": "REAL captured pane: block-element divider, headline already scrolled off",
+			"screen": [
+				"          -, send them verbatim unless the user exp",
+				"          -licitly asked for a summary.",
+				"      101 +When relaying responses back to the user",
+				"          +, send them verbatim unless the user ask",
+				"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+				"   What do you want to do?",
+				"",
+				"   ❯ 1. Stop and wait for limit to reset",
+				"     2. Switch to usage credits",
+				"     3. Switch to Team plan",
+				"",
+				"   Enter to confirm · Esc to cancel"
+			],
+			"expect": { "detail": null }
+		},
+		{
 			"name": "weekly limit, as the console showed it",
 			"screen": [
 				"● an earlier turn said something",
@@ -105,22 +123,22 @@
 			"expect": { "detail": "add funds to continue" }
 		},
 		{
-			"name": "a usage warning is not a block, the session is still running",
+			"name": "a warning line above the dialog does not change that the dialog is blocking",
 			"screen": [
 				"  └   You've used 90% of your weekly limit",
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 				" ❯ 1. Stop and wait for limit to reset"
 			],
-			"expect": null
+			"expect": { "detail": null }
 		},
 		{
-			"name": "a transition to credits is not a block either",
+			"name": "a transition line above the dialog is not a headline, but the dialog still blocks",
 			"screen": [
 				"  └   You're now using usage credits · Your weekly limit resets Monday",
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 				" ❯ 1. Stop and wait for limit to reset"
 			],
-			"expect": null
+			"expect": { "detail": null }
 		},
 		{
 			"name": "cancel label collapsed to a bare Stop is out of scope",
@@ -133,13 +151,13 @@
 			"expect": null
 		},
 		{
-			"name": "the limit choice with no headline above it detects nothing",
+			"name": "the limit choice with nothing recognisable above it still blocks",
 			"screen": [
 				"● nothing relevant here",
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 				" ❯ 1. Stop and wait for limit to reset"
 			],
-			"expect": null
+			"expect": { "detail": null }
 		},
 		{
 			"name": "answered: the composer returned and the headline fell out of window",
@@ -193,13 +211,13 @@
 			"expect": null
 		},
 		{
-			"name": "prose about usage data, which an earlier looser pattern tripped on",
+			"name": "prose above the dialog is not read as a headline, and does not stop the block",
 			"screen": [
 				"  └   The summary doesn't include usage data for last week",
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 				" ❯ 1. Stop and wait for limit to reset"
 			],
-			"expect": null
+			"expect": { "detail": null }
 		},
 		{
 			"name": "no rule anywhere on the screen",
