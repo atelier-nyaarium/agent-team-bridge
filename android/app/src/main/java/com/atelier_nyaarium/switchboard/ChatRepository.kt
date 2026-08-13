@@ -2243,9 +2243,9 @@ class ChatRepository(
 		// HTTP round trip (what the resurrection race actually races against), not the much longer
 		// LONG_POLL_HOLD_MS reconciliation cadence (reapplyCachedTeams runs every poll tick, so a
 		// tombstone's own expiry self-heals within about one poll regardless). Derived from
-		// ConsoleClient's own bound on that call (not an independent literal) so it can never
+		// ConsoleHttp's own bound on that call (not an independent literal) so it can never
 		// silently fall behind the client's real worst case.
-		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
+		const val FORGET_TOMBSTONE_MS = ConsoleHttp.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
 		// DERIVED from the generated wire constant, never a literal. This was its own 16 MB number
 		// sized for a path that base64'd a whole file into the heap, and it stayed at 16 MB after that
 		// path was deleted - so the console went on refusing exactly the large videos the chunked

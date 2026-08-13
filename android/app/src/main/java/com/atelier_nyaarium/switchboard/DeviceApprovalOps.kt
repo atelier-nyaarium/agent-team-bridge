@@ -134,7 +134,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 				newBoxPub = id.box.pub,
 				device = android.os.Build.MODEL,
 			)
-			val result = ConsoleClient.postPublicApproval(scan.reach, op)
+			val result = ConsoleHttp.postPublicApproval(scan.reach, op)
 			if (!result.ok) error(result.error ?: "The held device didn't accept this join.")
 			Unit
 		}
@@ -146,7 +146,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	suspend fun newDeviceFetch(scan: ScannedDeviceApproval): Result<Boolean> = withContext(Dispatchers.IO) {
 		runCatching {
 			val op = ConsoleApprovalOp.Fetch(approvalId = scan.approvalId, nonce = scan.nonce)
-			val result = ConsoleClient.postPublicApproval(scan.reach, op)
+			val result = ConsoleHttp.postPublicApproval(scan.reach, op)
 			if (!result.ok) error(result.error ?: "The approval window expired.")
 			val sealed = result.sealed ?: return@runCatching false
 			val plain = repo.federation.unsealConsoleTransport(sealed, scan.ownerSignPub)

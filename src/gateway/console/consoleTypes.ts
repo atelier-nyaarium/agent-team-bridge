@@ -258,7 +258,7 @@ export const FAKE_REQ = new Request("http://gateway/console");
 // hold /send for up to WAKE_TIMEOUT_MS (10 min), far past evie's opId hold. Past this bound the
 // op returns the deterministic session id and the wake/send continues in the background, the
 // answer landing in the mailbox via the persistent conversation. The Android console's own
-// PINNED_READ_TIMEOUT_MS (ConsoleClient.kt) must outlast this - pinned by
+// PINNED_READ_TIMEOUT_MS (ConsoleHttp.kt) must outlast this - pinned by
 // ChatRepositoryConstantsTest.kt, update both sides together.
 export const SEND_BOUND_MS = 25_000;
 
@@ -275,7 +275,7 @@ export const CREATE_SESSION_BOUND_MS = 25_000;
 // The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
 // outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
 // value. Must clear the relay chain with headroom: evie holds the console's HTTP request 55s and
-// the apiserver proxy allows 60s (ConsoleClient.PROXY_CEILING_MS). The Android console's own
+// the apiserver proxy allows 60s (ConsoleHttp.PROXY_CEILING_MS). The Android console's own
 // LONG_POLL_HOLD_MS must stay at or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts
 // and ChatRepositoryConstantsTest.kt, update all sides together.
 export const HOLD_CAP_MS = MAX_POLL_HOLD_MS;

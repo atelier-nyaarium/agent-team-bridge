@@ -23,7 +23,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * MockWebServer matrix test for ConsoleClient.postEvieDirect's decode contract, pinned against a
+ * MockWebServer matrix test for ConsoleHttp.postEvieDirect's decode contract, pinned against a
  * real HTTP round trip - a decode-order transposition here is type-identical Kotlin that compiles
  * clean, so the build gates alone cannot catch it (console-hardening.md Phase C verification).
  * Also covers executeCancellable's cancellation and per-call-timeout behavior (Phase D).
@@ -49,7 +49,7 @@ class PostEvieDirectTest {
 	// directly" even when both produce a similarly-shaped EnrollResult.
 	private fun taggedFail(msg: String) = EnrollResult(ok = false, error = "FAIL:$msg")
 
-	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleClient.postEvieDirect(
+	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleHttp.postEvieDirect(
 		client,
 		server.url("/relay").toString(),
 		"sa-token",
@@ -112,7 +112,7 @@ class PostEvieDirectTest {
 			dead.start()
 			val deadUrl = dead.url("/relay").toString()
 			dead.shutdown()
-			ConsoleClient.postEvieDirect(client, deadUrl, "sa-token", "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
+			ConsoleHttp.postEvieDirect(client, deadUrl, "sa-token", "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
 		}
 	}
 
@@ -128,13 +128,13 @@ class PostEvieDirectTest {
 	@Test
 	fun loggedBodyPreview_showsTheTruncatedBodyWhenLogBodyIsTrue() {
 		val body = """{"ok":true,"saToken":"super-secret-token-value"}"""
-		assertEquals(body.take(160), ConsoleClient.loggedBodyPreview(body, logBody = true))
+		assertEquals(body.take(160), ConsoleHttp.loggedBodyPreview(body, logBody = true))
 	}
 
 	@Test
 	fun loggedBodyPreview_neverContainsTheBodyWhenLogBodyIsFalse() {
 		val body = """{"ok":true,"saToken":"super-secret-token-value"}"""
-		val preview = ConsoleClient.loggedBodyPreview(body, logBody = false)
+		val preview = ConsoleHttp.loggedBodyPreview(body, logBody = false)
 		assertFalse(preview.contains("super-secret-token-value"))
 		assertTrue(preview.contains("redacted"))
 	}
@@ -159,7 +159,7 @@ class PostEvieDirectTest {
 			val started = System.nanoTime()
 			val job = launch(Dispatchers.IO) {
 				try {
-					ConsoleClient.executeCancellable(client, req)
+					ConsoleHttp.executeCancellable(client, req)
 				} catch (e: CancellationException) {
 					caughtCancellation = true
 					throw e
@@ -184,7 +184,7 @@ class PostEvieDirectTest {
 		runBlocking {
 			server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}""").setBodyDelay(2, TimeUnit.SECONDS))
 			val shortTimeoutClient = client.newBuilder().callTimeout(200, TimeUnit.MILLISECONDS).build()
-			ConsoleClient.executeCancellable(shortTimeoutClient, relayRequest())
+			ConsoleHttp.executeCancellable(shortTimeoutClient, relayRequest())
 		}
 	}
 }

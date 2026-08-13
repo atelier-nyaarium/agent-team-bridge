@@ -471,7 +471,7 @@ export async function startGateway(): Promise<void> {
 	// never spuriously times out (a sendText runs two sequential 8s execs = up to 16s, and a
 	// timeout on a keystroke send is indeterminate - the retry would re-inject). 20s clears that
 	// with margin and still nests well under the console relay hold (evie ~55s, apiserver
-	// ConsoleClient.PROXY_CEILING_MS 60s - the full chain is pinned in
+	// ConsoleHttp.PROXY_CEILING_MS 60s - the full chain is pinned in
 	// ChatRepositoryConstantsTest, not here; this comment is context, not a source of truth).
 	const HOST_OP_TIMEOUT_MS = 20_000;
 

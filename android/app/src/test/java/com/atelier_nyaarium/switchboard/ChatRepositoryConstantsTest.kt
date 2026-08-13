@@ -43,7 +43,7 @@ class ChatRepositoryConstantsTest {
 		val gatewaySendBoundMs = 25_000L
 		assertTrue(
 			"PINNED_READ_TIMEOUT_MS must stay comfortably past the gateway's send bound",
-			ConsoleClient.PINNED_READ_TIMEOUT_MS > gatewaySendBoundMs + 5_000L,
+			ConsoleHttp.PINNED_READ_TIMEOUT_MS > gatewaySendBoundMs + 5_000L,
 		)
 	}
 
@@ -54,7 +54,7 @@ class ChatRepositoryConstantsTest {
 		// the socket. Deliberately thin headroom (58s < 60s) - pinned strict, not loose.
 		assertTrue(
 			"LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS must stay under PROXY_CEILING_MS",
-			ChatRepository.LONG_POLL_HOLD_MS + ConsoleClient.HELD_READ_MARGIN_MS < ConsoleClient.PROXY_CEILING_MS,
+			ChatRepository.LONG_POLL_HOLD_MS + ConsoleHttp.HELD_READ_MARGIN_MS < ConsoleHttp.PROXY_CEILING_MS,
 		)
 	}
 
@@ -72,8 +72,8 @@ class ChatRepositoryConstantsTest {
 	@Test
 	fun heldTimeoutsStayStrictlyOrderedCallTimeoutAboveReadTimeoutAboveHold() {
 		val hold = ChatRepository.LONG_POLL_HOLD_MS
-		val heldReadTimeoutMs = hold + ConsoleClient.HELD_READ_MARGIN_MS
-		val heldCallTimeoutMs = heldReadTimeoutMs + ConsoleClient.CALL_TIMEOUT_MARGIN_MS + ConsoleClient.PINNED_CONNECT_TIMEOUT_MS
+		val heldReadTimeoutMs = hold + ConsoleHttp.HELD_READ_MARGIN_MS
+		val heldCallTimeoutMs = heldReadTimeoutMs + ConsoleHttp.CALL_TIMEOUT_MARGIN_MS + ConsoleHttp.PINNED_CONNECT_TIMEOUT_MS
 		assertTrue("held callTimeout must exceed held readTimeout", heldCallTimeoutMs > heldReadTimeoutMs)
 		assertTrue("held readTimeout must exceed the hold itself", heldReadTimeoutMs > hold)
 	}

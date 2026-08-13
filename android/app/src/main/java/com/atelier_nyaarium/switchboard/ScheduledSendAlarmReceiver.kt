@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 
 // connect()'s FOUR sequential round trips (apiReachable, submitConsoleAdmission, register, teams),
-// each up to the default OkHttpClient's own 15s connect + 20s read (ConsoleClient.kt's plain
+// each up to the default OkHttpClient's own 15s connect + 20s read (ConsoleHttp.kt's plain
 // connectTimeout/readTimeout builder, not independently named - re-deriving those two literals
 // would mean adding exported constants to an unrelated file for this one caller). Named here so at
 // least the SHAPE of the term (four round trips, not a bare number) survives a future edit to that
@@ -15,7 +15,7 @@ private const val CONNECT_ROUND_TRIP_MS = 35_000L
 
 // Cold-revival worst case for a scheduled-send fire: service start + repo entry
 // (REVIVAL_OVERHEAD_MS, the SAME revival cost PollAlarmReceiver's own PASS_TIMEOUT_MS derives
-// from) + connect()'s four sequential round trips above + the send itself (ConsoleClient's own
+// from) + connect()'s four sequential round trips above + the send itself (ConsoleHttp's own
 // PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS, live references so a future change to either
 // cannot silently drift this constant out of date the way a flat literal already did once).
 // Rounded up for real margin rather than
@@ -26,7 +26,7 @@ private const val CONNECT_ROUND_TRIP_MS = 35_000L
 internal const val SCHEDULED_SEND_PASS_TIMEOUT_MS =
 	REVIVAL_OVERHEAD_MS +
 		CONNECT_ROUND_TRIPS * CONNECT_ROUND_TRIP_MS +
-		(ConsoleClient.PINNED_CONNECT_TIMEOUT_MS + ConsoleClient.PINNED_READ_TIMEOUT_MS) +
+		(ConsoleHttp.PINNED_CONNECT_TIMEOUT_MS + ConsoleHttp.PINNED_READ_TIMEOUT_MS) +
 		35_000L
 
 /** Fires the scheduled-send alarm - either the single shared "next-due" wakeup (ACTION_FIRE_DUE,

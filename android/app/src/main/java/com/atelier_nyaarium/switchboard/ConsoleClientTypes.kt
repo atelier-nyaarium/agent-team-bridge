@@ -87,8 +87,8 @@ internal data class EnrollEnvelope(
 @Serializable
 // internal (not private): referenced from postEvieDirect, an internal inline fun - an inline
 // function's body cannot access a private-in-file type even from the same file (the compiler
-// treats inlining as a visibility-widening operation). Same bug class as ConsoleClient's own
-// PINNED_*/HELD_*/PROXY_CEILING_MS companion constants; see their comment for the general rule.
+// treats inlining as a visibility-widening operation). Same bug class as ConsoleHttp's
+// PINNED_*/HELD_*/PROXY_CEILING_MS constants; see their comment for the general rule.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
