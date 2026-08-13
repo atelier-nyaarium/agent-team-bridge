@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.plugins.references
 import com.atelier_nyaarium.switchboard.proto.RefFileMeta
 import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
 import com.atelier_nyaarium.switchboard.proto.RefSegmentMeta
-import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

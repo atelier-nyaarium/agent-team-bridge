@@ -16,7 +16,6 @@ import java.util.UUID
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 /** The board's whole storage surface, so the manager is unit-testable without a Context.
