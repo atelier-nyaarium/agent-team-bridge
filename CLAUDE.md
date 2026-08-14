@@ -791,7 +791,10 @@ permissions for the supervised target.
   busy, not that the work should stop. The measured duration is the by-product that lets a queued
   tile show its length instead of a spinner.
 - **Audio focus** (`SpeechFocus.kt`): held for a RUN, `AUDIOFOCUS_GAIN_TRANSIENT` so the user's music
-  resumes, released on a pause as well as at the end. A DUCKABLE loss keeps speaking (`focusAction`):
+  resumes, released at the end and on a HAND pause. A pause the focus system itself caused KEEPS the
+  request (`focusHold`), or releasing drops the listener and the GAIN that would lift that pause
+  never arrives, which left a call ending with the run still parked. A DUCKABLE loss keeps
+  speaking (`focusAction`):
   it is what a notification ping raises, and pausing on it killed every run, since the transport
   releases focus while paused so no GAIN could ever arrive to lift it. A refused request does not
   pause either, for the same reason: it registers no listener. `ACTION_AUDIO_BECOMING_NOISY` is its

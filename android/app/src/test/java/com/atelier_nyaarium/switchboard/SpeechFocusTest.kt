@@ -25,6 +25,31 @@ class SpeechFocusTest {
 	}
 
 	@Test
+	fun aFocusPauseKeepsTheRequestSoTheGainCanLiftIt() {
+		// Releasing drops the listener, so the pause a call caused could never be lifted and the run
+		// sat there until someone pressed play.
+		assertEquals(FocusHold.KEEP, focusHold(active = true, paused = true, pausedByFocus = true))
+	}
+
+	@Test
+	fun aHandPauseStillGivesTheUsersMusicBack() {
+		assertEquals(FocusHold.RELEASE, focusHold(active = true, paused = true, pausedByFocus = false))
+	}
+
+	@Test
+	fun nothingLeftToResumeReleasesEitherWay() {
+		// Otherwise a finished run keeps its request registered forever, waiting on a GAIN with an
+		// empty queue behind it.
+		assertEquals(FocusHold.RELEASE, focusHold(active = false, paused = true, pausedByFocus = true))
+		assertEquals(FocusHold.RELEASE, focusHold(active = false, paused = false, pausedByFocus = false))
+	}
+
+	@Test
+	fun aRunningQueueHoldsTheSound() {
+		assertEquals(FocusHold.ACQUIRE, focusHold(active = true, paused = false, pausedByFocus = false))
+	}
+
+	@Test
 	fun anUnknownChangeNeverSilencesTheRun() {
 		// The transient variants of GAIN land here, and none of them is a reason to stop.
 		assertEquals(FocusAction.KEEP, focusAction(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT))
