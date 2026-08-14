@@ -10,14 +10,12 @@ export interface CodexDaemonDeps {
 	daemonInstanceId: string;
 	send(message: Record<string, unknown>): void;
 	openClient?(child: CodexChild, model: string): Promise<AppServerSession>;
-	/** Turns a host session's workdir HINT into a real directory. Injected because the rule lives in
-	 * the host daemon, and a hint may be a console-picked path or a bare human label. */
+	/** A hint may be a picked path or a bare label; the rule lives in the host daemon. */
 	resolveHostCwd(hint: string | undefined): string;
 	now?(): number;
 }
 
-/** Which agent a native turn belongs to. The App Server knows nothing of agents, so every event it
- * emits is correlated back through this. */
+/** The App Server knows nothing of agents, so every event correlates back through this. */
 export interface TurnBinding {
 	ownerKey: string;
 	agentId: string;

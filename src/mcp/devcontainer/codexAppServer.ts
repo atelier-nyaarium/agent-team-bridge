@@ -27,18 +27,14 @@ export interface ThreadSettings {
 ////////////////////////////////
 //  Functions & Helpers
 
-// JSON-RPC's own code for a method the receiver does not implement. A server-initiated request that
-// reaches the unknown branch gets this rather than silence, so the App Server is never left waiting.
 const METHOD_NOT_FOUND = -32601;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 /**
- * Every server-initiated request this client answers, and the answer it always gives.
+ * Every server-initiated request, and the refusal it always gets.
  *
- * Codex asks permission for things Switchboard never grants on a caller's behalf: running a command
- * it wants approved, writing a file outside what the thread already allows, prompting a human,
- * elicitation, and app or tool approval. Each is refused in the shape that method expects, so Codex
- * proceeds within the sandbox it already has instead of stalling on an answer that never comes.
+ * Switchboard grants nothing on a caller's behalf. Each is refused in the shape that method expects,
+ * so Codex proceeds inside its existing sandbox rather than stalling.
  */
 const DECLINED_REQUESTS = new Map<string, unknown>([
 	["item/commandApproval", { decision: "denied" }],
@@ -49,11 +45,10 @@ const DECLINED_REQUESTS = new Map<string, unknown>([
 	["permission/request", { granted: false }],
 ]);
 
-// A method name is server-supplied, so it is echoed back bounded. An unbounded one would put an
-// arbitrary string of Codex's choosing into an error this side generates.
+// A server-supplied name is echoed back bounded.
 const MAX_ECHOED_METHOD = 80;
 
-/** Frame a JSON-RPC message as one line, which is the whole wire format. */
+/** One line per message is the whole wire format. */
 function frame(message: unknown): string {
 	return `${JSON.stringify(message)}\n`;
 }
@@ -71,15 +66,13 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 	}
 
 	function answerServerRequest(id: string | number, method: string | undefined): void {
-		// A Map rather than an object literal: an object would resolve a method named `constructor` or
-		// `toString` to an inherited function and answer with a body that serializes to nothing.
+		// A Map, since an object would resolve `constructor` to an inherited function.
 		const declined = method === undefined ? undefined : DECLINED_REQUESTS.get(method);
 		if (declined !== undefined) {
 			write({ jsonrpc: "2.0", id, result: declined });
 			return;
 		}
-		// Refused rather than ignored: silence would hang whatever Codex is waiting on, and guessing a
-		// permissive shape would grant something nobody reviewed.
+		// Refused, not ignored: silence hangs whatever Codex is waiting on.
 		const named = (method ?? "malformed").slice(0, MAX_ECHOED_METHOD);
 		write({ jsonrpc: "2.0", id, error: { code: METHOD_NOT_FOUND, message: `unsupported request: ${named}` } });
 	}
@@ -91,15 +84,13 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 		} catch {
 			return;
 		}
-		// `null` and a bare array both parse as valid JSON, and reading a property off either throws
-		// inside a stream handler, where an uncaught throw takes the whole daemon down.
+		// An uncaught throw in a stream handler takes the daemon down.
 		if (typeof message !== "object" || message === null || Array.isArray(message)) return;
 		const frame = message as Record<string, unknown>;
 
 		const parsed = CodexAppServerResponseSchema.safeParse(frame);
 		if (parsed.success) {
-			// Correlate on the exact id sent, never a coerced one, so a string "1" cannot settle the
-			// promise waiting on numeric 1.
+			// Never coerced: a string "1" must not settle numeric 1.
 			const waiter = typeof parsed.data.id === "number" ? pending.get(parsed.data.id) : undefined;
 			if (!waiter) return;
 			pending.delete(parsed.data.id as number);
@@ -108,8 +99,7 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			return;
 		}
 
-		// An id we minted is ours no matter how malformed the frame is. Treating it as a server request
-		// would answer the child using our own id and leave the real caller waiting out the timeout.
+		// An id we minted is ours however malformed the frame is.
 		if (typeof frame.id === "number" && pending.has(frame.id)) {
 			const waiter = pending.get(frame.id);
 			pending.delete(frame.id);
@@ -117,8 +107,7 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			return;
 		}
 
-		// Anything else carrying an id is a REQUEST, however malformed, and something is waiting on it.
-		// A well-formed method gets its decline; anything else still gets an answer.
+		// Anything else with an id is a request, and something is waiting on it.
 		if (frame.id !== undefined) {
 			answerServerRequest(
 				frame.id as string | number,
@@ -127,10 +116,8 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			return;
 		}
 		if (typeof frame.method === "string") {
-			// Queued, not called inline. Resolving a request only SCHEDULES its awaiting continuation, so
-			// a listener invoked synchronously here would run first and invert wire order whenever a reply
-			// and a notification arrive in one chunk. That is not rare: a steer's reply and its turn's own
-			// `turn/completed` routinely land together, and the inversion made the steer look undelivered.
+			// Queued, not inline: resolving a request only SCHEDULES its continuation, so an inline
+			// listener would run first and invert wire order when a reply and a notification share a chunk.
 			const notification = frame as { method: string; params?: unknown };
 			queueMicrotask(() => {
 				for (const listener of eventListeners) listener(notification);
@@ -186,9 +173,8 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 	};
 }
 
-/** The strongest tier a model offers, read per model because they differ: luna tops out at `max`
- * while others also offer `ultra`, so a fixed string would under-drive one of them. Undefined when a
- * model advertises none, which leaves the thread on that model's own default. */
+/** Per model, since they differ: luna tops out at `max` while others offer `ultra`. Undefined leaves
+ * the thread on that model's own default. */
 export function strongestEffort(model: {
 	supportedReasoningEfforts?: Array<{ reasoningEffort?: unknown }>;
 }): string | undefined {
@@ -206,9 +192,8 @@ export function strongestEffort(model: {
 /**
  * A client over one App Server child.
  *
- * Fail-closed at every edge: it refuses to hand out threads until `initialize` has completed and the
- * requested model is confirmed offered, and it answers every permission request Codex raises with a
- * refusal rather than a grant.
+ * Fail-closed at every edge: no thread before `initialize` completes and the model is confirmed
+ * offered, and every permission request is refused rather than granted.
  */
 export class CodexAppServerClient {
 	private constructor(
@@ -220,9 +205,8 @@ export class CodexAppServerClient {
 	/**
 	 * Handshake, then confirm the model.
 	 *
-	 * A model the server does not list is refused rather than falling back to the server's own default,
-	 * which would run a tier nobody asked for. `initialize` advertises no version or capabilities, so
-	 * `model/list` is the only thing there is to check compatibility against.
+	 * An unlisted model is refused rather than falling back to the server's default. `initialize`
+	 * advertises no version, so `model/list` is the only compatibility check there is.
 	 */
 	static async open(transport: AppServerTransport, requestedModel: string): Promise<CodexAppServerClient> {
 		await transport.request("initialize", {
@@ -246,19 +230,16 @@ export class CodexAppServerClient {
 		this.transport.onEvent(listener);
 	}
 
-	/** Sandbox is sent explicitly because the App Server defaults a thread to read-only, and an
-	 * approvalPolicy of "never" leaves an inherited default with no way to escalate out of it. */
+	/** Sandbox is explicit: the default is read-only, and `approvalPolicy: "never"` cannot escalate. */
 	async startThread(settings: ThreadSettings): Promise<string> {
 		const model = settings.model ?? this.defaultModel;
-		// An override is checked against the same list the default was, so a caller-supplied model can
-		// never reach thread/start unverified and quietly run a tier nobody asked for.
+		// An override is checked against the same list the default was.
 		if (!this.offered.has(model)) throw new Error(`model not offered: ${model}`);
 
 		const result = await this.transport.request("thread/start", {
 			cwd: settings.cwd,
 			model,
-			// Absent when the model advertises no tiers, so it runs at its own default rather than one
-			// this side guessed.
+			// Absent when the model advertises no tiers.
 			...(this.offered.get(model) ? { reasoningEffort: this.offered.get(model) } : {}),
 			approvalPolicy: "never",
 			sandbox: "workspace-write",
@@ -270,9 +251,8 @@ export class CodexAppServerClient {
 		await this.transport.request("thread/resume", { threadId });
 	}
 
-	/** `includeTurns` is load-bearing and NOT the default. Without it the App Server answers with an
-	 * empty `turns` array rather than an error, so reconciliation reads a well-formed reply, finds the
-	 * turn missing, and reports a completed turn as unrecoverable. */
+	/** `includeTurns` is load-bearing and NOT the default. Without it the reply is well-formed with an
+	 * empty `turns` array, and reconciliation reports a completed turn as unrecoverable. */
 	async readThread(threadId: string): Promise<unknown> {
 		return this.transport.request("thread/read", { threadId, includeTurns: true });
 	}

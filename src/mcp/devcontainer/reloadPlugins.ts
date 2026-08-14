@@ -33,11 +33,9 @@ const reloadSchema: any = ReloadPluginsSchema;
 //  Functions & Helpers
 
 function buildTmuxFn(tmuxPrefix: string): string {
-	// For docker exec, wrap the tmux binary call; for local, call tmux directly
 	if (tmuxPrefix === "tmux") {
 		return `tmux_cmd() { tmux "$@"; }`;
 	}
-	// docker exec prefix: extract the container portion
 	return `tmux_cmd() { ${tmuxPrefix} "$@"; }`;
 }
 
@@ -104,25 +102,20 @@ echo "Reload sequence complete."
 `;
 }
 
-// Write the script to a temp file and spawn it detached so it outlives the caller (the MCP tool
-// call or the host_op relay): it drives the target session for ~40s after we have returned.
+// Detached: it drives the session for ~40s after we return.
 function writeAndSpawn(script: string): string {
 	const scriptPath = path.join(os.tmpdir(), `reload-plugins-${Date.now()}.sh`);
 	fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 	const child = spawn("bash", [scriptPath], { detached: true, stdio: "ignore" });
-	// A spawn 'error' (e.g. resource exhaustion) on a child with no error listener throws as an
-	// uncaughtException; log it instead so a failed reload can never take the daemon down.
+	// An unlistened spawn error throws as an uncaughtException.
 	child.on("error", (err) => console.error("[reload-plugins] spawn failed:", err));
 	child.unref();
 	return scriptPath;
 }
 
-/** Daemon entry: drive a target session through the plugin update sequence. The host daemon runs on
- * the host, so a host target uses bare tmux and a devcontainer target reaches its tmux via docker
- * exec. Returns immediately (the script runs detached). */
+/** Daemon entry. Returns immediately; the script runs detached. */
 export function spawnReloadPlugins(target: TmuxTarget): string {
-	// The session name reaches the script as the PANE token and the container name reaches the docker
-	// exec prefix; both are shell-interpolated, so a non-slug would be an injection vector.
+	// Both names are shell-interpolated into the script.
 	assertTmuxName(target.sessionName);
 	let tmuxPrefix: string;
 	if (target.kind === "host") {
@@ -166,10 +159,8 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 
 				let tmuxPrefix: string;
 				let targetLabel: string;
-				// A self target (this process's own tmux, host or container) drives the session it actually
-				// registered under, derived from PROJECT_NAME - so a session running under a minted id
-				// reloads its own pane, not the conventional `claude` one. The cross-container team path
-				// has only the team name (no session id), so it drives that container's conventional pane.
+				// A self target reloads the pane it registered under, from PROJECT_NAME. A cross-container
+				// team has no session id, so it drives that container's conventional pane.
 				let sessionName: string;
 
 				if (inContainer) {
@@ -177,8 +168,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 					targetLabel = "self (container)";
 					sessionName = selfSessionTarget().sessionName;
 				} else if (args.team) {
-					// team is shell-interpolated into the docker exec prefix; assert the slug here too
-					// (the daemon path spawnReloadPlugins already does), or a crafted name injects.
+					// Shell-interpolated into the docker exec prefix.
 					assertTmuxName(args.team);
 					const container = `${args.team}_devcontainer-dev-1`;
 					tmuxPrefix = `docker exec -u vscode "${container}" tmux`;
@@ -190,9 +180,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 					sessionName = selfSessionTarget().sessionName;
 				}
 
-				// The session name is interpolated into the generated script's PANE token, so assert the
-				// slug (the daemon path spawnReloadPlugins and tmuxCore.paneTarget assert it too). The self
-				// paths derive it from PROJECT_NAME, which a hand-set composite could make non-slug.
+				// A hand-set composite could make PROJECT_NAME's session non-slug.
 				assertTmuxName(sessionName);
 				const scriptPath = writeAndSpawn(buildScript(tmuxPrefix, sessionName));
 

@@ -112,9 +112,7 @@ const PLUGINS = [
 
 const MARKETPLACE_SOURCE = "atelier-nyaarium/claude-marketplace";
 
-// Sets autoUpdate:true on the marketplace entry after `claude plugin install` creates it.
-// Everything else (enabledPlugins, marketplace source, installed_plugins.json) is written
-// By the CLI. This patch sets the needed autoUpdate flag.
+// The CLI writes everything else.
 const AUTOUPDATE_PATCH = JSON.stringify({
 	extraKnownMarketplaces: {
 		"atelier-nyaarium": { autoUpdate: true },
@@ -149,8 +147,7 @@ function provisionPluginSettings(projectPath: string): void {
 	const settingsPath = "/home/vscode/.claude/settings.json";
 	const claudeJson = "/home/vscode/.claude.json";
 
-	// Step 1: CLI install (idempotent; adds marketplace if missing, then installs each plugin).
-	// These write to installed_plugins.json, known_marketplaces.json, and flip enabledPlugins in settings.json.
+	// Idempotent: adds the marketplace if missing, then installs each plugin.
 	const installSteps = [
 		`claude plugin marketplace add ${MARKETPLACE_SOURCE} 2>/dev/null || true`,
 		...PLUGINS.map((p) => `claude plugin install ${p.name}@${p.marketplace}`),
@@ -161,8 +158,7 @@ function provisionPluginSettings(projectPath: string): void {
 		timeout: 120_000,
 	});
 
-	// Step 2: jq-merge the autoUpdate flag into the marketplace entry the CLI just wrote,
-	// plus the nyaascripts mcpServer into ~/.claude.json.
+	// jq-merge autoUpdate into the entry the CLI wrote, and nyaascripts into ~/.claude.json.
 	const autoUpdateJq = `'(if . == null then {} else . end) * ${AUTOUPDATE_PATCH.replace(/'/g, "'\\''")}'`;
 	const settingsCmd = [
 		`(cat ${settingsPath} 2>/dev/null || echo '{}') | jq ${autoUpdateJq} > /tmp/claude-settings.json`,

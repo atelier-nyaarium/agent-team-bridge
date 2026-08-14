@@ -9,9 +9,7 @@ const CompactSessionSchema = z.object({
 	instructions: z
 		.string()
 		.min(1)
-		// Capped well above any real compaction prompt but below ARG_MAX, since the text now rides as a
-		// single argv element. Null bytes are rejected: argv is null-terminated, so a stray NUL would
-		// silently truncate the line (the old base64 path masked this).
+		// One argv element, so it is capped below ARG_MAX and a NUL would truncate the line.
 		.max(16384)
 		.refine((v) => !/[\r\n]/.test(v) && !v.includes("\u0000"), {
 			message: "instructions must be a single line (no newlines or null bytes)",

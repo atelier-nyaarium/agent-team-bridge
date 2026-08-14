@@ -38,11 +38,9 @@ function describe(error: unknown): string {
 //  Class
 
 /**
- * The daemon's half of Codex delegation: one supervised App Server per target, and the reliable
- * stream back to the gateway.
+ * One supervised App Server per target, and the reliable stream back to the gateway.
  *
- * It owns no policy. Every guardrail a caller wanted is in the prompt, and every decision about what
- * an owner is allowed to reach was already made by the gateway before a command arrived here.
+ * Owns no policy: every guardrail is in the prompt, and every access decision was the gateway's.
  */
 export class CodexDaemonService {
 	private readonly core: AgentDaemonCore<TargetSession>;
@@ -57,14 +55,12 @@ export class CodexDaemonService {
 		});
 	}
 
-	/** What this daemon is and which children are live, sent on every authenticated reconnect. The
-	 * gateway decides from it what still needs reconciling; the daemon never asks on its own. */
+	/** What this daemon is and which children are live. The gateway decides what needs reconciling. */
 	hello(): Record<string, unknown> {
 		return this.core.hello();
 	}
 
-	/** Re-send everything the gateway has not committed, oldest first, so an ordering the reducer
-	 * depends on survives the reconnect that interrupted it. */
+	/** Oldest first, so an ordering the reducer depends on survives the reconnect. */
 	replay(): void {
 		this.core.replay();
 	}
@@ -74,12 +70,7 @@ export class CodexDaemonService {
 		this.core.acknowledge(ack);
 	}
 
-	/**
-	 * Run one gateway command.
-	 *
-	 * Commands for one agent are serialized: a steer and an interrupt for the same thread racing each
-	 * other would each read a turn state the other is about to change.
-	 */
+	/** Serialized per agent: a racing steer and interrupt each read state the other is changing. */
 	handleCommand(raw: unknown): void {
 		const parsed = CodexDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
@@ -107,8 +98,7 @@ export class CodexDaemonService {
 			case "reconcile":
 				return this.runReconcile(command);
 			default:
-				// An unmodelled kind must not reach a branch that starts work. Nothing here is safe to
-				// guess at, so it is refused in the shape the gateway already handles.
+				// An unmodelled kind must not reach a branch that starts work.
 				return this.reject(command as CodexDaemonCommand, "unsupported command");
 		}
 	}
@@ -118,15 +108,13 @@ export class CodexDaemonService {
 		const session = await this.session(resolved);
 		if (!session) return this.reject(command, "execution target is unavailable");
 
-		// A caller-chosen model is checked against the App Server's own list inside startThread, so an
-		// unoffered one is refused rather than silently running a tier nobody asked for.
+		// startThread checks the model against the server's own list.
 		const threadId = await session.client.startThread({ cwd: resolved.cwd, model: command.model });
 		const binding: TurnBinding = { ownerKey: command.ownerKey, agentId: command.agentId, threadId };
 		session.threads.set(threadId, binding);
 		const turnId = await this.beginTurn(session, binding, command.prompt);
-		// A refusal tells the gateway the start never reached an App Server, which is what lets it mark
-		// the agent unavailable with nothing to reconcile. That is only true while no turn exists, so
-		// this branch is taken ONLY after asking App Server whether one does.
+		// A refusal marks the agent unavailable with nothing to reconcile, so it is only reached after
+		// asking App Server whether a turn exists.
 		if (!turnId) return this.reject(command, "codex thread produced no turn");
 		this.emitReceipt(session, {
 			kind: "accepted",
@@ -144,10 +132,8 @@ export class CodexDaemonService {
 	/**
 	 * Start a turn, and if that call fails, ask App Server whether one started anyway.
 	 *
-	 * A write that reached the server but whose reply did not reach here looks identical to a write
-	 * that never landed. Only the server can tell them apart, and reporting a live turn as a refusal
-	 * would strand it: the gateway marks a refused start unavailable, which is excluded from
-	 * reconciliation, so nothing would ever come looking for it again.
+	 * A lost reply looks identical to a write that never landed, and only the server can tell them
+	 * apart. Reporting a live turn as a refusal strands it: a refused start is never reconciled.
 	 */
 	private async beginTurn(session: TargetSession, binding: TurnBinding, prompt: string): Promise<string | undefined> {
 		try {
@@ -163,9 +149,8 @@ export class CodexDaemonService {
 	}
 
 	/**
-	 * What App Server says is running on a thread. Three answers, like `outcomeFromRead`, and for the
-	 * same reason: "there is no turn" and "I could not ask" send the callers in opposite directions,
-	 * and one of those directions starts a second turn on a thread that is still working.
+	 * Three answers, like `outcomeFromRead`. "There is no turn" and "I could not ask" send callers in
+	 * opposite directions, and one of those starts a second turn on a thread still working.
 	 */
 	private async runningTurn(
 		session: TargetSession,
@@ -191,8 +176,7 @@ export class CodexDaemonService {
 			threadId: command.threadId,
 		};
 		session.threads.set(command.threadId, binding);
-		// A steer needs the exact turn the gateway believed was running. A turn this session no longer
-		// holds has already settled, which is the one case that legitimately becomes a new turn.
+		// A turn this session no longer holds has settled, which is the one case that becomes a new turn.
 		const expectedTurnId = command.expectedTurnId;
 		if (expectedTurnId !== undefined && session.turns.has(expectedTurnId)) {
 			try {
@@ -210,10 +194,8 @@ export class CodexDaemonService {
 				});
 				return;
 			} catch (error) {
-				// The turn finishing mid-steer is the ONLY failure that becomes a new turn, and only App
-				// Server saying so makes it that. A read that could not answer is refused along with every
-				// other unexplained error: starting a turn against a thread that may still be working
-				// would run the prompt twice, with write and network access, concurrently.
+				// Only App Server saying the turn ended makes this a new turn. Otherwise the prompt could
+				// run twice concurrently, with write and network access.
 				const running = await this.runningTurn(session, command.threadId);
 				if (running.known !== "none") return this.reject(command, describe(error));
 				session.turns.delete(expectedTurnId);
@@ -253,8 +235,7 @@ export class CodexDaemonService {
 			this.emitReceipt(session, { kind: "interruptFailed", ...shared, ok: false, error: describe(error) });
 			return;
 		}
-		// Delivered, not ended. The turn's own terminal is what says how it actually finished, which
-		// may still be a completion that won the race.
+		// Delivered, not ended: the turn's own terminal says how it finished.
 		this.emitReceipt(session, { kind: "interruptResult", ...shared, ok: true });
 	}
 
@@ -268,9 +249,7 @@ export class CodexDaemonService {
 		};
 		session.threads.set(command.threadId, binding);
 
-		// App Server is the authority on what this turn is doing. Its silence is reported as silence:
-		// an unreadable thread leaves the turn state OFF the receipt, which lands the record on
-		// recovering and leaves it eligible to be asked again, rather than inventing a failure.
+		// Silence is reported as silence: no turn state on the receipt, so the record stays askable.
 		let observed: ReadOutcome = { known: "unknown" };
 		if (command.turnId) {
 			try {
@@ -284,12 +263,11 @@ export class CodexDaemonService {
 				observed = { known: "unknown" };
 			}
 		}
-		// A turn App Server reports as running is bound again, so its own events correlate back to this
-		// agent under the new generation.
+		// Rebound, so its events correlate under the new generation.
 		if (observed.known === "running" && command.turnId) session.turns.set(command.turnId, binding);
 
-		// The receipt installs the fence FIRST, so the terminal that follows is measured against this
-		// generation instead of the dead one the gateway was still holding.
+		// The receipt installs the fence FIRST, so the terminal after it is measured against this
+		// generation, not the dead one.
 		this.emitReceipt(session, {
 			kind: "reconciled",
 			requestId: command.requestId,
@@ -311,27 +289,23 @@ export class CodexDaemonService {
 	}
 
 	/**
-	 * The target's session, opened on first use. Null means the target could not be reached, which the
-	 * caller reports as a refusal rather than retrying here.
+	 * Opened on first use. Null means unreachable, which the caller reports as a refusal.
 	 *
-	 * Commands serialize per AGENT, so two agents sharing a target arrive here concurrently. The open
-	 * is therefore shared through a per-target promise: without it both would build a client over the
-	 * same child, giving one process two readers of its stdout, two JSON-RPC id spaces that can settle
-	 * each other's requests, and two event counters both starting at zero on one fenced stream.
+	 * Commands serialize per AGENT, so two agents sharing a target arrive concurrently. The open is
+	 * shared per target: two clients over one child would give it two stdout readers, two colliding
+	 * JSON-RPC id spaces, and two event counters both starting at zero on one fenced stream.
 	 */
 	private session(target: AgentResolvedTarget): Promise<TargetSession | null> {
 		return this.core.acquireSession(target, (resolved, lease) => this.open(resolved, lease));
 	}
 
 	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
-		// A new generation is a different child. Nothing the old one knew about threads or turns
-		// survives it, so the session is rebuilt rather than carried over.
+		// A new generation is a different child, so nothing is carried over.
 		const opened = this.deps.openClient ?? defaultOpenClient;
 		let client: AppServerSession;
 		try {
-			// The client's default, used only when a start names no model. A per-agent choice belongs on
-			// the tool call, not in this process's environment: a model is a property of the thread being
-			// opened, and one child serves threads that may each want a different one.
+			// Used only when a start names no model. One child serves threads that may each want a
+			// different one, so the choice belongs on the call.
 			client = await opened(lease.child, CODEX_DEFAULT_MODEL);
 		} catch {
 			this.deps.targets.release(target.targetId);
@@ -343,8 +317,7 @@ export class CodexDaemonService {
 			generation: lease.generation,
 			client,
 			tracker: new CodexTurnTracker((item) => this.onCommentary(target.targetId, item)),
-			// Restarts from zero with the child, which is why every fence carries the generation that
-			// numbered it.
+			// Restarts from zero with the child, hence the generation on every fence.
 			nextEventId: 0,
 			turns: new Map(),
 			threads: new Map(),
@@ -393,8 +366,7 @@ export class CodexDaemonService {
 				this.emitEvent(session, {
 					...base,
 					state: "completed",
-					// An empty answer is a real outcome for a turn that only acted. Omitting the field would
-					// make the event unparseable and lose the terminal entirely.
+					// A turn that only acted has an empty answer. Omitting it loses the terminal.
 					finalResponse: outcome.finalResponse ?? "",
 					finalItemId: outcome.finalItemId,
 				});
@@ -425,8 +397,7 @@ export class CodexDaemonService {
 		);
 	}
 
-	/** A refusal carries no generation, so it is sent once. An owner whose refusal is lost sees the
-	 * operation stay unproven, which is what its wait budget already means. */
+	/** No generation, so it is sent once. A lost refusal leaves the operation unproven. */
 	private reject(command: CodexDaemonCommand, error: string): void {
 		const message = {
 			type: "codex_receipt",
@@ -439,9 +410,7 @@ export class CodexDaemonService {
 			operationId: command.kind === "reconcile" ? undefined : command.operationId,
 			error: sanitizeCodexErrorText(error) || "codex command failed",
 		};
-		// Logged as well as sent. A refusal is the daemon's whole explanation for why an owner's agent
-		// went unavailable, and without a local trace the only symptom is a result envelope naming no
-		// cause; that cost a full debugging round the first time it fired.
+		// Logged too: without it, an unavailable agent has no local trace of why.
 		console.error(`[codex-daemon] refused ${command.kind} for ${command.agentId}: ${message.error}`);
 		if (!CodexDaemonReceiptSchema.safeParse(message).success) return;
 		this.deps.send(message);

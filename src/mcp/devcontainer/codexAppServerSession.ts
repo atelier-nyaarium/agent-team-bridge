@@ -4,8 +4,7 @@ import type { CodexChild } from "./codexTargets.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The App Server calls this service makes. Named separately from the client class so a test can
- * stand in for a child process without one. */
+/** Separate from the client class so a test can stand in without a child process. */
 export interface AppServerSession {
 	onEvent(listener: (message: { method: string; params?: unknown }) => void): void;
 	startThread(settings: { cwd: string; model?: string }): Promise<string>;

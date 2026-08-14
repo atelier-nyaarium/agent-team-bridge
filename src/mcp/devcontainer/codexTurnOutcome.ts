@@ -4,27 +4,22 @@ import type { TurnOutcome } from "./codexTurnTracker.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** How a turn ended. The one shape both the live tracker and a post-restart `thread/read` produce, so
- * a rebuilt terminal and a witnessed one are the same message. */
+/** One shape for both the live tracker and a post-restart `thread/read`. */
 export type TerminalOutcome =
 	| { status: "completed"; finalResponse?: string; finalItemId?: string }
 	| { status: "failed"; error: string }
 	| { status: "interrupted" };
 
 /**
- * What App Server says about one turn.
- *
- * Three answers, not two. Collapsing `running` and `unknown` into a single absent outcome is what
- * lets a live turn be reported as a failed one: the caller cannot tell "App Server says it is still
- * going" from "App Server could not tell me", and the plan requires opposite handling for each.
+ * Three answers, not two. Collapsing `running` and `unknown` reports a live turn as a failed one:
+ * "still going" and "could not tell me" need opposite handling.
  */
 export type ReadOutcome = { known: "settled"; outcome: TerminalOutcome } | { known: "running" } | { known: "unknown" };
 
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The outcome a settled turn had, rebuilt from what `thread/read` still holds. Nothing is invented:
- * a turn whose items are gone reports completed with no answer rather than a guessed one. */
+/** Rebuilt from what `thread/read` still holds. A turn whose items are gone reports no answer. */
 export function outcomeFromRead(result: unknown, threadId: string, turnId: string): ReadOutcome {
 	const parsed = CodexAppServerThreadReadResultSchema.safeParse(result);
 	if (!parsed.success || parsed.data.thread.id !== threadId) return { known: "unknown" };
@@ -38,10 +33,8 @@ export function outcomeFromRead(result: unknown, threadId: string, turnId: strin
 		(item): item is { type: "agentMessage"; id: string; text: string; phase?: unknown } =>
 			item.type === "agentMessage",
 	);
-	// The same three-way classification the live tracker uses, so a turn rebuilt after a restart and
-	// one witnessed as it ran cannot disagree about which item was the answer. Commentary is excluded
-	// from the fallback: handing narration back as a final response is a WRONG answer, where handing
-	// back none is merely an empty one.
+	// The tracker's own classification, so a rebuilt turn agrees with a witnessed one. Commentary is
+	// excluded: narration as a final response is a wrong answer, none is an empty one.
 	const classified = messages.map((item) => ({ item, kind: classifyCodexItemPhase(item.phase) }));
 	const final =
 		classified.findLast((entry) => entry.kind === "answer")?.item ??
