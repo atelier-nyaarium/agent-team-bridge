@@ -275,6 +275,11 @@ class ChatRepository(
 	// terminal, so it should not falsely claim the board's ramped cadence before the UI ever renders.
 	@Volatile internal var currentFocus: FocusIntent = FocusIntent(screen = "background")
 
+	// The last screen actually on show, re-declared when the app comes back. Without it, onBackground's
+	// own declaration sticks: the same screen is still composed on return, so nothing re-declares and
+	// every daemon-derived chip on it sits at the background cadence.
+	@Volatile private var lastVisibleFocus: FocusIntent = FocusIntent(screen = "board")
+
 	/** The poll loop and mailbox drain (see PollDrain.kt): the loop lifecycle, the plane version
 	 * cursors and both drain-gate subscriber lists live there; it reaches back into this class the
 	 * way the federation Ops delegates do. */
@@ -294,6 +299,7 @@ class ChatRepository(
 		visible = true
 		drain.onForegroundResume()
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
+		declareFocus(lastVisibleFocus)
 		drain.kickPoll()
 	}
 
@@ -314,11 +320,12 @@ class ChatRepository(
 	 * focus than the one already declared, not a redundant re-declare of the same value) interrupts
 	 * an in-flight held poll so the Gateway's intent tracker - and the host daemon's derivation
 	 * cadence it drives - ramps up within about one RTT instead of waiting out the remainder of the
-	 * current hold (see pollRacingFocusChange). MainActivity/TerminalView call this on every
-	 * relevant UI transition (the board shown, a terminal opened/closed); onBackground calls it too. */
+	 * current hold (see pollRacingFocusChange). Every screen declares its own on show; onBackground
+	 * declares background, and [onForeground] re-declares whatever was on screen before it. */
 	fun declareFocus(focus: FocusIntent) {
 		val prior = currentFocus
 		currentFocus = focus
+		if (focus.screen != "background") lastVisibleFocus = focus
 		if (prior != focus) drain.interrupt()
 	}
 

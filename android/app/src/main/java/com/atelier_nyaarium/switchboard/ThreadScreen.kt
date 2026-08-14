@@ -185,6 +185,12 @@ fun ThreadScreen(
 		mutableStateOf(terminal.eligible && booting && terminal.needsLogin)
 	}
 	if (terminalMode) BackHandler { terminalMode = false }
+	// The chat half shows daemon-derived state too (the presence chip), and closing the terminal
+	// declares background on the way out. Without this the chip sits at the background cadence until
+	// the user navigates all the way back to the session list.
+	LaunchedEffect(terminalMode) {
+		if (!terminalMode) onFocusChange(FocusIntent(screen = "board"))
+	}
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) composer.onAddFiles(uris)
 	}

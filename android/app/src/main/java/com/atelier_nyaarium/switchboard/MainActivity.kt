@@ -226,9 +226,8 @@ fun App(
 	// Gateway's intent tracker ramps every LIVE session's daemon-derivation cadence while this
 	// device is watching, so board tiles reflect a working/needsLogin flip from the presence
 	// plane (Team.working/needsLogin) with no per-session peek of this device's own. Superseded by
-	// TerminalView's own terminal-focus declaration while a specific session's terminal is open;
-	// left alone (not reset here) while a non-terminal thread is open, since nothing daemon-drivable
-	// is showing either way.
+	// TerminalView's own terminal-focus declaration while a specific session's terminal is open; an
+	// open thread declares its own, since its presence chip is daemon-derived as well.
 	LaunchedEffect(openTeam) {
 		if (openTeam == null) repo.declareFocus(FocusIntent(screen = "board"))
 	}

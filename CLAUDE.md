@@ -708,6 +708,11 @@ permissions for the supervised target.
   PAYLOAD and can change while the row is on screen has to be folded in, or the row keeps stale
   content forever. State pushed over the JS bridge instead (`window.thread.*` mutating in place) is
   outside it by design and needs no fold.
+- **Working / needs-login** (`ChatState.working`): the presence plane FIRST, a local peek only as the
+  fallback. A peek lands solely while that session's terminal is on screen, so reading it first froze
+  the thread's chip at whatever it saw last time. Every screen also declares its own focus intent, and
+  `onForeground` re-declares the last one, or the cadence those chips arrive at sits at the background
+  floor while a thread is open.
 - **Session card rungs** (`SessionCardPreview.kt`): a PURE function decides which of the headline,
   board line and snippet show and what each is stamped with; the composable paints what it is handed
   and derives nothing. It lives outside `SessionCard` because the inline version was patched twice
