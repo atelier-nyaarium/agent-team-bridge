@@ -314,18 +314,18 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	private fun publishTransport() {
 		val repo = Repo.get(this)
 		val (active, paused) = repo.playback.transportState()
-		// Held exactly while the app INTENDS to make sound, which is what makes a pause give the user's
-		// music back - holding through a pause defeats the transient gain the whole design rests on.
+		// Held while the app intends to make sound, which is what makes a hand pause give the user's
+		// music back. A pause the FOCUS system caused keeps it instead - see focusHold.
 		//
 		// A refusal does NOT pause. It cannot: a refused request registers no listener, so no GAIN can
 		// ever arrive to lift the pause, and the queue sits there full and silent with a play button the
 		// user never pressed. Speaking without focus for a moment is recoverable; a run that can never
 		// start is not. This retries on every event instead, so focus and its listener are picked up the
 		// moment they are grantable.
-		if (active && !paused) {
-			focus.acquire()
-		} else {
-			focus.release()
+		when (focusHold(active, paused, focus.holdingForResume)) {
+			FocusHold.ACQUIRE -> focus.acquire()
+			FocusHold.KEEP -> Unit
+			FocusHold.RELEASE -> focus.release()
 		}
 		transport?.publish(active, paused, null)
 		val manager = getSystemService(NotificationManager::class.java)

@@ -26,6 +26,9 @@ internal enum class FocusAction {
 	REGAINED,
 }
 
+/** What the transport should do with the sound. */
+internal enum class FocusHold { ACQUIRE, KEEP, RELEASE }
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -41,6 +44,19 @@ internal fun focusAction(change: Int): FocusAction = when (change) {
 	AudioManager.AUDIOFOCUS_LOSS -> FocusAction.STOP
 	AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> FocusAction.PAUSE
 	else -> FocusAction.KEEP
+}
+
+/**
+ * Whether the transport should be holding the sound, from the state every surface already reads.
+ *
+ * A HAND pause releases, which is what gives the user's music back mid-run. A FOCUS pause keeps the
+ * request: releasing it drops the listener, so the GAIN that would lift that pause never arrives and
+ * the run sits paused until someone presses play. With nothing left to resume, both release.
+ */
+internal fun focusHold(active: Boolean, paused: Boolean, pausedByFocus: Boolean): FocusHold = when {
+	active && !paused -> FocusHold.ACQUIRE
+	active && pausedByFocus -> FocusHold.KEEP
+	else -> FocusHold.RELEASE
 }
 
 ////////////////////////////////
@@ -81,6 +97,10 @@ class SpeechFocus(
 	// ending, and an unplugged headset must not resume onto the loudspeaker when focus returns.
 	private var pausedByFocus = false
 
+	/** Whether a pause of ours is waiting on a GAIN to lift it, which is what [focusHold] decides
+	 * against: releasing the request in that state drops the listener that resume depends on. */
+	val holdingForResume: Boolean get() = pausedByFocus
+
 	private val noisy = object : BroadcastReceiver() {
 		override fun onReceive(context: Context?, intent: Intent?) {
 			if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
@@ -98,6 +118,9 @@ class SpeechFocus(
 		if (held) return true
 		val req = request ?: build().also { request = it }
 		held = audio.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+		// Speaking again leaves no pause of ours to undo. A stale arm would resume the run on a GAIN
+		// the user had already taken over from by pressing play.
+		if (held) pausedByFocus = false
 		// Registered even on refusal. The unplug guard protects whatever is routed to the headset,
 		// which on a refusal is somebody else's audio and no less worth stopping.
 		registerNoisy()
