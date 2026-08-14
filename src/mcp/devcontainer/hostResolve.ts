@@ -186,6 +186,16 @@ export function buildLaunchCommand(
 }
 
 ////////////////////////////////
+//  First-launch greeting
+
+export const FIRST_LAUNCH_GREETING = "welcome, see your switchboard capabilities";
+
+// Wake reports created too.
+export function shouldGreetLaunch(opts: { created: boolean; resumeSessionId?: string; ready: boolean }): boolean {
+	return opts.created && opts.ready && !opts.resumeSessionId;
+}
+
+////////////////////////////////
 //  Watch target resolution
 
 // The composite-parsing mirror of handleWake's own target resolution, without any container

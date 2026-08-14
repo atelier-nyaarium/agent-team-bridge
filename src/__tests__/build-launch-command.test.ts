@@ -7,6 +7,7 @@ import {
 	listHostDirs,
 	resolveHostWorkdir,
 	resolveWatchTarget,
+	shouldGreetLaunch,
 } from "../mcp/devcontainer/hostResolve.js";
 
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
@@ -174,5 +175,25 @@ describe("resolveWatchTarget", () => {
 	it("refuses a malformed (non-slug) project or session segment", () => {
 		expect(resolveWatchTarget("Recipe App.scratch")).toBeUndefined();
 		expect(resolveWatchTarget("recipe-app.$(rm -rf)")).toBeUndefined();
+	});
+});
+
+describe("shouldGreetLaunch", () => {
+	it("greets a first-time create", () => {
+		expect(shouldGreetLaunch({ created: true, ready: true })).toBe(true);
+	});
+
+	it("skips a reattach", () => {
+		expect(shouldGreetLaunch({ created: false, ready: true })).toBe(false);
+	});
+
+	it("skips a wake resuming a transcript", () => {
+		expect(
+			shouldGreetLaunch({ created: true, ready: true, resumeSessionId: "12345678-1234-1234-1234-123456789abc" }),
+		).toBe(false);
+	});
+
+	it("skips a pane with no composer", () => {
+		expect(shouldGreetLaunch({ created: true, ready: false })).toBe(false);
 	});
 });

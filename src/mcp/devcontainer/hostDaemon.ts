@@ -23,12 +23,14 @@ import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import {
 	buildLaunchCommand,
+	FIRST_LAUNCH_GREETING,
 	findProjectPath,
 	listHostDirs,
 	resolveHostWorkdir,
 	resolveWatchTarget,
 	scanDevcontainerProjects,
 	setProjectDirs,
+	shouldGreetLaunch,
 } from "./hostResolve.js";
 import { PresenceScheduler, type WatchEntry } from "./presenceScheduler.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
@@ -241,6 +243,19 @@ interface WakeMessage {
 	sessionToken?: string;
 }
 
+// Never blocks the reply.
+function greetFreshLaunch(
+	target: TmuxTarget,
+	opts: { created: boolean; resumeSessionId?: string; ready: boolean },
+): void {
+	if (!shouldGreetLaunch(opts)) return;
+	console.error(`[host-wake] greeting freshly created session ${target.sessionName}`);
+	void sendText(target, FIRST_LAUNCH_GREETING).catch((err) => {
+		const message = err instanceof Error ? err.message : String(err);
+		console.error(`[host-wake] failed to greet ${target.sessionName}: ${message}`);
+	});
+}
+
 async function handleWake(msg: WakeMessage): Promise<void> {
 	// The composite carries (project, session); a bare name defaults the session to "claude". Both
 	// segments are interpolated into tmux/shell commands, so reject a non-slug before launching.
@@ -289,6 +304,8 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 					res = await awaitReady(target);
 				}
 			}
+			// Original ensureSession, not relaunch.
+			greetFreshLaunch(target, { created, resumeSessionId: msg.resumeSessionId, ready: res.ready });
 			const live = res.ready || isAgentWorking(res.screen);
 			if (res.limit) {
 				console.error(
@@ -345,6 +362,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			lastScreen = res.screen;
 			launchAlive = res.alive;
 			limit = res.limit;
+			greetFreshLaunch(target, { created, resumeSessionId: msg.resumeSessionId, ready: res.ready });
 			if (limit)
 				console.error(
 					`[host-wake] ${msg.team} hit a usage limit: ${limit.headline ?? "no headline on screen"}`,
@@ -399,9 +417,11 @@ const hostOpRunner = createHostOpRunner({
 			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
 		);
 		if (created) {
-			void awaitReady(target).catch(() => {
-				// best-effort menu-clearing; a failure self-heals on the next launch
-			});
+			void awaitReady(target)
+				.then((res) => greetFreshLaunch(target, { created, resumeSessionId, ready: res.ready }))
+				.catch(() => {
+					// best-effort menu-clearing; a failure self-heals on the next launch
+				});
 		}
 	},
 	reloadPlugins: async (target) => {
