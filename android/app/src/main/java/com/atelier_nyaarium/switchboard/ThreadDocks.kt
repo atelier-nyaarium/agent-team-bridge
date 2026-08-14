@@ -93,20 +93,13 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 	}
 }
 
-/**
- * Dock for an armed goal: what will be typed, and which half of the wait it is in. A plain sibling in
- * ThreadScreen's Column like [ScheduledSendDock], but deliberately NOT a composer replacement - the
- * message it rides on is already gone, so there is nothing to stop the owner saying more meanwhile.
- *
- * The second line reads the phase off the record's own instants rather than a stored label, so a dock
- * drawn from a restored record cannot describe a phase the driver is no longer in.
- */
+/** Dock for an armed goal, showing what will be typed. Sibling of [ScheduledSendDock], but never a
+ * composer replacement: the message it rides on is already gone. */
 @Composable
 fun GoalDock(rec: PendingGoal, onCancel: () -> Unit) {
 	Surface(
 		modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-		// The same container as ScheduledSendDock, deliberately: these are the same KIND of thing (a
-		// pending intent stacked above the composer), and the error container sits inches below.
+		// Same container as ScheduledSendDock: same kind of thing, and the error one sits just below.
 		color = MaterialTheme.colorScheme.secondaryContainer,
 		shape = MaterialTheme.shapes.medium,
 	) {
@@ -125,7 +118,7 @@ fun GoalDock(rec: PendingGoal, onCancel: () -> Unit) {
 					overflow = TextOverflow.Ellipsis,
 				)
 				Text(
-					if (rec.replyAt == null) "Waiting for a reply" else "Waiting for the terminal to go idle",
+					"Waiting for its terminal",
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSecondaryContainer,
 				)

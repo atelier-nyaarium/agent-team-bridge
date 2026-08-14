@@ -130,12 +130,9 @@ async function formatResult(
 		if (body) parts.push(`\n${body}`);
 	}
 
-	// A POLLED reply names its attachments and cannot fetch them. The stored copy deliberately holds
-	// no reference (see stripFileRefs: a channel entry outlives every judgement made when it was
-	// sent), which leaves naming them the most this branch can honestly do. Saying so
-	// is the point - reporting "carried no bytes" would be a lie about the sender and would stop the
-	// agent asking for the one thing that does recover them. The live push path carries full
-	// references and materializes normally.
+	// A POLLED reply names its attachments and cannot fetch them: the stored copy holds no reference
+	// (see stripFileRefs). Naming them is the honest report, and "carried no bytes" would stop the
+	// agent asking for the one thing that recovers them. The live push path materializes normally.
 	const attached = result.files ? dropReferenceArtifacts(result.files) : [];
 	if (attached.length > 0) {
 		parts.push(`\nAttachments on this reply (a poll recovers names only; ask for a re-send to get the bytes):`);

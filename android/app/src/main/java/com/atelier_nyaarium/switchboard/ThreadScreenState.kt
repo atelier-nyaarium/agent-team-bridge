@@ -37,13 +37,11 @@ data class ScheduledSendState(
 	val onCancel: () -> Unit,
 )
 
-/** This team's armed goal: the banked record driving the dock, and its lifecycle. */
+/** This team's armed goal: the record driving the dock, and its lifecycle. */
 data class GoalState(
-	/** At most one armed goal per team, null otherwise. */
 	val record: PendingGoal?,
-	/** suspend + Boolean: arming SENDS the composed message, so the caller must await the real
-	 * outcome before clearing the composer - a failed send would otherwise destroy what was typed.
-	 * Takes the goal and the message separately; only the goal is typed into the pane. */
+	/** suspend + Boolean: arming SENDS, so the caller must await the outcome before clearing the
+	 * composer. Only the goal is typed into the pane; the rest is the message. */
 	val onArm: suspend (goal: String, text: String, uris: List<Uri>) -> Boolean,
 	val onCancel: () -> Unit,
 )

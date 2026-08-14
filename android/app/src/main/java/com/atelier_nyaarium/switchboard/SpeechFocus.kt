@@ -8,6 +8,44 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 
+////////////////////////////////
+//  Interfaces & Types
+
+/** What a focus change means for a run. */
+internal enum class FocusAction {
+	/** Keep speaking. */
+	KEEP,
+
+	/** Pause, and resume when focus comes back. */
+	PAUSE,
+
+	/** Pause and give the request up: whatever took the sound means to keep it. */
+	STOP,
+
+	/** Focus is back. */
+	REGAINED,
+}
+
+////////////////////////////////
+//  Functions & Helpers
+
+/**
+ * Pure so every branch is testable without an AudioManager.
+ *
+ * A DUCKABLE loss keeps speaking. It is what a notification ping raises, and pausing on it killed
+ * every run: the transport releases focus while paused, so no GAIN could arrive to lift it, and
+ * autoplay is triggered by the same arriving message that pings.
+ */
+internal fun focusAction(change: Int): FocusAction = when (change) {
+	AudioManager.AUDIOFOCUS_GAIN -> FocusAction.REGAINED
+	AudioManager.AUDIOFOCUS_LOSS -> FocusAction.STOP
+	AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> FocusAction.PAUSE
+	else -> FocusAction.KEEP
+}
+
+////////////////////////////////
+//  Class
+
 /**
  * The right to speak out loud, and the duty to stop.
  *
@@ -18,10 +56,7 @@ import android.media.AudioManager
  * TRANSIENT gain, because a run speaks and ends - permanent gain stops the user's music for good
  * rather than letting it come back when the queue drains.
  *
- * Every loss PAUSES, including the duckable one. That is the explicit choice the plan leaves open:
- * with `CONTENT_TYPE_SPEECH` the system does not auto-duck, and ducking speech underneath a
- * navigation prompt leaves two voices talking at once, which is worse than a gap. A pause holds the
- * queue intact and the run resumes when focus returns.
+ * What each loss means is [focusAction]'s call.
  *
  * Unplugging headphones is not a focus change at all, so it needs its own receiver. Without it, audio
  * routed to a headset re-routes to the phone's speaker and keeps reading agent messages aloud into
@@ -89,23 +124,23 @@ class SpeechFocus(
 			.build()
 
 	private fun onFocusChange(change: Int) {
-		when (change) {
-			AudioManager.AUDIOFOCUS_GAIN -> {
+		when (focusAction(change)) {
+			FocusAction.KEEP -> Unit
+			FocusAction.REGAINED -> {
 				held = true
 				if (!pausedByFocus) return
 				pausedByFocus = false
 				onResume()
 			}
-			// Permanent. Whatever took the sound means to keep it, so give the request up rather than
-			// holding a dead one - otherwise the next acquire believes it still owns focus it lost.
-			AudioManager.AUDIOFOCUS_LOSS -> {
+			// Holding a dead request would make the next acquire believe it still owns the sound.
+			FocusAction.STOP -> {
 				held = false
 				pausedByFocus = false
 				request?.let { audio.abandonAudioFocusRequest(it) }
 				request = null
 				onPause()
 			}
-			AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+			FocusAction.PAUSE -> {
 				held = false
 				// Only ours to undo if it was not already held. Setting this unconditionally meant a call
 				// arriving during a hand pause armed a resume, and the phone spoke when the call ended.

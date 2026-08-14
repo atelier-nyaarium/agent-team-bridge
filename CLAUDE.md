@@ -60,8 +60,8 @@ code does not belong here; rationale lives in `git log`.
   - `ScheduledSendOps.kt` (`repo.scheduled`) owns the banked sends, the alarm seam the service wires,
     and the one mutex every fire path funnels through so a warm kick cannot double-convert
   - `GoalOps.kt` (`repo.goals`) owns armed goals: the send they ride, the wait for that session's
-    reply and then for its pane, and the one place a `/goal` line is typed (see Armed goals below).
-    `Goal.kt` beside it is the record, the text sanitizer and the pure `goalStep` rule
+    composer, and the one place a `/goal` line is typed (see Armed goals below). `Goal.kt` is the
+    record, the sanitizer and the pure `goalStep` rule
   - `PresenceOps.kt` (`repo.presence`) owns the team list rebuild and its mutex, cross-Domain
     presence, and the read anchors this device reports back
   - `SessionOps.kt` (`repo.sessions`) owns the terminal view and session control: peek, tmux send,
@@ -197,10 +197,9 @@ slot: devcontainer wake, session spawn, and the console terminal view. It carrie
 | 20002 | MCP connector (game client WS)    |
 | 20003 | Enrollment TLS (arming only)      |
 
-20000 publishes to LOOPBACK only. Local HTTP authorizes a caller by its session binding, which says
-nothing about which machine it is on, so nothing may reach it from the LAN. Containers reach it by
-service name over the compose network, which does not traverse the mapping. 20003 is the one port
-that does need the LAN, and it is pinned-TLS behind a one-time nonce.
+20000 publishes to LOOPBACK only: local HTTP authorizes by session binding, which says nothing about
+which machine the caller is on. Containers reach it by service name, off that mapping. 20003 is the
+one port that needs the LAN, pinned-TLS behind a one-time nonce.
 
 ### Channel conversations
 
@@ -353,32 +352,25 @@ dedup on the mutating ops).
 
 ### Armed goals
 
-The send button's long-press menu offers **Goal**: send the composed message, wait for that session,
-then type a `/goal <description>` line into its pane. Console-only - no wire shape, no gateway change,
+The send button's long-press menu offers **Goal**: send the composed message, then type a
+`/goal <description>` line into that session's pane. Console-only - no wire shape, no gateway change,
 reusing `send` and the existing `tmux_send` op.
 
-- **THREE tmux sends, never one line.** The CLI folds a burst of typed characters into a clipboard
-  paste, and a whole `/goal ...` line pasted at once is not read as a command at all. So the prefix
-  goes alone, the description follows as its own paste, and Enter is its own keypress - the last part
-  for the same reason `resumeAfterLimit` is three sends (a trailing CR reads as inserted text).
-- **The wait is two halves and needs both.** The session's own reply is what "the message was worked"
-  means; the pane being ready is what makes a slash command a command rather than text queued into a
-  busy composer. `isReady && !isWorking`, so a pane held by a permission dialog is not idle either.
-- **An idle pane is not necessarily an EMPTY one.** Typing appends, so a line the owner half-typed
-  and walked away from gets submitted joined to the goal - measured, not theorized: probing this by
-  hand produced `Goal set: ...the /goal clear`. Hence `composerIsEmpty`, whose stated cost is that a
-  future CLI painting a ghost hint into an empty composer would read as occupied and expire the goal
-  unfired. That failure is visible and destroys nothing; the other one submits somebody's fragment.
-- **Arm BEFORE the send**, since the record is what recognizes the reply and a session can answer
-  before `send()` returns. That is also why the record carries its own `sentAt`: a reply landing
-  first is answering something else, and nothing may be typed until the send it rides has settled.
+- **The turn is NOT waited on.** The message goes over the wire, never through the composer, so the
+  box is free while the agent works and a line typed there is queued and runs when the turn ends.
+  Waiting for the reply cost a whole turn and bought nothing.
+- **THREE tmux sends, never one line.** The CLI folds a burst of typed characters into a paste, and a
+  whole `/goal ...` line pasted at once is read as no command. Enter is its own keypress, same reason
+  `resumeAfterLimit` is three sends.
+- **The composer must be EMPTY.** Typing appends, so a half-typed line the owner left gets submitted
+  joined to the goal. `isReady` also rejects a pane held by a dialog, where the line would answer it.
+- **The live composer is the LAST prompt row.** A message queued mid-turn draws its own prompt row
+  above it, so a first-match read would see the queue and never type.
 - **The record is cleared BEFORE the first keystroke.** A process death mid-sequence would otherwise
-  type `/goal ` into a composer already holding half of one. Losing a goal is re-armable; a session
-  typed at twice is not.
-- Peeking happens only in the second half. A peek every couple of seconds for the whole reply budget
-  is a real cost on a phone for an answer that cannot matter yet.
-- The phase is READ from the record's two nullable instants, never stored, so a restored record and
-  its dock cannot disagree about how far along it is. `goalStep` is the whole rule, and pure.
+  type into a composer already holding half a goal. Losing one is re-armable, a session typed at
+  twice is not.
+- `sentAt` gates the typing: nothing is typed for a message that never went out. `goalStep` is the
+  whole rule, and pure.
 
 ### Artifact references (`ref://`)
 
@@ -716,13 +708,21 @@ permissions for the supervised target.
   PAYLOAD and can change while the row is on screen has to be folded in, or the row keeps stale
   content forever. State pushed over the JS bridge instead (`window.thread.*` mutating in place) is
   outside it by design and needs no fold.
+- **Working / needs-login** (`ChatState.working`): the presence plane FIRST, a local peek only as the
+  fallback. A peek lands solely while that session's terminal is on screen, so reading it first froze
+  the thread's chip at whatever it saw last time. Every screen also declares its own focus intent, and
+  `onForeground` re-declares the last one, or the cadence those chips arrive at sits at the background
+  floor while a thread is open.
 - **Session card rungs** (`SessionCardPreview.kt`): a PURE function decides which of the headline,
   board line and snippet show and what each is stamped with; the composable paints what it is handed
   and derives nothing. It lives outside `SessionCard` because the inline version was patched twice
-  with no test able to reach the rules. The headline is the session's own last reply, so the owner's
-  sends and peer mirrors cannot take it; the snippet shows whenever the newest row is not that reply,
-  which is what makes a send visibly change the card. Each rung carries its OWN row's time, and the
-  bottom one is `lastActivity`, which is what `sessionOrder` ranks on, so the column reads in order.
+  with no test able to reach the rules. The card reports what the SESSION is doing: the headline is
+  its own last reply, and the owner's own row never takes a rung. Each rung carries its OWN row's
+  time, and the bottom one is `lastActivity`, which is what `sessionOrder` ranks on, so the column
+  reads in order.
+- **The card's board branch** (`cardBranchOf`): the root is always kept, contiguous finished runs
+  collapse to one rung, and what is left is a window around the session's current entry. A prefix
+  filled every slot with finished titles and hid the entry being worked on behind the count.
 - **One-line rows** (`oneLine`): ASCII whitespace collapse for a row that cannot show a second line,
   which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
   Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
@@ -764,6 +764,8 @@ permissions for the supervised target.
   is playing" instead let a torn-down run's marker drive the current one and swallow its message, four
   times. Cached speech is keyed on the WORDS, not just the entry, because one message is spoken two
   ways: attributed when played by hand, unattributed inside a run where the sentinel already said it.
+  A RESUME never re-announces (`parkedAnnounced`): a pause parks the entry its markers already
+  introduced, and the transport's play button is not a new run.
 - **Per-row play state** (`playStatesFor`, `setPlayStates`): the repository ANSWERS what each row is
   doing; consumers do not accumulate it from events. A row is painted as it is built as well as on
   push, since state changes when playback does, not when a row re-renders.
@@ -789,9 +791,10 @@ permissions for the supervised target.
   busy, not that the work should stop. The measured duration is the by-product that lets a queued
   tile show its length instead of a spinner.
 - **Audio focus** (`SpeechFocus.kt`): held for a RUN, `AUDIOFOCUS_GAIN_TRANSIENT` so the user's music
-  resumes, released on a pause as well as at the end. Every loss pauses, including the duckable one -
-  with `CONTENT_TYPE_SPEECH` the system does not auto-duck, and speech under speech is worse than a
-  gap. A refused request pauses rather than speaking anyway, and `ACTION_AUDIO_BECOMING_NOISY` is its
+  resumes, released on a pause as well as at the end. A DUCKABLE loss keeps speaking (`focusAction`):
+  it is what a notification ping raises, and pausing on it killed every run, since the transport
+  releases focus while paused so no GAIN could ever arrive to lift it. A refused request does not
+  pause either, for the same reason: it registers no listener. `ACTION_AUDIO_BECOMING_NOISY` is its
   own receiver because unplugging a headset is a route change, not a focus change.
 - **`transportPaused` normalizes in its GETTER**, so a pause cannot be observed over an idle queue. The
   rule lived at the writers through three rounds and each new way of emptying the queue reintroduced

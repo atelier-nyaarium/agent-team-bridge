@@ -12,9 +12,8 @@ const vectors: Vector[] = JSON.parse(
 	readFileSync(new URL("../../tests/fixtures/limit-notice/vectors.json", import.meta.url), "utf8"),
 ).vectors;
 
-// Panes are pinned to 58 columns (tmuxCore's TMUX_COLS), confirmed against a live capture whose
-// composer border was exactly 58 wide. Wrapping is therefore reproducible rather than incidental.
-const COLS = 58;
+// Panes are pinned to tmuxCore's TMUX_COLS, so wrapping is reproducible rather than incidental.
+const COLS = 53;
 const rule = (ch = "─") => ch.repeat(COLS);
 const CANCEL = "Stop and wait for limit to reset";
 

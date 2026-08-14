@@ -42,9 +42,12 @@ body {
 	font-size: 13px;
 }
 
+/* Sticky in BOTH axes: the code no longer wraps, so the page scrolls sideways and a top-only sticky
+   header would leave the path off-screen exactly when it is needed. */
 #crumb {
 	position: sticky;
 	top: 0;
+	left: 0;
 	z-index: 2;
 	padding: 10px 12px;
 	background: var(--bg);
@@ -119,10 +122,11 @@ body {
 	user-select: none;
 }
 
+/* Never wraps: a wrapped line reflows the gutter's numbering away from the code it labels, and a
+   long line is easier to follow by scrolling than by reading a ragged column. */
 .src {
 	width: 100%;
-	overflow-wrap: anywhere;
-	white-space: pre-wrap;
+	white-space: pre;
 }
 
 /* An elision between two snippet segments, so a gap never reads as adjacent code. */

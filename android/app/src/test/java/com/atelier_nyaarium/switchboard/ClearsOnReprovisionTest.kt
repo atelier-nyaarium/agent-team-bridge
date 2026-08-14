@@ -11,14 +11,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Clear & re-provision may hand the device to a DIFFERENT owner, and the process is not restarted:
- * Repo.get memoizes ChatRepository for the app's lifetime, so every delegate it holds survives the
- * wipe with the previous owner's data still in it.
- */
+/** Clear and re-provision may hand the device to a different owner, and the process is not
+ * restarted: Repo.get memoizes ChatRepository, so every delegate survives the wipe still holding
+ * the previous owner's data. */
 class ClearsOnReprovisionTest {
-	/** In-memory storage. [wipe] is what clearProvisioning does to the board: KEY_TASK_BOARD is in
-	 * PROVISIONING_KEYS, so the durable half is gone and only the in-memory copy remains. */
+	/** [wipe] is what clearProvisioning does to the board, leaving only the in-memory copy. */
 	private class FakeStore : BoardStore {
 		var blob: String? = null
 
@@ -75,11 +72,8 @@ class ClearsOnReprovisionTest {
 		assertTrue(board.refusals.isEmpty())
 	}
 
-	/**
-	 * The roster ([ChatRepository.clearedOnReprovision]) is instance-side, so pin the field set it has
-	 * to name. A delegate that states its own wipe and is then left out of the roster fails here; one
-	 * that holds state and never implements [ClearsOnReprovision] is invisible to both.
-	 */
+	/** The roster is instance-side, so pin the field set it has to name. A delegate that states its
+	 * own wipe and is then left out of it fails here. */
 	@Test
 	fun everyRepositoryFieldDeclaringAWipeIsInTheRoster() {
 		val declared = ChatRepository::class.java.declaredFields

@@ -638,19 +638,15 @@ export function createRoutes({
 	}
 
 	/**
-	 * 403 when someone other than the session that asked tries to read a job's answer.
+	 * 403 when someone other than the session that asked tries to read a job's answer. Mirror of
+	 * `refuseForeignReply`, which decides who may answer one.
 	 *
-	 * The mirror of [refuseForeignReply]: that door decides who may ANSWER a job, this one who may
-	 * READ it. A job asked by a REMOTE session is refused outright, since a remote asker collects
-	 * its answer over the sealed response_push relay and never over local HTTP.
-	 *
-	 * A `session_id` is computable from two non-secret values, so it is a name rather than a
-	 * credential and cannot be the thing that authorizes the read.
+	 * A remote asker collects over the sealed response_push relay, never over local HTTP, so its job
+	 * is refused here outright.
 	 */
 	function refuseForeignPoll(req: Request, sessionId: string): Response | null {
 		if (!auth) return null;
-		// The local-plane question first, so an unproven caller cannot tell a live job from an id
-		// that names nothing: this is every answer it gets.
+		// Asked first, so an unproven caller cannot tell a live job from an id that names nothing.
 		if (!provedLocalSession(req)) {
 			console.warn(`[auth] refused a poll without any session binding`);
 			return jsonResponse({ error: "this job is not open to this caller" }, 403);

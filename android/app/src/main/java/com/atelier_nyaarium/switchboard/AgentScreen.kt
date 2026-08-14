@@ -52,7 +52,7 @@ object AgentScreen {
 			"This service is disabled for your org\\b",
 		).joinToString("|"),
 	)
-	// Rows to read above the divider. Panes are pinned to 58 columns, where a short reset-time
+	// Rows to read above the divider. Panes are pinned narrow, where a short reset-time
 	// headline fits on one row and a long admin/org suffix wraps onto a second or third.
 	private const val LIMIT_WINDOW_ROWS = 3
 

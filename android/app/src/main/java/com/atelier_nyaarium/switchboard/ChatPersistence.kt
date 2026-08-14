@@ -267,18 +267,15 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 					JSONObject()
 						.put("text", rec.text)
 						.put("armedAt", rec.armedAt)
-						.putOpt("sentAt", rec.sentAt)
-						.putOpt("replyAt", rec.replyAt),
+						.putOpt("sentAt", rec.sentAt),
 				)
 			}
 			store.saveGoals(root.toString())
 		}
 	}
 
-	/** Same disposable storage class as drafts and scheduled sends. A row parses under its OWN
-	 * runCatching so one malformed team entry cannot throw away every other team's still-armed goal,
-	 * and a row with no text or no arming instant is dropped: the first has nothing to type and the
-	 * second has no clock to time out against, so it would wait forever. */
+	/** Per-row runCatching, so one malformed entry cannot throw away every other team's goal. A row
+	 * with no text or no arming instant is dropped: nothing to type, or no clock to time out against. */
 	internal fun loadPersistedGoals(): Map<String, PendingGoal> {
 		val json = store.loadGoals() ?: return emptyMap()
 		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
@@ -290,12 +287,7 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 					val text = obj.optString("text")
 					val armedAt = obj.optLong("armedAt")
 					if (text.isEmpty() || armedAt <= 0L) return@runCatching null
-					PendingGoal(
-						text = text,
-						armedAt = armedAt,
-						sentAt = obj.optLong("sentAt").takeIf { it > 0L },
-						replyAt = obj.optLong("replyAt").takeIf { it > 0L },
-					)
+					PendingGoal(text = text, armedAt = armedAt, sentAt = obj.optLong("sentAt").takeIf { it > 0L })
 				}.getOrNull()?.let { put(rawKey, it) }
 			}
 		}

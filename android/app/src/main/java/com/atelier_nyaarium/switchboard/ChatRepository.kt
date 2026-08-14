@@ -26,16 +26,10 @@ internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 	override val seq: Long get() = entry.seq
 }
 
-/**
- * In-memory state belonging to the CURRENT provisioning.
- *
- * A holder states its own wipe beside the fields it clears, rather than exposing them for
- * [clearAll] to reach one at a time. The SET of holders is [ChatRepository.clearedOnReprovision].
- */
+/** In-memory state belonging to the CURRENT provisioning. A holder states its own wipe beside the
+ * fields it clears; the set of holders is [ChatRepository.clearedOnReprovision]. */
 internal interface ClearsOnReprovision {
-	/** Drop what the previous provisioning left in memory. Runs AFTER the durable wipe
-	 * (store.clearProvisioning), so nothing here persists anything. Suspending because a holder may
-	 * guard its state with a mutex, and a wipe that skipped the lock would race the poll loop. */
+	/** Runs after the durable wipe, so nothing here persists. Suspending: a holder may hold a mutex. */
 	suspend fun clearInMemory()
 }
 
@@ -239,15 +233,13 @@ class ChatRepository(
 	////////////////////////////////
 	//  Re-provision wipe
 
-	/** Every holder of state belonging to the current provisioning; [clearAll] wipes exactly this set.
-	 * A delegate that gains a cache is named here and states its own wipe, rather than leaving clearAll
-	 * a hand-written call per field - a field nobody remembered to reach is how the board went on
-	 * serving the previous owner's entries to the next one. */
+	/** [clearAll] wipes exactly this set. A delegate that gains a cache belongs here; one nobody
+	 * remembered to reach is how the board went on serving the previous owner's entries. */
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
 		get() = listOf(this, board, presence, trust, drain)
 
-	/** This class's own share: the connection built from the blob, the ids and cursor learned from it,
-	 * the two team-keyed sets, and the invite secrets staged against the outgoing Domain. */
+	/** This class's own share: the connection, the ids and cursor learned from the blob, and the
+	 * invite secrets staged against the outgoing Domain. */
 	override suspend fun clearInMemory() {
 		client = null
 		sttsClient = null
@@ -283,15 +275,17 @@ class ChatRepository(
 	// terminal, so it should not falsely claim the board's ramped cadence before the UI ever renders.
 	@Volatile internal var currentFocus: FocusIntent = FocusIntent(screen = "background")
 
+	// The last screen actually on show, re-declared when the app comes back. Without it, onBackground's
+	// own declaration sticks: the same screen is still composed on return, so nothing re-declares and
+	// every daemon-derived chip on it sits at the background cadence.
+	@Volatile private var lastVisibleFocus: FocusIntent = FocusIntent(screen = "board")
+
 	/** The poll loop and mailbox drain (see PollDrain.kt): the loop lifecycle, the plane version
 	 * cursors and both drain-gate subscriber lists live there; it reaches back into this class the
 	 * way the federation Ops delegates do. */
 	internal val drain = PollDrain(this)
 
-	/** Goals armed against a session: the wait between sending a message and typing a `/goal` line
-	 * into that session's pane (see GoalOps' own doc). Must stay declared after [drain]: it subscribes
-	 * to the drain gate from its own init, so constructing it earlier reads that field before it
-	 * exists. */
+	/** Goals armed against a session (see GoalOps). */
 	internal val goals = GoalOps(this)
 
 	/** Set by the service: called per poll with the new inbound messages of one
@@ -305,6 +299,7 @@ class ChatRepository(
 		visible = true
 		drain.onForegroundResume()
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
+		declareFocus(lastVisibleFocus)
 		drain.kickPoll()
 	}
 
@@ -325,11 +320,12 @@ class ChatRepository(
 	 * focus than the one already declared, not a redundant re-declare of the same value) interrupts
 	 * an in-flight held poll so the Gateway's intent tracker - and the host daemon's derivation
 	 * cadence it drives - ramps up within about one RTT instead of waiting out the remainder of the
-	 * current hold (see pollRacingFocusChange). MainActivity/TerminalView call this on every
-	 * relevant UI transition (the board shown, a terminal opened/closed); onBackground calls it too. */
+	 * current hold (see pollRacingFocusChange). Every screen declares its own on show; onBackground
+	 * declares background, and [onForeground] re-declares whatever was on screen before it. */
 	fun declareFocus(focus: FocusIntent) {
 		val prior = currentFocus
 		currentFocus = focus
+		if (focus.screen != "background") lastVisibleFocus = focus
 		if (prior != focus) drain.interrupt()
 	}
 
@@ -405,8 +401,7 @@ class ChatRepository(
 				error = null,
 				localGatewayId = localGatewayId,
 				drafts = drafts,
-				// Seeded rather than armed: arming SENDS, which a gatewayless sandbox cannot do, and the
-				// dock is the surface worth looking at.
+				// Seeded rather than armed: arming sends, which a gatewayless sandbox cannot do.
 				goals = goals,
 			)
 		}

@@ -5,10 +5,8 @@ services:
     # Restart on crash so an uncaughtException flush-then-exit recovers unattended.
     restart: unless-stopped
     ports:
-      # Loopback, not every interface: local HTTP authorizes a caller by its session binding, which
-      # says nothing about which machine it is on. Devcontainers reach the gateway by service name
-      # over the compose network and never traverse this mapping; the host daemon and host-launched
-      # sessions use localhost. Cross-machine goes through evie's sealed relay, not this port.
+      # Loopback, not every interface: local HTTP authorizes by session binding, which says nothing
+      # about which machine the caller is on. Containers reach it by service name, off this mapping.
       - "127.0.0.1:20000:20000"
       # Arming-only pinned-TLS listener for the phone's LAN bundle delivery (nothing binds it
       # otherwise). The cert's SAN is the LAN IP, so the phone verifies hostname + pins the fingerprint.

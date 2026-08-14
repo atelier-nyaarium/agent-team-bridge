@@ -69,8 +69,7 @@ data class ChatState(
 	/** At most one pending scheduled send per team. Held here rather than in a bare repository map so
 	 * the dock indicator and the session-tile clock icon are Compose-reactive. */
 	val scheduledSends: Map<String, ScheduledSend> = emptyMap(),
-	/** At most one armed goal per team, held here for the same reason as [scheduledSends]: the dock
-	 * that shows one is a composable, and a bare repository map would not redraw it. */
+	/** At most one armed goal per team, held here for the same reason as [scheduledSends]. */
 	val goals: Map<String, PendingGoal> = emptyMap(),
 	/** (project, label) pairs with a spawnSession() call in flight. Distinct from the longer-lived
 	 * opId retry window: this is only "has not settled yet", so the dialog can refuse a second
@@ -120,17 +119,26 @@ data class ChatState(
 		return copy(teams = freshTeams, labels = nextLabels, teamAbsenceStreaks = nextStreak)
 	}
 
-	/** Whether the agent is working a turn: a tmux peek when one has landed, else a pending cold wake
-	 * or the message-status heuristic. */
+	/**
+	 * Whether the agent is working a turn.
+	 *
+	 * The presence plane FIRST, the same source the session tiles read: it keeps arriving at whatever
+	 * cadence this device's focus asks for, while a local peek only lands while the terminal is open.
+	 * Reading the peek first froze the thread's chip at whatever it saw the last time that terminal
+	 * was on screen. Then a pending cold wake, then the message-status heuristic.
+	 */
 	fun working(team: String): Boolean {
+		teams.firstOrNull { it.name == team }?.working?.let { return it }
 		sessionWorking[team]?.let { return it }
 		if (team in wakingTeams) return true
 		val last = threads[team]?.lastOrNull() ?: return false
 		return (last.fromMe && (last.status == null || last.status == "pending")) || last.status == "running"
 	}
 
-	/** Independent of working: a logged-out session still presents a composer. */
-	fun needsLogin(team: String): Boolean = sessionNeedsLogin[team] == true
+	/** Independent of working: a logged-out session still presents a composer. Same order as
+	 * [working], and for the same reason. */
+	fun needsLogin(team: String): Boolean =
+		teams.firstOrNull { it.name == team }?.needsLogin ?: (sessionNeedsLogin[team] == true)
 
 	/** Bridge link health for the dashboard header. */
 	enum class Health { ONLINE, SYNCING, DEGRADED, OFFLINE }
