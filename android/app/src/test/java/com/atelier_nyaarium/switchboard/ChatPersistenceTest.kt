@@ -264,15 +264,15 @@ class ChatPersistenceTest {
 	//  Goals
 
 	@Test
-	fun aGoalKeepsBothWaitInstantsAcrossARestart() {
-		val awaitingReply = PendingGoal(text = "Complete the plan", armedAt = 10L, sentAt = 11L)
-		val awaitingIdle = PendingGoal(text = "Ship it", armedAt = 20L, sentAt = 21L, replyAt = 22L)
-		codec.persistGoals(mapOf(team to awaitingReply, peerTeam to awaitingIdle))
+	fun aGoalKeepsItsSendInstantAcrossARestart() {
+		val stillSending = PendingGoal(text = "Complete the plan", armedAt = 10L)
+		val sent = PendingGoal(text = "Ship it", armedAt = 20L, sentAt = 21L)
+		codec.persistGoals(mapOf(team to stillSending, peerTeam to sent))
 		val loaded = codec.loadPersistedGoals()
 
-		// An absent instant must come back absent, not as a zero that reads as long ago.
-		assertEquals(mapOf(team to awaitingReply, peerTeam to awaitingIdle), loaded)
-		assertNull(loaded.getValue(team).replyAt)
+		// An absent instant must come back absent, not as a zero that reads as sent.
+		assertEquals(mapOf(team to stillSending, peerTeam to sent), loaded)
+		assertNull(loaded.getValue(team).sentAt)
 	}
 
 	@Test

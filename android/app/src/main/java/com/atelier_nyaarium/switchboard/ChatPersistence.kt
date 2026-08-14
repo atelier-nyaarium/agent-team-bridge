@@ -267,8 +267,7 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 					JSONObject()
 						.put("text", rec.text)
 						.put("armedAt", rec.armedAt)
-						.putOpt("sentAt", rec.sentAt)
-						.putOpt("replyAt", rec.replyAt),
+						.putOpt("sentAt", rec.sentAt),
 				)
 			}
 			store.saveGoals(root.toString())
@@ -288,12 +287,7 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 					val text = obj.optString("text")
 					val armedAt = obj.optLong("armedAt")
 					if (text.isEmpty() || armedAt <= 0L) return@runCatching null
-					PendingGoal(
-						text = text,
-						armedAt = armedAt,
-						sentAt = obj.optLong("sentAt").takeIf { it > 0L },
-						replyAt = obj.optLong("replyAt").takeIf { it > 0L },
-					)
+					PendingGoal(text = text, armedAt = armedAt, sentAt = obj.optLong("sentAt").takeIf { it > 0L })
 				}.getOrNull()?.let { put(rawKey, it) }
 			}
 		}

@@ -93,8 +93,8 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 	}
 }
 
-/** Dock for an armed goal: what will be typed, and which half of the wait it is in. Sibling of
- * [ScheduledSendDock], but never a composer replacement: the message it rides on is already gone. */
+/** Dock for an armed goal, showing what will be typed. Sibling of [ScheduledSendDock], but never a
+ * composer replacement: the message it rides on is already gone. */
 @Composable
 fun GoalDock(rec: PendingGoal, onCancel: () -> Unit) {
 	Surface(
@@ -118,7 +118,7 @@ fun GoalDock(rec: PendingGoal, onCancel: () -> Unit) {
 					overflow = TextOverflow.Ellipsis,
 				)
 				Text(
-					if (rec.replyAt == null) "Waiting for a reply" else "Waiting for the terminal to go idle",
+					"Waiting for its terminal",
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSecondaryContainer,
 				)

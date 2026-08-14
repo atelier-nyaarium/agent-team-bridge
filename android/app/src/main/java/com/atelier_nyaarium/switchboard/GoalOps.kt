@@ -7,28 +7,20 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
 /**
- * Goals armed against a session (`repo.goals`): the wait between sending a message and typing a
- * `/goal` line into that session's pane.
+ * Goals armed against a session (`repo.goals`): send the message, then type a `/goal` line into that
+ * session's pane as soon as its composer is free.
  *
- * The wait is two halves and needs both. The reply is what "the message was worked" means; the pane
- * being ready is what makes a slash command a command rather than text queued into a busy composer.
+ * The turn is deliberately not waited on. The message goes over the wire, so the composer stays free
+ * while the agent works, and a line typed there is queued and runs when the turn ends.
  */
 internal class GoalOps(private val repo: ChatRepository) {
-	init {
-		// Once per process, unlike a service recreation, which would add a second delivering subscriber.
-		// Needs `drain`, so this delegate stays declared after it.
-		repo.drain.addInboundSubscriber(InboundSubscriber { team, msg -> onInbound(team, msg) })
-	}
-
-	// Teams whose await loop is running here. An arm, a landing reply and the tick all call drive(),
-	// and three loops reaching Inject together would type the goal three times.
+	// Teams whose await loop is running here. An arm and the poll tick both call drive(), and two
+	// loops reaching Inject together would type the goal twice.
 	private val driving = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
 	/**
 	 * Arm a goal and send the message it rides on, replacing any goal already armed for this team.
-	 *
-	 * Arms BEFORE the send: the record is what recognizes the reply, and a session can answer before
-	 * send() returns. A send that does not land disarms again.
+	 * A send that does not land disarms again.
 	 *
 	 * Returns false when nothing was armed, so the caller keeps the composer intact.
 	 */
@@ -62,16 +54,6 @@ internal class GoalOps(private val repo: ChatRepository) {
 		clearGoal(team)
 	}
 
-	/** Drain-gate subscriber: stamps the record and hands the waiting to a coroutine. */
-	private fun onInbound(team: String, msg: Message) {
-		if (!isGoalReply(msg)) return
-		val rec = repo._state.value.goals[team] ?: return
-		if (rec.replyAt != null) return
-		updateGoal(team) { if (it.replyAt == null) it.copy(replyAt = System.currentTimeMillis()) else it }
-		DebugLog.log("Goal", "reply seen for $team; waiting for its pane")
-		drive(team)
-	}
-
 	/** Poll-cadence tick: starts a driver for a goal that has none, e.g. one restored from disk. */
 	fun tick() {
 		for (team in repo._state.value.goals.keys) drive(team)
@@ -84,10 +66,7 @@ internal class GoalOps(private val repo: ChatRepository) {
 			try {
 				while (true) {
 					val rec = repo._state.value.goals[team] ?: return@launch
-					// No peeking until it has answered: a session mid-turn cannot be idle yet, and peeking
-					// every couple of seconds for up to an hour is a real cost on a phone.
-					val screen = if (rec.replyAt == null) null else capturePane(team)
-					when (val step = goalStep(rec, System.currentTimeMillis(), screen)) {
+					when (val step = goalStep(rec, System.currentTimeMillis(), capturePane(team))) {
 						is GoalStep.Expire -> {
 							clearGoal(team)
 							repo._state.update { it.copy(error = "Goal dropped: ${step.reason}.") }
@@ -98,8 +77,7 @@ internal class GoalOps(private val repo: ChatRepository) {
 							inject(team, rec.text)
 							return@launch
 						}
-						GoalStep.AwaitReply -> delay(GOAL_REPLY_POLL_MS)
-						GoalStep.AwaitIdle -> delay(GOAL_IDLE_POLL_MS)
+						GoalStep.Wait -> delay(GOAL_POLL_MS)
 					}
 				}
 			} finally {

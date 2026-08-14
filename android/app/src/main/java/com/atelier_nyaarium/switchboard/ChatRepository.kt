@@ -280,8 +280,7 @@ class ChatRepository(
 	 * way the federation Ops delegates do. */
 	internal val drain = PollDrain(this)
 
-	/** Goals armed against a session (see GoalOps). Must stay declared after [drain], which its own
-	 * init subscribes to. */
+	/** Goals armed against a session (see GoalOps). */
 	internal val goals = GoalOps(this)
 
 	/** Set by the service: called per poll with the new inbound messages of one

@@ -60,8 +60,8 @@ code does not belong here; rationale lives in `git log`.
   - `ScheduledSendOps.kt` (`repo.scheduled`) owns the banked sends, the alarm seam the service wires,
     and the one mutex every fire path funnels through so a warm kick cannot double-convert
   - `GoalOps.kt` (`repo.goals`) owns armed goals: the send they ride, the wait for that session's
-    reply and then its pane, and the one place a `/goal` line is typed (see Armed goals below).
-    `Goal.kt` is the record, the sanitizer and the pure `goalStep` rule
+    composer, and the one place a `/goal` line is typed (see Armed goals below). `Goal.kt` is the
+    record, the sanitizer and the pure `goalStep` rule
   - `PresenceOps.kt` (`repo.presence`) owns the team list rebuild and its mutex, cross-Domain
     presence, and the read anchors this device reports back
   - `SessionOps.kt` (`repo.sessions`) owns the terminal view and session control: peek, tmux send,
@@ -352,27 +352,25 @@ dedup on the mutating ops).
 
 ### Armed goals
 
-The send button's long-press menu offers **Goal**: send the composed message, wait for that session,
-then type a `/goal <description>` line into its pane. Console-only - no wire shape, no gateway change,
+The send button's long-press menu offers **Goal**: send the composed message, then type a
+`/goal <description>` line into that session's pane. Console-only - no wire shape, no gateway change,
 reusing `send` and the existing `tmux_send` op.
 
+- **The turn is NOT waited on.** The message goes over the wire, never through the composer, so the
+  box is free while the agent works and a line typed there is queued and runs when the turn ends.
+  Waiting for the reply cost a whole turn and bought nothing.
 - **THREE tmux sends, never one line.** The CLI folds a burst of typed characters into a paste, and a
   whole `/goal ...` line pasted at once is read as no command. Enter is its own keypress, same reason
   `resumeAfterLimit` is three sends.
-- **The wait is two halves and needs both.** The reply is what "the message was worked" means; the
-  pane being ready is what makes a slash command a command rather than queued text. `isReady &&
-  !isWorking`, so a pane held by a permission dialog is not idle either.
-- **An idle pane is not necessarily an EMPTY one.** Typing appends, so a half-typed line the owner
-  left gets submitted joined to the goal. Hence `composerIsEmpty`, whose cost is that a future CLI
-  painting a ghost hint into an empty composer would expire the goal unfired instead.
-- **Arm BEFORE the send**, since the record recognizes the reply and a session can answer before
-  `send()` returns. Hence `sentAt`: a reply landing first is answering something else.
+- **The composer must be EMPTY.** Typing appends, so a half-typed line the owner left gets submitted
+  joined to the goal. `isReady` also rejects a pane held by a dialog, where the line would answer it.
+- **The live composer is the LAST prompt row.** A message queued mid-turn draws its own prompt row
+  above it, so a first-match read would see the queue and never type.
 - **The record is cleared BEFORE the first keystroke.** A process death mid-sequence would otherwise
   type into a composer already holding half a goal. Losing one is re-armable, a session typed at
   twice is not.
-- Peeking happens only in the second half; a peek every two seconds for the whole reply budget is a
-  real cost on a phone.
-- The phase is READ from the record's two instants, never stored. `goalStep` is the whole rule, pure.
+- `sentAt` gates the typing: nothing is typed for a message that never went out. `goalStep` is the
+  whole rule, and pure.
 
 ### Artifact references (`ref://`)
 
