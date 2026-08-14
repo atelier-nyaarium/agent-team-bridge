@@ -118,10 +118,11 @@ fun ThreadScreen(
 	onGateway: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
-	// The three assembled subjects (see ThreadScreenState.kt): distinct types are what make handing
+	// The four assembled subjects (see ThreadScreenState.kt): distinct types are what make handing
 	// one cluster's fact to another's slot a compile error instead of a plausible call.
 	composer: ComposerState,
 	scheduled: ScheduledSendState,
+	goal: GoalState,
 	terminal: TerminalState,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
@@ -170,6 +171,14 @@ fun ThreadScreen(
 	// draft, exactly the generation-token shape Phase 1's DurableOpStore uses for the identical "a
 	// stale attempt must not act after a newer one has taken over" problem.
 	var scheduleDialogGeneration by remember { mutableStateOf(0) }
+	// The Goal dialog's own three, for the identical reasons as the Schedule Send trio above:
+	// rememberSaveable so an Activity recreation (rotation, font scale) does not close a half-typed
+	// goal, a submitting flag so a bounced touch cannot arm two, and a generation token so a
+	// continuation that outlives its dialog does not act on a newer one's behalf.
+	var goalDialogOpen by rememberSaveable { mutableStateOf(false) }
+	var goalSubmitting by remember { mutableStateOf(false) }
+	var goalDialogGeneration by remember { mutableStateOf(0) }
+	val goalScope = rememberCoroutineScope()
 	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. A plain
 	// still-waking session (asleep, booting, or a fresh create) opens to CHAT by default - only a
 	// session already known to be stuck (terminal.needsLogin) jumps straight to terminal, so the
@@ -276,6 +285,34 @@ fun ThreadScreen(
 				}
 			},
 			onDismiss = { scheduleDialogSeed = null },
+		)
+	}
+	if (goalDialogOpen) {
+		GoalDialog(
+			submitting = goalSubmitting,
+			onConfirm = { typed ->
+				// Snapshot now, for the same reason Schedule Send does: what is armed and sent must be
+				// what was on screen at the tap, not whatever the draft holds once the call resolves.
+				val text = composer.draft.text
+				val files = draftFileUris(composerContext, composer.draft.files)
+				val myGeneration = goalDialogGeneration
+				goalSubmitting = true
+				goalScope.launch {
+					var ok = false
+					try {
+						ok = goal.onArm(typed, text, files)
+					} finally {
+						// The composer is cleared only on a genuine arm: arming SENDS the message, and a
+						// failure there means nothing went out, so wiping what was typed would destroy it.
+						if (goalDialogGeneration == myGeneration) {
+							goalSubmitting = false
+							goalDialogOpen = false
+							if (ok) composer.onClear()
+						}
+					}
+				}
+			},
+			onDismiss = { goalDialogOpen = false },
 		)
 	}
 
@@ -457,6 +494,9 @@ fun ThreadScreen(
 					onCancel = scheduled.onCancel,
 				)
 			}
+			// Stacks alongside the dock above rather than replacing the composer: the message this goal
+			// rides on has already gone out, so there is nothing left to hold back.
+			goal.record?.let { rec -> GoalDock(rec = rec, onCancel = goal.onCancel) }
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			// Hidden entirely while something is scheduled - the dock above is the sole surface then;
 			// letting the text field survive alongside it would let the user keep typing into a
@@ -560,6 +600,20 @@ fun ThreadScreen(
 								scheduleDialogGeneration++
 							},
 						)
+						// Absent, not disabled, for a session with no daemon-drivable pane (a peer, another
+						// Gateway's session): the send half would work and the typing half could never
+						// happen, and an item that cannot finish is worse than one that is not offered.
+						if (terminal.eligible) {
+							DropdownMenuItem(
+								text = { Text("Goal") },
+								enabled = sendEnabled,
+								onClick = hapticClick {
+									showSendMenu = false
+									goalDialogGeneration++
+									goalDialogOpen = true
+								},
+							)
+						}
 						DropdownMenuItem(
 							text = { Text("Send") },
 							enabled = sendEnabled,

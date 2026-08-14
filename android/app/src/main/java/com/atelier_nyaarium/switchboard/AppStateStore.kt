@@ -252,6 +252,11 @@ class AppStateStore(context: Context) :
 
 	override fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
 
+	/** At most one armed goal per team, same disposable storage class as the two above. */
+	override fun saveGoals(json: String) = prefs.edit().putString(KEY_GOALS, json).apply()
+
+	override fun loadGoals(): String? = prefs.getString(KEY_GOALS, null)
+
 	/** The whole task-board blob: per-Gateway cache + sync metadata, the pending-action queue, and
 	 * the one board draft - ONE key, so an optimistic edit and its queue append land in one apply. */
 	override fun saveTaskBoard(json: String) = prefs.edit().putString(KEY_TASK_BOARD, json).apply()
@@ -402,6 +407,7 @@ class AppStateStore(context: Context) :
 		const val KEY_ABSENCE_STREAKS = "team_absence_streak"
 		const val KEY_DRAFTS = "drafts"
 		const val KEY_SCHEDULED_SENDS = "scheduled_sends"
+		const val KEY_GOALS = "goals"
 		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
@@ -451,7 +457,7 @@ class AppStateStore(context: Context) :
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
 		val SCHEMA_WIPE_KEYS = listOf(
-			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_ABSENCE_STREAKS,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_ABSENCE_STREAKS,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD,
 		)
 
@@ -463,8 +469,8 @@ class AppStateStore(context: Context) :
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
-			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH,
-			KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
 		)
 	}
 }

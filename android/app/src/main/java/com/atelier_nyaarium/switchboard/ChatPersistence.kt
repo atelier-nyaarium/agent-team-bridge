@@ -30,6 +30,8 @@ internal interface ChatPersistenceStore {
 	fun loadLabels(): String?
 	fun saveScheduledSends(json: String)
 	fun loadScheduledSends(): String?
+	fun saveGoals(json: String)
+	fun loadGoals(): String?
 	fun saveAbsenceStreaks(json: String)
 	fun loadAbsenceStreaks(): String?
 	fun saveDrafts(json: String)
@@ -250,6 +252,49 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 						opId = opId,
 						targetDomainId = obj.optString("targetDomainId").takeIf { it.isNotEmpty() },
 						createdAt = obj.optLong("createdAt"),
+					)
+				}.getOrNull()?.let { put(rawKey, it) }
+			}
+		}
+	}
+
+	internal fun persistGoals(records: Map<String, PendingGoal>) {
+		runCatching {
+			val root = JSONObject()
+			for ((team, rec) in records) {
+				root.put(
+					team,
+					JSONObject()
+						.put("text", rec.text)
+						.put("armedAt", rec.armedAt)
+						.putOpt("sentAt", rec.sentAt)
+						.putOpt("replyAt", rec.replyAt),
+				)
+			}
+			store.saveGoals(root.toString())
+		}
+	}
+
+	/** Same disposable storage class as drafts and scheduled sends. A row parses under its OWN
+	 * runCatching so one malformed team entry cannot throw away every other team's still-armed goal,
+	 * and a row with no text or no arming instant is dropped: the first has nothing to type and the
+	 * second has no clock to time out against, so it would wait forever. */
+	internal fun loadPersistedGoals(): Map<String, PendingGoal> {
+		val json = store.loadGoals() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		return buildMap {
+			for (rawKey in root.keys()) {
+				if (!isAddressKey(rawKey)) continue
+				runCatching {
+					val obj = root.getJSONObject(rawKey)
+					val text = obj.optString("text")
+					val armedAt = obj.optLong("armedAt")
+					if (text.isEmpty() || armedAt <= 0L) return@runCatching null
+					PendingGoal(
+						text = text,
+						armedAt = armedAt,
+						sentAt = obj.optLong("sentAt").takeIf { it > 0L },
+						replyAt = obj.optLong("replyAt").takeIf { it > 0L },
 					)
 				}.getOrNull()?.let { put(rawKey, it) }
 			}

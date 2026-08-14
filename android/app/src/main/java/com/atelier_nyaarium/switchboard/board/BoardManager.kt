@@ -4,6 +4,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.BoardRefused
+import com.atelier_nyaarium.switchboard.ClearsOnReprovision
 import com.atelier_nyaarium.switchboard.ConsoleClient
 import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.localFieldOrSelf
@@ -73,7 +74,7 @@ data class BoardLiveLine(
  * mid-edit cannot revert it. Queue entries retire ONLY on the gateway's accept or a sealed refusal
  * ([BoardRefused]); every other failure stays queued and retries on a later drain.
  */
-class BoardManager(private val store: BoardStore) {
+class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	private val json = Json { ignoreUnknownKeys = true }
 
 	/** False when a STORED board could not be decoded, as opposed to there being none yet. An empty
@@ -112,6 +113,18 @@ class BoardManager(private val store: BoardStore) {
 	private fun notice(entry: BoardRefusal) {
 		refusals.add(entry)
 		mutate { it.copy(notices = it.notices + entry) }
+	}
+
+	/** Drop the previous provisioning's board. In memory only: the durable key is wiped first, and
+	 * [mutate] persists a transform of [blob], so a board left here is re-committed onto the next
+	 * owner's device by their first write. */
+	override suspend fun clearInMemory() {
+		synchronized(stateLock) {
+			blob = BoardBlob()
+			loadedCleanly = true
+			refusals.clear()
+			revision.longValue++
+		}
 	}
 
 	val knownVersion: TaskBoardVersion?

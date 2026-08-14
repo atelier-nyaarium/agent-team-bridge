@@ -15,6 +15,7 @@ import com.atelier_nyaarium.switchboard.Draft
 import com.atelier_nyaarium.switchboard.Message
 import com.atelier_nyaarium.switchboard.MessageFile
 import com.atelier_nyaarium.switchboard.OutgoingFile
+import com.atelier_nyaarium.switchboard.PendingGoal
 import com.atelier_nyaarium.switchboard.Team
 import com.atelier_nyaarium.switchboard.board.BoardBlob
 import com.atelier_nyaarium.switchboard.board.GatewayBoard
@@ -78,6 +79,16 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		val locations = staged.take(2).mapNotNull { f -> f.src?.let { it to "Pictures" } }.toMap()
 		return mapOf(SESSION to Draft(text = "", files = staged, locations = locations))
 	}
+
+	/** An armed goal on the second session, so the dock draws without a gateway to send through.
+	 * Waiting on the reply (no replyAt), which is the phase the second line reads differently. */
+	fun goals(): Map<String, PendingGoal> = mapOf(
+		SESSION_2 to PendingGoal(
+			text = "Complete the plan",
+			armedAt = System.currentTimeMillis(),
+			sentAt = System.currentTimeMillis(),
+		),
+	)
 
 	/** Canned listings for the create dialog's directory picker, keyed by the listed prefix (the
 	 * text up to and including its last "/"). Enough shape to see descent, filtering, and the

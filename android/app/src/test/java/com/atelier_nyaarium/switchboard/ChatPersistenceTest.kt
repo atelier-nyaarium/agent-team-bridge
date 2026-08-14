@@ -53,6 +53,12 @@ class ChatPersistenceTest {
 		}
 
 		override fun loadDrafts(): String? = slots["drafts"]
+
+		override fun saveGoals(json: String) {
+			slots["goals"] = json
+		}
+
+		override fun loadGoals(): String? = slots["goals"]
 	}
 
 	private val store = FakeStore()
@@ -252,6 +258,42 @@ class ChatPersistenceTest {
 		codec.persistScheduledSends(mapOf(team to blankOp, peerTeam to zeroFire))
 
 		assertEquals(emptyMap<String, ScheduledSend>(), codec.loadPersistedScheduledSends())
+	}
+
+	////////////////////////////////
+	//  Goals
+
+	@Test
+	fun aGoalKeepsBothWaitInstantsAcrossARestart() {
+		val awaitingReply = PendingGoal(text = "Complete the plan", armedAt = 10L, sentAt = 11L)
+		val awaitingIdle = PendingGoal(text = "Ship it", armedAt = 20L, sentAt = 21L, replyAt = 22L)
+		codec.persistGoals(mapOf(team to awaitingReply, peerTeam to awaitingIdle))
+		val loaded = codec.loadPersistedGoals()
+
+		// Both phases survive: a restored record must resume the wait it was actually in, and an
+		// absent instant must come back absent rather than as a zero that reads as "long ago".
+		assertEquals(mapOf(team to awaitingReply, peerTeam to awaitingIdle), loaded)
+		assertNull(loaded.getValue(team).replyAt)
+	}
+
+	@Test
+	fun aGoalThatCouldNeverFireOrTimeOutIsDropped() {
+		val noText = PendingGoal(text = "", armedAt = 10L)
+		val noClock = PendingGoal(text = "Complete the plan", armedAt = 0L)
+		codec.persistGoals(mapOf(team to noText, peerTeam to noClock))
+
+		// Nothing to type, and nothing to time out against - the second would otherwise wait forever.
+		assertEquals(emptyMap<String, PendingGoal>(), codec.loadPersistedGoals())
+	}
+
+	@Test
+	fun oneUnreadableGoalRowDoesNotTakeTheOthersWithIt() {
+		codec.persistGoals(mapOf(team to PendingGoal(text = "Complete the plan", armedAt = 10L, sentAt = 11L)))
+		store.slots["goals"] = store.slots.getValue("goals").removeSuffix("}") + ",\"$peerTeam\":42}"
+		val loaded = codec.loadPersistedGoals()
+
+		assertEquals(setOf(team), loaded.keys)
+		assertEquals("Complete the plan", loaded.getValue(team).text)
 	}
 
 	////////////////////////////////

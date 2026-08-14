@@ -415,6 +415,11 @@ fun App(
 					onReschedule = { at -> repo.scheduled.rescheduleSend(openTeam!!, at) },
 					onCancel = { repo.scheduled.cancelScheduledSendForEdit(openTeam!!) },
 				),
+				goal = GoalState(
+					record = state.goals[openTeam!!],
+					onArm = { g, text, uris -> repo.goals.armAndSend(openTeam!!, g, text, uris) },
+					onCancel = { repo.goals.cancelGoal(openTeam!!) },
+				),
 				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!

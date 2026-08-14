@@ -269,15 +269,15 @@ suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
 	// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
 	// provisioning/identity/history, never voice (clear() is the full factory wipe).
 	store.clearProvisioning()
-	client = null
-	sttsClient = null
+	// Durable first, then every in-memory holder (see clearedOnReprovision). The process is not
+	// restarted and nothing reconstructs these, so a cache left holding the previous owner's data is
+	// re-persisted onto the next owner's device by their first write.
+	for (cache in clearedOnReprovision) cache.clearInMemory()
 	stts.purgeAll()
 	// Paired with the TTS purge above, same as the one-shot schema-migration wipe does (see
 	// init{}): the prefs wipe never touches filesDir, so downloaded attachments would
 	// otherwise survive a Revoke-and-Delete/Clear-and-re-provision indefinitely.
 	Attachments.purgeAll(filesDir)
-	localGatewayId = ""
-	mailboxSync.clearInMemory()
 	_state.update { ChatState(provisioned = false) }
 	// The fresh ChatState() above already resets scheduledSends to empty (and its own key is
 	// wiped from disk, being in PROVISIONING_KEYS) - only the OS-level alarm resource needs an

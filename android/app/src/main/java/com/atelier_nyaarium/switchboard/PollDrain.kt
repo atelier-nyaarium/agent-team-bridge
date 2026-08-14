@@ -35,7 +35,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Plane appliers, notification fan-out targets and every other effect stay on the repository; this
  * delegate reaches back into it the way the federation Ops delegates do.
  */
-internal class PollDrain(private val repo: ChatRepository) {
+internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision {
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -136,6 +136,10 @@ internal class PollDrain(private val repo: ChatRepository) {
 		resumeBacklogPending = true
 		pollFails = 0
 	}
+
+	/** A cursor is a claim about what THIS device already holds, so one carried across a
+	 * re-provision makes the new Gateway ship nothing for that plane. */
+	override suspend fun clearInMemory() = resetPlaneCursors()
 
 	/** Forget every presented plane version so the NEXT poll looks like a cold boot and the
 	 * Gateway ships current truth for every plane (see refreshTeams). */
@@ -304,6 +308,10 @@ internal class PollDrain(private val repo: ChatRepository) {
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
+					// Restarts the wait for a goal armed before this process started (or before a
+					// re-provision), and retires one that ran out of time. A no-op when none is armed,
+					// which is every pass in the ordinary case.
+					repo.goals.tick()
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
