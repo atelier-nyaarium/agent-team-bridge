@@ -7,14 +7,10 @@ import { uploadBlob } from "../blobTransfer.js";
 import { parseDsCard } from "../designer/dsCard.js";
 import { routerPost } from "./helpers.js";
 
-// Advisory per-file cap on the agent side, DERIVED from the one size limit rather than restating
-// it - an independent copy here could drift from the real limit it must track. The gateway enforces
-// the real backstop (a buggy agent on a trusted machine is not the threat model, but a clear error
-// here beats a silent oversized push).
+// Advisory and derived; the gateway holds the real backstop.
 const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
-// An extension missing here falls back to octet-stream, and both renderers classify on the mime
-// prefix alone without re-sniffing, so the file gets a bare row instead of a thumbnail or player.
+// A missing extension falls back to octet-stream, and both renderers classify on the prefix alone.
 const MIME_BY_EXT: Record<string, string> = {
 	".png": "image/png",
 	".jpg": "image/jpeg",
@@ -25,8 +21,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	".bmp": "image/bmp",
 	".apng": "image/apng",
 	".avif": "image/avif",
-	// TIFF and HEIC are deliberately absent: the transcript renders anything image/* as an <img>,
-	// which the WebView cannot decode for either, so octet-stream and a file row is the better fall.
+	// TIFF and HEIC are absent: the transcript renders image/* as an <img>, which cannot decode them.
 	".mp4": "video/mp4",
 	".webm": "video/webm",
 	".mov": "video/quicktime",
@@ -39,13 +34,10 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-/** Bytes of prefix sniffed from a hand-attached html file for the @dsCard marker. The marker must
- * lead the file, so the prefix decides card-ness exactly; only a <title> past this bound is missed,
- * and the console then falls back to the filename stem. */
+/** The marker leads the file, so this decides card-ness exactly. Only a late <title> is missed. */
 const CARD_SNIFF_BYTES = 8192;
 
-/** A hand-attached html file's declared card fields, or null when it is not a card. Compose-time is
- * the one place allowed to read bytes to answer this, so an attached card docks exactly like a
+/** Compose-time is the one place allowed to read bytes for this, so an attached card docks like a
  * designer_push_card one. */
 async function sniffDsCard(filePath: string, filename: string, mime: string): Promise<ReturnType<typeof parseDsCard>> {
 	const html = mime.startsWith("text/html") || /\.html?$/i.test(filename);
@@ -60,55 +52,42 @@ async function sniffDsCard(filePath: string, filename: string, mime: string): Pr
 	}
 }
 
-/** Stage an absolute-path attachment on the blob plane and describe it, under the shared advisory
- * cap. Shared by the reply tools and notify_human. Unlike an inbound ChannelFile (which may be
- * metadata-only), this always names transferable bytes. */
+/** Unlike an inbound ChannelFile, this always names transferable bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
 	const filename = basename(filePath);
 	const stats = await stat(filePath);
-	// A FIFO stats as size 0 and then blocks the ingest read until a writer appears, wedging the tool
-	// call with no error and no timeout.
+	// A FIFO stats as 0 and then blocks the read, wedging the call with no error.
 	if (!stats.isFile()) throw new Error(`Attachment "${filename}" is not a regular file`);
 	if (stats.size > MAX_ATTACHMENT_BYTES) {
 		throw new Error(`Attachment "${filename}" is ${stats.size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`);
 	}
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
 	const card = await sniffDsCard(filePath, filename, mime);
-	// The bytes go to the blob store a chunk at a time; the message carries only the reference, so
-	// this function no longer holds the file and its base64 at once.
 	const blobId = await uploadBlob(filePath);
-	// Stat again after the upload: the guard stat has to precede it, but by then it describes bytes
-	// that may already be stale. This narrows the gap rather than closing it, since nothing locks
-	// the file across the two calls.
+	// Narrows the stale-size gap; nothing locks the file across the two stats.
 	const after = await stat(filePath).catch(() => stats);
 	return {
 		filename,
 		mime,
 		size: after.size,
 		descriptiveKey: filename,
-		// getTime(), not mtimeMs: the latter carries sub-millisecond precision as a fraction, which
-		// the wire schema's integer check rejects. An mtime outside the Date range yields NaN, which
-		// serializes to null and would have the gateway reject the whole message over one odd file.
+		// getTime(), not mtimeMs: the fraction fails the wire schema's integer check.
 		...wireModifiedAt(after.mtime),
 		blobId,
-		// An operator file is an ordinary attachment BY CONSTRUCTION - the role is a literal here,
-		// never an argument - except a marker-led html, which declares itself a card the same way a
-		// designer_push_card does.
+		// A literal, never an argument, except a marker-led html that declares itself a card.
 		...(card ? { role: "design-card" as const, ...card } : { role: "attachment" as const }),
 	};
 }
 
-/** The wire field for a file's mtime, or nothing at all when the clock cannot be represented.
- * Omission is a supported sender state; a null or NaN is not, and would fail the whole payload. */
+/** Omission is a supported sender state; a null or NaN would fail the whole payload. */
 export function wireModifiedAt(mtime: Date): { modifiedAt?: number } {
 	const ms = mtime.getTime();
 	return Number.isFinite(ms) ? { modifiedAt: ms } : {};
 }
 
-/** Stage a whole attachment list, sequentially, against ONE budget. The per-file cap alone lets N
- * files each under it push an unbounded total onto the gateway, and running them concurrently would
- * multiply the transfer buffers live at once for no gain on a link this short. */
+/** Sequential, against ONE budget: the per-file cap alone lets N files push an unbounded total, and
+ * concurrency would multiply the live transfer buffers for no gain. */
 export async function readReplyAttachments(paths: string[]): Promise<ChannelFile[]> {
 	const out: ChannelFile[] = [];
 	let total = 0;
@@ -128,23 +107,14 @@ export async function readReplyAttachments(paths: string[]): Promise<ChannelFile
 
 export type ToolTextResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
-// Literal backslash-n followed by markdown structure (another \n, a list marker, heading, table
-// pipe, or quote) - the signature of an author who meant line breaks. A non-structural follow
-// (a letter, as in a Windows path) is legitimate prose and passes.
+// A non-structural follow (a letter, as in a Windows path) is legitimate prose and passes.
 const ESCAPE_HAZARD_RE = /\\n(?:\\n|- |\* |\+ |#|\||>)/;
 
-/** The first spot where [text] contains a literal `\n` escape sequence used as markdown structure
- * (a snippet around the match), or null when clean. The enforcing half of the escaped-newline
- * guard - the always-visible half is REAL_NEWLINES_GUIDANCE on the prose-field describes in
- * shared/schemas.ts (schemas cannot import from mcp/, so the two halves live apart). Code is
- * exempt, judged line by line in document order the way the renderer parses it, per CommonMark's
- * fence rules: an opener at a line start (backtick or tilde, info string allowed - never
- * rendered) is closed only by a line holding the MATCHING delimiter and nothing but whitespace; a
- * delimiter line with trailing text inside a fence is ordinary code content, and an unterminated
- * fence runs to end-of-string. On prose lines, inline code spans are blanked to a space,
- * run-length aware (`` ``x`` `` closes only on an equal backtick run). Blanking (not deleting)
- * matters: deletion would glue the span's neighbors together and manufacture a \n-plus-structure
- * adjacency the author never wrote. */
+/** A snippet around the first literal `\n` used as markdown structure, or null. The enforcing half
+ * of the guard; REAL_NEWLINES_GUIDANCE in shared/schemas.ts is the visible half.
+ *
+ * Code is exempt, judged line by line per CommonMark's fence rules. Inline spans are BLANKED, not
+ * deleted: deleting would glue their neighbors into an adjacency the author never wrote. */
 export function literalEscapeHazard(text: string): string | null {
 	let openFence: string | null = null;
 	for (const line of text.split("\n")) {
@@ -166,11 +136,8 @@ export function literalEscapeHazard(text: string): string | null {
 	return null;
 }
 
-/** The reject text every enforcement point returns for a literalEscapeHazard hit. The `\\n`
- * spellings are deliberate: the message must SHOW the two-character sequence, so a raw newline
- * escape here would demonstrate the very bug it describes. The snippet rides inside a code span
- * (its own backticks swapped out) so an agent quoting this reject back to the human verbatim
- * does not trip the lint a second time. */
+/** The `\\n` spellings are deliberate: the message must SHOW the sequence. The snippet rides in a
+ * code span so an agent quoting this back does not trip the lint again. */
 export function literalEscapeReject(toolName: string, field: string, snippet: string): string {
 	const quotable = snippet.replace(/`/g, "'");
 	return (
@@ -181,26 +148,19 @@ export function literalEscapeReject(toolName: string, field: string, snippet: st
 	);
 }
 
-/** The error shape every reply-tool handler returns. Scoped to this file's own callers rather than
- * the similar `textResult` in `connector/utils.ts` - that one serves the unrelated connector
- * subsystem and always sets `isError`, where this one is dedicated to reply-tool failures. */
+/** Reply-tool failures only. `connector/utils.ts` has its own for the connector subsystem. */
 export function toolError(text: string): ToolTextResult {
 	return { content: [{ type: "text" as const, text }], isError: true };
 }
 
 /**
- * POST a reply payload to the gateway, owning the try/catch and success/failure tool response
- * shape shared by every reply tool.
+ * The try/catch and tool-response shape every reply tool shares.
  *
- * `payload` must already carry the fields the caller wants on the wire - callers build it
- * explicitly rather than rest-spreading their args, so a renamed or mistyped arg can never leak
- * through unmapped (see the silent-strip footgun this guards against in `RespondBodySchema`, which
- * is not `.strict()`).
+ * Callers build `payload` explicitly rather than rest-spreading their args, since RespondBodySchema
+ * is not `.strict()` and would silently drop a mistyped one.
  *
- * `files` is a THUNK, called only once the prose has passed the lint. Staging an attachment puts
- * its bytes on the gateway, so building the list eagerly would leave a rejected call's uploads
- * sitting there unreferenced. Deferring it is what makes "a refused reply sends nothing" true for
- * every tool at once, rather than something each one has to remember at its own call site.
+ * `files` is a THUNK, called only after the prose passes the lint, which is what makes "a refused
+ * reply sends nothing" true for every tool at once rather than per call site.
  */
 export async function postReply(
 	payload: Record<string, unknown>,
@@ -216,11 +176,8 @@ export async function postReply(
 		files?: () => Promise<ChannelFile[]>;
 	},
 ): Promise<ToolTextResult> {
-	// Absent/non-string fields are clean by definition - that is what lets a structured reply's
-	// replyAsJson-only payload and a title-less designer push pass with no per-tool special-casing.
-	// A reject names the TOOL-facing field the agent filled in, not the wire key it mapped to
-	// (channel_reply's `full` and designer_push_card's `message` both ride the wire as `response`).
-	// The spoken trio comes from the shared field list; `response` is this wire's body field name.
+	// Absent fields are clean, so a replyAsJson-only payload needs no special-casing. A reject names
+	// the TOOL-facing field, not the wire key it mapped to.
 	for (const field of [...SPOKEN_TIER_FIELDS, "response"]) {
 		const value = payload[field];
 		if (typeof value !== "string") continue;

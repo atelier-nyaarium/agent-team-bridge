@@ -49,9 +49,7 @@ export function registerBridgeTools(mcpServer: McpServer, capabilities: Capabili
 	const projectName = process.env.PROJECT_NAME;
 
 	if (!projectName) {
-		// Register a stub under each REAL tool's own name so a misconfigured container's agent sees
-		// every tool that would exist once PROJECT_NAME is set, not just whichever ones someone
-		// remembered to hand-copy here. Keep this list 1:1 with what the branch below registers.
+		// Keep 1:1 with the branch below, so a misconfigured container still shows every tool.
 		const configError = {
 			content: [
 				{

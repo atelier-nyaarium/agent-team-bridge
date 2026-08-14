@@ -26,9 +26,8 @@ export interface DiscoverGroup {
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The agent-facing canonical address of a discovered peer, built via the value objects (never a
- * hand-concat, so a bare team field becomes the right form, not an accidental 3-segment spawn-point).
- * Falls back to the raw team on a malformed segment, since this is display, not a trust boundary. */
+/** Built via the value objects, never a hand-concat, so a bare team does not become an accidental
+ * spawn-point. Falls back to the raw team: this is display, not a trust boundary. */
 function displayTarget(domainId: string, gatewayId: string, team: string): string {
 	try {
 		const { project, session } = parseSessionName(team);
@@ -40,9 +39,7 @@ function displayTarget(domainId: string, gatewayId: string, team: string): strin
 	}
 }
 
-/** The addressable form of a discover group's header - a team's spawn-point - regardless of
- * whether any session exists under it yet. Falls back to the bare project name when the
- * (domainId, gatewayId) pair isn't resolvable, since this is display, not a trust boundary. */
+/** A team's spawn-point, whether or not a session exists under it. Display, not a trust boundary. */
 function displayHeader(domainId: string | undefined, gatewayId: string | undefined, project: string): string {
 	if (!domainId || !gatewayId) return project;
 	try {
@@ -63,15 +60,9 @@ export function relativeAge(lastActiveMs: number, nowMs: number = Date.now()): s
 	return `${Math.floor(h / 24)}d ago`;
 }
 
-/** Buckets entries by (domainId, gatewayId, project) so a team's bare spawn-point row and its
- * composite session rows collapse under one header instead of printing twice - `teams()` emits
- * both for a catalog project with active sessions. Trusts the wire's own `kind` to tell a bare
- * catalog project from a composite session rather than re-splitting `team` on its dots: a
- * catalog project name may itself contain a dot (`isCatalogProject` elsewhere in this codebase
- * makes the same call by membership, never by the mechanical dot test), so treating `team` as
- * the whole project name for a `"devcontainer"` entry is the only form that can't mis-split one.
- * Skips an entry with no usable `team` instead of throwing, since a federated peer's shape isn't
- * locally guaranteed. Pure given the filtered entry list, exported for tests. */
+/** Buckets by (domainId, gatewayId, project), so a spawn-point row and its session rows share one
+ * header. Trusts the wire's `kind` rather than splitting on dots, since a project name may hold
+ * one. Skips an entry with no usable `team`: a federated peer's shape is not locally guaranteed. */
 export function groupDiscoverEntries(entries: DiscoverEntry[]): DiscoverGroup[] {
 	const groups = new Map<string, DiscoverGroup>();
 	for (const t of entries) {
@@ -88,9 +79,7 @@ export function groupDiscoverEntries(entries: DiscoverEntry[]): DiscoverGroup[] 
 	return [...groups.values()];
 }
 
-/** Renders the filtered entry list as grouped/header output lines - one header per (domainId,
- * gatewayId, project) bucket, its active sessions nested below. Pure given the filtered entry
- * list, exported for tests. */
+/** One header per bucket, its active sessions nested below. Exported for tests. */
 export function formatDiscoverLines(entries: DiscoverEntry[]): string[] {
 	return groupDiscoverEntries(entries).flatMap(({ domainId, gatewayId, project, sessions }) => [
 		`- ${displayHeader(domainId, gatewayId, project)}`,
@@ -100,8 +89,6 @@ export function formatDiscoverLines(entries: DiscoverEntry[]): string[] {
 
 function formatSessionLine(t: DiscoverEntry): string {
 	const address = t.gatewayId && t.domainId ? displayTarget(t.domainId, t.gatewayId, t.team) : t.team;
-	// Lead with the human label when the gateway supplies one, so a crosstalk agent sees
-	// the owner's name for the session beside its addressable form.
 	const name = t.sessionLabel ? `${t.sessionLabel} (${address})` : address;
 	if (t.status === "available") {
 		const seen = t.lastActive ? `, last seen ${relativeAge(t.lastActive)}` : "";
@@ -132,21 +119,13 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 		},
 		async () => {
 			try {
-				// /discover fans out across the mesh: local teams plus every online
-				// peer Gateway's teams (evie stays content-blind). A federated peer carries its
-				// own (domainId, gatewayId), shown as the full domain.gateway.spawn.session
-				// address so it is addressable.
 				const teams = (await routerGet("/discover")) as DiscoverEntry[];
-				// Hide what an agent cannot address as a crosstalk peer: consoles (the human's
-				// device) and the reserved "host" daemon by name (kind alone can't isolate it - a
-				// stray catalog entry could share the literal team name "host").
+				// "host" is filtered BY NAME: a catalog entry could share the literal team name.
 				const others = teams.filter(
 					(t) => t && t.team !== bridgeProjectName() && t.team !== "host" && t.kind !== "console",
 				);
 
-				// Checked post-grouping, not on the raw filtered count: groupDiscoverEntries can drop an
-				// entry with no usable team (a malformed federated peer), so a nonzero others.length does
-				// not guarantee any line actually renders.
+				// Post-grouping: grouping can drop an entry, so a nonzero count renders no line.
 				const lines = formatDiscoverLines(others);
 				if (lines.length === 0) {
 					return { content: [{ type: "text" as const, text: `No other sessions found.` }] };

@@ -124,20 +124,17 @@ async function formatResult(
 	} else if (result.status === "timeout") {
 		parts.push(result.message || `No response in time.`);
 	} else {
-		// Defensive catch-all: a ResponseStatus added later (or an absent status) would otherwise fall
-		// through silently, dropping the body. Surface whatever text the payload carries.
+		// A ResponseStatus added later would otherwise drop its body silently.
 		const body = result.response ?? result.message ?? result.reason;
 		if (body) parts.push(`\n${body}`);
 	}
 
-	// A POLLED reply names its attachments and cannot fetch them: the stored copy holds no reference
-	// (see stripFileRefs). Naming them is the honest report, and "carried no bytes" would stop the
-	// agent asking for the one thing that recovers them. The live push path materializes normally.
+	// A POLLED reply names its attachments and cannot fetch them: the stored copy holds no reference.
+	// Naming them is the honest report; the live push path materializes normally.
 	const attached = result.files ? dropReferenceArtifacts(result.files) : [];
 	if (attached.length > 0) {
 		parts.push(`\nAttachments on this reply (a poll recovers names only; ask for a re-send to get the bytes):`);
-		// The name comes from the replying peer and this output is line-structured, so a newline in
-		// it would forge entries, including the [session_id: ...] line an agent copies to thread.
+		// A peer-supplied newline would forge entries in this line-structured output.
 		for (const f of attached) parts.push(`- ${f.filename.replace(/[\r\n]+/g, " ")}`);
 	}
 
@@ -157,8 +154,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 		},
 		async ({ to, body, session_id, displayLabel, attachments }: BridgeSendArgs) => {
 			try {
-				// Poll mode: session_id present, no body. Attachments exclude it too, or a threaded
-				// send that carried files but no prose would poll and discard them silently.
+				// Attachments exclude poll mode too, or a files-only send would discard them.
 				if (session_id && !body && !attachments?.length) {
 					const result = (await routerPost("/poll", { session_id })) as SendResult;
 
@@ -172,26 +168,19 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					return await formatResult(result, to);
 				}
 
-				// Send mode: requires to, body
 				if (!to || !body) {
 					throw new Error(`Provide to + body for sending, or just session_id for polling.`);
 				}
 
-				// displayLabel becomes a persistent human-rendered session label on the console board.
-				// body stays unlinted as a deliberate trade: its PRIMARY consumer is the receiving
-				// model (which reads escapes fine), and although a display copy does mirror to the
-				// owner's console, rejecting real inter-team work over a cosmetic mirror is worse
-				// than the blemish - especially since task bodies often carry unfenced code.
+				// `body` stays unlinted: its primary consumer is the receiving model, and rejecting real
+				// inter-team work over a cosmetic mirror is worse than the blemish.
 				if (displayLabel) {
 					const hazard = literalEscapeHazard(displayLabel);
 					if (hazard) return toolError(literalEscapeReject("crosstalk_send", "displayLabel", hazard));
 				}
 
-				// This reader is unconfined by design: any absolute path the session can read, with no
-				// root or secret policy. Unlike a reply's, the recipient here can be a foreign agent in
-				// a linked Domain, so the justification is not the one channel_reply's reader rests on.
-				// Accepted because mirrorPeer copies both legs into the owner's mailbox, so nothing
-				// leaves unseen.
+				// Unconfined by design, and the recipient may be a foreign agent. Accepted because
+				// mirrorPeer copies both legs into the owner's mailbox, so nothing leaves unseen.
 				let files: ChannelFile[] = [];
 				if (attachments?.length) {
 					try {

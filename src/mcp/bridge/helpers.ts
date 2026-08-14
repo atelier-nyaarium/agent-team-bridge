@@ -24,28 +24,21 @@ interface RouterPostOptions {
 ////////////////////////////////
 //  Functions & Helpers
 
-// Bridge state: set by initBridge(), read by tool handlers after MCP connects
 let ROUTER_URL = "";
 let PROJECT_NAME = "";
 let AGENT_TYPE = "";
 
-// Stable conversation id for the life of this MCP process. Regenerated on process start,
-// reused across WebSocket reconnects so the gateway can keep the conversation tied to the
-// same agent window / container instance.
+// Per process, reused across reconnects.
 const CONVERSATION_ID: string = crypto.randomUUID();
 
 let routerWs: WebSocket | null = null;
 let suppressReconnect = false;
 const reconnector = createReconnector(() => connectToRouter());
 
-// Server instance for channel notifications (set when Claude + channel mode)
 let channelServer: Server | null = null;
 
-/** This MCP instance's remembered main/lead-vs-worker answer, and the handshake ids it may use to
- * write it. `confirm` only takes effect for an id this connection actually received via
- * `noteReceived` first, so a lead delegating a channel_reply_structured (carrying a relayed hs id)
- * to a separate-harness worker teammate can never poison the WORKER's own cache to true via an id
- * it never received - the guard lives on the write itself instead of at every call site. */
+/** `confirm` only takes for an id this connection received, so a relayed handshake id cannot poison
+ * a worker's own cache. The guard lives on the write, not at every call site. */
 function createHandshakeRoleCache() {
 	let role: boolean | null = null;
 	const receivedIds = new Set<string>();
@@ -75,9 +68,7 @@ export function setChannelServer(server: Server): void {
 	channelServer = server;
 }
 
-/** Record this process's main/lead-vs-worker answer for a handshake it actually received. Returns
- * false (no-op) for an id `noteReceived` never saw, so a relayed/foreign id can never write the
- * cache. */
+/** False (no-op) for an id `noteReceived` never saw. */
 export function confirmHandshakeRole(hsSessionId: string, value: boolean): boolean {
 	return handshakeRole.confirm(hsSessionId, value);
 }
@@ -90,23 +81,15 @@ export function bridgeConversationId(): string {
 	return CONVERSATION_ID;
 }
 
-/** The launcher-delivered session binding, presented on every HTTP call so the gateway derives the
- * sender from the binding instead of trusting a body field. Empty for a hand-launched session,
- * which stays unbound rather than being refused. Read per call, not cached: the module can load
- * before the env is in place. */
+/** The gateway derives the sender from this rather than a body field. Read per call, not cached:
+ * the module can load before the env is in place. */
 function sessionTokenHeader(): Record<string, string> {
 	const token = process.env.SWITCHBOARD_SESSION_TOKEN;
 	return token ? { "x-session-token": token } : {};
 }
 
-/**
- * The readable part of a gateway `error`, which is a bare string on most routes and a structured
- * object on the ones that answer a typed refusal.
- *
- * Reading only the string shape is not a smaller bug than it sounds: it turned every structured
- * refusal into the literal text "[object Object]" at the caller, which is the one place the reason
- * was needed.
- */
+/** A gateway `error` is a bare string on most routes and an object on typed refusals. Reading only
+ * the string shape rendered every structured refusal as "[object Object]". */
 export function routerErrorText(failure: unknown): string | undefined {
 	if (typeof failure === "string") return failure;
 	const message = (failure as { message?: unknown } | null)?.message;
@@ -138,10 +121,8 @@ export async function routerPost(
 			}
 			continue;
 		}
-		// KNOWN GAP (plans/pain-points.md): this parse is OUTSIDE the try above, so a non-JSON error
-		// body rejects out of the retry loop entirely - no retry, and the status never reaches the
-		// caller. A gateway throw becomes exactly that, since Bun.serve declares no `error` handler,
-		// so a disk failure reads to a tool's caller like a bad request rather than something to retry.
+		// KNOWN GAP (plans/pain-points.md): outside the try, so a non-JSON error body skips the retry
+		// loop and its status never reaches the caller.
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
 			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
@@ -151,12 +132,8 @@ export async function routerPost(
 	throw lastErr!;
 }
 
-/** POST a plugin-action envelope to the gateway's /plugin-action route, self-scoped to THIS
- * container's own identity. Deliberately takes no target/team/session_id parameter - `from` is
- * always this process's own PROJECT_NAME, so a plugin-action tool cannot smuggle a different
- * destination through this helper even by mistake. New plugin-action tools should call this
- * rather than routerPost("/plugin-action", ...) directly - hand-rolling the POST body is what
- * would reopen the hole this closes. */
+/** Self-scoped: no target parameter, and `from` is always this process. Hand-rolling the POST body
+ * instead of calling this is what would reopen the hole. */
 export async function postPluginAction(
 	pluginId: string,
 	actionType: string,
@@ -170,13 +147,9 @@ export async function postPluginAction(
 	})) as { delivered?: boolean };
 }
 
-/** POST a task-board request, self-scoped to THIS container's own identity for the same reason
- * postPluginAction is: `from` decides which session's entries the gateway will let the call touch,
- * so a tool that could set it could write as another session. Board tools call this rather than
- * routerPost("/task-board", ...) directly. */
+/** Self-scoped like postPluginAction: `from` decides whose entries the call may touch. */
 export async function postBoard(body: Record<string, unknown>): Promise<unknown> {
-	// `from` LAST, so it overwrites rather than defaults. Spreading it first would make the identity
-	// something a body could name, which is the smuggling this exists to prevent.
+	// `from` LAST, so it overwrites rather than defaults.
 	return routerPost("/task-board", { ...body, from: PROJECT_NAME });
 }
 
@@ -197,10 +170,8 @@ export async function routerGet(
 			}
 			continue;
 		}
-		// KNOWN GAP (plans/pain-points.md): this parse is OUTSIDE the try above, so a non-JSON error
-		// body rejects out of the retry loop entirely - no retry, and the status never reaches the
-		// caller. A gateway throw becomes exactly that, since Bun.serve declares no `error` handler,
-		// so a disk failure reads to a tool's caller like a bad request rather than something to retry.
+		// KNOWN GAP (plans/pain-points.md): outside the try, so a non-JSON error body skips the retry
+		// loop and its status never reaches the caller.
 		const json = (await res.json()) as Record<string, unknown>;
 		if (!res.ok) {
 			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
@@ -210,12 +181,8 @@ export async function routerGet(
 	throw lastErr!;
 }
 
-/** Build the register message from the bridge module state (rebuilt fresh on every reconnect).
- * The harness session id rides along so the gateway can `claude --resume <id>` the session on a
- * later wake; the cwd basename is the default session label for a self-appearing (manually
- * launched) session. The gateway records neither until the handshake confirms, so a channel-less
- * session that never answers never becomes a durable card. Pure given (module state, env),
- * exported for tests. */
+/** Rebuilt on every reconnect. The gateway records nothing until the handshake confirms, so a
+ * channel-less session never becomes a durable card. Exported for tests. */
 export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string | boolean> {
 	const registerMsg: Record<string, string | boolean> = {
 		type: "register",
@@ -233,14 +200,11 @@ export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"
 	}
 	const cwdName = basename(process.cwd());
 	if (cwdName) registerMsg.cwdName = cwdName;
-	// The launcher-delivered binding for this session's record. A session started by hand has none
-	// and registers unbound: it operates its own conversation normally, but cannot claim a name
-	// whose binding is active.
+	// A hand-launched session registers unbound: it works normally, but cannot claim a bound name.
 	if (process.env.SWITCHBOARD_SESSION_TOKEN) {
 		registerMsg.sessionToken = process.env.SWITCHBOARD_SESSION_TOKEN;
 	}
-	// Carry the remembered handshake answer so a reconnect confirms silently instead of re-asking -
-	// never sent false, since a worker that answered false is evicted and never reconnects.
+	// Never false: a worker that answered false is evicted and never reconnects.
 	if (handshakeRole.get() === true) registerMsg.isMainOrLead = true;
 	return registerMsg;
 }
@@ -268,10 +232,8 @@ export function connectToRouter(): void {
 			return;
 		}
 
-		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide.
-		// Scoped to hs-* ids on purpose. Any OTHER gateway-authored push must reach the LLM rather
-		// than be swallowed by this cached answer, and a future one may well forget to change `from`,
-		// so the id prefix rather than the sender is what this gate turns on.
+		// Gated on the hs- prefix, not the sender: another gateway push must reach the LLM rather than
+		// be swallowed by this cached answer, and a future one may forget to change `from`.
 		if (
 			msg.type === "channel_push" &&
 			msg.from === "gateway" &&
@@ -293,10 +255,9 @@ export function connectToRouter(): void {
 				});
 				return;
 			}
-			// role === null: let the LLM decide via channel notification (falls through)
+			// role === null falls through, so the LLM decides.
 		}
 
-		// Handshake rejected: worker agent, stop reconnecting
 		if (msg.type === "handshake_reject") {
 			console.error(`[bridge] handshake rejected - this is a worker, disconnecting permanently`);
 			suppressReconnect = true;
@@ -304,14 +265,12 @@ export function connectToRouter(): void {
 			return;
 		}
 
-		// Channel mode: receive channel_push messages for Claude
 		if (msg.type === "channel_push" && isChannel && channelServer) {
 			emitChannelNotification(channelServer, msg as unknown as ChannelPushPayload).catch((err: Error) => {
 				console.error(`[channel] notification error: ${err.message}`);
 			});
 		}
 
-		// Channel mode: receive response_push when a reply arrives for a sent request
 		if (msg.type === "response_push" && isChannel && channelServer) {
 			emitResponseNotification(channelServer, msg as unknown as ResponsePushPayload).catch((err: Error) => {
 				console.error(`[channel] response notification error: ${err.message}`);
