@@ -58,9 +58,7 @@ let ws: WebSocket | null = null;
 let gatewayUrl = "ws://localhost:20000";
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
-// Minted once per daemon process, deliberately NOT per socket. A reconnect changes which connection
-// carries an event, not which supervisor produced it, so a durable event fenced by this id stays
-// valid across a reconnect that a socket-scoped epoch would have discarded.
+// Per process, not per socket.
 const daemonInstanceId = crypto.randomUUID();
 const codexTargets = new ExecutionTargetManager();
 const codexDaemon = new CodexDaemonService({
@@ -86,13 +84,10 @@ const AGENT_DAEMON_BINDINGS = [
 	{ descriptor: CODEX_BACKEND, targets: codexTargets, service: codexDaemon, parseAck: CodexEventAckSchema },
 	{ descriptor: COPILOT_BACKEND, targets: copilotTargets, service: copilotDaemon, parseAck: CopilotEventAckSchema },
 ] as const;
-// One wake at a time per team: a reconnect + retry (or a duplicate wake message) must not run a
-// second handleWake against a session the first is still bringing up - the reattach branch could
-// otherwise kill a session mid-startup.
+// A second wake kills a starting session.
 const inflightWakes = new Map<string, Promise<void>>();
 
-// A send on a socket mid-close throws; the daemon must never die because a reply could not be
-// delivered. Swallow it - the caller retries on reconnect.
+// A send mid-close throws.
 function safeSend(payload: Record<string, unknown>): void {
 	try {
 		if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
@@ -101,8 +96,7 @@ function safeSend(payload: Record<string, unknown>): void {
 	}
 }
 
-/** Reap every supervised App Server. A child outliving its supervisor would hold a thread nothing
- * can reach or stop. */
+/** Reap every supervised App Server. */
 export function stopSupervisedChildren(): void {
 	for (const { service, targets } of AGENT_DAEMON_BINDINGS) {
 		service.shutdown();
@@ -130,9 +124,7 @@ function connect(): void {
 	ws.on("open", () => {
 		console.error("[host-wake] connected to gateway");
 		reconnector.reset();
-		// Present the host-daemon token. The gateway's host slot is fail-closed: it refuses
-		// the register unless it has HOST_WS_TOKEN set AND this token matches it, so
-		// start-gateway.sh and start-host-daemon.sh wire the same value from .env.
+		// The host slot is fail-closed.
 		const hostToken = process.env.HOST_WS_TOKEN;
 		ws!.send(
 			JSON.stringify({
@@ -144,8 +136,7 @@ function connect(): void {
 			}),
 		);
 
-		// Which supervisor and which children are live, then everything the gateway never committed.
-		// A reconnect changes the socket, not what the children have already produced.
+		// Replay what the gateway never committed.
 		for (const { service } of AGENT_DAEMON_BINDINGS) {
 			safeSend(service.hello());
 			service.replay();
@@ -155,13 +146,7 @@ function connect(): void {
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
 		console.error(`[host-wake] sent catalog with ${projects.length} projects`);
 
-		// A fresh connection (first boot, or a reconnect after a gap) resets every tracked team's
-		// hysteresis and reports it unknown. Without this, a flip that settled to a NEW confirmed
-		// value during a disconnect gap (the WS down, but the daemon's own timers kept ticking
-		// against a still-live tmux) would never be reported at all: observe() only fires on a
-		// TRANSITION away from the already-confirmed value, so a tracker sitting on a stale
-		// confirmation would just keep re-confirming it forever post-reconnect. Watches themselves
-		// are not dropped - no fresh presence_watch push is required for peeking to resume.
+		// observe() fires on transitions, so a stale confirmation re-confirms forever.
 		presenceScheduler.clearAll();
 	});
 
@@ -229,17 +214,12 @@ function connect(): void {
 
 interface WakeMessage {
 	type: "wake";
-	// The composite `project.session` to wake; the daemon parses it into the project (container/dir)
-	// and the tmux session name.
 	team: string;
 	projectPath?: string;
-	// The Claude harness id to `--resume`, if the gateway has one mapped for this session.
 	resumeSessionId?: string;
-	// A host session's workdir hint (the record's label): the pane opens in ~/projects/<hint>. Absent
-	// for a devcontainer wake (its workdir is fixed at /workspace/<project>).
+	// Host only: ~/projects/<hint>.
 	workdirHint?: string;
-	// The record's binding secret, exported into the launched session so its register can prove which
-	// record it is. Absent for a wake with no record (or a record predating the field).
+	// Proves which record.
 	sessionToken?: string;
 }
 
@@ -257,16 +237,14 @@ function greetFreshLaunch(
 }
 
 async function handleWake(msg: WakeMessage): Promise<void> {
-	// The composite carries (project, session); a bare name defaults the session to "claude". Both
-	// segments are interpolated into tmux/shell commands, so reject a non-slug before launching.
+	// Both segments reach tmux and shell commands.
 	const { project, session } = parseSessionName(msg.team);
 	if (!isTmuxName(project) || !isTmuxName(session)) {
 		console.error(`[host-wake] refusing wake of "${msg.team}": invalid project/session name`);
 		safeSend({ type: "wake_result", team: msg.team, success: false, error: "invalid session name" });
 		return;
 	}
-	// A host session launches on the bare host tmux with no container bring-up. The daemon's own
-	// supervisor session shares that server, so a reserved name would relaunch over (or kill) it.
+	// The daemon shares this tmux server.
 	if (project === "host") {
 		if (isReservedHostSession(session)) {
 			console.error(`[host-wake] refusing wake of "${msg.team}": "${session}" is a reserved host session`);
@@ -283,15 +261,10 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		try {
 			const { created } = await ensureSession(target, launch);
 			let res = await awaitReady(target);
-			// The host launch tail `; exec bash` keeps the pane alive after claude exits, so a reattach
-			// can land on a dead shell. awaitReady has now pressed through any startup menus and polled,
-			// so a pane that neither reached the composer nor is working a turn is dead - relaunch it
-			// with --resume. A fresh launch (created) is never a reattach, so never force-relaunched.
-			// A limit-blocked pane is alive and holding an unanswered dialog, not a dead shell, so it must
-			// not be killed: relaunching would discard the dialog and hit the same limit on the next turn.
+			// `exec bash` outlives claude, so a reattach can land on a dead shell. A limit dialog is
+			// alive, not dead: relaunching would discard it and hit the same limit again.
 			if (!created && !res.ready && !res.limit && !isAgentWorking(res.screen)) {
-				// Re-capture before the destructive kill: the awaitReady frame could be a sub-second
-				// composer/spinner transition on a still-live session.
+				// The frame could be a sub-second transition.
 				const recheck = await peekPane(target)
 					.then((p) => p.ansi)
 					.catch(() => res.screen);
@@ -340,9 +313,6 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 
 		console.error(`[host-wake] ${msg.team} container is up, starting Claude`);
 
-		// Reattach if the session is already alive, else launch it (with --resume baked into the
-		// command when an id is mapped). The container is up, so the tmux ops go through tmuxCore's
-		// docker exec (the proven terminal-op path).
 		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
 		const { created } = await ensureSession(
 			target,
@@ -350,10 +320,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		);
 		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
-		// For a fresh launch, poll the pane to clear the dev-channels + folder-trust menus (press "1")
-		// until the REPL composer shows, and track whether it ever captured: a launch that exits
-		// instantly takes its tmux session down with it, so zero captures means a dead launch ->
-		// report a failed wake so /send fails fast. A slow-but-alive session captures at least once.
+		// Zero captures means a dead launch.
 		let lastScreen = "";
 		let launchAlive = !created;
 		let limit: LimitNotice | undefined;
@@ -372,12 +339,10 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			try {
 				lastScreen = (await peekPane(target)).ansi;
 			} catch {
-				// reattach is alive regardless; the screen is best-effort
+				// A reattach is alive regardless.
 			}
 		}
 
-		// Send wake_result with a screen capture so the caller can assess; success reflects whether
-		// the launched session is actually alive (dead-launch detection above).
 		safeSend({
 			type: "wake_result",
 			team: msg.team,
@@ -396,31 +361,24 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 ////////////////////////////////
 //  Host op handler (console terminal view)
 
-// The executor owns single-flight + the peek cadence floor; this module only relays the
-// reply onto the host WS, correlated by reqId.
+// The runner owns single-flight and the cadence floor.
 const hostOpRunner = createHostOpRunner({
-	// The console-facing peek falls back to container logs while a pane does not exist yet; the raw
-	// peekPane serves the internal wake/ready callers that need its reject-on-absent.
+	// Internal callers use peekPane for its reject-on-absent.
 	peekPane: peekWithFallback,
 	sendText,
 	sendKey,
 	createSession: async (target, workdirHint, resumeSessionId, sessionToken) => {
-		// A create_session for an existing session reattaches instead of erroring on a duplicate
-		// new-session. For a fresh launch, clear the dev-channels + folder-trust menus in the
-		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
-		// on the REPL becoming ready (a large/slow launch would blow that budget). resumeSessionId only
-		// takes effect on that fresh-launch branch - a reattach ignores the whole launch command,
-		// resume included.
 		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
 		const { created } = await ensureSession(
 			target,
 			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
 		);
+		// Backgrounded: the op must beat the gateway's 20s timeout.
 		if (created) {
 			void awaitReady(target)
 				.then((res) => greetFreshLaunch(target, { created, resumeSessionId, ready: res.ready }))
 				.catch(() => {
-					// best-effort menu-clearing; a failure self-heals on the next launch
+					// Self-heals on the next launch.
 				});
 		}
 	},
@@ -434,12 +392,7 @@ const hostOpRunner = createHostOpRunner({
 ////////////////////////////////
 //  Presence derivation (board tile working/needsLogin/limitBlocked)
 
-// Drives the intent-ramped board-tile derivation loop: peeks each watched session at its own
-// resolved cadence through hostOpRunner's own single-flight/cadence-floor/slot-priority pipeline
-// (resize=false - a background derivation peek must never resize the pane out from under an
-// actively-viewed terminal; priority="derive" - it always yields slot admission to an interactive
-// peek). A confirmed flip (or a derivation-impossible clear) is reported back to the gateway as a
-// presence_derive frame.
+// resize=false and priority="derive": never disturb an actively-viewed terminal.
 const presenceScheduler = new PresenceScheduler({
 	peek: (target) => hostOpRunner.peek(target, { resize: false, priority: "derive" }),
 	report: (team, value) => {
@@ -462,8 +415,7 @@ async function handleHostOp(reqId: string, op: HostOp): Promise<void> {
 		safeSend({ type: "host_op_reply", reqId, ok: true, result });
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		// Classify a peek failure at the source (the stderr is freshest here) so the gateway/console
-		// read a kind instead of re-matching tmux/docker wording.
+		// Classified here: the stderr is freshest.
 		const errorKind = op.kind === "peek" ? classifyPeekError(message) : undefined;
 		safeSend({ type: "host_op_reply", reqId, ok: false, error: message, errorKind });
 	}

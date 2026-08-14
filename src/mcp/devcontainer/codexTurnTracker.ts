@@ -20,8 +20,7 @@ export interface TurnOutcome {
 	threadId: string;
 	turnId: string;
 	status: "completed" | "failed" | "interrupted";
-	/** Present only for a completed turn that actually produced one. A failed or interrupted turn
-	 * never receives an invented answer. */
+	/** Only for a completed turn that produced one. */
 	finalResponse?: string;
 	error?: string;
 	activities: TrackedActivity[];
@@ -39,11 +38,10 @@ function byteLength(text: string): number {
 //  Class
 
 /**
- * What a turn produced, assembled from the events the App Server emits for it.
+ * What a turn produced. Deltas are ignored, so nothing partial reaches storage.
  *
- * Deltas are ignored entirely and only completed items are kept, so nothing partial can reach
- * storage. A terminal that arrives before its own final item is held until that item lands or the
- * caller gives up waiting, which is the only reason this needs state at all.
+ * A terminal arriving before its own final item is held until that item lands or the caller gives
+ * up. That hold is the only reason this needs state.
  */
 interface TrackedTurn {
 	threadId: string;
@@ -55,23 +53,19 @@ interface TrackedTurn {
 	pendingTerminal?: { status: "completed" | "failed" | "interrupted"; error?: string };
 }
 
-/** The one place an answer is chosen. Both the hold decision and the reported outcome read it, so
- * they cannot disagree about whether this turn has produced one. */
+/** The one place an answer is chosen, so the hold and the outcome cannot disagree. */
 function answerOf(entry: TrackedTurn): string | undefined {
 	return entry.lastFinalAnswer ?? entry.lastCandidate;
 }
 
-// Turn ids of turns already reported. Bounded, because a late duplicate only ever arrives near its
-// own turn, so remembering the recent ones is enough to refuse one.
+// A late duplicate only arrives near its own turn.
 const SETTLED_MEMORY = 256;
 
 export class CodexTurnTracker {
 	private readonly turns = new Map<string, TrackedTurn>();
 	private readonly settled = new Set<string>();
 
-	/** `onCommentary` streams what `retainActivity` just kept. It fires from the same classification
-	 * the stored copy is built from, so a relayed item and a recorded one cannot disagree about which
-	 * text was commentary. */
+	/** Fires from the same classification the stored copy is built from. */
 	constructor(
 		private readonly onCommentary: (item: {
 			threadId: string;
@@ -92,12 +86,8 @@ export class CodexTurnTracker {
 		return null;
 	}
 
-	/**
-	 * Settle a turn whose terminal arrived but whose final item never did.
-	 *
-	 * The caller decides when to stop waiting; this only reports what is actually held, so a turn with
-	 * no completed answer settles without one rather than borrowing a message from somewhere else.
-	 */
+	/** Settle a turn whose terminal arrived but whose final item never did. Reports only what is
+	 * held, so a turn with no answer settles without one. */
 	settlePending(threadId: string, turnId: string): TurnOutcome | null {
 		const entry = this.turns.get(turnId);
 		if (!entry || entry.threadId !== threadId || !entry.pendingTerminal) return null;
@@ -132,8 +122,7 @@ export class CodexTurnTracker {
 	}) {
 		if (this.settled.has(params.turnId)) return null;
 		const entry = this.entryFor(params.threadId, params.turnId);
-		// A turn id belongs to one thread. An item naming a different one is not this turn's and is
-		// dropped rather than merged, which is what keeps an answer from crossing threads.
+		// Keeps an answer from crossing threads.
 		if (entry.threadId !== params.threadId) return null;
 
 		// Commentary is retained but never answers for the turn.
@@ -148,8 +137,7 @@ export class CodexTurnTracker {
 				entry.lastCandidate = params.item.text;
 		}
 
-		// The terminal beat its own answer. Release the hold only once an answer has actually landed,
-		// or commentary would release it and the real answer would arrive after the turn was reported.
+		// Commentary must not release the hold.
 		if (entry.pendingTerminal && answerOf(entry) !== undefined) {
 			return this.finish(params.turnId, entry.pendingTerminal);
 		}
@@ -160,8 +148,7 @@ export class CodexTurnTracker {
 		threadId: string;
 		turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message?: string } | null };
 	}) {
-		// A redelivered terminal for a turn already reported would otherwise fabricate a blank entry and
-		// answer a second time, with none of the first outcome's content.
+		// A redelivered terminal would answer again from a blank entry.
 		if (this.settled.has(params.turn.id)) return null;
 		const entry = this.entryFor(params.threadId, params.turn.id);
 		if (entry.threadId !== params.threadId) return null;
@@ -169,9 +156,7 @@ export class CodexTurnTracker {
 		const error = params.turn.error?.message ? sanitizeCodexErrorText(params.turn.error.message) : undefined;
 		const terminal = { status: params.turn.status, error };
 
-		// A successful turn with no answer yet is the terminal-before-final-item case. The test has to
-		// be the same value the answer is read from, or a turn that has only produced commentary looks
-		// finished and settles without the answer still in flight.
+		// Tested against the same value the answer is read from.
 		if (params.turn.status === "completed" && answerOf(entry) === undefined) {
 			entry.pendingTerminal = terminal;
 			return null;
@@ -193,7 +178,6 @@ export class CodexTurnTracker {
 			threadId: entry.threadId,
 			turnId,
 			status: terminal.status,
-			// Only a completed turn gets an answer, and only from its own items.
 			finalResponse: terminal.status === "completed" ? answerOf(entry) : undefined,
 			error: terminal.error,
 			activities: entry.activities,

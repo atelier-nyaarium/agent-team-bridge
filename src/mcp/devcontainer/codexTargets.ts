@@ -6,8 +6,7 @@ import { type AgentResolvedTarget, parseAgentTargetId } from "../../shared/agent
 ////////////////////////////////
 //  Interfaces & Types
 
-/** One live `codex app-server` process. The manager owns its lifetime and knows nothing of the
- * protocol spoken over these streams. */
+/** One live child. Knows nothing of the protocol spoken over these streams. */
 export interface AgentChild {
 	readonly stdin: Writable;
 	readonly stdout: Readable;
@@ -28,8 +27,7 @@ export interface TargetLease {
 	child: AgentChild;
 }
 
-/** What a consumer of supervised children actually needs. Narrower than the manager on purpose: the
- * daemon service must not be able to reach backoff or generation counters it does not own. */
+/** Narrower than the manager: a consumer cannot reach backoff or generation counters. */
 export interface TargetSupervisor {
 	acquire(target: AgentResolvedTarget): TargetAvailability;
 	release(targetId: string): void;
@@ -52,17 +50,13 @@ export interface TargetLogEvent {
 
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_CEILING_MS = 60_000;
-// A child surviving this long counts as healthy, so a crash after real work does not accumulate
-// toward the give-up count the way a startup crash loop does.
+// Surviving this long separates a crash loop from a crash after real work.
 const HEALTHY_MS = 30_000;
 const MAX_FAST_FAILS = 5;
-// A given-up target tries once more after this long. Without it, installing the missing binary or
-// repairing auth would need a daemon restart, which would take every healthy target down with it.
+// Without a retry, repairing auth would need a daemon restart.
 const GIVE_UP_COOLDOWN_MS = 5 * 60_000;
 
-// Switchboard's own secrets, which an agent child has no business seeing. Agent backends authenticate
-// from their own config files (Codex from ~/.codex/auth.json), so their prefixed vars are toolchain
-// settings, not Switchboard secrets.
+// Switchboard's own secrets. Backends authenticate from their own config files.
 const SCRUBBED_EXACT = new Set([
 	"HOST_WS_TOKEN",
 	"BRIDGE_ROUTER_URL",
@@ -77,10 +71,10 @@ const SCRUBBED_EXACT = new Set([
 const SCRUBBED_PATTERN = /token|secret|password|credential|api[_-]?key/i;
 
 /**
- * The child's environment: the target's own, minus anything of Switchboard's. A deny list rather
- * than an allow list, so a variable a backend needs for its toolchain is never stripped by surprise.
- * Only the LAUNCHING backend's prefix is exempt from the secret pattern: exempting every backend's
- * prefix handed one backend's operator-provided credentials to the other's host child.
+ * A deny list, so a variable a backend needs is never stripped by surprise.
+ *
+ * Only the LAUNCHING backend's prefix is exempt: exempting every prefix handed one backend's
+ * credentials to the other's child.
  */
 export function scrubChildEnv(
 	source: Record<string, string | undefined>,
@@ -96,21 +90,15 @@ export function scrubChildEnv(
 	return out;
 }
 
-/**
- * What to carry INTO a container, as `docker exec -e` pairs.
- *
- * A container child inherits the container's own environment, not this process's, so the host's
- * variables are both unreachable and meaningless there. Only the selected agent's own settings are worth
- * forwarding, and scrubbing them first keeps the deny list authoritative for both launch paths.
- */
+/** `docker exec -e` pairs. A container child inherits the container's environment, so only the
+ * agent's own settings are worth forwarding. Scrubbed first, keeping the deny list authoritative. */
 export function containerEnvArgs(source: Record<string, string | undefined>, envPrefix: string): string[] {
 	return Object.entries(scrubChildEnv(source, envPrefix))
 		.filter(([key]) => key.startsWith(envPrefix))
 		.flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
 
-// The project comes from the shared targetId grammar rather than from reading the field directly, so
-// this cannot drift from whatever else builds one. The name is an argv element, never a shell string.
+// Parsed through the shared grammar, so it cannot drift.
 function containerProject(targetId: string): string {
 	const parsed = parseAgentTargetId(targetId);
 	if (parsed?.kind !== "devcontainer") {
@@ -119,8 +107,7 @@ function containerProject(targetId: string): string {
 	return parsed.project;
 }
 
-// Enough of the child's stderr to tell one failure apart from another. Never logged raw, since it
-// can name a path; it is only read to derive a class.
+// Never logged raw: it can name a path.
 const STDERR_KEEP_BYTES = 2_000;
 
 const STDERR_CLASSES: Array<[RegExp, string]> = [
@@ -137,8 +124,7 @@ function adoptProcess(proc: ReturnType<typeof spawn>): AgentChild {
 		stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_KEEP_BYTES);
 	});
 
-	// A stream error with no listener is thrown, and an unhandled throw here would take the daemon
-	// down over one target's broken pipe. Every failure has to arrive through onExit instead.
+	// An unlistened stream error throws and takes the daemon down. Failures arrive through onExit.
 	proc.stdin?.on("error", () => {});
 	proc.stderr?.on("error", () => {});
 	proc.stdout?.on("error", () => {});
@@ -161,12 +147,10 @@ function adoptProcess(proc: ReturnType<typeof spawn>): AgentChild {
 }
 
 /**
- * A container child goes through `docker exec -i`, the boundary the terminal ops already use,
- * because `devcontainer exec` buffers to completion and cannot carry a long-lived conversation.
+ * `docker exec -i`, not `devcontainer exec`, which buffers to completion.
  *
- * Neither branch takes a working directory from the caller. A thread carries its own cwd, so the
- * process only needs a sane one for its target, and accepting a per-session path here would both
- * split one target across several children and hand an arbitrary absolute path to `-w`.
+ * Neither branch takes a caller's working directory: a thread carries its own, and a per-session
+ * path here would split one target across several children.
  */
 export const realLauncher: ExecutionTargetLauncher = {
 	launch(target, env) {
@@ -188,24 +172,20 @@ export const realLauncher: ExecutionTargetLauncher = {
 				return adoptProcess(spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] }));
 			}
 			case "host": {
-				// The id has to agree with the kind in both directions. Without this, a container-shaped
-				// id paired with kind "host" runs on the host under the daemon's own user, which is the
-				// one direction the container branch already refuses.
+				// A container-shaped id with kind "host" would run under the daemon's own user.
 				if (parseAgentTargetId(target.targetId)?.kind !== "host") {
 					throw Object.assign(new Error("target is not a host id"), { code: "badTarget" });
 				}
 				return adoptProcess(spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "pipe"] }));
 			}
 			default:
-				// Never fall through to the host branch. An unrecognized kind reaching an unsandboxed
-				// spawn is the one mistake here that runs code somewhere it was never meant to.
+				// Never fall through to the unsandboxed host spawn.
 				throw Object.assign(new Error("unknown execution target kind"), { code: "badTarget" });
 		}
 	},
 };
 
-/** An error reduced to a class name. A message may carry a path or child output, neither of which
- * belongs in a log that ships. */
+/** A class name, since a message may carry a path or child output. */
 function classify(err: unknown): string {
 	const code = (err as { code?: unknown } | null)?.code;
 	return typeof code === "string" ? code : "launchFailed";
@@ -230,10 +210,9 @@ const defaultLog = targetLogger("codex-target");
 //  Class
 
 /**
- * One `codex app-server` per execution target, started on first use.
+ * One child per execution target, started on first use.
  *
- * Every thread for a target multiplexes through that target's single child, so the process count
- * tracks targets rather than conversations. A child that dies takes only its own target with it.
+ * Every thread multiplexes through it, so the process count tracks targets, not conversations.
  */
 export class ExecutionTargetManager implements TargetSupervisor {
 	private readonly targets = new Map<
@@ -260,8 +239,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		private readonly envPrefix: string = agentEnvPrefix("codex"),
 	) {}
 
-	/** The target's child, started if this is its first use. Never throws: a target that cannot run
-	 * reports why, so the caller answers `unavailable` rather than failing the whole daemon. */
+	/** Never throws: a target that cannot run reports why. */
 	acquire(target: AgentResolvedTarget): TargetAvailability {
 		const entry = this.targets.get(target.targetId) ?? {
 			generation: 0,
@@ -272,9 +250,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		};
 		this.targets.set(target.targetId, entry);
 
-		// Every host session shares one targetId while carrying its own workdir, so cwd deliberately
-		// does NOT take part: a thread supplies its own, and comparing it here would let the first
-		// session lock out every later one. Only the launch mechanism has to match.
+		// cwd does not take part: comparing it would let the first session lock out every later one.
 		if (entry.launchedFor && entry.launchedFor.kind !== target.kind) {
 			return { state: "unavailable", errorClass: "targetIdCollision" };
 		}
@@ -284,7 +260,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 			if (this.now() - entry.gaveUpAt < GIVE_UP_COOLDOWN_MS) {
 				return { state: "unavailable", errorClass: entry.errorClass ?? "launchFailed" };
 			}
-			// One more attempt, from a clean count, so a repaired target recovers on its own.
+			// A repaired target recovers on its own.
 			entry.gaveUpAt = undefined;
 			entry.fastFails = 0;
 			entry.backoffMs = BACKOFF_START_MS;
@@ -313,8 +289,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		entry.lease = lease;
 		entry.launchedFor = target;
 		child.onExit((info) => {
-			// Only the CURRENT generation's exit retires the lease. A late exit from a replaced child
-			// would otherwise tear down its successor.
+			// A late exit must not tear down its successor.
 			const live = this.targets.get(target.targetId);
 			if (live?.lease?.generation !== lease.generation) return;
 			live.lease = undefined;
@@ -325,8 +300,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		return { state: "running", lease };
 	}
 
-	/** Stop a target's child, if it has one. A deliberate stop is not a failure, so it costs the
-	 * target no backoff, and the next acquire starts a fresh generation immediately. */
+	/** A deliberate stop is not a failure, so it costs no backoff. */
 	release(targetId: string): void {
 		const entry = this.targets.get(targetId);
 		if (!entry?.lease) return;
@@ -335,8 +309,7 @@ export class ExecutionTargetManager implements TargetSupervisor {
 		entry.lease = undefined;
 	}
 
-	/** Reap every child, so none outlives the daemon. Generation counters deliberately survive: a
-	 * reused manager must never hand out a generation a late exit could still be carrying. */
+	/** Generation counters survive, so no generation a late exit carries is handed out again. */
 	shutdown(): void {
 		for (const targetId of [...this.targets.keys()]) this.release(targetId);
 	}
