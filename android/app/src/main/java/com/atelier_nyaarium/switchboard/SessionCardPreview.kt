@@ -43,11 +43,13 @@ fun sessionCardPreview(
 	val headline = oneLine(reply?.title)
 	val lastRow = state.lastRow(team)
 
-	// The snippet is suppressed only when it would repeat the headlined row back to itself. Keying that
-	// on the ROW, not merely on a headline existing, is what keeps the owner's own send visible: after
-	// they send, the headline is still the agent's older reply and the newest row is theirs, so the card
-	// has to change or sending looks like it did nothing.
-	val showSnippet = headline == null || lastRow?.id != reply?.id
+	// The card reports what the SESSION is doing: the agent's own last word, then its board work. The
+	// owner knows what they just sent, and their own row displacing the reply is what made the card
+	// stop answering that question.
+	//
+	// Also suppressed when the snippet would repeat the headlined row back to itself, keyed on the ROW
+	// rather than on a headline merely existing.
+	val showSnippet = lastRow?.fromMe != true && (headline == null || lastRow?.id != reply?.id)
 	// A row carrying only files has no text to preview, and the card would otherwise show a lone
 	// timestamp against blank space. Same stand-in the notification shade uses for that row.
 	val snippet = (if (showSnippet) state.snippet(team) else null)
@@ -63,7 +65,7 @@ fun sessionCardPreview(
 		boardWork = boardWork?.let { it.copy(title = oneLine(it.title).orEmpty()) },
 		// Tied to boardWork rather than passed straight through: a session whose work is all finished
 		// shows no board rung, and a branch surviving that would draw a tree under nothing.
-		boardBranch = boardBranch?.takeIf { boardWork != null && it.rows.isNotEmpty() },
+		boardBranch = boardBranch?.takeIf { boardWork != null && it.rungs.isNotEmpty() },
 		snippet = snippet,
 		// The thread's newest time, which is also what sessionOrder sorts on, so the card's LOWEST time
 		// is its sort key and the column reads in order down the list. Never shown alone: a bare time

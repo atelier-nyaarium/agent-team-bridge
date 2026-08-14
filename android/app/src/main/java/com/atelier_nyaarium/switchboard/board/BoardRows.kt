@@ -20,12 +20,46 @@ data class BoardRows(
 	val trash: List<BoardRow>,
 )
 
-/** What a session card draws, and how much of the branch it had to leave out. */
-data class CardBranch(val rows: List<BoardRow>, val hidden: Int)
+/** One line a session card draws. */
+sealed interface CardRung {
+	data class Entry(val row: BoardRow) : CardRung
 
-/** How many rows a session card will draw before it starts counting instead. A card is a glance;
+	/** A contiguous run of finished entries, drawn as one line. */
+	data class Finished(val count: Int, val depth: Int, val allDone: Boolean) : CardRung
+}
+
+/** What a session card draws, and how many entries it neither drew nor counted in a run. */
+data class CardBranch(val rungs: List<CardRung>, val hidden: Int)
+
+/** How many lines a session card will draw before it starts counting instead. A card is a glance;
  * past this the session list turns into a page of scrolling and the board tab is the better place. */
 const val CARD_BRANCH_MAX = 6
+
+private fun isFinished(row: BoardRow) = row.entry.state == "done" || row.entry.state == "cancelled"
+
+/** Contiguous finished runs of two or more become one rung. A single finished entry stays itself,
+ * since "1 done" costs the same line and says less than the title does. */
+private fun collapseFinished(rows: List<BoardRow>): List<CardRung> {
+	val out = mutableListOf<CardRung>()
+	var i = 0
+	while (i < rows.size) {
+		if (!isFinished(rows[i])) {
+			out.add(CardRung.Entry(rows[i]))
+			i++
+			continue
+		}
+		var end = i
+		while (end < rows.size && isFinished(rows[end])) end++
+		val run = rows.subList(i, end)
+		if (run.size == 1) {
+			out.add(CardRung.Entry(run[0]))
+		} else {
+			out.add(CardRung.Finished(run.size, run.minOf { it.depth }, run.all { it.entry.state == "done" }))
+		}
+		i = end
+	}
+	return out
+}
 
 /**
  * One branch of a session's tree: the top-level entry holding [currentId] and everything beneath it.
@@ -37,6 +71,10 @@ const val CARD_BRANCH_MAX = 6
  * An unknown or absent [currentId] falls back to the FIRST branch rather than to nothing: a session
  * whose current entry was just trashed still has work worth showing, and an empty card would read as
  * a session with no board at all.
+ *
+ * The card centers on where the work IS. A long finished run collapses to one rung, and what is left
+ * is a window around [currentId] rather than the top of the branch: a prefix filled every slot with
+ * finished entries and hid the one being worked on behind the count.
  */
 fun cardBranchOf(rows: List<BoardRow>, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
 	if (rows.isEmpty()) return CardBranch(emptyList(), 0)
@@ -46,9 +84,21 @@ fun cardBranchOf(rows: List<BoardRow>, currentId: String?, max: Int = CARD_BRANC
 	var end = start + 1
 	while (end < rows.size && rows[end].depth != 0) end++
 	val branch = rows.subList(start, end)
-	// The cut keeps the TOP of the branch, not the rows around the current entry: the root names what
-	// the work is, and a slice starting mid-tree would show indented children under nothing.
-	return if (branch.size <= max) CardBranch(branch, 0) else CardBranch(branch.take(max), branch.size - max)
+	// The root is kept whatever else goes: it names what the work is, and a slice starting mid-tree
+	// would show indented children hanging under nothing.
+	val root = CardRung.Entry(branch.first())
+	val rungs = listOf(root) + collapseFinished(branch.drop(1))
+	val kept = if (rungs.size <= max) {
+		rungs
+	} else {
+		val current = rungs.indexOfFirst { it is CardRung.Entry && it.row.entry.id == currentId }
+		val window = (max - 1).coerceAtLeast(0)
+		// One rung of lead-in where there is room, so the current entry is not pinned to the top edge.
+		val first = (current - 1).coerceIn(1, (rungs.size - window).coerceAtLeast(1))
+		listOf(root) + rungs.subList(first, (first + window).coerceAtMost(rungs.size))
+	}
+	val shown = kept.sumOf { if (it is CardRung.Finished) it.count else 1 }
+	return CardBranch(kept, branch.size - shown)
 }
 
 /** The ONE pure producer of board rows: its output guarantees each entry id appears at most once,

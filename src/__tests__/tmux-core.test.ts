@@ -150,8 +150,9 @@ describe("tmuxCore peekPane", () => {
 	it("resizes the detached session to fit the phone, then captures the visible pane with a hash", async () => {
 		stdoutData = "screen contents";
 		const r = await peekPane({ kind: "host", name: "host", sessionName: "claude" });
-		expect(calls[0]).toEqual(["tmux", "resize-window", "-t", "=claude", "-x", "58", "-y", "40"]);
-		expect(calls[1]).toEqual(["tmux", "capture-pane", "-t", "=claude.0", "-e", "-p"]);
+		expect(calls[0]).toEqual(["tmux", "resize-window", "-t", "=claude", "-x", "53", "-y", "38"]);
+		// -J joins wrapped rows, so a selected URL copies as one string.
+		expect(calls[1]).toEqual(["tmux", "capture-pane", "-t", "=claude.0", "-e", "-J", "-p"]);
 		expect(r.ansi).toBe("screen contents");
 		expect(r.hash).toMatch(/^[0-9a-f]{16}$/);
 	});

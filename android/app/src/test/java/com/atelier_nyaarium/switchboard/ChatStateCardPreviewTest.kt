@@ -100,17 +100,14 @@ class ChatStateCardPreviewTest {
 	}
 
 	@Test
-	fun sendingSomethingChangesTheCard() {
-		// The owner's own send cannot retire the headline, so without the snippet rung beneath it the
-		// card would be byte-identical to before they sent and nothing would confirm it went.
-		val before = preview(inbound("reply", title = "The headline", at = 1_000))
-		assertNull(before.snippet)
-		assertNull(before.snippetAt)
-
+	fun theOwnersOwnSendNeverTakesARungOnTheCard() {
+		// The card reports what the session is doing. The owner knows what they sent, and it displacing
+		// the reply is what made the card stop answering that.
 		val after = preview(inbound("reply", title = "The headline", at = 1_000), sent("my follow-up", at = 9_000))
+
 		assertEquals("The headline", after.headline)
-		assertEquals("my follow-up", after.snippet)
-		assertEquals(9_000L, after.snippetAt)
+		assertNull(after.snippet)
+		assertNull(after.snippetAt)
 	}
 
 	@Test
@@ -119,7 +116,7 @@ class ChatStateCardPreviewTest {
 		// rows append in arrival order and only a persisted load re-sorts them, so a server-stamped
 		// row landing behind an optimistic echo under clock skew is enough to separate the two. Reading
 		// the last row's stamp instead would leave the card's lowest time out of step with its rank.
-		val p = preview(inbound("reply", title = "The headline", at = 9_000), sent("later", at = 4_000))
+		val p = preview(inbound("reply", title = "The headline", at = 9_000), inbound("later chatter", at = 4_000))
 		assertEquals(9_000L, p.snippetAt)
 	}
 

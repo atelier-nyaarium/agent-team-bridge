@@ -711,10 +711,13 @@ permissions for the supervised target.
 - **Session card rungs** (`SessionCardPreview.kt`): a PURE function decides which of the headline,
   board line and snippet show and what each is stamped with; the composable paints what it is handed
   and derives nothing. It lives outside `SessionCard` because the inline version was patched twice
-  with no test able to reach the rules. The headline is the session's own last reply, so the owner's
-  sends and peer mirrors cannot take it; the snippet shows whenever the newest row is not that reply,
-  which is what makes a send visibly change the card. Each rung carries its OWN row's time, and the
-  bottom one is `lastActivity`, which is what `sessionOrder` ranks on, so the column reads in order.
+  with no test able to reach the rules. The card reports what the SESSION is doing: the headline is
+  its own last reply, and the owner's own row never takes a rung. Each rung carries its OWN row's
+  time, and the bottom one is `lastActivity`, which is what `sessionOrder` ranks on, so the column
+  reads in order.
+- **The card's board branch** (`cardBranchOf`): the root is always kept, contiguous finished runs
+  collapse to one rung, and what is left is a window around the session's current entry. A prefix
+  filled every slot with finished titles and hid the entry being worked on behind the count.
 - **One-line rows** (`oneLine`): ASCII whitespace collapse for a row that cannot show a second line,
   which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
   Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
@@ -756,6 +759,8 @@ permissions for the supervised target.
   is playing" instead let a torn-down run's marker drive the current one and swallow its message, four
   times. Cached speech is keyed on the WORDS, not just the entry, because one message is spoken two
   ways: attributed when played by hand, unattributed inside a run where the sentinel already said it.
+  A RESUME never re-announces (`parkedAnnounced`): a pause parks the entry its markers already
+  introduced, and the transport's play button is not a new run.
 - **Per-row play state** (`playStatesFor`, `setPlayStates`): the repository ANSWERS what each row is
   doing; consumers do not accumulate it from events. A row is painted as it is built as well as on
   push, since state changes when playback does, not when a row re-renders.
@@ -781,9 +786,10 @@ permissions for the supervised target.
   busy, not that the work should stop. The measured duration is the by-product that lets a queued
   tile show its length instead of a spinner.
 - **Audio focus** (`SpeechFocus.kt`): held for a RUN, `AUDIOFOCUS_GAIN_TRANSIENT` so the user's music
-  resumes, released on a pause as well as at the end. Every loss pauses, including the duckable one -
-  with `CONTENT_TYPE_SPEECH` the system does not auto-duck, and speech under speech is worse than a
-  gap. A refused request pauses rather than speaking anyway, and `ACTION_AUDIO_BECOMING_NOISY` is its
+  resumes, released on a pause as well as at the end. A DUCKABLE loss keeps speaking (`focusAction`):
+  it is what a notification ping raises, and pausing on it killed every run, since the transport
+  releases focus while paused so no GAIN could ever arrive to lift it. A refused request does not
+  pause either, for the same reason: it registers no listener. `ACTION_AUDIO_BECOMING_NOISY` is its
   own receiver because unplugging a headset is a route change, not a focus change.
 - **`transportPaused` normalizes in its GETTER**, so a pause cannot be observed over an idle queue. The
   rule lived at the writers through three rounds and each new way of emptying the queue reintroduced

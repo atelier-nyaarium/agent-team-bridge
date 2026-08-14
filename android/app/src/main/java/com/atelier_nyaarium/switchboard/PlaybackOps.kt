@@ -83,6 +83,12 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 	 * that moved on while one was in flight must not let the leftovers introduce the wrong one. */
 	private var markersFor: QueueEntry? = null
 
+	/** The entry a pause parked, which its markers already introduced. A resume speaks the body
+	 * rather than naming the session again: the transport's play button is not a new run, and
+	 * re-announcing on every tap is what it sounded like. Cleared by the next start, so a fresh tap
+	 * on the same message later still gets its sentinel. */
+	private var parkedAnnounced: QueueEntry? = null
+
 	/** The marker handed to the engine, by its own entry key. CLAIMED rather than sounding: a marker
 	 * spends its whole synthesis owning nothing audible, and a teardown in that window still has to
 	 * reach it. A terminal that does not match belongs to a run that has already ended. */
@@ -359,6 +365,7 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 				// audible thing is a marker, and a marker is never resumable, so a pause landing there
 				// files nothing rather than cutting the opening off the body.
 				queue.requeueFront(head)
+				parkedAnnounced = head
 				repo.stts.abandon(head.team, head.at, head.tier, remember = true)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
 			}
@@ -486,7 +493,9 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 		// this returns having started the boundary rather than the message. Markers staged for a
 		// DIFFERENT entry are discarded: they name a session, and announcing the wrong one is worse
 		// than announcing none.
-		if (markersFor != entry) queueMarkers(entry, chime = false)
+		val resuming = parkedAnnounced == entry
+		parkedAnnounced = null
+		if (!resuming && markersFor != entry) queueMarkers(entry, chime = false)
 		if (nextMarkerStarted()) return
 		speakBody(entry)
 	}

@@ -38,8 +38,8 @@ const CONTAINER_LOGS_TIMEOUT_MS = 5_000;
 // The detached agent session is sized to fit the phone's terminal view before each capture. A
 // detached session keeps the resize-window size (no attached client overrides it), and a same-size
 // resize is a no-op redraw, so the cost is one cheap spawn per peek.
-const TMUX_COLS = 58;
-const TMUX_ROWS = 40;
+const TMUX_COLS = 53;
+const TMUX_ROWS = 38;
 
 // Startup readiness polling. A large resumed history can take a while to render, so the budget is
 // generous; the gateway-side wake wait runs until the woken container registers (bounded well above
@@ -198,7 +198,10 @@ export async function peekPane(target: TmuxTarget, resize = true): Promise<TmuxP
 			]),
 		).catch(() => {});
 	}
-	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-p"]));
+	// -J joins the rows a line was WRAPPED across, so selecting a long URL in the console's terminal
+	// view copies one string instead of two halves with a newline and the next row's padding between
+	// them. tmux tracks the wrap itself, so a line the app drew as two rows stays two rows.
+	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-J", "-p"]));
 	const hash = crypto.createHash("sha256").update(ansi).digest("hex").slice(0, 16);
 	return { ansi, hash };
 }

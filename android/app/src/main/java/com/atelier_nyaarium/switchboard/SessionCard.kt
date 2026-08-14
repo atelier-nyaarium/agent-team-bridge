@@ -209,9 +209,21 @@ fun SessionCard(
 						BoardCardCount(liveBoardWork)
 					}
 				} else {
-					branch.rows.forEachIndexed { index, row ->
-						BoardCardRow(row.entry.state, oneLine(row.entry.title).orEmpty(), row.depth) {
-							if (index == 0) BoardCardCount(liveBoardWork)
+					branch.rungs.forEachIndexed { index, rung ->
+						val count = @Composable { if (index == 0) BoardCardCount(liveBoardWork) }
+						when (rung) {
+							is com.atelier_nyaarium.switchboard.board.CardRung.Entry ->
+								BoardCardRow(rung.row.entry.state, oneLine(rung.row.entry.title).orEmpty(), rung.row.depth, count)
+							// One line for a finished run: the titles of work already done are what buried the
+							// entry actually being worked on. Marked done even when the run holds a cancelled
+							// entry, since a struck-through count reads as a count that was called off.
+							is com.atelier_nyaarium.switchboard.board.CardRung.Finished ->
+								BoardCardRow(
+									"done",
+									if (rung.allDone) "${rung.count} done" else "${rung.count} finished",
+									rung.depth,
+									count,
+								)
 						}
 					}
 					if (branch.hidden > 0) {
