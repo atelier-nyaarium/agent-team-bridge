@@ -60,8 +60,8 @@ code does not belong here; rationale lives in `git log`.
   - `ScheduledSendOps.kt` (`repo.scheduled`) owns the banked sends, the alarm seam the service wires,
     and the one mutex every fire path funnels through so a warm kick cannot double-convert
   - `GoalOps.kt` (`repo.goals`) owns armed goals: the send they ride, the wait for that session's
-    reply and then for its pane, and the one place a `/goal` line is typed (see Armed goals below).
-    `Goal.kt` beside it is the record, the text sanitizer and the pure `goalStep` rule
+    reply and then its pane, and the one place a `/goal` line is typed (see Armed goals below).
+    `Goal.kt` is the record, the sanitizer and the pure `goalStep` rule
   - `PresenceOps.kt` (`repo.presence`) owns the team list rebuild and its mutex, cross-Domain
     presence, and the read anchors this device reports back
   - `SessionOps.kt` (`repo.sessions`) owns the terminal view and session control: peek, tmux send,
@@ -197,10 +197,9 @@ slot: devcontainer wake, session spawn, and the console terminal view. It carrie
 | 20002 | MCP connector (game client WS)    |
 | 20003 | Enrollment TLS (arming only)      |
 
-20000 publishes to LOOPBACK only. Local HTTP authorizes a caller by its session binding, which says
-nothing about which machine it is on, so nothing may reach it from the LAN. Containers reach it by
-service name over the compose network, which does not traverse the mapping. 20003 is the one port
-that does need the LAN, and it is pinned-TLS behind a one-time nonce.
+20000 publishes to LOOPBACK only: local HTTP authorizes by session binding, which says nothing about
+which machine the caller is on. Containers reach it by service name, off that mapping. 20003 is the
+one port that needs the LAN, pinned-TLS behind a one-time nonce.
 
 ### Channel conversations
 
@@ -357,28 +356,23 @@ The send button's long-press menu offers **Goal**: send the composed message, wa
 then type a `/goal <description>` line into its pane. Console-only - no wire shape, no gateway change,
 reusing `send` and the existing `tmux_send` op.
 
-- **THREE tmux sends, never one line.** The CLI folds a burst of typed characters into a clipboard
-  paste, and a whole `/goal ...` line pasted at once is not read as a command at all. So the prefix
-  goes alone, the description follows as its own paste, and Enter is its own keypress - the last part
-  for the same reason `resumeAfterLimit` is three sends (a trailing CR reads as inserted text).
-- **The wait is two halves and needs both.** The session's own reply is what "the message was worked"
-  means; the pane being ready is what makes a slash command a command rather than text queued into a
-  busy composer. `isReady && !isWorking`, so a pane held by a permission dialog is not idle either.
-- **An idle pane is not necessarily an EMPTY one.** Typing appends, so a line the owner half-typed
-  and walked away from gets submitted joined to the goal - measured, not theorized: probing this by
-  hand produced `Goal set: ...the /goal clear`. Hence `composerIsEmpty`, whose stated cost is that a
-  future CLI painting a ghost hint into an empty composer would read as occupied and expire the goal
-  unfired. That failure is visible and destroys nothing; the other one submits somebody's fragment.
-- **Arm BEFORE the send**, since the record is what recognizes the reply and a session can answer
-  before `send()` returns. That is also why the record carries its own `sentAt`: a reply landing
-  first is answering something else, and nothing may be typed until the send it rides has settled.
+- **THREE tmux sends, never one line.** The CLI folds a burst of typed characters into a paste, and a
+  whole `/goal ...` line pasted at once is read as no command. Enter is its own keypress, same reason
+  `resumeAfterLimit` is three sends.
+- **The wait is two halves and needs both.** The reply is what "the message was worked" means; the
+  pane being ready is what makes a slash command a command rather than queued text. `isReady &&
+  !isWorking`, so a pane held by a permission dialog is not idle either.
+- **An idle pane is not necessarily an EMPTY one.** Typing appends, so a half-typed line the owner
+  left gets submitted joined to the goal. Hence `composerIsEmpty`, whose cost is that a future CLI
+  painting a ghost hint into an empty composer would expire the goal unfired instead.
+- **Arm BEFORE the send**, since the record recognizes the reply and a session can answer before
+  `send()` returns. Hence `sentAt`: a reply landing first is answering something else.
 - **The record is cleared BEFORE the first keystroke.** A process death mid-sequence would otherwise
-  type `/goal ` into a composer already holding half of one. Losing a goal is re-armable; a session
-  typed at twice is not.
-- Peeking happens only in the second half. A peek every couple of seconds for the whole reply budget
-  is a real cost on a phone for an answer that cannot matter yet.
-- The phase is READ from the record's two nullable instants, never stored, so a restored record and
-  its dock cannot disagree about how far along it is. `goalStep` is the whole rule, and pure.
+  type into a composer already holding half a goal. Losing one is re-armable, a session typed at
+  twice is not.
+- Peeking happens only in the second half; a peek every two seconds for the whole reply budget is a
+  real cost on a phone.
+- The phase is READ from the record's two instants, never stored. `goalStep` is the whole rule, pure.
 
 ### Artifact references (`ref://`)
 

@@ -115,9 +115,8 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { it.copy(notices = it.notices + entry) }
 	}
 
-	/** Drop the previous provisioning's board. In memory only: the durable key is wiped first, and
-	 * [mutate] persists a transform of [blob], so a board left here is re-committed onto the next
-	 * owner's device by their first write. */
+	/** In memory only, the durable key having been wiped first. [mutate] persists a transform of
+	 * [blob], so a board left here is re-committed by the next owner's first write. */
 	override suspend fun clearInMemory() {
 		synchronized(stateLock) {
 			blob = BoardBlob()

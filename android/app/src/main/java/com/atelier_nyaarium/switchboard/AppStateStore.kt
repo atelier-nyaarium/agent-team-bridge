@@ -252,7 +252,7 @@ class AppStateStore(context: Context) :
 
 	override fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
 
-	/** At most one armed goal per team, same disposable storage class as the two above. */
+	/** Same disposable storage class as the two above. */
 	override fun saveGoals(json: String) = prefs.edit().putString(KEY_GOALS, json).apply()
 
 	override fun loadGoals(): String? = prefs.getString(KEY_GOALS, null)

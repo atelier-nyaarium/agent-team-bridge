@@ -28,8 +28,8 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	// Not private: SessionOps.forget drops a forgotten team's entry.
 	@Volatile var lastReportedReadAnchors: Map<String, ReadAnchor> = emptyMap()
 
-	/** A poll re-derives both, but reapplyCachedTeams runs on every tick, so until one lands the
-	 * cached snapshot would merge the previous owner's roster back into state. */
+	/** reapplyCachedTeams runs every tick, so until a fresh poll lands the cached snapshot would
+	 * merge the previous owner's roster back in. */
 	override suspend fun clearInMemory() {
 		lastRawTeams = null
 		lastReportedReadAnchors = emptyMap()

@@ -179,8 +179,7 @@ export class PendingJobStore<T> {
 		return this.entries.get(id)?.to;
 	}
 
-	/** The team waiting on a job, or undefined for an unknown id. Read-only, and deliberately not
-	 * folded into `poll`: the answer has to be authorized before it is consumed. */
+	/** The team waiting on a job. Kept apart from `poll`: the read is authorized before it consumes. */
 	askerOf(id: string): string | undefined {
 		return this.entries.get(id)?.from;
 	}

@@ -26,16 +26,10 @@ internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 	override val seq: Long get() = entry.seq
 }
 
-/**
- * In-memory state belonging to the CURRENT provisioning.
- *
- * A holder states its own wipe beside the fields it clears, rather than exposing them for
- * [clearAll] to reach one at a time. The SET of holders is [ChatRepository.clearedOnReprovision].
- */
+/** In-memory state belonging to the CURRENT provisioning. A holder states its own wipe beside the
+ * fields it clears; the set of holders is [ChatRepository.clearedOnReprovision]. */
 internal interface ClearsOnReprovision {
-	/** Drop what the previous provisioning left in memory. Runs AFTER the durable wipe
-	 * (store.clearProvisioning), so nothing here persists anything. Suspending because a holder may
-	 * guard its state with a mutex, and a wipe that skipped the lock would race the poll loop. */
+	/** Runs after the durable wipe, so nothing here persists. Suspending: a holder may hold a mutex. */
 	suspend fun clearInMemory()
 }
 
@@ -239,15 +233,13 @@ class ChatRepository(
 	////////////////////////////////
 	//  Re-provision wipe
 
-	/** Every holder of state belonging to the current provisioning; [clearAll] wipes exactly this set.
-	 * A delegate that gains a cache is named here and states its own wipe, rather than leaving clearAll
-	 * a hand-written call per field - a field nobody remembered to reach is how the board went on
-	 * serving the previous owner's entries to the next one. */
+	/** [clearAll] wipes exactly this set. A delegate that gains a cache belongs here; one nobody
+	 * remembered to reach is how the board went on serving the previous owner's entries. */
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
 		get() = listOf(this, board, presence, trust, drain)
 
-	/** This class's own share: the connection built from the blob, the ids and cursor learned from it,
-	 * the two team-keyed sets, and the invite secrets staged against the outgoing Domain. */
+	/** This class's own share: the connection, the ids and cursor learned from the blob, and the
+	 * invite secrets staged against the outgoing Domain. */
 	override suspend fun clearInMemory() {
 		client = null
 		sttsClient = null
@@ -288,10 +280,8 @@ class ChatRepository(
 	 * way the federation Ops delegates do. */
 	internal val drain = PollDrain(this)
 
-	/** Goals armed against a session: the wait between sending a message and typing a `/goal` line
-	 * into that session's pane (see GoalOps' own doc). Must stay declared after [drain]: it subscribes
-	 * to the drain gate from its own init, so constructing it earlier reads that field before it
-	 * exists. */
+	/** Goals armed against a session (see GoalOps). Must stay declared after [drain], which its own
+	 * init subscribes to. */
 	internal val goals = GoalOps(this)
 
 	/** Set by the service: called per poll with the new inbound messages of one
@@ -405,8 +395,7 @@ class ChatRepository(
 				error = null,
 				localGatewayId = localGatewayId,
 				drafts = drafts,
-				// Seeded rather than armed: arming SENDS, which a gatewayless sandbox cannot do, and the
-				// dock is the surface worth looking at.
+				// Seeded rather than armed: arming sends, which a gatewayless sandbox cannot do.
 				goals = goals,
 			)
 		}

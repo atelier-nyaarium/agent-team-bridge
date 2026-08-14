@@ -6,16 +6,10 @@ import { describe, expect, it } from "vitest";
 //  Functions & Helpers
 
 /**
- * A source-residue guard for the wipe a Clear-and-re-provision performs.
+ * Source-residue guard for the Clear-and-re-provision wipe: declaring `ClearsOnReprovision` does
+ * nothing until the roster names the field, and reading that roster needs an instance, so a Context.
  *
- * The console's repository is a process singleton with no reset path, so every delegate it holds
- * survives a wipe with the previous owner's data still in it. A delegate states its own wipe by
- * implementing `ClearsOnReprovision`, but declaring one does nothing until the roster names it, and
- * a roster entry cannot be checked from a JVM test: reading it needs an instance, and constructing
- * one needs a Context.
- *
- * Deliberately in the TS suite: the Android tests run on push to main, so a Kotlin-side assertion
- * could not stop the regression from landing in a PR.
+ * In the TS suite on purpose: the Android tests run after merge and could not block the PR.
  */
 const ANDROID_SRC = path.join(
 	import.meta.dirname,
@@ -91,8 +85,7 @@ describe("a re-provision wipes every holder that declares a wipe", () => {
 	});
 
 	it("finds classes and fields at all, so the comparison above is proving something", () => {
-		// Both sides empty would satisfy the assertion while checking nothing, which is how a guard
-		// stops covering anything without ever failing.
+		// Both sides empty would satisfy the assertion above while checking nothing.
 		expect(wipingClasses().size).toBeGreaterThan(0);
 		expect(rosterNames().length).toBeGreaterThan(0);
 	});

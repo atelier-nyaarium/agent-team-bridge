@@ -80,8 +80,7 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		return mapOf(SESSION to Draft(text = "", files = staged, locations = locations))
 	}
 
-	/** An armed goal on the second session, so the dock draws without a gateway to send through.
-	 * Waiting on the reply (no replyAt), which is the phase the second line reads differently. */
+	/** An armed goal so the dock draws with no gateway behind it, in its awaiting-reply phase. */
 	fun goals(): Map<String, PendingGoal> = mapOf(
 		SESSION_2 to PendingGoal(
 			text = "Complete the plan",

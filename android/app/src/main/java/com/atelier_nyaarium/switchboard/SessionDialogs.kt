@@ -169,15 +169,8 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 	)
 }
 
-/**
- * Type what a session should keep working toward. Confirming sends the composed message and arms the
- * goal against it (see GoalOps.armAndSend), which is why the confirm reads as submitting rather than
- * closing instantly.
- *
- * Single-line and capped like [RenameDialog]: the goal is typed as one line into a terminal, so a
- * newline would submit it halfway through. A PASTED newline still gets through here and is collapsed
- * at the repository edge - the field cannot refuse what it is handed, only what is typed into it.
- */
+/** Type what a session should keep working toward. Confirming sends the message and arms the goal
+ * against it (GoalOps.armAndSend), which is why the confirm reads as submitting. */
 @Composable
 fun GoalDialog(submitting: Boolean, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
 	var goal by remember { mutableStateOf("") }
@@ -187,9 +180,7 @@ fun GoalDialog(submitting: Boolean, onConfirm: (String) -> Unit, onDismiss: () -
 		text = {
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 				Text("Goal Description", style = MaterialTheme.typography.bodySmall)
-				// No `label`, unlike [RenameDialog]: the line above already names the field, and a
-				// Material label sits INSIDE an empty field, so it read as a second "Goal" ghosted in
-				// the box. Without one the placeholder shows there instead, which is an example.
+				// No label: it would sit inside the empty field, ghosting a second name under the one above.
 				OutlinedTextField(
 					value = goal,
 					onValueChange = { if (it.length <= GOAL_MAX_CHARS) goal = it },

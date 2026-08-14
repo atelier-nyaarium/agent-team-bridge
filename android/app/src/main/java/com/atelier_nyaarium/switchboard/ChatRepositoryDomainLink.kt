@@ -269,9 +269,8 @@ suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
 	// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
 	// provisioning/identity/history, never voice (clear() is the full factory wipe).
 	store.clearProvisioning()
-	// Durable first, then every in-memory holder (see clearedOnReprovision). The process is not
-	// restarted and nothing reconstructs these, so a cache left holding the previous owner's data is
-	// re-persisted onto the next owner's device by their first write.
+	// Durable first, then every in-memory holder: a cache left holding the previous owner's data is
+	// re-persisted by the next owner's first write.
 	for (cache in clearedOnReprovision) cache.clearInMemory()
 	stts.purgeAll()
 	// Paired with the TTS purge above, same as the one-shot schema-migration wipe does (see

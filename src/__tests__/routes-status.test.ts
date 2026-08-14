@@ -65,9 +65,8 @@ describe("routes", () => {
 			expect(res.status).toBe(404);
 		});
 
-		// A session_id is computable from two non-secret values, so it names a job rather than
-		// authorizing one. A persistent channel entry is not consumed on read either, so an id that
-		// leaked once would otherwise keep paying out the answer forever.
+		// A session_id names a job rather than authorizing one: it is computable from two non-secret
+		// values, and a persistent channel entry is not consumed on read.
 		it("hands a job's answer only to the session that asked", async () => {
 			const store = new PendingJobStore<ResponsePayload>();
 			const sessionStore = new SessionStore();

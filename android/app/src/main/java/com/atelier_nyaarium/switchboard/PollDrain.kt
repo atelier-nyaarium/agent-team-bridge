@@ -137,8 +137,8 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		pollFails = 0
 	}
 
-	/** A cursor is a claim about what THIS device already holds, so one carried across a
-	 * re-provision makes the new Gateway ship nothing for that plane. */
+	/** A cursor claims what this device already holds, so one carried across a re-provision makes
+	 * the new Gateway ship nothing for that plane. */
 	override suspend fun clearInMemory() = resetPlaneCursors()
 
 	/** Forget every presented plane version so the NEXT poll looks like a cold boot and the
@@ -308,9 +308,8 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
-					// Restarts the wait for a goal armed before this process started (or before a
-					// re-provision), and retires one that ran out of time. A no-op when none is armed,
-					// which is every pass in the ordinary case.
+					// Restarts the wait for a goal armed before this process started, and retires an
+					// expired one. A no-op when none is armed.
 					repo.goals.tick()
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see

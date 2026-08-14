@@ -270,8 +270,7 @@ class ChatPersistenceTest {
 		codec.persistGoals(mapOf(team to awaitingReply, peerTeam to awaitingIdle))
 		val loaded = codec.loadPersistedGoals()
 
-		// Both phases survive: a restored record must resume the wait it was actually in, and an
-		// absent instant must come back absent rather than as a zero that reads as "long ago".
+		// An absent instant must come back absent, not as a zero that reads as long ago.
 		assertEquals(mapOf(team to awaitingReply, peerTeam to awaitingIdle), loaded)
 		assertNull(loaded.getValue(team).replyAt)
 	}
@@ -282,7 +281,7 @@ class ChatPersistenceTest {
 		val noClock = PendingGoal(text = "Complete the plan", armedAt = 0L)
 		codec.persistGoals(mapOf(team to noText, peerTeam to noClock))
 
-		// Nothing to type, and nothing to time out against - the second would otherwise wait forever.
+		// Nothing to type, and no clock to time out against.
 		assertEquals(emptyMap<String, PendingGoal>(), codec.loadPersistedGoals())
 	}
 
