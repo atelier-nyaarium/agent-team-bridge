@@ -9,8 +9,7 @@ import type { FoundRef } from "./refScanner.js";
 /** A ref that resolved, ready to become snapshot metadata. */
 export interface ResolvedRef {
 	found: FoundRef;
-	/** Path as written, which is also the snapshot's identity: one snapshot per file however many
-	 * refs point into it. */
+	/** Also the snapshot's identity: one per file however many refs point into it. */
 	refPath: string;
 	text: string;
 	resolution: Resolution;
@@ -22,8 +21,7 @@ export interface Segment {
 	text: string;
 }
 
-/** A working entry while the budget settles. Never ships: the wire form is the `ref` block on the
- * snapshot's own ChannelFile, derived at the end. */
+/** Never ships. The wire form is the `ref` block, derived at the end. */
 interface InternalEntry {
 	refPath: string;
 	filename: string;
@@ -37,9 +35,7 @@ export interface BuiltArtifact {
 	/** UTF-8 text. The caller stages it onto the blob plane. */
 	content: string;
 	mime: string;
-	/** What this snapshot IS, for the ChannelFile that carries it. The snapshot content is exactly
-	 * its segments' text joined with newlines, so the line ranges here partition it byte-exactly and
-	 * the text never rides the wire twice. */
+	/** The content IS these segments joined with newlines, so the line ranges partition it exactly. */
 	ref: RefFileMeta;
 }
 
@@ -48,14 +44,13 @@ export type BuildResult = { ok: true; artifacts: BuiltArtifact[] } | { ok: false
 ////////////////////////////////
 //  Functions & Helpers
 
-/** No single snapshot may exceed this. A file over it must be narrowed by the ref, not truncated,
- * since a truncated snapshot would silently not contain what the ref points at. */
+/** Narrowed by the ref, never truncated: a truncated snapshot would not hold what the ref points
+ * at. */
 export const MAX_FILE_BYTES = 256 * 1024;
 
-/** Everything one message may attach, decoded. Keeps a reply far below any transport ceiling. */
+/** Everything one message may attach, decoded. */
 export const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 
-/** Lines kept either side of a snippet, so a reader sees why the region looks like it does. */
 const CONTEXT_LINES = 3;
 
 function lineCount(text: string): number {
@@ -66,13 +61,8 @@ function bytes(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
-/**
- * Merge each file's ranges into as few segments as possible, with context.
- *
- * Coalescing is what keeps one copy per file no matter how many refs point into it. Overlapping
- * windows merge rather than shipping the same lines twice, which would let a handful of nearby refs
- * re-inflate a snippet past the very cap that produced it.
- */
+/** Overlapping windows merge, or nearby refs would re-inflate a snippet past the cap that produced
+ * it. */
 function segmentsFor(text: string, ranges: Array<{ startLine: number; endLine: number }>): Segment[] {
 	const lines = text.split("\n");
 	const windows = ranges
@@ -97,13 +87,8 @@ function entryBytes(entry: InternalEntry, fullText: string): number {
 	return (entry.segments ?? []).reduce((sum, s) => sum + bytes(s.text), 0);
 }
 
-/**
- * Assemble the snapshot artifacts for a message's refs, each carrying its own `ref` metadata.
- *
- * `existingNames` must be the agent's own attachment filenames, so snapshot naming dedupes across
- * the whole files array. Naming is display-only: the console pairs a tapped ref to its snapshot
- * through the file entry's own `ref` block, never through the filename.
- */
+/** `existingNames` is the agent's own attachments, so naming dedupes across the whole files array.
+ * Naming is display-only: the console pairs a ref through the `ref` block. */
 export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[]): BuildResult {
 	if (resolved.length === 0) return { ok: true, artifacts: [] };
 
@@ -115,9 +100,7 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 		else byPath.set(ref.refPath, [ref]);
 	}
 
-	// Replay the device's own naming over the agent's attachments IN ORDER rather than collapsing
-	// them into a set: it renames each colliding entry, so two attachments sharing a basename take
-	// two names, and a snapshot must not take a name the second attachment will land under.
+	// Replayed IN ORDER, not collapsed to a set: two attachments sharing a basename take two names.
 	const used = new Set<string>();
 	for (const name of existingNames) uniqueName(safeName(name), used);
 
@@ -128,8 +111,7 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 		const text = refs[0].text;
 		texts.set(refPath, text);
 
-		// A ref covering the whole file pins its file to full mode: there is no narrower region to
-		// degrade to, so it must not be counted as snippet-eligible later.
+		// A whole-file ref pins full mode: there is no narrower region to degrade to.
 		const total = lineCount(text);
 		const coversWholeFile = refs.some((r) => r.resolution.startLine <= 1 && r.resolution.endLine >= total);
 
@@ -167,8 +149,7 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 	const budgeted = applyBudget(entries, byPath, texts);
 	if (!budgeted.ok) return budgeted;
 
-	// Wire caps are refused loudly, never truncated: a silently dropped key would be a ref that
-	// taps dead with no error anywhere, and both bounds are far past any real message.
+	// Refused loudly: a dropped key would be a ref that taps dead with no error anywhere.
 	const artifacts: BuiltArtifact[] = [];
 	for (const entry of entries) {
 		const refs = byPath.get(entry.refPath) ?? [];
@@ -222,12 +203,10 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 }
 
 /**
- * Bring the message under the aggregate budget, degrading before refusing.
+ * Degrade before refusing: largest first, and only files that CAN be narrowed.
  *
- * Largest first, and only files that CAN be narrowed. A file pinned to full mode by a whole-file ref
- * is left alone, since snippeting it would ship a region its own ref does not point at. When
- * everything eligible has been degraded and it is still over, the send fails naming what to narrow,
- * because the agent is right there and can rewrite the message.
+ * Once everything eligible is degraded and it is still over, the send fails naming what to narrow,
+ * since the agent is right there and can rewrite the message.
  */
 function applyBudget(
 	entries: InternalEntry[],

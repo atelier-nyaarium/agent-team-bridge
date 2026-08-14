@@ -2,23 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** Ceiling on a file a ref may point at, checked on the stat before the read. Well above the
- * snapshot cap in artifactBuilder, which bounds what is SENT rather than what is opened. */
+/** What may be OPENED. artifactBuilder's cap bounds what is sent. */
 const MAX_REF_SOURCE_BYTES = 8_000_000;
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** Why a file cannot be referenced at all. Every one of these is a hard tool error: the resolution
- * tier degrades, the file tier does not. */
+/** All hard tool errors: the resolution tier degrades, the file tier does not. */
 export type FileFailure = "missing" | "unreadable" | "binary";
 
 export interface LoadedFile {
-	/** Path as written in the ref, kept for messages and manifest keys. */
+	/** As written, kept for messages and manifest keys. */
 	refPath: string;
-	/** Absolute path actually read, after confinement. */
 	absolute: string;
-	/** UTF-8 text. A UTF-16 source is transcoded, and every coordinate downstream refers to THIS. */
+	/** UTF-8. A UTF-16 source is transcoded, and every coordinate downstream refers to THIS. */
 	text: string;
 	bytes: number;
 }
@@ -29,47 +26,37 @@ export type LoadResult = { ok: true; file: LoadedFile } | { ok: false; failure: 
 //  Functions & Helpers
 
 /**
- * Where a ref path points, read the way a shell reads a path: `/x` from the filesystem root, `~/x`
- * from the owner's home, anything else from the project root. `..` is ordinary and normalizes.
+ * Shell-style: `/x` from root, `~/x` from home, anything else from the project root.
  *
- * `~user/x` is deliberately NOT expanded. Half-supporting a shell-ism that resolves to a different
- * account's home is worse than treating it as the literal directory name it also legally is.
+ * `~user/x` is NOT expanded: half-supporting a shell-ism resolving to another account's home is
+ * worse than treating it as the literal directory name it also legally is.
  */
 function resolveRefPath(projectRoot: string, refPath: string): string {
 	if (refPath === "~" || refPath.startsWith("~/")) return path.join(os.homedir(), refPath.slice(1));
 	return path.resolve(projectRoot, refPath);
 }
 
-/**
- * Whether the bytes are text, and in which encoding.
- *
- * A UTF-16 BOM is checked FIRST: those files are full of NUL bytes, so a UTF-8 sniff would call
- * every one of them binary and refuse a perfectly referenceable source file.
- */
+/** A UTF-16 BOM is checked FIRST: those files are full of NULs, which a UTF-8 sniff calls binary. */
 function decodeText(buffer: Buffer): string | null {
 	if (buffer.length >= 2) {
 		if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString("utf16le");
 		if (buffer[0] === 0xfe && buffer[1] === 0xff) return buffer.subarray(2).swap16().toString("utf16le");
 	}
 
-	// A NUL is the reliable binary tell; a decoder alone is not, since Buffer.toString happily
-	// produces replacement characters for arbitrary bytes rather than reporting failure.
+	// toString never fails, so a NUL is the reliable binary tell.
 	const head = buffer.subarray(0, 8192);
 	if (head.includes(0)) return null;
 
 	const text = buffer.toString("utf8");
-	// Round-tripping catches invalid UTF-8 that toString silently replaced.
+	// Round-tripping catches what toString silently replaced.
 	return Buffer.from(text, "utf8").equals(buffer) ? text : null;
 }
 
 /**
- * Read a referenced file, resolving its path the way a shell would.
+ * The project root is a base, not a fence: a snapshot only rides a reply to the OWNER's own console,
+ * and an author meaning to disclose a file can paste it regardless.
  *
- * The project root is the base for a bare path, not a fence: a ref may name anything the session can
- * read, because a snapshot only ever rides a reply to the OWNER's own console, and an author who
- * means to disclose a file can read it and paste it regardless. The one refusal that remains is the
- * secrets guardrail above, and it is loud rather than silent - a skipped ref would leave the author
- * believing the snapshot went out.
+ * Refusals are loud, since a skipped ref would leave the author believing it went out.
  */
 export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
 	if (refPath === "") return { ok: false, failure: "missing", detail: "a ref needs a path" };
@@ -87,8 +74,7 @@ export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
 	try {
 		const stat = fs.statSync(absolute);
 		if (!stat.isFile()) return { ok: false, failure: "unreadable", detail: `${refPath} is not a file` };
-		// Sized BEFORE reading. The snippet caps downstream bound what is SENT, which is no help if
-		// pointing a ref at a multi-gigabyte file already read it into memory to find that out.
+		// Sized BEFORE reading, or a huge file is already in memory.
 		if (stat.size > MAX_REF_SOURCE_BYTES) {
 			return {
 				ok: false,

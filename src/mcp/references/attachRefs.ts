@@ -12,8 +12,7 @@ import { scanRefs } from "./refScanner.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A file on a reply. Its bytes ride the blob plane, named by `blobId`, whether the agent attached
- * them or this module generated them. */
+/** Bytes ride the blob plane, named by `blobId`. */
 type ReplyFile = ChannelFile;
 
 export type AttachResult = { ok: true; files: ReplyFile[] } | { ok: false; error: string };
@@ -23,23 +22,16 @@ export type AttachResult = { ok: true; files: ReplyFile[] } | { ok: false; error
 
 let enabled = false;
 
-/**
- * Turn ref snapshotting on for this session. Called once at startup from the capability union, so a
- * session whose owner has no console able to render a code viewer never pays to build one.
- */
+/** Set once at startup, so a session with no console able to render one never builds one. */
 export function setReferencesEnabled(on: boolean): void {
 	enabled = on;
 }
 
 /**
- * The directory a bare (project-relative) ref path resolves against. Not a boundary: an absolute or
- * `~/` path is read as written (see refFile.ts).
+ * What a bare ref path resolves against. Not a boundary: an absolute or `~/` path is read as written.
  *
- * A container serves one project under /workspace; elsewhere the session's own working directory
- * stands in for the project. That last one is a GUESS, and a wrong one whenever a session was
- * launched outside the repo it works in - the process cwd is the launch directory, and nothing tells
- * this process where the author actually is. `REFERENCE_ROOT` overrides both, which is both the fix
- * for that case and what lets the tests point at a fixture tree.
+ * The cwd fallback is a GUESS, wrong whenever a session was launched outside the repo it works in.
+ * `REFERENCE_ROOT` overrides it, and points the tests at a fixture tree.
  */
 export function referenceRoot(): string {
 	if (process.env.REFERENCE_ROOT) return process.env.REFERENCE_ROOT;
@@ -50,20 +42,15 @@ export function referenceRoot(): string {
 }
 
 /**
- * Find the refs a message links, snapshot what they point at, and return the reply's full file list.
- *
- * The failure split is the whole design in one place. A file that cannot be snapshotted at all
- * (missing, binary, escaping the project, too big to narrow) is a HARD error, returned to the agent
- * so it can fix the message while it is still there to fix. Everything about RESOLUTION degrades
- * instead: a renamed class or a moved line ships anyway with a banner saying so, because refusing to
- * send a message over a stale pointer is worse than opening the reader in roughly the right place.
+ * The failure split, in one place. A file that cannot be snapshotted at all is a HARD error the
+ * agent can still fix. RESOLUTION degrades instead, shipping with a banner, because refusing to send
+ * over a stale pointer is worse than opening roughly in the right place.
  */
 export async function appendRefArtifacts(body: string, attachments: ReplyFile[]): Promise<AttachResult> {
 	if (!enabled) return { ok: true, files: attachments };
 
 	const { refs: found, problems } = scanRefs(body);
-	// A malformed ref is the agent's own typo, and the agent is right here to fix it. Reporting the
-	// position beats silently attaching a snapshot for a ref it did not write.
+	// The agent is right here to fix its own typo.
 	if (problems.length > 0) {
 		const first = problems[0];
 		return { ok: false, error: `${first.raw}: ${first.message} (at offset ${first.offset})` };
@@ -94,8 +81,7 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 	);
 	if (!built.ok) return { ok: false, error: built.error };
 
-	// The role is a literal here, never derived from anything the caller passed: an artifact is one
-	// this loop built, and nothing else on the message can become one.
+	// A literal, never derived from the caller: only what this loop built is a snapshot.
 	const snapshots: ReplyFile[] = [];
 	for (const artifact of built.artifacts) {
 		const bytes = Buffer.from(artifact.content, "utf8");

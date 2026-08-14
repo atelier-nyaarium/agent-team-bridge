@@ -1,13 +1,8 @@
 ////////////////////////////////
 //  Interfaces & Types
 
-/**
- * What a ref is made of.
- *
- * `char` is the load-bearing one: a percent-escape lexes to a `char` carrying its DECODED value, so
- * an encoded colon is structurally incapable of being a separator. "Split before decode" stops
- * being an ordering rule someone has to remember and becomes a property of the token type.
- */
+/** A percent-escape lexes to a `char` holding its DECODED value, so an encoded colon is
+ * structurally incapable of being a separator. Split-before-decode is a property of the type. */
 export type TokenKind = "sep" | "hash" | "range" | "at" | "char";
 
 export interface Token {
@@ -26,8 +21,7 @@ export type LexMode = "scope" | "fragment";
 
 const HEX = /^[0-9a-fA-F]{2}$/;
 
-/** The literal text a token stands for, used when a token falls after the structural marker that
- * won and therefore counts as ordinary text. */
+/** For a token falling after the structural marker that won, which is ordinary text. */
 export function tokenText(token: Token): string {
 	switch (token.kind) {
 		case "sep":
@@ -48,12 +42,10 @@ export function tokensToText(tokens: Token[]): string {
 }
 
 /**
- * Consume a maximal run of `%XX` escapes and decode it as one unit.
+ * A maximal run of `%XX`, decoded as one unit: one character can be several escapes, and
+ * `decodeURIComponent("%E6")` throws.
  *
- * Decoding escapes one at a time would corrupt every non-ASCII path, because a single character
- * arrives as several escapes (`%E6%97%A5` is one ideograph, and `decodeURIComponent("%E6")` throws).
- * Returns null when the run is not decodable, so the caller can treat the bytes as literal rather
- * than failing: a lexer that throws is not total.
+ * Null when undecodable, so the caller treats the bytes as literal. A lexer that throws is not total.
  */
 function readEscapeRun(input: string, start: number): { text: string; end: number } | null {
 	let end = start;
@@ -76,12 +68,8 @@ function dotRun(input: string, start: number): number {
 	return end - start;
 }
 
-/**
- * Turn a ref body into tokens. Total: every input lexes, so failure is the parser's job alone.
- *
- * Mode switches to `fragment` on the FIRST raw `#`; a later one is ordinary text, which is what
- * lets a matcher search for a `#`.
- */
+/** Total: every input lexes, so failure is the parser's job. Mode switches on the FIRST raw `#`, so
+ * a matcher can search for a later one. */
 export function lex(input: string): Token[] {
 	const tokens: Token[] = [];
 	let mode: LexMode = "scope";
@@ -95,13 +83,11 @@ export function lex(input: string): Token[] {
 		if (c === "%") {
 			const run = readEscapeRun(input, i);
 			if (run) {
-				// One token per DECODED character, never per escape, so an astral character stays one
-				// unit and a multi-escape sequence cannot be mistaken for several.
+				// Per DECODED character, so an astral character stays one unit.
 				for (const decoded of run.text) push("char", decoded, i);
 				i = run.end;
 				continue;
 			}
-			// A `%` that introduces nothing decodable is a literal percent.
 			push("char", "%", i);
 			i++;
 			continue;
@@ -127,8 +113,7 @@ export function lex(input: string): Token[] {
 				continue;
 			}
 			if (c === ".") {
-				// Exactly two dots is a range. One is ordinary, and three or more is a spread or a
-				// variadic, so `#...args` searches for that text instead of parsing as a broken range.
+				// Exactly two is a range, so `#...args` searches for its own text.
 				const run = dotRun(input, i);
 				if (run === 2) {
 					push("range", "", i);

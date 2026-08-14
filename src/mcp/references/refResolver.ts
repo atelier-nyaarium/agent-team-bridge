@@ -5,13 +5,7 @@ import type { Matcher, Ref } from "./refGrammar.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/**
- * How much of what the ref asked for was actually found.
- *
- * The resolution tier NEVER hard-fails. A file that has drifted since the agent read it should
- * still open somewhere useful with an honest banner, because the alternative is refusing to send a
- * message over a renamed function.
- */
+/** The resolution tier NEVER hard-fails: a drifted file still opens, with a banner. */
 export type Quality = "exact" | "fuzzy" | "unresolved";
 
 /** A character span to highlight inside the range, in original-file coordinates. */
@@ -41,14 +35,12 @@ export interface Resolution {
 
 const parsers = new Map<string, Parser>();
 
-/** Grammars are loaded once per process and reused: each wasm is megabytes and a reply may carry
- * many refs into the same language. */
+/** Cached per process: each wasm is megabytes. */
 async function parserFor(grammarId: string): Promise<Parser> {
 	const cached = parsers.get(grammarId);
 	if (cached) return cached;
 
-	// Named explicitly: the library's own default finds this inside node_modules, which the bundled
-	// build has no copy of.
+	// The library's default looks in node_modules, which the bundle has no copy of.
 	await Parser.init({ locateFile: () => treeSitterWasmPath() });
 	const parser = new Parser();
 	parser.setLanguage(await Language.load(grammarWasmPath(grammarId)));
@@ -57,12 +49,9 @@ async function parserFor(grammarId: string): Promise<Parser> {
 }
 
 /**
- * The name parts a node answers to.
- *
- * Splitting on `::` and `.` is what makes one node match a RUN of ref segments: C# writes
- * `namespace A.B`, C++17 writes `namespace A::B`, and a C++ out-of-line definition writes
- * `void A::B::method()` with no nested scope nodes to walk at all. No identifier in these languages
- * legitimately contains either separator, so splitting is unambiguous.
+ * Splitting on `::` and `.` lets one node match a RUN of segments: `namespace A.B`, `namespace A::B`,
+ * and an out-of-line `void A::B::method()` have no nested scope nodes to walk. No identifier in these
+ * languages contains either separator.
  */
 function nameParts(node: Node): string[] {
 	const named = node.childForFieldName("name") ?? qualifiedDeclarator(node);
@@ -70,8 +59,7 @@ function nameParts(node: Node): string[] {
 	return named.text.split(/::|\./).filter((p) => p !== "");
 }
 
-/** The declarator identifier of a C-family definition, which carries the qualification rather than
- * the definition node itself. */
+/** In C-family code the declarator carries the qualification, not the definition node. */
 function qualifiedDeclarator(node: Node): Node | null {
 	if (node.type !== "function_definition") return null;
 	let cursor: Node | null = node.childForFieldName("declarator");
@@ -83,16 +71,11 @@ function qualifiedDeclarator(node: Node): Node | null {
 }
 
 /**
- * Where to keep searching after matching a node.
+ * Two declarations name a scope whose members are not their children. A C# file-scoped namespace has
+ * no body, so everything after it belongs to it; a GDScript `class_name X` names the whole FILE.
  *
- * Two declarations name a scope whose members are not their own children. A C# file-scoped
- * namespace (`namespace Foo;`, the modern default) has no body node at all, so every declaration
- * after it in the file belongs to it. A GDScript `class_name X` names the FILE, so its members are
- * everything the file holds, including what precedes the declaration.
- *
- * Searching either one's own subtree instead dead-ends on a bare identifier, and a dead end is not
- * an error here: the ref degrades to a text match and lands on the first CALL of the method it
- * named, which reads as a plausible result rather than a miss.
+ * Their own subtree dead-ends on a bare identifier, and the ref then degrades to a text match on the
+ * first CALL of the method, which reads as plausible rather than as a miss.
  */
 function searchAreas(node: Node): Node[] {
 	if (node.type === "class_name_statement") return [node.parent ?? node];
@@ -128,30 +111,26 @@ function parameterList(node: Node): Node | null {
 	const viaDeclarator = declarator?.childForFieldName("parameters");
 	if (viaDeclarator) return viaDeclarator;
 
-	// Only the node's OWN parameter list. A subtree search would silently bind a class or namespace
-	// to some nested method's parameters and call it exact, which the pseudo-segment exemption
-	// exists to prevent. The value form (`const f = (url) => {}`) keeps its own lookup below.
+	// The node's OWN list only: a subtree search would bind a class to a nested method's parameters
+	// and call it exact.
 	const value = node.childForFieldName("value");
 	return value?.childForFieldName("parameters") ?? null;
 }
 
 interface Branch {
 	node: Node;
-	/** How many of the ref's segments this branch has consumed. Per-branch, never shared: a
-	 * compound-name match advances only its own cursor, and a branch that runs out of segments is a
-	 * final match no matter how many its siblings went on to consume. */
+	/** Per-branch, never shared: a compound-name match advances only its own cursor. */
 	consumed: number;
 	/** Inside a parameter list, where the next segment names a parameter rather than a scope. */
 	inParameters?: boolean;
 }
 
 /**
- * Walk the scope chain, collecting every branch that satisfies it.
+ * Every branch satisfying the scope chain.
  *
- * A segment matches any DESCENDANT of the previous match, not only a direct child, so deeply nested
- * JavaScript resolves without naming the anonymous closures in between. An intermediate segment
- * keeps ALL same-named nodes and continues into the union of them, which is what makes a re-opened
- * C++ namespace, a C# partial class, and a TypeScript overload set resolve instead of failing.
+ * A segment matches any DESCENDANT, so anonymous closures in between need no naming. An intermediate
+ * segment keeps ALL same-named nodes, which is what resolves a re-opened namespace, a partial class,
+ * and an overload set.
  */
 function walkSegments(root: Node, segments: string[]): Node[] {
 	let branches: Branch[] = [{ node: root, consumed: 0 }];
@@ -172,8 +151,7 @@ function walkSegments(root: Node, segments: string[]): Node[] {
 				continue;
 			}
 
-			// A parameter is a bare identifier, not a node answering to a `name` field, so inside a
-			// parameter list a segment matches a leaf by its own text instead.
+			// A parameter is a bare identifier, so it matches a leaf by text.
 			if (branch.inParameters) {
 				for (const leaf of leavesNamed(branch.node, remaining[0])) {
 					next.push({ node: leaf, consumed: branch.consumed + 1 });
@@ -182,8 +160,7 @@ function walkSegments(root: Node, segments: string[]): Node[] {
 			}
 
 			for (const area of searchAreas(branch.node)) {
-				// A sibling area is itself a candidate; the branch's own node is not, or a segment
-				// could match the node it already matched and never advance.
+				// The branch's own node is excluded, or a segment could match it again and never advance.
 				const candidates =
 					area.id === branch.node.id ? namedDescendants(area) : [area, ...namedDescendants(area)];
 				for (const candidate of candidates) {
@@ -215,12 +192,11 @@ function leavesNamed(root: Node, name: string): Node[] {
 }
 
 /**
- * How many leading segments this node's name consumes, or 0 if it does not match.
+ * How many leading segments this name consumes, or 0.
  *
- * A qualified name matches either spelling: `namespace Acme.Services` answers both
- * `:Acme:Services` (a run, one segment per part) and `:Acme.Services` (one segment, written the way
- * the source writes it). Accepting only the split form silently failed the C# ref an author would
- * naturally write, and failed it to `fuzzy` rather than to an error.
+ * A qualified name matches either spelling: `namespace Acme.Services` answers `:Acme:Services` and
+ * `:Acme.Services` alike. Accepting only the split form failed the ref an author would write, and
+ * failed it to `fuzzy` rather than to an error.
  */
 function matchedRun(parts: string[], remaining: string[]): number {
 	if (parts.length === 0 || remaining.length === 0) return 0;
@@ -234,12 +210,8 @@ function depthOf(node: Node): number {
 	return depth;
 }
 
-/**
- * Shallowest first, then document order. Sorting on position alone would throw away the depth the
- * walk worked to find, so a nested declaration could outrank the top-level one someone meant: in
- * this repo `ref://src/shared/crypto.ts:sign` landed on an interface field rather than the exported
- * function, and reported itself exact.
- */
+/** Shallowest first, then document order. On position alone a nested declaration outranks the
+ * top-level one someone meant, and reports itself exact. */
 function dedupeByPosition(nodes: Node[]): Node[] {
 	const seen = new Map<string, Node>();
 	for (const node of nodes) {
@@ -277,13 +249,8 @@ function nearestBefore(text: string, needle: string, pivot: number): number {
 	return needle === "" ? -1 : text.lastIndexOf(needle, Math.max(0, pivot - needle.length));
 }
 
-/**
- * Apply a fragment inside an already-resolved scope.
- *
- * Every miss degrades rather than failing: the scope stays the range, the quality drops to fuzzy,
- * and the reason names what was not found. A ref is a pointer into a file that keeps changing, so a
- * stale matcher should still open the reader in the right neighbourhood.
- */
+/** Every miss degrades rather than failing: the scope stays the range and the reason names what was
+ * not found, so a stale matcher still opens in the right neighbourhood. */
 function applyMatcher(text: string, scopeStart: number, scopeEnd: number, matcher: Matcher): Partial<Resolution> {
 	const scope = text.slice(scopeStart, scopeEnd);
 	const absolute = (local: number) => scopeStart + local;
@@ -316,7 +283,7 @@ function applyMatcher(text: string, scopeStart: number, scopeEnd: number, matche
 			if (fromAt === -1) return { quality: "fuzzy", reason: `no match for "${matcher.from}" in this scope` };
 			const toAt = first(matcher.to, fromAt + matcher.from.length);
 			if (toAt === -1) {
-				// The range start was found, so open there rather than falling back to the whole scope.
+				// The start was found, so open there rather than the whole scope.
 				return {
 					startLine: lineOf(text, absolute(fromAt)),
 					endLine: lineOf(text, absolute(fromAt + matcher.from.length)),
@@ -333,12 +300,7 @@ function applyMatcher(text: string, scopeStart: number, scopeEnd: number, matche
 	}
 }
 
-/**
- * The fuzzy tier: find a segment's text as a plain string in the file.
- *
- * Reached when the AST could not satisfy the chain, or when the file has no whitelisted grammar at
- * all. A renamed enclosing class should not stop a reader reaching the method they were pointed at.
- */
+/** The fuzzy tier, reached when the AST could not satisfy the chain or the file has no grammar. */
 function fuzzyLineMatch(text: string, segments: string[]): Resolution | null {
 	for (let i = segments.length - 1; i >= 0; i--) {
 		const segment = segments[i];
@@ -361,11 +323,8 @@ function wholeFile(text: string, reason: string): Resolution {
 }
 
 /**
- * Resolve a ref against a file's text, always producing a range.
- *
- * The tiers, in order: the AST satisfies the scope chain; else the segment text is found as a plain
- * string; else the whole file. Hard failure lives entirely in the file tier (missing, binary,
- * escaping, over-cap), never here.
+ * Always produces a range. Tiers in order: the AST satisfies the chain, else the segment text is
+ * found as a plain string, else the whole file. Hard failure lives in the file tier alone.
  */
 export async function resolveRef(filePath: string, text: string, ref: Ref): Promise<Resolution> {
 	const lastLine = Math.max(1, text.split("\n").length);

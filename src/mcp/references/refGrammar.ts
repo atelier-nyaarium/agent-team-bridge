@@ -3,23 +3,19 @@ import { lex, type Token, tokensToText } from "./refLexer.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/**
- * What a ref's fragment selects inside the innermost resolved scope. The anchor and range forms are
- * W3C Text Fragment semantics under a cleaner spelling, with one deliberate deviation: the spec
- * anchors on immediate adjacency, while `@before`/`@after` here mean nearest-in-scope, which is
- * what someone pointing at the third `foo += 1` in a repetitive function actually means.
- */
+/** W3C Text Fragment semantics, with one deviation: `@before`/`@after` mean nearest-in-scope, not
+ * the spec's immediate adjacency. */
 export type Matcher =
 	| { kind: "text"; text: string }
 	| { kind: "before"; text: string; anchor: string }
 	| { kind: "after"; text: string; anchor: string }
 	| { kind: "range"; from: string; to: string };
 
-/** A parsed ref. Every string here is DECODED; re-encoding happens only in `canonicalKey`. */
+/** Every string here is DECODED; only `canonicalKey` re-encodes. */
 export interface Ref {
-	/** Project-relative, as written. Confinement is the resolver's job, not the parser's. */
+	/** As written. Confinement is the resolver's job. */
 	path: string;
-	/** Scope waypoints. Each matches any descendant of the previous, not only a direct child. */
+	/** Each matches any descendant of the previous, not only a direct child. */
 	segments: string[];
 	matcher: Matcher | null;
 }
@@ -31,11 +27,8 @@ export type ParseErrorCode =
 	| "empty-anchor"
 	| "empty-range-bound";
 
-/**
- * Parsing is TOTAL: an input is a ref, is not one at all, or is a stated error at a stated offset.
- * There is no fourth outcome where a malformed ref silently becomes a different valid ref, which is
- * the failure this grammar exists to make unrepresentable.
- */
+/** Parsing is TOTAL: a ref, not a ref, or a stated error at a stated offset. There is no outcome
+ * where a malformed ref silently becomes a different valid one. */
 export type ParseResult =
 	| { kind: "ok"; ref: Ref }
 	| { kind: "not-a-ref" }
@@ -50,14 +43,7 @@ const ANCHOR_KEYWORDS = ["before", "after"] as const;
 
 type AnchorKeyword = (typeof ANCHOR_KEYWORDS)[number];
 
-/**
- * Characters the printer escapes, per lexing mode.
- *
- * Derived from what the reader treats specially rather than hand-maintained: that mode's structural
- * tokens, `%` because it introduces an escape, and `<`/`>`/whitespace because `tryParseRef` strips
- * those before lexing. A hand-kept list can drift from what the reader actually treats specially;
- * deriving it here keeps the two in sync.
- */
+// What the reader treats specially: structural tokens, `%`, and what tryParseRef strips.
 const SCOPE_ESCAPES = new Set(["%", ":", "#", "<", ">"]);
 const FRAGMENT_ESCAPES = new Set(["%", ":", "#", ".", "@", "<", ">"]);
 
@@ -75,8 +61,7 @@ function error(code: ParseErrorCode, message: string, offset: number): ParseResu
 	return { kind: "error", code, message, offset };
 }
 
-/** Where an anchor marker (`@before:` / `@after:`) starts, or null. Only that exact shape is
- * structural, so an `@` in an email address needs no encoding. */
+/** Only that exact shape is structural, so an `@` in an email address needs no encoding. */
 function findAnchor(tokens: Token[]): { at: number; keyword: AnchorKeyword; after: number } | null {
 	for (let i = 0; i < tokens.length; i++) {
 		if (tokens[i].kind !== "at") continue;
@@ -95,14 +80,8 @@ function findAnchor(tokens: Token[]): { at: number; keyword: AnchorKeyword; afte
 
 type MatcherResult = ParseResult | { kind: "matcher"; matcher: Matcher };
 
-/**
- * Parse a fragment.
- *
- * One rule resolves every ambiguity: the FIRST structural marker by position wins, and everything
- * after it is ordinary text. That is why a second `@after:` or a second `..` needs no encoding to be
- * searched for literally, and why which form a fragment takes never depends on the order these
- * branches happen to be written in.
- */
+/** The FIRST structural marker by position wins and the rest is ordinary text, so a second `@after:`
+ * needs no encoding and the form never depends on branch order. */
 function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
 	if (tokens.length === 0) {
 		return error("empty-fragment", "a `#` with nothing after it selects nothing", hashOffset);
@@ -139,36 +118,28 @@ function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
 	return { kind: "matcher", matcher: { kind: "text", text: tokensToText(tokens) } };
 }
 
-/**
- * Parse a `ref://` URI.
- *
- * Deliberately not `new URL()`: under URL rules `ref://app.js:Foo` reads `app.js` as a host and
- * `:Foo` as a port, which is not what any of this means.
- */
+/** Not `new URL()`: under URL rules `ref://app.js:Foo` reads `app.js` as a host and `:Foo` as a
+ * port. */
 export function tryParseRef(uri: string): ParseResult {
-	// The angle-bracket pair is markdown's destination wrapper, so it comes off only as a PAIR.
-	// Stripping a lone trailing one would silently shorten `#Promise<Response>`.
+	// Markdown's wrapper comes off only as a PAIR, or `#Promise<Response>` silently shortens.
 	const bare = uri.trim();
 	const wrapped = bare.length >= 2 && bare.startsWith("<") && bare.endsWith(">");
 	const unwrapped = wrapped ? bare.slice(1, -1) : bare;
 	if (!unwrapped.toLowerCase().startsWith(REF_SCHEME)) return { kind: "not-a-ref" };
 
-	// Offsets are shifted past the scheme so they index the ref as WRITTEN, which is the string an
-	// error message quotes back. A raw lexer offset would point six characters short of the problem.
+	// Shifted past the scheme, so an offset indexes the ref as WRITTEN.
 	const tokens = lex(unwrapped.slice(REF_SCHEME.length)).map((t) => ({ ...t, offset: t.offset + REF_SCHEME.length }));
 	const hashAt = tokens.findIndex((t) => t.kind === "hash");
 	const scope = hashAt === -1 ? tokens : tokens.slice(0, hashAt);
 
-	// path := char+. Required, which is what stops `ref://:Foo` from quietly promoting its first
-	// segment into the path slot; a filter over split pieces cannot tell that apart from a `::` merge.
+	// path := char+, required, or `ref://:Foo` promotes its first segment into the path slot.
 	const firstSep = scope.findIndex((t) => t.kind === "sep");
 	const pathTokens = firstSep === -1 ? scope : scope.slice(0, firstSep);
 	if (pathTokens.length === 0) {
 		return error("path-required", "a ref needs a file path before any `:`", 0);
 	}
 
-	// segment := char*, so an empty one merges. That IS the `::` collapse, stated rather than
-	// falling out of a filter as a side effect.
+	// segment := char*, so an empty one merges. That IS the `::` collapse.
 	const segments: string[] = [];
 	let cursor = firstSep;
 	while (cursor !== -1) {
@@ -186,8 +157,7 @@ export function tryParseRef(uri: string): ParseResult {
 	return { kind: "ok", ref: { ...ref, matcher: matcher.matcher } };
 }
 
-/** The parsed ref, or null for anything that is not a well-formed one. A caller that needs to tell
- * an agent WHY its ref was rejected uses `tryParseRef`. */
+/** Null for anything malformed. Use `tryParseRef` when the caller needs the reason. */
 export function parseRef(uri: string): Ref | null {
 	const result = tryParseRef(uri);
 	return result.kind === "ok" ? result.ref : null;
@@ -206,13 +176,8 @@ function serializeMatcher(matcher: Matcher): string {
 	}
 }
 
-/**
- * The stable identity of a ref: what the MCP writes as a manifest key and what the console
- * recomputes from a tapped link.
- *
- * Idempotent by construction rather than by remembering: every character the reader treats
- * specially is escaped, so re-reading a key yields the same tokens and therefore the same ref.
- */
+/** A ref's stable identity, which the console recomputes from a tapped link. Idempotent by
+ * construction: everything the reader treats specially is escaped. */
 export function canonicalKey(ref: Ref): string {
 	const scope = [ref.path, ...ref.segments].map((c) => encode(c, SCOPE_ESCAPES)).join(":");
 	return `${REF_SCHEME}${scope}${ref.matcher ? serializeMatcher(ref.matcher) : ""}`;

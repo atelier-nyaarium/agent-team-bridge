@@ -5,9 +5,9 @@ import { moduleDir, pluginRoot } from "../../shared/plugin-root.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** One grammar's pinned npm source. `subdir` is for a package shipping several grammars. */
+/** `subdir` is for a package shipping several grammars. */
 export interface GrammarSource {
-	/** The wasm basename, and the key everything else in the reference engine uses. */
+	/** The wasm basename, and the key everything else uses. */
 	id: string;
 	package: string;
 	subdir?: string;
@@ -17,11 +17,9 @@ export interface GrammarSource {
 //  Functions & Helpers
 
 /**
- * The languages the reference engine can resolve a scope chain in. A file outside this set is still
- * referenceable, it just resolves through the fuzzy line-match tier instead of an AST.
+ * A file outside this set still resolves, through the fuzzy tier.
  *
- * TSX is its own entry because plain TypeScript cannot parse it: the two grammars disagree on
- * whether `<T>` opens a type assertion or an element, so one cannot stand in for the other.
+ * TSX is its own entry: the grammars disagree on whether `<T>` opens a type assertion or an element.
  */
 export const GRAMMAR_SOURCES: GrammarSource[] = [
 	{ id: "typescript", package: "tree-sitter-typescript", subdir: "typescript" },
@@ -38,10 +36,7 @@ export function grammarsDir(): string {
 	return path.join(pluginRoot(), "grammars");
 }
 
-/**
- * web-tree-sitter's own runtime wasm, which it otherwise locates inside its `node_modules` package.
- * The build copies it beside the bundle, so prefer that; fall back to the package for a source run.
- */
+/** The build copies it beside the bundle; the package is the source-run fallback. */
 export function treeSitterWasmPath(): string {
 	const beside = path.join(moduleDir(import.meta.url), "web-tree-sitter.wasm");
 	if (existsSync(beside)) return beside;
@@ -52,11 +47,7 @@ export function manifestFile(): string {
 	return path.join(grammarsDir(), "manifest.json");
 }
 
-/**
- * Which grammar parses a given file, by extension. Explicit rather than derived: `.ts` and `.tsx`
- * differ by grammar, not by dialect, and a header like `.h` is C++ here by convention rather than
- * by anything the extension states.
- */
+// Explicit, not derived: `.h` is C++ here by convention, not by anything the extension states.
 const BY_EXTENSION: Record<string, string> = {
 	".ts": "typescript",
 	".mts": "typescript",

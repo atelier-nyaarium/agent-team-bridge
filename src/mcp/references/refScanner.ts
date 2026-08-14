@@ -9,7 +9,7 @@ export interface FoundRef {
 	ref: Ref;
 	/** The canonical key this ref is filed under in the manifest. */
 	key: string;
-	/** The destination exactly as written, so an error can quote what the agent typed. */
+	/** Exactly as written, so an error quotes what the agent typed. */
 	raw: string;
 }
 
@@ -30,19 +30,13 @@ export interface ScanResult {
 //  Functions & Helpers
 
 /**
- * Every distinct ref a message links, plus every malformed one.
+ * Every distinct ref a message links, plus every malformed one, deduped by canonical key.
  *
- * Which destinations exist at all is decided by the console's own markdown parser (see
- * `markdown.ts`), so a fenced example, an inline-code example, and a bare mention in prose are all
- * simply not links and never reach this function. That is the whole reason there is no masking here:
- * the previous hand-rolled version had to re-derive CommonMark, and every place it guessed wrong
- * either dropped a real ref with no error or attached a snapshot for an example.
- *
- * Refs dedupe by canonical key, which is what makes several links to one symbol free.
+ * `markdown.ts` decides what is a link at all, so a fenced or inline-code example never reaches
+ * here. There is no masking: the hand-rolled version re-derived CommonMark and guessed wrong.
  */
 export function scanRefs(body: string): ScanResult {
-	// Nothing can be a ref without the scheme appearing somewhere, and this keeps a message with no
-	// refs from depending on the parser being loadable at all.
+	// Also keeps a ref-less message off the parser entirely.
 	if (!body.toLowerCase().includes(REF_SCHEME)) return { refs: [], problems: [] };
 
 	const refs = new Map<string, FoundRef>();
