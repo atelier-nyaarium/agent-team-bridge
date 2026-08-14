@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
@@ -85,6 +87,54 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 					Icons.Default.Close,
 					contentDescription = "Cancel scheduled send",
 					tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = if (cancelEnabled) 1f else 0.4f),
+				)
+			}
+		}
+	}
+}
+
+/**
+ * Dock for an armed goal: what will be typed, and which half of the wait it is in. A plain sibling in
+ * ThreadScreen's Column like [ScheduledSendDock], but deliberately NOT a composer replacement - the
+ * message it rides on is already gone, so there is nothing to stop the owner saying more meanwhile.
+ *
+ * The second line reads the phase off the record's own instants rather than a stored label, so a dock
+ * drawn from a restored record cannot describe a phase the driver is no longer in.
+ */
+@Composable
+fun GoalDock(rec: PendingGoal, onCancel: () -> Unit) {
+	Surface(
+		modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+		// The same container as ScheduledSendDock, deliberately: these are the same KIND of thing (a
+		// pending intent stacked above the composer), and the error container sits inches below.
+		color = MaterialTheme.colorScheme.secondaryContainer,
+		shape = MaterialTheme.shapes.medium,
+	) {
+		Row(
+			Modifier.fillMaxWidth().padding(12.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(10.dp),
+		) {
+			Icon(Icons.Default.Flag, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+			Column(Modifier.weight(1f)) {
+				Text(
+					"Goal: ${rec.text}",
+					style = MaterialTheme.typography.bodyMedium,
+					color = MaterialTheme.colorScheme.onSecondaryContainer,
+					maxLines = 2,
+					overflow = TextOverflow.Ellipsis,
+				)
+				Text(
+					if (rec.replyAt == null) "Waiting for a reply" else "Waiting for the terminal to go idle",
+					style = MaterialTheme.typography.labelSmall,
+					color = MaterialTheme.colorScheme.onSecondaryContainer,
+				)
+			}
+			IconButton(onClick = hapticClick(onCancel)) {
+				Icon(
+					Icons.Default.Close,
+					contentDescription = "Cancel goal",
+					tint = MaterialTheme.colorScheme.onSecondaryContainer,
 				)
 			}
 		}

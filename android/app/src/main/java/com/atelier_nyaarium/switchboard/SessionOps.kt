@@ -214,6 +214,8 @@ internal class SessionOps(private val repo: ChatRepository) {
 		repo.persistence.persistDrafts(next.drafts)
 		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
 		repo.scheduled.cancelScheduledSend(key)
+		// Same reason, for the goal waiting to be typed into a pane that is about to be killed.
+		repo.goals.cancelGoal(key)
 		// Queue first, cache second. Dropping under the advance mutex stops the player only once the
 		// queue no longer points at it, so the stop's own terminal cannot advance into an entry whose
 		// audio `purge` is about to delete.

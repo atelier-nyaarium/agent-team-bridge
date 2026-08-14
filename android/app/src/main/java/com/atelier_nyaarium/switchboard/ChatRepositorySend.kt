@@ -16,11 +16,14 @@ import kotlinx.coroutines.withContext
 //  pipeline keeps (ChatRepository.reconciled) stays declared on the class, since an extension has no
 //  backing field.
 
-suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
+/** Returns the opId this send ran under, or null when the picked files were refused and nothing was
+ * sent. The id is what lets a caller find the settled row and learn the outcome (an armed goal must
+ * not survive a send that failed); the ordinary composer Send ignores it. */
+suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = emptyList()): String? = withContext(Dispatchers.IO) {
 	val (picked, refused) = admitPicked(uris, "pick-${java.util.UUID.randomUUID()}")
 	if (refused != null) {
 		_state.update { it.copy(error = refused.message()) }
-		return@withContext
+		return@withContext null
 	}
 	// Local echo: persist the picked files so the sent message shows its own thumbnails through
 	// the same asset-loader path as inbound files. The echo starts "pending" and resolves to
@@ -41,6 +44,7 @@ suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = em
 	val raisedWakeNotice = wasAvailable && team !in _state.value.wakingTeams
 	if (raisedWakeNotice) _state.update { it.copy(wakingTeams = it.wakingTeams + team) }
 	deliver(team, echoId, text, picked, opId, raisedWakeNotice)
+	opId
 }
 
 /** Re-send a failed message, rebuilding attachment bytes from their local

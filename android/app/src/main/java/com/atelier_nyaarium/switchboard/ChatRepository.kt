@@ -106,6 +106,7 @@ class ChatRepository(
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
 			scheduledSends = persistence.loadPersistedScheduledSends(),
+			goals = persistence.loadPersistedGoals(),
 			drafts = persistence.loadPersistedDrafts(),
 		),
 	)
@@ -287,6 +288,12 @@ class ChatRepository(
 	 * way the federation Ops delegates do. */
 	internal val drain = PollDrain(this)
 
+	/** Goals armed against a session: the wait between sending a message and typing a `/goal` line
+	 * into that session's pane (see GoalOps' own doc). Must stay declared after [drain]: it subscribes
+	 * to the drain gate from its own init, so constructing it earlier reads that field before it
+	 * exists. */
+	internal val goals = GoalOps(this)
+
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
@@ -378,6 +385,7 @@ class ChatRepository(
 		threads: Map<String, List<Message>>,
 		dirs: Map<String, List<String>> = emptyMap(),
 		drafts: Map<String, Draft> = emptyMap(),
+		goals: Map<String, PendingGoal> = emptyMap(),
 	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
 		// The Create button and the local/peer board split key off localGatewayId, which a
@@ -397,6 +405,9 @@ class ChatRepository(
 				error = null,
 				localGatewayId = localGatewayId,
 				drafts = drafts,
+				// Seeded rather than armed: arming SENDS, which a gatewayless sandbox cannot do, and the
+				// dock is the surface worth looking at.
+				goals = goals,
 			)
 		}
 	}

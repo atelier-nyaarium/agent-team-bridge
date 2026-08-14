@@ -69,6 +69,9 @@ data class ChatState(
 	/** At most one pending scheduled send per team. Held here rather than in a bare repository map so
 	 * the dock indicator and the session-tile clock icon are Compose-reactive. */
 	val scheduledSends: Map<String, ScheduledSend> = emptyMap(),
+	/** At most one armed goal per team, held here for the same reason as [scheduledSends]: the dock
+	 * that shows one is a composable, and a bare repository map would not redraw it. */
+	val goals: Map<String, PendingGoal> = emptyMap(),
 	/** (project, label) pairs with a spawnSession() call in flight. Distinct from the longer-lived
 	 * opId retry window: this is only "has not settled yet", so the dialog can refuse a second
 	 * identical submission rather than silently reattaching to the first. */

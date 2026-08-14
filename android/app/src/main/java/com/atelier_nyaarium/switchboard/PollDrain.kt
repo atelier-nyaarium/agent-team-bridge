@@ -308,6 +308,10 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
+					// Restarts the wait for a goal armed before this process started (or before a
+					// re-provision), and retires one that ran out of time. A no-op when none is armed,
+					// which is every pass in the ordinary case.
+					repo.goals.tick()
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
