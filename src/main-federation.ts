@@ -24,7 +24,13 @@ console.log(`[federation-router] identity ${identity.sign.pub}`);
 console.log(`[federation-router] ready on port ${port}`);
 
 function shutdown(): void {
-	void server.stop().then(() => process.exit(0));
+	server.stop().then(
+		() => process.exit(0),
+		(err) => {
+			console.error(`[federation-router] shutdown failed: ${(err as Error).message}`);
+			process.exit(1);
+		},
+	);
 }
 
 process.once("SIGTERM", shutdown);

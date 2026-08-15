@@ -24,10 +24,11 @@ import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./r
 export interface GatewayBridgeParams {
 	port: number;
 	authToken: string;
-	getDomain?: (domainId: string) => DomainSnapshot | null;
-	getDomainMeta?: (domainId: string) => DomainMeta | null;
-	hasLinkEdge?: (srcDomainId: string, dstDomainId: string) => boolean;
-	adminDomainId?: () => string | null;
+	// Required: an absent getDomain would skip the whole registration verification block.
+	getDomain: (domainId: string) => DomainSnapshot | null;
+	getDomainMeta: (domainId: string) => DomainMeta | null;
+	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
+	adminDomainId: () => string | null;
 }
 
 export class GatewayBridge implements ToolProvider {
@@ -56,19 +57,19 @@ export class GatewayBridge implements ToolProvider {
 	private consoleRelaySettler: ((opId: string, reply: Record<string, unknown>) => void) | null = null;
 	private readonly port: number;
 	private readonly authToken: string;
-	private readonly getDomain: ((domainId: string) => DomainSnapshot | null) | null;
-	private readonly getDomainMeta: ((domainId: string) => DomainMeta | null) | null;
-	private readonly hasLinkEdge: ((srcDomainId: string, dstDomainId: string) => boolean) | null;
-	private readonly adminDomainIdGetter: (() => string | null) | null;
+	private readonly getDomain: (domainId: string) => DomainSnapshot | null;
+	private readonly getDomainMeta: (domainId: string) => DomainMeta | null;
+	private readonly hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
+	private readonly adminDomainIdGetter: () => string | null;
 	private readonly seenRegisterNonces = new Map<string, number>();
 
 	public constructor({ port, authToken, getDomain, getDomainMeta, hasLinkEdge, adminDomainId }: GatewayBridgeParams) {
 		this.port = port;
 		this.authToken = authToken;
-		this.getDomain = getDomain ?? null;
-		this.getDomainMeta = getDomainMeta ?? null;
-		this.hasLinkEdge = hasLinkEdge ?? null;
-		this.adminDomainIdGetter = adminDomainId ?? null;
+		this.getDomain = getDomain;
+		this.getDomainMeta = getDomainMeta;
+		this.hasLinkEdge = hasLinkEdge;
+		this.adminDomainIdGetter = adminDomainId;
 		this.handleCall = this.handleCall.bind(this);
 		this.onConnect = this.onConnect.bind(this);
 		this.onDisconnect = this.onDisconnect.bind(this);
@@ -117,7 +118,7 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	private adminDomain(): string | null {
-		return this.adminDomainIdGetter?.() ?? null;
+		return this.adminDomainIdGetter();
 	}
 
 	public isConnected(): boolean {
@@ -185,7 +186,7 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	public broadcastDomainUpdate(domainId: string): void {
-		const domain = this.getDomain?.(domainId);
+		const domain = this.getDomain(domainId);
 		if (!domain) return;
 		const frame = { type: "domain_update", domain, displayName: domain.displayName ?? null };
 		for (const gatewayId of this.gatewayConnections.get(domainId)?.keys() ?? []) {
@@ -281,7 +282,7 @@ export class GatewayBridge implements ToolProvider {
 		if (protocolVersion < FEDERATION_PROTOCOL_VERSION) {
 			return { ok: false, error: "version_too_old", floor: FEDERATION_PROTOCOL_VERSION };
 		}
-		const meta = this.getDomainMeta?.(domainId);
+		const meta = this.getDomainMeta(domainId);
 		if (meta?.status === "pending") {
 			// Reject pending registrations.
 			console.warn(`[BridgeServer] rejected gateway_register into pending domain "${domainId}/${gatewayId}"`);
@@ -291,7 +292,7 @@ export class GatewayBridge implements ToolProvider {
 				error: `registration_denied: admitted-identity proof required for domain "${domainId}"`,
 			};
 		}
-		const domain = this.getDomain?.(domainId);
+		const domain = this.getDomain(domainId);
 		if (domain) {
 			const presented = !!(parsed.data.signPub || parsed.data.admission || parsed.data.proof);
 			if (presented) {
@@ -382,7 +383,7 @@ export class GatewayBridge implements ToolProvider {
 					error: `gateway "${dstGateway}" is ambiguous across Domains`,
 				});
 			}
-			if (foreign && this.hasLinkEdge?.(senderDomainId, foreign.domainId)) {
+			if (foreign && this.hasLinkEdge(senderDomainId, foreign.domainId)) {
 				dstDomainId = foreign.domainId;
 				dstConnId = foreign.connId;
 			}

@@ -114,11 +114,7 @@ export class RouterServer {
 		const transport = this.bridge.transportAdapter;
 		if (!transport) throw new Error("gateway transport unavailable");
 		this.server = https.createServer({ cert: this.tls.certPem, key: this.tls.keyPem }, (request, response) => {
-			this.handleHttp(request, response).catch((err) => {
-				console.error(`[federation-router] request failed: ${(err as Error).message}`);
-				if (!response.headersSent) response.writeHead(500);
-				response.end();
-			});
+			void this.serve(request, response);
 		});
 		this.server.on("clientError", (_err, socket) => socket.destroy());
 		this.server.on("upgrade", (request, socket, head) => {
@@ -183,11 +179,24 @@ export class RouterServer {
 		return this.console;
 	}
 
-	private async handleHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
+	// The ONE seam every request passes through. Nothing else may touch ServerResponse, so a
+	// handler cannot launch unobserved work: it returns a Response or throws into this catch.
+	private async serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
+		try {
+			await this.writeResponse(response, await this.route(request));
+		} catch (err) {
+			console.error(`[federation-router] request failed: ${(err as Error).message}`);
+			try {
+				if (!response.headersSent) response.writeHead(500);
+				response.end();
+			} catch {}
+		}
+	}
+
+	private async route(request: IncomingMessage): Promise<Response> {
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 		if (url.pathname === "/health" && request.method === "GET") {
-			this.writeResponse(response, new Response(JSON.stringify({ ok: true })));
-			return;
+			return new Response(JSON.stringify({ ok: true }));
 		}
 		const maxBody =
 			url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")
@@ -203,15 +212,13 @@ export class RouterServer {
 			const left = Buffer.from(token ?? "");
 			const right = Buffer.from(`Bearer ${this.params.consoleToken}`);
 			if (left.length !== right.length || !timingSafeEqual(left, right)) {
-				this.writeResponse(response, new Response("Unauthorized", { status: 401 }));
-				return;
+				return new Response("Unauthorized", { status: 401 });
 			}
 		}
 		const body = await readBody(request, maxBody);
-		if (body === null) {
-			this.writeResponse(response, new Response("Payload Too Large", { status: 413 }));
-			return;
-		}
+		if (body.outcome === "too-large") return new Response("Payload Too Large", { status: 413 });
+		// An abandoned request has no client left to answer; anything written is discarded.
+		if (body.outcome === "aborted") return new Response(null, { status: 499 });
 		const headers = new Headers();
 		for (const [key, value] of Object.entries(request.headers)) {
 			if (typeof value === "string") headers.set(key, value);
@@ -219,25 +226,24 @@ export class RouterServer {
 		const webRequest = new Request(url, {
 			method: request.method,
 			headers,
-			body: body.length ? new Uint8Array(body) : undefined,
+			body: body.bytes.length ? new Uint8Array(body.bytes) : undefined,
 		});
-		let result: Response;
 		if (url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")) {
-			result = await this.approval.handleRequest(webRequest);
-		} else if (["/relay", "/console", "/ingest"].includes(url.pathname)) {
-			result = await this.console.handleRequest(webRequest);
-		} else {
-			result = new Response("Not Found", { status: 404 });
+			return this.approval.handleRequest(webRequest);
 		}
-		this.writeResponse(response, result);
+		if (["/relay", "/console", "/ingest"].includes(url.pathname)) {
+			return this.console.handleRequest(webRequest);
+		}
+		return new Response("Not Found", { status: 404 });
 	}
 
-	private writeResponse(response: ServerResponse, result: Response): void {
+	private async writeResponse(response: ServerResponse, result: Response): Promise<void> {
+		const body = Buffer.from(await result.arrayBuffer());
 		response.statusCode = result.status;
 		result.headers.forEach((value, key) => {
 			response.setHeader(key, value);
 		});
-		void result.arrayBuffer().then((body) => response.end(Buffer.from(body)));
+		response.end(body);
 	}
 
 	private coordinatorFor(domainId: string): EnrollmentCoordinator | null {
@@ -332,9 +338,11 @@ export class RouterServer {
 	}
 }
 
-// A caller that aborts mid-body must never reject: the launch is not awaited.
-function readBody(request: IncomingMessage, maxBytes: number): Promise<Buffer | null> {
-	if (maxBytes === 0) return Promise.resolve(Buffer.alloc(0));
+// Three-valued: too-large and aborted are different answers and get different replies.
+type BodyResult = { outcome: "ok"; bytes: Buffer } | { outcome: "too-large" } | { outcome: "aborted" };
+
+function readBody(request: IncomingMessage, maxBytes: number): Promise<BodyResult> {
+	if (maxBytes === 0) return Promise.resolve({ outcome: "ok", bytes: Buffer.alloc(0) });
 	return new Promise((resolve) => {
 		const chunks: Buffer[] = [];
 		let length = 0;
@@ -344,14 +352,14 @@ function readBody(request: IncomingMessage, maxBytes: number): Promise<Buffer | 
 			if (length > maxBytes) {
 				// Pause rather than drain or destroy: backpressure stops the sender, and the
 				// socket stays writable long enough to answer 413.
-				resolve(null);
+				resolve({ outcome: "too-large" });
 				request.pause();
 				return;
 			}
 			chunks.push(buffer);
 		});
-		request.on("end", () => resolve(Buffer.concat(chunks)));
-		request.on("aborted", () => resolve(null));
-		request.on("error", () => resolve(null));
+		request.on("end", () => resolve({ outcome: "ok", bytes: Buffer.concat(chunks) }));
+		request.on("aborted", () => resolve({ outcome: "aborted" }));
+		request.on("error", () => resolve({ outcome: "aborted" }));
 	});
 }

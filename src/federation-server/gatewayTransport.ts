@@ -128,7 +128,9 @@ export class GatewayTransport {
 		const callId = msg.callId;
 		const name = msg.action;
 		const params = (msg.params ?? {}) as Record<string, unknown>;
-		void this.dispatchCall(ws, connId, callId, name, params);
+		this.dispatchCall(ws, connId, callId, name, params).catch((error) => {
+			console.error(`[${this.label}] dispatch failed for ${connId}: ${(error as Error).message}`);
+		});
 	}
 
 	private async dispatchCall(
@@ -138,12 +140,19 @@ export class GatewayTransport {
 		name: string,
 		params: Record<string, unknown>,
 	): Promise<void> {
+		let frame: string;
 		try {
 			const result = await this.provider.handleCall(connId, name, params);
-			ws.send(JSON.stringify({ type: "tool_result", callId, result }));
+			frame = JSON.stringify({ type: "tool_result", callId, result });
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
-			ws.send(JSON.stringify({ type: "tool_error", callId, error: errorMessage }));
+			frame = JSON.stringify({ type: "tool_error", callId, error: errorMessage });
+		}
+		// A send on a closing socket throws, and this call is launched unobserved.
+		try {
+			ws.send(frame);
+		} catch (error) {
+			console.warn(`[${this.label}] dropped reply to ${connId}: ${(error as Error).message}`);
 		}
 	}
 
