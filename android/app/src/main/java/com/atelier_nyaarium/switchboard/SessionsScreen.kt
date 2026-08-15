@@ -77,6 +77,7 @@ fun SessionsScreen(
 	onSpawn: (String, String, String?) -> Unit,
 	onListDirs: suspend (String) -> List<String> = { emptyList() },
 	onVerifyEnroll: (() -> Unit)? = null,
+	onRouterEndpoint: (() -> Unit)? = null,
 	// The board's live line per session card; { null } keeps every card's ordinary ladder.
 	boardLine: (Team) -> BoardLiveLine? = { null },
 	boardBranch: (Team) -> com.atelier_nyaarium.switchboard.board.CardBranch? = { null },
@@ -206,7 +207,15 @@ fun SessionsScreen(
 			if (local.isEmpty() && linkedDomains.isEmpty()) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
-				EmptyBoard(state, onManage, onAddGateway, onHostHelp, onRefresh, onVerifyEnroll = onVerifyEnroll)
+				EmptyBoard(
+					state,
+					onManage,
+					onAddGateway,
+					onHostHelp,
+					onRefresh,
+					onVerifyEnroll = onVerifyEnroll,
+					onRouterEndpoint = onRouterEndpoint,
+				)
 			} else {
 				// One shared sweep phase for every card's working/verifying pulse bar, instead of each
 				// card driving its own infinite animation.

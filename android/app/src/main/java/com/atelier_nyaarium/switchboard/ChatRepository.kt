@@ -363,6 +363,11 @@ class ChatRepository(
 	// internal (not private): connect() (ChatRepositoryDomainLink.kt) is that one caller.
 	internal fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
 
+	/** The sandbox's stored provisioning blob. Fake host, fake credentials, never dialed. */
+	private val SANDBOX_PROVISIONING =
+		"""{"transport":"direct","routerUrl":"https://router.sandbox.invalid:20001",""" +
+			""""routerCertFp":"${"11".repeat(32)}","appToken":"sandbox","conversationId":"sandbox"}"""
+
 	/**
 	 * Install canned sessions and threads, for the `emulator` sandbox build only.
 	 *
@@ -388,6 +393,10 @@ class ChatRepository(
 		// gatewayless sandbox never learns from a register. Adopt the first fixture's gateway
 		// segment so the seeded board renders as this device's own (Create button included).
 		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { localGatewayId = it }
+		// A stored blob, so the screens that READ one (the Federation endpoint form) show a
+		// pointed-at Router instead of the unconfigured branch. Never dialed: the sandbox declares
+		// itself connected and starts no poll loop.
+		if (store.load() == null) store.save(SANDBOX_PROVISIONING)
 		sandboxDirs = dirs
 		_state.update { s ->
 			s.copy(

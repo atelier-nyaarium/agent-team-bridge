@@ -76,15 +76,6 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 }
 
 /**
- * Repoint this console at a different endpoint, keeping everything else.
- *
- * Deliberately NOT provision(): that treats the blob as a fresh enrollment and clears the
- * console-admitted, first-rooted and ceremony latches, so re-running it to change a host would
- * re-submit an admission and re-offer the trust compare. This edits transport fields only,
- * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
- * keyring, cursors and admission state untouched.
- */
-/**
  * Canonicalize a hand-typed SHA-256 leaf fingerprint, or null if it is not one. Accepts the
  * colon- and space-separated spellings openssl and every certificate viewer print, since that is
  * what an owner copies off a terminal; the pin check compares plain lowercase hex, so an
@@ -96,6 +87,43 @@ internal fun normalizeCertFp(raw: String): String? {
 	return stripped
 }
 
+/** What the Router endpoint form shows. Display fields ONLY: the blob beside them carries the
+ * bearer credentials this console signs in with, which must never reach a screen. */
+data class RouterEndpoint(val host: String, val port: Int, val certFp: String, val direct: Boolean)
+
+/** Split a stored routerUrl back into the host and port the form edits, or null if it is not one. */
+internal fun parseRouterUrl(url: String, fallbackPort: Int): Pair<String, Int>? {
+	val body = url.trim().removeSuffix("/").substringAfter("://", url.trim().removeSuffix("/"))
+	if (body.isEmpty()) return null
+	val colon = body.lastIndexOf(':')
+	if (colon <= 0) return body to fallbackPort
+	val port = body.substring(colon + 1).toIntOrNull() ?: return body to fallbackPort
+	return body.substring(0, colon) to port
+}
+
+/**
+ * The endpoint this console is pointed at, for prefilling the form. Null before provisioning, and
+ * null on the cloud branch, which carries no Router fields to show.
+ */
+fun ChatRepository.currentRouterEndpoint(fallbackPort: Int): RouterEndpoint? {
+	val blob = store.load() ?: return null
+	val json = runCatching { JSONObject(blob) }.getOrNull() ?: return null
+	val direct = json.optString("transport") == "direct"
+	val url = json.optString("routerUrl")
+	if (url.isEmpty()) return null
+	val (host, port) = parseRouterUrl(url, fallbackPort) ?: return null
+	return RouterEndpoint(host, port, json.optString("routerCertFp"), direct)
+}
+
+/**
+ * Repoint this console at a different endpoint, keeping everything else.
+ *
+ * Deliberately NOT provision(): that treats the blob as a fresh enrollment and clears the
+ * console-admitted, first-rooted and ceremony latches, so re-running it to change a host would
+ * re-submit an admission and re-offer the trust compare. This edits transport fields only,
+ * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
+ * keyring, cursors and admission state untouched.
+ */
 suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) = withContext(Dispatchers.IO) {
 	val blob = store.load() ?: run {
 		_state.update { it.copy(error = "Not provisioned yet.") }

@@ -36,13 +36,14 @@ import com.atelier_nyaarium.switchboard.plugins.PluginManager
 
 /** The settings hub's routes: the hub plus one focused sub-screen each. A plain enum
  * (Serializable), so App() holds the current route in rememberSaveable across rotation. */
-enum class SettingsRoute { HUB, PROFILE, VOICE, NETWORKS, SECURITY, PLUGINS, SYSTEM }
+enum class SettingsRoute { HUB, PROFILE, VOICE, NETWORKS, FEDERATION, SECURITY, PLUGINS, SYSTEM }
 
 private fun settingsTitle(route: SettingsRoute): String = when (route) {
 	SettingsRoute.HUB -> "Settings"
 	SettingsRoute.PROFILE -> "Profile"
 	SettingsRoute.VOICE -> "Voice & TTS"
 	SettingsRoute.NETWORKS -> "Domain & Trust"
+	SettingsRoute.FEDERATION -> "Federation"
 	SettingsRoute.SECURITY -> "Security"
 	SettingsRoute.PLUGINS -> "Plugins"
 	SettingsRoute.SYSTEM -> "System"
@@ -79,7 +80,15 @@ fun SettingsScreen(
 		} else {
 			route
 		}
-	val onBack = { if (effectiveRoute == SettingsRoute.HUB) onCloseSettings() else onRoute(SettingsRoute.HUB) }
+	// Federation is reached FROM Domain & Trust, not from the hub, so back returns there rather
+	// than skipping the level the user actually came through.
+	val onBack = {
+		when (effectiveRoute) {
+			SettingsRoute.HUB -> onCloseSettings()
+			SettingsRoute.FEDERATION -> onRoute(SettingsRoute.NETWORKS)
+			else -> onRoute(SettingsRoute.HUB)
+		}
+	}
 	Scaffold(
 		topBar = {
 			TopAppBar(
@@ -107,7 +116,9 @@ fun SettingsScreen(
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
-				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onYourDevices, onFederation)
+				SettingsRoute.NETWORKS ->
+					NetworksSettings(onManage, onYourDevices, onFederation) { onRoute(SettingsRoute.FEDERATION) }
+				SettingsRoute.FEDERATION -> FederationSettings(repo)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
 				SettingsRoute.PLUGINS -> PluginsSettings(plugins, repo)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
