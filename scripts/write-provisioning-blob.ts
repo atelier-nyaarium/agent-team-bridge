@@ -12,9 +12,15 @@ import { ProvisioningSchema } from "../src/shared/schemas.js";
 //  Interfaces & Types
 
 export interface ProvisioningBlobInput {
-	apiUrl: string;
-	caPem: string;
-	saToken: string;
+	// The direct branch: the Router's own endpoint and the leaf fingerprint pinned against it. The
+	// k8s trio below stays representable so an already-written blob still parses; a NEW blob is
+	// always direct.
+	transport?: "k8s" | "direct";
+	routerUrl?: string;
+	routerCertFp?: string;
+	apiUrl?: string;
+	caPem?: string;
+	saToken?: string;
 	appToken: string;
 	namespace?: string;
 	service?: string;

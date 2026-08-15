@@ -1024,10 +1024,17 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 | `PORT` | HTTP/WS port (default 20000) |
 | `GATEWAY_ID` | This Gateway's id (default: sanitized hostname) |
 | `HOST_WS_TOKEN` | Secret the host daemon presents for the reserved `host` slot. Fail-closed. Auto-provisioned into `.env` by `start-gateway.sh` |
-| `EVIE_NAMESPACE` | K8s namespace (default `evie-bot`) |
 | `FEDERATION_DOMAIN_ID` | Domain id. NOT fail-closed; the enrollment-delivered `domain-id` file takes precedence |
 | `DATA_DIR` | All durable state (default `/app/data`), deliberately separate from the log volume so clearing logs cannot wipe federation identity |
 | `FEDERATION_DIR` | Keypair, allowlist, transport.json, domain-id (default: inside `DATA_DIR`) |
+
+**Federation Router (Docker, its own compose project):**
+
+| Var | Meaning |
+|-----|---------|
+| `FEDERATION_BIND` | The host address the Router publishes on. Defaults to `127.0.0.1`, which no phone can reach; set it to this machine's LAN address. Read by `start-federation.sh`, `setup-verify.ts` and `setup-provision.ts` alike, so the probe, the check and the emitted blob all agree |
+| `FEDERATION_WS_TOKEN` | Bearer the gateway presents at the Router's WS upgrade. Fail-closed. Minted into `.env` by `start-federation.sh` |
+| `CONSOLE_BRIDGE_TOKEN` | App token every console presents on the op surface. Fail-closed. Minted into `.env` by `start-federation.sh`; `export:federation` carries the cluster's across so already-provisioned consoles are not turned away |
 
 **Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above. The daemon announces each
 capability when its corresponding CLI is found on `PATH`; no environment variable is required.
@@ -1138,37 +1145,32 @@ claude plugin marketplace add atelier-nyaarium/claude-marketplace
 claude plugin install switchboard@atelier-nyaarium
 ```
 
-### Console bridge
-
-Spans two repos and three runtimes, so the order is fixed.
-
-1. Push evie (`app/features/bridge` + `deploy/`). Its `Push (main)` builds the image and rolls out.
-   Await the run, then `gitPull` locally.
-2. Push switchboard the same way, then `gitPull`.
-3. Apply the cluster objects from evie-bot:
-   - `kubectl create secret generic console-bridge-app-token -n evie-bot --from-literal=CONSOLE_BRIDGE_TOKEN=$(openssl rand -hex 32)`
-   - `kubectl apply -f deploy/console-bridge.yaml`
-   - `kubectl set env deploy/evie-bot-deployment -n evie-bot --from=secret/console-bridge-app-token`
-4. On the host: `./down.sh && ./start-gateway.sh && ./start-host-daemon.sh`.
-5. Validate with `evie-bot/deploy/console-bridge-smoketest.sh`.
-
-`register`/`send`/`list_teams` relay through the gateway, so they only pass after step 4. Setting the
-env before applying the yaml enables the bridge in the pod but leaves it unreachable.
-
 ### Federation
 
-Layers on the console-bridge deploy. The gateway-to-evie WS is admission-only, no bearer fallback.
+One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, no bearer fallback.
 
-1. One-time RBAC: `kubectl apply -f evie-bot/deploy/federation-rbac.yaml`. Re-apply after a
-   transport-endpoint change so the new rule lands.
+1. `./start-federation.sh` with `FEDERATION_BIND` in `.env` set to this machine's LAN address. It
+   defaults to loopback, and a phone cannot reach loopback. The script mints both Router tokens into
+   `.env` on first run.
 2. Domain id is not fail-closed; a gateway without one arms for enrollment. A creds-less secondary
    gets it from the sealed bootstrap bundle.
-3. `./setup.sh`. `2) Evie Admin Provision` does the cluster cutover, stages a pending admin Domain,
-   and emits the transport-only blob. `1) Setup Gateway` arms this gateway, shows its admit payload,
-   waits for the phone's sealed bundle, and connects in-process with no restart.
+3. `./setup.sh`. `2) Admin Provision` reads the Router's state (stop, write, start when it stages a
+   pending admin Domain, since the store is single-writer) and emits the transport-only blob:
+   `transport: direct`, the LAN `routerUrl`, the leaf fingerprint read from the running Router's
+   `/health`, and the app token from `.env`. It refuses to run if it cannot read the state file,
+   because an empty read looks like "no Domain" and the fresh branch would stage a pending Domain
+   OVER a rooted one - that exact misread happened once, stopped only by the display-name prompt.
+   `1) Setup Gateway` arms this gateway, shows its admit payload, waits for the phone's sealed
+   bundle, and connects in-process with no restart.
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
-   local state and the host blob.
+   local state and the host blob. Both mutate the Router's own state file through
+   `scripts/lib/routerState.ts`.
+
+`scripts/lib/routerState.ts` keeps every Bun `$` template on ONE line: Bun does not treat a
+backslash-newline as a continuation, it splits the argv there and the stray backslash lands in it,
+so a wrapped template runs a different command and `readRouterFed` returned "" while the file was
+fine. That is how the empty-read misread above was produced.
 
 ### Cutting over to the self-hosted Router
 
@@ -1207,34 +1209,25 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
 
 ### Retiring the k8s path
 
-The gateway side is DONE: `gateway/evie/transport.ts` loads only the direct branch, the `EVIE_*`
-env vars are gone, and `setup-purge` mutates the Router's own state file through
-`scripts/lib/routerState.ts` (stop, mutate, start - the store is single-writer). A `transport.json`
-still holding the k8s shape now resolves to null, so such a Gateway arms for enrollment rather than
-half-reading a relay it cannot reach.
-
+The server side is DONE. Nothing under `src/gateway`, `scripts/` or the Dockerfile reaches a cluster:
+`gateway/evie/transport.ts` loads only the direct branch, the `EVIE_*` env vars are gone, kubectl is
+out of the image, and provision / purge / verify all speak to the Router through
+`scripts/lib/routerState.ts` and `/health`. A `transport.json` still holding the k8s shape resolves
+to null, so such a Gateway arms for enrollment rather than half-reading a relay it cannot reach.
 `setup.sh --gateway-transport` is GONE rather than ported: it wrote a k8s `transport.json` over the
-gateway's own, which after the cutover knocks it off the Router. `--verify` probes the Router and
-the Gateway's registration instead (`setup-verify.ts`); it reads `FEDERATION_BIND` for the same
-reason `start-federation.sh` does, since a LAN bind unbinds loopback.
+gateway's own, which after the cutover knocks it off the Router.
 
-What is left is NOT a deletion, and that is the whole reason it is still here:
+The one k8s-speaking file left is `scripts/federation-export.ts`, on purpose: it is the one-time
+migration that reads the cluster's Secret into the Router, and it stays until the owner deletes the
+cluster objects. evie-bot's side (the bridges, the eleven synced copies, the deploy objects) is
+deleted and committed locally there, NOT pushed - the owner pushes evie.
 
-- **`setup-provision.ts` is the only implementation of a from-scratch setup**, and it stages the
-  admin Domain into the CLUSTER. Deleting its kubectl plumbing (and with it `applySecret` / `k` /
-  `kStdin` / `kGetB64` / `readSaCreds` / `ensureAdminKubernetes` / `clearAdminKubeconfig` in
-  `scripts/lib/host.ts`, which nothing else uses) removes the ability to provision at all. It needs
-  a Router-side rewrite first: same flow, writing `volumes/federation-data/federation.json` through
-  `routerState.ts` instead of a Secret. That rewrite needs a 0600 write into the gateway container
-  again; `writeGatewayFile` did it carefully (bytes over stdin so a secret stays out of `ps`) and
-  was pruned when its last caller went, so lift it from git history rather than re-deriving it.
-- Then the `kubectl` install in the Dockerfile and the k8s rows in `setup-constants.ts` fall out on
-  their own.
-- evie-bot: the gateway/console/device-approval bridges plus ELEVEN synced copies (the seven
-  `federation-*` leaves, the `federation-lifecycle` barrel, `evie-protocol.ts`, `crypto.ts`,
-  `admission.ts`), their rows in `_lint.yml` and `_test.yml`, and the bridge k8s objects.
-  `notice.ts` STAYS - its twin is in nyaaskills, not evie.
-- console: the k8s proxy transport, `PROXY_CEILING_MS`, and legacy provisioning parsing. Another
-  console release.
-- Then the legacy halves of the `transport` unions in the shared schemas, and the LKE bridge
-  objects. The cluster keeps plain evie-bot hosting with no switchboard role.
+What remains is CLIENT-side and needs a console release:
+
+- console: the k8s proxy transport branch, `PROXY_CEILING_MS`, and the k8s fields in `Provisioning`
+  parsing. Every device must be on a direct blob first, or the update strands it.
+- Then the k8s halves of the shared schemas (`schemasProvisioning.ts`, `schemasGatewayTransport.ts`,
+  `federation-proofs.ts`), whose refinements still REQUIRE the k8s fields when `transport` is not
+  `direct`. Deleting them makes every older blob unparseable, and the plugin updates before the
+  console does, so this is last.
+- The cluster keeps plain evie-bot hosting with no switchboard role.

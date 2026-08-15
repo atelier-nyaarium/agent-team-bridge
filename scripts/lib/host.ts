@@ -1,20 +1,15 @@
-// Shared host-side primitives for the bun setup orchestrators: typed wrappers over Bun.$ (docker,
-// and admin-only kubectl run through the gateway container), base64 Secret reads,
-// Opaque-Secret apply, the interactive menu/prompt loop, .env read/write, and logging.
+// Shared host-side primitives for the bun setup orchestrators: typed wrappers over Bun.$ (docker
+// compose for the gateway and the Router), the interactive menu/prompt loop, .env read/write, and
+// logging.
 
 import dgram from "node:dgram";
 import fs from "node:fs";
-import path from "node:path";
 import { $ } from "bun";
 
 ////////////////////////////////
 //  Constants
 
-// Only the admin-provisioning path copies its explicitly configured kubeconfig here. Ordinary
-// gateways never receive a kubeconfig and enroll through the Console instead.
 export const CONTAINER = "switchboard";
-export const NS = "evie-bot";
-export const KUBECONFIG_IN = "/app/kubeconfig.yaml";
 
 ////////////////////////////////
 //  Logging
@@ -78,18 +73,7 @@ export function dirExists(dirPath: string): boolean {
 }
 
 ////////////////////////////////
-//  Docker + kubectl (Bun.$)
-
-/** kubectl inside the gateway container. Returns the ShellPromise; await `.text()` for stdout,
- * `.quiet().nothrow()` for a probe whose exit code you want to read. */
-export function k(...args: string[]) {
-	return $`docker exec ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} -n ${NS} ${args}`;
-}
-
-/** kubectl with `stdin` piped in (e.g. `apply -f -`). */
-export function kStdin(stdin: string, ...args: string[]) {
-	return $`docker exec -i ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} -n ${NS} ${args} < ${Buffer.from(stdin)}`;
-}
+//  Docker (Bun.$)
 
 /** docker compose in the current project. */
 export function dc(...args: string[]) {
@@ -122,73 +106,6 @@ export async function ensureContainer(): Promise<void> {
 	note(`Starting gateway docker`);
 	const up = await dc("up", "--build", "-d").quiet().nothrow();
 	if (up.exitCode !== 0) die(`docker compose up failed (is docker running?)`);
-}
-
-/** Prepare Kubernetes access for the explicit Evie Admin Provision action. The kubeconfig location
- * is intentionally opt-in and local to the administrator's .env; it is copied into the running
- * container only for that admin workflow, never declared by Docker Compose. */
-export async function ensureAdminKubernetes(): Promise<void> {
-	const kubeconfig = await envGet("SWITCHBOARD_KUBECONFIG");
-	if (!kubeconfig) {
-		throw new Error(
-			"Evie Admin Provision requires SWITCHBOARD_KUBECONFIG in .env (for example: SWITCHBOARD_KUBECONFIG=/absolute/path/to/kubeconfig.yaml)",
-		);
-	}
-	const source = path.resolve(kubeconfig);
-	if (!(await Bun.file(source).exists())) {
-		throw new Error(`SWITCHBOARD_KUBECONFIG does not exist: ${source}`);
-	}
-	await ensureContainer();
-	const copy = await $`docker cp ${source} ${`${CONTAINER}:${KUBECONFIG_IN}`}`.quiet().nothrow();
-	if (copy.exitCode !== 0) throw new Error("could not copy SWITCHBOARD_KUBECONFIG into the admin container");
-	const chmod = await $`docker exec ${CONTAINER} chmod 600 ${KUBECONFIG_IN}`.quiet().nothrow();
-	if (chmod.exitCode !== 0) throw new Error("could not secure the admin kubeconfig in the gateway container");
-	for (let i = 0; i < 30; i++) {
-		const probe = await $`docker exec ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} version`.quiet().nothrow();
-		if (probe.exitCode === 0) return;
-		await Bun.sleep(2000);
-	}
-	throw new Error(`kubectl not reachable through '${CONTAINER}'`);
-}
-
-/** Remove the transient admin credential after an admin operation completes. Failure is harmless:
- * the next ordinary compose recreation has no kubeconfig mount and therefore cannot depend on it. */
-export async function clearAdminKubeconfig(): Promise<void> {
-	await $`docker exec ${CONTAINER} rm -f ${KUBECONFIG_IN}`.quiet().nothrow();
-}
-
-/** A base64-decoded kubectl jsonpath read; empty string when the secret/field is absent. */
-export async function kGetB64(...args: string[]): Promise<string> {
-	const r = await k(...args)
-		.quiet()
-		.nothrow();
-	const v = r.text().trim();
-	return v ? Buffer.from(v, "base64").toString() : "";
-}
-
-/** Read a ServiceAccount-token Secret's (token, ca.crt) pair, base64-decoded; empty strings when absent. */
-export async function readSaCreds(secret: string): Promise<{ saToken: string; caPem: string }> {
-	const saToken = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.token}");
-	const caPem = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.ca\\.crt}");
-	return { saToken, caPem };
-}
-
-/** Apply an Opaque Secret (values base64-encoded) as YAML on stdin, so values never hit argv.
- * serverSide uses SSA + --force-conflicts (for a Secret a controller also writes). Returns whether the
- * apply succeeded, so the caller chooses to throw or tolerate. */
-export async function applySecret(name: string, data: Record<string, string>, serverSide = false): Promise<boolean> {
-	const lines = Object.entries(data)
-		.map(([key, val]) => `  ${key}: ${Buffer.from(val).toString("base64")}`)
-		.join("\n");
-	const yaml = `apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${NS}\ntype: Opaque\ndata:\n${lines}\n`;
-	const flags = serverSide ? ["apply", "--server-side", "--force-conflicts", "-f", "-"] : ["apply", "-f", "-"];
-	return (
-		(
-			await kStdin(yaml, ...flags)
-				.quiet()
-				.nothrow()
-		).exitCode === 0
-	);
 }
 
 ////////////////////////////////

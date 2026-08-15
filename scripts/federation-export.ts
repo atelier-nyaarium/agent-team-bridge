@@ -90,10 +90,12 @@ async function writeState(dataDir: string, blob: string): Promise<void> {
  */
 async function importConsoleToken(args: Args): Promise<"written" | "unchanged" | "absent"> {
 	const extra = kubectlArgs(args);
-	const read = await $`kubectl --kubeconfig=${args.kubeconfig} ${extra} -n ${NAMESPACE} \
-		get secret ${CONSOLE_SECRET} -o jsonpath=${`{.data.${CONSOLE_KEY}}`}`
-		.quiet()
-		.nothrow();
+	// One line: Bun's `$` treats a backslash-newline as an argv split, not a continuation.
+	const jsonpath = `{.data.${CONSOLE_KEY}}`;
+	const read =
+		await $`kubectl --kubeconfig=${args.kubeconfig} ${extra} -n ${NAMESPACE} get secret ${CONSOLE_SECRET} -o jsonpath=${jsonpath}`
+			.quiet()
+			.nothrow();
 	const encoded = read.exitCode ? "" : read.stdout.toString().trim();
 	if (!encoded) return "absent";
 	const token = Buffer.from(encoded, "base64").toString("utf8").trim();

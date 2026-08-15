@@ -4,13 +4,14 @@
 // pre-stages the admin Domain as a pending tenant (a displayName label plus a one-time invite
 // nonce, no owner root) and the admin's phone first-roots it on scan like any friend.
 //
-// evie's identity is preserved verbatim by every write path, since re-minting it would change
-// evie's SAS fingerprint. The federation Secret is the v2 multi-domain shape
+// The Router's identity is preserved verbatim by every write path, since re-minting it would change
+// the SAS fingerprint every enrolled device holds. The state file is the v2 multi-domain shape
 // (`{ schema:2, identity, enrollment: { <domainId>: state } }`); setup touches only the admin
 // slice and writes the whole map back so a friend Domain is never clobbered.
 //
-// Persisted shapes mirror evie's EnrollmentState / PendingTenantRecord byte-for-byte: the host
-// writes the Secret evie reads, so any drift makes evie reject the admin slice.
+// Persisted shapes mirror the Router's EnrollmentState / PendingTenantRecord byte-for-byte
+// (src/federation-server/federationSecret.ts): the host writes the file the Router reads, so any
+// drift makes the Router reject the admin slice.
 
 import type { SignedAdmission, SignedRevocation } from "../src/shared/admission.js";
 import type { Identity } from "../src/shared/crypto.js";
@@ -70,8 +71,8 @@ const FEDERATION_SECRET_SCHEMA = 2;
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Parse the live evie federation.json and pull out evie's identity, with an actionable error
- * instead of a raw SyntaxError. */
+/** Parse the Router's federation.json and pull out its identity, with an actionable error instead
+ * of a raw SyntaxError. */
 function readEvieFederation(evieFedJson: string): {
 	evieFed: MultiDomainEvieFederation;
 	evieIdentity: Identity;
@@ -81,12 +82,12 @@ function readEvieFederation(evieFedJson: string): {
 		evieFed = JSON.parse(evieFedJson) as MultiDomainEvieFederation;
 	} catch {
 		throw new Error(
-			"evie federation Secret is not valid JSON - check `kubectl get secret evie-federation -o json`",
+			"the Router's federation.json is not valid JSON - restore it from ./backup-federation.sh's archive",
 		);
 	}
 	const evieIdentity = evieFed.identity;
 	if (!evieIdentity?.sign?.pub || !evieIdentity?.box?.pub) {
-		throw new Error("evie federation Secret has no usable identity (.identity.sign/.box)");
+		throw new Error("the Router's federation.json has no usable identity (.identity.sign/.box)");
 	}
 	return { evieFed, evieIdentity };
 }
