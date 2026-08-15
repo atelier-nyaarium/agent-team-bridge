@@ -1301,6 +1301,7 @@ export function createRoutes({
 			ok: true,
 			teams: registry.size,
 			pending_jobs: store.size,
+			router_connected: evieClient?.isConnected() ?? false,
 		});
 	}
 
