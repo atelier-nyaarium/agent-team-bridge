@@ -116,7 +116,6 @@ export class RouterServer {
 		this.server = https.createServer({ cert: this.tls.certPem, key: this.tls.keyPem }, (request, response) => {
 			void this.serve(request, response);
 		});
-		this.server.on("clientError", (_err, socket) => socket.destroy());
 		this.server.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 			if (url.pathname !== "/" && url.pathname !== "/gateway") {
@@ -142,6 +141,18 @@ export class RouterServer {
 		});
 		// Permanent listener: a one-shot is spent by the bind and leaves later errors uncaught.
 		this.server.on("error", (err) => console.error(`[federation-router] server error: ${err.message}`));
+		// A client whose pin does not match aborts DURING the handshake, so it reaches no route and
+		// no status code. Without this, a mismatched console is indistinguishable from one that
+		// never dialed, which is the same thing twice over on a self-signed leaf.
+		this.server.on("tlsClientError", (err, socket) => {
+			const peer = (socket as { remoteAddress?: string }).remoteAddress ?? "?";
+			console.log(`[federation-router] TLS handshake failed from ${peer}: ${err.message}`);
+		});
+		this.server.on("clientError", (err, socket) => {
+			const peer = (socket as { remoteAddress?: string }).remoteAddress ?? "?";
+			console.log(`[federation-router] client error from ${peer}: ${err.message}`);
+			socket.destroy();
+		});
 		await new Promise<void>((resolve, reject) => {
 			this.server?.once("error", reject);
 			this.server?.listen(this.params.port, () => {
@@ -194,11 +205,33 @@ export class RouterServer {
 	}
 
 	private async route(request: IncomingMessage): Promise<Response> {
+		const answer = await this.resolve(request);
+		// Every request, with what it resolved to. The console surface only ever logged its own
+		// refusals, so a request turned away by the gate BELOW - or one that never matched a route
+		// at all - looked exactly like a console that never dialed.
+		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
+		if (url.pathname !== "/health") {
+			const peer = request.socket.remoteAddress ?? "?";
+			console.log(`[federation-router] ${request.method} ${url.pathname} from ${peer} -> ${answer.status}`);
+		}
+		return answer;
+	}
+
+	private async resolve(request: IncomingMessage): Promise<Response> {
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 		if (url.pathname === "/health" && request.method === "GET") {
 			// The fingerprint rides the health answer so clients can confirm the pin they hold
 			// without root access to the cert file or a boot line that log rotation discards.
-			return new Response(JSON.stringify({ ok: true, certFingerprint: this.tls.certFp }));
+			// `gateways` is the Router's OWN count, which is what makes it worth having: a Gateway
+			// reports `router_connected` from its own socket state and reads true across a half-open
+			// one, so only the far side can contradict it.
+			return new Response(
+				JSON.stringify({
+					ok: true,
+					certFingerprint: this.tls.certFp,
+					gateways: this.bridge.registeredGatewayCount,
+				}),
+			);
 		}
 		const maxBody =
 			url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")

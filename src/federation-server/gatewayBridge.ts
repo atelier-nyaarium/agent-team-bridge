@@ -99,6 +99,13 @@ export class GatewayBridge implements ToolProvider {
 		return this.transport;
 	}
 
+	/** How many Gateways are registered right now. The Router's own count, so an operator can hold
+	 * it against a Gateway's `router_connected`, which is only that Gateway's view of its socket and
+	 * still reads true across a half-open one. */
+	public get registeredGatewayCount(): number {
+		return this.connGateways.size;
+	}
+
 	public stop(): void {
 		this.transport?.stop();
 		this.transport = null;

@@ -32,7 +32,7 @@ export async function verify(): Promise<void> {
 	// -k, not a pin: this probe runs on the host beside the Router, so there is no peer to
 	// authenticate. It reports the fingerprint for the operator to compare against their devices.
 	const health = await $`curl -sk --max-time 5 ${await routerHealthUrl()}`.quiet().nothrow().text();
-	const router = jparse<{ ok?: boolean; certFingerprint?: string }>(health.trim());
+	const router = jparse<{ ok?: boolean; certFingerprint?: string; gateways?: number }>(health.trim());
 	if (!router?.ok)
 		throw new Error(`the Router did not answer /health (got: ${health.trim().slice(0, 120) || "nothing"})`);
 	note(`Router healthy. TLS fingerprint ${router.certFingerprint ?? "(absent)"}`);
@@ -43,5 +43,13 @@ export async function verify(): Promise<void> {
 	if (!gateway.router_connected) {
 		throw new Error("the Gateway is up but NOT connected to the Router - check its transport.json and its log");
 	}
-	note("Gateway healthy and registered with the Router");
+	// Both sides, not one. A Gateway reads `router_connected` off its own socket, which stays OPEN
+	// across a half-open connection, so it can claim a link the Router is not holding - and every
+	// console op relayed over that link fails while both ends look healthy.
+	if (!router.gateways) {
+		throw new Error(
+			"the Gateway believes it is connected but the Router holds NO registration - restart the Gateway",
+		);
+	}
+	note(`Gateway healthy and registered. The Router holds ${router.gateways} gateway connection(s)`);
 }
