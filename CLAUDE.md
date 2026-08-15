@@ -9,7 +9,8 @@ code does not belong here; rationale lives in `git log`.
 
 ## Layout
 
-- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` - the three entry points
+- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - the four
+  entry points
 - `src/gateway/` - the Docker-side HTTP + WS router (`index.ts`, `routes.ts`, `websocket.ts`;
   `routeSchemas.ts` holds the request schemas, byte caps and pure helpers the route table validates
   with; `wsTypes.ts` holds the WS registries, `WsData`, the repush bounds and the pure socket
@@ -139,6 +140,24 @@ code does not belong here; rationale lives in `git log`.
     retry a replay rather than a second delegated task
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
+- `src/federation-server/` - the self-hosted federation Router: one TLS listener serving the gateway
+  WS, the console op surface and the token-exempt device-approval ingress. Ported from evie's bridge;
+  see Self-hosted Router below. NOT yet deployed - the live path is still evie over k8s
+  - `routerServer.ts` - the listener and the ONE guarded seam every request enters through:
+    `route()` returns a Response and never touches `ServerResponse`, `serve()` is the only adapter.
+    Pinned by `federation-launch-seam-residue.test.ts`
+  - `fileSecretStore.ts` - the durable federation state, replacing evie's `KubeSecretStore` facade
+    whole; whole-file atomic writes, persist-before-publish, bounded CAS re-run
+  - `gatewayBridge.ts` / `gatewayTransport.ts` - registration authority and relay routing, and the
+    ws adapter beneath them. The four trust callbacks are REQUIRED: an absent `getDomain` would skip
+    the entire registration verification block
+  - `consoleSurface.ts` / `publicApproval.ts` - the app-token-gated op family, and the two
+    nonce-gated public routes that must stay token-exempt
+  - `routerTls.ts` - the persistent self-signed cert. Minted only when absent, never auto-rotated;
+    rotating it re-provisions every client
+  - The five coordinators (`enrollmentCoordinator`, `tenantAdmin`, `enrollHandshakeCoordinator`,
+    `deviceApprovalCoordinator`, `trustRendezvousCoordinator`) keep their windows in memory by
+    design; a restart loses them and the flows re-arm
 - `src/shared/agent-binary.ts` - whether a backend's CLI is on `PATH`. Uncached and `which`-free: the
   answer gates both the daemon's declaration and the plugin's tool registration
 - `src/shared/` - wire truth and utilities used by both sides
@@ -189,13 +208,15 @@ code does not belong here; rationale lives in `git log`.
 **Gateway** (`main-gateway.ts`) runs in Docker as one machine's central router.
 **Host daemon** (`main-host-daemon.ts`) runs headless on the host and owns the reserved `host` WS
 slot: devcontainer wake, session spawn, and the console terminal view. It carries no Claude session.
+**Federation Router** (`main-federation.ts`) is the self-hosted replacement for evie's relay, built
+but not yet deployed.
 
-| Port  | Service                           |
-|-------|-----------------------------------|
-| 20000 | Gateway (HTTP + WS)               |
-| 20001 | Evie bridge server (tool call WS) |
-| 20002 | MCP connector (game client WS)    |
-| 20003 | Enrollment TLS (arming only)      |
+| Port  | Service                             |
+|-------|-------------------------------------|
+| 20000 | Gateway (HTTP + WS)                 |
+| 20001 | Federation Router (TLS), was evie's |
+| 20002 | MCP connector (game client WS)      |
+| 20003 | Enrollment TLS (arming only)        |
 
 20000 publishes to LOOPBACK only: local HTTP authorizes by session binding, which says nothing about
 which machine the caller is on. Containers reach it by service name, off that mapping. 20003 is the
@@ -257,6 +278,22 @@ paid-for bugs:
 
 UNBOUND is a VALUE a resolver returns, never an absence a caller falls into. That is what stops a
 gate from manufacturing an accidental permit.
+
+### Self-hosted Router
+
+`src/federation-server/` is a drop-in replacement for evie's relay, run in Docker at home instead of
+k8s. Migration plan and its decisions: `plans/self-hosted-federation.md`. It speaks the SAME wire
+protocol, so `src/gateway/evie/evieClient.ts` connects to it unchanged; only the transport under it
+differs. Everything below about trust, sealing and admissions holds identically - the Router is
+content-blind for the same reasons evie is, and moving it home changes reachability, not trust.
+
+Three surfaces share one TLS port, and the boundary between them is the whole security story: the
+gateway WS is bearer-gated at upgrade, the console op family is app-token-gated, and device-approval
+join/fetch is deliberately token-EXEMPT because a fresh device holds no credential yet.
+
+Its cert is minted once and never rotated. Rotating it invalidates the pin every enrolled Gateway
+and phone holds, which is a re-provision of each, not a restart. That cert is also distinct from the
+ephemeral one the 20003 enrollment listener mints per arming.
 
 ### Federation and trust
 
