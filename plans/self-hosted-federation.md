@@ -183,12 +183,33 @@ in three rounds:
 3. The bind's one-shot `once("error")` left post-listen server errors uncaught.
 
 The Router was also the only entry point missing `installRejectionGuard`, which is what let
-these reach the process rather than a log line.
+these reach the process rather than a log line. A fourth instance was then found in the one
+place responses are written: `writeResponse` floated `result.arrayBuffer().then(...)`.
 
-Patched minimally and left as-is for now. The real repair is structural and belongs to
-`architecture-fan-out`: one guarded launch seam that every request enters through, so a new
-handler cannot reintroduce this by being written the obvious way. Do not add a fourth
-one-off catch; fix the seam.
+RESOLVED structurally. `routerServer.ts` now has one seam:
+- `route(request): Promise<Response>` is pure dispatch and never touches `ServerResponse`.
+- `serve(request, response)` is the only adapter: it awaits both the dispatch and the body
+  write inside one try, with the error path itself guarded against a dead socket.
+- `readBody` answers three-valued (`ok` / `too-large` / `aborted`), so an abandoned request
+  is no longer reported to itself as 413.
+- The two sibling launches are closed: `dispatchCall` carries a `.catch` and guards its own
+  `ws.send` (which throws on a closing socket), and `shutdown()` handles its rejection.
+
+Pinned by `federation-launch-seam-residue.test.ts`: the node HTTP types appear nowhere under
+`src/federation-server/` except `routerServer.ts` (with a positive control proving the
+exemption works), and exactly one unobserved launch exists across that directory plus
+`main-federation.ts`. It caught the `dispatchCall` launch on its first run.
+
+The detector is held against known-bad samples in the same file, because the first version of
+it was theater: a line regex matching only `void <lowercase>` or `void this.`, which a red team
+disproved live by adding three launches that all passed green - including `void Promise.all(...)`,
+the same idiom it claimed to count, escaping on capitalization alone. It now folds fluent chains
+into logical statements, skips held values (awaited, returned, bound, assigned), and recognises
+bare async calls, rejection-armless `.then`, and async emitter callbacks.
+
+Biome's `noFloatingPromises` was tried first and rejected: it is nursery in 2.5.1 and does not
+fire even when forced on a same-file async call, so enabling it would have implied a gate that
+does not exist.
 
 ## Phase 2 - Docker + scripts
 
