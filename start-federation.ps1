@@ -28,10 +28,15 @@ if ($LASTEXITCODE -ne 0) { docker network create switchboard-federation | Out-Nu
 docker compose -f docker-compose.federation.yml -p switchboard-federation up --build -d
 if ($LASTEXITCODE -ne 0) { Write-Error 'Federation Router compose up failed'; exit 1 }
 
+# Probe whatever the compose file actually bound. A LAN FEDERATION_BIND unbinds loopback, so a
+# hardcoded localhost probe reports a healthy Router as a 60s timeout.
+$probeHost = Get-EnvValue 'FEDERATION_BIND'
+if (-not $probeHost -or $probeHost -eq '0.0.0.0') { $probeHost = '127.0.0.1' }
+
 Write-Host 'Waiting for the federation Router to be ready...'
 foreach ($i in 1..30) {
 	try {
-		$resp = Invoke-WebRequest -Uri 'https://localhost:20001/health' -SkipCertificateCheck -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+		$resp = Invoke-WebRequest -Uri "https://${probeHost}:20001/health" -SkipCertificateCheck -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
 		if ($resp.StatusCode -eq 200) {
 			Write-Host 'Federation Router ready. TLS fingerprint:'
 			docker logs switchboard-federation 2>&1 | Select-String -Pattern 'TLS fingerprint' | Select-Object -First 1

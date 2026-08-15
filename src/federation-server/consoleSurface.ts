@@ -1,7 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import type { GatewayBridge } from "./gatewayBridge.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;

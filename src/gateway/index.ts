@@ -692,11 +692,17 @@ export async function startGateway(): Promise<void> {
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
-		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
-		// reaches a behind-NAT evie through the apiserver. The SA token authenticates to the API
-		// server (consumed there); the cluster CA is pinned for TLS.
+		// The federation WS. On the k8s branch creds are delivered by enrollment, no kubeconfig
+		// mount, and it reaches a behind-NAT evie through the apiserver: the SA token authenticates
+		// there and the cluster CA is pinned. On the direct branch it dials the Router and pins its
+		// leaf fingerprint. Log the branch that is actually in use, or the k8s framing reads as
+		// still-on-k8s after a cutover.
 		const connection = evieWsConnection(transport);
-		console.log(`[evie] service-proxy transport -> ${transport.apiUrl} (${transport.service}:${transport.port})`);
+		console.log(
+			transport.transport === "direct"
+				? `[evie] direct transport -> ${transport.routerUrl}`
+				: `[evie] service-proxy transport -> ${transport.apiUrl} (${transport.service}:${transport.port})`,
+		);
 
 		// Frame handlers land on the slice after the routes rebuild; a frame arriving before that
 		// is dropped (the console re-polls).

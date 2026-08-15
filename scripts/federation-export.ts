@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { $ } from "bun";
 
@@ -12,6 +13,7 @@ import { $ } from "bun";
 const NAMESPACE = "evie-bot";
 const SECRET = "evie-federation";
 const DATA_KEY = "federation.json";
+const IMAGE = "switchboard-federation-federation:latest";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -43,6 +45,40 @@ function kubectlArgs(args: Args): string[] {
 	if (args.server) extra.push(`--server=${args.server}`);
 	if (args.tlsServerName) extra.push(`--tls-server-name=${args.tlsServerName}`);
 	return extra;
+}
+
+/**
+ * Write the state file, falling back to the container when the Router already root-owns the dir.
+ * A re-export is the normal path after a failed cutover, and by then the host cannot write here.
+ */
+async function writeState(dataDir: string, blob: string): Promise<void> {
+	const target = path.join(dataDir, DATA_KEY);
+	mkdirSync(dataDir, { recursive: true });
+	try {
+		writeFileSync(target, blob, { mode: 0o600 });
+		return;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
+	}
+
+	if (!(await $`docker image inspect ${IMAGE}`.quiet().nothrow()).exitCode) {
+		const staging = mkdtempSync(path.join(tmpdir(), "federation-export-"));
+		try {
+			writeFileSync(path.join(staging, DATA_KEY), blob, { mode: 0o600 });
+			const script = `cp /in/${DATA_KEY} /data/${DATA_KEY} && chmod 600 /data/${DATA_KEY}`;
+			const mounts = [`${staging}:/in:ro`, `${path.resolve(dataDir)}:/data`];
+			const copy = await $`docker run --rm -v ${mounts[0]} -v ${mounts[1]} --entrypoint sh ${IMAGE} -c ${script}`
+				.nothrow()
+				.quiet();
+			if (!copy.exitCode) return;
+			console.error(copy.stderr.toString().trim());
+		} finally {
+			rmSync(staging, { recursive: true, force: true });
+		}
+	}
+	throw new Error(
+		`cannot write ${target} - it is owned by the Router. Run ./start-federation.sh once, or sudo rm it.`,
+	);
 }
 
 /** Read the Secret and its resourceVersion together, so the caller can prove nothing moved. */
@@ -99,8 +135,7 @@ if (!state.identity?.sign?.pub) {
 	process.exit(1);
 }
 
-mkdirSync(args.dataDir, { recursive: true });
-writeFileSync(path.join(args.dataDir, DATA_KEY), first.blob, { mode: 0o600 });
+await writeState(args.dataDir, first.blob);
 
 console.log(`Wrote ${path.join(args.dataDir, DATA_KEY)}`);
 console.log(`  identity ${state.identity.sign.pub}`);

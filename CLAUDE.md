@@ -1189,18 +1189,25 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
 
 1. `./backup-federation.sh` with the Router stopped. It refuses while it runs, asserts the cert,
    key and state all landed, and includes both tokens - a data-only archive authenticates nobody.
-2. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
+2. `bun run smoketest:federation` BEFORE the export, never after. It registers a gateway with no
+   admission, which only passes while the store holds no rooted domain; once the real one is
+   imported `verifyRegistrationClaim` demands a genuine admission and the check fails correctly.
+3. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
    the evie identity keypair rather than minting one, which is what makes enrolled devices still
-   resolve this Router. It aborts if the Secret moves mid-read.
-3. `./start-federation.sh`, then `bun run smoketest:federation`. Expect every check to pass.
-4. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
+   resolve this Router. It aborts if the Secret moves mid-read. A re-export writes through the
+   container, since by then the Router root-owns the data dir and the host cannot.
+4. Set `FEDERATION_BIND` in `.env` to the LAN address. It defaults to `127.0.0.1`, so without this
+   the phone cannot reach the Router at all. Then `./start-federation.sh`.
+5. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
    branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
-   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), then
-   `./start-gateway.sh`. Confirm `router_connected: true` on the gateway's `/health`.
-5. Point the phone at the LAN address in Settings, Federation Router. The port defaults to 20001
+   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), keeping the old
+   file as `transport.k8s.json` for the rollback. Then `./start-gateway.sh`. Confirm
+   `router_connected: true` on the gateway's `/health`, `[evie] direct transport ->` in its log,
+   and `Gateway registered: <domain>/<id>` in the Router's.
+6. Point the phone at the LAN address in Settings, Federation Router. The port defaults to 20001
    and the fingerprint comes from the Router's `/health`. Editing there repoints the transport
    ONLY; it never re-runs provisioning, so admission and enrollment survive.
-6. Verify before trusting it: send, poll, board, peek, wake, and add-a-device.
+7. Verify before trusting it: send, poll, board, peek, wake, and add-a-device.
 
 ### Retiring the k8s path
 
