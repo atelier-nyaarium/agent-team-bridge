@@ -25,6 +25,12 @@ import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import kotlinx.coroutines.launch
 
 ////////////////////////////////
+//  Constants
+
+/** The Router's own port, so a fresh field needs only a host typed into it. */
+private const val DEFAULT_ROUTER_PORT = 20001
+
+////////////////////////////////
 //  Composables
 
 /** The baked-in plugin list, one row per catalog plugin with its on/off toggle. A refused flip
@@ -155,8 +161,55 @@ internal fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYour
 	Text("People", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = hapticClick(onFederation), modifier = Modifier.fillMaxWidth()) { Text("Users") }
 	HorizontalDivider()
+	RouterEndpointCard(repo)
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
+}
+
+/** Point this console at a self-hosted Router. Editing here repoints the transport only: it never
+ * re-runs provisioning, so the admission and enrollment latches survive. */
+@Composable
+internal fun RouterEndpointCard(repo: ChatRepository) {
+	val scope = rememberCoroutineScope()
+	var host by remember { mutableStateOf("") }
+	var port by remember { mutableStateOf(DEFAULT_ROUTER_PORT.toString()) }
+	var certFp by remember { mutableStateOf("") }
+	var busy by remember { mutableStateOf(false) }
+
+	Text("Federation Router", style = MaterialTheme.typography.titleSmall)
+	OutlinedTextField(
+		value = host,
+		onValueChange = { host = it },
+		singleLine = true,
+		label = { Text("Domain or IP") },
+		modifier = Modifier.fillMaxWidth(),
+	)
+	OutlinedTextField(
+		value = port,
+		onValueChange = { port = it.filter { c -> c.isDigit() }.take(5) },
+		singleLine = true,
+		label = { Text("Port") },
+		modifier = Modifier.fillMaxWidth(),
+	)
+	OutlinedTextField(
+		value = certFp,
+		onValueChange = { certFp = it.trim() },
+		singleLine = true,
+		label = { Text("Certificate fingerprint") },
+		modifier = Modifier.fillMaxWidth(),
+	)
+	Button(
+		enabled = !busy && host.isNotBlank() && certFp.isNotBlank(),
+		onClick = hapticClick {
+			busy = true
+			scope.launch {
+				repo.setEndpoint(host, port.toIntOrNull() ?: DEFAULT_ROUTER_PORT, certFp)
+				busy = false
+			}
+		},
+		modifier = Modifier.fillMaxWidth(),
+	) { Text(if (busy) "Saving..." else "Use this Router") }
+	HorizontalDivider()
 }
 
 @Composable

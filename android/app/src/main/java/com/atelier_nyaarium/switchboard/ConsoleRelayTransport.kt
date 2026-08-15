@@ -26,9 +26,21 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * seal/relay path behind one widened ConsoleClient member, leaving `blobs` as the only other.
  */
 internal class ConsoleRelayTransport(internal val prov: Provisioning, internal val store: AppStateStore) {
-	internal val client = ConsoleHttp.buildPinnedClient(prov.caPem)
+	private val direct = prov.transport == "direct"
+
+	/** Trust is a pinned CA through the k8s proxy, or the Router's pinned leaf. Built per branch
+	 * because a direct record carries no CA to build the other one from. */
+	internal val client =
+		if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
+
+	/** Where an op is posted. The Router serves its ops at the root, so there is no proxy path to
+	 * thread through; the same field keeps every call site unchanged. */
 	internal val proxyBase =
-		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
+		if (direct) {
+			prov.routerUrl
+		} else {
+			"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
+		}
 
 	/** This console's route Gateway id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Gateway routes to the right Gateway; null until learned. */
@@ -127,7 +139,8 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		val frame = buildSealedFrame(op, opId, identity, gatewayId, hostKeys.boxPub)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
+			// The SA token authenticates the k8s proxy hop, which a direct call does not make.
+			.apply { if (!direct) header("Authorization", "Bearer ${prov.saToken}") }
 			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(ConsoleHttp.JSON))
 			.build()

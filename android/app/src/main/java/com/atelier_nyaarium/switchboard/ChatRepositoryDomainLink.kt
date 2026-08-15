@@ -75,6 +75,43 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 	_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false) }
 }
 
+/**
+ * Repoint this console at a different endpoint, keeping everything else.
+ *
+ * Deliberately NOT provision(): that treats the blob as a fresh enrollment and clears the
+ * console-admitted, first-rooted and ceremony latches, so re-running it to change a host would
+ * re-submit an admission and re-offer the trust compare. This edits transport fields only,
+ * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
+ * keyring, cursors and admission state untouched.
+ */
+suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) = withContext(Dispatchers.IO) {
+	val blob = store.load() ?: run {
+		_state.update { it.copy(error = "Not provisioned yet.") }
+		return@withContext
+	}
+	val trimmedHost = host.trim().removeSuffix("/")
+	if (trimmedHost.isEmpty()) {
+		_state.update { it.copy(error = "Enter a domain or IP.") }
+		return@withContext
+	}
+	val url = if (trimmedHost.startsWith("http")) "$trimmedHost:$port" else "https://$trimmedHost:$port"
+	val edited = JSONObject(blob).apply {
+		put("transport", "direct")
+		put("routerUrl", url)
+		put("routerCertFp", certFp.trim().lowercase())
+	}.toString()
+	try {
+		Provisioning.parse(edited)
+	} catch (e: Exception) {
+		_state.update { it.copy(error = "Invalid endpoint: ${e.message?.take(160) ?: "unparseable"}") }
+		return@withContext
+	}
+	store.save(edited)
+	client = null
+	sttsClient = null
+	_state.update { it.copy(error = null) }
+}
+
 suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	// DEBUG: wire the ingest sender from the blob up front, BEFORE any enroll step can fail, then
 	// flush on every exit path (the finally below). Otherwise a pre-register failure (admission
