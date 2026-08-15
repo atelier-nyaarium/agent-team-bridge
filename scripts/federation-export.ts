@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { $ } from "bun";
@@ -13,6 +13,8 @@ import { $ } from "bun";
 const NAMESPACE = "evie-bot";
 const SECRET = "evie-federation";
 const DATA_KEY = "federation.json";
+const CONSOLE_SECRET = "console-bridge-app-token";
+const CONSOLE_KEY = "CONSOLE_BRIDGE_TOKEN";
 const IMAGE = "switchboard-federation-federation:latest";
 
 ////////////////////////////////
@@ -81,6 +83,39 @@ async function writeState(dataDir: string, blob: string): Promise<void> {
 	);
 }
 
+/**
+ * Carry the console app token across. It lives in its OWN Secret, not in the federation state, so
+ * a state-only export leaves the Router minting a fresh one and every already-provisioned console
+ * is turned away with a 401 it reports as "sign-in rejected".
+ */
+async function importConsoleToken(args: Args): Promise<"written" | "unchanged" | "absent"> {
+	const extra = kubectlArgs(args);
+	const read = await $`kubectl --kubeconfig=${args.kubeconfig} ${extra} -n ${NAMESPACE} \
+		get secret ${CONSOLE_SECRET} -o jsonpath=${`{.data.${CONSOLE_KEY}}`}`
+		.quiet()
+		.nothrow();
+	const encoded = read.exitCode ? "" : read.stdout.toString().trim();
+	if (!encoded) return "absent";
+	const token = Buffer.from(encoded, "base64").toString("utf8").trim();
+	if (!token) return "absent";
+
+	const envPath = path.resolve(".env");
+	const current = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+	const rows = current.split("\n");
+	const line = `${CONSOLE_KEY}=${token}`;
+	if (rows.includes(line)) return "unchanged";
+
+	// Never clobber an existing backup: the one worth keeping is the pre-cutover file, and a
+	// second run would otherwise overwrite it with the already-migrated one.
+	const backup = `${envPath}.bak-preRouter`;
+	if (current && !existsSync(backup)) writeFileSync(backup, current, { mode: 0o600 });
+
+	const kept = rows.filter((row) => !row.startsWith(`${CONSOLE_KEY}=`));
+	while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+	writeFileSync(envPath, `${[...kept, line].join("\n")}\n`, { mode: 0o600 });
+	return "written";
+}
+
 /** Read the Secret and its resourceVersion together, so the caller can prove nothing moved. */
 async function readSecret(args: Args): Promise<{ blob: string; version: string }> {
 	const extra = kubectlArgs(args);
@@ -136,10 +171,16 @@ if (!state.identity?.sign?.pub) {
 }
 
 await writeState(args.dataDir, first.blob);
+const consoleToken = await importConsoleToken(args);
 
 console.log(`Wrote ${path.join(args.dataDir, DATA_KEY)}`);
 console.log(`  identity ${state.identity.sign.pub}`);
 console.log(`  ${domains.length} domain(s), ${rooted} rooted`);
+console.log(
+	consoleToken === "absent"
+		? `  WARNING: no ${CONSOLE_SECRET} in the cluster - set ${CONSOLE_KEY} in .env by hand or every console gets a 401`
+		: `  ${CONSOLE_KEY} ${consoleToken === "written" ? "imported into .env" : "already matches the cluster"}`,
+);
 console.log("");
 console.log("The identity is IMPORTED, never re-minted: enrolled devices resolve this Router by it.");
 console.log("Next: ./start-federation.sh, then repoint the gateway's transport.json and restart it.");

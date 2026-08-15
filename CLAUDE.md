@@ -1195,7 +1195,10 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
 3. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
    the evie identity keypair rather than minting one, which is what makes enrolled devices still
    resolve this Router. It aborts if the Secret moves mid-read. A re-export writes through the
-   container, since by then the Router root-owns the data dir and the host cannot.
+   container, since by then the Router root-owns the data dir and the host cannot. It ALSO carries
+   `CONSOLE_BRIDGE_TOKEN` from the separate `console-bridge-app-token` Secret into `.env`: that one
+   is not part of the federation state, and a freshly minted one 401s every already-provisioned
+   console, which the app reports as "sign-in rejected".
 4. Set `FEDERATION_BIND` in `.env` to the LAN address. It defaults to `127.0.0.1`, so without this
    the phone cannot reach the Router at all. Then `./start-federation.sh`.
 5. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
