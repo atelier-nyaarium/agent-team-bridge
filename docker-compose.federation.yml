@@ -1,0 +1,26 @@
+services:
+  federation:
+    build: .
+    container_name: switchboard-federation
+    restart: unless-stopped
+    command: ["bun", "run", "src/main-federation.ts"]
+    ports:
+      # LAN access is deliberate. Set FEDERATION_BIND to a LAN IP or 0.0.0.0.
+      - "${FEDERATION_BIND:-127.0.0.1}:20001:20001"
+    environment:
+      - PORT=20001
+      - DATA_DIR=/app/data
+      - CONSOLE_BRIDGE_TOKEN=${CONSOLE_BRIDGE_TOKEN:-}
+      - FEDERATION_WS_TOKEN=${FEDERATION_WS_TOKEN:-}
+    volumes:
+      - ./volumes/federation:/app/log
+      - ./volumes/federation-data:/app/data
+    networks:
+      switchboard-federation:
+        aliases:
+          - federation-router
+
+networks:
+  switchboard-federation:
+    name: switchboard-federation
+    external: true
