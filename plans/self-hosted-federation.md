@@ -211,7 +211,7 @@ Biome's `noFloatingPromises` was tried first and rejected: it is nursery in 2.5.
 fire even when forced on a same-file async call, so enabling it would have implied a gate that
 does not exist.
 
-## Phase 2 - Docker + scripts
+## Phase 2 - Docker + scripts ✅
 
 - Reuse the existing gateway `Dockerfile` (it copies all of `src/`); compose command override
   runs `bun run src/main-federation.ts`. No `scripts/build.ts` change - the Router runs from
@@ -237,6 +237,24 @@ does not exist.
 - Ops one-liners recorded in the runbook: host clock (NTP) matters for signed proofs and
   invite expiry; log rotation for the container; pin the image/source version at start time.
 - PowerShell variants kept in parity.
+
+### Bug Classes
+
+**Mechanism:** the start scripts.
+
+**Defect class:** an unchecked `docker compose up` misattributes its own failure. Both scripts
+fell straight into a 30x2s health poll and then blamed the container ("did not become healthy
+within 60s") for a container that was never created. Patched twice, in `start-gateway.sh` and
+`start-federation.sh`, and the PowerShell twins already had the check, so the bash pair were the
+outliers. A third start script would be written the same wrong way.
+
+If one more start script appears, extract the shared shape (create network, compose up with an
+exit check, poll health, report which step actually failed) rather than patching a third copy.
+
+**Related, resolved:** the backup script's copy failed silently on the root-owned cert and key
+and produced no archive at all, because `set -e` aborted before `tar`. Fixed by copying through
+a container AND asserting every expected file landed before writing. The assertion is the part
+worth keeping: a backup that cannot prove what it captured is not a backup.
 
 ## Phase 3 - Wire schemas + codegen
 
