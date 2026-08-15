@@ -1,8 +1,5 @@
-// Copilot spoken locally, over the same ACP client the daemon drives.
-//
-// Copilot's prompt call IS the turn: it resolves when the turn ends, so the terminal needs no event
-// correlation. What the events carry instead is the answer itself, arriving as chunks, which is why
-// a running turn is tracked here at all.
+// The daemon's own ACP client. The prompt call IS the turn, so no terminal needs correlating; the
+// events carry the answer itself, as chunks, which is why a running turn is tracked at all.
 
 import crypto from "node:crypto";
 import { COPILOT_DEFAULT_MODEL } from "../../shared/copilot-thinking.js";
@@ -26,8 +23,8 @@ interface ActiveTurn {
 /**
  * One `copilot --acp` child, driven directly.
  *
- * Deliberately has no `steerTurn`. ACP exposes no steer, and its absence is what tells the runtime to
- * refuse a follow-up while a turn is running rather than open a second one against the same session.
+ * No `steerTurn`: ACP exposes none, and its absence is what makes the runtime refuse a follow-up
+ * rather than open a second turn on the same session.
  */
 export class CopilotLocalSession implements LocalBackendSession {
 	private readonly active = new Map<string, ActiveTurn>();
@@ -40,8 +37,7 @@ export class CopilotLocalSession implements LocalBackendSession {
 		const client = await defaultOpenCopilotClient(child);
 		const session = new CopilotLocalSession(client);
 		client.onEvent((event) => session.onEvent(event));
-		// The transport already rejects in-flight requests on exit, which settles running turns. This is
-		// what tells the RUNTIME to stop handing later calls to a session whose child is gone.
+		// The transport settles running turns; this stops the RUNTIME handing it later calls.
 		child.onExit(() => {
 			session.active.clear();
 			session.closedListener?.();
@@ -87,8 +83,7 @@ export class CopilotLocalSession implements LocalBackendSession {
 	async interruptTurn(sessionId: string, turnId: string): Promise<void> {
 		const turn = this.active.get(sessionId);
 		if (!turn || turn.turnId !== turnId) return;
-		// Marked before the notify, so the prompt's own resolution reads it as interrupted whichever
-		// order the two arrive in.
+		// Marked before the notify, so the resolution reads it as interrupted either way.
 		turn.cancelled = true;
 		this.client.cancel(sessionId);
 	}
@@ -98,8 +93,7 @@ export class CopilotLocalSession implements LocalBackendSession {
 		this.client.close();
 	}
 
-	/** Only the turn that is still current retires the slot. A late resolution from a replaced turn
-	 * must not clear its successor. */
+	/** A late resolution from a replaced turn must not clear its successor. */
 	private retire(sessionId: string, turn: ActiveTurn): void {
 		if (this.active.get(sessionId) === turn) this.active.delete(sessionId);
 	}

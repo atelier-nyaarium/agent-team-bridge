@@ -1,8 +1,7 @@
 // The session's own agent backend, used when no daemon announced one.
 //
-// Same five calls, same validated answers, no wire in between. The result is parsed through the very
-// schema the gateway path answers with, so a caller cannot tell which side served it and a shaping
-// mistake here fails loudly rather than reaching Claude as a plausible wrong answer.
+// Parsed through the very schema the gateway path answers with, so a shaping mistake fails loudly
+// rather than reaching Claude as a plausible wrong answer.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -33,7 +32,7 @@ import type { LocalBackendSession } from "./localAgentSession.js";
 //  Interfaces & Types
 
 export interface LocalAgentBackend {
-	/** Takes the very body the tool would have posted, so the two dispatches differ only in transport. */
+	/** The very body the tool would have posted, so the dispatches differ only in transport. */
 	handle(body: Record<string, unknown>): Promise<unknown>;
 	shutdown(): void;
 }
@@ -41,10 +40,7 @@ export interface LocalAgentBackend {
 ////////////////////////////////
 //  Functions & Helpers
 
-/**
- * Where a thread runs. A caller's path is resolved against this process's directory and must name a
- * real one, since the alternative is a child whose writes land somewhere nobody named.
- */
+/** Must name a real directory, or the child's writes land somewhere nobody named. */
 export function resolveLocalCwd(requested: string | undefined, base: string = process.cwd()): string {
 	if (!requested) return base;
 	const resolved = path.resolve(base, requested);
@@ -60,11 +56,9 @@ function unavailable(errorClass: string, backend: AgentBackendDescriptor): Error
 }
 
 /**
- * A session-owned backend for one agent CLI.
+ * The target manager is reused, so a local child gets the same env scrub, backoff and cooldown.
  *
- * The target manager is reused rather than reimplemented, so a local child gets the same env scrub,
- * crash backoff and give-up cooldown a daemon-supervised one gets. Only the host target exists here:
- * a devcontainer target is a thing a daemon reaches across a boundary this process does not have.
+ * Only the host target exists: a devcontainer target crosses a boundary this process lacks.
  */
 export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalAgentBackend {
 	const isCodex = backend.id === "codex";
@@ -105,15 +99,13 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 	const resultSchema = isCodex ? CodexAgentResultSchema : CopilotAgentResultSchema;
 	const listSchema = isCodex ? CodexListAgentsResultSchema : CopilotListAgentsResultSchema;
 
-	/** A refused request, in the shape the route answers one with. The result envelope cannot carry
-	 * this: it only permits an error when the AGENT is unwell, which a badly timed call does not make it. */
+	/** The result envelope cannot carry this: it only permits an error when the AGENT is unwell. */
 	const refuse = (message: string): unknown =>
 		requestErrorSchema.parse({ error: { code: "invalid_input", retryable: false, message } });
 
 	return {
 		async handle(body) {
-			// Validated with the same schema the gateway route validates against, so a malformed call is
-			// refused identically on both paths rather than reaching the runtime as a half-shaped request.
+			// The gateway route's own schema, so a malformed call is refused identically on both paths.
 			const parsed = requestSchema.safeParse(body);
 			if (!parsed.success) return refuse(parsed.error.issues[0]?.message ?? "invalid request");
 

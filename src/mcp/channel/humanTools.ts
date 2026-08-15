@@ -11,10 +11,8 @@ import { appendRefArtifacts } from "../references/attachRefs.js";
 ////////////////////////////////
 //  Schemas
 
-// Every tier is required (no ghost ping that is only a bar headline, and no notice
-// the console cannot speak). Strict: an unknown field (e.g. the retired `tiny`) is
-// rejected, not silently stripped. The tier fields are the SAME GuidedNoticeTiers
-// object channel_reply spreads, so both tools' describes are identical by construction.
+// Every tier required, and strict so a retired field is rejected rather than stripped. Shares
+// channel_reply's own GuidedNoticeTiers, so both describes are identical by construction.
 export const NotifyHumanSchema = z
 	.object({
 		...GuidedNoticeTiers,
@@ -44,8 +42,7 @@ Push a notification to every registered console.
 Use for milestones and critical blockers. Use \`channel_reply\` for conversational replies.
 `.trim();
 
-// This and `channel_reply` are the ONLY tools whose body is scanned for refs, so their descriptions
-// are where the pointer to `switchboard_capabilities` has to reach an agent mid-reply.
+// Only this and `channel_reply` scan for refs, so their descriptions carry the capabilities pointer.
 export function registerHumanTools(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const notifySchema: any = NotifyHumanSchema;
@@ -59,10 +56,8 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 		},
 		async (args: NotifyHumanArgs) => {
 			const { title, summary, full, fullSpoken, attachments } = args;
-			// Before attachment materialization (file reads) and before the POST, so a reject costs
-			// nothing. The spoken trio comes from the shared field list; `full` is this surface's own
-			// body field name (it renames per surface, so each lint loop appends its own). Non-string
-			// values are clean by definition, matching postReply's own loop.
+			// Before file reads and the POST, so a reject costs nothing. `full` is this surface's own
+			// body field name, which renames per surface.
 			for (const field of [...SPOKEN_TIER_FIELDS, "full"] as const) {
 				const value = args[field];
 				if (typeof value !== "string") continue;
@@ -81,15 +76,12 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 					};
 				}
 			}
-			// A notice carries agent prose to the same console the chat does, so a ref written in one
-			// deserves the same snapshot. `full` is the only field rendered as markdown, so it is the
-			// only one scanned.
+			// `full` is the only field rendered as markdown, so it is the only one scanned.
 			const withRefs = await appendRefArtifacts(full, attached);
 			if (!withRefs.ok) return toolError(withRefs.error);
 			if (withRefs.files.length > 0) files = withRefs.files;
 			try {
-				// routerPost parses the JSON and throws on any non-ok response with
-				// the server's error message (including the 413 cap and 503 no-bridge).
+				// routerPost throws with the server's own message on any non-ok response.
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
 					title,

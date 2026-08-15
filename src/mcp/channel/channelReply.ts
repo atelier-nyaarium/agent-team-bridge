@@ -36,10 +36,7 @@ export function isEmptyResponseData(responseData: Record<string, unknown>): bool
 //  Handlers (exported directly so tests can call them without an McpServer)
 
 export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTextResult> {
-	// Prose parity with the gateway's own /true/i handshake fallback: a handshake answered with plain
-	// channel_reply (rather than the instructed channel_reply_structured) still fills the role cache,
-	// or a prose-confirmed lead would keep re-asking on every reconnect. confirmHandshakeRole itself
-	// scopes the write to a handshake this process actually received.
+	// Parity with the gateway's /true/i fallback, or a prose-confirmed lead re-asks every reconnect.
 	confirmHandshakeRole(args.session_id, /true/i.test(args.full));
 	const payload = buildChannelReplyPayload(args);
 	let files: Awaited<ReturnType<typeof readReplyAttachments>> = [];
@@ -51,9 +48,8 @@ export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTe
 		}
 	}
 
-	// Snapshots ride alongside the agent's own attachments, and are named against them, so a ref and
-	// an attachment can never land on one filename. A hard failure here stops the send on purpose:
-	// the agent is still in the loop and can narrow or correct the ref it wrote.
+	// Named against the agent's own attachments, so nothing collides. A hard failure stops the send
+	// on purpose: the agent is still here to correct the ref.
 	const withRefs = await appendRefArtifacts(args.full, files);
 	if (!withRefs.ok) return toolError(withRefs.error);
 	if (withRefs.files.length > 0) payload.files = withRefs.files;
@@ -67,9 +63,7 @@ export async function handleChannelReplyStructured(args: ChannelReplyStructuredA
 			`Empty responseData rejected - {} would render as the literal string "{}" on the console with no useful content.`,
 		);
 	}
-	// Remember the answer so a later reconnect confirms silently instead of re-asking.
-	// confirmHandshakeRole scopes the write to a handshake this process actually received, so a lead
-	// relaying a worker teammate this session_id to answer can never poison the worker's own cache.
+	// Scoped to a handshake this process received, so a relayed session_id cannot poison a worker.
 	if (typeof args.responseData.isMainOrLead === "boolean") {
 		confirmHandshakeRole(args.session_id, args.responseData.isMainOrLead);
 	}
@@ -80,8 +74,7 @@ export async function handleChannelReplyStructured(args: ChannelReplyStructuredA
 ////////////////////////////////
 //  Functions & Helpers
 
-// `capabilities` is threaded in rather than read from a module global, so the description can never
-// be composed before the answer arrives.
+// Threaded in, not read from a global, so a description cannot be composed before the answer.
 export function registerChannelReply(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	const guidance = capabilityInstructions(capabilities);
 	mcpServer.registerTool(

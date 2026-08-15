@@ -1,10 +1,7 @@
-// The daemonless half of agent delegation: a session running its own backend child, answering the
-// same five tool calls in the same validated shapes the gateway path answers in.
+// The daemonless half of agent delegation, answering the same five tool calls in the same shapes.
 //
-// What it deliberately does NOT have is what a wire needs. There is no relay, so nothing is fenced;
-// no restart, so nothing is durable; no HTTP, so an operation cannot be retried behind the caller's
-// back and needs no replay identity. An agent lives exactly as long as the process that started it,
-// which is the honest cost of having no daemon to outlive it.
+// What it lacks is what a wire needs: no relay so nothing is fenced, no restart so nothing is
+// durable, no HTTP so nothing needs replay identity. An agent dies with the process.
 
 import crypto from "node:crypto";
 import type { AgentBackendId } from "../../shared/agent-backend.js";
@@ -18,16 +15,14 @@ export type LocalAgentState = "idle" | "working" | "unavailable";
 export type LocalTurnState = "inProgress" | "completed" | "failed" | "interrupted";
 export type LocalObservation = "terminal" | "waitTimedOut" | "idle" | "interruptRequested" | "unavailable";
 
-/** The error codes the runtime itself raises. Every one is spelled the same in both backends' error
- * enums, so a shared answer never needs translating. */
+/** Spelled the same in both backends' error enums, so an answer never needs translating. */
 export type LocalErrorCode = "not_found" | "app_server_unavailable" | "turn_failed";
 
 /**
- * A refused REQUEST, which is not the same as an unwell AGENT.
+ * A refused REQUEST, which is not an unwell AGENT.
  *
- * The result envelope only permits an error when the agent is genuinely unavailable, so a refusal
- * about the timing of THIS call cannot be expressed there: both backends' schemas reject it outright.
- * The gateway routes these to the request-error shape and so does the local host.
+ * The result envelope only permits an error when the agent is genuinely unavailable, so both
+ * schemas reject a timing refusal there. Both paths route these to the request-error shape.
  */
 export interface LocalRefusal {
 	refused: string;
@@ -39,8 +34,7 @@ export interface LocalError {
 	retryable: boolean;
 }
 
-/** The neutral answer, handed to a backend's own schema to be validated into its result type. Field
- * names match both result schemas, which is what lets one builder serve both. */
+/** Field names match both result schemas, which is what lets one builder serve both. */
 export interface LocalAgentAnswer {
 	agentId: string;
 	agentState: LocalAgentState;
@@ -60,21 +54,17 @@ export interface LocalRequest {
 	cwd?: string;
 }
 
-/** How the runtime reaches one backend. The session is opened lazily, so a process with the CLI
- * installed but never used never spawns a child. */
+/** Opened lazily, so an unused CLI never spawns a child. */
 export interface LocalBackendSpec {
 	backendId: AgentBackendId;
-	/** Fresh session, or a reason it could not be opened. Called once and memoized; a failure is not
-	 * cached, so installing a login and retrying works without restarting the session. */
+	/** Memoized, but a failure is not cached, so a login and retry works without a restart. */
 	openSession(): Promise<LocalBackendSession>;
 	defaultCwd(): string;
 	waitBudgetMs: number;
-	/** Why a follow-up to a working agent is refused on a backend with no steer. Absent means the
-	 * backend steers instead, which the runtime detects from the session itself. */
+	/** Absent means the backend steers instead, detected from the session itself. */
 	busyMessage?: string;
-	/** Delivery word for a follow-up that opened a NEW turn. Codex and Copilot disagree on the term. */
+	/** Codex and Copilot disagree on the term. */
 	followupDelivery: string;
-	/** Cap on retained commentary per turn, and the item count its truncation marker must leave. */
 	maxActivities: number;
 }
 
@@ -163,8 +153,7 @@ export class LocalAgentRuntime {
 		}
 	}
 
-	/** Every agent this process owns, newest activity last. Ordering is insertion order, which is
-	 * start order, since nothing here is reordered by later work. */
+	/** Insertion order, which is start order: nothing here is reordered by later work. */
 	list(): LocalListAgent[] {
 		return [...this.agents.values()].map((agent) => ({
 			agentId: agent.agentId,
@@ -192,8 +181,7 @@ export class LocalAgentRuntime {
 	}
 
 	private async start(request: LocalRequest): Promise<LocalAgentAnswer> {
-		// The id is derived rather than random so a local agent id is spelled like a coordinated one,
-		// and two runs of the same operation cannot mint two agents.
+		// Derived, so a local id is spelled like a coordinated one.
 		const operationId = crypto.randomUUID();
 		const agentId = agentIdForOperation(this.spec.backendId, operationId);
 		const prompt = request.prompt ?? "";
@@ -210,8 +198,7 @@ export class LocalAgentRuntime {
 		try {
 			threadId = await session.openThread({ cwd: request.cwd ?? this.spec.defaultCwd(), model: request.model });
 		} catch (error) {
-			// Nothing was recorded, so the agent simply does not exist. Reporting it as unavailable
-			// rather than inventing a record keeps `list` honest about what this process is running.
+			// Nothing was recorded, so no record is invented and `list` stays honest.
 			return this.fail(agentId, "app_server_unavailable", errorText(error), true);
 		}
 
@@ -241,8 +228,7 @@ export class LocalAgentRuntime {
 
 		const active = this.activeTurn(agent);
 		if (active) {
-			// A backend with no steer cannot take this at all. Refusing the REQUEST is what keeps the
-			// running turn untouched instead of racing a second one against it.
+			// Refusing the REQUEST keeps the running turn untouched, instead of racing a second one.
 			if (!session.steerTurn) return { refused: this.spec.busyMessage ?? "agent is still working" };
 			try {
 				await session.steerTurn(agent.threadId, active.id, prompt);
@@ -269,8 +255,7 @@ export class LocalAgentRuntime {
 		const agent = this.agents.get(request.agentId ?? "");
 		if (!agent) return this.notFound(request.agentId ?? "");
 		const active = this.activeTurn(agent);
-		// Nothing running is not an error: the caller asked for the outcome and the outcome is already
-		// in hand, which is exactly what the settled record holds.
+		// Nothing running is not an error: the outcome is already in hand.
 		if (!active) return this.settledAnswer(agent);
 		return this.waitFor(agent, active.id);
 	}
@@ -292,8 +277,7 @@ export class LocalAgentRuntime {
 		} catch (error) {
 			return this.fail(agent.agentId, "app_server_unavailable", errorText(error), true);
 		}
-		// Requested, not ended. The turn's own terminal still decides how it finished, which may be a
-		// completion that won the race against the interrupt.
+		// Requested, not ended: the turn's own terminal still decides how it finished.
 		return {
 			agentId: agent.agentId,
 			agentState: "working",
@@ -332,21 +316,20 @@ export class LocalAgentRuntime {
 			kind,
 			prompt,
 			status: "accepted",
-			// A start always starts its own turn; the schema refuses any other word there.
+			// The schema refuses any other word for a start.
 			delivery: kind === "start" ? "started" : this.spec.followupDelivery,
 			turnId: turn.id,
 			createdAt: at,
 			acceptedAt: at,
 		});
-		// Registered before the race, so a terminal that beats the budget is already recorded by the
-		// time the wait resumes. `applyTerminal` is idempotent for the case where it does not.
+		// Registered before the race, so a terminal beating the budget is recorded. applyTerminal is
+		// idempotent for the case where it does not.
 		void handle.settled.then((terminal) => this.applyTerminal(agent, turn.id, terminal));
 
 		return this.waitFor(agent, turn.id, kind === "start" ? "started" : this.spec.followupDelivery);
 	}
 
-	/** Race one turn against the wait budget. A turn that outlives it keeps running, and the caller
-	 * collects it later with an await. */
+	/** A turn outliving the budget keeps running; the caller collects it with an await. */
 	private async waitFor(agent: LocalAgentRecord, turnId: string, delivery?: string): Promise<LocalAgentAnswer> {
 		const settled = agent.settled;
 		if (settled) {
@@ -380,10 +363,8 @@ export class LocalAgentRuntime {
 	/**
 	 * Record how a turn ended, once.
 	 *
-	 * Idempotent because two paths reach it: the listener registered at dispatch, and the racing
-	 * caller that saw the same promise settle. Whichever runs second must not re-stamp a turn whose
-	 * outcome is already written, or an await would report a fresher timestamp than the terminal it
-	 * describes.
+	 * Two paths reach it: the dispatch listener and the racing caller. Whichever runs second must not
+	 * re-stamp, or an await reports a fresher timestamp than the terminal it describes.
 	 */
 	private applyTerminal(agent: LocalAgentRecord, turnId: string, terminal: LocalTerminal): void {
 		const turn = agent.turns.find((candidate) => candidate.id === turnId);
@@ -399,8 +380,7 @@ export class LocalAgentRuntime {
 		agent.updatedAt = Math.max(agent.updatedAt, turn.updatedAt);
 	}
 
-	/** Narration for one turn, capped. The marker sits at the end and the retained window is exactly
-	 * full, which is what the shared activity invariant requires of any producer. */
+	/** The marker sits at the end and the window is exactly full, per the shared invariant. */
 	private activitiesOf(turn: LocalTurnRecord): LocalAgentAnswer["activities"] {
 		const kept = turn.commentary.map((text) => ({ kind: "commentary" as const, text }));
 		if (turn.omitted === 0) return kept;
@@ -413,8 +393,7 @@ export class LocalAgentRuntime {
 			const turn = agent.turns.find((candidate) => candidate.id === turnId);
 			if (turn?.state !== "inProgress") continue;
 			turn.commentary.push(text);
-			// The newest window is kept: what an agent is doing now explains a running turn better than
-			// how it opened. Dropping from the front is what makes `omitted` a count of lost history.
+			// The newest window is kept: what it is doing now explains a running turn best.
 			while (turn.commentary.length > this.spec.maxActivities) {
 				turn.commentary.shift();
 				turn.omitted += 1;
@@ -479,8 +458,7 @@ export class LocalAgentRuntime {
 		return this.activeTurn(agent) ? "working" : "idle";
 	}
 
-	/** Stamp the agent as touched and return the instant, so every child record written in the same
-	 * step carries a timestamp inside the agent's own lifetime. */
+	/** Returns the instant, so every child record written in one step shares a timestamp. */
 	private touch(agent: LocalAgentRecord): number {
 		const at = this.now();
 		agent.updatedAt = Math.max(agent.updatedAt, at);
@@ -489,16 +467,14 @@ export class LocalAgentRuntime {
 
 	private open(): Promise<LocalBackendSession> {
 		if (this.session) return Promise.resolve(this.session);
-		// Shared across concurrent callers: two opens would give one child two readers of its stdout
-		// and two request id spaces able to settle each other's calls.
+		// Shared: two opens would give one child two stdout readers and two colliding id spaces.
 		this.opening ??= this.spec
 			.openSession()
 			.then((session) => {
 				this.session = session;
 				session.onActivity((turnId, text) => this.recordActivity(turnId, text));
-				// A dead child must not stay cached, or every later call is dispatched into a closed pipe
-				// and the target manager is never asked for a replacement. Guarded on identity so a late
-				// close from a replaced session cannot evict its successor.
+				// A cached dead child sends every later call into a closed pipe. Identity-guarded, so a
+				// late close cannot evict its successor.
 				session.onClosed(() => {
 					if (this.session === session) this.session = undefined;
 				});

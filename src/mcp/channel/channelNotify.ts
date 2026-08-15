@@ -5,9 +5,7 @@ import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./ev
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The prose must survive a filesystem that will not take the bytes, so a materialization failure
- * costs the [FILES] block and nothing else. Ref snapshots are dropped by their declared role
- * regardless of direction; an agent reads paths off disk, not source copies it never asked for. */
+/** A materialization failure costs the [FILES] block and nothing else, so the prose survives. */
 async function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | undefined): Promise<string> {
 	if (!bucketKey || !files || files.length === 0) return "";
 	const wanted = dropReferenceArtifacts(files);
@@ -24,25 +22,16 @@ async function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[]
 	}
 }
 
-/**
- * Emit a channel notification to push an incoming message into Claude's session.
- * The message arrives as a <channel source="bridge" ...>body</channel> tag.
- */
+/** Arrives as a `<channel source="bridge" ...>body</channel>` tag. */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
-	// Inbound files key the materialization bucket by the channel message_id.
 	const filesBlock = await filesBlockFor(payload.message_id, payload.files);
 
-	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
-	// Every structured field - session_id, from, reply_schema, instructions - rides in `meta`,
-	// which the harness renders as <channel ...> tag attributes; nothing is jammed as a prose preamble.
+	// Prose ONLY. Every structured field rides in `meta`, which the harness renders as attributes.
 	const content = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
 
-	// Per-message reply routing, mirroring the `instructions` key the cycle tools return on every
-	// response. The full how-to-reply guidance in the MCP `instructions` sits at the top of the
-	// context and loses salience to fresher injections (skills, compaction summaries), which has
-	// produced real missed replies; this attribute keeps the reply route in the freshest content.
-	// Exactly true, not truthy: this arrives off the wire, where a stray string would otherwise turn a
-	// question into an announcement the agent never answers.
+	// Repeated per message: the MCP `instructions` sit at the top of the context and lose salience to
+	// fresher injections, which has produced real missed replies. Exactly true, not truthy: a stray
+	// wire string would turn a question into an announcement nobody answers.
 	const instructions =
 		payload.no_ack === true
 			? "Awareness only. Nobody is waiting on a reply, so do not send one."
@@ -58,18 +47,16 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				session_id: payload.session_id,
 				from: payload.from,
 				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
-				// A STRING, like every other value here: meta is rendered as tag attributes, and a boolean
-				// took the whole notification down silently. Snake_case for the same reason, since the
-				// harness drops a key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/ without a word either.
+				// A STRING: a boolean took the whole notification down silently. Snake_case too, since
+				// the harness drops a key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/ without a word.
 				...(payload.no_ack === true ? { no_ack: "true" } : {}),
 				instructions,
 			},
 		},
 	});
 
-	// This logs the EMIT, not the delivery: the harness silently drops the notification when this
-	// plugin is not in the session's --channels list (a manual launch without the daemon's flags).
-	// That state is visible only as "Channel notifications skipped" in the harness's own mcp-logs.
+	// The EMIT, not the delivery: the harness drops it silently when this plugin is not in the
+	// session's --channels list, visible only as "Channel notifications skipped" in its own logs.
 	console.error(
 		`[channel] emitted from ${payload.from} [${payload.session_id.slice(0, 8)}...]${payload.no_ack === true ? " no_ack" : ""}`,
 	);
@@ -82,8 +69,7 @@ export async function emitResponseNotification(server: Server, payload: Response
 	await server.notification({
 		method: "notifications/claude/channel",
 		params: {
-			// The reply prose only; status rides structured in meta, not as a
-			// "Status:" label flattened into the body.
+			// Prose only; status rides in meta, not as a label flattened into the body.
 			content: filesBlock ? `${body}\n\n${filesBlock}` : body,
 			meta: {
 				session_id: payload.session_id,

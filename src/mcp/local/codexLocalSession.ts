@@ -1,5 +1,4 @@
-// Codex spoken locally. The same App Server client and turn tracker the daemon drives, wired to the
-// runtime's turn handles instead of to a fenced relay stream.
+// The daemon's own App Server client and turn tracker, wired to turn handles instead of a relay.
 
 import { CODEX_DEFAULT_MODEL } from "../../shared/codex-thinking.js";
 import type { AppServerSession } from "../devcontainer/codexAppServerSession.js";
@@ -15,9 +14,8 @@ import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./loca
 /**
  * One `codex app-server` child, driven directly.
  *
- * A turn's outcome arrives on the event stream rather than from the call that started it, so every
- * dispatched turn parks a resolver here until its terminal lands. The child dying settles all of
- * them: without that a caller would wait its whole budget on a turn nothing can ever finish.
+ * An outcome arrives on the event stream, not from the call that started the turn, so each turn
+ * parks a resolver here. The child dying settles them all, or a caller waits its whole budget.
  */
 export class CodexLocalSession implements LocalBackendSession {
 	private readonly pending = new Map<string, (terminal: LocalTerminal) => void>();
@@ -56,9 +54,7 @@ export class CodexLocalSession implements LocalBackendSession {
 	}
 
 	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
-		// A thread that has already run a turn is resumed first, the way the daemon resumes before every
-		// follow-up. App Server is free to unload an idle thread, and starting a turn on an unloaded one
-		// fails rather than silently opening a fresh conversation.
+		// App Server may unload an idle thread, and starting a turn on an unloaded one fails.
 		if (this.used.has(threadId)) await this.client.resumeThread(threadId);
 		const turnId = await this.client.startTurn(threadId, prompt);
 		this.used.add(threadId);
