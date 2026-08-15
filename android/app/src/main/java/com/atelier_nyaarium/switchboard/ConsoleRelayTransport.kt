@@ -42,6 +42,13 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 			"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 		}
 
+	init {
+		// The host only, never a token: an operator reading logcat needs to see WHICH endpoint an
+		// op is going to when two clients on one device disagree, and this is the one place the
+		// answer is decided.
+		DebugLog.log("Relay", "transport direct=$direct host=${runCatching { java.net.URI(proxyBase).host }.getOrNull() ?: "?"}")
+	}
+
 	/** This console's route Gateway id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Gateway routes to the right Gateway; null until learned. */
 	@Volatile
