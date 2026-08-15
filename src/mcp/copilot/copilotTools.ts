@@ -7,7 +7,7 @@ import {
 	CopilotMessageAgentInputSchema,
 	CopilotStartAgentInputSchema,
 	CopilotStopAgentInputSchema,
-} from "../../shared/copilot-thinking.js";
+} from "../../shared/copilot-agent.js";
 import type { AgentDispatch } from "../agentDispatch.js";
 import { routerPost } from "../bridge/helpers.js";
 

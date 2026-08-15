@@ -1,6 +1,6 @@
 // The daemon's own App Server client and turn tracker, wired to turn handles instead of a relay.
 
-import { CODEX_DEFAULT_MODEL } from "../../shared/codex-thinking.js";
+import { CODEX_DEFAULT_MODEL } from "../../shared/codex-agent.js";
 import type { AppServerSession } from "../devcontainer/codexAppServerSession.js";
 import { defaultOpenClient } from "../devcontainer/codexAppServerSession.js";
 import type { AgentChild } from "../devcontainer/codexTargets.js";

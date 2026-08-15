@@ -10,7 +10,7 @@ import {
 	CodexDaemonReceiptSchema,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 import { AgentDaemonCore, type AgentEventAck } from "./agentDaemonCore.js";
 import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AppServerSession } from "./codexAppServerSession.js";

@@ -1,5 +1,5 @@
 // Codex delegation: byte/shape bounds, opaque ID shapes, and agent/operation identity. The base
-// layer every other codexThinking* file imports from; imports nothing from a sibling domain file.
+// layer every other codexAgent* file imports from; imports nothing from a sibling domain file.
 
 import { z } from "zod";
 import { CODEX_BACKEND } from "./agent-backend.js";

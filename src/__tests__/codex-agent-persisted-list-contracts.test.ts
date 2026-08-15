@@ -5,8 +5,8 @@ import {
 	codexOperationFingerprint,
 	projectCodexListAgent,
 	projectCodexListResult,
-} from "../shared/codex-thinking.js";
-import { AGENT_ID, requestedAgent } from "./helpers/codex-thinking.js";
+} from "../shared/codex-agent.js";
+import { AGENT_ID, requestedAgent } from "./helpers/codex-agent.js";
 
 const ACCEPTANCE_FENCE = {
 	daemonInstanceId: "daemon-1",

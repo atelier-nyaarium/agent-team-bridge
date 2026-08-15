@@ -2,7 +2,7 @@ import {
 	CodexAppServerResponseSchema,
 	CodexAppServerThreadStartResultSchema,
 	CodexAppServerTurnStartResultSchema,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 import type { CodexChild } from "./codexTargets.js";
 
 ////////////////////////////////

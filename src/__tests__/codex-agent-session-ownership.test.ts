@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { CodexAgentService } from "../gateway/codexAgentService.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
-import type { CodexPersistedAgent } from "../shared/codex-thinking.js";
+import type { CodexPersistedAgent } from "../shared/codex-agent.js";
 import { type CodexCatalogWriter, type SessionRecord, SessionStore } from "../shared/session-store.js";
-import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-thinking.js";
+import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-agent.js";
 
 function setup(opts: { persistChecked?: (sessionStore: SessionStore) => void } = {}) {
 	let sessionStore!: SessionStore;

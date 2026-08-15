@@ -3,8 +3,8 @@ import { CodexAgentService, CodexTransitionError } from "../gateway/codexAgentSe
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation } from "../gateway/websocket.js";
 import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
+import { AGENT_ID, OPERATION_ID } from "./helpers/codex-agent.js";
 import { setup } from "./helpers/codex-persistence.js";
-import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
 const DEVCONTAINER_TARGET = {
 	kind: "devcontainer",

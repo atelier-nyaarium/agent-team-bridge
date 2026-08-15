@@ -8,8 +8,8 @@ import { capabilityInstructions } from "../mcp/capabilities.js";
 import { describeDrift, renderCapabilities } from "../mcp/capabilitiesTool.js";
 import {
 	type Capability,
-	CODEX_THINKING_CAPABILITY_ID,
-	COPILOT_THINKING_CAPABILITY_ID,
+	CODEX_AGENT_CAPABILITY_ID,
+	COPILOT_AGENT_CAPABILITY_ID,
 	daemonCapabilityDeclaration,
 	UNREPORTED_CAPABILITIES,
 	unionCapabilities,
@@ -68,7 +68,7 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const CODEX = { id: CODEX_THINKING_CAPABILITY_ID, instructions: "Delegate like so." };
+const CODEX = { id: CODEX_AGENT_CAPABILITY_ID, instructions: "Delegate like so." };
 
 ////////////////////////////////
 //  Tests
@@ -162,7 +162,7 @@ describe("what switchboard_capabilities reports", () => {
 
 		expect(text).toContain("Delegate like so.");
 		expect(text).toContain("Dock a card.");
-		expect(text).toContain(`## ${CODEX_THINKING_CAPABILITY_ID}`);
+		expect(text).toContain(`## ${CODEX_AGENT_CAPABILITY_ID}`);
 	});
 
 	it("says so plainly when the session has nothing", () => {
@@ -181,14 +181,14 @@ describe("what switchboard_capabilities reports", () => {
 	});
 
 	it("ignores reworded guidance, since the startup text is what it serves either way", () => {
-		expect(describeDrift([CODEX], [{ id: CODEX_THINKING_CAPABILITY_ID, instructions: "Reworded." }])).toBeNull();
+		expect(describeDrift([CODEX], [{ id: CODEX_AGENT_CAPABILITY_ID, instructions: "Reworded." }])).toBeNull();
 	});
 
 	it("warns about a toggle the running session cannot adopt", () => {
 		const drift = describeDrift([CODEX], [{ id: "designer" }]);
 
 		expect(drift).toContain("designer is now enabled");
-		expect(drift).toContain(`${CODEX_THINKING_CAPABILITY_ID} is no longer enabled`);
+		expect(drift).toContain(`${CODEX_AGENT_CAPABILITY_ID} is no longer enabled`);
 		expect(drift).toContain("restart this session");
 	});
 
@@ -207,7 +207,7 @@ describe("a declaration's whole journey to a session", () => {
 		const served = serve(envWithExecutables(), [{ id: "designer" }]);
 
 		expect(capabilityInstructions(served.capabilities)).toContain("designer");
-		expect(capabilityInstructions(served.capabilities)).not.toContain("codex-thinking");
+		expect(capabilityInstructions(served.capabilities)).not.toContain("codex-agent");
 	});
 
 	it("tells a session with neither source enabled nothing at all", () => {
@@ -218,7 +218,7 @@ describe("a declaration's whole journey to a session", () => {
 describe("what the daemon announces", () => {
 	it("declares only Codex when its CLI is installed", () => {
 		expect(daemonCapabilityDeclaration(envWithExecutables("codex")).map((c) => c.id)).toEqual([
-			CODEX_THINKING_CAPABILITY_ID,
+			CODEX_AGENT_CAPABILITY_ID,
 		]);
 	});
 });
@@ -227,7 +227,7 @@ describe("a declared capability's whole journey to a session", () => {
 	it("reaches a session as a name in the block and guidance in the tool", () => {
 		const served = serve(envWithExecutables("codex"), [{ id: "designer", instructions: "Dock a card." }]);
 
-		expect(capabilityInstructions(served.capabilities)).toContain("`codex-thinking`, `designer`");
+		expect(capabilityInstructions(served.capabilities)).toContain("`codex-agent`, `designer`");
 		expect(capabilityInstructions(served.capabilities)).not.toContain("Dock a card.");
 		expect(renderCapabilities(served.capabilities, null)).toContain("codexStartAgent");
 	});
@@ -237,10 +237,10 @@ describe("what the daemon announces", () => {
 	it("declares both capabilities with guidance when both CLIs are installed", () => {
 		const capabilities = daemonCapabilityDeclaration(envWithExecutables("codex", "copilot"));
 
-		expect(capabilities.map((c) => c.id)).toEqual([CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID]);
+		expect(capabilities.map((c) => c.id)).toEqual([CODEX_AGENT_CAPABILITY_ID, COPILOT_AGENT_CAPABILITY_ID]);
 		expect(capabilities).toEqual([
-			expect.objectContaining({ id: CODEX_THINKING_CAPABILITY_ID, instructions: expect.any(String) }),
-			expect.objectContaining({ id: COPILOT_THINKING_CAPABILITY_ID, instructions: expect.any(String) }),
+			expect.objectContaining({ id: CODEX_AGENT_CAPABILITY_ID, instructions: expect.any(String) }),
+			expect.objectContaining({ id: COPILOT_AGENT_CAPABILITY_ID, instructions: expect.any(String) }),
 		]);
 	});
 });

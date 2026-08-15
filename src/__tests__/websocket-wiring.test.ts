@@ -122,12 +122,10 @@ describe("createWebSocketHandlers", () => {
 				team: "host",
 				subId: "h1",
 				token: HOST_TOKEN,
-				daemonCapabilities: [{ id: "codex-thinking", instructions: "Delegate like so." }],
+				daemonCapabilities: [{ id: "codex-agent", instructions: "Delegate like so." }],
 			}),
 		);
-		expect(onDaemonCapabilities).toHaveBeenCalledWith([
-			{ id: "codex-thinking", instructions: "Delegate like so." },
-		]);
+		expect(onDaemonCapabilities).toHaveBeenCalledWith([{ id: "codex-agent", instructions: "Delegate like so." }]);
 	});
 
 	it("takes an empty declaration, which is how a daemon says the feature went off", () => {
@@ -164,7 +162,7 @@ describe("createWebSocketHandlers", () => {
 			team: "host",
 			subId: "h1",
 			token: HOST_TOKEN,
-			daemonCapabilities: [{ id: "codex-thinking" }],
+			daemonCapabilities: [{ id: "codex-agent" }],
 		};
 		handlers.message(live, JSON.stringify(withCodex));
 		handlers.message(
@@ -174,7 +172,7 @@ describe("createWebSocketHandlers", () => {
 
 		expect(second.close).toHaveBeenCalled();
 		expect(onDaemonCapabilities).toHaveBeenCalledTimes(1);
-		expect(onDaemonCapabilities).toHaveBeenCalledWith([{ id: "codex-thinking" }]);
+		expect(onDaemonCapabilities).toHaveBeenCalledWith([{ id: "codex-agent" }]);
 	});
 
 	it("ignores a capability declaration from anyone but the host slot", () => {
@@ -184,7 +182,7 @@ describe("createWebSocketHandlers", () => {
 		const badToken = createMockWs();
 		handlers.open(rogue);
 		handlers.open(badToken);
-		const declaration = [{ id: "codex-thinking" }];
+		const declaration = [{ id: "codex-agent" }];
 
 		handlers.message(
 			rogue,

@@ -2,7 +2,7 @@
 // events carry the answer itself, as chunks, which is why a running turn is tracked at all.
 
 import crypto from "node:crypto";
-import { COPILOT_DEFAULT_MODEL } from "../../shared/copilot-thinking.js";
+import { COPILOT_DEFAULT_MODEL } from "../../shared/copilot-agent.js";
 import type { AgentChild } from "../devcontainer/codexTargets.js";
 import type { CopilotAcpClient } from "../devcontainer/copilotAcp.js";
 import { defaultOpenCopilotClient } from "../devcontainer/copilotAcp.js";

@@ -1,4 +1,4 @@
-import { CodexAppServerThreadReadResultSchema, classifyCodexItemPhase } from "../../shared/codex-thinking.js";
+import { CodexAppServerThreadReadResultSchema, classifyCodexItemPhase } from "../../shared/codex-agent.js";
 import type { TurnOutcome } from "./codexTurnTracker.js";
 
 ////////////////////////////////

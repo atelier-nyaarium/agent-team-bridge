@@ -3,11 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initBridge, routerErrorText, routerPost } from "../mcp/bridge/helpers.js";
 import { codexRequestBody } from "../mcp/codex/codexTools.js";
-import {
-	CodexGatewayRequestSchema,
-	CodexRequestErrorSchema,
-	sanitizeCodexErrorText,
-} from "../shared/codex-thinking.js";
+import { CodexGatewayRequestSchema, CodexRequestErrorSchema, sanitizeCodexErrorText } from "../shared/codex-agent.js";
 
 describe("what a tool actually sends", () => {
 	it("builds a request the gateway's own schema accepts, for every kind", () => {

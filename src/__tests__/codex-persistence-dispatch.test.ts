@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CodexTransitionError } from "../gateway/codexAgentService.js";
+import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-agent.js";
 import { setup } from "./helpers/codex-persistence.js";
-import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-thinking.js";
 
 const DEVCONTAINER_TARGET = {
 	kind: "devcontainer",

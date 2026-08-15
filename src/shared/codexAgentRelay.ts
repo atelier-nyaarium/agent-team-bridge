@@ -6,7 +6,6 @@
 // record what an operation last saw.
 
 import { z } from "zod";
-import { CodexDeliverySchema, CodexTurnStateSchema } from "./codexThinkingAgentState.js";
 import {
 	boundedUtf8,
 	CODEX_ACTIVITY_MAX_BYTES,
@@ -16,8 +15,9 @@ import {
 	CodexPromptSchema,
 	OpaqueIdSchema,
 	OperationIdSchema,
-} from "./codexThinkingIdentity.js";
-import { CodexExecutionTargetSchema, CodexResolvedTargetSchema } from "./codexThinkingTargets.js";
+} from "./codexAgentIdentity.js";
+import { CodexDeliverySchema, CodexTurnStateSchema } from "./codexAgentState.js";
+import { CodexExecutionTargetSchema, CodexResolvedTargetSchema } from "./codexAgentTargets.js";
 
 export const CodexReconciliationFenceSchema = z
 	.object({

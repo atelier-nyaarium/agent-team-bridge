@@ -4,8 +4,8 @@ import WebSocket from "ws";
 import { agentEnvPrefix, agentFrameType, CODEX_BACKEND, COPILOT_BACKEND } from "../../shared/agent-backend.js";
 import type { LimitNotice } from "../../shared/agent-screen.js";
 import { daemonCapabilityDeclaration } from "../../shared/capabilities.js";
-import { CodexEventAckSchema } from "../../shared/codex-thinking.js";
-import { CopilotEventAckSchema } from "../../shared/copilot-thinking.js";
+import { CodexEventAckSchema } from "../../shared/codex-agent.js";
+import { CopilotEventAckSchema } from "../../shared/copilot-agent.js";
 import {
 	classifyPeekError,
 	type HostOp,

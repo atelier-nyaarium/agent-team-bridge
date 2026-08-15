@@ -5,7 +5,7 @@ import {
 	CodexAppServerTurnCompletedSchema,
 	classifyCodexItemPhase,
 	sanitizeCodexErrorText,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 
 ////////////////////////////////
 //  Interfaces & Types

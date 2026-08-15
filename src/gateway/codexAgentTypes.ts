@@ -4,7 +4,7 @@ import type {
 	CodexReconciliationFence,
 	CodexResolvedTarget,
 	CodexStoredOperation,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";

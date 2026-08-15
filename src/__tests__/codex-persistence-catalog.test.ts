@@ -7,10 +7,10 @@ import {
 	type CodexPersistedAgent,
 	codexOperationFingerprint,
 	restoreCodexAgentCatalog,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import { DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
-import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-thinking.js";
+import { AGENT_ID, OPERATION_ID, requestedAgent } from "./helpers/codex-agent.js";
 
 const OTHER_AGENT_ID = "codex_ffffffffffffffffffffffffffffffff";
 const OTHER_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";

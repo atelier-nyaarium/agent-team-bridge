@@ -11,7 +11,7 @@ import {
 	type CodexStoredOperation,
 	type CodexStoredTurn,
 	sanitizeCodexErrorText,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import { type CodexApplication, CodexTransitionError } from "./codexAgentTypes.js";
 
 ////////////////////////////////

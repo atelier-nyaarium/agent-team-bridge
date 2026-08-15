@@ -16,7 +16,7 @@ import {
 	CodexResolvedTargetSchema,
 	type CodexStoredOperation,
 	codexOperationFingerprint,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import {
 	decideAcceptance,

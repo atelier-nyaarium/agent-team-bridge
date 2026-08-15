@@ -57,11 +57,11 @@ are not.
 
 ### Structural, surfaced during the build
 
-- [medium] `src/shared/codex-thinking.ts` - its public, persistence, daemon, and App Server
+- [medium] `src/shared/codex-agent.ts` - its public, persistence, daemon, and App Server
   boundaries occupy one high-conflict module. It intentionally exposes one compatibility import
   today; preserve that barrel and split the implementation by trust boundary when a next consumer
   arrives.
-- [medium] `src/shared/codex-thinking.ts : OpaqueIdSchema` - **misalignment** - used for ids that
+- [medium] `src/shared/codex-agent.ts : OpaqueIdSchema` - **misalignment** - used for ids that
   have real internal structure. `CodexResolvedTarget.targetId` carries a grammar
   (`container:<project>`), but its schema says only "a string up to 512 chars", so neither zod nor
   tsc can catch a mismatch. Where an id has a grammar, the schema should carry it.

@@ -2,14 +2,14 @@
 // tool answers with, and the five tools' own input and gateway-request envelopes.
 
 import { z } from "zod";
-import { CodexActivitiesSchema } from "./codexThinkingActivities.js";
+import { CodexActivitiesSchema } from "./codexAgentActivities.js";
 import {
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
 	CodexPromptSchema,
 	OpaqueIdSchema,
 	OperationIdSchema,
-} from "./codexThinkingIdentity.js";
+} from "./codexAgentIdentity.js";
 
 ////////////////////////////////
 //  Enums and errors

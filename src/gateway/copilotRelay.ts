@@ -7,7 +7,7 @@ import {
 	CopilotDaemonHelloSchema,
 	type CopilotDaemonReceipt,
 	CopilotDaemonReceiptSchema,
-} from "../shared/copilot-thinking.js";
+} from "../shared/copilot-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { CopilotAgentService, CopilotApplication } from "./copilotAgentService.js";
 

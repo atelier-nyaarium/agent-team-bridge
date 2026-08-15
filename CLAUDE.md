@@ -135,7 +135,7 @@ code does not belong here; rationale lives in `git log`.
     target manager and validates both ends against the schemas the gateway route uses
   - `agentDispatch.ts` - the one seam saying where an agent tool call is served
   - `codex/codexTools.ts` - the five Codex tools, registered only when the daemon announced
-    `codex-thinking`. Each mints a private operation id per invocation, which is what makes an HTTP
+    `codex-agent`. Each mints a private operation id per invocation, which is what makes an HTTP
     retry a replay rather than a second delegated task
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
@@ -149,7 +149,7 @@ code does not belong here; rationale lives in `git log`.
     `./schemas.js`. Every schema carries `.meta({id})`, which is its generated Kotlin class name.
     The barrel's export order is biome-sorted and NOT the codegen's emission order, which comes
     from `scripts/codegen-kotlin.ts`'s own ROOTS list
-  - `codex-thinking.ts` - the Codex delegation wire truth: a barrel over the `codexThinking*.ts`
+  - `codex-agent.ts` - the Codex delegation wire truth: a barrel over the sibling `codexAgent*.ts`
     domain files (identity, activities, targets, agent state, relay frames, App Server protocol,
     agent record, catalog), re-exporting the original public surface by name so the split files'
     internal helpers stay out of it. Never fed to the Kotlin codegen

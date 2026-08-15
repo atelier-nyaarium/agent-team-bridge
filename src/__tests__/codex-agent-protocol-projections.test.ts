@@ -12,8 +12,8 @@ import {
 	CodexDaemonCommandSchema,
 	CodexDaemonEventSchema,
 	CodexDaemonReceiptSchema,
-} from "../shared/codex-thinking.js";
-import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
+} from "../shared/codex-agent.js";
+import { AGENT_ID, OPERATION_ID } from "./helpers/codex-agent.js";
 
 const OWNER_KEY = "recipe-app.owner";
 

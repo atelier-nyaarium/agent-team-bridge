@@ -4,7 +4,7 @@ import { CodexRelay } from "../gateway/codexRelay.js";
 import { CodexRoute } from "../gateway/codexRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
-import { CodexAgentResultSchema, codexAgentIdForOperation } from "../shared/codex-thinking.js";
+import { CodexAgentResultSchema, codexAgentIdForOperation } from "../shared/codex-agent.js";
 import { type CodexCatalogWriter, SessionStore } from "../shared/session-store.js";
 
 const START = "123e4567-e89b-42d3-a456-426614174000";

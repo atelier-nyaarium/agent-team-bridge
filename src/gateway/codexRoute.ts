@@ -11,7 +11,7 @@ import {
 	codexAgentIdForOperation,
 	projectCodexListResult,
 	sanitizeCodexErrorText,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
 import { type CodexAgentService, CodexTransitionError } from "./codexAgentService.js";

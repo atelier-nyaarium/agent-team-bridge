@@ -1,11 +1,11 @@
 // Codex delegation: the `codex app-server` JSONL protocol itself (its thread/turn/item shapes,
 // its request/response envelope), as distinct from our own gateway-daemon relay in
-// codexThinkingRelay.ts. `looseObject` throughout because the App Server is a third party: we
+// codexAgentRelay.ts. `looseObject` throughout because the App Server is a third party: we
 // project only the fields we read and tolerate whatever else it sends.
 
 import { z } from "zod";
-import { CodexTurnStateSchema } from "./codexThinkingAgentState.js";
-import { OpaqueIdSchema } from "./codexThinkingIdentity.js";
+import { OpaqueIdSchema } from "./codexAgentIdentity.js";
+import { CodexTurnStateSchema } from "./codexAgentState.js";
 
 export const CodexAppServerResponseSchema = z
 	.looseObject({

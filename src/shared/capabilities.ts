@@ -16,69 +16,96 @@ export type CapabilityBundle = z.infer<typeof CapabilityBundleSchema>;
 /** A source that has never spoken. Distinct from one that spoke and declared nothing. */
 export const UNREPORTED_CAPABILITIES: CapabilitySnapshot = { known: false, capabilities: [], clientVersions: [] };
 
-export const CODEX_THINKING_CAPABILITY_ID = agentCapabilityId("codex");
-export const COPILOT_THINKING_CAPABILITY_ID = agentCapabilityId("copilot");
+export const CODEX_AGENT_CAPABILITY_ID = agentCapabilityId("codex");
+export const COPILOT_AGENT_CAPABILITY_ID = agentCapabilityId("copilot");
 
 // Served only by switchboard_capabilities. The always-on block carries names alone, so length here
 // is not charged against the MCP server instructions.
-export const CODEX_THINKING_INSTRUCTIONS = `
-# Codex Thinking
+export const CODEX_AGENT_INSTRUCTIONS = `
+# Codex Agent
 
-Codex agents are enabled. A Codex agent is a second-model-family thread this session owns, for handing off a self-contained sub-task.
+Codex Agents are enabled. A Codex agent is a second-model-family thread this session owns, for handing off a self-contained sub-task.
 
-## Sandbox
-
-Codex sandbox denies outbound network access. Writes can only happen in the directory you start it in. Otherwise, all other executions are permitted.
+Start with \`codexStartAgent\`.
 
 GPT-family agents are **very literal** and pursue a goal through unexpected or suspect actions. Set guardrails in the prompt you delegate.
-
-But, choose your terms **very literally**, because if you say "Never" in the beginning, Codex might not listen to you even if you say "It's OK now".
+But, choose your terms **very literally**, because if you say "Never" in the beginning, GPT might not listen to you even if you say "It's OK now".
 - "Don't XXX." - Means you will never lift the restriction. Trashing the thread is the only way around.
 - "Don't XXX, unless I say otherwise later" - Means you may lift the restriction depending on feel.
 
-## Driving Codex Agent manually
+You are the triage gate for what Codex says and does. A confident tone is not evidence; verify their work and claims against the code.
 
-- An agent can hold several Codex threads at once. Issue the codexStartAgent calls in parallel to run concurrently.
-- For developing, reuse the thread. For one-off audits, prefer a fresh thread for an empty context and fresh eyes.
-- For one-offs, give them a markdown Report format.
-- You are the triage gate for what codex says and does. A confident tone is not evidence; verify against the code.
+Codex sandbox denies outbound network access. Writes can only happen in the directory you start it in. Otherwise, all other executions are permitted.
 
-## Shaping a Codex Agent Workflow
+## Driving a Codex Agent Workflow
 
-Fan-out dimensions run on Codex: Audits, assessments, adversarial second reads.
+To keep your context free of clutter, it's recommended to use Workflows.
+
+Code editing or fan-outs run on Codex: Audits, assessments, adversarial second reads.
 
 Research is the exception, web research especially. It stays on Opus.
 
-Ask once before fanning out whether the dimensions should be Codex or Claude. Left to you, choose Codex for anything that is not research.
+Choose model depending on task:
+- Haiku relays verbatim to Codex. Or Sonnet if you want to remove a whole report phase.
+- Sonnet collates, Opus decides.
 
-The last consolidating steps always runs on Claude. Don't pipe a Codex to a Codex. Choose model depending on task: Sonnet collates, Opus decides.
+Single Iterative Phase Style:
+- Iterative fix until pass (Sonnet working with Codexes) and report
 
-Shapes that work, not an exhaustive list:
-- Research (Opuses)                  -> Rank (Sonnet)
-- Audit (Codexes)                    -> Synthesize (Sonnet)
-- Architecture assessment (Codexes)  -> Synthesize (Opus)
-- Iterative fix until pass (Codex)   -> Report (Sonnet)
+Fan Out ► Join Style
+- Research (Opuses) ► Rank Sort (Opus or Sonnet)
+- Audits (Haikus verbatim Codexes) ► Synthesize (Opus)
+- Assessments (Haikus verbatim Codexes) ► Synthesize (Opus)
 
 ## Recovery
 
 Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns every thread with its full history, so recover or re-run the collection.
 `.trim();
 
-export const COPILOT_THINKING_INSTRUCTIONS = `
+export const COPILOT_AGENT_INSTRUCTIONS = `
 # Copilot Agent
 
-Copilot Agents are enabled. Use them for self-contained coding tasks through the logged-in Copilot CLI.
+Copilot Agents are enabled. A Copilot agent is a second-model-family thread this session owns, for handing off a self-contained sub-task.
 
-Use \`copilotStartAgent\` for a fresh task, \`copilotMessageAgent\` for an idle follow-up, \`copilotAwaitAgent\` to wait,
-\`copilotStopAgent\` to stop the current turn, and \`copilotListAgents\` to inspect existing agents.
-Copilot uses the normal CLI login. Run \`copilot\` and \`/login\` if authentication is required.
+Start with \`copilotStartAgent\`.
+
+GPT-family agents are **very literal** and pursue a goal through unexpected or suspect actions. Set guardrails in the prompt you delegate.
+But, choose your terms **very literally**, because if you say "Never" in the beginning, GPT might not listen to you even if you say "It's OK now".
+- "Don't XXX." - Means you will never lift the restriction. Trashing the thread is the only way around.
+- "Don't XXX, unless I say otherwise later" - Means you may lift the restriction depending on feel.
+
+You are the triage gate for what Copilot says and does. A confident tone is not evidence; verify their work and claims against the code.
+
+## Driving a Copilot Agent Workflow
+
+To keep your context free of clutter, it's recommended to use Workflows.
+
+Code editing or fan-outs run on Copilot: Audits, assessments, adversarial second reads.
+
+Research is the exception, web research especially. It stays on Opus.
+
+Choose model depending on task:
+- Haiku relays verbatim to Copilot. Or Sonnet if you want to remove a whole report phase.
+- Sonnet collates, Opus decides.
+
+Single Iterative Phase Style:
+- Iterative fix until pass (Sonnet working with Copilots) and report
+
+Fan Out ► Join Style
+- Research (Opuses) ► Rank Sort (Opus or Sonnet)
+- Audits (Haikus verbatim Copilots) ► Synthesize (Opus)
+- Assessments (Haikus verbatim Copilots) ► Synthesize (Opus)
+
+## Recovery
+
+Copilot agents belong to the whole Claude Code session. If a Workflow caller dies, \`copilotListAgents\` returns every thread with its full history, so recover or re-run the collection.
 `.trim();
 
 // Guidance is capability payload, not a backend fact, so it lives here beside the other capability
 // prose rather than on the descriptor.
 const AGENT_BACKEND_INSTRUCTIONS: Record<AgentBackendId, string> = {
-	codex: CODEX_THINKING_INSTRUCTIONS,
-	copilot: COPILOT_THINKING_INSTRUCTIONS,
+	codex: CODEX_AGENT_INSTRUCTIONS,
+	copilot: COPILOT_AGENT_INSTRUCTIONS,
 };
 
 /**
