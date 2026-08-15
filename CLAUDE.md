@@ -179,8 +179,9 @@ code does not belong here; rationale lives in `git log`.
     filename, array position, or message direction
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
   - `crypto.ts` / `admission.ts` / `evie-protocol.ts` / `federation-lifecycle.ts` (a barrel over the
-    seven per-flow `federation-*` leaves) - the synced leaves; see Synced leaves below for the full list
-  - `notice.ts` - the four notice tiers both reply tools and the console wire share
+    seven per-flow `federation-*` files) - the federation trust model and its wire vocabulary
+  - `notice.ts` - the four notice tiers both reply tools and the console wire share; the one remaining
+    synced leaf (see Synced leaves below)
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
   - `session-store.ts` - the gateway's authoritative session records, keyed by `spawn.id`
@@ -984,21 +985,13 @@ mismatch.
 | Source | Copy |
 |--------|------|
 | `notice.ts` | `nyaaskills/src/shared/notice.ts` |
-| `evie-protocol.ts` | `evie-bot/app/features/bridge/evie-protocol.ts` |
-| `crypto.ts` | `evie-bot/app/features/bridge/crypto.ts` |
-| `admission.ts` | `evie-bot/app/features/bridge/admission.ts` |
-| `federation-lifecycle.ts` | `evie-bot/app/features/bridge/federation-lifecycle.ts` |
-| `federation-enrollment.ts` | `evie-bot/app/features/bridge/federation-enrollment.ts` |
-| `federation-xdomain-links.ts` | `evie-bot/app/features/bridge/federation-xdomain-links.ts` |
-| `federation-tenants.ts` | `evie-bot/app/features/bridge/federation-tenants.ts` |
-| `federation-enroll-ops.ts` | `evie-bot/app/features/bridge/federation-enroll-ops.ts` |
-| `federation-handshakes.ts` | `evie-bot/app/features/bridge/federation-handshakes.ts` |
-| `federation-device-approval.ts` | `evie-bot/app/features/bridge/federation-device-approval.ts` |
-| `federation-proofs.ts` | `evie-bot/app/features/bridge/federation-proofs.ts` |
 
-`federation-lifecycle.ts` is a pure barrel over the seven `federation-*` leaves (one flow each), so
-consumers in both repos import it alone. The CI lists live in `.github/workflows/ci.yml` here and
-`_lint.yml` in evie; a new leaf needs a row in both.
+`crypto.ts`, `admission.ts`, `evie-protocol.ts` and the eight `federation-*` modules were leaves too,
+mirrored into evie's bridge. They are ORDINARY modules now: the Router serves federation itself, evie
+holds no copy, and their stamps came off with the copies. `federation-lifecycle.ts` stays a pure
+barrel over the seven per-flow `federation-*` files, for readability rather than for a second repo.
+
+The CI list lives in `.github/workflows/ci.yml`; a new leaf needs a row there and in its own repo.
 
 Always use `bun scripts/sync-leaf.ts <path>`. FOOTGUN: the order is format, restamp, copy. Copying
 first and running `lint:fix` after reformats the SOURCE, staling both the stamp and the copy, and the
@@ -1073,8 +1066,9 @@ peek, and session spawn all fail with `host daemon offline`; this cost a full ou
 Bringing it back is three scripts, and the Router is its own compose project so it starts and stops
 on its own trigger: `./start-federation.sh && ./start-gateway.sh && ./start-host-daemon.sh`. Order
 between the first two does not matter - both create the shared `switchboard-federation` network if
-it is absent, because compose declares it external and `down.sh` removes it. Verify the Router with
-`bun run smoketest:federation`.
+it is absent, because compose declares it external and `down.sh` removes it. Verify the whole path
+with `./setup.sh --verify`, which checks the Router answers and that the Gateway is REGISTERED with
+it rather than merely running.
 
 Router ops worth knowing: back it up with `./backup-federation.sh` (it refuses while the container
 runs, since the store is single-writer, and it archives the two tokens from `.env` alongside the
@@ -1189,29 +1183,53 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
 
 1. `./backup-federation.sh` with the Router stopped. It refuses while it runs, asserts the cert,
    key and state all landed, and includes both tokens - a data-only archive authenticates nobody.
+   A backup taken before the export holds the MINTED identity, not the imported one, so it restores
+   a Router no enrolled device recognises. Take a fresh one after step 5.
 2. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
    the evie identity keypair rather than minting one, which is what makes enrolled devices still
-   resolve this Router. It aborts if the Secret moves mid-read.
-3. `./start-federation.sh`, then `bun run smoketest:federation`. Expect every check to pass.
+   resolve this Router. It aborts if the Secret moves mid-read. A re-export writes through the
+   container, since by then the Router root-owns the data dir and the host cannot. It ALSO carries
+   `CONSOLE_BRIDGE_TOKEN` from the separate `console-bridge-app-token` Secret into `.env`: that one
+   is not part of the federation state, and a freshly minted one 401s every already-provisioned
+   console, which the app reports as "sign-in rejected".
+3. Set `FEDERATION_BIND` in `.env` to the LAN address. It defaults to `127.0.0.1`, so without this
+   the phone cannot reach the Router at all. Then `./start-federation.sh`.
 4. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
    branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
-   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), then
-   `./start-gateway.sh`. Confirm `router_connected: true` on the gateway's `/health`.
-5. Point the phone at the LAN address in Settings, Federation Router. The port defaults to 20001
-   and the fingerprint comes from the Router's `/health`. Editing there repoints the transport
-   ONLY; it never re-runs provisioning, so admission and enrollment survive.
+   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), keeping the old
+   file as `transport.k8s.json` for the rollback. Then `./start-gateway.sh`. Confirm
+   `router_connected: true` on the gateway's `/health`, `[evie] direct transport ->` in its log,
+   and `Gateway registered: <domain>/<id>` in the Router's.
+5. Point the phone at the LAN address in Settings, Federation, Federation Router. The port defaults
+   to 20001 and the fingerprint comes from the Router's `/health`, as PLAIN hex. Editing there
+   repoints the transport ONLY; it never re-runs provisioning, so admission and enrollment survive.
 6. Verify before trusting it: send, poll, board, peek, wake, and add-a-device.
 
 ### Retiring the k8s path
 
-Only after living on the Router, and only once the owner confirms the console update is taken.
-Until then the deletions below would break a live path.
+The gateway side is DONE: `gateway/evie/transport.ts` loads only the direct branch, the `EVIE_*`
+env vars are gone, and `setup-purge` mutates the Router's own state file through
+`scripts/lib/routerState.ts` (stop, mutate, start - the store is single-writer). A `transport.json`
+still holding the k8s shape now resolves to null, so such a Gateway arms for enrollment rather than
+half-reading a relay it cannot reach.
 
-- switchboard: the k8s branch of `gateway/evie/transport.ts`, the six `EVIE_*` transport env vars,
-  the kubectl plumbing in `setup-provision.ts` / `setup-purge.ts` / `bootstrap-domain.ts` /
-  `scripts/lib/host.ts`, the `kubectl` install in the Dockerfile, and the k8s rows in
-  `setup-constants.ts`. `setup-purge` needs a Router-side replacement first: today it mutates the
-  CLUSTER, so after cutover it would wipe local state while leaving the Router's file untouched.
+`setup.sh --gateway-transport` is GONE rather than ported: it wrote a k8s `transport.json` over the
+gateway's own, which after the cutover knocks it off the Router. `--verify` probes the Router and
+the Gateway's registration instead (`setup-verify.ts`); it reads `FEDERATION_BIND` for the same
+reason `start-federation.sh` does, since a LAN bind unbinds loopback.
+
+What is left is NOT a deletion, and that is the whole reason it is still here:
+
+- **`setup-provision.ts` is the only implementation of a from-scratch setup**, and it stages the
+  admin Domain into the CLUSTER. Deleting its kubectl plumbing (and with it `applySecret` / `k` /
+  `kStdin` / `kGetB64` / `readSaCreds` / `ensureAdminKubernetes` / `clearAdminKubeconfig` in
+  `scripts/lib/host.ts`, which nothing else uses) removes the ability to provision at all. It needs
+  a Router-side rewrite first: same flow, writing `volumes/federation-data/federation.json` through
+  `routerState.ts` instead of a Secret. That rewrite needs a 0600 write into the gateway container
+  again; `writeGatewayFile` did it carefully (bytes over stdin so a secret stays out of `ps`) and
+  was pruned when its last caller went, so lift it from git history rather than re-deriving it.
+- Then the `kubectl` install in the Dockerfile and the k8s rows in `setup-constants.ts` fall out on
+  their own.
 - evie-bot: the gateway/console/device-approval bridges plus ELEVEN synced copies (the seven
   `federation-*` leaves, the `federation-lifecycle` barrel, `evie-protocol.ts`, `crypto.ts`,
   `admission.ts`), their rows in `_lint.yml` and `_test.yml`, and the bridge k8s objects.

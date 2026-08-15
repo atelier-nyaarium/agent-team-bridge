@@ -77,6 +77,16 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 				op: env.op,
 			};
 			const body = await handleFrame(opened);
+			// Every op EXCEPT the steady stream of held polls, which stay silent by design (see
+			// consoleHandler's own note). Without this a console op that is answered but refused
+			// leaves no trace at all: the relay layer only logs its own failures, and a refusal is
+			// a successful relay carrying a bad answer.
+			if (env.op.kind !== "poll") {
+				const failed = (body as { error?: unknown } | null)?.error;
+				console.log(
+					`[console] op ${env.op.kind} -> ${failed ? `error: ${String(failed).slice(0, 120)}` : "ok"}`,
+				);
+			}
 
 			// Seal the reply back to the console. The signer was just verified as an
 			// admitted console, so the box key resolves; a failure here is unexpected and

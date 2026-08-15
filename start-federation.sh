@@ -15,9 +15,15 @@ if ! docker compose -f docker-compose.federation.yml -p switchboard-federation u
 	exit 1
 fi
 
+# Probe whatever the compose file actually bound. A LAN FEDERATION_BIND unbinds loopback, so a
+# hardcoded localhost probe reports a healthy Router as a 60s timeout.
+BIND="$(grep -oE '^FEDERATION_BIND=.*' .env 2>/dev/null | head -1 | cut -d= -f2-)"
+PROBE_HOST="${BIND:-127.0.0.1}"
+[ "$PROBE_HOST" = "0.0.0.0" ] && PROBE_HOST="127.0.0.1"
+
 echo "Waiting for the federation Router to be ready..."
 for _ in $(seq 1 30); do
-	if curl -skf https://localhost:20001/health >/dev/null 2>&1; then
+	if curl -skf "https://${PROBE_HOST}:20001/health" >/dev/null 2>&1; then
 		echo "Federation Router ready. TLS fingerprint:"
 		docker logs switchboard-federation 2>&1 | grep -m1 'TLS fingerprint' || true
 		exit 0

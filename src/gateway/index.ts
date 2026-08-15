@@ -692,11 +692,10 @@ export async function startGateway(): Promise<void> {
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
-		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
-		// reaches a behind-NAT evie through the apiserver. The SA token authenticates to the API
-		// server (consumed there); the cluster CA is pinned for TLS.
+		// The federation WS: dial the Router and pin its leaf fingerprint. Creds are delivered by
+		// enrollment, so there is nothing to mount and nothing to configure by hand.
 		const connection = evieWsConnection(transport);
-		console.log(`[evie] service-proxy transport -> ${transport.apiUrl} (${transport.service}:${transport.port})`);
+		console.log(`[evie] direct transport -> ${transport.routerUrl}`);
 
 		// Frame handlers land on the slice after the routes rebuild; a frame arriving before that
 		// is dropped (the console re-polls).

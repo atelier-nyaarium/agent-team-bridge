@@ -7,7 +7,6 @@ import { evieWsConnection, loadEvieTransport } from "../gateway/evie/transport.j
 ////////////////////////////////
 //  Constants
 
-const K8S = { apiUrl: "https://api.example", saToken: "sa", caPem: "pem" };
 const DIRECT = {
 	transport: "direct",
 	routerUrl: "https://federation-router:20001",
@@ -19,7 +18,6 @@ const DIRECT = {
 //  Functions & Helpers
 
 let dir: string;
-const savedEnv = process.env.EVIE_API_URL;
 
 function write(value: unknown): void {
 	writeFileSync(path.join(dir, "transport.json"), JSON.stringify(value));
@@ -27,27 +25,18 @@ function write(value: unknown): void {
 
 beforeEach(() => {
 	dir = mkdtempSync(path.join(os.tmpdir(), "switchboard-transport-"));
-	process.env.EVIE_API_URL = undefined as unknown as string;
-	delete process.env.EVIE_API_URL;
 });
 
 afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
-	if (savedEnv === undefined) delete process.env.EVIE_API_URL;
-	else process.env.EVIE_API_URL = savedEnv;
 });
 
 ////////////////////////////////
 //  Tests
 
 describe("loadEvieTransport", () => {
-	it("resolves nothing when neither env nor file is present", () => {
+	it("resolves nothing when no file is present", () => {
 		expect(loadEvieTransport(dir)).toBeNull();
-	});
-
-	it("reads a file with no transport as the k8s branch", () => {
-		write(K8S);
-		expect(loadEvieTransport(dir)?.transport).toBe("k8s");
 	});
 
 	it("reads the direct branch", () => {
@@ -59,10 +48,15 @@ describe("loadEvieTransport", () => {
 		});
 	});
 
-	it("refuses a branch missing its own fields", () => {
-		write({ transport: "direct", routerUrl: DIRECT.routerUrl });
+	// A retired-branch file must leave the gateway standalone and armed for enrollment, never
+	// half-adopted: its fields describe a relay this build can no longer reach.
+	it("refuses a retired k8s file rather than half-reading it", () => {
+		write({ apiUrl: "https://api.example", saToken: "sa", caPem: "pem" });
 		expect(loadEvieTransport(dir)).toBeNull();
-		write({ apiUrl: K8S.apiUrl });
+	});
+
+	it("refuses a direct branch missing its own fields", () => {
+		write({ transport: "direct", routerUrl: DIRECT.routerUrl });
 		expect(loadEvieTransport(dir)).toBeNull();
 	});
 
@@ -70,23 +64,10 @@ describe("loadEvieTransport", () => {
 		writeFileSync(path.join(dir, "transport.json"), "{not json");
 		expect(loadEvieTransport(dir)).toBeNull();
 	});
-
-	it("does not let a stale k8s env shadow a direct file", () => {
-		process.env.EVIE_API_URL = "https://stale.example";
-		write(DIRECT);
-		expect(loadEvieTransport(dir)?.transport).toBe("direct");
-	});
 });
 
 describe("evieWsConnection", () => {
-	it("tunnels the k8s branch through the service proxy with the CA pinned", () => {
-		write(K8S);
-		const conn = evieWsConnection(loadEvieTransport(dir)!);
-		expect(conn.url.startsWith("wss://api.example/api/v1/namespaces/")).toBe(true);
-		expect(conn.tls).toEqual({ ca: K8S.caPem });
-	});
-
-	it("dials the direct branch by URL with the leaf pinned, lowercased", () => {
+	it("dials by URL with the leaf pinned, lowercased", () => {
 		write(DIRECT);
 		const conn = evieWsConnection(loadEvieTransport(dir)!);
 		expect(conn.url).toBe("wss://federation-router:20001");

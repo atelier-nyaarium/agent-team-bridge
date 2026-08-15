@@ -242,6 +242,8 @@ fun App(
 	BackHandler(enabled = overlays.isNotEmpty() || showSettings || openTeam != null) {
 		when {
 			overlays.isNotEmpty() -> closeOverlay()
+			// Mirrors SettingsScreen's own back: Federation was entered from Domain & Trust.
+			showSettings && settingsRoute == SettingsRoute.FEDERATION -> settingsRoute = SettingsRoute.NETWORKS
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
 			showSettings -> showSettings = false
 			else -> openTeam = null
@@ -541,6 +543,12 @@ fun App(
 						// device rooted an enroll invite but has not completed the in-person trust step).
 						onVerifyEnroll = (if (state.provisioned) repo.ceremony.pendingEnrolleeCeremony() else null)
 							?.let { c -> { openOverlay(Overlay.EnrolleeCeremony(c)) } },
+						// Reaching a self-hosted Router precedes having any Gateway, so the empty board
+						// opens the Federation screen directly rather than making the owner find it.
+						onRouterEndpoint = {
+							settingsRoute = SettingsRoute.FEDERATION
+							showSettings = true
+						},
 						boardLine = { team -> boardLines[team.name] },
 						boardBranch = { team -> boardBranches[team.name] },
 						undoneFor = { team ->

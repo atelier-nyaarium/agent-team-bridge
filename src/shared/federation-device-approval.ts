@@ -1,7 +1,3 @@
-// SYNC-HASH: 01e9ee0fa5403b269f4726ff3d7d0bbe
-// SYNCED MODULE - source of truth: switchboard/src/shared/federation-device-approval.ts
-// Copied verbatim into: evie-bot/app/features/bridge/federation-device-approval.ts
-// MUST re-copy on change: cp src/shared/federation-device-approval.ts ../evie-bot/app/features/bridge/federation-device-approval.ts
 import { z } from "zod";
 import { b64Field, displayField } from "./crypto.js";
 

@@ -96,15 +96,10 @@ export function dc(...args: string[]) {
 	return $`docker compose ${args}`;
 }
 
-/** Write `content` to an absolute path inside the gateway container as a 0600 file. Bytes ride stdin,
- * never argv, so a secret stays out of `ps`; `umask 077` makes the file 0600 from birth with no
- * world-readable window, and the chmod is belt-and-suspenders. `filePath` must be a trusted absolute
- * container path (it is baked into the shell command). */
-export async function writeGatewayFile(filePath: string, content: string): Promise<boolean> {
-	const dir = path.posix.dirname(filePath);
-	const sh = `umask 077 && mkdir -p ${dir} && cat > ${filePath} && chmod 600 ${filePath}`;
-	const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(content)}`.quiet().nothrow();
-	return r.exitCode === 0;
+/** The federation Router is its own compose project, so it needs the file and project name that
+ * `start-federation.sh` uses; a bare `docker compose` here would target the gateway instead. */
+export function dcFederation(...args: string[]) {
+	return $`docker compose -f docker-compose.federation.yml -p switchboard-federation ${args}`;
 }
 
 /** True when the gateway container is currently running. `.nothrow()` so a down docker daemon

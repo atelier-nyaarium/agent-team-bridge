@@ -149,9 +149,16 @@ internal fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDevice
 }
 
 @Composable
-internal fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYourDevices: () -> Unit, onFederation: () -> Unit) {
-	// Three distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
-	// your account (Your devices), and linking with a friend's separate network (cross-Domain trust).
+internal fun NetworksSettings(
+	onManage: () -> Unit,
+	onYourDevices: () -> Unit,
+	onUsers: () -> Unit,
+	onFederationScreen: () -> Unit,
+) {
+	// Four distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
+	// your account (Your devices), linking with a friend's separate network (cross-Domain trust),
+	// and the server all of that rides on. Navigation only - the forms live on their own screens,
+	// since inline they read as settings of whatever section they happen to sit under.
 	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = hapticClick(onManage), modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
@@ -159,8 +166,16 @@ internal fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYour
 	Button(onClick = hapticClick(onYourDevices), modifier = Modifier.fillMaxWidth()) { Text("Your devices") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = hapticClick(onFederation), modifier = Modifier.fillMaxWidth()) { Text("Users") }
+	Button(onClick = hapticClick(onUsers), modifier = Modifier.fillMaxWidth()) { Text("Users") }
 	HorizontalDivider()
+	Text("Infrastructure", style = MaterialTheme.typography.titleSmall)
+	Button(onClick = hapticClick(onFederationScreen), modifier = Modifier.fillMaxWidth()) { Text("Federation") }
+}
+
+/** Everything that is only meaningful because this console federates: which server it talks to,
+ * and the owner key that server's whole trust graph roots at. */
+@Composable
+internal fun FederationSettings(repo: ChatRepository) {
 	RouterEndpointCard(repo)
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
@@ -171,12 +186,20 @@ internal fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYour
 @Composable
 internal fun RouterEndpointCard(repo: ChatRepository) {
 	val scope = rememberCoroutineScope()
-	var host by remember { mutableStateOf("") }
-	var port by remember { mutableStateOf(DEFAULT_ROUTER_PORT.toString()) }
-	var certFp by remember { mutableStateOf("") }
+	// Seed from what this console is ACTUALLY pointed at. Blank fields read as "nothing is set",
+	// which is wrong on a connected console and hides the values the owner came here to check.
+	val stored = remember { repo.currentRouterEndpoint(DEFAULT_ROUTER_PORT) }
+	var host by remember { mutableStateOf(stored?.host ?: "") }
+	var port by remember { mutableStateOf((stored?.port ?: DEFAULT_ROUTER_PORT).toString()) }
+	var certFp by remember { mutableStateOf(stored?.certFp ?: "") }
 	var busy by remember { mutableStateOf(false) }
 
 	Text("Federation Router", style = MaterialTheme.typography.titleSmall)
+	Text(
+		if (stored?.direct == true) "Connected directly to your own Router." else "Using the hosted relay.",
+		style = MaterialTheme.typography.bodySmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
 	OutlinedTextField(
 		value = host,
 		onValueChange = { host = it },
@@ -196,6 +219,7 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 		onValueChange = { certFp = it.trim() },
 		singleLine = true,
 		label = { Text("Certificate fingerprint") },
+		supportingText = { Text("SHA-256, 64 hex characters. Colons are fine.") },
 		modifier = Modifier.fillMaxWidth(),
 	)
 	Button(

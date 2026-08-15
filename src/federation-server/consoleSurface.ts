@@ -1,7 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import type { GatewayBridge } from "./gatewayBridge.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;
@@ -322,6 +321,10 @@ export class ConsoleSurface {
 		const url = new URL(req.url, "http://console-bridge");
 		if (req.method !== "POST") return bounce(405, `method not allowed`);
 		if (!constantTimeBearerEquals(req.headers.get(APP_TOKEN_HEADER), this.authToken)) {
+			// Log the refusal, never the token. A silent 401 is indistinguishable from a console
+			// that never arrived, which is the one thing an operator needs to tell apart when a
+			// migrated Router and an already-provisioned console disagree about this secret.
+			console.log(`[console] rejected ${url.pathname}: app token mismatch`);
 			return new Response(`Unauthorized`, { status: 401 });
 		}
 

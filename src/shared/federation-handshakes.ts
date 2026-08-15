@@ -1,7 +1,3 @@
-// SYNC-HASH: 4787745eba26796b169b16b22ffd9057
-// SYNCED MODULE - source of truth: switchboard/src/shared/federation-handshakes.ts
-// Copied verbatim into: evie-bot/app/features/bridge/federation-handshakes.ts
-// MUST re-copy on change: cp src/shared/federation-handshakes.ts ../evie-bot/app/features/bridge/federation-handshakes.ts
 import { z } from "zod";
 import { b64Field, slugField } from "./crypto.js";
 

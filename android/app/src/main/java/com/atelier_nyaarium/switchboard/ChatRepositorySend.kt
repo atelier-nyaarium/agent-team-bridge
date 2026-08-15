@@ -21,6 +21,9 @@ import kotlinx.coroutines.withContext
 suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = emptyList()): String? = withContext(Dispatchers.IO) {
 	val (picked, refused) = admitPicked(uris, "pick-${java.util.UUID.randomUUID()}")
 	if (refused != null) {
+		// A refusal here never reaches the wire, so without this the send is invisible on BOTH
+		// sides: no row leaves the phone and no op reaches the gateway.
+		DebugLog.log("Send", "admission refused before the wire: ${refused.message()}")
 		_state.update { it.copy(error = refused.message()) }
 		return@withContext null
 	}
@@ -126,10 +129,15 @@ internal suspend fun ChatRepository.deliver(
 				?.domainId
 				?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
 		}
+		DebugLog.log("Send", "op=${opId.take(8)} team=$team files=${picked.size} domain=${targetDomain ?: "local"}")
 		val r = client().send(team, text, picked, opId, targetDomain)
 		when {
-			!r.ok -> fail(r.error)
+			!r.ok -> {
+				DebugLog.log("Send", "op=${opId.take(8)} refused: ${r.error?.take(160)}")
+				fail(r.error)
+			}
 			else -> {
+				DebugLog.log("Send", "op=${opId.take(8)} ok")
 				succeeded = true
 				setMessageStatus(team, echoId, null)
 			}
@@ -144,6 +152,7 @@ internal suspend fun ChatRepository.deliver(
 		// surfaces a legible cause ("Can't reach the server", "Bridge token rejected")
 		// instead of a raw "HTTP 401: {json}" exception string.
 		val (cause, _) = classifyConnError(e)
+		DebugLog.log("Send", "op=${opId.take(8)} threw: ${e::class.simpleName}: ${e.message?.take(160)}")
 		fail(cause)
 	} finally {
 		// Only on a non-success exit (fail() above, or a cancellation rethrow that skips fail()):
