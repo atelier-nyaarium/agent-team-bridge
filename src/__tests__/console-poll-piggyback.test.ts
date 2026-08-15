@@ -159,6 +159,42 @@ describe("poll: focus intent + presence piggyback", () => {
 		expect(result.presence?.[0].status).toBe("verifying");
 	});
 
+	// A reinstall leaves the old conversationId registered as a consumer with a stale cursor. The
+	// box compacts only to the slowest one, so entries the LIVE device has already acked stay
+	// retained; a hold gate that looked at the retained count answered instantly every time,
+	// and the console busy-looped at the poll floor until the idle sweep. Hold on "nothing new
+	// for THIS device", or two installs on one owner burn a round-trip every few seconds all day.
+	it("holds a poll whose cursor is already past everything a stale sibling consumer pins", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "one" }));
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "two" }));
+
+		// The stale sibling: polls once at cursor 0 (pinning both entries), then vanishes.
+		await h.handler.handleFrame(frame({ kind: "poll" }, "stale-p1", "pixel", "conv-old"));
+
+		// The live device drains and acks everything.
+		const drained = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			entries: unknown[];
+			cursor: number;
+		};
+		expect(drained.entries).toHaveLength(2);
+		await h.handler.handleFrame(frame({ kind: "poll", cursor: drained.cursor }, "p2"));
+
+		// Now a held poll at that cursor MUST hold - the two entries are still retained for the
+		// sibling, but nothing is new for this device. Wake it with a fresh append and prove it
+		// held by the fact that the append is what it returns.
+		const held = h.handler.handleFrame(frame({ kind: "poll", cursor: drained.cursor, holdMs: 5_000 }, "p3"));
+		await new Promise((r) => setTimeout(r, 30));
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "three" }));
+		const start = Date.now();
+		const reply = (await held).result as { entries: { seq: number }[]; settled?: string };
+		expect(Date.now() - start).toBeLessThan(2_000);
+		expect(reply.settled).toBe("mailbox");
+		expect(reply.entries.some((e) => e.seq > drained.cursor)).toBe(true);
+	});
+
 	it("mailbox entries win settled priority over a simultaneously-changed presence plane", async () => {
 		const { planeRegistry, presence } = makePresencePlane([teamInfo({ team: "team-a" })]);
 		const h = makeHarness({}, { planeRegistry, presence });
