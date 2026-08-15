@@ -65,6 +65,18 @@ export interface ConsoleSurfaceParams {
 	onTrustHandshake?: (op: TrustHandshakeOp) => TrustHandshakeResult | Promise<TrustHandshakeResult>;
 	onTrustPending?: (req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>;
 	onTransport?: (req: TransportRequest) => TransportResult | Promise<TransportResult>;
+	/** How a console reaches this Router from either side of a NAT that does not hairpin. Behind the
+	 * app token on purpose: a LAN address on the public /health would tell any scanner this port-forward
+	 * ends on a home network at a specific private address, and only a console that already holds the
+	 * token has any use for it. */
+	onReach?: () => RouterReachAnswer;
+}
+
+/** What the `reach` op answers. Both fields may be empty on a Router whose owner has not configured
+ * them; the console then keeps whatever address it already has. */
+export interface RouterReachAnswer {
+	publicHost: string | null;
+	lanAddresses: string[];
 }
 
 const CONSOLE_PROTOCOL_VERSION = 1;
@@ -95,6 +107,7 @@ export class ConsoleSurface {
 		| ((req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>)
 		| null;
 	private readonly onTransport: ((req: TransportRequest) => TransportResult | Promise<TransportResult>) | null;
+	private readonly onReach: (() => RouterReachAnswer) | null;
 	private readonly pending = new Map<
 		string,
 		{ resolve: (res: Response) => void; timer: ReturnType<typeof setTimeout> }
@@ -114,6 +127,7 @@ export class ConsoleSurface {
 		onTrustHandshake,
 		onTrustPending,
 		onTransport,
+		onReach,
 	}: ConsoleSurfaceParams) {
 		this.authToken = authToken;
 		this.getBridge = getBridge;
@@ -127,6 +141,7 @@ export class ConsoleSurface {
 		this.onTrustHandshake = onTrustHandshake ?? null;
 		this.onTrustPending = onTrustPending ?? null;
 		this.onTransport = onTransport ?? null;
+		this.onReach = onReach ?? null;
 		this.handleRequest = this.handleRequest.bind(this);
 	}
 
@@ -242,6 +257,13 @@ export class ConsoleSurface {
 		}
 	}
 
+	/** No request payload beyond the discriminator and no signature: the app token that gated this
+	 * request IS the proof, and the answer is configuration, not state a signer could contest. */
+	private handleReach(): Response {
+		if (!this.onReach) return bounce(501, `reach not available`, false);
+		return json(this.onReach(), 200);
+	}
+
 	public settleConsoleRelay(opId: string, reply: Record<string, unknown>): void {
 		const entry = this.pending.get(opId);
 		if (!entry) return;
@@ -351,6 +373,7 @@ export class ConsoleSurface {
 		if (body.trustPending !== undefined) return this.handleTrustPending(body.trustPending);
 
 		if (body.transport !== undefined) return this.handleTransport(body.transport);
+		if (body.reach !== undefined) return this.handleReach();
 
 		const { opId, signerSignPub, sealed, targetGateway } = body;
 		if (

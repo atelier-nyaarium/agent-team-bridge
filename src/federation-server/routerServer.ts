@@ -14,7 +14,7 @@ import {
 	verifyRosterRequest,
 	verifyTrustPendingRequest,
 } from "../shared/federation-proofs.js";
-import { ConsoleSurface } from "./consoleSurface.js";
+import { ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
 import { DeviceApprovalCoordinator } from "./deviceApprovalCoordinator.js";
 import { EnrollHandshakeCoordinator } from "./enrollHandshakeCoordinator.js";
 import { dispatchEnrollOp, EnrollmentCoordinator, resolveEnrollRoute } from "./enrollmentCoordinator.js";
@@ -37,6 +37,9 @@ export interface RouterServerParams {
 	federationToken: string;
 	store: FileSecretStore;
 	tls?: RouterTls;
+	/** How a console reaches this Router from either side of a NAT that does not hairpin. Served
+	 * by the app-token-gated `reach` op, never by the public /health. */
+	reach?: RouterReachAnswer;
 }
 
 ////////////////////////////////
@@ -104,6 +107,7 @@ export class RouterServer {
 			onRoster: (req) => this.handleRoster(req),
 			// Direct transport fields arrive later.
 			onTransport: () => ({ ok: false, error: "transport not available" }),
+			onReach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
 		});
 		this.bridge.setConsoleRelaySettler((opId, reply) => this.console.settleConsoleRelay(opId, reply));
 		this.approval = new PublicApproval({ port: params.port, onApproval: (op) => this.deviceApproval.handle(op) });
@@ -225,6 +229,11 @@ export class RouterServer {
 			// `gateways` is the Router's OWN count, which is what makes it worth having: a Gateway
 			// reports `router_connected` from its own socket state and reads true across a half-open
 			// one, so only the far side can contradict it.
+			// The Router's reach (public host, LAN addresses) is deliberately NOT here: this answer is
+			// public by necessity, and a LAN address on it tells any scanner this port-forward ends on a
+			// home network at a specific private address. It rides the app-token-gated `reach` op on
+			// /console instead. No chicken-and-egg: this answer works from whichever address a console
+			// can reach, and the token it already holds is what lets it ask for the other one.
 			return new Response(
 				JSON.stringify({
 					ok: true,

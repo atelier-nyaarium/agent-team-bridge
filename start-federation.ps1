@@ -22,6 +22,16 @@ if (-not (Test-Path $envFile)) { New-Item -Path $envFile -ItemType File | Out-Nu
 if (-not (Get-EnvValue 'CONSOLE_BRIDGE_TOKEN')) { Add-Content -Path $envFile -Value "CONSOLE_BRIDGE_TOKEN=$(New-Token)" }
 if (-not (Get-EnvValue 'FEDERATION_WS_TOKEN')) { Add-Content -Path $envFile -Value "FEDERATION_WS_TOKEN=$(New-Token)" }
 
+# The two reach settings are the owner's to fill, not ours to mint. Say so rather than start a
+# Router no phone can find.
+$bind = Get-EnvValue 'FEDERATION_BIND'
+if (-not $bind -or $bind -eq '127.0.0.1') {
+	Write-Warning 'FEDERATION_BIND is unset or loopback in .env - the Router will not be reachable from a phone. Set it to this machine''s LAN address and rerun.'
+}
+if (-not (Get-EnvValue 'FEDERATION_PUBLIC_HOST')) {
+	Write-Warning 'FEDERATION_PUBLIC_HOST is unset in .env - a phone off this LAN cannot reach the Router. Set it to your domain or public IP once port 20001 is forwarded here.'
+}
+
 docker network inspect switchboard-federation 2>$null 1>$null
 if ($LASTEXITCODE -ne 0) { docker network create switchboard-federation | Out-Null }
 

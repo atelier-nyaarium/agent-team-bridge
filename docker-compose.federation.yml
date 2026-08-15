@@ -12,6 +12,11 @@ services:
       - DATA_DIR=/app/data
       - CONSOLE_BRIDGE_TOKEN=${CONSOLE_BRIDGE_TOKEN:-}
       - FEDERATION_WS_TOKEN=${FEDERATION_WS_TOKEN:-}
+      # What the Router advertises on /health so a console can reach it from either side of the
+      # NAT: its public name (a domain absorbs an IP change) and the LAN address it is bound to.
+      # Inside the container it cannot see the host's interfaces, so the bind IS the LAN address.
+      - FEDERATION_PUBLIC_HOST=${FEDERATION_PUBLIC_HOST:-}
+      - FEDERATION_LAN_ADDRESSES=${FEDERATION_BIND:-}
     # Bounded, since restart: unless-stopped otherwise grows the json-file forever. The boot
     # fingerprint is served from /health, so rotating past it loses nothing.
     logging:

@@ -31,11 +31,34 @@ export async function verify(): Promise<void> {
 
 	// -k, not a pin: this probe runs on the host beside the Router, so there is no peer to
 	// authenticate. It reports the fingerprint for the operator to compare against their devices.
-	const health = await $`curl -sk --max-time 5 ${await routerHealthUrl()}`.quiet().nothrow().text();
+	const healthUrl = await routerHealthUrl();
+	const health = await $`curl -sk --max-time 5 ${healthUrl}`.quiet().nothrow().text();
 	const router = jparse<{ ok?: boolean; certFingerprint?: string; gateways?: number }>(health.trim());
 	if (!router?.ok)
 		throw new Error(`the Router did not answer /health (got: ${health.trim().slice(0, 120) || "nothing"})`);
 	note(`Router healthy. TLS fingerprint ${router.certFingerprint ?? "(absent)"}`);
+
+	// The reach a console will steer by rides the app-token-gated `reach` op, not /health, so
+	// asking for it here also proves the token in .env is the one the Router holds. Say plainly which
+	// leg is missing: no public host strands a phone off the LAN, no LAN address strands one on it.
+	const appToken = await envGet("CONSOLE_BRIDGE_TOKEN");
+	if (!appToken) throw new Error("CONSOLE_BRIDGE_TOKEN missing from .env");
+	const consoleUrl = healthUrl.replace(/\/health$/, "/console");
+	const bearer = `X-Console-Bridge-Token: Bearer ${appToken}`;
+	const reachText =
+		await $`curl -sk --max-time 5 -X POST ${consoleUrl} -H ${bearer} -H ${"Content-Type: application/json"} -d ${'{"reach":{}}'}`
+			.quiet()
+			.nothrow()
+			.text();
+	const reach = jparse<{ publicHost?: string | null; lanAddresses?: string[]; error?: string }>(reachText.trim());
+	if (!reach || reach.error) {
+		throw new Error(
+			`the Router refused the reach op (${reach?.error ?? (reachText.trim().slice(0, 120) || "no answer")}) - is CONSOLE_BRIDGE_TOKEN in .env the one the Router runs with?`,
+		);
+	}
+	note(
+		`Router advertises: public ${reach.publicHost ?? "(none - set FEDERATION_PUBLIC_HOST)"}, LAN ${reach.lanAddresses?.length ? reach.lanAddresses.join(", ") : "(none - set FEDERATION_BIND)"}`,
+	);
 
 	const gwText = await $`curl -s --max-time 5 ${GATEWAY_HEALTH}`.quiet().nothrow().text();
 	const gateway = jparse<{ ok?: boolean; router_connected?: boolean }>(gwText.trim());
