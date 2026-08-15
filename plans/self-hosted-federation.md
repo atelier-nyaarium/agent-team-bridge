@@ -104,7 +104,7 @@ Standing defaults (raise objections any time):
   a backup step; restoring an old snapshot is a security event (it can resurrect revoked
   members), noted in the runbook.
 
-## Phase 1 - Router core in switchboard
+## Phase 1 - Router core in switchboard ✅
 
 `main-federation.ts` fourth entry point: one Bun TLS listener on 20001. Uses the wire
 schemas that ALREADY exist in `src/shared` (evie-protocol, console ops, federation-lifecycle,
