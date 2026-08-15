@@ -74,6 +74,9 @@ code does not belong here; rationale lives in `git log`.
     buys, who that connection says this owner is, and the wipe that undoes it),
     `ChatRepositoryStts.kt` and `ChatRepositoryDrafts.kt` (speech settings, composer drafts). Call
     sites stay `repo.send(...)`, so the spelling a residue test matches on is the same either way
+  - `RouterReach.kt` - the addresses this device knows for its Router and the pure order it tries
+    them in; `ConsoleRelayTransport.kt` owns the failover that walks that order (see Self-hosted
+    Router, Reach)
   - The federation surface is six more held delegates, reached as `repo.ownerFacts` /
     `.gatewayEnroll` / `.ceremony` / `.devices` / `.domainAdmin` / `.trust`: `OwnerFacts.kt`
     (first-root, the owner key, and every fact submitted through `submitOwnerFact`, plus membership),
@@ -282,11 +285,10 @@ gate from manufacturing an accidental permit.
 
 ### Self-hosted Router
 
-`src/federation-server/` is a drop-in replacement for evie's relay, run in Docker at home instead of
-k8s. Migration plan and its decisions: `plans/self-hosted-federation.md`. It speaks the SAME wire
-protocol, so `src/gateway/evie/evieClient.ts` connects to it unchanged; only the transport under it
-differs. Everything below about trust, sealing and admissions holds identically - the Router is
-content-blind for the same reasons evie is, and moving it home changes reachability, not trust.
+`src/federation-server/` replaced evie's relay: the same wire protocol, run in Docker at home, so
+`src/gateway/evie/evieClient.ts` connects to it unchanged and only the transport under it differs.
+Everything below about trust, sealing and admissions holds identically - the Router is content-blind
+for the same reasons evie was, and moving it home changed reachability, not trust.
 
 Three surfaces share one TLS port, and the boundary between them is the whole security story: the
 gateway WS is bearer-gated at upgrade, the console op family is app-token-gated, and device-approval
@@ -295,6 +297,32 @@ join/fetch is deliberately token-EXEMPT because a fresh device holds no credenti
 Its cert is minted once and never rotated. Rotating it invalidates the pin every enrolled Gateway
 and phone holds, which is a re-provision of each, not a restart. That cert is also distinct from the
 ephemeral one the 20003 enrollment listener mints per arming.
+
+**Reach: one Router, several addresses, and the phone learns them from the Router.** A home router
+that does not hairpin drops a LAN-to-public SYN, so the public address is unreachable from INSIDE
+and the LAN address from OUTSIDE, and neither can be the one stored truth. The owner types either
+one; the Router advertises the rest through the app-token-gated `reach` op (`{publicHost,
+lanAddresses}`, from `FEDERATION_PUBLIC_HOST` / `FEDERATION_BIND`); the console persists what it
+learned beside the blob (`RouterReach`, wiped with it) and tries candidates in order - LAN first so a
+phone at home never pays a hairpin timeout, public next, the typed address last, the last one that
+answered first of all (`reachCandidates`, pure and tested).
+
+- **NOT on `/health`.** That answer is public by necessity, and a LAN address on it tells any scanner
+  this port-forward ends on a home network at a specific private address. Behind the token there is
+  no chicken-and-egg: `/health` works from whichever address the phone can reach, and the token it
+  already holds is what lets it ask for the other one.
+- **Failover is on a thrown `IOException` only, never an HTTP status.** A status proves the Router was
+  reached and said something; the answer belongs to the caller. `withReachFailover` walks the ring at
+  most once per op, and `apiReachable` is where a network change is discovered, since it is the
+  first thing a connect does and every later op inherits its choice.
+- **The debug ingest follows the transport's CURRENT base** (a provider, not a value): a flush that
+  kept dialing the address it was attached with died on exactly the network change worth reading.
+- The Router logs an unauthenticated 401 and a TLS handshake failure at the outer gate. Both were
+  silent once, and a mismatched console looked identical to one that never dialed.
+
+The outage that produced all of this: the phone held the public domain, OkHttp's pool kept ONE
+socket alive from a moment the hairpin happened to pass, and everything rode it until it dropped.
+"Works, then does not, then a reinstall fixes it" is what a single lucky connection looks like.
 
 ### Federation and trust
 
