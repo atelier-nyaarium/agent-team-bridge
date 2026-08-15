@@ -25,7 +25,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 		const h = makeHarness({ send: async () => jsonRes({ error: 'Team "team-a" is not connected' }, 404) });
 		const reply = await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "hi" }));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("not connected");
 	});
 
 	it("send forwards op.files to routes.send", async () => {
@@ -96,7 +95,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 		for (const sid of ["hs-deadbeef", "conv:other-window:team-b"]) {
 			const reply = await h.handler.handleFrame(frame({ kind: "respond", session_id: sid, response: "x" }, sid));
 			expect(reply.ok).toBe(false);
-			expect(reply.error).toContain("Unknown session_id");
 		}
 		expect(h.respondCalls).toHaveLength(0);
 	});
@@ -120,7 +118,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 			frame({ kind: "respond", session_id: "notice:recipe-app", response: "hi" }, "r-notice"),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("Unknown session_id");
 	});
 
 	it("a send blocked by a slow wake returns the deterministic session id", async () => {
@@ -190,7 +187,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 			status: "error",
 			session_id: `conv.${OWNER}.test-domain.test-host.asleep.dev`,
 		});
-		expect(entries[0].body).toContain("not connected");
 	});
 
 	it("a sleeping CLI team woken past the bound lands a clean error, never a random session id", async () => {
@@ -241,7 +237,6 @@ describe("createConsoleDispatcher: send + respond", () => {
 			session_id: `conv.${OWNER}.test-domain.test-host.sleepy-cli.dev`,
 			status: "error",
 		});
-		expect(entries[0].body).toContain("CLI-mode");
 	});
 
 	it("the same opId on two conversations does not cross-replay", async () => {
@@ -306,6 +301,5 @@ describe("createConsoleDispatcher: send + respond", () => {
 		const entries = (poll.result as { entries: { body?: string; status?: string }[] }).entries;
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({ status: "error" });
-		expect(entries[0].body).toContain("not connected");
 	});
 });

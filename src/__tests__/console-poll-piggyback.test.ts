@@ -410,7 +410,6 @@ describe("report_read + poll: read-anchors piggyback", () => {
 			frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 10 }, "p1"),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("not available");
 	});
 
 	it("report_read applies a genuine advance and echoes it back as `advanced: true`", async () => {

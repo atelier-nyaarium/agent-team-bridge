@@ -9,9 +9,6 @@ function constantTimeBearerEquals(provided: string | null, expected: string): bo
 	const right = Buffer.from(`Bearer ${expected}`);
 	return left.length === right.length && timingSafeEqual(left, right);
 }
-function getActiveBridge(): GatewayBridge | null {
-	return null;
-}
 
 import {
 	type ConsoleApprovalOp,
@@ -58,7 +55,7 @@ export interface GatewayFrameSink {
 export interface ConsoleSurfaceParams {
 	port: number;
 	authToken: string;
-	getBridge?: () => GatewayFrameSink | null;
+	getBridge: () => GatewayFrameSink | null;
 	timeoutMs?: number;
 	ingestFile?: string;
 	onEnrollOp?: (op: EnrollOp) => EnrollResult | Promise<EnrollResult>;
@@ -120,7 +117,7 @@ export class ConsoleSurface {
 		onTransport,
 	}: ConsoleSurfaceParams) {
 		this.authToken = authToken;
-		this.getBridge = getBridge ?? getActiveBridge;
+		this.getBridge = getBridge;
 		this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.ingestFile = ingestFile ?? null;
 		this.onEnrollOp = onEnrollOp ?? null;

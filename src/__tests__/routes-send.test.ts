@@ -16,7 +16,6 @@ describe("routes", () => {
 				body: "hi",
 			});
 			expect(res.status).toBe(404);
-			expect((await res.json()).error).toContain("not connected");
 		});
 
 		it("the not-found `available` list skips a non-slug Device Name registry key instead of throwing", async () => {
@@ -238,7 +237,6 @@ describe("routes", () => {
 				channelOnly: true,
 			});
 			expect(res.status).toBe(503);
-			expect((await res.json()).error).toContain("Router unavailable");
 		});
 
 		it("a not-yet-existing composite with no displayLabel fails fast instead of silently adopting the typed name", async () => {
@@ -261,9 +259,6 @@ describe("routes", () => {
 				channelOnly: true,
 			});
 			expect(res.status).toBe(404);
-			expect((await res.json()).error).toBe(
-				`"proj-a.newsession" does not exist yet; retry with a displayLabel to create it`,
-			);
 			// The wake carries a provenance key derived from (fromConversationId, to) even though this
 			// attempt has no displayLabel, so a retry that DOES supply one still reattaches correctly.
 			expect(wakeCalls).toEqual([

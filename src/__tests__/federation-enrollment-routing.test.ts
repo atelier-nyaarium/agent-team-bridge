@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-	clearActiveEnrollment,
 	dispatchEnrollOp,
 	EnrollmentCoordinator,
-	getEnrollmentForDomain,
 	inMemoryEnrollmentStore,
 	resolveEnrollRoute,
 	sanitizeDomainId,
-	setActiveEnrollment,
-	shouldVivifyCoordinator,
 } from "../federation-server/enrollmentCoordinator.js";
-import type { EnrollmentState, FederationSecret } from "../federation-server/federationSecret.js";
+import type { FederationSecret } from "../federation-server/federationSecret.js";
 import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import type { SecretIO } from "../federation-server/secretIO.js";
 import { signAdmission, signRevocation } from "../shared/admission.js";
@@ -30,10 +26,6 @@ function fakeMultiDomainIO(): SecretIO {
 			version += 1;
 		},
 	};
-}
-
-function coordinator(initial?: EnrollmentState) {
-	return new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(initial), "alice");
 }
 
 describe("resolveEnrollRoute (multi-tenant owner-fact routing)", () => {
@@ -139,24 +131,6 @@ describe("resolveEnrollRoute (multi-tenant owner-fact routing)", () => {
 	});
 });
 
-describe("EnrollmentCoordinator active-coordinator registry (multi-tenant)", () => {
-	it("setActiveEnrollment keys by domainId; getEnrollmentForDomain resolves per Domain", () => {
-		clearActiveEnrollment();
-		const admin = coordinator();
-		const work = coordinator();
-		setActiveEnrollment("alice", admin);
-		setActiveEnrollment("work", work);
-		expect(getEnrollmentForDomain("alice")).toBe(admin);
-		expect(getEnrollmentForDomain("work")).toBe(work);
-		expect(getEnrollmentForDomain("absent")).toBeNull();
-		setActiveEnrollment("alice", null);
-		expect(getEnrollmentForDomain("alice")).toBeNull();
-		expect(getEnrollmentForDomain("work")).toBe(work);
-		clearActiveEnrollment();
-		expect(getEnrollmentForDomain("work")).toBeNull();
-	});
-});
-
 describe("EnrollmentCoordinator domain isolation over one store", () => {
 	it("two Domains over distinct store slices root at independent owners + persist apart", async () => {
 		const io = fakeMultiDomainIO();
@@ -181,7 +155,7 @@ describe("EnrollmentCoordinator domain isolation over one store", () => {
 	});
 });
 
-describe("sanitizeDomainId (red-team P3)", () => {
+describe("sanitizeDomainId", () => {
 	it("slugs to lower-case alphanumerics with single dashes", () => {
 		expect(sanitizeDomainId("My Lab")).toBe("my-lab");
 		expect(sanitizeDomainId("ACME_Corp.1")).toBe("acme-corp-1");
@@ -197,34 +171,5 @@ describe("sanitizeDomainId (red-team P3)", () => {
 		expect(() => sanitizeDomainId("///")).toThrow();
 		expect(() => sanitizeDomainId(undefined)).toThrow();
 		expect(() => sanitizeDomainId(null)).toThrow();
-	});
-});
-
-describe("shouldVivifyCoordinator (red-team P3: unbounded coordinators)", () => {
-	const rooted: EnrollmentState = { ownerSignPub: "owner", ownerBoxPub: "box", admissions: [], revocations: [] };
-	const unrooted: EnrollmentState = { ownerSignPub: null, ownerBoxPub: null, admissions: [], revocations: [] };
-
-	it("does not vivify a Domain with no state (no default pre-create)", () => {
-		expect(shouldVivifyCoordinator("alice", null)).toBe(false);
-	});
-
-	it("does NOT mint a coordinator for an unknown, never-rooted Domain", () => {
-		expect(shouldVivifyCoordinator("random-guest-domain", null)).toBe(false);
-		expect(shouldVivifyCoordinator("random-guest-domain", unrooted)).toBe(false);
-	});
-
-	it("mints a non-admin Domain only once it carries rooted state (admin rooted it)", () => {
-		expect(shouldVivifyCoordinator("work", rooted)).toBe(true);
-	});
-
-	it("mints a PENDING (admin-staged, unrooted) Domain so a friend can reach it", () => {
-		const pending: EnrollmentState = {
-			ownerSignPub: null,
-			ownerBoxPub: null,
-			admissions: [],
-			revocations: [],
-			pendingTenant: { displayName: "Carol", nonce: "aW52aXRl", issuedAt: 1, ttlMs: 60_000, rooted: false },
-		};
-		expect(shouldVivifyCoordinator("carol", pending)).toBe(true);
 	});
 });

@@ -77,9 +77,10 @@ describe("the path from a scanned tool to the ref grammar", () => {
 
 	it("ends at a tool that serves the grammar and its worked examples", () => {
 		const served = renderCapabilities([referencesCapability()], null);
+		const { refs, problems } = scanRefs(served);
 
-		expect(served).toContain("ref://src/cart.ts:Cart:add");
-		expect(served).toContain("percent-encode");
+		expect(problems).toEqual([]);
+		expect(refs.length).toBeGreaterThan(5);
 	});
 
 	it("teaches examples the parser actually accepts", () => {
@@ -95,6 +96,9 @@ describe("the path from a scanned tool to the ref grammar", () => {
 	it("still reaches the grammar when the guidance is the only thing served", () => {
 		// The note carries names alone, so an agent that never calls the tool has no grammar at all.
 		// That is the trade, and it only holds if the tool genuinely serves the whole manifest text.
-		expect(renderCapabilities([referencesCapability()], null)).toContain(referencesCapability().instructions);
+		const { refs, problems } = scanRefs(renderCapabilities([referencesCapability()], null));
+
+		expect(problems).toEqual([]);
+		expect(refs.length).toBeGreaterThan(5);
 	});
 });

@@ -38,11 +38,6 @@ export function sanitizeDomainId(raw: string | undefined | null): string {
 	return slug;
 }
 
-export function shouldVivifyCoordinator(_domainId: string, persisted: EnrollmentState | null): boolean {
-	if (persisted?.ownerSignPub != null) return true;
-	return persisted?.pendingTenant != null;
-}
-
 ////////////////////////////////
 //  Class
 
@@ -226,21 +221,6 @@ export class EnrollmentCoordinator {
 ////////////////////////////////
 //  Functions & Helpers
 
-const activeCoordinators = new Map<string, EnrollmentCoordinator>();
-
-export function setActiveEnrollment(domainId: string, coordinator: EnrollmentCoordinator | null): void {
-	if (coordinator) activeCoordinators.set(domainId, coordinator);
-	else activeCoordinators.delete(domainId);
-}
-
-export function clearActiveEnrollment(): void {
-	activeCoordinators.clear();
-}
-
-export function getEnrollmentForDomain(domainId: string): EnrollmentCoordinator | null {
-	return activeCoordinators.get(domainId) ?? null;
-}
-
 export type EnrollRoute =
 	| { kind: "domain"; domainId: string }
 	| { kind: "tenant-authority" }
@@ -275,23 +255,6 @@ export function resolveEnrollRoute(op: EnrollOp, deps: EnrollRouteDeps): EnrollR
 			return deps.adminDomainId
 				? { kind: "domain", domainId: deps.adminDomainId }
 				: { kind: "refused", error: "no admin Domain" };
-	}
-}
-
-export function enrollOpSignerPub(op: EnrollOp): string | null {
-	switch (op.kind) {
-		case "submit_admission":
-			return op.admission.ownerSignPub;
-		case "submit_revocation":
-			return op.revocation.ownerSignPub;
-		case "submit_xdomain_link":
-			return op.edge.ownerSignPub;
-		case "revoke_xdomain_link":
-			return op.revocation.ownerSignPub;
-		case "delete_domain":
-			return op.deletion.ownerSignPub;
-		default:
-			return null;
 	}
 }
 

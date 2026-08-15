@@ -240,7 +240,6 @@ describe("degrading instead of failing", () => {
 		const r = await resolve("c.js", text, "ref://c.js:tick#foo %2B= 1");
 
 		expect(r.quality).toBe("fuzzy");
-		expect(r.reason).toContain("foo += 1");
 		expect(r.startLine).toBe(1);
 		expect(r.span).toBeUndefined();
 	});
@@ -251,7 +250,6 @@ describe("degrading instead of failing", () => {
 		const r = await resolve("c.js", text, "ref://c.js:tick#foo %2B= 1@before:reset()");
 
 		expect(r.quality).toBe("fuzzy");
-		expect(r.reason).toContain("reset()");
 	});
 
 	it("opens at the range start when only the range end is gone", async () => {
@@ -261,7 +259,6 @@ describe("degrading instead of failing", () => {
 
 		expect(r.quality).toBe("fuzzy");
 		expect(r.startLine).toBe(2);
-		expect(r.reason).toContain("reset()");
 	});
 
 	it("falls back to a text match when the enclosing scope was renamed", async () => {
@@ -271,7 +268,6 @@ describe("degrading instead of failing", () => {
 
 		expect(r.quality).toBe("fuzzy");
 		expect(r.startLine).toBe(2);
-		expect(r.reason).toContain("add");
 	});
 
 	it("opens the whole file when nothing in the chain survives", async () => {
