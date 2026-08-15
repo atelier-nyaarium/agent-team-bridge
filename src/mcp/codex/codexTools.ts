@@ -7,7 +7,7 @@ import {
 	CodexMessageAgentInputSchema,
 	CodexStartAgentInputSchema,
 	CodexStopAgentInputSchema,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 import type { AgentDispatch } from "../agentDispatch.js";
 import { routerPost } from "../bridge/helpers.js";
 
@@ -20,6 +20,11 @@ const START_DESCRIPTION = `
 Start a session-owned Codex agent for a self-contained subtask.
 
 Waits for the turn. A turn beyond the wait budget keeps running and is returned later.
+
+Models:
+- gpt-5.6-sol - Flagship for the hardest reasoning and coding. Ask permission first.
+- gpt-5.6-terra - Balanced workhorse for strong everyday reasoning and implementation.
+- gpt-5.6-luna - Efficient for long-running exploration, audits, and implementation. Use it by default.
 
 ## Prompt
 
@@ -34,9 +39,9 @@ State allowed writes, network access, and completion criteria.
 
 ## Reuse
 
-Reuse an agent with \`codexMessageAgent\` instead of starting one per attempt. The thread retains its history.
+To retain history, reuse an agent with \`codexMessageAgent\` instead of starting one per turn.
 
-Agents belong to this session, not their caller. Use \`codexListAgents\` to resume work after a caller ends.
+Agents belong to this whole session, not the caller. Use \`codexListAgents\` to resume work after a caller ends.
 `.trim();
 
 const MESSAGE_DESCRIPTION = `

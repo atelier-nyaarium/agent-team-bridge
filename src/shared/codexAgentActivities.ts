@@ -8,7 +8,7 @@ import {
 	CODEX_ACTIVITY_MAX_BYTES,
 	CODEX_ACTIVITY_MAX_ITEMS,
 	OpaqueIdSchema,
-} from "./codexThinkingIdentity.js";
+} from "./codexAgentIdentity.js";
 
 export const CodexActivitySchema = z.discriminatedUnion("kind", [
 	z

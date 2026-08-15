@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CodexTransitionError } from "../gateway/codexAgentService.js";
-import { CodexPersistedAgentSchema, codexOperationFingerprint } from "../shared/codex-thinking.js";
+import { CodexPersistedAgentSchema, codexOperationFingerprint } from "../shared/codex-agent.js";
+import { AGENT_ID, OPERATION_ID } from "./helpers/codex-agent.js";
 import { setup } from "./helpers/codex-persistence.js";
-import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
 const OTHER_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
 const THIRD_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174002";

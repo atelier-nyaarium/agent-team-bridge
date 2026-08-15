@@ -11,7 +11,7 @@ import {
 	CopilotDaemonReceiptSchema,
 	isReliableCopilotMessage,
 	sanitizeCopilotErrorText,
-} from "../../shared/copilot-thinking.js";
+} from "../../shared/copilot-agent.js";
 import { AgentDaemonCore, type AgentEventAck } from "./agentDaemonCore.js";
 import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AgentChild, TargetLease, TargetSupervisor } from "./codexTargets.js";

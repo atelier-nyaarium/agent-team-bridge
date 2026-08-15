@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CodexAgentService } from "../gateway/codexAgentService.js";
 import { CodexRelay } from "../gateway/codexRelay.js";
-import type { CodexDaemonEvent, CodexDaemonReceipt } from "../shared/codex-thinking.js";
+import type { CodexDaemonEvent, CodexDaemonReceipt } from "../shared/codex-agent.js";
 import {
 	AGENT_ID,
 	currentAgent,

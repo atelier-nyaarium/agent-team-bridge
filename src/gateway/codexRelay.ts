@@ -8,7 +8,7 @@ import {
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
 	type CodexPersistedAgent,
-} from "../shared/codex-thinking.js";
+} from "../shared/codex-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { CodexAgentService, CodexApplication } from "./codexAgentService.js";
 

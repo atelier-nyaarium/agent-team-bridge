@@ -137,10 +137,15 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 				.put("adminDomainId", adminDomain)
 				.put("handshakeId", invite.handshakeId)
 				.put("pin", invite.pin)
+			// The invite carries whichever branch this owner is on, or a direct-mode owner mints
+			// an invite pointing at an endpoint the friend cannot reach.
 			val obj = JSONObject()
+				.put("transport", prov.transport)
 				.put("apiUrl", prov.apiUrl)
 				.put("saToken", prov.saToken)
 				.put("caPem", prov.caPem)
+				.put("routerUrl", prov.routerUrl)
+				.put("routerCertFp", prov.routerCertFp)
 				.put("appToken", prov.appToken)
 				.put("pendingTenant", JSONObject().put("domainId", tenant.domainId).put("nonce", tenant.nonce))
 				.put("enrollHandshake", enrollHandshake)

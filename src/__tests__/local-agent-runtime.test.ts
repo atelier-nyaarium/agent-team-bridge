@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { LocalAgentRuntime, type LocalBackendSpec } from "../mcp/local/localAgentRuntime.js";
 import type { LocalBackendSession, LocalTerminal } from "../mcp/local/localAgentSession.js";
 import type { AgentBackendId } from "../shared/agent-backend.js";
-import { CodexAgentResultSchema } from "../shared/codexThinkingAgentState.js";
-import { CodexListAgentsResultSchema } from "../shared/codexThinkingCatalog.js";
-import { CODEX_ACTIVITY_MAX_ITEMS } from "../shared/codexThinkingIdentity.js";
+import { CodexListAgentsResultSchema } from "../shared/codexAgentCatalog.js";
+import { CODEX_ACTIVITY_MAX_ITEMS } from "../shared/codexAgentIdentity.js";
+import { CodexAgentResultSchema } from "../shared/codexAgentState.js";
 
 ////////////////////////////////
 //  Interfaces & Types

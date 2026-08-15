@@ -57,11 +57,11 @@ are not.
 
 ### Structural, surfaced during the build
 
-- [medium] `src/shared/codex-thinking.ts` - its public, persistence, daemon, and App Server
+- [medium] `src/shared/codex-agent.ts` - its public, persistence, daemon, and App Server
   boundaries occupy one high-conflict module. It intentionally exposes one compatibility import
   today; preserve that barrel and split the implementation by trust boundary when a next consumer
   arrives.
-- [medium] `src/shared/codex-thinking.ts : OpaqueIdSchema` - **misalignment** - used for ids that
+- [medium] `src/shared/codex-agent.ts : OpaqueIdSchema` - **misalignment** - used for ids that
   have real internal structure. `CodexResolvedTarget.targetId` carries a grammar
   (`container:<project>`), but its schema says only "a string up to 512 chars", so neither zod nor
   tsc can catch a mismatch. Where an id has a grammar, the schema should carry it.
@@ -1401,3 +1401,47 @@ places including CLAUDE.md, that the console could detect a Gateway downgrading 
 while `ConsoleClient.forget` discarded the reply body. A red team spent real effort disproving prose
 I had written confidently. Where an invariant matters, a residue test costs about what the paragraph
 does and cannot go stale; `board-refusal-residue.test.ts` is the pattern.
+
+## Self-hosted federation Router, Phase 1 (`plans/self-hosted-federation.md`, 2026-08-15)
+
+- [high] **Nothing in the repo reveals that a `Bun.serve` server cannot be behavior-tested.** The
+  gateway is written on `Bun.serve` and its own suites never start it, so the constraint is
+  invisible until you try. I only learned it when the Router's socket suites died on
+  `ReferenceError: Bun is not defined` - vitest workers run under node, production runs under bun.
+  The Router now uses `node:https` + `ws` for exactly this reason, which means the two servers in
+  this repo are built on different stacks and neither file says why. Anyone adding a third server
+  will pick wrong. A line in CLAUDE.md would fix it; a shared listener helper would fix it better.
+- [high] **Ported comments carry the old system's audit ids.** evie's bridge annotates security
+  branches with bare finding references (`(P1)`, `(P2)`, `(P3)`, `(audit R3)`) that mean nothing
+  outside evie's review history. They survived the port and read as authoritative. Worse, one test
+  heading claimed `shouldVivifyCoordinator` guarded "unbounded coordinators" while nothing ever
+  called it. The lesson from the last plan repeats: prose asserting an invariant nobody wired.
+- [med] **Comment volume is the real porting cost.** Roughly 130 comment blocks came across as
+  multi-paragraph narrative and needed deleting - `gatewayBridge.ts` alone had a running prose
+  walkthrough inside `handleGatewayRegister`. The reasoning is genuinely valuable and genuinely
+  unreadable at that density. Porting a file is mostly deciding which sentence of five to keep.
+- [med] **Residue tests have no shared helper, so each one re-invents the sweep.** Five existed
+  (`board-refusal`, `console-target`, `draft-location`, `board-door`, `biometric-gate`); each
+  hand-rolls directory walking, line filtering and comment skipping. I wrote a sixth and repeated
+  it again. A `src/__tests__/helpers/residue.ts` with `filesUnder()` and `linesMatching()` would
+  remove the copy and make the next one three lines.
+- [med] **A test fixture that boots a real server needs an awaitable stop, and nothing demonstrated
+  one.** My first Router fixture called a synchronous `stop()`, and vitest reported
+  `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` - server logs landing
+  after the worker closed. The fix is that `stop()` must await both `wsServer.close()` and
+  `server.close()`, and every `afterEach` must await it. Worth encoding in the fixture helper above.
+- [low] **The shell's cwd survives between commands and silently retargets relative paths.** A
+  `cd src/__tests__` early in a chain made a later `bunx biome check --write src/__tests__/x.ts`
+  resolve to a path that does not exist, and biome reported "no fixes applied" rather than an error,
+  so it looked like the file was already clean while lint kept failing. Absolute paths, always.
+
+### The lesson worth keeping
+
+**A guard you wrote is not a guard until you have watched it fail.** I added a residue test to pin
+the launch seam, and it was theater: its regex matched only `void <lowercase>` or `void this.`, so a
+bare call, a `.then` with no rejection arm, and `void Promise.all(...)` - the same idiom it claimed
+to count, escaping on capitalization alone - all passed green. A red team proved it in one move by
+dropping three launches into the directory and running my test. None of the three real historical
+bugs would have been caught either. The rule that falls out: a test whose job is to catch a class
+must be run against a member of that class before it is trusted, and if it cannot be, it should not
+be written.

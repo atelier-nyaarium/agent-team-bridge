@@ -9,7 +9,7 @@ import {
 	scrubChildEnv,
 	type TargetLogEvent,
 } from "../mcp/devcontainer/codexTargets.js";
-import { type CodexResolvedTarget, parseCodexTargetId } from "../shared/codex-thinking.js";
+import { type CodexResolvedTarget, parseCodexTargetId } from "../shared/codex-agent.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -93,9 +93,9 @@ describe("what a Codex child inherits", () => {
 
 	it("keeps a Codex variable that is itself secret-shaped", () => {
 		// The carve-out only shows up on a name that would otherwise match, so the case has to use one.
-		expect(scrubChildEnv({ CODEX_API_KEY: "k", CODEX_THINKING_MODEL: "gpt-5.6-luna" }, "CODEX_")).toEqual({
+		expect(scrubChildEnv({ CODEX_API_KEY: "k", CODEX_AGENT_MODEL: "gpt-5.6-luna" }, "CODEX_")).toEqual({
 			CODEX_API_KEY: "k",
-			CODEX_THINKING_MODEL: "gpt-5.6-luna",
+			CODEX_AGENT_MODEL: "gpt-5.6-luna",
 		});
 	});
 
@@ -303,8 +303,8 @@ describe("a target that cannot launch at all", () => {
 describe("what reaches a container", () => {
 	it("forwards only Codex's own settings, since the container has its own environment", () => {
 		expect(
-			containerEnvArgs({ CODEX_THINKING_MODEL: "gpt-5.6-luna", PATH: "/usr/bin", HOME: "/root" }, "CODEX_"),
-		).toEqual(["-e", "CODEX_THINKING_MODEL=gpt-5.6-luna"]);
+			containerEnvArgs({ CODEX_AGENT_MODEL: "gpt-5.6-luna", PATH: "/usr/bin", HOME: "/root" }, "CODEX_"),
+		).toEqual(["-e", "CODEX_AGENT_MODEL=gpt-5.6-luna"]);
 	});
 
 	it("forwards nothing of Switchboard's, even under a Codex-shaped name", () => {

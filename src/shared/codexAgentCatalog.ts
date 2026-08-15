@@ -4,17 +4,13 @@
 
 import { z } from "zod";
 import { restoreAgentCatalog } from "./agent-record.js";
-import { CodexActivitiesSchema } from "./codexThinkingActivities.js";
-import type { CodexPersistedAgent } from "./codexThinkingAgentRecord.js";
-import {
-	CodexListExchangeSchema,
-	CodexPersistedAgentSchema,
-	codexAgentHistoryIssues,
-} from "./codexThinkingAgentRecord.js";
-import type { CodexListAvailabilityError } from "./codexThinkingAgentState.js";
-import { CodexAgentStateSchema, CodexListAvailabilityErrorSchema } from "./codexThinkingAgentState.js";
-import { CodexAgentIdSchema, CodexErrorTextSchema, OpaqueIdSchema } from "./codexThinkingIdentity.js";
-import { CodexReconciliationFenceSchema } from "./codexThinkingRelay.js";
+import { CodexActivitiesSchema } from "./codexAgentActivities.js";
+import { CodexAgentIdSchema, CodexErrorTextSchema, OpaqueIdSchema } from "./codexAgentIdentity.js";
+import type { CodexPersistedAgent } from "./codexAgentRecord.js";
+import { CodexListExchangeSchema, CodexPersistedAgentSchema, codexAgentHistoryIssues } from "./codexAgentRecord.js";
+import { CodexReconciliationFenceSchema } from "./codexAgentRelay.js";
+import type { CodexListAvailabilityError } from "./codexAgentState.js";
+import { CodexAgentStateSchema, CodexListAvailabilityErrorSchema } from "./codexAgentState.js";
 
 export const CodexAgentCatalogSchema = z
 	.object({

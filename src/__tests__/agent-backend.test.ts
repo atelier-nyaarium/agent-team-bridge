@@ -9,17 +9,17 @@ import {
 	CODEX_BACKEND,
 	COPILOT_BACKEND,
 } from "../shared/agent-backend.js";
-import { CODEX_THINKING_CAPABILITY_ID, COPILOT_THINKING_CAPABILITY_ID } from "../shared/capabilities.js";
-import { CODEX_WAIT_BUDGET_MS, CodexDaemonHelloSchema, CodexEventAckSchema } from "../shared/codex-thinking.js";
-import { COPILOT_WAIT_BUDGET_MS, CopilotDaemonHelloSchema, CopilotEventAckSchema } from "../shared/copilot-thinking.js";
+import { CODEX_AGENT_CAPABILITY_ID, COPILOT_AGENT_CAPABILITY_ID } from "../shared/capabilities.js";
+import { CODEX_WAIT_BUDGET_MS, CodexDaemonHelloSchema, CodexEventAckSchema } from "../shared/codex-agent.js";
+import { COPILOT_WAIT_BUDGET_MS, CopilotDaemonHelloSchema, CopilotEventAckSchema } from "../shared/copilot-agent.js";
 
 // Every derivation is pinned so a descriptor edit that would change a wire spelling fails here instead of at a peer.
 describe("agent backend derivations", () => {
 	it("derives the capability ids the gates read", () => {
-		expect(agentCapabilityId("codex")).toBe(CODEX_THINKING_CAPABILITY_ID);
-		expect(agentCapabilityId("copilot")).toBe(COPILOT_THINKING_CAPABILITY_ID);
-		expect(CODEX_THINKING_CAPABILITY_ID).toBe("codex-thinking");
-		expect(COPILOT_THINKING_CAPABILITY_ID).toBe("copilot-thinking");
+		expect(agentCapabilityId("codex")).toBe(CODEX_AGENT_CAPABILITY_ID);
+		expect(agentCapabilityId("copilot")).toBe(COPILOT_AGENT_CAPABILITY_ID);
+		expect(CODEX_AGENT_CAPABILITY_ID).toBe("codex-agent");
+		expect(COPILOT_AGENT_CAPABILITY_ID).toBe("copilot-agent");
 	});
 
 	it("derives the env prefixes the child-env scrub exempts", () => {

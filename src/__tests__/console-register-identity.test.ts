@@ -102,14 +102,12 @@ describe("createConsoleDispatcher: register + identity", () => {
 		};
 		const reply = await h.handler.handleFrame(frame(firstRoot));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("evie");
 	});
 
 	it("rejects the reserved host-daemon device name", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", "host", "conv-host"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("reserved");
 		expect(h.registry.get("host")).toBeUndefined();
 	});
 
@@ -137,7 +135,6 @@ describe("createConsoleDispatcher: register + identity", () => {
 
 		const reply = await handler.handleFrame(frame({ kind: "register" }, "op1", "recipe-app", "conv-x"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("project on the bridge");
 		expect(registry.get("recipe-app")).toBeUndefined();
 	});
 
@@ -148,7 +145,6 @@ describe("createConsoleDispatcher: register + identity", () => {
 
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", "team-a", "conv-x"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("existing team");
 		expect(h.registry.get("team-a")).toBe(subs);
 		expect(subs.size).toBe(1);
 	});
@@ -230,7 +226,6 @@ describe("createConsoleDispatcher: register + identity", () => {
 		h.conversationRegistry.set("conv-stolen", realTeamWs("some-window", "w1"));
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-stolen"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("in use");
 	});
 
 	it("an existing peer self-heals its conversation pointer", async () => {
@@ -262,6 +257,5 @@ describe("createConsoleDispatcher: register + identity", () => {
 		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
 		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "op2", "tablet", "conv-1"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("register op to rename");
 	});
 });

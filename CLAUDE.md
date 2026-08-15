@@ -9,7 +9,8 @@ code does not belong here; rationale lives in `git log`.
 
 ## Layout
 
-- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` - the three entry points
+- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - the four
+  entry points
 - `src/gateway/` - the Docker-side HTTP + WS router (`index.ts`, `routes.ts`, `websocket.ts`;
   `routeSchemas.ts` holds the request schemas, byte caps and pure helpers the route table validates
   with; `wsTypes.ts` holds the WS registries, `WsData`, the repush bounds and the pure socket
@@ -135,10 +136,28 @@ code does not belong here; rationale lives in `git log`.
     target manager and validates both ends against the schemas the gateway route uses
   - `agentDispatch.ts` - the one seam saying where an agent tool call is served
   - `codex/codexTools.ts` - the five Codex tools, registered only when the daemon announced
-    `codex-thinking`. Each mints a private operation id per invocation, which is what makes an HTTP
+    `codex-agent`. Each mints a private operation id per invocation, which is what makes an HTTP
     retry a replay rather than a second delegated task
   - `capabilities.ts` - the bounded read of the gateway's capability union, done before the McpServer
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
+- `src/federation-server/` - the self-hosted federation Router: one TLS listener serving the gateway
+  WS, the console op surface and the token-exempt device-approval ingress. Ported from evie's bridge;
+  see Self-hosted Router below. NOT yet deployed - the live path is still evie over k8s
+  - `routerServer.ts` - the listener and the ONE guarded seam every request enters through:
+    `route()` returns a Response and never touches `ServerResponse`, `serve()` is the only adapter.
+    Pinned by `federation-launch-seam-residue.test.ts`
+  - `fileSecretStore.ts` - the durable federation state, replacing evie's `KubeSecretStore` facade
+    whole; whole-file atomic writes, persist-before-publish, bounded CAS re-run
+  - `gatewayBridge.ts` / `gatewayTransport.ts` - registration authority and relay routing, and the
+    ws adapter beneath them. The four trust callbacks are REQUIRED: an absent `getDomain` would skip
+    the entire registration verification block
+  - `consoleSurface.ts` / `publicApproval.ts` - the app-token-gated op family, and the two
+    nonce-gated public routes that must stay token-exempt
+  - `routerTls.ts` - the persistent self-signed cert. Minted only when absent, never auto-rotated;
+    rotating it re-provisions every client
+  - The five coordinators (`enrollmentCoordinator`, `tenantAdmin`, `enrollHandshakeCoordinator`,
+    `deviceApprovalCoordinator`, `trustRendezvousCoordinator`) keep their windows in memory by
+    design; a restart loses them and the flows re-arm
 - `src/shared/agent-binary.ts` - whether a backend's CLI is on `PATH`. Uncached and `which`-free: the
   answer gates both the daemon's declaration and the plugin's tool registration
 - `src/shared/` - wire truth and utilities used by both sides
@@ -149,7 +168,7 @@ code does not belong here; rationale lives in `git log`.
     `./schemas.js`. Every schema carries `.meta({id})`, which is its generated Kotlin class name.
     The barrel's export order is biome-sorted and NOT the codegen's emission order, which comes
     from `scripts/codegen-kotlin.ts`'s own ROOTS list
-  - `codex-thinking.ts` - the Codex delegation wire truth: a barrel over the `codexThinking*.ts`
+  - `codex-agent.ts` - the Codex delegation wire truth: a barrel over the sibling `codexAgent*.ts`
     domain files (identity, activities, targets, agent state, relay frames, App Server protocol,
     agent record, catalog), re-exporting the original public surface by name so the split files'
     internal helpers stay out of it. Never fed to the Kotlin codegen
@@ -189,13 +208,15 @@ code does not belong here; rationale lives in `git log`.
 **Gateway** (`main-gateway.ts`) runs in Docker as one machine's central router.
 **Host daemon** (`main-host-daemon.ts`) runs headless on the host and owns the reserved `host` WS
 slot: devcontainer wake, session spawn, and the console terminal view. It carries no Claude session.
+**Federation Router** (`main-federation.ts`) is the self-hosted replacement for evie's relay, built
+but not yet deployed.
 
-| Port  | Service                           |
-|-------|-----------------------------------|
-| 20000 | Gateway (HTTP + WS)               |
-| 20001 | Evie bridge server (tool call WS) |
-| 20002 | MCP connector (game client WS)    |
-| 20003 | Enrollment TLS (arming only)      |
+| Port  | Service                             |
+|-------|-------------------------------------|
+| 20000 | Gateway (HTTP + WS)                 |
+| 20001 | Federation Router (TLS), was evie's |
+| 20002 | MCP connector (game client WS)      |
+| 20003 | Enrollment TLS (arming only)        |
 
 20000 publishes to LOOPBACK only: local HTTP authorizes by session binding, which says nothing about
 which machine the caller is on. Containers reach it by service name, off that mapping. 20003 is the
@@ -257,6 +278,22 @@ paid-for bugs:
 
 UNBOUND is a VALUE a resolver returns, never an absence a caller falls into. That is what stops a
 gate from manufacturing an accidental permit.
+
+### Self-hosted Router
+
+`src/federation-server/` is a drop-in replacement for evie's relay, run in Docker at home instead of
+k8s. Migration plan and its decisions: `plans/self-hosted-federation.md`. It speaks the SAME wire
+protocol, so `src/gateway/evie/evieClient.ts` connects to it unchanged; only the transport under it
+differs. Everything below about trust, sealing and admissions holds identically - the Router is
+content-blind for the same reasons evie is, and moving it home changes reachability, not trust.
+
+Three surfaces share one TLS port, and the boundary between them is the whole security story: the
+gateway WS is bearer-gated at upgrade, the console op family is app-token-gated, and device-approval
+join/fetch is deliberately token-EXEMPT because a fresh device holds no credential yet.
+
+Its cert is minted once and never rotated. Rotating it invalidates the pin every enrolled Gateway
+and phone holds, which is a re-provision of each, not a restart. That cert is also distinct from the
+ephemeral one the 20003 enrollment listener mints per arming.
 
 ### Federation and trust
 
@@ -1032,6 +1069,19 @@ invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fiel
 bring it back. Always run `./start-host-daemon.sh` after. A forgotten daemon is silent until wake,
 peek, and session spawn all fail with `host daemon offline`; this cost a full outage once.
 
+`./down.sh` is the ALL-components stop: gateway, federation Router, host daemon, and both networks.
+Bringing it back is three scripts, and the Router is its own compose project so it starts and stops
+on its own trigger: `./start-federation.sh && ./start-gateway.sh && ./start-host-daemon.sh`. Order
+between the first two does not matter - both create the shared `switchboard-federation` network if
+it is absent, because compose declares it external and `down.sh` removes it. Verify the Router with
+`bun run smoketest:federation`.
+
+Router ops worth knowing: back it up with `./backup-federation.sh` (it refuses while the container
+runs, since the store is single-writer, and it archives the two tokens from `.env` alongside the
+data volume because a data-only restore authenticates nobody). Host clock drift breaks signed
+proofs and invite expiry, so keep NTP running. The Router's cert is minted once and never rotated -
+rotating it re-provisions every enrolled Gateway and phone.
+
 A session's identity and its channel hearing BOTH ride the daemon's launch command, so a bare
 `claude --resume` on the host comes up broken in two silent ways: it registers under a fresh derived
 name (the phone thread and board claims stay keyed on the old one), and the harness drops every
@@ -1125,3 +1175,48 @@ Layers on the console-bridge deploy. The gateway-to-evie WS is admission-only, n
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
    local state and the host blob.
+
+### Cutting over to the self-hosted Router
+
+The Router (`src/federation-server/`) is built, tested and running, but NOTHING is cut over: the
+gateway and console still reach evie through the k8s service-proxy. Both transports coexist by
+design, chosen per record by a `transport` field that reads as `k8s` when absent. This is the
+runbook for the switch, and it is deliberately a human decision, not a script.
+
+The one-way door: **rollback stays clean only until the Router accepts its first federation
+mutation** (an admission, a revocation, a tenant op). Before that, repointing back to the cluster
+loses nothing. After it, the cluster's copy is stale and repointing can resurrect a revoked member.
+
+1. `./backup-federation.sh` with the Router stopped. It refuses while it runs, asserts the cert,
+   key and state all landed, and includes both tokens - a data-only archive authenticates nobody.
+2. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
+   the evie identity keypair rather than minting one, which is what makes enrolled devices still
+   resolve this Router. It aborts if the Secret moves mid-read.
+3. `./start-federation.sh`, then `bun run smoketest:federation`. Expect every check to pass.
+4. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
+   branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
+   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), then
+   `./start-gateway.sh`. Confirm `router_connected: true` on the gateway's `/health`.
+5. Point the phone at the LAN address in Settings, Federation Router. The port defaults to 20001
+   and the fingerprint comes from the Router's `/health`. Editing there repoints the transport
+   ONLY; it never re-runs provisioning, so admission and enrollment survive.
+6. Verify before trusting it: send, poll, board, peek, wake, and add-a-device.
+
+### Retiring the k8s path
+
+Only after living on the Router, and only once the owner confirms the console update is taken.
+Until then the deletions below would break a live path.
+
+- switchboard: the k8s branch of `gateway/evie/transport.ts`, the six `EVIE_*` transport env vars,
+  the kubectl plumbing in `setup-provision.ts` / `setup-purge.ts` / `bootstrap-domain.ts` /
+  `scripts/lib/host.ts`, the `kubectl` install in the Dockerfile, and the k8s rows in
+  `setup-constants.ts`. `setup-purge` needs a Router-side replacement first: today it mutates the
+  CLUSTER, so after cutover it would wipe local state while leaving the Router's file untouched.
+- evie-bot: the gateway/console/device-approval bridges plus ELEVEN synced copies (the seven
+  `federation-*` leaves, the `federation-lifecycle` barrel, `evie-protocol.ts`, `crypto.ts`,
+  `admission.ts`), their rows in `_lint.yml` and `_test.yml`, and the bridge k8s objects.
+  `notice.ts` STAYS - its twin is in nyaaskills, not evie.
+- console: the k8s proxy transport, `PROXY_CEILING_MS`, and legacy provisioning parsing. Another
+  console release.
+- Then the legacy halves of the `transport` unions in the shared schemas, and the LKE bridge
+  objects. The cluster keeps plain evie-bot hosting with no switchboard role.

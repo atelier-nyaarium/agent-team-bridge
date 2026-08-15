@@ -30,6 +30,9 @@ internal fun EmptyBoard(
 	onHostHelp: () -> Unit,
 	onRefresh: () -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
+	// Reaching a self-hosted Router is a precondition for having any Gateway at all, so the entry
+	// point belongs here too and not only behind Settings.
+	onRouterEndpoint: (() -> Unit)? = null,
 ) {
 	Column(
 		Modifier.fillMaxSize().padding(32.dp),
@@ -67,6 +70,9 @@ internal fun EmptyBoard(
 				Button(onClick = hapticClick(onAddGateway)) { Text("Add a Gateway") }
 				Spacer(Modifier.height(4.dp))
 				TextButton(onClick = hapticClick(onHostHelp)) { Text("Running Gateway Setup") }
+				if (onRouterEndpoint != null) {
+					TextButton(onClick = hapticClick(onRouterEndpoint)) { Text("Set the Router address") }
+				}
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`

@@ -106,13 +106,28 @@ async function postPastedBundle(bundle: string): Promise<boolean> {
 /** Wait for the phone to deliver the sealed bundle, by either the phone's LAN POST or a bundle the
  * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
  * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
+/** True once transport.json holds a usable branch. Existence alone is not the signal: a truncated
+ * or half-written file would read as a successful enrollment. */
+async function transportInstalled(): Promise<boolean> {
+	const file = Bun.file(TRANSPORT_FILE_HOST);
+	if (!(await file.exists())) return false;
+	try {
+		const raw = (await file.json()) as Record<string, unknown>;
+		return raw.transport === "direct"
+			? !!raw.routerUrl && !!raw.routerCertFp && !!raw.bearer
+			: !!raw.apiUrl && !!raw.saToken && !!raw.caPem;
+	} catch {
+		return false;
+	}
+}
+
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
 		// needs no keypress.
 		for (let i = 0; i < 5; i++) {
-			if (await Bun.file(TRANSPORT_FILE_HOST).exists()) return "installed";
+			if (await transportInstalled()) return "installed";
 			await Bun.sleep(1000);
 		}
 		console.log("\n    Enter) Check again");
@@ -143,7 +158,7 @@ export async function setupGateway(): Promise<void> {
 
 	// An already-enrolled gateway has a delivered transport; re-enrolling disconnects it until a new
 	// bundle arrives, so confirm before re-arming.
-	if (await Bun.file(TRANSPORT_FILE_HOST).exists()) {
+	if (await transportInstalled()) {
 		if (!confirm(`Gateway "${id}" already enrolled. Re-enroll?`)) return;
 	}
 

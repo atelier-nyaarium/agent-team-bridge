@@ -21,8 +21,16 @@ EFF_ID="$(sed -n 's/^GATEWAY_ID=//p' .env 2>/dev/null | head -1)"; EFF_ID="${EFF
 # the same value from .env; compose reads .env on its own for the gateway side.
 grep -qE '^HOST_WS_TOKEN=' .env 2>/dev/null || echo "HOST_WS_TOKEN=$(openssl rand -hex 32)" >> .env
 
+# The gateway attaches to this network to reach the federation Router, and compose declares it
+# external, so it must exist before `up`. down.sh removes it, so recreate it here rather than
+# depending on start-federation.sh having run first.
+docker network inspect switchboard-federation >/dev/null 2>&1 || docker network create switchboard-federation >/dev/null
+
 docker compose down --remove-orphans 2>/dev/null || true
-docker compose up --build -d
+if ! docker compose up --build -d; then
+	echo "ERROR: docker compose up failed - the gateway was never started" >&2
+	exit 1
+fi
 
 echo "Waiting for the gateway to be ready..."
 for _ in $(seq 1 30); do

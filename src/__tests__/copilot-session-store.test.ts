@@ -3,7 +3,7 @@ import {
 	CopilotPersistedAgentSchema,
 	copilotOperationFingerprint,
 	restoreCopilotAgentCatalog,
-} from "../shared/copilot-thinking.js";
+} from "../shared/copilot-agent.js";
 import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";

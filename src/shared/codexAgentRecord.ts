@@ -1,12 +1,11 @@
 // Codex delegation: one agent's durable history - its turns, the exchanges (start/message calls)
 // that produced them, the operations that delivered those exchanges, and the persisted agent record
 // that ties them together under the cross-boundary invariants `codexAgentHistoryIssues` states once
-// for both this private shape and the public projection in codexThinkingCatalog.ts.
+// for both this private shape and the public projection in codexAgentCatalog.ts.
 
 import { z } from "zod";
 import { agentTurnHistoryIssues } from "./agent-record.js";
-import { CodexStoredActivitiesSchema } from "./codexThinkingActivities.js";
-import { CodexAgentStateSchema, CodexDeliverySchema, type CodexTurnStateSchema } from "./codexThinkingAgentState.js";
+import { CodexStoredActivitiesSchema } from "./codexAgentActivities.js";
 import {
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
@@ -14,9 +13,10 @@ import {
 	codexOperationFingerprint,
 	OpaqueIdSchema,
 	OperationIdSchema,
-} from "./codexThinkingIdentity.js";
-import { CodexReconciliationFenceSchema } from "./codexThinkingRelay.js";
-import { CodexExecutionTargetSchema, CodexResolvedTargetSchema } from "./codexThinkingTargets.js";
+} from "./codexAgentIdentity.js";
+import { CodexReconciliationFenceSchema } from "./codexAgentRelay.js";
+import { CodexAgentStateSchema, CodexDeliverySchema, type CodexTurnStateSchema } from "./codexAgentState.js";
+import { CodexExecutionTargetSchema, CodexResolvedTargetSchema } from "./codexAgentTargets.js";
 
 export const CodexStoredTurnSchema = z.discriminatedUnion("state", [
 	z

@@ -15,7 +15,7 @@ import {
 	type CopilotStoredOperation,
 	type CopilotStoredTurn,
 	copilotOperationFingerprint,
-} from "../shared/copilot-thinking.js";
+} from "../shared/copilot-agent.js";
 import type { CopilotCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";

@@ -10,7 +10,7 @@ import {
 	type CopilotStoredTurn,
 	copilotAgentIdForOperation,
 	sanitizeCopilotErrorText,
-} from "../shared/copilot-thinking.js";
+} from "../shared/copilot-agent.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
 import { type CopilotAgentService, CopilotTransitionError } from "./copilotAgentService.js";

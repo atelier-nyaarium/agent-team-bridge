@@ -47,7 +47,7 @@ export const COPILOT_BACKEND: AgentBackendDescriptor = {
 export const AGENT_BACKENDS: readonly AgentBackendDescriptor[] = [CODEX_BACKEND, COPILOT_BACKEND];
 
 export function agentCapabilityId(id: AgentBackendId): string {
-	return `${id}-thinking`;
+	return `${id}-agent`;
 }
 
 /** Env prefix carried into a container and exempted from the child-env secret scrub. */

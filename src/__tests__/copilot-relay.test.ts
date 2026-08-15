@@ -11,7 +11,7 @@ import {
 	CopilotEventAckSchema,
 	type CopilotPersistedAgent,
 	CopilotPersistedAgentSchema,
-} from "../shared/copilot-thinking.js";
+} from "../shared/copilot-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 
 const OWNER_KEY = "recipe-app.work";

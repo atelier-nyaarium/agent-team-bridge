@@ -135,7 +135,7 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry, store });
 			const { health } = createRoutes(ctx);
 			const res = health();
-			expect(await res.json()).toEqual({ ok: true, teams: 1, pending_jobs: 1 });
+			expect(await res.json()).toEqual({ ok: true, teams: 1, pending_jobs: 1, router_connected: false });
 		});
 	});
 

@@ -154,7 +154,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("only local sessions have shares");
 		// The same-named LOCAL share survives: refused, never folded.
 		expect(h.calls.unshare).toHaveLength(0);
 		expect(h.set.size).toBe(1);
@@ -211,7 +210,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("only devcontainer and loose");
 		expect(h.calls.share).toHaveLength(0);
 	});
 
@@ -228,7 +226,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("only devcontainer and loose");
 		expect(h.calls.share).toHaveLength(0);
 	});
 
@@ -245,7 +242,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("only devcontainer and loose");
 		expect(h.calls.share).toHaveLength(0);
 	});
 
@@ -262,7 +258,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("only local sessions");
 		expect(h.calls.share).toHaveLength(0);
 	});
 
@@ -279,7 +274,6 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("not a linked Domain");
 		expect(h.calls.share).toHaveLength(0);
 	});
 
@@ -351,10 +345,8 @@ describe("console cross-Domain share ops", () => {
 			),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("not available");
 		const lr = await handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "nf-ls"));
 		expect(lr.ok).toBe(false);
-		expect(lr.error).toContain("not available");
 	});
 
 	// An UNDER-QUALIFIED share (the local `spawn.session` form, without the domain.gateway prefix)

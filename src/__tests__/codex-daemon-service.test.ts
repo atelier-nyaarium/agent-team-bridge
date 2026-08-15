@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
 import { CodexDaemonService, resolveAgentTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
-import type { CodexResolvedTarget } from "../shared/codex-thinking.js";
+import type { CodexResolvedTarget } from "../shared/codex-agent.js";
 
 const OWNER_KEY = "recipe-app.work";
 const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";

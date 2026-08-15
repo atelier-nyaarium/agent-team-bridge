@@ -20,6 +20,10 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	fun deviceApprovalReach(): String? =
 		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
+	/** The Router cert fingerprint to pin the reach against, empty when the reach is the k8s ingress. */
+	private fun routerCertFp(): String =
+		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.routerCertFp ?: ""
+
 	/** HELD device: arm a one-time approval window and build the authorize-console QR. The QR carries
 	 * PUBLIC material only (owner keys + Domain + the reach/token/nonce), never an SA token. Fails when
 	 * the network has no public ingress or its Domain is not yet confirmed by a local session. */
@@ -39,6 +43,9 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 				.put("approvalId", approvalId)
 				.put("nonce", nonce)
 				.put("reach", reach)
+				// A fresh device holds no provisioning record, so the QR is the only place it can
+				// learn which cert to pin against a self-signed Router. Empty for a k8s reach.
+				.put("reachCertFp", routerCertFp())
 				.toString()
 			DeviceApprovalArmed(approvalId, nonce, qr)
 		}
@@ -85,9 +92,12 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	private fun buildConsoleTransport(): ConsoleTransport {
 		val prov = Provisioning.parse(repo.store.load() ?: error("not provisioned"))
 		return ConsoleTransport(
+			transport = prov.transport,
 			apiUrl = prov.apiUrl,
 			caPem = prov.caPem,
 			saToken = prov.saToken,
+			routerUrl = prov.routerUrl,
+			routerCertFp = prov.routerCertFp,
 			appToken = prov.appToken,
 			namespace = prov.namespace,
 			service = prov.service,
@@ -112,6 +122,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 				approvalId = j.getString("approvalId"),
 				nonce = j.getString("nonce"),
 				reach = j.getString("reach"),
+				reachCertFp = j.optString("reachCertFp"),
 				// N's OWN console key fingerprint - the SAME value the held device renders (it shows
 				// fingerprint(newSignPub)) so the human can cross-check the two screens. An attacker who
 				// saw the QR and joined first then shows a different code and is caught. The owner key
@@ -162,10 +173,15 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	 * no owner key, so it must NEVER self-sign. provisioned flips LAST so the poll loop starts only
 	 * after consoleAdmitted is set, never racing a self-admission with a throwaway owner key. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
+		// Every transport field is restated: a rebuild that enumerates only the k8s ones drops a
+		// direct record on the way in, and the new device silently provisions against nothing.
 		val prov = com.atelier_nyaarium.switchboard.proto.Provisioning(
-			apiUrl = transport.apiUrl,
-			caPem = transport.caPem,
-			saToken = transport.saToken,
+			transport = transport.transport,
+			apiUrl = transport.apiUrl.ifEmpty { null },
+			caPem = transport.caPem.ifEmpty { null },
+			saToken = transport.saToken.ifEmpty { null },
+			routerUrl = transport.routerUrl.ifEmpty { null },
+			routerCertFp = transport.routerCertFp.ifEmpty { null },
 			appToken = transport.appToken,
 			namespace = transport.namespace,
 			service = transport.service,

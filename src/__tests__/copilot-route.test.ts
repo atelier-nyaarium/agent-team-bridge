@@ -4,7 +4,7 @@ import { CopilotRelay } from "../gateway/copilotRelay.js";
 import { CopilotRoute } from "../gateway/copilotRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
-import { CopilotAgentResultSchema, copilotAgentIdForOperation } from "../shared/copilot-thinking.js";
+import { CopilotAgentResultSchema, copilotAgentIdForOperation } from "../shared/copilot-agent.js";
 import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 
 const START_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";

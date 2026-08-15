@@ -3,13 +3,13 @@ import {
 	CodexAgentCatalogSchema,
 	type CodexPersistedAgent,
 	restoreCodexAgentCatalog,
-} from "./codex-thinking.js";
+} from "./codex-agent.js";
 import {
 	type CopilotAgentCatalog,
 	CopilotAgentCatalogSchema,
 	type CopilotPersistedAgent,
 	restoreCopilotAgentCatalog,
-} from "./copilot-thinking.js";
+} from "./copilot-agent.js";
 import { DurableStoreInstalledError } from "./durable-store.js";
 import { composeSessionName, isComposite, isSlug, parseSessionName } from "./session-id.js";
 import { LABEL_MAX, sanitizeLabel, sanitizeWorkdirPath } from "./session-sanitize.js";

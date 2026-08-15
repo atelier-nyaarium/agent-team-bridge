@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { decideAcceptance, withActivity } from "../gateway/codexAgentReducers.js";
-import { CodexPersistedAgentSchema } from "../shared/codex-thinking.js";
+import { CodexPersistedAgentSchema } from "../shared/codex-agent.js";
+import { AGENT_ID, OPERATION_ID } from "./helpers/codex-agent.js";
 import { setup } from "./helpers/codex-persistence.js";
-import { AGENT_ID, OPERATION_ID } from "./helpers/codex-thinking.js";
 
 ////////////////////////////////
 //  Tests

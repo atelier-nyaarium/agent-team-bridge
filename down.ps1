@@ -5,6 +5,8 @@ Stop the host daemon and take down the gateway (PowerShell port of down.sh).
 $ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
 
+# Stop all components.
+
 $pidFile = Join-Path $PSScriptRoot '.host-daemon.pid'
 
 # Stop the background host-daemon window and its bun child (a whole tree, like tmux kill-session).
@@ -26,13 +28,17 @@ if (Test-Path $pidFile) {
 Write-Host "Taking down gateway..."
 try { docker compose down --remove-orphans 2>$null } catch { }
 
-$network = 'switchboard'
-docker network inspect $network 2>$null 1>$null
-if ($LASTEXITCODE -eq 0) {
-	Write-Host "Removing '$network' network..."
-	docker network rm $network 2>$null 1>$null
-	if ($LASTEXITCODE -ne 0) {
-		Write-Host "WARNING: could not remove '$network' network (containers still attached?)."
+Write-Host 'Taking down federation Router...'
+try { docker compose -f docker-compose.federation.yml -p switchboard-federation down --remove-orphans 2>$null } catch { }
+
+foreach ($network in @('switchboard', 'switchboard-federation')) {
+	docker network inspect $network 2>$null 1>$null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host "Removing '$network' network..."
+		docker network rm $network 2>$null 1>$null
+		if ($LASTEXITCODE -ne 0) {
+			Write-Host "WARNING: could not remove '$network' network (containers still attached?)."
+		}
 	}
 }
 

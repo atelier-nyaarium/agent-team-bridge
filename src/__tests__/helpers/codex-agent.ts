@@ -2,7 +2,7 @@ import {
 	type CodexPersistedAgent,
 	CodexPersistedAgentSchema,
 	codexOperationFingerprint,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 
 ////////////////////////////////
 //  Constants

@@ -1,0 +1,2 @@
+export const HANDSHAKE_RATE_WINDOW_MS = 600_000;
+export const HANDSHAKE_RATE_MAX = 10;

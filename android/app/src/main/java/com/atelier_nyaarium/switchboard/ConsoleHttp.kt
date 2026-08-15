@@ -6,7 +6,9 @@ import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -154,7 +156,8 @@ internal object ConsoleHttp {
 	): R {
 		val req = Request.Builder()
 			.url(url)
-			.header("Authorization", "Bearer $saToken")
+			// Empty on a direct record: that token authenticates the k8s proxy hop, not the Router.
+			.apply { if (saToken.isNotEmpty()) header("Authorization", "Bearer $saToken") }
 			.header("X-Console-Bridge-Token", "Bearer $appToken")
 			.post(body)
 			.build()
@@ -227,6 +230,35 @@ internal object ConsoleHttp {
 		// upload), so relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
 		return OkHttpClient.Builder()
 			.sslSocketFactory(ssl.socketFactory, tm)
+			.connectTimeout(PINNED_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+			.readTimeout(PINNED_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+			.writeTimeout(PINNED_WRITE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+			.build()
+	}
+
+	/**
+	 * A client trusting EXACTLY the Router's self-signed leaf, by SHA-256 fingerprint.
+	 *
+	 * Hostname verification is disabled here and only here: a pinned leaf has no CA chain and no
+	 * meaningful subject, which is what lets the same certificate answer on a LAN IP, a DDNS name,
+	 * or a port-forwarded address without reissue. The pin is the trust, and it is delivered
+	 * out-of-band in the provisioning blob. Same timeout profile as the CA-pinned client, so a
+	 * held poll is not mislabelled as a failure.
+	 */
+	internal fun buildLeafPinnedClient(certFpHex: String): OkHttpClient {
+		val tm = object : X509TrustManager {
+			override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
+				throw CertificateException("client authentication is not used")
+
+			override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) =
+				checkPinnedLeaf(chain, certFpHex)
+
+			override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+		}
+		val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
+		return OkHttpClient.Builder()
+			.sslSocketFactory(ssl.socketFactory, tm)
+			.hostnameVerifier { _, _ -> true }
 			.connectTimeout(PINNED_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
 			.readTimeout(PINNED_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
 			.writeTimeout(PINNED_WRITE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)

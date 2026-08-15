@@ -13,14 +13,14 @@ import {
 	CodexGatewayRequestSchema,
 	CodexListAgentsResultSchema,
 	CodexRequestErrorSchema,
-} from "../../shared/codex-thinking.js";
+} from "../../shared/codex-agent.js";
 import {
 	COPILOT_ACTIVITY_MAX_ITEMS,
 	CopilotAgentResultSchema,
 	CopilotGatewayRequestSchema,
 	CopilotListAgentsResultSchema,
 	CopilotRequestErrorSchema,
-} from "../../shared/copilot-thinking.js";
+} from "../../shared/copilot-agent.js";
 import { ExecutionTargetManager, realLauncher, targetLogger } from "../devcontainer/codexTargets.js";
 import { copilotLauncher } from "../devcontainer/copilotTargets.js";
 import { CodexLocalSession } from "./codexLocalSession.js";

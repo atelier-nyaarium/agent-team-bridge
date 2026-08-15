@@ -29,9 +29,16 @@ import kotlinx.serialization.json.Json
  * minting a UUID, trailing-slash URL normalization, the service-proxy defaults.
  */
 data class Provisioning(
+	/** "k8s" (the service-proxy) or "direct" (the self-hosted Router). Absent on an old blob reads
+	 * as k8s, so its port keeps the proxy meaning. */
+	val transport: String = "k8s",
+	/** Empty on a direct blob; the k8s branch's fields. */
 	val apiUrl: String,
 	val caPem: String,
 	val saToken: String,
+	/** Empty on a k8s blob; the Router endpoint and the leaf fingerprint pinned against it. */
+	val routerUrl: String = "",
+	val routerCertFp: String = "",
 	val appToken: String,
 	val namespace: String,
 	val service: String,
@@ -54,9 +61,12 @@ data class Provisioning(
 		fun parse(blob: String): Provisioning {
 			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
 			return Provisioning(
-				apiUrl = p.apiUrl.trimEnd('/'),
-				caPem = p.caPem,
-				saToken = p.saToken,
+				transport = p.transport ?: "k8s",
+				apiUrl = p.apiUrl?.trimEnd('/') ?: "",
+				caPem = p.caPem ?: "",
+				saToken = p.saToken ?: "",
+				routerUrl = p.routerUrl?.trimEnd('/') ?: "",
+				routerCertFp = p.routerCertFp ?: "",
 				appToken = p.appToken ?: "",
 				namespace = p.namespace ?: "evie-bot",
 				service = p.service ?: "evie-console-bridge",

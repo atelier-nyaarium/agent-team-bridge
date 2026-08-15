@@ -5,8 +5,8 @@ import { z } from "zod";
 import {
 	type Capability,
 	type CapabilityBundle,
-	CODEX_THINKING_CAPABILITY_ID,
-	COPILOT_THINKING_CAPABILITY_ID,
+	CODEX_AGENT_CAPABILITY_ID,
+	COPILOT_AGENT_CAPABILITY_ID,
 	UNREPORTED_CAPABILITIES,
 	unionCapabilities,
 } from "../shared/capabilities.js";
@@ -51,8 +51,8 @@ export const GATED_CAPABILITY_IDS = [
 	"designer",
 	"references",
 	"taskboard",
-	CODEX_THINKING_CAPABILITY_ID,
-	COPILOT_THINKING_CAPABILITY_ID,
+	CODEX_AGENT_CAPABILITY_ID,
+	COPILOT_AGENT_CAPABILITY_ID,
 ] as const;
 
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
@@ -129,5 +129,11 @@ export function hasCapability(capabilities: Capability[], id: CapabilityId): boo
 export function capabilityInstructions(capabilities: Capability[]): string {
 	if (capabilities.length === 0) return "";
 	const names = capabilities.map((c) => `\`${c.id}\``).join(", ");
-	return `\n\n## Capabilities\n\nEnabled: ${names}.\n\nCall \`switchboard_capabilities\` after receiving a channel message or compacting.`;
+	return `
+	
+## Capabilities
+
+Enabled: ${names}.
+
+Call \`switchboard_capabilities\` after receiving a channel message or compacting.`;
 }
