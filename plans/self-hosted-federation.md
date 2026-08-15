@@ -262,10 +262,16 @@ All additive fields OPTIONAL first, per the deploy rule; gateway/Router deploy b
 version-bump push; console updates last. Any touched synced leaf is re-synced to evie-bot
 until Phase 7 (CI enforces the mirrors).
 
-- `ProvisioningSchema` (codegen root): a legacy/direct DISCRIMINATED UNION, not a bolted-on
-  optional block - the k8s fields are required today, so an optional block cannot represent a
-  direct-only blob. Legacy branch unchanged; direct branch carries `url`, `certFingerprint`,
-  `token`. An old record's `port: 20004` (proxy meaning) is never reinterpreted.
+- `ProvisioningSchema` (codegen root): CORRECTED during implementation. The plan said
+  "discriminated union", but the repo forbids that here: a union is legal only ENCODE-side
+  (`SEALED_ROOTS` in `codegen-kotlin.ts`), and a decode-side union root is silently dropped by
+  the Kotlin codegen. Provisioning is DECODED by the phone, so it must stay one flat object.
+  The shape instead: a `transport` discriminant field (`"k8s"` absent-default, or `"direct"`),
+  every k8s field relaxed to optional, the direct fields (`routerUrl`, `routerCertFp`) added
+  optional, and a zod `.refine()` enforcing that the named branch's fields are all present.
+  Refinements do not reach the JSON Schema, so Kotlin still sees flat optionals - validation
+  stays on the TS side where it belongs. An old record's `port: 20004` (proxy meaning) is never
+  reinterpreted, because a blob with no `transport` reads as k8s.
 - `GatewayTransportSchema` (codegen root, nested in the sealed `GatewayBootstrapBundle`):
   legacy/direct union or versioned envelope. The PHONE builds this shape in
   `GatewayEnrollment.kt`, so the Kotlin side changes in the same push. The direct branch must

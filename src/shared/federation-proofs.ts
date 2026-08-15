@@ -1,4 +1,4 @@
-// SYNC-HASH: 5f0a6d91e69388a1c2a7a0741a58f893
+// SYNC-HASH: d19534336235e1af1ff7bac3629ba5c2
 // SYNCED MODULE - source of truth: switchboard/src/shared/federation-proofs.ts
 // Copied verbatim into: evie-bot/app/features/bridge/federation-proofs.ts
 // MUST re-copy on change: cp src/shared/federation-proofs.ts ../evie-bot/app/features/bridge/federation-proofs.ts
@@ -121,8 +121,14 @@ export const TransportRequestSchema = z
 export const TransportResultSchema = z
 	.object({
 		ok: z.boolean(),
+		// Absent reads as "k8s", so an older Router's reply still installs.
+		transport: z.enum(["k8s", "direct"]).optional(),
 		saToken: z.string().optional(),
 		caPem: z.string().optional(),
+		// The direct branch: what a Gateway needs to dial the Router and pin it.
+		routerUrl: z.string().optional(),
+		routerCertFp: z.string().optional(),
+		bearer: z.string().optional(),
 		error: z.string().optional(),
 	})
 	.meta({ id: "TransportResult" });
