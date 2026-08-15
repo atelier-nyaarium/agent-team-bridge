@@ -1,7 +1,3 @@
-// SYNC-HASH: d19534336235e1af1ff7bac3629ba5c2
-// SYNCED MODULE - source of truth: switchboard/src/shared/federation-proofs.ts
-// Copied verbatim into: evie-bot/app/features/bridge/federation-proofs.ts
-// MUST re-copy on change: cp src/shared/federation-proofs.ts ../evie-bot/app/features/bridge/federation-proofs.ts
 import { z } from "zod";
 import { b64Field, displayField, sign, verify } from "./crypto.js";
 

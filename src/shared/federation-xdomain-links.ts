@@ -1,7 +1,3 @@
-// SYNC-HASH: f237c081345b8925bd1b2f92e3ed2213
-// SYNCED MODULE - source of truth: switchboard/src/shared/federation-xdomain-links.ts
-// Copied verbatim into: evie-bot/app/features/bridge/federation-xdomain-links.ts
-// MUST re-copy on change: cp src/shared/federation-xdomain-links.ts ../evie-bot/app/features/bridge/federation-xdomain-links.ts
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
 

@@ -1,7 +1,3 @@
-// SYNC-HASH: 69a2450f2389311c7617a0bde2df2d4b
-// SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
-// Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
-// MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
 import { z } from "zod";
 
 ////////////////////////////////
