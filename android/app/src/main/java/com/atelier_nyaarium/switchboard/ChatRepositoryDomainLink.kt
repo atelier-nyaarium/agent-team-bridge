@@ -123,12 +123,16 @@ fun ChatRepository.currentRouterEndpoint(fallbackPort: Int): RouterEndpoint? {
  * re-submit an admission and re-offer the trust compare. This edits transport fields only,
  * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
  * keyring, cursors and admission state untouched.
+ *
+ * Reachable BEFORE any blob exists: an unprovisioned phone can point itself at a Router and confirm
+ * the pin, since /health needs no token. What it cannot do without a token is sign in, and it says
+ * so on the first authenticated op rather than pretending; a later blob import supplies the token
+ * without disturbing the address set here.
  */
 suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) = withContext(Dispatchers.IO) {
-	val blob = store.load() ?: run {
-		_state.update { it.copy(error = "Not provisioned yet.") }
-		return@withContext
-	}
+	// No blob yet: start one. Only the fields this form knows; the token and everything else arrive
+	// with a real import, and Provisioning.parse below still validates the direct pair.
+	val blob = store.load() ?: "{}"
 	val trimmedHost = host.trim().removeSuffix("/")
 	if (trimmedHost.isEmpty()) {
 		_state.update { it.copy(error = "Enter a domain or IP.") }
@@ -161,7 +165,9 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	// flush on every exit path (the finally below). Otherwise a pre-register failure (admission
 	// submit, register) strands its trace on-device until a poll cycle that never starts. The
 	// attach + flush + every DebugLog.log here compile out of release builds (BuildConfig.DEBUG).
-	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) } }
+	// The base is the CLIENT's current one, read at each flush: it fails over between Router
+	// addresses, and the ingest must follow it or the trace dies on the network change worth reading.
+	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) { client().transport.proxyBase } } }
 	DebugLog.log("Connect", "start gateway=${localGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 	try {
 		// Preflight the cluster path (API server + SA token + TLS) before blaming the

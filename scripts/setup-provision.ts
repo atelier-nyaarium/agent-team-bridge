@@ -40,9 +40,11 @@ async function readFed(): Promise<string> {
 	);
 }
 
-/** The address a phone on this network dials, and the leaf it pins. Both come from the running
- * Router: the bind from .env, the fingerprint from /health, so a blob can never carry a pin the
- * Router does not actually present. */
+/** The address the blob names, and the leaf it pins. The fingerprint comes from the running Router's
+ * /health so a blob can never carry a pin the Router does not actually present. The address is the
+ * PUBLIC host when one is configured, else the LAN bind: a phone only needs one address it can reach
+ * to learn every other from the Router's `reach` op, and the public one is the one that works from
+ * anywhere once the port is forwarded. */
 async function routerReach(): Promise<{ routerUrl: string; routerCertFp: string }> {
 	const bind = await envGet("FEDERATION_BIND");
 	if (!bind || bind === "127.0.0.1" || bind === "0.0.0.0") {
@@ -55,7 +57,13 @@ async function routerReach(): Promise<{ routerUrl: string; routerCertFp: string 
 	if (!parsed?.ok || !parsed.certFingerprint) {
 		throw new Error(`the Router at ${bind}:${ROUTER_PORT} did not answer /health - run ./start-federation.sh`);
 	}
-	return { routerUrl: `https://${bind}:${ROUTER_PORT}`, routerCertFp: parsed.certFingerprint };
+	const publicHost = await envGet("FEDERATION_PUBLIC_HOST");
+	const host = publicHost || bind;
+	if (!publicHost)
+		note(
+			"FEDERATION_PUBLIC_HOST is unset: the blob names the LAN address, so a phone must be on this network to first connect.",
+		);
+	return { routerUrl: `https://${host}:${ROUTER_PORT}`, routerCertFp: parsed.certFingerprint };
 }
 
 ////////////////////////////////

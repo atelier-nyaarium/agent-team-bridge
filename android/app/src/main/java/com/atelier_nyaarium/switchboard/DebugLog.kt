@@ -40,7 +40,7 @@ object DebugLog {
 
 	// Ingest endpoint params, set once provisioned. All @Volatile; written from
 	// the main thread, read from the poll loop IO thread.
-	@Volatile private var ingestUrl: String? = null
+	@Volatile private var ingestBase: (() -> String)? = null
 	@Volatile private var ingestSaToken: String? = null
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
@@ -82,18 +82,15 @@ object DebugLog {
 	 * builds enable periodic log streaming; release builds no-op (body inside
 	 * BuildConfig.DEBUG).
 	 */
-	fun attachIngest(prov: Provisioning) {
+	fun attachIngest(prov: Provisioning, baseUrl: () -> String) {
 		if (BuildConfig.DEBUG) {
 			// Branch like every other console call. The k8s form needs an SA token the direct blob
 			// does not carry, so building it unconditionally left the whole trace stranded on-device
-			// for exactly the setup most likely to need reading.
+			// for exactly the setup most likely to need reading. The base is a PROVIDER, not a value:
+			// the transport fails over between Router addresses, and a flush that kept dialing the
+			// one it was attached with would die on exactly the network change worth reading about.
 			val direct = prov.transport == "direct"
-			ingestUrl =
-				if (direct) {
-					"${prov.routerUrl.trimEnd('/')}/ingest"
-				} else {
-					"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy/ingest"
-				}
+			ingestBase = baseUrl
 			ingestSaToken = if (direct) "" else prov.saToken
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
@@ -106,7 +103,7 @@ object DebugLog {
 				runCatching {
 					if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
 				}.getOrNull()
-			val host = runCatching { java.net.URI(ingestUrl ?: "").host }.getOrNull() ?: "?"
+			val host = runCatching { java.net.URI(baseUrl()).host }.getOrNull() ?: "?"
 			log("Ingest", "attached direct=$direct host=$host client=${ingestClient != null}")
 		}
 	}
@@ -117,7 +114,7 @@ object DebugLog {
 	 */
 	fun flushToIngest() {
 		if (BuildConfig.DEBUG) {
-			val url = ingestUrl ?: return
+			val url = ingestBase?.let { "${it().trimEnd('/')}/ingest" } ?: return
 			val saToken = ingestSaToken ?: return
 			val appToken = ingestAppToken ?: return
 			val device = ingestDevice ?: return

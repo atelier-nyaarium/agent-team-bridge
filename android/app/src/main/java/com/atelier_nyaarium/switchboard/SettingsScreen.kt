@@ -70,22 +70,19 @@ fun SettingsScreen(
 ) {
 	// Settings opens from the pre-provision setup screen too. Before provisioning the repo is not
 	// loaded, so the provisioned-only categories (Profile, Voice, Networks, Security) would NPE or
-	// route into provisioned-only screens. Show ONLY the app-local sections then (System, Plugins),
-	// and treat a stale saved sub-route as the hub so it can never render a provisioned-only screen
-	// unprovisioned.
+	// route into provisioned-only screens. Show ONLY the app-local sections then (System, Plugins,
+	// and Federation, which reads the store and dials nothing), and treat a stale saved sub-route as
+	// the hub so it can never render a provisioned-only screen unprovisioned.
 	val provisioned = state.provisioned
-	val effectiveRoute =
-		if (!provisioned && route != SettingsRoute.HUB && route != SettingsRoute.SYSTEM && route != SettingsRoute.PLUGINS) {
-			SettingsRoute.HUB
-		} else {
-			route
-		}
-	// Federation is reached FROM Domain & Trust, not from the hub, so back returns there rather
-	// than skipping the level the user actually came through.
+	val preProvisionRoutes = setOf(SettingsRoute.HUB, SettingsRoute.SYSTEM, SettingsRoute.PLUGINS, SettingsRoute.FEDERATION)
+	val effectiveRoute = if (!provisioned && route !in preProvisionRoutes) SettingsRoute.HUB else route
+	// Federation is reached FROM Domain & Trust when provisioned, so back returns there rather than
+	// skipping the level the user actually came through. Before provisioning there is no Domain &
+	// Trust to return to, so back goes to the hub.
 	val onBack = {
 		when (effectiveRoute) {
 			SettingsRoute.HUB -> onCloseSettings()
-			SettingsRoute.FEDERATION -> onRoute(SettingsRoute.NETWORKS)
+			SettingsRoute.FEDERATION -> onRoute(if (provisioned) SettingsRoute.NETWORKS else SettingsRoute.HUB)
 			else -> onRoute(SettingsRoute.HUB)
 		}
 	}

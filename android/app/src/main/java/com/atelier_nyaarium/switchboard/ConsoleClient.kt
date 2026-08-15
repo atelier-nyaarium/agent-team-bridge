@@ -18,6 +18,7 @@ import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Talks to the console bridge through the CA-pinned k8s API service-proxy.
@@ -52,16 +53,40 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 	 * the admission submit, leaving the console forever "not admitted". /health needs no app token, so a
 	 * failure here means the cluster or tunnel is down, separate from "the bridge rejected our creds".
 	 */
-	fun apiReachable(): String {
+	suspend fun apiReachable(): String {
+		// The one probe that may fail over: it is the first thing a connect does, so a phone that just
+		// changed networks discovers the working address HERE and every later op inherits it.
+		val code = transport.withReachFailover { base ->
+			val req = Request.Builder()
+				.url("$base/health")
+				.apply { if (transport.prov.saToken.isNotEmpty()) header("Authorization", "Bearer ${transport.prov.saToken}") }
+				.get()
+				.build()
+			transport.client.newCall(req).execute().use { resp ->
+				val text = resp.body?.string().orEmpty()
+				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
+				resp.code
+			}
+		}
+		// Reached. Ask the Router how ELSE it can be reached (app-token gated, so this cannot run before
+		// the token exists) and remember the answer beside which address just answered. Best-effort:
+		// an older Router without the op, or a transient failure, leaves what this device already knows.
+		transport.reached(runCatching { fetchReach() }.getOrNull())
+		return "reachable (HTTP $code)"
+	}
+
+	/** The Router's advertised public host and LAN addresses. Behind the app token, so a stranger on
+	 * the port sees the same /health as before and nothing about the network behind it. */
+	private fun fetchReach(): RouterReach? {
+		if (transport.prov.transport != "direct") return null
 		val req = Request.Builder()
-			.url("${transport.proxyBase}/health")
-			.header("Authorization", "Bearer ${transport.prov.saToken}")
-			.get()
+			.url("${transport.proxyBase}/console")
+			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
+			.post("""{"reach":{}}""".toRequestBody(ConsoleHttp.JSON))
 			.build()
 		transport.client.newCall(req).execute().use { resp ->
-			val text = resp.body?.string().orEmpty()
-			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
-			return "reachable (HTTP ${resp.code})"
+			if (!resp.isSuccessful) return null
+			return RouterReach.decode(resp.body?.string())
 		}
 	}
 
