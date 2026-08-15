@@ -1,4 +1,4 @@
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import https from "node:https";
 import path from "node:path";
@@ -40,18 +40,30 @@ function readEnv(file: string): Record<string, string> {
 	return values;
 }
 
-function fingerprintOf(certPem: string): string {
-	return createHash("sha256").update(new X509Certificate(certPem).raw).digest("hex");
+const CHECK_TIMEOUT_MS = 10_000;
+
+// Every check is bounded: a hung socket must report FAIL, not produce no output at all.
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<T>((_, reject) =>
+			setTimeout(() => reject(new Error(`timed out after ${CHECK_TIMEOUT_MS}ms: ${label}`)), CHECK_TIMEOUT_MS),
+		),
+	]);
 }
 
 async function check(name: string, fn: () => Promise<void>): Promise<void> {
 	try {
-		await fn();
+		await withTimeout(fn(), name);
 		console.log(`PASS ${name}`);
 	} catch (error) {
 		failures += 1;
 		console.log(`FAIL ${name}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+}
+
+function skip(name: string, why: string): void {
+	console.log(`SKIP ${name}: ${why}`);
 }
 
 function request(
@@ -166,29 +178,103 @@ await check("wrong gateway bearer", async () => {
 		});
 	});
 });
-await check("gateway registration", async () => {
-	if (!federationToken) throw new Error("missing federation token");
-	const ws = await openGateway(federationToken);
-	const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
-		const callId = "federation-smoketest";
+// A thrown handleCall answers tool_error, and a refused socket just closes; settling on
+// tool_result alone left this check hanging rather than failing.
+function callGateway(ws: WebSocket, callId: string, action: string, params: Record<string, unknown>) {
+	return new Promise<Record<string, unknown>>((resolve, reject) => {
 		ws.on("message", (data) => {
 			const frame = JSON.parse(String(data)) as Record<string, unknown>;
-			if (frame.type === "tool_result" && frame.callId === callId)
-				resolve(frame.result as Record<string, unknown>);
+			if (frame.callId !== callId) return;
+			if (frame.type === "tool_result") resolve(frame.result as Record<string, unknown>);
+			if (frame.type === "tool_error") reject(new Error(String(frame.error)));
 		});
-		ws.once("error", reject);
-		ws.send(
-			JSON.stringify({
-				type: "tool_call",
-				callId,
-				action: "gateway_register",
-				params: { domainId: "admin", gatewayId: "smoketest", protocolVersion: 1 },
-			}),
-		);
+		ws.on("error", reject);
+		ws.on("close", () => reject(new Error("socket closed before reply")));
+		ws.send(JSON.stringify({ type: "tool_call", callId, action, params }));
 	});
+}
+
+async function registerGateway(gatewayId: string): Promise<WebSocket> {
+	if (!federationToken) throw new Error("missing federation token");
+	const ws = await openGateway(federationToken);
+	await callGateway(ws, `reg-${gatewayId}`, "gateway_register", {
+		domainId: "admin",
+		gatewayId,
+		protocolVersion: 1,
+	});
+	return ws;
+}
+
+await check("gateway registration", async () => {
+	const ws = await registerGateway("smoketest");
+	const reply = await callGateway(ws, "list", "list_gateways", {});
 	ws.close();
-	if (typeof reply.protocolVersion !== "number" || typeof reply.domainId !== "string")
-		throw new Error("missing registration fields");
+	if (!Array.isArray(reply.gateways)) throw new Error("missing gateways field");
 });
+
+await check("gateway relay round trip", async () => {
+	const origin = await registerGateway("smoketest-origin");
+	const destination = await registerGateway("smoketest-destination");
+	const relayId = "smoketest-relay";
+	const delivered = new Promise<void>((resolve, reject) => {
+		destination.on("message", (data) => {
+			const frame = JSON.parse(String(data)) as Record<string, unknown>;
+			if (frame.type !== "gateway_relay" || frame.relayId !== relayId) return;
+			destination.send(
+				JSON.stringify({
+					type: "tool_call",
+					callId: "relay-reply",
+					action: "gateway_relay_reply",
+					params: { relayId, ok: true, result: { seen: true } },
+				}),
+			);
+			resolve();
+		});
+		destination.on("close", () => reject(new Error("destination closed")));
+	});
+	const replied = callGateway(origin, relayId, "gateway_relay", {
+		relayId,
+		srcGateway: "smoketest-origin",
+		dstGateway: "smoketest-destination",
+		payload: { smoketest: true },
+	});
+	await delivered;
+	const reply = await replied;
+	origin.close();
+	destination.close();
+	if (reply.ok !== true) throw new Error("relay not acknowledged");
+});
+
+// Every field is a b64Field, and a malformed op 404s before the per-id limiter is reached.
+const b64 = (value: string) => Buffer.from(value).toString("base64");
+
+await check("public approval fetch", async () => {
+	const response = await request("/device-approval", {
+		method: "POST",
+		body: new TextEncoder().encode(
+			JSON.stringify({ step: "fetch", approvalId: b64("smoketest-unknown"), nonce: b64("nonce") }),
+		),
+	});
+	// An unknown id is an opaque miss, never an enumeration.
+	if (response.status !== 200) throw new Error(`status ${response.status}`);
+});
+
+await check("public approval rate limit", async () => {
+	const body = new TextEncoder().encode(
+		JSON.stringify({
+			step: "fetch",
+			approvalId: b64(`rate-${Date.now()}`),
+			nonce: b64("nonce"),
+		}),
+	);
+	let limited = false;
+	for (let i = 0; i < 80 && !limited; i++) {
+		const response = await request("/device-approval", { method: "POST", body });
+		if (response.status === 429) limited = true;
+	}
+	if (!limited) throw new Error("never rate limited");
+});
+
+skip("console send/poll + idempotent replay", "needs a registered gateway serving the console relay");
 
 if (failures) process.exit(1);

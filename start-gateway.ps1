@@ -44,6 +44,12 @@ if (-not (Get-EnvValue 'HOST_WS_TOKEN')) {
 	Add-Content -Path $envFile -Value "HOST_WS_TOKEN=$token"
 }
 
+# The gateway attaches to this network to reach the federation Router, and compose declares it
+# external, so it must exist before `up`. down.ps1 removes it, so recreate it here rather than
+# depending on start-federation.ps1 having run first.
+docker network inspect switchboard-federation *> $null
+if ($LASTEXITCODE -ne 0) { docker network create switchboard-federation | Out-Null }
+
 try { docker compose down --remove-orphans 2>$null } catch { }
 docker compose up --build -d
 if ($LASTEXITCODE -ne 0) {
