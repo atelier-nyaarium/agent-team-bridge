@@ -3,20 +3,14 @@ import crypto from "node:crypto";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A plane's version identity. `epoch` distinguishes one gateway process incarnation from a later
- * one (mirrors DeviceMailbox's own epoch: a receiver comparing against an unknown epoch treats the
- * plane as fully stale rather than diffing against a counter minted by a different process).
- * `counter` is monotonic within one epoch, incremented only when the plane's content actually
- * changed (see `identityOf`). */
+/** `epoch` distinguishes one process incarnation from a later one, mirroring DeviceMailbox's own.
+ * `counter` is monotonic within an epoch. */
 export interface PlaneVersion {
 	epoch: number;
 	counter: number;
 }
 
-/** Durable identity a plane can be restored from across a graceful restart: its version plus the
- * content hash that version was last published at. `cleanShutdown` is stamped by the CALLER (the
- * process that knows whether it is exiting via SIGTERM/SIGINT vs. a crash) - the registry has no
- * process-lifecycle knowledge of its own. */
+/** `cleanShutdown` is stamped by the CALLER: the registry has no process-lifecycle knowledge. */
 export interface PlanePersistedState {
 	epoch: number;
 	counter: number;
@@ -28,13 +22,7 @@ interface PlaneDefinition<T> {
 	name: string;
 	snapshot: () => T;
 	identityOf: (snapshot: T) => string;
-	/** Invoked synchronously right after a bump (a genuine content-hash change), with the plane's
-	 * new version - regardless of which caller triggered the recompute (markDirty, the tripwire, or
-	 * boot reconciliation). The registry's only "this plane's content just changed" observation hook
-	 * outside the poll-consumption waitForBump path; a plane that needs to react to its OWN change
-	 * (push it somewhere, not just wait to be asked) registers one instead of hand-rolling external
-	 * version diffing, which would reproduce the same callsite-driven "remember to announce" bug
-	 * class markDirty()/recompute() already exist to structurally rule out for the bump decision. */
+	/** The one hook outside waitForBump for a plane that must react to its own change. */
 	onBump?: (version: PlaneVersion) => void;
 }
 
@@ -46,18 +34,13 @@ interface Waiter {
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Random positive Int31 (mirrors device-mailbox.ts's mintEpoch - the console/peer wire parses
- * epoch as a signed 32-bit int, and equality-only comparison is the invariant these values need,
- * never ordering). */
+/** Mirrors device-mailbox.ts's mintEpoch. Equality-only, never ordering. */
 function mintEpoch(): number {
 	return 1 + Math.floor(Math.random() * 0x7ffffffe);
 }
 
-/** sha256 of a value, recursively sorting plain-object keys so semantically-identical content
- * hashes identically regardless of Map/object insertion order (which can legitimately differ
- * between a live process and a JSON-restored one). Does NOT reorder arrays - array order is
- * assumed semantically meaningful; a plane's `identityOf` must itself canonically sort any
- * collection whose order is not (e.g. session records, sorted by team before hashing). */
+/** Keys sorted, arrays NOT: array order is assumed meaningful, so `identityOf` must sort its own
+ * unordered collections before hashing. */
 export function stableHash(value: unknown): string {
 	return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
 }
@@ -72,14 +55,8 @@ function stableStringify(value: unknown): string {
 ////////////////////////////////
 //  Class
 
-/**
- * One named, versioned, hash-gated state plane. Mutators never call `bump()` directly (that
- * would reproduce the callsite-driven "remember to announce" pattern this framework exists to
- * kill) - they call `markDirty()`, and `recompute()` (invoked by the registry after any dirty
- * mark, and periodically by the tripwire) is what actually decides whether the identity changed
- * and, if so, bumps the counter. A plane cannot forget to announce a real change because nothing
- * outside `recompute()` is allowed to advance the counter.
- */
+/** Mutators call `markDirty()`, never bump directly: nothing outside `recompute()` may advance
+ * the counter, so a plane cannot forget to announce a real change. */
 class Plane<T> {
 	readonly name: string;
 	private readonly snapshotFn: () => T;
@@ -98,18 +75,10 @@ class Plane<T> {
 		if (restored?.cleanShutdown) {
 			this.epoch = restored.epoch;
 			this.counter = restored.counter;
-			// The persisted hash, NOT recomputed yet - reconcileOnBoot() does that explicitly, once
-			// every plane is registered, so its one honest bump is a deliberate boot step rather than
-			// a side effect of construction order.
+			// Not recomputed yet: reconcileOnBoot() does that once every plane is registered.
 			this.lastHash = restored.hash;
 		} else {
-			// No persisted state, or the last exit was not clean: the counter lineage cannot be
-			// trusted (nothing proves what happened between the last persist tick and an
-			// uncaughtException/SIGKILL), so a fresh epoch forces every peer/console to fully
-			// resync rather than risk installing content behind what was already fanned out live.
-			// The baseline hash is the CURRENT snapshot, computed now - this epoch's counter 0 IS
-			// this content, so the first markDirty() after registration correctly sees "unchanged"
-			// instead of spuriously bumping against an empty-string placeholder.
+			// An unclean exit cannot trust the counter lineage, so a fresh epoch forces a full resync.
 			this.epoch = mintEpoch();
 			this.lastHash = this.identityOf(this.snapshotFn());
 		}
@@ -123,10 +92,7 @@ class Plane<T> {
 		this.dirty = true;
 	}
 
-	/** Recompute identity and bump iff it changed. Returns true if a bump fired. Called by the
-	 * registry right after any `markDirty()`, and on the tripwire's own slow tick (which recomputes
-	 * unconditionally, catching a mutation that changed the hash without ever marking dirty - the
-	 * escaped-write case the tripwire exists for). */
+	/** True if a bump fired. `force` catches an escaped write that never marked dirty. */
 	recompute(force = false): boolean {
 		if (!this.dirty && !force) return false;
 		this.dirty = false;
@@ -138,18 +104,13 @@ class Plane<T> {
 		return true;
 	}
 
-	/** Boot reconciliation for a CLEAN restart: recompute against the live boot-time state and bump
-	 * once if it differs from the persisted hash (live-derived fields, e.g. a session's connection
-	 * status, cannot survive a process exit even when the exit was graceful, so this is expected to
-	 * fire whenever anything was live at shutdown - not a bug). No-op for a fresh epoch (nothing to
-	 * reconcile against). */
+	/** Live-derived fields never survive an exit, so this is expected to fire, not a bug. */
 	reconcileOnBoot(): boolean {
 		return this.recompute(true);
 	}
 
 	persistedState(cleanShutdown: boolean): PlanePersistedState {
-		// A clean-shutdown snapshot recomputes the hash fresh at the true moment of exit, so the
-		// persisted hash reflects reality even if nothing marked dirty since the last regular tick.
+		// The true moment of exit, even if nothing marked dirty since the last tick.
 		if (cleanShutdown) this.recompute(true);
 		return { epoch: this.epoch, counter: this.counter, hash: this.lastHash, cleanShutdown };
 	}
@@ -159,38 +120,25 @@ class Plane<T> {
 	}
 }
 
-/**
- * The plane registry: named, versioned, hash-gated snapshots multiplexed on the console poll
- * response (generalizing the domainVersion precedent), plus the shared wait primitive a held poll
- * races against a mailbox's own `waitForAppend`. One registry per gateway process.
- */
+/** Multiplexed on the console poll response, plus the wait primitive a held poll races against a
+ * mailbox's own `waitForAppend`. One registry per process. */
 export class PlaneRegistry {
 	private readonly planes = new Map<string, Plane<unknown>>();
 	private waiters: Waiter[] = [];
 	private readonly coalesceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-	/** Register a plane once. `identityOf` must be a pure function of `snapshot()`'s return value,
-	 * and must canonically order any collection inside it whose iteration order is not itself
-	 * semantically meaningful (session records, sub-plane maps) - two calls with equivalent content
-	 * must hash identically regardless of Map/object insertion order. */
+	/** `identityOf` must be pure and canonically order any unordered collection inside it. */
 	registerPlane<T>(def: PlaneDefinition<T>, restored?: PlanePersistedState): void {
 		if (this.planes.has(def.name)) throw new Error(`plane "${def.name}" already registered`);
 		this.planes.set(def.name, new Plane(def, restored) as Plane<unknown>);
 	}
 
-	/** Whether a plane is currently registered - the guard a caller that registers planes LAZILY
-	 * (e.g. one per owner, on that owner's first-ever touch, rather than all up front at boot)
-	 * needs before calling registerPlane a second time for the same name, which throws. */
+	/** For a caller that registers planes LAZILY, since a second registerPlane throws. */
 	hasPlane(name: string): boolean {
 		return this.planes.has(name);
 	}
 
-	/** Drop a plane from the registry - the inverse of registerPlane, for a plane whose lifetime is
-	 * shorter than the process's (e.g. one per revocable relationship, torn down when that
-	 * relationship ends). Settles any in-flight `waitForBump` waiter tracking this plane (as woken,
-	 * not left to time out) - a caller must not have to rely on some other plane's coincidental
-	 * co-occurring bump to notify a waiter that the plane it was tracking is gone. A no-op if the
-	 * name is not currently registered. */
+	/** For a plane shorter-lived than the process. Wakes, never times out, any waiter tracking it. */
 	unregisterPlane(name: string): void {
 		if (!this.planes.delete(name)) return;
 		const pending = this.coalesceTimers.get(name);
@@ -203,10 +151,8 @@ export class PlaneRegistry {
 		}
 	}
 
-	/** Mark a plane dirty and immediately recompute (mutators call this; it is the ONLY path that
-	 * can advance a plane's counter, so a write that never calls it cannot announce itself outside
-	 * the tripwire's own periodic catch-up). Wakes every held poll whose presented version for this
-	 * plane no longer matches. */
+	/** The ONLY path that can advance a counter. Wakes every held poll whose version no longer
+	 * matches. */
 	markDirty(name: string): void {
 		const plane = this.planes.get(name);
 		if (!plane) return;
@@ -214,9 +160,8 @@ export class PlaneRegistry {
 		if (plane.recompute()) this.wake(name);
 	}
 
-	/** markDirty, coalesced: the recompute + wake run ONCE at the end of `windowMs`, folding a write
-	 * burst into one bump (each bump ships a whole snapshot). Lives on the registry rather than as a
-	 * call-site debounce so a mutator cannot forget the flush; the tripwire catches any leftover. */
+	/** Folds a write burst into one bump. On the registry, not a call-site debounce, so a mutator
+	 * cannot forget the flush. */
 	markDirtyCoalesced(name: string, windowMs: number): void {
 		const plane = this.planes.get(name);
 		if (!plane) return;
@@ -240,16 +185,8 @@ export class PlaneRegistry {
 		return this.planes.get(name)?.snapshot() as T | undefined;
 	}
 
-	/** Every plane within `scope` (default: every registered plane) whose CURRENT version differs
-	 * from what the caller presented (behind, ahead, or an unrecognized epoch alike - see
-	 * PollWaitHub's own doc for why "ahead" is not special-cased). `scope` matters once more than
-	 * one plane shares a registry: a caller asking about only SOME planes (an op field it opted
-	 * into - e.g. a legacy client that tracks presence but predates a later plane) must not have
-	 * every OTHER registered plane look "changed" just because its own presented-map has no key
-	 * for them - an absent key means "not tracked" only for planes the caller is actually asking
-	 * about; without a scope, "not tracked" and "unknown, ship it" (cold boot) are
-	 * indistinguishable, so a bare presented-map alone cannot express "I am not asking about this
-	 * plane at all" once a second plane exists on the same registry. */
+	/** `scope` matters once more than one plane exists: without it, "not tracked" and "unknown, ship
+	 * it" are indistinguishable from an absent presented-map key. */
 	changedSince(presented: ReadonlyMap<string, PlaneVersion>, scope?: ReadonlySet<string>): string[] {
 		const changed: string[] = [];
 		for (const [name, plane] of this.planes) {
@@ -261,18 +198,9 @@ export class PlaneRegistry {
 		return changed;
 	}
 
-	/** Resolve when ANY IN-SCOPE registered plane's version diverges from `presented`, or
-	 * `timeoutMs` elapses - whichever first. Mirrors DeviceMailbox.waitForAppend's shape exactly (a
-	 * waiters array + one timer per waiter), deliberately a SEPARATE mechanism from the mailbox's
-	 * own waiters rather than sharing that array: presence and messages are different subsystems,
-	 * and racing two independent primitives via `Promise.race` at the one call site (the poll op)
-	 * is safer than coupling them. Returns true if a real bump woke it, false on timeout - callers
-	 * use this to decide whether a response actually changed. Registration happens synchronously
-	 * (no `await` between the changed-check and pushing the waiter), so a bump landing between "the
-	 * caller checked" and "the caller starts waiting" is structurally impossible - JS's
-	 * single-threaded execution IS the lock. `scope` only bounds the immediate fast-path check
-	 * above; `wake()`'s own per-waiter dispatch already scopes itself correctly by construction -
-	 * see its own doc. */
+	/** Mirrors DeviceMailbox.waitForAppend, deliberately SEPARATE: `Promise.race` at the one call
+	 * site is safer than coupling the two subsystems. No `await` between check and push, so JS's
+	 * single-threaded execution IS the lock against a bump landing in between. */
 	waitForBump(
 		presented: ReadonlyMap<string, PlaneVersion>,
 		timeoutMs: number,
@@ -299,33 +227,18 @@ export class PlaneRegistry {
 		const cur = this.planes.get(planeName)?.version;
 		if (!cur) return;
 		for (const waiter of [...this.waiters]) {
-			// A waiter that never mentioned this plane at all is not tracking it (a legacy client
-			// presenting only `domainVersion`, or a caller that only tracks a subset of the registry's
-			// planes) - waking it would just be a wasted round trip, not a correctness fix. Only a
-			// STALE presented value for a plane the waiter actually asked about is grounds to wake.
-			// Needs no separate `scope` param the way changedSince/waitForBump do: a caller only ever
-			// puts a key in its OWN presentedMap for a plane it is actually asking about (never a
-			// placeholder for an opted-out one), so this membership check is already exactly as scoped
-			// as `scope` would make it - the ambiguity `scope` resolves is specific to changedSince's
-			// bulk iteration over EVERY registered plane, which this per-plane dispatch never does.
+			// A waiter with no key for this plane is not tracking it.
 			if (!waiter.presentedMap.has(planeName)) continue;
 			const have = waiter.presentedMap.get(planeName);
 			if (!have || have.epoch !== cur.epoch || have.counter !== cur.counter) waiter.settle(true);
 		}
 	}
 
-	/** The tripwire: recompute every plane unconditionally (not gated on markDirty) and bump+log any
-	 * whose hash moved without a prior markDirty ever having caught it - a mutation that escaped the
-	 * facade. Self-heals (the bump fires here, same as any other) rather than leaving the plane
-	 * silently stale forever. Call on a slow tick, never the per-poll hot path.
+	/** Self-heals a mutation that escaped markDirty. Call on a slow tick, never the hot path.
 	 *
-	 * Each plane's recompute is individually isolated: a snapshot()/identityOf() that throws (a
-	 * runtime bug in one plane's own derivation logic, not a registry concern) is caught and logged
-	 * rather than propagating - this loop runs inside a bare setInterval callback with no caller of
-	 * its own to catch it, so an uncaught throw here would reach the process-wide uncaughtException
-	 * handler and take the whole gateway down over a single plane's bug, silently dropping every
-	 * live connection. A broken plane's own tripwire coverage is lost until it is fixed, but every
-	 * OTHER plane - and the process itself - keeps running. */
+	 * Each plane's recompute is isolated: an uncaught throw here runs inside a bare setInterval with
+	 * nothing to catch it, taking the whole gateway down. One broken plane keeps running everything
+	 * else. */
 	tripwireTick(): void {
 		for (const [name, plane] of this.planes) {
 			try {
@@ -341,17 +254,14 @@ export class PlaneRegistry {
 		}
 	}
 
-	/** Boot reconciliation for every plane restored from a CLEAN shutdown (a fresh-epoch plane has
-	 * nothing to reconcile - its whole point is "everyone must full-resync"). Call once at startup,
-	 * after every plane is registered. */
+	/** Call once at startup, after every plane is registered. */
 	reconcileOnBoot(): void {
 		for (const [name, plane] of this.planes) {
 			if (plane.reconcileOnBoot()) console.log(`[plane-registry] "${name}" reconciled on boot (one honest bump)`);
 		}
 	}
 
-	/** This process's full persisted state, bundled into whatever ONE atomic file the caller writes
-	 * alongside its other durable state (never a separate sidecar file - see plan). */
+	/** Bundled into the caller's one atomic file, never a separate sidecar. */
 	persistedState(cleanShutdown: boolean): Record<string, PlanePersistedState> {
 		const out: Record<string, PlanePersistedState> = {};
 		for (const [name, plane] of this.planes) out[name] = plane.persistedState(cleanShutdown);

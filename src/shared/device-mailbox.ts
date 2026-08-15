@@ -11,36 +11,26 @@ export interface MailboxSnapshot {
 	epoch: number;
 }
 
-/** A box's full serializable state for durability across an gateway restart. The epoch is
- * preserved on reload so the console's persisted cursor still matches (no spurious flip). */
+/** Epoch is preserved on reload, so the console's cursor still matches. */
 export interface MailboxSnapshotState {
 	epoch: number;
 	nextSeq: number;
 	dropped: number;
 	lastActivity: number;
 	entries: MailboxEntry[];
-	// dedupeKey -> seq, so idempotent append survives a restart: a relay retry
-	// after a deploy must not re-append. Optional - older snapshots omit it.
+	// dedupeKey -> seq, so a relay retry does not re-append.
 	seenKeys?: Array<[string, number]>;
-	// deviceId -> acked seq, so the slowest-device watermark survives a deploy
-	// (else a restart resets it and re-broadens retention). Optional.
+	// deviceId -> acked seq, surviving a deploy.
 	consumerCursors?: Array<[string, number]>;
-	// deviceId -> last drain time (ms), so a consumer's idle clock survives a restart
-	// instead of resetting (which would delay forgetting a dead device). Optional.
+	// deviceId -> last drain time.
 	consumerLastSeen?: Array<[string, number]>;
-	// session ids the device received and may therefore respond to. Persisted so a
-	// thread delivered before a restart stays respondable after it. Optional.
+	// Sessions this device may respond to.
 	respondableSessions?: string[];
 }
 
-// The cap is an OOM backstop, not the primary compactor: trimToMinCursor removes
-// entries every device has acked on each drain, so a regularly-polled inbox stays
-// small regardless of the cap. The cap only bounds UNACKED accumulation for a
-// dark/slow device, so it is generous, and an eviction here is logged as exceptional.
+// An OOM backstop, not the primary compactor: trimToMinCursor does the real work.
 const DEFAULT_MAX_ENTRIES = 10_000;
-// An entry is prose and file references now, never file bytes, so this bounds text rather than
-// attachments. Still generous by orders of magnitude against any real message, because its job is
-// to catch a runaway producer, not to ration ordinary mail.
+// Text only, never file bytes.
 const DEFAULT_MAX_BYTES = 64_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
@@ -48,35 +38,21 @@ const DEFAULT_MAX_DEVICES = 500;
 const DEFAULT_MAX_SEEN_KEYS = 4096;
 const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
-/** Cheap byte estimate for cap accounting: the body and its spoken copy (by contract near
- * body-sized, unlike the small title/summary tiers), plus each attachment's name and reference.
- * Attachments no longer dominate, since an entry describes its files rather than carrying them.
- * Avoids re-serializing the whole entry per append. */
+/** Avoids re-serializing the whole entry per append. */
 function entryBytes(input: MailboxInput): number {
 	let n = (input.body?.length ?? 0) + (input.fullSpoken?.length ?? 0);
 	if (input.files) for (const f of input.files) n += f.filename.length + (f.blobId?.length ?? 0);
 	return n;
 }
 
-/**
- * Whether a stored entry can still be decoded by a consumer.
- *
- * Deliberately NOT the ingest schema. That one governs what a SENDER may submit (counts, lengths,
- * digest shapes); reusing it here would make every future tightening a retroactive, silent deletion
- * of already-delivered history. This checks only what a consumer's decoder REQUIRES and an older
- * writer could have omitted: a declared role per file. Everything else a consumer tolerates.
- */
+/** NOT the ingest schema: reusing it would retroactively delete delivered history. */
 function servable(entry: MailboxEntry): boolean {
 	const files = (entry as { files?: unknown }).files;
 	if (!Array.isArray(files)) return true;
 	return files.every((f) => typeof (f as { role?: unknown })?.role === "string");
 }
 
-/** Random positive Int31 (the console parses epoch as a signed 32-bit int). The
- * console only compares epochs for equality, so the invariant is that a restarted
- * gateway's mailbox instance can never re-mint an epoch a console still holds from
- * the previous process; otherwise the console cannot detect the new instance and its
- * stale cursor acks away the fresh entries while seq dedupe eats the rest. */
+/** Never re-mints an epoch a console still holds, or a stale cursor acks away fresh mail. */
 function mintEpoch(): number {
 	return 1 + Math.floor(Math.random() * 0x7ffffffe);
 }
@@ -85,22 +61,14 @@ function mintEpoch(): number {
 //  Class
 
 /**
- * Per-device inbound queue drained by the console's poll op. There is no live
- * socket to the console, so delivery (agent message or reply) is always an append
- * here; the console catches up by polling. Append assigns a monotonic seq used as
- * the poll cursor. When the queue exceeds maxEntries the oldest entries are
- * evicted and counted in `dropped`, so a console that polls too slowly can detect
- * the gap.
+ * Per-device inbound queue drained by the console's poll op. No live socket, so delivery is always
+ * an append; the console catches up by polling.
  *
- * `epoch` distinguishes one mailbox instance from a later one created for the
- * same conversation after eviction. Seq restarts at 1 in a new instance, so a
- * console holding a stale (larger) cursor must reset it when the epoch changes;
- * otherwise its cursor would silently ack away the new instance's first entries.
+ * `epoch` distinguishes an instance from its predecessor after eviction: seq restarts at 1, so a
+ * stale cursor across an epoch change would silently ack away the new instance's entries.
  *
- * One inbox can be drained by several devices, each a consumer with its own acked
- * cursor. Compaction (trimToMinCursor) only removes entries the slowest consumer
- * has acked, so a fast device never strands a slow one. A consumer idle past its
- * TTL is released by sweepIdleConsumers so a departed device cannot pin compaction.
+ * Several devices drain one inbox, each with its own acked cursor. Compaction removes only what the
+ * slowest has acked; an idle consumer past TTL is dropped so it cannot pin compaction forever.
  */
 export class DeviceMailbox {
 	private entries: MailboxEntry[] = [];
@@ -108,20 +76,13 @@ export class DeviceMailbox {
 	private bytesUsed = 0;
 	private nextSeq = 1;
 	private dropped = 0;
-	// dedupeKey -> the seq it first produced. Bounds an at-least-once relay retry
-	// to a single append. FIFO-capped; persisted so dedup survives a restart.
+	// dedupeKey -> first-produced seq. FIFO-capped, persisted.
 	private seenKeys = new Map<string, number>();
-	// deviceId -> acked seq. The slowest-device watermark: trimToMinCursor compacts
-	// only to min(consumerCursors), so a faster device cannot ack away entries a
-	// slower device of the same recipient has not yet drained. Persisted.
+	// deviceId -> acked seq: the slowest-device watermark. Persisted.
 	private consumerCursors = new Map<string, number>();
-	// deviceId -> last drain time (ms). A consumer idle past the store TTL is dropped
-	// by sweepIdleConsumers so a departed device stops pinning the watermark forever.
-	// Persisted so the idle clock is not reset to "fresh" by a gateway restart.
+	// deviceId -> last drain time. Persisted.
 	private consumerLastSeen = new Map<string, number>();
-	// session ids this device received, so the console may only respond to a thread
-	// actually delivered to it. Durable (in the snapshot) so respondability survives
-	// a restart, instead of the console being told "Unknown session_id" after a deploy.
+	// Sessions this device received. Persisted.
 	private respondableSessions = new Set<string>();
 	private maxEntries: number;
 	private maxBytes: number;
@@ -151,9 +112,7 @@ export class DeviceMailbox {
 		if (dedupeKey !== undefined) {
 			const seenSeq = this.seenKeys.get(dedupeKey);
 			if (seenSeq !== undefined) {
-				// Idempotent: an at-least-once relay retry of an already-appended op.
-				// Never append a duplicate; return the prior entry if still resident,
-				// else a stand-in carrying its original seq.
+				// Idempotent: never a duplicate append.
 				const existing = this.entries.find((e) => e.seq === seenSeq);
 				return existing ?? { ...input, seq: seenSeq, at: Date.now() };
 			}
@@ -163,17 +122,14 @@ export class DeviceMailbox {
 		this.entryBytes.push(entryBytes(input));
 		this.bytesUsed += this.entryBytes[this.entryBytes.length - 1];
 		if (dedupeKey !== undefined) this.recordSeen(dedupeKey, entry.seq);
-		// Evict the oldest entries until both the count cap and the byte cap hold.
-		// Always keep the just-appended entry even if it alone exceeds the byte cap
-		// (a single oversized file is rejected upstream; this is only a backstop).
+		// The just-appended entry is always kept, even alone over the byte cap.
 		let evicted = 0;
 		while (this.entries.length > this.maxEntries || (this.bytesUsed > this.maxBytes && this.entries.length > 1)) {
 			this.evictOneForCapacity();
 			evicted++;
 		}
 		if (evicted > 0) {
-			// The watermark is the primary compactor; this eviction means a device fell
-			// far enough behind to drop UNACKED mail (a real gap the console sees), so log it.
+			// A real gap: unacked mail dropped.
 			console.warn(
 				`[mailbox] OOM backstop evicted ${evicted} unacked entr${evicted === 1 ? "y" : "ies"} (dropped total ${this.dropped})`,
 			);
@@ -183,14 +139,9 @@ export class DeviceMailbox {
 		return entry;
 	}
 
-	/** Evict one entry to relieve the OOM backstop: the oldest "peer" entry (agent-to-agent
-	 * mirror chatter) if any exist, else the oldest entry overall. Lets a burst of agent chatter
-	 * evict itself before a slow device's real unread mail. */
+	/** Oldest "peer" (mirror chatter) entry first, so a burst of it self-evicts before real mail. */
 	private evictOneForCapacity(): void {
-		// Never a candidate: the entry THIS append() call just pushed (mirrors the byte-cap
-		// guard above, "always keep the just-appended entry"). Searching the full array
-		// including it would let a fresh 'peer' entry evict itself on the very call that
-		// created it, whenever the rest of the backlog is entirely non-peer.
+		// The just-pushed entry is never a candidate.
 		const lastIdx = this.entries.length - 1;
 		let idx = -1;
 		for (let i = 0; i < lastIdx; i++) {
@@ -206,19 +157,13 @@ export class DeviceMailbox {
 		this.dropped += 1;
 	}
 
-	/** Record dedupeKey -> seq, FIFO-bounded so a flood of unique keys cannot grow
-	 * unbounded. A retry older than the cap is implausible. Map iteration is
-	 * insertion-ordered, so the first key is the oldest. */
+	/** FIFO-bounded. A retry older than the cap is implausible. */
 	private recordSeen(key: string, seq: number): void {
 		this.seenKeys.set(key, seq);
 		capFifo(this.seenKeys, DEFAULT_MAX_SEEN_KEYS);
 	}
 
-	/**
-	 * Resolve when an entry is appended, the timeout elapses, or the mailbox is
-	 * torn down - whichever comes first. This is the long-poll hold: the poll op
-	 * waits here when the box is empty instead of returning an empty drain.
-	 */
+	/** The long-poll hold: waits here when the box is empty instead of returning empty. */
 	waitForAppend(timeoutMs: number): Promise<void> {
 		return new Promise((resolve) => {
 			let timer: ReturnType<typeof setTimeout> | undefined;
@@ -233,44 +178,28 @@ export class DeviceMailbox {
 		});
 	}
 
-	/** Wake every held poll (append, or the store tearing this instance down). */
+	/** Wake every held poll. */
 	releaseWaiters(): void {
 		for (const settle of this.waiters.splice(0)) settle();
 	}
 
 	/**
-	 * Ack everything at or below `cursor`, then return the entries above it without
-	 * removing them. Returned entries are dropped on the next drain whose cursor covers
-	 * them, giving at-least-once delivery (the console dedupes by seq).
+	 * Ack at or below `cursor`, return the rest without removing them: at-least-once delivery.
 	 *
-	 * Acking is epoch-gated: a cursor is only honored when `epoch` matches this instance,
-	 * because seq restarts at 1 in each instance, so a cursor carried over from an evicted
-	 * instance would otherwise silently ack away the new instance's entries (even at the
-	 * cursor==highWater boundary). When `epoch` is omitted, fall back to a magnitude guard.
-	 *
-	 * `dropped` is a cumulative total, never reset server-side, so a poll response lost in
-	 * transit cannot hide a gap. The console detects new gaps against the previous total
-	 * or by any non-contiguous seq jump.
+	 * Epoch-gated: a cursor from an evicted instance must never ack away the new one's entries.
+	 * `dropped` is cumulative, never reset, so a lost poll response cannot hide a gap.
 	 */
 	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
-		// Mark the device alive on every poll (even a cursor-0 first poll), so
-		// sweepIdleConsumers only forgets a truly silent one. Register its watermark floor
-		// at 0 on first sight so a sibling consumer's ack cannot trim past mail this consumer
-		// received but has not yet acked; advanceConsumer raises the floor as it acks.
+		// Alive on every poll, floored at 0 on first sight.
 		if (consumerId !== undefined) {
 			this.consumerLastSeen.set(consumerId, Date.now());
 			if (!this.consumerCursors.has(consumerId)) this.consumerCursors.set(consumerId, 0);
 		}
-		// A cursor beyond highWater is proof of a stale instance no matter what
-		// the epoch claims (this instance never issued it); honoring it would ack
-		// away entries the console has never seen.
+		// Beyond highWater proves a stale instance regardless of the claimed epoch.
 		const epochOk = (epoch === undefined || epoch === this.epoch) && cursor <= this.highWater;
 		if (cursor > 0 && epochOk) {
 			if (consumerId !== undefined) {
-				// Watermark path: record this device's progress and compact only to the
-				// slowest registered device of this recipient, so a faster device cannot
-				// ack away entries a slower one has not yet drained. For a single device
-				// this is exactly ack(cursor).
+				// Compacts only to the slowest registered device.
 				this.advanceConsumer(consumerId, cursor);
 				this.trimToMinCursor();
 			} else {
@@ -281,15 +210,12 @@ export class DeviceMailbox {
 		return { entries: [...this.entries], cursor: this.highWater, dropped: this.dropped, epoch: this.epoch };
 	}
 
-	/** Record a device's acked seq (monotonic). One entry per device sharing this
-	 * recipient inbox; the min across them drives compaction. */
+	/** Monotonic. The min across devices drives compaction. */
 	advanceConsumer(consumerId: string, seq: number): void {
 		this.consumerCursors.set(consumerId, Math.max(this.consumerCursors.get(consumerId) ?? 0, seq));
 	}
 
-	/** The low watermark: the slowest registered device. 0 when no device has acked
-	 * (trim nothing - undelivered mail is retained until a device drains it or the
-	 * whole inbox is TTL-evicted). */
+	/** 0 when no device has acked: trims nothing. */
 	minCursor(): number {
 		if (this.consumerCursors.size === 0) return 0;
 		let m = Number.POSITIVE_INFINITY;
@@ -297,8 +223,7 @@ export class DeviceMailbox {
 		return m;
 	}
 
-	/** Compact entries every device has acked. Not a gap: these reached all devices,
-	 * so `dropped` is untouched (unlike the OOM-backstop eviction in append). */
+	/** Not a gap: `dropped` stays untouched. */
 	trimToMinCursor(): void {
 		const min = this.minCursor();
 		if (min <= 0) return;
@@ -310,16 +235,13 @@ export class DeviceMailbox {
 		}
 	}
 
-	/** Drop a device's cursor when it goes stale past the TTL, so the watermark can
-	 * advance past it instead of being pinned forever by an abandoned device. */
+	/** Frees the watermark from an abandoned device. */
 	forgetConsumer(consumerId: string): void {
 		this.consumerCursors.delete(consumerId);
 		this.consumerLastSeen.delete(consumerId);
 	}
 
-	/** Forget every consumer idle past ttlMs, then re-trim. A departed device
-	 * otherwise pins minCursor() at its last (or zero) cursor and stops compaction
-	 * for the live devices that share this inbox. Returns how many were forgotten. */
+	/** A departed device otherwise pins minCursor() forever. */
 	sweepIdleConsumers(now: number, ttlMs: number): number {
 		let forgotten = 0;
 		for (const [consumerId, lastSeen] of this.consumerLastSeen) {
@@ -332,8 +254,7 @@ export class DeviceMailbox {
 		return forgotten;
 	}
 
-	/** Remember a session id delivered to this device (FIFO-capped) so a later
-	 * respond op for it is authorized. Survives a restart via the snapshot. */
+	/** FIFO-capped, so a later respond op is authorized. */
 	recordSession(sessionId: string): void {
 		this.respondableSessions.add(sessionId);
 		capFifo(this.respondableSessions, DEFAULT_MAX_RESPONDABLE_SESSIONS);
@@ -356,8 +277,7 @@ export class DeviceMailbox {
 		return now - this.lastActivity > ttlMs;
 	}
 
-	/** Serializable state for durability. Held polls (waiters) are transient and omitted;
-	 * the console simply re-polls after the restart. */
+	/** Held polls are transient and omitted; the console re-polls. */
 	snapshot(): MailboxSnapshotState {
 		return {
 			epoch: this.epoch,
@@ -372,15 +292,8 @@ export class DeviceMailbox {
 		};
 	}
 
-	/** Rebuild a box from a snapshot, keeping its epoch + seq so the console resumes without
-	 * a spurious epoch flip and without re-seeing acked entries.
-	 *
-	 * Entries are checked on the way OUT, not merely on the way in. A consumer decodes a poll result
-	 * atomically, so one entry it cannot decode fails the whole batch, and a batch that never decodes
-	 * is a cursor that never advances - which keeps the box alive, since draining refreshes the idle
-	 * clock, so the entry is never swept either. Dropping it turns "this device receives nothing,
-	 * ever" into "this device loses one message".
-	 */
+	/** Checked on the way OUT: one undecodable entry would otherwise fail the whole poll batch
+	 * forever, since the cursor that never advances keeps draining and never sweeps it either. */
 	static fromSnapshot(
 		s: MailboxSnapshotState,
 		maxEntries = DEFAULT_MAX_ENTRIES,
@@ -393,8 +306,7 @@ export class DeviceMailbox {
 		const droppedSeqs = new Set<number>();
 		for (const e of s.entries) {
 			if (!servable(e)) {
-				// The count is the ONLY signal a console has: it derives a gap from the dropped delta,
-				// never from a seq jump, so a silent skip here would be an invisible loss.
+				// The count is the ONLY signal the console has.
 				box.dropped++;
 				droppedSeqs.add(e.seq);
 				continue;
@@ -407,15 +319,13 @@ export class DeviceMailbox {
 		if (droppedSeqs.size > 0) {
 			console.error(`[mailbox] dropped ${droppedSeqs.size} unservable entr(ies) at restore`);
 		}
-		// A dropped entry's dedupe key goes with it, so an at-least-once redelivery can still land.
-		// Keeping it would dedupe away the one retry able to heal the loss.
+		// A dropped entry's dedupe key goes with it, or the healing retry dedupes away too.
 		if (s.seenKeys) for (const [k, v] of s.seenKeys) if (!droppedSeqs.has(v)) box.seenKeys.set(k, v);
 		if (s.consumerCursors) for (const [k, v] of s.consumerCursors) box.consumerCursors.set(k, v);
 		if (s.consumerLastSeen) {
 			for (const [k, v] of s.consumerLastSeen) box.consumerLastSeen.set(k, v);
 		} else {
-			// An older snapshot has no idle clock; seed it from lastActivity so a
-			// restored consumer is not immediately swept as idle on the next sweep.
+			// No idle clock on an older snapshot.
 			for (const k of box.consumerCursors.keys()) box.consumerLastSeen.set(k, box.lastActivity);
 		}
 		if (s.respondableSessions) for (const id of s.respondableSessions) box.respondableSessions.add(id);
@@ -423,14 +333,8 @@ export class DeviceMailbox {
 	}
 }
 
-/**
- * Owns one DeviceMailbox per opaque recipient key. The console handler keys it by the
- * Domain ownerId, so one inbox serves all an owner's devices, each tracked as a
- * `consumerId` cursor within the box. Bounded two ways so an attacker minting distinct
- * keys cannot exhaust memory: a store-wide cap (LRU eviction beyond it) and an idle TTL
- * sweep. Both eviction paths fire onEvict so the handler tears down the associated peer
- * state in lockstep.
- */
+/** Bounded two ways against a key-minting attacker: an LRU cap and an idle TTL sweep. Both fire
+ * onEvict so the handler tears down peer state in lockstep. */
 export class DeviceMailboxStore {
 	private mailboxes = new Map<string, DeviceMailbox>();
 	private ttlMs: number;
@@ -447,9 +351,7 @@ export class DeviceMailboxStore {
 		this.maxDevices = opts.maxDevices ?? DEFAULT_MAX_DEVICES;
 	}
 
-	/** Called for each mailbox evicted (idle sweep or LRU cap), so the owner can
-	 * tear down the associated peer state and keep peer lifetime equal to mailbox
-	 * lifetime. */
+	/** Keeps peer lifetime equal to mailbox lifetime. */
 	setOnEvict(cb: (device: string) => void): void {
 		this.onEvictCb = cb;
 	}
@@ -472,15 +374,14 @@ export class DeviceMailboxStore {
 		return this.mailboxes.get(device);
 	}
 
-	/** Every box's serializable state, keyed by conversation id, for durability. */
+	/** Keyed by conversation id. */
 	snapshot(): Record<string, MailboxSnapshotState> {
 		const out: Record<string, MailboxSnapshotState> = {};
 		for (const [conv, box] of this.mailboxes) out[conv] = box.snapshot();
 		return out;
 	}
 
-	/** Re-hydrate mailboxes on boot. A box that beat the load (a console polled before the
-	 * restore ran) wins, so a live epoch is never replaced by a stale snapshot. */
+	/** A box that beat the load wins: a live epoch is never replaced by a stale one. */
 	restore(data: Record<string, MailboxSnapshotState>): void {
 		for (const [conv, s] of Object.entries(data)) {
 			if (this.mailboxes.has(conv)) continue;
@@ -515,7 +416,6 @@ export class DeviceMailboxStore {
 				removed++;
 				this.onEvictCb?.(device);
 			} else {
-				// A still-live inbox may hold a departed consumer pinning its watermark.
 				box.sweepIdleConsumers(now, this.ttlMs);
 			}
 		}
