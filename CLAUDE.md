@@ -1069,6 +1069,19 @@ invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fiel
 bring it back. Always run `./start-host-daemon.sh` after. A forgotten daemon is silent until wake,
 peek, and session spawn all fail with `host daemon offline`; this cost a full outage once.
 
+`./down.sh` is the ALL-components stop: gateway, federation Router, host daemon, and both networks.
+Bringing it back is three scripts, and the Router is its own compose project so it starts and stops
+on its own trigger: `./start-federation.sh && ./start-gateway.sh && ./start-host-daemon.sh`. Order
+between the first two does not matter - both create the shared `switchboard-federation` network if
+it is absent, because compose declares it external and `down.sh` removes it. Verify the Router with
+`bun run smoketest:federation`.
+
+Router ops worth knowing: back it up with `./backup-federation.sh` (it refuses while the container
+runs, since the store is single-writer, and it archives the two tokens from `.env` alongside the
+data volume because a data-only restore authenticates nobody). Host clock drift breaks signed
+proofs and invite expiry, so keep NTP running. The Router's cert is minted once and never rotated -
+rotating it re-provisions every enrolled Gateway and phone.
+
 A session's identity and its channel hearing BOTH ride the daemon's launch command, so a bare
 `claude --resume` on the host comes up broken in two silent ways: it registers under a fresh derived
 name (the phone thread and board claims stay keyed on the old one), and the harness drops every
