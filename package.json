@@ -7,6 +7,7 @@
 		"start:mcp": "bun run src/main-mcp.ts",
 		"start:host-daemon": "bun run src/main-host-daemon.ts",
 		"smoketest:federation": "bun run scripts/federation-smoketest.ts",
+		"export:federation": "bun run scripts/federation-export.ts",
 		"build": "bun run scripts/build.ts",
 		"lint": "biome ci . && bunx tsc --noEmit",
 		"lint:fix": "biome check --write .",

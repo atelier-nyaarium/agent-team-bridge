@@ -293,7 +293,7 @@ until Phase 7 (CI enforces the mirrors).
 - Kotlin codegen rerun + committed in the same push; run the LOCAL Kotlin gate
   (`testDebugUnitTest` + release compile) before merge - CI does not compile Kotlin.
 
-## Phase 4 - Gateway direct transport (parallelizable with Phase 3)
+## Phase 4 - Gateway direct transport (parallelizable with Phase 3) ✅
 
 - `transport.json` dual reader: legacy service-proxy shape AND v2
   `{url, bearer, certFingerprint}`. v2 is a local gateway file - keep it a gateway-side
@@ -311,7 +311,7 @@ until Phase 7 (CI enforces the mirrors).
 - `setup-gateway.ts` success check tightened: validate the file parses as legacy-or-v2, not
   "file exists". Start script verifies REGISTRATION on the Router, not just a listening port.
 
-## Phase 5 - Console direct transport + settings
+## Phase 5 - Console direct transport + settings ✅
 
 Goal: pre-stage a backward-compatible APK while the phone still runs against LKE, so Phase 6
 is a configuration change, not a first-of-its-kind build.
