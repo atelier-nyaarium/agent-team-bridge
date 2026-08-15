@@ -256,7 +256,7 @@ and produced no archive at all, because `set -e` aborted before `tar`. Fixed by 
 a container AND asserting every expected file landed before writing. The assertion is the part
 worth keeping: a backup that cannot prove what it captured is not a backup.
 
-## Phase 3 - Wire schemas + codegen
+## Phase 3 - Wire schemas + codegen ✅
 
 All additive fields OPTIONAL first, per the deploy rule; gateway/Router deploy before the
 version-bump push; console updates last. Any touched synced leaf is re-synced to evie-bot

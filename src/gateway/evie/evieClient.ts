@@ -23,8 +23,9 @@ export interface EvieClientConfig {
 	// Authorization (consumed by the API server) plus the bridge token in a forwarded
 	// header, so the auth shape lives with the caller, not here.
 	headers: Record<string, string>;
-	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://).
-	tls?: { ca: string };
+	// How TLS is trusted: a cluster CA (PEM) for the service-proxy, or the Router's leaf
+	// fingerprint. A self-signed leaf has no chain, so pinning it IS the trust.
+	tls?: { ca: string } | { certFp: string };
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
 	gatewayId: string;
@@ -87,6 +88,28 @@ const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
 
+function tlsOptions(tls: EvieClientConfig["tls"]): Record<string, unknown> {
+	if (!tls) return {};
+	// A pinned leaf has no chain to validate, so chain verification is turned off and the
+	// fingerprint check below is what actually authenticates the peer.
+	if ("certFp" in tls) return { rejectUnauthorized: false, tls: { rejectUnauthorized: false } };
+	return { tls: { ca: tls.ca } };
+}
+
+/** Destroy the socket unless its leaf matches the pin. Nothing else authenticates a self-signed
+ * Router, so a mismatch must close the connection rather than warn. */
+function verifyPinnedLeaf(ws: WebSocket, expectedFp: string): void {
+	ws.once("upgrade", (response) => {
+		const socket = (response as { socket?: { getPeerCertificate?: (d?: boolean) => { raw?: Buffer } } }).socket;
+		const raw = socket?.getPeerCertificate?.(true)?.raw;
+		const actual = raw ? crypto.createHash("sha256").update(raw).digest("hex") : "";
+		if (actual !== expectedFp.toLowerCase()) {
+			console.error(`[evie-client] router cert fingerprint mismatch; refusing the connection`);
+			ws.terminate();
+		}
+	});
+}
+
 export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
@@ -113,11 +136,12 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			// it can close the connection and drop all federation traffic with it. Must stay >= the
 			// matching explicit limit on evie's BridgeTransport, or a frame evie accepts kills us.
 			maxPayload: EVIE_WS_MAX_PAYLOAD_BYTES,
-			// Bun's WebSocket reads a pinned CA under `tls`, NOT a top-level `ca`. A top-level `ca` is
-			// silently ignored, so it falls back to the system trust store and rejects the private
-			// cluster-signed API server cert ("TLS handshake failed"). Verified against the live endpoint.
-			...(config.tls ? { tls: { ca: config.tls.ca } } : {}),
+			// Bun's WebSocket reads pinned TLS options under `tls`, NOT at the top level. A top-level
+			// `ca` is silently ignored, so it falls back to the system trust store and rejects the
+			// private cluster-signed API server cert ("TLS handshake failed").
+			...tlsOptions(config.tls),
 		});
+		if (config.tls && "certFp" in config.tls) verifyPinnedLeaf(ws, config.tls.certFp);
 
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
