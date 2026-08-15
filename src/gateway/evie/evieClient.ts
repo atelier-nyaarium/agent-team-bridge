@@ -19,13 +19,12 @@ export interface EvieToolCallResult {
 
 export interface EvieClientConfig {
 	url: string;
-	// WebSocket handshake headers. The service-proxy transport carries the SA token as
-	// Authorization (consumed by the API server) plus the bridge token in a forwarded
-	// header, so the auth shape lives with the caller, not here.
+	// WebSocket handshake headers. The bearer the Router gates the upgrade on, so the auth
+	// shape lives with the caller, not here.
 	headers: Record<string, string>;
-	// How TLS is trusted: a cluster CA (PEM) for the service-proxy, or the Router's leaf
-	// fingerprint. A self-signed leaf has no chain, so pinning it IS the trust.
-	tls?: { ca: string } | { certFp: string };
+	// How TLS is trusted: the Router's leaf fingerprint. A self-signed leaf has no chain,
+	// so pinning it IS the trust.
+	tls?: { certFp: string };
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
 	gatewayId: string;
@@ -82,18 +81,16 @@ const TOOL_CALL_TIMEOUT_MS = 120_000;
 // setup stops re-trying instead of polling evie indefinitely.
 const PENDING_REREGISTER_DELAY_MS = 15_000;
 const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
-// Application-level keepalive. The k8s API service-proxy drops idle upgraded connections,
-// so a ping well under that idle window keeps the tunnel warm and detects a silently-dropped
-// path: two missed pongs terminate the socket and trigger a reconnect.
+// Application-level keepalive: a ping detects a silently-dropped path that neither end has
+// noticed, since two missed pongs terminate the socket and trigger a reconnect.
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
 
 function tlsOptions(tls: EvieClientConfig["tls"]): Record<string, unknown> {
 	if (!tls) return {};
-	// A pinned leaf has no chain to validate, so chain verification is turned off and the
-	// fingerprint check below is what actually authenticates the peer.
-	if ("certFp" in tls) return { rejectUnauthorized: false, tls: { rejectUnauthorized: false } };
-	return { tls: { ca: tls.ca } };
+	// A pinned leaf has no chain to validate, so chain verification is turned off and
+	// verifyPinnedLeaf below is what actually authenticates the peer.
+	return { rejectUnauthorized: false, tls: { rejectUnauthorized: false } };
 }
 
 /** Destroy the socket unless its leaf matches the pin. Nothing else authenticates a self-signed

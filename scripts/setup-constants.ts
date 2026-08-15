@@ -11,7 +11,7 @@ import path from "node:path";
 export const HEALTH_URL = "http://localhost:20000/health";
 export const ENROLL_URL = "http://localhost:20000/enroll";
 export const ADMIT_PAYLOAD_URL = "http://localhost:20000/admit-payload";
-// The gateway's federation dir on the host (bind-mounted from FED_DIR_IN inside the container).
+// The gateway's federation dir on the host (bind-mounted to /app/data/federation in the container).
 export const FED_DIR_HOST = "volumes/gateway-data/federation";
 export const TRANSPORT_FILE_HOST = `${FED_DIR_HOST}/transport.json`; // enrollment writes this once a bundle installs
 export const EVIE_DEPLOY = "deploy/evie-bot-deployment";
@@ -20,7 +20,6 @@ export const BRIDGE_YAML = "../evie-bot/deploy/console-bridge.yaml";
 export const GATEWAY_BRIDGE_YAML = "../evie-bot/deploy/gateway-bridge.yaml";
 export const SERVICE = "evie-console-bridge";
 export const PORT = 20004;
-export const FED_DIR_IN = "/app/data/federation"; // the gateway's federation dir (allowlist + keypair)
 export const SECRETS_DIR = path.join(os.homedir(), ".config", "switchboard"); // host-local admin secrets (0700)
 export const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 export const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)

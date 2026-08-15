@@ -23,13 +23,11 @@ import {
 	note,
 	readSaCreds,
 	secureFile,
-	writeGatewayFile,
 } from "./lib/host.js";
 import {
 	BLOB_FILE,
 	BRIDGE_YAML,
 	EVIE_DEPLOY,
-	FED_DIR_IN,
 	FED_SECRET,
 	GATEWAY_BRIDGE_YAML,
 	INVITE_TTL_MS,
@@ -180,31 +178,14 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	note(`Blob: ${BLOB_FILE}`);
 }
 
-/** Write the local Gateway's service-proxy transport.json into its federation dir, so the gateway
- * reaches evie through the apiserver (off kubectl port-forward) on its next restart. */
-export async function writeGatewayTransport(): Promise<void> {
-	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
-	if (!saToken || !caPem) throw new Error("gateway-bridge SA token not ready yet - re-run in a few seconds");
-	const apiUrl = await clusterApiUrl();
-	const transport = JSON.stringify({
-		apiUrl,
-		namespace: NS,
-		saToken,
-		caPem,
-		service: "evie-bridge",
-		port: 20001,
-	});
-	if (!(await writeGatewayFile(`${FED_DIR_IN}/transport.json`, transport))) {
-		throw new Error("writing gateway transport.json failed");
-	}
-	note("Gateway transport written");
-}
-
 /** Health-probe the full service-proxy -> bridge path with the emitted creds. Uses an AUTHENTICATED
  * POST /ingest (NOT a GET: the bridge answers GET 200 BEFORE the app-token gate), served locally at
  * evie so it isolates bridge+creds from gateway connectivity. Bearer tokens ride a 0600 curl -K
- * config, never argv. */
-export async function verify(): Promise<void> {
+ * config, never argv.
+ *
+ * Internal to this flow: `setup.sh --verify` probes the Router (setup-verify.ts), since that is what
+ * a Gateway actually reaches now. This one only checks what provision itself just wrote. */
+async function verify(): Promise<void> {
 	if (!(await Bun.file(BLOB_FILE).exists())) throw new Error(`no blob at ${BLOB_FILE} - run setup.sh first`);
 	const blob = jparse<{ apiUrl?: string; saToken?: string; appToken?: string; caPem?: string }>(
 		await Bun.file(BLOB_FILE).text(),

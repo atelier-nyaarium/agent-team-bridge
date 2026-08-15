@@ -7,10 +7,8 @@
 //
 //   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
 //                        Non-TTY runs Provision direct.
-//   --gateway-transport  move the local Gateway off port-forward onto the service-proxy WS (run
-//                        AFTER validating WS-over-proxy on this cluster).
 //   --qr                 re-open the enrollment-QR menu for the current blob.
-//   --verify             health-probe the bridge.
+//   --verify             health-probe the Router and this Gateway's link to it.
 //   --help
 //
 // The Domain ROOT private key is generated on the Console and never reaches the host, so this script
@@ -21,12 +19,13 @@
 // the blob only. The blob is transport-only (cluster creds; no identity, no Gateway keys).
 
 import fs from "node:fs";
-import { ask, clearAdminKubeconfig, die, ensureAdminKubernetes, err, note } from "./lib/host.js";
+import { ask, die, err, note } from "./lib/host.js";
 import { BLOB_FILE, SECRETS_DIR } from "./setup-constants.js";
 import { qrMenu } from "./setup-enrollment-ui.js";
 import { gatewayHostname, setupGateway } from "./setup-gateway.js";
-import { provision, verify, writeGatewayTransport } from "./setup-provision.js";
+import { provision } from "./setup-provision.js";
 import { purgeFederation, purgeGateway } from "./setup-purge.js";
+import { verify } from "./setup-verify.js";
 
 ////////////////////////////////
 //  Constants
@@ -34,10 +33,9 @@ import { purgeFederation, purgeGateway } from "./setup-purge.js";
 const USAGE = [
 	"Admin setup - the SINGLE bootstrap for this gateway and the Android Console.",
 	"",
-	"  ./setup.sh              menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
-	"  ./setup.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
-	"  ./setup.sh --qr                 re-open the enrollment-QR menu for the current blob",
-	"  ./setup.sh --verify             health-probe the bridge",
+	"  ./setup.sh          menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
+	"  ./setup.sh --qr     re-open the enrollment-QR menu for the current blob",
+	"  ./setup.sh --verify health-probe the Router and this Gateway's link to it",
 	"  ./setup.sh --help",
 ].join("\n");
 
@@ -92,9 +90,6 @@ async function main(): Promise<void> {
 	const arg = process.argv[2] ?? "";
 	switch (arg) {
 		case "": {
-			// write_gateway_transport is intentionally NOT in the Provision chain: it commits the
-			// local Gateway to the service-proxy WS, and if WS-over-proxy does not work on this
-			// cluster the Gateway could not connect. Validate that path first, then --gateway-transport.
 			if (process.stdin.isTTY) {
 				await topMenu();
 			} else {
@@ -108,22 +103,8 @@ async function main(): Promise<void> {
 			await qrMenu();
 			break;
 		}
-		case "--gateway-transport": {
-			await ensureAdminKubernetes();
-			try {
-				await writeGatewayTransport();
-			} finally {
-				await clearAdminKubeconfig();
-			}
-			break;
-		}
 		case "--verify": {
-			await ensureAdminKubernetes();
-			try {
-				await verify();
-			} finally {
-				await clearAdminKubeconfig();
-			}
+			await verify();
 			break;
 		}
 		case "--help":
