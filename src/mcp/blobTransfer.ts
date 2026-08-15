@@ -5,28 +5,21 @@ import { routerPost } from "./bridge/helpers.js";
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Where this process stages the blob plane's bytes. Content-addressed, so re-attaching a file the
- * gateway already holds, or receiving the same bytes twice, costs one round trip and no transfer. */
+/** Content-addressed, so re-sending bytes the gateway holds costs a round trip and no transfer. */
 export function agentStagingRoot(): string {
 	return `${process.env.TMPDIR ?? "/tmp"}/switchboard-blobs`;
 }
 
-// Resolved per call rather than cached: a BlobStore is just its root path, so there is nothing to
-// keep, and holding one would pin the first TMPDIR this process ever saw.
+// Per call, not cached: holding one would pin the first TMPDIR this process saw.
 function localBlobStore(): BlobStore {
 	return new BlobStore(agentStagingRoot());
 }
 
-/** Ceiling for this process's staging copies. Smaller than the gateway's, since an agent stages
- * what it is sending or has just received rather than a whole Domain's traffic, but a MULTIPLE of
- * the largest single attachment and never equal to it: a store that can just barely hold one
- * max-size blob evicts it the moment a second transfer starts, so the two would fight instead of
- * queueing. That is the invariant, not the number. */
+/** A MULTIPLE of the largest attachment, never equal to it: a store holding exactly one max blob
+ * evicts it the moment a second transfer starts, so the two fight instead of queueing. */
 const MAX_STAGING_BYTES = MAX_BLOB_BYTES * 4;
 
-/** Keep the staging store bounded. Called on every transfer rather than on a timer, because an MCP
- * process has no tick of its own, and the cost is one directory walk against work that just moved
- * megabytes. Content addressing makes eviction free: anything swept can be fetched again. */
+/** On every transfer, since an MCP process has no tick. Eviction is free: anything swept refetches. */
 export function sweepStaging(): void {
 	try {
 		localBlobStore().sweep({ maxBytes: MAX_STAGING_BYTES });
@@ -35,28 +28,15 @@ export function sweepStaging(): void {
 	}
 }
 
-/**
- * Put a local file's bytes on the gateway and return the reference that names them.
- *
- * A chunk at a time in both hops, so neither this process nor a request body ever holds the whole
- * file. `have` from each write is the resume cursor, so an interrupted upload continues instead of
- * restarting, and a re-sent chunk is a no-op because a blob is named by its own digest.
- */
+/** A chunk at a time in both hops, so neither this process nor a request body holds the whole file. */
 export async function uploadBlob(filePath: string): Promise<string> {
-	// Sweep BEFORE ingesting, never after. Sweeping after would let a file large enough to blow the
-	// budget on its own be staged and then immediately evicted as the single over-budget entry,
-	// leaving the very next line to fail on a blob that existed a millisecond earlier.
+	// BEFORE ingesting: sweeping after would evict an over-budget file the next line then fails on.
 	sweepStaging();
 	return pushStaged(localBlobStore().ingestFile(filePath));
 }
 
-/**
- * Put bytes already in memory on the gateway and return the reference that names them.
- *
- * For content this process GENERATES rather than reads: a `ref://` snapshot, a designer card. Those
- * are bounded and small by construction, so holding one is not the hazard [uploadBlob] exists to
- * avoid, and they still travel the one plane so the wire has a single shape for a file's bytes.
- */
+/** For content this process GENERATES, which is bounded and small, so holding it is not the hazard
+ * uploadBlob avoids. Still one plane, so the wire has one shape for a file's bytes. */
 export async function uploadBytes(bytes: Buffer): Promise<string> {
 	const local = localBlobStore();
 	const blobId = blobIdFor(bytes);
@@ -71,9 +51,7 @@ export async function uploadBytes(bytes: Buffer): Promise<string> {
 	return pushStaged(blobId);
 }
 
-/** Move a staged blob to the gateway, a chunk at a time, resuming from whatever it already holds.
- * `have` from each write IS the resume cursor, so an interrupted upload continues instead of
- * restarting, and a re-sent chunk is a no-op because a blob is named by its own digest. */
+/** `have` IS the resume cursor. A re-sent chunk is a no-op: the blob is named by its own digest. */
 async function pushStaged(blobId: string): Promise<string> {
 	const local = localBlobStore();
 	const remote = (await routerPost("/blob/stat", { blobId })) as { have: number; complete: boolean };
@@ -94,21 +72,13 @@ async function pushStaged(blobId: string): Promise<string> {
 			if (!ack.complete) throw new Error(`blob ${blobId} failed verification at the gateway`);
 			return blobId;
 		}
-		// The gateway's cursor beats our own arithmetic: it is the side that knows what landed. But a
-		// cursor that does not move means the chunk did not land, and re-sending it forever would
-		// spin rather than fail, so a stalled transfer has to become an error the caller can see.
+		// The gateway's cursor wins, but one that never moves means the chunk never landed.
 		if (ack.have <= offset) throw new Error(`blob ${blobId} stalled at offset ${offset}`);
 		offset = ack.have;
 	}
 }
 
-/**
- * Pull a blob's bytes down and return the local path holding them.
- *
- * Resumes from whatever this process already has, and returns immediately for a blob it holds in
- * full. The store seal-verifies the digest, so a truncated or tampered transfer never produces a
- * path at all.
- */
+/** The store seal-verifies the digest, so a truncated or tampered transfer never produces a path. */
 export async function downloadBlob(blobId: string, fromGateway?: string): Promise<string> {
 	const local = localBlobStore();
 	const held = local.path(blobId);
@@ -116,11 +86,9 @@ export async function downloadBlob(blobId: string, fromGateway?: string): Promis
 
 	let offset = local.stat(blobId).have;
 	for (;;) {
-		// The far side decides when a transfer ends, so a peer that never sets `eof` would otherwise
-		// stream onto this disk until it filled. Nothing legitimate crosses the plane's own ceiling.
+		// A peer that never sets `eof` would otherwise stream onto this disk until it filled.
 		if (offset > MAX_BLOB_BYTES) throw new Error(`blob ${blobId} exceeded ${MAX_BLOB_BYTES} bytes`);
-		// `fromGateway` says which Gateway holds the bytes. This process still only ever talks to its
-		// own, which pulls the range in behind this call when it is not the holder.
+		// This process only ever talks to its own gateway, which pulls a foreign holder's bytes in.
 		const res = (await routerPost("/blob/get", {
 			blobId,
 			offset,
@@ -128,7 +96,7 @@ export async function downloadBlob(blobId: string, fromGateway?: string): Promis
 			...(fromGateway ? { fromGateway } : {}),
 		})) as { chunk?: string; eof: boolean };
 		const bytes = Buffer.from(res.chunk ?? "", "base64");
-		// A short read that is not the end would otherwise spin here forever asking for the same offset.
+		// A short non-final read would otherwise spin forever asking for the same offset.
 		if (bytes.length === 0 && !res.eof) throw new Error(`blob ${blobId} stalled at offset ${offset}`);
 		const written = local.write(blobId, offset, bytes, res.eof);
 		if (res.eof) {

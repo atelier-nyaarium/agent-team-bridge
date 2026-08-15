@@ -52,7 +52,6 @@ export function registerConnectorTools(
 	const hasSchema = existsSync(schemaPath);
 	const hasCerts = existsSync(`${connectorDir}/server.crt`) && existsSync(`${connectorDir}/server.key`);
 
-	// mcpConnectorStatus
 	mcpServer.registerTool(
 		"mcpConnectorStatus",
 		{
@@ -105,7 +104,6 @@ export function registerConnectorTools(
 		},
 	);
 
-	// mcpConnectorServe
 	mcpServer.registerTool(
 		"mcpConnectorServe",
 		{
@@ -129,7 +127,6 @@ export function registerConnectorTools(
 		},
 	);
 
-	// mcpConnectorUnserve
 	mcpServer.registerTool(
 		"mcpConnectorUnserve",
 		{
@@ -148,7 +145,6 @@ export function registerConnectorTools(
 		},
 	);
 
-	// mcpConnectorOpen
 	mcpServer.registerTool(
 		"mcpConnectorOpen",
 		{
@@ -201,7 +197,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorClose
 	mcpServer.registerTool(
 		"mcpConnectorClose",
 		{
@@ -230,7 +225,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorGenerateCert
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const generateCertObj: any = z.object({
 		domain: z.string().optional().describe(`Certificate SAN domain. Defaults to \`localhost\`.`),
@@ -277,7 +271,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorGenerateToken
 	mcpServer.registerTool(
 		"mcpConnectorGenerateToken",
 		{
@@ -308,7 +301,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorDisconnect
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const disconnectObj: any = z.object({
 		clientId: z.string().describe(`Six-character client hash from \`mcpConnectorStatus\`.`),
@@ -333,7 +325,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorClientBundle
 	mcpServer.registerTool(
 		"mcpConnectorClientBundle",
 		{
@@ -376,7 +367,6 @@ Disconnects connected clients.
 		},
 	);
 
-	// mcpConnectorCreateSchema (only when no schema exists)
 	if (!hasSchema) {
 		mcpServer.registerTool(
 			"mcpConnectorCreateSchema",

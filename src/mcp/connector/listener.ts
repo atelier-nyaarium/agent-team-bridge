@@ -24,8 +24,7 @@ interface PendingInvocation {
 	clientHash: string;
 }
 
-/** Bounds on a reassembling chunk stream. A client can open one by sending a single frame, so
- * both the part count and the accumulated size have to be refused rather than trusted. */
+/** A client opens one by sending a single frame, so count and size must both be refused. */
 const MAX_CHUNK_STREAM_PARTS = 4096;
 const MAX_CHUNK_STREAM_BYTES = 16_000_000;
 
@@ -124,7 +123,6 @@ export function invokeOnClient(shortHash: string, tool: string, args: Record<str
 		);
 	}
 
-	// Validate params against loaded Zod schema
 	const toolSchema = getToolSchema(tool);
 	if (toolSchema) {
 		const parsed = toolSchema.safeParse(args);
@@ -179,8 +177,7 @@ function acceptChunk(hash: string, streamId: string, seq: number, total: number,
 		chunkStreams.set(key, stream);
 	}
 	if (stream.parts[seq] == null) {
-		// Bounded as it accumulates: a client that keeps sending parts would otherwise grow this
-		// map without limit, and the join at the end doubles whatever it reached.
+		// Bounded, or a client that keeps sending parts grows this map without limit.
 		if (stream.bytes + payload.length > MAX_CHUNK_STREAM_BYTES) {
 			console.error(`${TAG} Dropping stream from ${hash}: over the ${MAX_CHUNK_STREAM_BYTES}-byte cap`);
 			chunkStreams.delete(key);
@@ -244,7 +241,6 @@ function createServer({ hostname, port, mode, cert, key }: CreateServerParams): 
 		fetch(req, server) {
 			const url = new URL(req.url);
 
-			// In HTTPS mode, enforce bearer token auth on all endpoints
 			if (mode === "https" && authToken) {
 				const authHeader = req.headers.get("Authorization") ?? "";
 				const expected = `Bearer ${authToken}`;
@@ -260,7 +256,7 @@ function createServer({ hostname, port, mode, cert, key }: CreateServerParams): 
 				const upgraded = server.upgrade(req, {
 					data: { shortHash: "", instance },
 				});
-				// Bun expects undefined after successful WS upgrade; types require the cast
+				// Bun expects undefined after upgrade; types require the cast.
 				if (upgraded) return undefined as unknown as Response;
 				return new Response(`WebSocket upgrade failed`, { status: 400 });
 			}

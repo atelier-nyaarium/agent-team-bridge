@@ -1,10 +1,8 @@
 ////////////////////////////////
 //  dsCard marker parsing
 //
-//  The compose-time authority for what a design card declares about itself. The wire carries the
-//  result (ChannelFile.cardTitle/cardGroup/cardWidth/cardHeight), so the console docks a card from
-//  fields alone; its own parser survives only for tap-time opening. Regex semantics mirror the
-//  Kotlin twin in android/.../plugins/designer/DesignerCards.kt exactly.
+//  Compose-time authority. The wire carries the result; this parser survives only for tap-time
+//  opening. Regex semantics mirror the Kotlin twin in DesignerCards.kt exactly.
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -19,21 +17,18 @@ export interface DsCardFields {
 ////////////////////////////////
 //  Functions & Helpers
 
-// The marker must LEAD the file (same contract as claude.ai/design's self-check): a first-line
-// `<!-- @dsCard ... -->` comment, nothing but whitespace before it.
+// The marker must LEAD the file: first-line, nothing but whitespace before it.
 const MARKER = /^\s*<!--\s*@dsCard([^>]*?)-->/;
 const ATTR = /([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*"([^"]*)"/g;
 const TITLE = /<title>([^<]*)<\/title>/i;
 
-/** Wire bounds from ChannelFileSchema. Title and group are display strings, so an overlong one is
- * clipped rather than failing the whole message; width/height are display hints, so an out-of-range
- * one is dropped rather than clipped to a lie. */
+/** Title/group are clipped rather than failing the message; width/height are dropped rather than
+ * clipped to a lie. */
 const MAX_TITLE = 200;
 const MAX_GROUP = 64;
 const MAX_DIMENSION = 8192;
 
-/** Parse a design card's declared fields from its HTML, or null when the leading marker is absent
- * (the content is not a card). */
+/** Null when the leading marker is absent. */
 export function parseDsCard(html: string): DsCardFields | null {
 	const match = MARKER.exec(html);
 	if (!match) return null;

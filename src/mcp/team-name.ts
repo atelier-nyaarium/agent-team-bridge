@@ -10,21 +10,11 @@ export function randomTeamId(): string {
 }
 
 /**
- * The per-session team name: a 6-hex digest of the Claude Code harness's `CLAUDE_CODE_SESSION_ID`.
- * Stable across a plugin reload (same process, same id), but NOT across a process restart: a
- * `--resume` forks a fresh session id, so the derived name changes and the phone thread (keyed on
- * the old name) keeps addressing a session that no longer registers. Only the daemon's
- * PROJECT_NAME env pin survives a restart; this fallback exists for launches that have no pin.
+ * A 6-hex digest of `CLAUDE_CODE_SESSION_ID`, stable across a reload but NOT a restart: `--resume`
+ * forks a fresh id, so the phone thread keeps addressing a session that no longer registers. Only
+ * the daemon's PROJECT_NAME pin survives a restart; this is the fallback for launches with none.
  *
- * Returns null - the caller falls back to `randomTeamId()` - only when there is no session id
- * (older harness, `--no-session-persistence`, or the `-p --continue` throwaway id).
- *
- * Only a real claude process reaches this path: an in-process subagent shares the parent's MCP
- * connection and never registers, and a separate teammate process mints its own fresh session id,
- * so no two registering sessions ever derive the same name from another's id.
- *
- * The 6-hex output matches `randomTeamId`'s width and, being hex, is disjoint from the reserved
- * team names (gateway/host), so it can never land on a reserved slot.
+ * Null (falls back to `randomTeamId()`) only when there is no session id at all.
  */
 export function stableTeamName(sessionId: string | undefined): string | null {
 	if (!sessionId) return null;
@@ -32,14 +22,10 @@ export function stableTeamName(sessionId: string | undefined): string | null {
 }
 
 /**
- * Resolve the name this session registers under, from the PROJECT_NAME the environment delivered.
- * Every live registrant must be a COMPOSITE (arity-2) name - a bare arity-1 name is reserved for
- * catalog spawn-points (the load-bearing invariant of the address grammar). So:
- *  - unset: a manually-launched Claude on the host; join under the host spawn-point.
- *  - set but bare (image ENV, manual/VS-Code-direct launch): normalize to a session under that spawn.
- *  - already composite (the daemon's `project.session`): use as-is.
- * Durability is decided later at handshake-confirm (a session with no channel never confirms and so
- * never becomes a record); the composition here is purely a naming step.
+ * A bare (arity-1) name is reserved for spawn-points, so every registrant must be COMPOSITE:
+ *  - unset: a manual host launch, joins the host spawn-point.
+ *  - bare: normalized to a session under that spawn.
+ *  - already composite: used as-is.
  */
 export function resolveSessionNaming(
 	explicitProject: string | undefined,

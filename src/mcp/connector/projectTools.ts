@@ -78,7 +78,7 @@ export async function registerProjectTools(
 	const schemaPath = `${connectorDir}/mcp-schema.js`;
 
 	if (!existsSync(schemaPath)) {
-		// mcpConnectorCreateSchema stub is handled by connectorTools.ts
+		// Stub handled by connectorTools.ts.
 		console.error(`${TAG} No schema at ${schemaPath}`);
 		return;
 	}
@@ -141,7 +141,6 @@ export async function registerProjectTools(
 
 	const tools: McpTool[] = parsed.data;
 
-	// Store schemas and response file specs for validation by listener
 	loadedToolSchemas.clear();
 	loadedResponseFiles.clear();
 	for (const tool of tools) {

@@ -68,8 +68,7 @@ Cannot target another conversation.
 export function registerDesignerTools(mcpServer: McpServer): void {
 	const projectName = bridgeProjectName();
 	if (!projectName) {
-		// Matches registerBridgeTools's own stub pattern: a misconfigured container (no PROJECT_NAME)
-		// sees the real tool names with a clear reason, not a missing tool.
+		// Matches registerBridgeTools's own stub pattern.
 		const configError = {
 			content: [
 				{
@@ -104,8 +103,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		async (args: PushCardArgs) => {
 			const { session_id, name, html, message } = args;
 			const bytes = Buffer.from(html, "utf-8");
-			// The tool call IS the declaration that this file is a card, so the role is unconditional;
-			// the marker only enriches it. The console docks from these fields without opening the file.
+			// The call IS the declaration; the marker only enriches it.
 			const card = parseDsCard(html) ?? {};
 			return postReply(
 				{ session_id, ...(message ? { response: message } : {}) },
@@ -136,9 +134,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		{ title: "Designer Delete Card", description: DELETE_DESCRIPTION, inputSchema: deleteSchema },
 		async (args: DeleteCardArgs) => {
 			try {
-				// postPluginAction self-scopes to this MCP process's own identity - the ONLY identity
-				// field the gateway's /plugin-action route reads to pick a target, so this can only ever
-				// act on OUR OWN conversation.
+				// Self-scoped to this process's own identity, so it can only touch our own conversation.
 				const result = await postPluginAction("designer", "delete-card", { fileName: args.fileName });
 				return {
 					content: [

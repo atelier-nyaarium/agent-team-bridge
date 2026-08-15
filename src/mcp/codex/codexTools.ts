@@ -79,20 +79,13 @@ List this session's Codex agents with their prompt and response history.
 Agents outlive their callers. Use this to resume work after a subagent or workflow ends.
 `.trim();
 
-/**
- * One private ID per tool invocation, minted before the call and reused across its HTTP retries.
- *
- * This is what makes a retry a replay rather than a second delegated task. It is deliberately never
- * shown to Claude: a caller that could choose it could also make two separate requests collide, and
- * a fresh tool call is a new mutation even when its text is identical.
- */
+/** Minted once per call, reused across retries, so a retry replays rather than delegates twice.
+ * Never shown to Claude: a caller-chosen id could collide two separate requests. */
 function operationId(): string {
 	return crypto.randomUUID();
 }
 
-/** What a tool invocation actually sends, built separately from the sending so it can be checked
- * without a server. An absent optional is OMITTED rather than sent as undefined, because the
- * gateway's request schemas are strict. */
+/** Absent is OMITTED, since the gateway's schemas are strict. */
 export function codexRequestBody(
 	kind: "start" | "message" | "await" | "stop" | "list",
 	args: { agentId?: string; prompt?: string; model?: string; cwd?: string } = {},
@@ -165,8 +158,7 @@ export function registerCodexTools(mcpServer: McpServer, dispatch: AgentDispatch
 
 	mcpServer.registerTool(
 		"codexListAgents",
-		// The strict schema rather than a bare `{}`: an empty literal registers in strip mode, so unknown
-		// fields would be silently dropped where every sibling tool refuses them.
+		// Strict, not a bare `{}`: a literal registers in strip mode and silently drops unknown fields.
 		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: listSchema },
 		async () => post(dispatch, codexRequestBody("list")),
 	);

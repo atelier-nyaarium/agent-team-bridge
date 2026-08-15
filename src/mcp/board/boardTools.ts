@@ -63,8 +63,7 @@ const UpdateInputSchema = {
 	title: z.string().min(1).max(500).optional().describe(`Replaces the title.`),
 	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replaces the body. \`null\` clears it.`),
 	state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]).optional().describe(`Work state.`),
-	// nullable AND optional: absent means leave the placement alone, null means move to top level.
-	// Legal here because MCP inputs never pass through the Kotlin codegen.
+	// null moves to top level, absent leaves it alone. Legal here: never reaches Kotlin codegen.
 	parent: ID.nullable()
 		.optional()
 		.describe(
@@ -171,15 +170,8 @@ The owner attaches files from their phone. You can read them but cannot change t
 - Unclaimed entries send no notice. Check attachments when you claim one.
 `.trim();
 
-/**
- * One private ID per MUTATING tool invocation, minted before the call and reused across its HTTP
- * retries. This is what makes a retry a replay rather than a second write.
- *
- * Create additionally derives its entry id from it, so its replay is structural; the others rely on
- * the route's own record of the id. Deliberately never shown to Claude: a caller that could choose
- * it could also make two separate requests collide, and a fresh tool call is a new mutation even
- * when its text is identical.
- */
+/** Minted once per invocation, reused across HTTP retries, so a retry replays rather than writes
+ * twice. Never shown to Claude: a caller-chosen id could collide two separate requests. */
 function operationId(): string {
 	return crypto.randomUUID();
 }
@@ -187,10 +179,8 @@ function operationId(): string {
 /** The actions that CHANGE something. A read is re-run freely; these are not. */
 const MUTATING = new Set(["claim", "release", "create", "update", "clear"]);
 
-/** What a tool invocation sends, built separately from the sending so it can be checked without a
- * server. An absent optional is OMITTED rather than sent as undefined, because the gateway's request
- * schema is strict. `from` is NOT here: postBoard supplies this process's own identity, so no tool
- * can name a different session. */
+/** Absent is OMITTED, since the gateway's schema is strict. `from` is NOT here: postBoard supplies
+ * this process's own identity. */
 export function boardRequestBody(
 	action: "list" | "claim" | "release" | "create" | "update" | "clear" | "attachments",
 	args: {
@@ -217,17 +207,12 @@ export function boardRequestBody(
 }
 
 /**
- * A fetch is TWO hops, and neither needs a gate of its own.
- *
- * Hop one resolves filenames to blobIds on `/task-board`, which already refuses an impersonated
- * sender and filters on what this session may see. Hop two moves the bytes through `/blob/get`,
- * already chunked, resumable and digest-verified. The blobIds live only in here: what comes back is
- * paths, so the plumbing never reaches the model's context and cannot be replayed out of it.
+ * Two hops, neither needing its own gate: `/task-board` resolves filenames to blobIds and already
+ * filters on what this session may see, and `/blob/get` moves the bytes, chunked and verified. The
+ * blobIds live only here; what comes back is paths.
  */
 async function fetchAttachments(args: { id: string; filenames?: string[] }): Promise<string> {
-	// Through the same builder as every other action, so "not in MUTATING" is what keeps this read
-	// from minting an operation id. A minted one would have the route record this answer and replay
-	// it verbatim, handing back blobIds for pictures the owner has since swapped.
+	// Not in MUTATING, so this mints no operation id, or a replay would hand back stale blobIds.
 	const answer = (await postBoard(boardRequestBody("attachments", { id: args.id }))) as {
 		attachments?: Array<{ blobId: string; blobGateway: string; filename: string; mime: string; size: number }>;
 	};
@@ -239,12 +224,9 @@ async function fetchAttachments(args: { id: string; filenames?: string[] }): Pro
 		return `None of those names are on entry ${args.id}. It has: ${all.map((a) => a.filename).join(", ")}`;
 	}
 
-	// Before the transfer, not after: the staging root is byte-bounded and this is the first download
-	// path that sweeps it at all, so a big fetch would otherwise land on whatever the last one left.
+	// Before the transfer, or a big fetch lands on whatever the last one left.
 	sweepStaging();
-	// The entry's folder is REPLACED, not added to. Collision-free naming is right for a message,
-	// where each one's files are distinct, and wrong here: re-reading an entry would otherwise land
-	// shot-2.png, shot-3.png and so on, and leave behind files the owner has since removed.
+	// REPLACED, not added to, or a re-read grows shot-2.png, shot-3.png forever.
 	rmSync(join(EVIE_FILES_DIR, safeFilename(args.id)), { recursive: true, force: true });
 	const landed = await materializeFiles({
 		discordMessageId: args.id,
@@ -265,8 +247,7 @@ async function fetchAttachments(args: { id: string; filenames?: string[] }): Pro
 	return lines.join("\n");
 }
 
-/** Wire shape of one auto-marked entry. Read defensively rather than parsed: the gateway updates on
- * its own trigger, so a plugin can be talking to one that has never heard of a cascade. */
+/** Read defensively: an older gateway has never heard of a cascade. */
 type CascadeLine = { id?: unknown; title?: unknown; from?: unknown; to?: unknown; reason?: unknown };
 
 const CASCADE_CAUSE: Record<string, string> = {
@@ -275,13 +256,8 @@ const CASCADE_CAUSE: Record<string, string> = {
 	child_reopened: "work under it went back to unfinished",
 };
 
-/**
- * What the board did on its own, as prose, because a bare list of ids reads as something the caller
- * has to act on. It does not: the change is already saved.
- *
- * Returns empty for anything that is not a populated array of usable rows, so an older gateway's
- * reply, or a newer one's field this does not understand, degrades to the plain JSON answer.
- */
+/** As prose, so it does not read as something the caller must act on; the change is already saved.
+ * Empty for anything not a usable row array, degrading to the plain JSON answer. */
 export function cascadeProse(raw: unknown): string {
 	if (!Array.isArray(raw) || raw.length === 0) return "";
 	const lines: string[] = [];
@@ -309,8 +285,7 @@ async function post(
 		return { content: [{ type: "text" as const, text: `${JSON.stringify(result, null, 2)}${prose}` }] };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		// A failure here cannot say whether the write landed and the reply was lost. Calling the tool
-		// again would mint a NEW operation id, so a create that did land would double; list first.
+		// A retry mints a NEW operation id, so a create that landed would double; list first.
 		const text = `Task board request failed: ${message}. It may still have applied - run taskBoardList before retrying.`;
 		return { content: [{ type: "text" as const, text }], isError: true };
 	}
@@ -370,8 +345,7 @@ export function registerBoardTools(mcpServer: McpServer): void {
 				return { content: [{ type: "text" as const, text: await fetchAttachments(args) }] };
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				// Safe to re-run, unlike the mutating tools: this mints no operation id, so a retry is a
-				// fresh read rather than a replay of a stale one.
+				// Mints no operation id, unlike the mutating tools, so a retry is a fresh read.
 				const text = `Could not fetch attachments for ${args.id}: ${message}. Retrying is safe.`;
 				return { content: [{ type: "text" as const, text }], isError: true };
 			}

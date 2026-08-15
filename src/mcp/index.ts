@@ -37,15 +37,12 @@ import { resolveSessionNaming } from "./team-name.js";
 ////////////////////////////////
 //  Functions & Helpers
 
-// Grace between the client's initialized signal and the FIRST router connect. The gateway pushes a
-// lead handshake within microseconds of the bridge registering, but the client wires its channel
-// notification handler tens of ms AFTER the MCP initialize completes - an instant register loses
-// that race and the push is dropped unheard (observed 6-32ms margins on a localhost gateway). Only
-// the first connect is gated; WS reconnects (helpers.ts's reconnector) stay instant, since a warm
-// client has no such race.
+// An instant register loses the handshake push: the client wires its channel handler tens of ms
+// after initialize completes (6-32ms observed). Only the first connect is gated; reconnects stay
+// instant, since a warm client has no such race.
 const INITIAL_ROUTER_CONNECT_GRACE_MS = 200;
 
-// Keyed by the backend union, so a backend added to the registry without a registrar fails the build.
+// A backend added without a registrar fails the build.
 const AGENT_TOOL_REGISTRARS: Record<AgentBackendId, (mcpServer: McpServer, dispatch: AgentDispatch) => void> = {
 	codex: registerCodexTools,
 	copilot: registerCopilotTools,
@@ -56,14 +53,8 @@ const AGENT_GATEWAY_DISPATCH: Record<AgentBackendId, AgentDispatch> = {
 	copilot: copilotGatewayDispatch,
 };
 
-/**
- * Register one backend's tools, if this session can reach it at all, and answer how.
- *
- * The daemon's declaration wins wherever it exists: it carries coordination this process cannot
- * offer, and its agents outlive the session. Otherwise a locally installed CLI is enough on its own,
- * which is what makes a Gatewayless session able to delegate. Installing the CLI is the whole opt-in
- * either way; nothing here reads a flag.
- */
+/** The daemon's declaration wins: it carries coordination this process cannot offer. Otherwise a
+ * locally installed CLI is enough, which is what lets a Gatewayless session delegate. */
 function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescriptor, capabilities: Capability[]): void {
 	const register = AGENT_TOOL_REGISTRARS[backend.id];
 	if (hasCapability(capabilities, agentCapabilityId(backend.id))) {
@@ -73,8 +64,7 @@ function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescrip
 	if (!isAgentBackendInstalled(backend)) return;
 
 	const local = createLocalAgentBackend(backend);
-	// Reaped with the session that started it. A local agent has no daemon to outlive it, so a child
-	// left behind here would be one nothing can ever reach or stop again.
+	// Reaped with this session: a local agent has no daemon to outlive it.
 	localBackends.push(local);
 	console.error(`[${backend.id}] no daemon declared it, serving locally from the installed CLI`);
 	register(mcpServer, (body) => local.handle(body));
@@ -94,14 +84,9 @@ The conversation stays open. Reply as many times as you need; there is no finali
 
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
-	// Every session is a bridge peer registering under a composite `spawn.session` name from
-	// resolveSessionNaming (see team-name.ts for the composition rules). Peers reach the gateway on
-	// the docker network inside a container or the forwarded localhost port elsewhere. The host
-	// plumbing (wake + terminal view) lives in the headless host daemon, not here.
 	const envPinned = Boolean(process.env.PROJECT_NAME);
 	process.env.PROJECT_NAME = resolveSessionNaming(process.env.PROJECT_NAME, process.env.CLAUDE_CODE_SESSION_ID);
-	// The one line that makes an identity split diagnosable: a session launched without the daemon's
-	// env pin registers under a DERIVED name, and the phone thread keeps addressing the old one.
+	// A session launched without the daemon's env pin registers under a DERIVED name.
 	console.error(
 		`[bridge] identity ${process.env.PROJECT_NAME} (${envPinned ? "env-pinned" : "derived - manual launch?"})`,
 	);
@@ -112,9 +97,7 @@ export async function startMcp(): Promise<void> {
 	const agentType = process.env.AGENT_TYPE || detectAgentType();
 	const isChannel = agentType === "claude";
 
-	// Asked before the server exists, because it decides which tools get registered and what
-	// guidance the session carries. Bounded and single-attempt: an unreachable gateway costs a beat
-	// and falls back, never the startup.
+	// Before the server exists: it decides which tools register.
 	const capabilities = await fetchCapabilities(process.env.BRIDGE_ROUTER_URL);
 
 	const mcpServer = new McpServer(
@@ -133,25 +116,16 @@ export async function startMcp(): Promise<void> {
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);
 	registerHumanTools(mcpServer, capabilities);
-	// After registerBridgeTools, so bridgeProjectName() already reflects whether PROJECT_NAME is set.
-	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
-	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
+	// Adopted on the next start, matching the console's own restart-to-adopt.
 	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
-	// These tools reach a child process rather than a console surface, so the gate is whether one can
-	// be reached at all: a daemon that declared the backend, or the CLI installed right here.
+	// Reaches a child process, so the gate is whether one can be reached: a daemon, or the CLI here.
 	for (const backend of AGENT_BACKENDS) registerAgentBackend(mcpServer, backend, capabilities);
-	// Gated on the console plugin that renders the board: without it the owner has no way to see or
-	// answer anything a session writes, so the tools would be a one-way channel into a surface nobody
-	// is looking at.
+	// Without the board plugin the owner cannot see or answer anything a session writes.
 	if (hasCapability(capabilities, "taskboard")) registerBoardTools(mcpServer);
-	// Ref snapshotting is not a tool of its own: it rides the reply path, so it is switched on here
-	// rather than registered. A session whose owner has no console able to render a code viewer never
-	// pays to build one.
+	// Not a tool of its own: it rides the reply path, so it is switched on rather than registered.
 	setReferencesEnabled(hasCapability(capabilities, "references"));
 
-	// The game-client connector serves /workspace project schemas, so it is container-only. The
-	// registered name is composite (`project.session`); the workspace dir + schema are keyed by the
-	// PROJECT (spawn) segment, so resolve that, not the full session name.
+	// Container-only. The registered name is composite; the workspace/schema key on the project alone.
 	if (inContainer) {
 		const projectName = process.env.PROJECT_NAME ? parseSessionName(process.env.PROJECT_NAME).project : undefined;
 		const port = Number(process.env.MCP_CONNECTOR_PORT) || 20002;
@@ -165,7 +139,7 @@ export async function startMcp(): Promise<void> {
 				console.error(`[connector] Auth token loaded`);
 			}
 
-			// Best-effort start - port may be held by another IDE session
+			// Port may be held by another IDE session.
 			try {
 				startListener(port);
 			} catch {
@@ -192,9 +166,7 @@ export async function startMcp(): Promise<void> {
 	}
 
 	const transport = new StdioServerTransport();
-	// See INITIAL_ROUTER_CONNECT_GRACE_MS: register on the bridge only once the client can actually
-	// hear the pushes that registration triggers. A session with no initialized client should not be
-	// present on the bridge at all - it would absorb pushes it can only drop.
+	// See INITIAL_ROUTER_CONNECT_GRACE_MS.
 	mcpServer.server.oninitialized = () => {
 		setTimeout(connectToRouter, INITIAL_ROUTER_CONNECT_GRACE_MS);
 	};
@@ -207,8 +179,7 @@ export async function startMcp(): Promise<void> {
 		console.error(`[mcp] stdin closed, shutting down`);
 		closeRouter();
 		stopListener();
-		// A locally hosted backend's child has no daemon supervising it, so this is the only thing that
-		// ever reaps one. Left running, it would hold its model session open with nothing able to reach it.
+		// The only thing that ever reaps a local child: no daemon supervises it.
 		for (const local of localBackends) local.shutdown();
 		process.exit(0);
 	});

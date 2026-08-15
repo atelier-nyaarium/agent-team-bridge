@@ -35,7 +35,6 @@ function generateShortHash(): string {
 }
 
 export function addClient(ws: ServerWebSocket<ClientData>, remoteAddress: string, instance: string): ClientSession {
-	// If a client with the same instance name already exists, close the old connection
 	if (instance) {
 		for (const [hash, existing] of clients) {
 			if (existing.instance === instance) {
