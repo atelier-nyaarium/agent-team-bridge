@@ -1175,3 +1175,48 @@ Layers on the console-bridge deploy. The gateway-to-evie WS is admission-only, n
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
    local state and the host blob.
+
+### Cutting over to the self-hosted Router
+
+The Router (`src/federation-server/`) is built, tested and running, but NOTHING is cut over: the
+gateway and console still reach evie through the k8s service-proxy. Both transports coexist by
+design, chosen per record by a `transport` field that reads as `k8s` when absent. This is the
+runbook for the switch, and it is deliberately a human decision, not a script.
+
+The one-way door: **rollback stays clean only until the Router accepts its first federation
+mutation** (an admission, a revocation, a tenant op). Before that, repointing back to the cluster
+loses nothing. After it, the cluster's copy is stale and repointing can resurrect a revoked member.
+
+1. `./backup-federation.sh` with the Router stopped. It refuses while it runs, asserts the cert,
+   key and state all landed, and includes both tokens - a data-only archive authenticates nobody.
+2. `bun run export:federation` with the Router stopped. Read-only against the cluster; it imports
+   the evie identity keypair rather than minting one, which is what makes enrolled devices still
+   resolve this Router. It aborts if the Secret moves mid-read.
+3. `./start-federation.sh`, then `bun run smoketest:federation`. Expect every check to pass.
+4. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
+   branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
+   `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), then
+   `./start-gateway.sh`. Confirm `router_connected: true` on the gateway's `/health`.
+5. Point the phone at the LAN address in Settings, Federation Router. The port defaults to 20001
+   and the fingerprint comes from the Router's `/health`. Editing there repoints the transport
+   ONLY; it never re-runs provisioning, so admission and enrollment survive.
+6. Verify before trusting it: send, poll, board, peek, wake, and add-a-device.
+
+### Retiring the k8s path
+
+Only after living on the Router, and only once the owner confirms the console update is taken.
+Until then the deletions below would break a live path.
+
+- switchboard: the k8s branch of `gateway/evie/transport.ts`, the six `EVIE_*` transport env vars,
+  the kubectl plumbing in `setup-provision.ts` / `setup-purge.ts` / `bootstrap-domain.ts` /
+  `scripts/lib/host.ts`, the `kubectl` install in the Dockerfile, and the k8s rows in
+  `setup-constants.ts`. `setup-purge` needs a Router-side replacement first: today it mutates the
+  CLUSTER, so after cutover it would wipe local state while leaving the Router's file untouched.
+- evie-bot: the gateway/console/device-approval bridges plus ELEVEN synced copies (the seven
+  `federation-*` leaves, the `federation-lifecycle` barrel, `evie-protocol.ts`, `crypto.ts`,
+  `admission.ts`), their rows in `_lint.yml` and `_test.yml`, and the bridge k8s objects.
+  `notice.ts` STAYS - its twin is in nyaaskills, not evie.
+- console: the k8s proxy transport, `PROXY_CEILING_MS`, and legacy provisioning parsing. Another
+  console release.
+- Then the legacy halves of the `transport` unions in the shared schemas, and the LKE bridge
+  objects. The cluster keeps plain evie-bot hosting with no switchboard role.

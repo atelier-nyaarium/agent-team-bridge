@@ -347,7 +347,7 @@ is a configuration change, not a first-of-its-kind build.
 - Release: this phase ships via the normal `bun run build patch` ritual (console release);
   local Kotlin gate before merge.
 
-## Phase 6 - Migration tooling + cutover
+## Phase 6 - Migration tooling + cutover (tooling ✅, cutover is the owner's switch)
 
 - Export script (`setup.ts` menu entry): with the Router STOPPED, pull the live
   `evie-federation` Secret verbatim (identity included) + `CONSOLE_BRIDGE_TOKEN`, write
@@ -366,7 +366,7 @@ is a configuration change, not a first-of-its-kind build.
   replaces it in Phase 7.
 - No plugin bump; this phase is operations.
 
-## Phase 7 - Clean break (two stages)
+## Phase 7 - Clean break (runbook graduated to CLAUDE.md; gated on the cutover)
 
 Stage 7a - post-cutover cleanup (after living on the Router):
 - Switchboard: delete the service-proxy transport branch + the six `EVIE_*` transport env
