@@ -84,6 +84,18 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
  * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
  * keyring, cursors and admission state untouched.
  */
+/**
+ * Canonicalize a hand-typed SHA-256 leaf fingerprint, or null if it is not one. Accepts the
+ * colon- and space-separated spellings openssl and every certificate viewer print, since that is
+ * what an owner copies off a terminal; the pin check compares plain lowercase hex, so an
+ * un-normalized paste fails later as an opaque cert mismatch instead of here as a typo.
+ */
+internal fun normalizeCertFp(raw: String): String? {
+	val stripped = raw.trim().filterNot { it == ':' || it == ' ' || it == '-' }.lowercase()
+	if (stripped.length != 64 || !stripped.all { it.isDigit() || it in 'a'..'f' }) return null
+	return stripped
+}
+
 suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) = withContext(Dispatchers.IO) {
 	val blob = store.load() ?: run {
 		_state.update { it.copy(error = "Not provisioned yet.") }
@@ -94,11 +106,15 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 		_state.update { it.copy(error = "Enter a domain or IP.") }
 		return@withContext
 	}
+	val fp = normalizeCertFp(certFp) ?: run {
+		_state.update { it.copy(error = "Fingerprint must be 64 hex characters (SHA-256).") }
+		return@withContext
+	}
 	val url = if (trimmedHost.startsWith("http")) "$trimmedHost:$port" else "https://$trimmedHost:$port"
 	val edited = JSONObject(blob).apply {
 		put("transport", "direct")
 		put("routerUrl", url)
-		put("routerCertFp", certFp.trim().lowercase())
+		put("routerCertFp", fp)
 	}.toString()
 	try {
 		Provisioning.parse(edited)
