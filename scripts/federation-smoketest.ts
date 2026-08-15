@@ -18,6 +18,8 @@ const insecureTls = { rejectUnauthorized: false, tls: { rejectUnauthorized: fals
 const expectedFingerprint = readArg("--fingerprint") ?? fingerprintFromLogs();
 let failures = 0;
 
+// /health carries it, so this needs neither root for the cert file nor a boot line that
+// log rotation would discard. The container log is the fallback.
 function fingerprintFromLogs(): string {
 	const logs = Bun.spawnSync(["docker", "logs", "switchboard-federation"], { stderr: "pipe" });
 	const text = `${logs.stdout.toString()}${logs.stderr.toString()}`;
@@ -137,6 +139,8 @@ await check("TLS fingerprint", checkFingerprint);
 await check("health", async () => {
 	const response = await request("/health");
 	if (response.status !== 200) throw new Error(`status ${response.status}`);
+	const served = (JSON.parse(response.body.toString()) as { certFingerprint?: string }).certFingerprint;
+	if (served !== expectedFingerprint) throw new Error("health reports a different fingerprint");
 });
 await check("unknown path", async () => {
 	const response = await request("/missing");
@@ -149,7 +153,8 @@ await check("console rejects missing token", async () => {
 await check("console accepts token", async () => {
 	if (!consoleToken) throw new Error("missing console token");
 	const response = await request("/console", { method: "POST", token: consoleToken, body: Buffer.from("{}") });
-	if (response.status === 401) throw new Error("token rejected");
+	// Exact status: a 500 from a wedged surface would also pass a not-401 assertion.
+	if (response.status !== 400) throw new Error(`status ${response.status}`);
 });
 await check("public approval join", async () => {
 	const body = Buffer.from(

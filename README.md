@@ -41,8 +41,9 @@ DevContainers (one per project)
 | Port  | Service                              |
 |-------|--------------------------------------|
 | 20000 | Gateway (HTTP + WS bridge)           |
-| 20001 | Evie bridge server (tool call WS)    |
+| 20001 | Federation Router (TLS)              |
 | 20002 | MCP Connector (game client WS)       |
+| 20003 | Enrollment TLS (arming only)         |
 
 ## Starting the gateway
 

@@ -196,7 +196,9 @@ export class RouterServer {
 	private async route(request: IncomingMessage): Promise<Response> {
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 		if (url.pathname === "/health" && request.method === "GET") {
-			return new Response(JSON.stringify({ ok: true }));
+			// The fingerprint rides the health answer so clients can confirm the pin they hold
+			// without root access to the cert file or a boot line that log rotation discards.
+			return new Response(JSON.stringify({ ok: true, certFingerprint: this.tls.certFp }));
 		}
 		const maxBody =
 			url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")

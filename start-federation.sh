@@ -10,7 +10,10 @@ if ! docker network inspect switchboard-federation >/dev/null 2>&1; then
 	docker network create switchboard-federation >/dev/null
 fi
 
-docker compose -f docker-compose.federation.yml -p switchboard-federation up --build -d
+if ! docker compose -f docker-compose.federation.yml -p switchboard-federation up --build -d; then
+	echo "ERROR: docker compose up failed - the Router was never started" >&2
+	exit 1
+fi
 
 echo "Waiting for the federation Router to be ready..."
 for _ in $(seq 1 30); do
