@@ -83,14 +83,27 @@ object DebugLog {
 	 */
 	fun attachIngest(prov: Provisioning) {
 		if (BuildConfig.DEBUG) {
-			val proxyBase = "${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
-			ingestUrl = "$proxyBase/ingest"
-			ingestSaToken = prov.saToken
+			// Branch like every other console call. The k8s form needs an SA token the direct blob
+			// does not carry, so building it unconditionally left the whole trace stranded on-device
+			// for exactly the setup most likely to need reading.
+			val direct = prov.transport == "direct"
+			ingestUrl =
+				if (direct) {
+					"${prov.routerUrl.trimEnd('/')}/ingest"
+				} else {
+					"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy/ingest"
+				}
+			ingestSaToken = if (direct) "" else prov.saToken
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
 			ingestConversationId = prov.conversationId
-			ingestSslFactory = runCatching { pinnedSocketFactory(prov.caPem) }.getOrNull()
-			log("Ingest", "attached device=${prov.device} conv=${prov.conversationId} pinned=${ingestSslFactory != null}")
+			ingestSslFactory =
+				if (direct) {
+					runCatching { leafPinnedSocketFactory(prov.routerCertFp) }.getOrNull()
+				} else {
+					runCatching { pinnedSocketFactory(prov.caPem) }.getOrNull()
+				}
+			log("Ingest", "attached direct=$direct device=${prov.device} pinned=${ingestSslFactory != null}")
 		}
 	}
 
@@ -118,13 +131,18 @@ object DebugLog {
 				val reqBody = body.toByteArray()
 				val url2 = java.net.URL(url)
 				val conn = url2.openConnection() as java.net.HttpURLConnection
-				// Trust the cluster CA, or the HTTPS handshake to the API server fails.
+				// Trust the cluster CA (k8s) or the Router's pinned leaf (direct), or the handshake
+				// fails. The Router's cert carries no useful subject, so its identity is the
+				// fingerprint the trust manager already checked, not the hostname.
 				(conn as? javax.net.ssl.HttpsURLConnection)?.let { https ->
 					ingestSslFactory?.let { https.sslSocketFactory = it }
+					if (saToken.isEmpty()) https.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
 				}
 				conn.requestMethod = "POST"
 				conn.setRequestProperty("Content-Type", "application/json")
-				conn.setRequestProperty("Authorization", "Bearer $saToken")
+				// The SA token authenticates to the API SERVER, so it is meaningless (and absent)
+				// on the direct branch, where the Router gates on the app token alone.
+				if (saToken.isNotEmpty()) conn.setRequestProperty("Authorization", "Bearer $saToken")
 				conn.setRequestProperty("X-Console-Bridge-Token", "Bearer $appToken")
 				conn.connectTimeout = 8_000
 				conn.readTimeout = 8_000
@@ -184,6 +202,25 @@ object DebugLog {
 
 	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned
 	 * OkHttp client. The default trust store rejects the cluster-signed API server. */
+	/** Trust exactly the Router's self-signed leaf, by fingerprint. It has no chain to validate, so
+	 * pinning it IS the trust; hostname verification is handled by the caller's own verifier. */
+	private fun leafPinnedSocketFactory(certFpHex: String): javax.net.ssl.SSLSocketFactory {
+		val tm = object : javax.net.ssl.X509TrustManager {
+			override fun checkClientTrusted(
+				chain: Array<java.security.cert.X509Certificate>,
+				authType: String,
+			) = throw java.security.cert.CertificateException("client authentication is not used")
+
+			override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) =
+				checkPinnedLeaf(chain, certFpHex)
+
+			override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
+		}
+		return javax.net.ssl.SSLContext.getInstance("TLS")
+			.apply { init(null, arrayOf<javax.net.ssl.TrustManager>(tm), java.security.SecureRandom()) }
+			.socketFactory
+	}
+
 	private fun pinnedSocketFactory(caPem: String): javax.net.ssl.SSLSocketFactory {
 		val ca = java.security.cert.CertificateFactory.getInstance("X.509")
 			.generateCertificate(caPem.byteInputStream())
