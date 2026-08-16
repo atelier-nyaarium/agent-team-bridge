@@ -15,10 +15,8 @@ import {
 	envGet,
 	envSet,
 	err,
-	jparse,
 	note,
 	secureFile,
-	TTY_PASTE_LIMIT,
 } from "./lib/host.js";
 import { FEDERATION_NETWORK, ROUTER_PORT } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
@@ -212,20 +210,6 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 		if (choice === "b") return "back";
 		if (choice === "p") {
 			const bundle = ask("Paste the bundle:");
-			// A terminal silently drops a paste past its line buffer, so a near-limit blob that will not
-			// parse was cut rather than malformed, and saying "invalid" would blame the wrong thing.
-			//
-			// A current bundle cannot reach this: it is the root plus this gateway's own admission, a
-			// fixed ~1.9 KB even with absurd inputs. So hitting it means the SENDER is old - before 8.3.0
-			// the bundle carried the whole Domain snapshot and grew with every member admitted, which is
-			// exactly how it crossed the line. Name that, since updating the phone is the actual fix.
-			if (bundle.length >= TTY_PASTE_LIMIT - 1 && jparse(bundle) === null) {
-				err(
-					`the paste arrived as ${bundle.length} bytes and does not parse - your terminal cut it at its ~${TTY_PASTE_LIMIT} byte limit.\n` +
-						`  A current bundle is ~1.9 KB and cannot hit this. Update the Switchboard app (8.3.0+) and re-run enrollment.`,
-				);
-				continue;
-			}
 			if (bundle && (await postPastedBundle(bundle))) return "installed";
 		}
 	}
