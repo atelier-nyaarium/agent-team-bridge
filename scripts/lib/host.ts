@@ -181,6 +181,20 @@ export function confirm(label: string): boolean {
 	return ask(`${label} [y/N]:`).toLowerCase() === "y";
 }
 
+/**
+ * The size past which a terminal cannot be trusted to carry a paste.
+ *
+ * A TTY in canonical mode buffers input per line and the kernel's line discipline caps that at 4096
+ * bytes: paste 6000 characters and exactly 4095 arrive, the rest DISCARDED with no error and no
+ * marker, just a shorter string. Raw mode does not rescue it either - the pty's own input buffer is
+ * the same size, and a bulk write past it is dropped while the reader is still draining. Measured
+ * both ways before believing it.
+ *
+ * So anything approaching this has to travel as a file, and a failed parse near it is almost
+ * certainly truncation rather than a malformed document.
+ */
+export const TTY_PASTE_LIMIT = 4096;
+
 ////////////////////////////////
 //  JSON
 
