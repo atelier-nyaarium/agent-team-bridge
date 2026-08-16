@@ -37,7 +37,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	 * exactly one (the proxy), so the whole failover machinery below is inert there. */
 	private val candidates: List<String> =
 		if (direct) {
-			reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, reachPort(prov.routerUrl, DEFAULT_ROUTER_PORT))
+			reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, DEFAULT_ROUTER_PORT)
 		} else {
 			listOf("${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy")
 		}
@@ -130,22 +130,27 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	internal fun reached(advertised: RouterReach?) {
 		if (!direct) return
 		val known = RouterReach.decode(store.loadRouterReach())
+		// The port travels with the host it was advertised beside: a Router that named a public host
+		// also said which port, and absent there means its own, never a port remembered from before.
 		val next = RouterReach(
 			publicHost = advertised?.publicHost ?: known.publicHost,
+			publicPort = if (advertised?.publicHost != null) advertised.publicPort else known.publicPort,
 			lanAddresses = advertised?.lanAddresses?.takeIf { it.isNotEmpty() } ?: known.lanAddresses,
 		)
 		if (next != known) store.saveRouterReach(next.encode())
-		next.publicHost?.let(::selfCorrectBootstrap)
+		next.publicHost?.let { selfCorrectBootstrap(it, next.publicPort) }
 	}
 
 	/** Point the stored blob at [publicHost] when it names something else. A no-op when it already
-	 * agrees, so an ordinary connect does not rewrite the blob on every poll. */
-	private fun selfCorrectBootstrap(publicHost: String) {
+	 * agrees, so an ordinary connect does not rewrite the blob on every poll. The port is the advertised
+	 * public one; with none advertised, whatever the blob already names, so an owner-typed port is not
+	 * rewritten by a Router that said nothing about ports. */
+	private fun selfCorrectBootstrap(publicHost: String, publicPort: Int?) {
 		val blob = store.load() ?: return
 		val json = runCatching { org.json.JSONObject(blob) }.getOrNull() ?: return
 		val currentUrl = json.optString("routerUrl")
 		if (currentUrl.isEmpty()) return
-		val port = reachPort(currentUrl, DEFAULT_ROUTER_PORT)
+		val port = publicPort ?: reachPort(currentUrl, DEFAULT_ROUTER_PORT)
 		val wanted = "https://$publicHost:$port"
 		if (currentUrl == wanted) return
 		DebugLog.log("Relay", "bootstrap self-corrected to $publicHost")

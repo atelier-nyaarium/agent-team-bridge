@@ -62,8 +62,7 @@ foreach ($i in 1..30) {
 	try {
 		$resp = Invoke-WebRequest -Uri 'http://localhost:20000/health' -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
 		if ($resp.StatusCode -eq 200) {
-			Write-Host "Gateway ready (Host: $effId). Waiting 10s for evie-bot..."
-			Start-Sleep -Seconds 10
+			Write-Host "Gateway ready (Host: $effId)."
 			exit 0
 		}
 	} catch { }

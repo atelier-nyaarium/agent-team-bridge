@@ -70,13 +70,24 @@ export interface ConsoleSurfaceParams {
 	 * ends on a home network at a specific private address, and only a console that already holds the
 	 * token has any use for it. */
 	onReach?: () => RouterReachAnswer;
+	/** The gateways registered into the admin Domain, for the host's own setup screen. Admin Domain
+	 * only, and never every Domain: the app token is shared by every tenant's console. */
+	onGateways?: () => RouterGatewaysAnswer;
 }
 
 /** What the `reach` op answers. Both fields may be empty on a Router whose owner has not configured
- * them; the console then keeps whatever address it already has. */
+ * them; the console then keeps whatever address it already has. `publicPort` is the port the public
+ * host is dialed on, which is not the Router's own port when a forward remaps it; absent means the
+ * Router's own. LAN addresses are always on the Router's own port. */
 export interface RouterReachAnswer {
 	publicHost: string | null;
+	publicPort?: number;
 	lanAddresses: string[];
+}
+
+/** What the `gateways` op answers. `signFp` is null for an identity-less registration. */
+export interface RouterGatewaysAnswer {
+	gateways: { gatewayId: string; signFp: string | null }[];
 }
 
 const CONSOLE_PROTOCOL_VERSION = 1;
@@ -108,6 +119,7 @@ export class ConsoleSurface {
 		| null;
 	private readonly onTransport: ((req: TransportRequest) => TransportResult | Promise<TransportResult>) | null;
 	private readonly onReach: (() => RouterReachAnswer) | null;
+	private readonly onGateways: (() => RouterGatewaysAnswer) | null;
 	private readonly pending = new Map<
 		string,
 		{ resolve: (res: Response) => void; timer: ReturnType<typeof setTimeout> }
@@ -128,6 +140,7 @@ export class ConsoleSurface {
 		onTrustPending,
 		onTransport,
 		onReach,
+		onGateways,
 	}: ConsoleSurfaceParams) {
 		this.authToken = authToken;
 		this.getBridge = getBridge;
@@ -142,6 +155,7 @@ export class ConsoleSurface {
 		this.onTrustPending = onTrustPending ?? null;
 		this.onTransport = onTransport ?? null;
 		this.onReach = onReach ?? null;
+		this.onGateways = onGateways ?? null;
 		this.handleRequest = this.handleRequest.bind(this);
 	}
 
@@ -264,6 +278,11 @@ export class ConsoleSurface {
 		return json(this.onReach(), 200);
 	}
 
+	private handleGateways(): Response {
+		if (!this.onGateways) return bounce(501, `gateways not available`, false);
+		return json(this.onGateways(), 200);
+	}
+
 	public settleConsoleRelay(opId: string, reply: Record<string, unknown>): void {
 		const entry = this.pending.get(opId);
 		if (!entry) return;
@@ -374,6 +393,7 @@ export class ConsoleSurface {
 
 		if (body.transport !== undefined) return this.handleTransport(body.transport);
 		if (body.reach !== undefined) return this.handleReach();
+		if (body.gateways !== undefined) return this.handleGateways();
 
 		const { opId, signerSignPub, sealed, targetGateway } = body;
 		if (

@@ -103,24 +103,40 @@ async function postPastedBundle(bundle: string): Promise<boolean> {
 	}
 }
 
-/** Wait for the phone to deliver the sealed bundle, by either the phone's LAN POST or a bundle the
- * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
- * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
-/** True once transport.json holds a usable branch. Existence alone is not the signal: a truncated
- * or half-written file would read as a successful enrollment. */
-async function transportInstalled(): Promise<boolean> {
-	const file = Bun.file(TRANSPORT_FILE_HOST);
-	if (!(await file.exists())) return false;
+/** True once transport.json holds the direct branch the gateway itself accepts. Existence alone is
+ * not the signal: a truncated file, or one still in the retired k8s shape, would read as a successful
+ * enrollment here while `loadEvieTransport` reads it as null and arms for enrollment. Same rule as
+ * that loader, or the two answer opposite things about one file. */
+export async function transportInstalled(): Promise<boolean> {
+	const text = await readTransportText();
+	if (!text) return false;
 	try {
-		const raw = (await file.json()) as Record<string, unknown>;
-		return raw.transport === "direct"
-			? !!raw.routerUrl && !!raw.routerCertFp && !!raw.bearer
-			: !!raw.apiUrl && !!raw.saToken && !!raw.caPem;
+		const raw = JSON.parse(text) as Record<string, unknown>;
+		return raw.transport === "direct" && !!raw.routerUrl && !!raw.routerCertFp && !!raw.bearer;
 	} catch {
 		return false;
 	}
 }
 
+/** transport.json's text, or null when absent. The gateway writes it as root at 0600, so the host
+ * cannot open it directly once the container has; read through a container then, the way the Router
+ * state is read. A direct read that fails for any other reason is a real absence. */
+async function readTransportText(): Promise<string | null> {
+	const file = Bun.file(TRANSPORT_FILE_HOST);
+	if (!(await file.exists())) return null;
+	try {
+		return await file.text();
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "EACCES") return null;
+	}
+	const mount = `${process.cwd()}/volumes/gateway-data:/w:ro`;
+	const read = await $`docker run --rm -v ${mount} busybox cat /w/federation/transport.json`.quiet().nothrow();
+	return read.exitCode === 0 ? read.stdout.toString() : null;
+}
+
+/** Wait for the phone to deliver the sealed bundle, by either the phone's LAN POST or a bundle the
+ * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
+ * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
 	for (;;) {
@@ -147,8 +163,8 @@ async function waitForInstall(): Promise<"installed" | "back"> {
  * for the phone to deliver the connection bundle and restarts the gateway to connect. Any saved
  * artifact is wiped on success, on back-out, and on ^C. */
 export async function setupGateway(): Promise<void> {
-	// A downstream Gateway starts with no Domain or Kubernetes knowledge. The Console that scans
-	// this QR already owns the network and delivers the sealed enrollment bundle after the scan.
+	// A downstream Gateway starts with no Domain knowledge. The Console that scans this QR already
+	// owns the network and delivers the sealed enrollment bundle after the scan.
 
 	// The gateway is named by this machine's hostname; a pre-set GATEWAY_ID overrides it for
 	// duplicate hostnames, so there is no name prompt.
@@ -182,7 +198,7 @@ export async function setupGateway(): Promise<void> {
 			// Continue: wait for the bundle (LAN delivery or a paste), then connect.
 			if ((await waitForInstall()) === "installed") {
 				console.log();
-				note(`Gateway "${id}" enrolled; connecting to evie.`);
+				note(`Gateway "${id}" enrolled; connecting to the Router.`);
 				return;
 			}
 		}

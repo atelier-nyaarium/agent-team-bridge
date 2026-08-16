@@ -200,7 +200,12 @@ code does not belong here; rationale lives in `git log`.
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
 - `scripts/` - `build.ts`, `codegen-kotlin.ts`, `sync-leaf.ts`, `setup.ts` (the admin menu entry;
   its options live in `setup-gateway.ts` / `setup-provision.ts` / `setup-purge.ts` /
-  `setup-enrollment-ui.ts`), `check-module-residue.ts`, `import-stts-voices.ts`, `build-grammars.ts`
+  `setup-enrollment-ui.ts`, and `setup-status.ts` is the state header it draws first),
+  `start-federation.ts` (what `start-federation.sh` execs), `check-module-residue.ts`,
+  `import-stts-voices.ts`, `build-grammars.ts`
+  - `lib/routerStart.ts` - the ONE place that decides what `.env` holds for the Router: mints the
+    tokens, detects and writes the LAN bind on every start, reads and writes the public reach, and
+    brings the Router up. Both `start-federation.ts` and Admin Provision go through it
 - `tests/fixtures/` - golden wire fixtures and signing vectors read by BOTH vitest and the Kotlin
   tests. `_manifest.json` and `_signing-vectors-manifest.json` are the inventories both runtimes
   iterate, so a new corpus cannot be read by only one side
@@ -302,10 +307,15 @@ ephemeral one the 20003 enrollment listener mints per arming.
 hairpins a LAN-to-public connection unreliably or not at all, so the public address is not dependable
 from INSIDE and the LAN address is unreachable from OUTSIDE, and neither can be the one stored truth.
 The owner types either one; the Router advertises the rest through the app-token-gated `reach` op
-(`{publicHost, lanAddresses}`, from `FEDERATION_PUBLIC_HOST` / `FEDERATION_BIND`); the console
-persists what it learned beside the blob (`RouterReach`, wiped with it) and tries candidates in a
-FIXED order - every LAN address, then the public host, then the typed address (`reachCandidates`,
-pure and tested).
+(`{publicHost, publicPort?, lanAddresses}`, from `FEDERATION_PUBLIC_HOST` / `_PORT` /
+`FEDERATION_BIND`); the console persists what it learned beside the blob (`RouterReach`, wiped with
+it) and tries candidates in a FIXED order - every LAN address, then the public host, then the typed
+address (`reachCandidates`, pure and tested).
+
+- **The public port is its own field, and LAN never dials it.** A port forward remaps the public
+  side only, so `reachCandidates` dials LAN on the Router's own port and public on `publicPort`;
+  absent means the Router's own. One port for every candidate was the shape before this and would
+  have dialed the LAN on the forwarded port the moment one was configured.
 
 - **The stored address is only "which Router do I start at".** After the first answer the Router is
   the truth, so `reached()` rewrites the blob's `routerUrl` to the advertised public host: a
@@ -1074,9 +1084,13 @@ Biome: tabs, double quotes, semicolons, 120 char width. Files follow categorized
 
 | Var | Meaning |
 |-----|---------|
-| `FEDERATION_BIND` | The host address the Router publishes on. Defaults to `127.0.0.1`, which no phone can reach; set it to this machine's LAN address. Read by `start-federation.sh`, `setup-verify.ts` and `setup-provision.ts` alike, so the probe, the check and the emitted blob all agree |
+| `FEDERATION_BIND` | The LAN address the Router binds and advertises. DETECTED and written by `scripts/lib/routerStart.ts` on every start (`detectLanHost`, the internet-facing interface), never typed: a DHCP move lands in `.env` before compose reads it. `setup-verify.ts` and `setup-provision.ts` probe the same value, so the probe, the check and the emitted blob agree |
+| `FEDERATION_PUBLIC_HOST` / `FEDERATION_PUBLIC_PORT` | Where the Router is reached from OUTSIDE, the one thing setup asks (`2) Admin Provision`, prefilled on a re-run). Empty host means LAN only and the port is not asked; the port is only advertised when it differs from the Router's own |
 | `FEDERATION_WS_TOKEN` | Bearer the gateway presents at the Router's WS upgrade. Fail-closed. Minted into `.env` by `start-federation.sh` |
 | `CONSOLE_BRIDGE_TOKEN` | App token every console presents on the op surface. Fail-closed. Minted into `.env` by `start-federation.sh`; `export:federation` carries the cluster's across so already-provisioned consoles are not turned away |
+
+Nothing in this table is hand-edited. Every key is minted, detected, or prompted for by
+`start-federation.sh` / `setup.sh`, which is why there is no `.env.example`.
 
 **Host daemon:** `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL` as above. The daemon announces each
 capability when its corresponding CLI is found on `PATH`; no environment variable is required.
@@ -1191,19 +1205,25 @@ claude plugin install switchboard@atelier-nyaarium
 
 One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, no bearer fallback.
 
-1. `./start-federation.sh` with `FEDERATION_BIND` in `.env` set to this machine's LAN address. It
-   defaults to loopback, and a phone cannot reach loopback. The script mints both Router tokens into
-   `.env` on first run.
-2. Domain id is not fail-closed; a gateway without one arms for enrollment. A creds-less secondary
-   gets it from the sealed bootstrap bundle.
-3. `./setup.sh`. `2) Admin Provision` reads the Router's state (stop, write, start when it stages a
-   pending admin Domain, since the store is single-writer) and emits the transport-only blob:
-   `transport: direct`, the LAN `routerUrl`, the leaf fingerprint read from the running Router's
-   `/health`, and the app token from `.env`. It refuses to run if it cannot read the state file,
-   because an empty read looks like "no Domain" and the fresh branch would stage a pending Domain
-   OVER a rooted one - that exact misread happened once, stopped only by the display-name prompt.
-   `1) Setup Gateway` arms this gateway, shows its admit payload, waits for the phone's sealed
-   bundle, and connects in-process with no restart.
+1. `./setup.sh`, and nothing before it. The menu reads state before it draws (`setup-status.ts`:
+   LAN, public reach, Router, fingerprint, Domain, this gateway, and a `Gateways` roster of what the
+   Router holds for the admin Domain, via the app-token-gated `gateways` op), and its option labels
+   are chosen from that same state, so what an option WILL do is what it says.
+2. `2) Admin Provision` asks the one thing it cannot detect, the public host and (only then) port,
+   writes `.env`, and brings the Router up itself through `scripts/lib/routerStart.ts`, the same
+   module `start-federation.sh` execs. `docker compose up` leaves an unchanged Router running and
+   restarts one whose reach moved, so re-running is enter, enter. It then reads the Router's state
+   (stop, write, start when it stages a pending admin Domain, since the store is single-writer) and
+   emits the transport-only blob: `transport: direct`, the public `routerUrl` (LAN when no public
+   host), the leaf fingerprint read from the running Router's `/health`, and the app token from
+   `.env`. It refuses to run if it cannot read the state file, because an empty read looks like "no
+   Domain" and the fresh branch would stage a pending Domain OVER a rooted one - that exact misread
+   happened once, stopped only by the display-name prompt.
+3. Domain id is not fail-closed; a gateway without one arms for enrollment. A creds-less secondary
+   gets it from the sealed bootstrap bundle. `1) Setup Gateway` arms this gateway, shows its admit
+   payload, waits for the phone's sealed bundle, and connects in-process with no restart. Its
+   `transportInstalled` accepts ONLY the direct shape, the same rule as `loadEvieTransport`, or the
+   menu says "already enrolled" over a file the gateway itself reads as "arm for enrollment".
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
    local state and the host blob. Both mutate the Router's own state file through
@@ -1236,8 +1256,8 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
    `CONSOLE_BRIDGE_TOKEN` from the separate `console-bridge-app-token` Secret into `.env`: that one
    is not part of the federation state, and a freshly minted one 401s every already-provisioned
    console, which the app reports as "sign-in rejected".
-3. Set `FEDERATION_BIND` in `.env` to the LAN address. It defaults to `127.0.0.1`, so without this
-   the phone cannot reach the Router at all. Then `./start-federation.sh`.
+3. `./start-federation.sh`. It detects and writes `FEDERATION_BIND` itself; run `./setup.sh` option
+   2 afterwards to add the public host so a phone off the LAN can reach it.
 4. Repoint the gateway: rewrite `volumes/gateway-data/federation/transport.json` to the direct
    branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
    `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), keeping the old

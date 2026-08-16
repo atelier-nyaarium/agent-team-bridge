@@ -5,17 +5,19 @@ services:
     restart: unless-stopped
     command: ["bun", "run", "src/main-federation.ts"]
     ports:
-      # LAN access is deliberate. Set FEDERATION_BIND to a LAN IP or 0.0.0.0.
+      # LAN access is deliberate. start-federation.sh detects and writes FEDERATION_BIND on every run.
       - "${FEDERATION_BIND:-127.0.0.1}:20001:20001"
     environment:
       - PORT=20001
       - DATA_DIR=/app/data
       - CONSOLE_BRIDGE_TOKEN=${CONSOLE_BRIDGE_TOKEN:-}
       - FEDERATION_WS_TOKEN=${FEDERATION_WS_TOKEN:-}
-      # What the Router advertises on /health so a console can reach it from either side of the
-      # NAT: its public name (a domain absorbs an IP change) and the LAN address it is bound to.
-      # Inside the container it cannot see the host's interfaces, so the bind IS the LAN address.
+      # What the Router advertises through the app-token-gated reach op so a console can reach it
+      # from either side of the NAT: its public name and forwarded port, and the LAN address it is
+      # bound to. Inside the container it cannot see the host's interfaces, so the bind IS the LAN
+      # address. All three are written by the setup and start scripts, never by hand.
       - FEDERATION_PUBLIC_HOST=${FEDERATION_PUBLIC_HOST:-}
+      - FEDERATION_PUBLIC_PORT=${FEDERATION_PUBLIC_PORT:-}
       - FEDERATION_LAN_ADDRESSES=${FEDERATION_BIND:-}
     # Bounded, since restart: unless-stopped otherwise grows the json-file forever. The boot
     # fingerprint is served from /health, so rotating past it loses nothing.

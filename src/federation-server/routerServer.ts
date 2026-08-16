@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { fingerprint } from "../shared/crypto.js";
 import type { EnrollOp } from "../shared/federation-lifecycle.js";
 import {
 	ROSTER_MAX_SKEW_MS,
@@ -108,6 +109,16 @@ export class RouterServer {
 			// Direct transport fields arrive later.
 			onTransport: () => ({ ok: false, error: "transport not available" }),
 			onReach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
+			onGateways: () => {
+				const adminDomainId = params.store.adminDomainId();
+				if (!adminDomainId) return { gateways: [] };
+				return {
+					gateways: this.bridge.registeredGateways(adminDomainId).map((g) => ({
+						gatewayId: g.gatewayId,
+						signFp: g.signPub ? fingerprint(g.signPub) : null,
+					})),
+				};
+			},
 		});
 		this.bridge.setConsoleRelaySettler((opId, reply) => this.console.settleConsoleRelay(opId, reply));
 		this.approval = new PublicApproval({ port: params.port, onApproval: (op) => this.deviceApproval.handle(op) });

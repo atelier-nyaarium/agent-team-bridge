@@ -20,6 +20,13 @@ if (!consoleToken || !federationToken) {
 // anyway. Loopback and 0.0.0.0 are never a reach a client could use, so they are dropped here
 // rather than advertised.
 const publicHost = (process.env.FEDERATION_PUBLIC_HOST ?? "").trim() || null;
+// The port the public host is forwarded on. Only meaningful beside a host, and only advertised
+// when it differs from the Router's own, so a console that predates the field dials the right thing.
+const publicPortRaw = Number((process.env.FEDERATION_PUBLIC_PORT ?? "").trim());
+const publicPort =
+	publicHost && Number.isInteger(publicPortRaw) && publicPortRaw > 0 && publicPortRaw !== port
+		? publicPortRaw
+		: undefined;
 const lanAddresses = (process.env.FEDERATION_LAN_ADDRESSES ?? "")
 	.split(",")
 	.map((a) => a.trim())
@@ -35,9 +42,9 @@ const server = new RouterServer({
 	federationToken,
 	store,
 	tls,
-	reach: { publicHost, lanAddresses },
+	reach: publicPort ? { publicHost, publicPort, lanAddresses } : { publicHost, lanAddresses },
 });
-if (publicHost) console.log(`[federation-router] public host ${publicHost}`);
+if (publicHost) console.log(`[federation-router] public host ${publicHost}:${publicPort ?? port}`);
 if (lanAddresses.length) console.log(`[federation-router] lan addresses ${lanAddresses.join(", ")}`);
 await server.start();
 console.log(`[federation-router] identity ${identity.sign.pub}`);

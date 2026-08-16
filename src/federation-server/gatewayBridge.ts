@@ -34,7 +34,7 @@ export interface GatewayBridgeParams {
 export class GatewayBridge implements ToolProvider {
 	private transport: GatewayTransport | null = null;
 	private gatewayConnections = new Map<string, Map<string, ConnectionId>>();
-	private connGateways = new Map<ConnectionId, { domainId: string; gatewayId: string }>();
+	private connGateways = new Map<ConnectionId, { domainId: string; gatewayId: string; signPub: string | null }>();
 	private pendingRelays = new Map<
 		string,
 		{
@@ -104,6 +104,18 @@ export class GatewayBridge implements ToolProvider {
 	 * still reads true across a half-open one. */
 	public get registeredGatewayCount(): number {
 		return this.connGateways.size;
+	}
+
+	/** The gateways registered into ONE Domain, with the signing key each presented. Scoped by Domain
+	 * because the app token every console holds is shared across tenants, so an unscoped list would
+	 * hand one tenant another's gateway names. `signPub` is null for an identity-less admin-Domain
+	 * registration, which is the only kind that reaches the map without one. */
+	public registeredGateways(domainId: string): { gatewayId: string; signPub: string | null }[] {
+		const out: { gatewayId: string; signPub: string | null }[] = [];
+		for (const reg of this.connGateways.values()) {
+			if (reg.domainId === domainId) out.push({ gatewayId: reg.gatewayId, signPub: reg.signPub });
+		}
+		return out.sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
 	}
 
 	public stop(): void {
@@ -327,7 +339,7 @@ export class GatewayBridge implements ToolProvider {
 			}
 		}
 		this.domainMap(domainId).set(gatewayId, connId);
-		this.connGateways.set(connId, { domainId, gatewayId });
+		this.connGateways.set(connId, { domainId, gatewayId, signPub: parsed.data.signPub ?? null });
 		console.log(`[BridgeServer] Gateway registered: ${domainId}/${gatewayId} (v${protocolVersion})`);
 		const peers = [...this.domainMap(domainId).keys()].filter((h) => h !== gatewayId);
 		const reply: Record<string, unknown> = {

@@ -1,12 +1,14 @@
-// Admin setup - the single bootstrap for this machine's gateway and the owner's Console. It
-// configures + enrolls the gateway and emits the bridge blob the owner's Console imports. Driven by
-// setup.sh, a thin launcher that execs this. The menu loop lives here; each dial option's logic is a
-// sibling module: setup-gateway.ts (enroll), setup-provision.ts (Admin Provision), setup-purge.ts
-// (Purge Gateway / Purge Federation), setup-enrollment-ui.ts (the QR/JSON present flow),
-// setup-board-guard.ts (the typed purge confirmation), setup-constants.ts (shared paths).
+// Admin setup - the single bootstrap for this machine's Router, gateway and the owner's Console. It
+// asks the one thing it cannot detect (the public address), writes .env itself, starts the Router,
+// enrolls the gateway and emits the blob the owner's Console imports. Driven by setup.sh, a thin
+// launcher that execs this. The menu loop lives here; each dial option's logic is a sibling module:
+// setup-status.ts (the header above the dial), setup-gateway.ts (enroll), setup-provision.ts (Admin
+// Provision), setup-purge.ts (Purge Gateway / Purge Federation), setup-enrollment-ui.ts (the QR/JSON
+// present flow), setup-board-guard.ts (the typed purge confirmation), setup-constants.ts (shared
+// paths).
 //
 //   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
-//                        Non-TTY runs Provision direct.
+//                        Non-TTY runs Provision direct on .env as it stands.
 //   --qr                 re-open the enrollment-QR menu for the current blob.
 //   --verify             health-probe the Router and this Gateway's link to it.
 //   --help
@@ -26,6 +28,7 @@ import { qrMenu } from "./setup-enrollment-ui.js";
 import { gatewayHostname, setupGateway } from "./setup-gateway.js";
 import { provision } from "./setup-provision.js";
 import { purgeFederation, purgeGateway } from "./setup-purge.js";
+import { printSetupStatus, readSetupStatus } from "./setup-status.js";
 import { verify } from "./setup-verify.js";
 
 ////////////////////////////////
@@ -44,8 +47,9 @@ const USAGE = [
 //  Top dial menu
 
 /** Top dial menu (the default, interactive run): the single bootstrap for the gateway and the
- * Console, grouped by what each option does. A first-time admin runs option 2 to set up the network,
- * then option 1 to enroll this machine as a gateway. */
+ * Console, grouped by what each option does. The header above the dial is read fresh on every draw,
+ * and the option labels are chosen from the same state, so what an option WILL do is what it says.
+ * A first-time admin runs option 2 to set up the network, then option 1 to enroll this machine. */
 async function topMenu(): Promise<void> {
 	const ops: Record<string, () => Promise<void>> = {
 		"1": setupGateway,
@@ -58,13 +62,20 @@ async function topMenu(): Promise<void> {
 	};
 	const host = gatewayHostname();
 	for (;;) {
+		const status = await readSetupStatus();
 		console.log(`\n\u{1F365} Switchboard - Setup on ${host}\n`);
-		console.log("Gateway:");
-		console.log("  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n");
-		console.log("Admin:");
-		console.log("  2) Admin Provision      - First-time setup of your network on this machine's Router\n");
+		printSetupStatus(status);
+		console.log("\nGateway:");
 		console.log(
-			"     Needs the Router running (./start-federation.sh) with FEDERATION_BIND set to this machine's LAN address\n",
+			status.gatewayEnrolled
+				? "  1) Setup Gateway        - Re-enroll this machine and (re)show its QR\n"
+				: "  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n",
+		);
+		console.log("Admin:");
+		console.log(
+			status.domain === "rooted"
+				? "  2) Admin Provision      - Change the public address, refresh the blob\n"
+				: "  2) Admin Provision      - Set up your network on this machine's Router\n",
 		);
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
