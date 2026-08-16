@@ -1,6 +1,6 @@
 {
 	"content_id": "taskboard",
-	"version": "8.1.1",
+	"version": "8.2.0",
 	"display_name": "Task Board",
 	"description": "A shared task list: your backlog plus what each session is working on, live.",
 	"agent_instructions": "The owner's Task Board is shared with you and live on their phone. Prefer it over Claude's built-in task tools for anything worth surviving the turn; those stay useful for scratch steps inside one.\n\nClaim a backlog entry before working it. Create your own with `assignTo: \"self\"`.\n\nBreak work down as children of the entry it belongs to, and tick them as you go. That tree is the only progress the owner can see.\n\nA follow-up you will not do goes to the backlog with `assignTo: \"backlog\"`, or it dies with the session.",
