@@ -54,6 +54,20 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	internal val proxyBase: String
 		get() = candidates[current]
 
+	/**
+	 * The client to dial [base] with: the shared one, except a private address gets a short connect
+	 * timeout. A LAN address answers from the same subnet or not at all, so waiting the full 15s on
+	 * one is waiting for something that cannot happen - and that wait is the entire cost of trying
+	 * LAN first while away from home. Everything else (trust, pinning, read timeouts) is inherited.
+	 */
+	internal fun clientFor(base: String): okhttp3.OkHttpClient {
+		val host = runCatching { java.net.URI(base).host }.getOrNull() ?: return client
+		if (!isPrivateHost(host)) return client
+		return client.newBuilder()
+			.connectTimeout(LAN_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+			.build()
+	}
+
 	init {
 		// The host only, never a token: an operator reading logcat needs to see WHICH endpoint an
 		// op is going to when two clients on one device disagree, and this is the one place the
@@ -105,20 +119,37 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		get() = candidates.size
 
 	/**
-	 * [proxyBase] answered. Remember it as preferred so the next process start tries it first, and
-	 * fold in what the Router advertises about its other addresses. Only meaningful on the direct
-	 * branch; the k8s proxy has nothing to learn.
+	 * The Router answered and said how else it can be reached. Store that, and SELF-CORRECT the blob's
+	 * bootstrap address to the advertised public host.
+	 *
+	 * The stored address is only ever "which Router do I start at"; after the first answer the Router
+	 * itself is the truth. So a bootstrap left pointing at a raw LAN IP is rewritten to the domain,
+	 * which survives a DHCP change - the LAN address it replaces arrives fresh in `lanAddresses` on
+	 * every connect anyway. Only meaningful on the direct branch; the k8s proxy has nothing to learn.
 	 */
 	internal fun reached(advertised: RouterReach?) {
 		if (!direct) return
 		val known = RouterReach.decode(store.loadRouterReach())
-		val host = runCatching { java.net.URI(proxyBase).host }.getOrNull() ?: return
 		val next = RouterReach(
 			publicHost = advertised?.publicHost ?: known.publicHost,
 			lanAddresses = advertised?.lanAddresses?.takeIf { it.isNotEmpty() } ?: known.lanAddresses,
-			preferred = host,
 		)
 		if (next != known) store.saveRouterReach(next.encode())
+		next.publicHost?.let(::selfCorrectBootstrap)
+	}
+
+	/** Point the stored blob at [publicHost] when it names something else. A no-op when it already
+	 * agrees, so an ordinary connect does not rewrite the blob on every poll. */
+	private fun selfCorrectBootstrap(publicHost: String) {
+		val blob = store.load() ?: return
+		val json = runCatching { org.json.JSONObject(blob) }.getOrNull() ?: return
+		val currentUrl = json.optString("routerUrl")
+		if (currentUrl.isEmpty()) return
+		val port = reachPort(currentUrl, DEFAULT_ROUTER_PORT)
+		val wanted = "https://$publicHost:$port"
+		if (currentUrl == wanted) return
+		DebugLog.log("Relay", "bootstrap self-corrected to $publicHost")
+		store.save(json.put("routerUrl", wanted).toString())
 	}
 
 	/** This console's route Gateway id, learned at register and set by ChatRepository.
@@ -217,15 +248,17 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 
 		val frame = buildSealedFrame(op, opId, identity, gatewayId, hostKeys.boxPub)
 		val payload = wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(ConsoleHttp.JSON)
-		val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
-			client.newBuilder().apply {
-				if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-				if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-			}.build()
-		} else {
-			client
-		}
 		val resp = withReachFailover { base ->
+			// Per candidate, so a LAN address keeps its short connect timeout even under a long-poll's
+			// own read/call bounds.
+			val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
+				clientFor(base).newBuilder().apply {
+					if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+					if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+				}.build()
+			} else {
+				clientFor(base)
+			}
 			val req = Request.Builder()
 				.url("$base/relay")
 				// The SA token authenticates the k8s proxy hop, which a direct call does not make.
@@ -261,7 +294,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		logBody: Boolean,
 		fail: (String) -> R,
 	): R = withReachFailover { base ->
-		ConsoleHttp.postEvieDirect(client, "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+		ConsoleHttp.postEvieDirect(clientFor(base), "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */

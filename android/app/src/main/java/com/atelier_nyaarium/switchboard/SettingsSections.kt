@@ -202,7 +202,6 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 		val parts = buildList {
 			learned.publicHost?.let { add("public $it") }
 			if (learned.lanAddresses.isNotEmpty()) add("home ${learned.lanAddresses.joinToString(", ")}")
-			learned.preferred?.let { add("using $it") }
 		}
 		Text(
 			"Router reachable at: ${parts.joinToString(" / ")}",

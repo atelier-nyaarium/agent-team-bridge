@@ -23,22 +23,23 @@ class RouterReachTest {
 		)
 	}
 
+	// The ordering is a FIXED rule, never "whatever worked last". Connecting once from away used to
+	// record the public host as preferred, which then jumped the queue at home and paid a full
+	// hairpin timeout on every cold start - the rare case optimised, the common one pessimised.
 	@Test
-	fun preferredJumpsTheQueueWhenItIsStillACandidate() {
-		val reach = RouterReach(
-			publicHost = "switchboard.example.com",
-			lanAddresses = listOf("192.168.1.238"),
-			preferred = "switchboard.example.com",
-		)
-		assertEquals("https://switchboard.example.com:20001", reachCandidates(reach, typed, 20001).first())
+	fun lanStaysFirstEvenAfterTheLastConnectionWasPublic() {
+		val reach = RouterReach(publicHost = "switchboard.example.com", lanAddresses = listOf("192.168.1.238"))
+		assertEquals("https://192.168.1.238:20001", reachCandidates(reach, typed, 20001).first())
 	}
 
-	// A preferred address the Router no longer advertises (a LAN renumber) must not resurrect
-	// itself at the head of the list, or the phone dials a dead address first on every connect.
+	// Trying LAN first is only cheap because a private address gets seconds, not the full connect
+	// timeout: away from home it is unroutable, and that wait is the entire cost of the rule.
 	@Test
-	fun aStalePreferredIsIgnored() {
-		val reach = RouterReach(lanAddresses = listOf("192.168.1.240"), preferred = "192.168.1.238")
-		assertEquals("https://192.168.1.240:20001", reachCandidates(reach, typed, 20001).first())
+	fun privateAddressesAreRecognisedForTheShortTimeout() {
+		listOf("192.168.1.238", "10.0.0.5", "172.16.4.4", "172.31.255.1", "127.0.0.1", "localhost")
+			.forEach { assertEquals(it, true, isPrivateHost(it)) }
+		listOf("switchboard.example.com", "99.47.67.157", "172.56.15.53", "8.8.8.8")
+			.forEach { assertEquals(it, false, isPrivateHost(it)) }
 	}
 
 	@Test

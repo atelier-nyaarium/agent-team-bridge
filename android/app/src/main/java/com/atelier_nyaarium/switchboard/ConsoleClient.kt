@@ -62,7 +62,7 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 				.apply { if (transport.prov.saToken.isNotEmpty()) header("Authorization", "Bearer ${transport.prov.saToken}") }
 				.get()
 				.build()
-			transport.client.newCall(req).execute().use { resp ->
+			transport.clientFor(base).newCall(req).execute().use { resp ->
 				val text = resp.body?.string().orEmpty()
 				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
 				resp.code
