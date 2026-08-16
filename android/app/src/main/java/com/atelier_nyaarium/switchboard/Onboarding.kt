@@ -84,7 +84,15 @@ fun LockScreen(onUnlock: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String) -> Unit, onSettings: () -> Unit) {
+fun ProvisionScreen(
+	repo: ChatRepository,
+	state: ChatState,
+	onProvision: (String) -> Unit,
+	onSettings: () -> Unit,
+	// The Federation screen, reachable before any blob: a phone can point itself at a Router and
+	// confirm the pin with nothing else set up, since /health needs no token.
+	onFederation: () -> Unit = onSettings,
+) {
 	val context = LocalContext.current
 	var status by remember { mutableStateOf("") }
 	var scanning by remember { mutableStateOf(false) }
@@ -191,6 +199,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			HorizontalDivider()
 			TextButton(onClick = hapticClick { addDevice = true }) { Text("Adding another device to your account?") }
 			TextButton(onClick = hapticClick { showHostHelp = true }) { Text("Setting up your own Domain?") }
+			TextButton(onClick = hapticClick(onFederation)) { Text("Point this phone at your Federation Router") }
 		}
 	}
 }

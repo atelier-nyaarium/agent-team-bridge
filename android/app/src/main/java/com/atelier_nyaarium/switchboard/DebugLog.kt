@@ -8,6 +8,8 @@ import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Debug-only log stream. This build writes NO on-device file. DEBUG builds buffer the last RING_CAP
@@ -38,15 +40,14 @@ object DebugLog {
 
 	// Ingest endpoint params, set once provisioned. All @Volatile; written from
 	// the main thread, read from the poll loop IO thread.
-	@Volatile private var ingestUrl: String? = null
+	@Volatile private var ingestBase: (() -> String)? = null
 	@Volatile private var ingestSaToken: String? = null
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
 	@Volatile private var ingestConversationId: String? = null
-	// The ingest POST hits the K8s API server's cluster-signed cert, so a default
-	// HttpsURLConnection fails the handshake against the platform trust store. Pin
-	// the cluster CA the same way the relay's OkHttp client does.
-	@Volatile private var ingestSslFactory: javax.net.ssl.SSLSocketFactory? = null
+	// The relay's own pinned client (cluster CA or Router leaf), so the debug channel rides the
+	// exact trust and transport the real one does.
+	@Volatile private var ingestClient: okhttp3.OkHttpClient? = null
 
 	fun init(context: Context) {
 		val ctx = context.applicationContext
@@ -81,29 +82,29 @@ object DebugLog {
 	 * builds enable periodic log streaming; release builds no-op (body inside
 	 * BuildConfig.DEBUG).
 	 */
-	fun attachIngest(prov: Provisioning) {
+	fun attachIngest(prov: Provisioning, baseUrl: () -> String) {
 		if (BuildConfig.DEBUG) {
 			// Branch like every other console call. The k8s form needs an SA token the direct blob
 			// does not carry, so building it unconditionally left the whole trace stranded on-device
-			// for exactly the setup most likely to need reading.
+			// for exactly the setup most likely to need reading. The base is a PROVIDER, not a value:
+			// the transport fails over between Router addresses, and a flush that kept dialing the
+			// one it was attached with would die on exactly the network change worth reading about.
 			val direct = prov.transport == "direct"
-			ingestUrl =
-				if (direct) {
-					"${prov.routerUrl.trimEnd('/')}/ingest"
-				} else {
-					"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy/ingest"
-				}
+			ingestBase = baseUrl
 			ingestSaToken = if (direct) "" else prov.saToken
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
 			ingestConversationId = prov.conversationId
-			ingestSslFactory =
-				if (direct) {
-					runCatching { leafPinnedSocketFactory(prov.routerCertFp) }.getOrNull()
-				} else {
-					runCatching { pinnedSocketFactory(prov.caPem) }.getOrNull()
-				}
-			log("Ingest", "attached direct=$direct device=${prov.device} pinned=${ingestSslFactory != null}")
+			// The SAME client the relay path uses, not a second HTTP stack with its own trust. The two
+			// Android stacks reached the same host with different outcomes on one device (OkHttp
+			// connected through the LAN hairpin, HttpURLConnection timed out), and a debug channel
+			// that dies where the real one lives is worse than none: it says "nothing is wrong".
+			ingestClient =
+				runCatching {
+					if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
+				}.getOrNull()
+			val host = runCatching { java.net.URI(baseUrl()).host }.getOrNull() ?: "?"
+			log("Ingest", "attached direct=$direct host=$host client=${ingestClient != null}")
 		}
 	}
 
@@ -113,7 +114,7 @@ object DebugLog {
 	 */
 	fun flushToIngest() {
 		if (BuildConfig.DEBUG) {
-			val url = ingestUrl ?: return
+			val url = ingestBase?.let { "${it().trimEnd('/')}/ingest" } ?: return
 			val saToken = ingestSaToken ?: return
 			val appToken = ingestAppToken ?: return
 			val device = ingestDevice ?: return
@@ -126,31 +127,23 @@ object DebugLog {
 				ring.clear()
 			}
 
+			val client = ingestClient ?: return
 			runCatching {
 				val body = buildIngestJson(device, convId, lines)
-				val reqBody = body.toByteArray()
-				val url2 = java.net.URL(url)
-				val conn = url2.openConnection() as java.net.HttpURLConnection
-				// Trust the cluster CA (k8s) or the Router's pinned leaf (direct), or the handshake
-				// fails. The Router's cert carries no useful subject, so its identity is the
-				// fingerprint the trust manager already checked, not the hostname.
-				(conn as? javax.net.ssl.HttpsURLConnection)?.let { https ->
-					ingestSslFactory?.let { https.sslSocketFactory = it }
-					if (saToken.isEmpty()) https.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-				}
-				conn.requestMethod = "POST"
-				conn.setRequestProperty("Content-Type", "application/json")
-				// The SA token authenticates to the API SERVER, so it is meaningless (and absent)
-				// on the direct branch, where the Router gates on the app token alone.
-				if (saToken.isNotEmpty()) conn.setRequestProperty("Authorization", "Bearer $saToken")
-				conn.setRequestProperty("X-Console-Bridge-Token", "Bearer $appToken")
-				conn.connectTimeout = 8_000
-				conn.readTimeout = 8_000
-				conn.doOutput = true
-				conn.outputStream.use { it.write(reqBody) }
-				// Read the response code to complete the round-trip; discard the body.
-				conn.responseCode
-				conn.disconnect()
+				val request =
+					okhttp3.Request.Builder()
+						.url(url)
+						.post(body.toRequestBody("application/json".toMediaType()))
+						// The SA token authenticates to the API SERVER, so it is meaningless (and
+						// absent) on the direct branch, where the Router gates on the app token alone.
+						.apply { if (saToken.isNotEmpty()) header("Authorization", "Bearer $saToken") }
+						.header("X-Console-Bridge-Token", "Bearer $appToken")
+						.build()
+				// Read the code to complete the round-trip; discard the body. Logged straight to logcat
+				// rather than through log(): a failing flush must not feed the ring it is draining.
+				client.newCall(request).execute().use { android.util.Log.d("sb/Ingest", "flushed ${lines.size} lines -> HTTP ${it.code}") }
+			}.onFailure { e ->
+				android.util.Log.d("sb/Ingest", "flush failed: ${e::class.simpleName}: ${e.message?.take(200)}")
 			}
 			// On failure: lines are lost (not re-queued). Debug convenience only.
 		}
@@ -198,40 +191,6 @@ object DebugLog {
 				}
 			}
 		}
-	}
-
-	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned
-	 * OkHttp client. The default trust store rejects the cluster-signed API server. */
-	/** Trust exactly the Router's self-signed leaf, by fingerprint. It has no chain to validate, so
-	 * pinning it IS the trust; hostname verification is handled by the caller's own verifier. */
-	private fun leafPinnedSocketFactory(certFpHex: String): javax.net.ssl.SSLSocketFactory {
-		val tm = object : javax.net.ssl.X509TrustManager {
-			override fun checkClientTrusted(
-				chain: Array<java.security.cert.X509Certificate>,
-				authType: String,
-			) = throw java.security.cert.CertificateException("client authentication is not used")
-
-			override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) =
-				checkPinnedLeaf(chain, certFpHex)
-
-			override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
-		}
-		return javax.net.ssl.SSLContext.getInstance("TLS")
-			.apply { init(null, arrayOf<javax.net.ssl.TrustManager>(tm), java.security.SecureRandom()) }
-			.socketFactory
-	}
-
-	private fun pinnedSocketFactory(caPem: String): javax.net.ssl.SSLSocketFactory {
-		val ca = java.security.cert.CertificateFactory.getInstance("X.509")
-			.generateCertificate(caPem.byteInputStream())
-		val ks = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType()).apply {
-			load(null, null)
-			setCertificateEntry("cluster-ca", ca)
-		}
-		val tmf = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-			.apply { init(ks) }
-		val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }
-		return sslCtx.socketFactory
 	}
 
 	/** Minimal hand-rolled JSON for the ingest body; avoids kotlinx.serialization

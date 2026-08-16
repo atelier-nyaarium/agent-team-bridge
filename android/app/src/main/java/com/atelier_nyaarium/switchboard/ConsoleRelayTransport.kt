@@ -33,14 +33,124 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	internal val client =
 		if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
 
-	/** Where an op is posted. The Router serves its ops at the root, so there is no proxy path to
-	 * thread through; the same field keeps every call site unchanged. */
-	internal val proxyBase =
+	/** The Router addresses this device knows, in the order they are tried. On the k8s branch there is
+	 * exactly one (the proxy), so the whole failover machinery below is inert there. */
+	private val candidates: List<String> =
 		if (direct) {
-			prov.routerUrl
+			reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, reachPort(prov.routerUrl, DEFAULT_ROUTER_PORT))
 		} else {
-			"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
+			listOf("${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy")
 		}
+
+	/** Index of the candidate every op currently posts to. Advanced by [failedToReach], never reset:
+	 * an address that failed once is retried only after every other one has, which is what a phone
+	 * that just walked out of WiFi range needs. */
+	@Volatile
+	private var current = 0
+
+	/** Where an op is posted. The Router serves its ops at the root, so there is no proxy path to
+	 * thread through; the same field keeps every call site unchanged. Reads the CURRENT candidate, so
+	 * a failover between two ops is picked up by the second without the caller knowing. */
+	internal val proxyBase: String
+		get() = candidates[current]
+
+	/**
+	 * The client to dial [base] with: the shared one, except a private address gets a short connect
+	 * timeout. A LAN address answers from the same subnet or not at all, so waiting the full 15s on
+	 * one is waiting for something that cannot happen - and that wait is the entire cost of trying
+	 * LAN first while away from home. Everything else (trust, pinning, read timeouts) is inherited.
+	 */
+	internal fun clientFor(base: String): okhttp3.OkHttpClient {
+		val host = runCatching { java.net.URI(base).host }.getOrNull() ?: return client
+		if (!isPrivateHost(host)) return client
+		return client.newBuilder()
+			.connectTimeout(LAN_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+			.build()
+	}
+
+	init {
+		// The host only, never a token: an operator reading logcat needs to see WHICH endpoint an
+		// op is going to when two clients on one device disagree, and this is the one place the
+		// answer is decided.
+		DebugLog.log(
+			"Relay",
+			"transport direct=$direct candidates=${candidates.map { runCatching { java.net.URI(it).host }.getOrNull() ?: "?" }}",
+		)
+	}
+
+	/**
+	 * A connection to [proxyBase] could not be made at all (a thrown IOException, never an HTTP
+	 * status: a status means the Router was reached and said something). Advance to the next candidate
+	 * and report whether there is one, so the caller retries once rather than failing the op on an
+	 * address the phone simply cannot see from where it is.
+	 */
+	@Synchronized
+	internal fun failedToReach(base: String): Boolean {
+		if (base != proxyBase) return true // a concurrent op already moved on; the retry uses its choice
+		if (candidates.size < 2) return false
+		val next = (current + 1) % candidates.size
+		DebugLog.log("Relay", "unreachable ${runCatching { java.net.URI(base).host }.getOrNull()}, trying ${runCatching { java.net.URI(candidates[next]).host }.getOrNull()}")
+		current = next
+		return true
+	}
+
+	/**
+	 * Run [attempt] against the current candidate; on a connect-level failure (an IOException, meaning
+	 * the address could not be reached at all) advance and retry, once per remaining candidate, so one
+	 * op tries the whole ring at most once. An HTTP status of any kind is NOT a failover trigger: it
+	 * proves the Router was reached, and the answer belongs to the caller. A cancellation is rethrown
+	 * untouched, since it is not the address's fault.
+	 */
+	internal suspend inline fun <T> withReachFailover(attempt: (base: String) -> T): T {
+		var tries = 0
+		while (true) {
+			val base = proxyBase
+			try {
+				return attempt(base)
+			} catch (e: java.io.IOException) {
+				tries++
+				if (tries >= candidateCount || !failedToReach(base)) throw e
+			}
+		}
+	}
+
+	/** How many addresses there are to try, so the failover loop knows when it has been round. */
+	internal val candidateCount: Int
+		get() = candidates.size
+
+	/**
+	 * The Router answered and said how else it can be reached. Store that, and SELF-CORRECT the blob's
+	 * bootstrap address to the advertised public host.
+	 *
+	 * The stored address is only ever "which Router do I start at"; after the first answer the Router
+	 * itself is the truth. So a bootstrap left pointing at a raw LAN IP is rewritten to the domain,
+	 * which survives a DHCP change - the LAN address it replaces arrives fresh in `lanAddresses` on
+	 * every connect anyway. Only meaningful on the direct branch; the k8s proxy has nothing to learn.
+	 */
+	internal fun reached(advertised: RouterReach?) {
+		if (!direct) return
+		val known = RouterReach.decode(store.loadRouterReach())
+		val next = RouterReach(
+			publicHost = advertised?.publicHost ?: known.publicHost,
+			lanAddresses = advertised?.lanAddresses?.takeIf { it.isNotEmpty() } ?: known.lanAddresses,
+		)
+		if (next != known) store.saveRouterReach(next.encode())
+		next.publicHost?.let(::selfCorrectBootstrap)
+	}
+
+	/** Point the stored blob at [publicHost] when it names something else. A no-op when it already
+	 * agrees, so an ordinary connect does not rewrite the blob on every poll. */
+	private fun selfCorrectBootstrap(publicHost: String) {
+		val blob = store.load() ?: return
+		val json = runCatching { org.json.JSONObject(blob) }.getOrNull() ?: return
+		val currentUrl = json.optString("routerUrl")
+		if (currentUrl.isEmpty()) return
+		val port = reachPort(currentUrl, DEFAULT_ROUTER_PORT)
+		val wanted = "https://$publicHost:$port"
+		if (currentUrl == wanted) return
+		DebugLog.log("Relay", "bootstrap self-corrected to $publicHost")
+		store.save(json.put("routerUrl", wanted).toString())
+	}
 
 	/** This console's route Gateway id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Gateway routes to the right Gateway; null until learned. */
@@ -137,22 +247,27 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		val hostKeys = requireGatewayKeys(gatewayId)
 
 		val frame = buildSealedFrame(op, opId, identity, gatewayId, hostKeys.boxPub)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			// The SA token authenticates the k8s proxy hop, which a direct call does not make.
-			.apply { if (!direct) header("Authorization", "Bearer ${prov.saToken}") }
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(ConsoleHttp.JSON))
-			.build()
-		val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
-			client.newBuilder().apply {
-				if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-				if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-			}.build()
-		} else {
-			client
+		val payload = wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(ConsoleHttp.JSON)
+		val resp = withReachFailover { base ->
+			// Per candidate, so a LAN address keeps its short connect timeout even under a long-poll's
+			// own read/call bounds.
+			val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
+				clientFor(base).newBuilder().apply {
+					if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+					if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+				}.build()
+			} else {
+				clientFor(base)
+			}
+			val req = Request.Builder()
+				.url("$base/relay")
+				// The SA token authenticates the k8s proxy hop, which a direct call does not make.
+				.apply { if (!direct) header("Authorization", "Bearer ${prov.saToken}") }
+				.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+				.post(payload)
+				.build()
+			ConsoleHttp.executeCancellable(callClient, req)
 		}
-		val resp = ConsoleHttp.executeCancellable(callClient, req)
 		if (!resp.isSuccessful) error("HTTP ${resp.code}: ${resp.text.take(500)}")
 		val reply = wireJson.decodeFromString<ConsoleRelayReply>(resp.text)
 		// Cleartext error path (console not admitted or pre-seal failure): surface it so the
@@ -178,7 +293,9 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		body: RequestBody,
 		logBody: Boolean,
 		fail: (String) -> R,
-	): R = ConsoleHttp.postEvieDirect(client, "$proxyBase/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+	): R = withReachFailover { base ->
+		ConsoleHttp.postEvieDirect(clientFor(base), "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */
 	internal inline fun <reified T> resultOf(body: ConsoleReplyBody, op: String): T {

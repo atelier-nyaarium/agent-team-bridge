@@ -237,7 +237,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			// a reconnect; callers see a fast retryable error.
 			for (const [callId, pending] of pendingCalls) {
 				clearTimeout(pending.timer);
-				pending.resolve({ callId, error: `Disconnected from evie-bot` });
+				pending.resolve({ callId, error: `Disconnected from the federation Router` });
 			}
 			pendingCalls.clear();
 			config.onDisconnect?.();
@@ -370,7 +370,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 	async function callTool(action: string, params: Record<string, unknown>): Promise<EvieToolCallResult> {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			return { callId: "", error: `Not connected to evie-bot` };
+			return { callId: "", error: `Not connected to the federation Router` };
 		}
 
 		const callId = crypto.randomUUID();

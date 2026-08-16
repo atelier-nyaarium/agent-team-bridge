@@ -21,12 +21,15 @@ export async function routerRunning(): Promise<boolean> {
 	return out.trim() === "true";
 }
 
+// Bun's `$` does NOT treat a backslash-newline as a line continuation: the newline splits the
+// argv and the stray backslash lands in it, so a wrapped template silently runs a different
+// command. Every template in this file stays on one line for that reason.
+
 /** Read the Router's state file, or "" when there is nothing to read. */
 export async function readRouterFed(): Promise<string> {
-	const read = await $`docker run --rm -v ${`${path.resolve(DATA_DIR)}:/data:ro`} --entrypoint sh ${IMAGE} \
-		-c ${`cat /data/${STATE_FILE} 2>/dev/null || true`}`
-		.quiet()
-		.nothrow();
+	const mount = `${path.resolve(DATA_DIR)}:/data:ro`;
+	const script = `cat /data/${STATE_FILE} 2>/dev/null || true`;
+	const read = await $`docker run --rm -v ${mount} --entrypoint sh ${IMAGE} -c ${script}`.quiet().nothrow();
 	return read.exitCode ? "" : read.stdout.toString();
 }
 
@@ -37,8 +40,9 @@ export async function readRouterFed(): Promise<string> {
 export async function writeRouterFed(json: string): Promise<void> {
 	if (await routerRunning()) throw new Error("the Router is running and owns this file - stop it first");
 	const body = Buffer.from(json);
-	const write = await $`docker run --rm -i -v ${`${path.resolve(DATA_DIR)}:/data`} --entrypoint sh ${IMAGE} \
-		-c ${`cat > /data/${STATE_FILE} && chmod 600 /data/${STATE_FILE}`} < ${body}`
+	const mount = `${path.resolve(DATA_DIR)}:/data`;
+	const script = `cat > /data/${STATE_FILE} && chmod 600 /data/${STATE_FILE}`;
+	const write = await $`docker run --rm -i -v ${mount} --entrypoint sh ${IMAGE} -c ${script} < ${body}`
 		.quiet()
 		.nothrow();
 	if (write.exitCode) throw new Error(`could not write the Router state: ${write.stderr.toString().trim()}`);

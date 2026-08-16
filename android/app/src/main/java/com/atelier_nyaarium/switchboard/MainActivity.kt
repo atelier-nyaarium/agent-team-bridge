@@ -243,7 +243,8 @@ fun App(
 		when {
 			overlays.isNotEmpty() -> closeOverlay()
 			// Mirrors SettingsScreen's own back: Federation was entered from Domain & Trust.
-			showSettings && settingsRoute == SettingsRoute.FEDERATION -> settingsRoute = SettingsRoute.NETWORKS
+			showSettings && settingsRoute == SettingsRoute.FEDERATION ->
+				settingsRoute = if (state.provisioned) SettingsRoute.NETWORKS else SettingsRoute.HUB
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
 			showSettings -> showSettings = false
 			else -> openTeam = null
@@ -293,6 +294,10 @@ fun App(
 				state = state,
 				onProvision = { repo.command { provision(it) } },
 				onSettings = { showSettings = true },
+				onFederation = {
+					settingsRoute = SettingsRoute.FEDERATION
+					showSettings = true
+				},
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.

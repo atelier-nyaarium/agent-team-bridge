@@ -25,12 +25,6 @@ import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import kotlinx.coroutines.launch
 
 ////////////////////////////////
-//  Constants
-
-/** The Router's own port, so a fresh field needs only a host typed into it. */
-private const val DEFAULT_ROUTER_PORT = 20001
-
-////////////////////////////////
 //  Composables
 
 /** The baked-in plugin list, one row per catalog plugin with its on/off toggle. A refused flip
@@ -182,13 +176,17 @@ internal fun FederationSettings(repo: ChatRepository) {
 }
 
 /** Point this console at a self-hosted Router. Editing here repoints the transport only: it never
- * re-runs provisioning, so the admission and enrollment latches survive. */
+ * re-runs provisioning, so the admission and enrollment latches survive. Either of the Router's
+ * addresses will do: whichever one this phone can reach, the Router tells it the rest. */
 @Composable
 internal fun RouterEndpointCard(repo: ChatRepository) {
 	val scope = rememberCoroutineScope()
 	// Seed from what this console is ACTUALLY pointed at. Blank fields read as "nothing is set",
 	// which is wrong on a connected console and hides the values the owner came here to check.
 	val stored = remember { repo.currentRouterEndpoint(DEFAULT_ROUTER_PORT) }
+	// What the Router has told this device about itself, so the owner sees the addresses in play
+	// rather than only the one they typed.
+	val learned = remember { RouterReach.decode(repo.store.loadRouterReach()) }
 	var host by remember { mutableStateOf(stored?.host ?: "") }
 	var port by remember { mutableStateOf((stored?.port ?: DEFAULT_ROUTER_PORT).toString()) }
 	var certFp by remember { mutableStateOf(stored?.certFp ?: "") }
@@ -200,11 +198,23 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
+	if (learned.publicHost != null || learned.lanAddresses.isNotEmpty()) {
+		val parts = buildList {
+			learned.publicHost?.let { add("public $it") }
+			if (learned.lanAddresses.isNotEmpty()) add("home ${learned.lanAddresses.joinToString(", ")}")
+		}
+		Text(
+			"Router reachable at: ${parts.joinToString(" / ")}",
+			style = MaterialTheme.typography.bodySmall,
+			color = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
+	}
 	OutlinedTextField(
 		value = host,
 		onValueChange = { host = it },
 		singleLine = true,
 		label = { Text("Domain or IP") },
+		supportingText = { Text("Either address works. The Router tells this phone its others.") },
 		modifier = Modifier.fillMaxWidth(),
 	)
 	OutlinedTextField(
@@ -232,7 +242,7 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 			}
 		},
 		modifier = Modifier.fillMaxWidth(),
-	) { Text(if (busy) "Saving..." else "Use this Router") }
+	) { Text(if (busy) "Saving..." else "Change Federation Router") }
 	HorizontalDivider()
 }
 

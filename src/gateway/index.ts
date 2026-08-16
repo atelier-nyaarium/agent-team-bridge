@@ -755,7 +755,7 @@ export async function startGateway(): Promise<void> {
 				};
 			},
 			onDisconnect: () => {
-				console.error(`[evie] disconnected from evie-bot`);
+				console.error(`[evie] disconnected from the federation Router`);
 			},
 		});
 

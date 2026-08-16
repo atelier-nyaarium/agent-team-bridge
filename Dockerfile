@@ -51,10 +51,6 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | g
 	&& apt update && apt install -y gh \
 	&& apt clean && rm -rf /var/lib/apt/lists/*
 
-# kubectl
-RUN curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$(dpkg --print-architecture)/kubectl" -o /usr/local/bin/kubectl \
-	&& chmod +x /usr/local/bin/kubectl
-
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile

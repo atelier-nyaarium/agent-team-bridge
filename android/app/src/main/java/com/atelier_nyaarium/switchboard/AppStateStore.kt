@@ -66,6 +66,12 @@ class AppStateStore(context: Context) :
 
 	fun load(): String? = prefs.getString(KEY_BLOB, null)
 
+	/** What this device LEARNED about how to reach its Router (from the Router itself), kept apart from
+	 * the blob it was handed: the blob is imported, this is discovered, and a re-provision wipes both. */
+	fun saveRouterReach(json: String) = prefs.edit().putString(KEY_ROUTER_REACH, json).apply()
+
+	fun loadRouterReach(): String? = prefs.getString(KEY_ROUTER_REACH, null)
+
 	fun clear() = prefs.edit().clear().apply()
 
 	/** Reset provisioning + identity + transcript for a re-provision, keeping the settings-owned
@@ -400,6 +406,7 @@ class AppStateStore(context: Context) :
 
 	internal companion object {
 		const val KEY_BLOB = "provisioning"
+		const val KEY_ROUTER_REACH = "router_reach"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_READ_ANCHORS = "read_anchors"
@@ -466,7 +473,7 @@ class AppStateStore(context: Context) :
 		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
 		 * pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
-			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
+			KEY_BLOB, KEY_ROUTER_REACH, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,

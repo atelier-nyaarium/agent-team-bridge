@@ -1,9 +1,9 @@
 // Admin setup - the single bootstrap for this machine's gateway and the owner's Console. It
 // configures + enrolls the gateway and emits the bridge blob the owner's Console imports. Driven by
 // setup.sh, a thin launcher that execs this. The menu loop lives here; each dial option's logic is a
-// sibling module: setup-gateway.ts (enroll), setup-provision.ts (Evie Admin Provision),
-// setup-purge.ts (Purge Gateway / Purge Federation), setup-enrollment-ui.ts (the QR/JSON present
-// flow), setup-board-guard.ts (the typed purge confirmation), setup-constants.ts (shared paths).
+// sibling module: setup-gateway.ts (enroll), setup-provision.ts (Admin Provision), setup-purge.ts
+// (Purge Gateway / Purge Federation), setup-enrollment-ui.ts (the QR/JSON present flow),
+// setup-board-guard.ts (the typed purge confirmation), setup-constants.ts (shared paths).
 //
 //   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
 //                        Non-TTY runs Provision direct.
@@ -13,10 +13,11 @@
 //
 // The Domain ROOT private key is generated on the Console and never reaches the host, so this script
 // never holds, prompts for, or roots with the owner key. Provision branches on whether the admin
-// Domain is already rooted in evie's federation Secret: a fresh (absent/unrooted) Domain is pre-staged
-// as a PENDING tenant (display name + one-time invite nonce, no owner root) and the blob carries
-// `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
-// the blob only. The blob is transport-only (cluster creds; no identity, no Gateway keys).
+// Domain is already rooted in the Router's federation state: a fresh (absent/unrooted) Domain is
+// pre-staged as a PENDING tenant (display name + one-time invite nonce, no owner root) and the blob
+// carries `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and
+// emits the blob only. The blob is transport-only (the Router's address, pin and app token; no
+// identity, no Gateway keys).
 
 import fs from "node:fs";
 import { ask, die, err, note } from "./lib/host.js";
@@ -61,8 +62,10 @@ async function topMenu(): Promise<void> {
 		console.log("Gateway:");
 		console.log("  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n");
 		console.log("Admin:");
-		console.log("  2) Evie Admin Provision - First-time setup of your Evie network\n");
-		console.log("     Before first use, add SWITCHBOARD_KUBECONFIG=/absolute/path/to/kubeconfig.yaml to .env\n");
+		console.log("  2) Admin Provision      - First-time setup of your network on this machine's Router\n");
+		console.log(
+			"     Needs the Router running (./start-federation.sh) with FEDERATION_BIND set to this machine's LAN address\n",
+		);
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
 		console.log("  0) Purge Federation     - Delete your whole Domain and erase everything\n");

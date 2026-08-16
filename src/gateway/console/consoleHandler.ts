@@ -380,11 +380,20 @@ export function createConsoleDispatcher({
 					domain,
 				});
 
-				if (snap.entries.length === 0 && hold > 0) {
+				// Hold when nothing is NEW for this device, not when nothing is retained for anyone.
+				// The box compacts only to the slowest consumer, so a stale one (a reinstall leaves its
+				// old conversationId behind until the idle sweep) pins entries this device has long
+				// since acked. Gating on the retained count made every poll answer instantly with
+				// entries the console discards, a busy-loop at the poll floor for up to the sweep TTL.
+				// The retained entries still ship: a genuinely behind cursor needs them, and the console
+				// dedupes by seq.
+				const cursor = op.cursor ?? 0;
+				const nothingNew = (s: typeof snap) => s.entries.every((e) => e.seq <= cursor);
+				if (nothingNew(snap) && hold > 0) {
 					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
 					for (const p of participants) if (p.wait) waits.push(p.wait(hold));
 					await Promise.race(waits);
-					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
+					snap = box.drain(cursor, op.epoch, conversationId);
 				}
 				// Log only a poll that hands entries to the console or signals a dropped-entry gap,
 				// never the steady stream of empty held polls. This is the one window into whether a
