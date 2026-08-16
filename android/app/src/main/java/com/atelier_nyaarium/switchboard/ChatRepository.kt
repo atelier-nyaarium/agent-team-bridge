@@ -194,6 +194,15 @@ class ChatRepository(
 	 * this class and its federation delegates (federation-manager-residue pins that reach). */
 	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) {
 		federation.applyDomainSync(snapshot, version)
+		refreshAdmittedGateways()
+	}
+
+	/** Republish the admitted Gateway ids into state (see ChatState.admittedGateways). Called after
+	 * every keyring fold: the keyring is a durable store with no change signal, so nothing else would
+	 * ever notice a machine being admitted or revoked. */
+	internal fun refreshAdmittedGateways() {
+		val ids = sessions.keyringGateways()
+		if (ids != _state.value.admittedGateways) _state.update { it.copy(admittedGateways = ids) }
 	}
 	// The federation surface, split into collaborators by concern (see each class's own doc).
 	// Screens call through these (repo.ownerFacts.X, repo.devices.X, ...) rather than on ChatRepository
@@ -387,6 +396,9 @@ class ChatRepository(
 		dirs: Map<String, List<String>> = emptyMap(),
 		drafts: Map<String, Draft> = emptyMap(),
 		goals: Map<String, PendingGoal> = emptyMap(),
+		// Seeded rather than derived: the roster comes from the keyring, which a gatewayless sandbox
+		// never receives, so a machine with no sessions would be unreachable to look at.
+		admittedGateways: List<String> = emptyList(),
 	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
 		// The Create button and the local/peer board split key off localGatewayId, which a
@@ -412,6 +424,7 @@ class ChatRepository(
 				drafts = drafts,
 				// Seeded rather than armed: arming sends, which a gatewayless sandbox cannot do.
 				goals = goals,
+				admittedGateways = admittedGateways,
 			)
 		}
 	}

@@ -207,8 +207,14 @@ fun GoalDialog(submitting: Boolean, onConfirm: (String) -> Unit, onDismiss: () -
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateSessionDialog(
+	// The Gateway this was opened on, named in the title. Every Gateway offers Create and every one of
+	// them has a `host`, so the dialog is otherwise identical whichever machine it will spawn on.
+	gateway: String,
 	projects: List<String>,
 	pendingSpawns: Set<Pair<String, String>>,
+	// A picked project's spawn target. The dialog never spells an address itself: the caller owns which
+	// Gateway this was opened on, and a project name alone would resolve to the polled one.
+	targetOf: (String) -> String,
 	onListDirs: suspend (String) -> List<String>,
 	onSpawn: (String, String, String?) -> Unit,
 	onDismiss: () -> Unit,
@@ -222,11 +228,14 @@ fun CreateSessionDialog(
 	val dirText = dir.text.trim()
 	// Blank is the default workdir; anything else must be rooted before Spawn will send it.
 	val dirOk = dirText.isEmpty() || isRootedWorkdir(dirText)
-	val pendingLabels = pendingSpawns.filter { it.first == selectedProject }.mapTo(HashSet()) { it.second }
+	val selectedTarget = targetOf(selectedProject)
+	// Keyed on the TARGET, not the project: two machines each have a `host`, and the same label is in
+	// flight on only one of them.
+	val pendingLabels = pendingSpawns.filter { it.first == selectedTarget }.mapTo(HashSet()) { it.second }
 	val isPending = trimmed.isNotEmpty() && trimmed in pendingLabels
 	AlertDialog(
 		onDismissRequest = onDismiss,
-		title = { Text("New session") },
+		title = { Text(if (gateway.isEmpty()) "New session" else "New session on $gateway") },
 		text = {
 			Column {
 				ExposedDropdownMenuBox(
@@ -280,7 +289,7 @@ fun CreateSessionDialog(
 				enabled = trimmed.isNotEmpty() && !isPending && dirOk,
 				onClick = hapticClick {
 					val workdir = dirText.takeIf { selectedProject == "host" && it.isNotEmpty() }
-					onSpawn(selectedProject, trimmed, workdir)
+					onSpawn(selectedTarget, trimmed, workdir)
 				},
 			) { Text("Spawn") }
 		},

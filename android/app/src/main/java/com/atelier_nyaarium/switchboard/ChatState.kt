@@ -49,6 +49,14 @@ data class ChatState(
 	 * route Gateway has not re-synced, so sealed ops transiently reject. Drives the calm SYNCING
 	 * header; cleared once an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
+	/** Every Gateway this owner has admitted, by gateway id. The sessions board unions these with the
+	 * Gateways its session rows name, so a machine with no sessions yet is still drawn and still
+	 * offers Create - which is the whole reason a second machine was invisible.
+	 *
+	 * The keyring rather than a roster fetch: it is exactly the set this device can SEAL to, so a drawn
+	 * section is always an actionable one and the two cannot drift. Republished on each keyring fold
+	 * rather than read per recomposition, since resolving a member verifies its admission. */
+	val admittedGateways: List<String> = emptyList(),
 	/** Linked friend Domains from the route Gateway's cross-Domain peer set. Unioned with the
 	 * discovery-derived Domains in linkedDomains(), so a freshly-linked peer is visible even while its
 	 * gateway is offline and has shared nothing back. */

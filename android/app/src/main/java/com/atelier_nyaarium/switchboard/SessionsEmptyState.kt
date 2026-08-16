@@ -18,6 +18,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 ////////////////////////////////
+//  Functions & Helpers
+
+/**
+ * Whether [EmptyBoard] has a real not-yet-working state to report, rather than its bare "nothing here
+ * yet" fallback.
+ *
+ * The sessions board asks before drawing an admitted-but-idle Gateway's section: those states are
+ * exactly the ones where a Create button would offer an action that cannot be delivered. Lives beside
+ * EmptyBoard and mirrors its own branch order, so a new cause is added to both at once.
+ */
+internal fun emptyBoardHasCause(state: ChatState): Boolean =
+	state.noGatewayState != NoGatewayState.NONE ||
+		state.status == "error" ||
+		state.enrollingSince != 0L ||
+		!state.connected ||
+		state.pollFailStreak > 0
+
+////////////////////////////////
 //  Composables
 
 /** The single status surface when the board has no sessions (HealthHeader is hidden in this state);

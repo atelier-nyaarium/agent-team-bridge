@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceSession
+import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.coroutines.delay
@@ -61,6 +62,62 @@ internal fun adminDomainId(sessions: List<Team>, localGatewayId: String): String
  * gateway must group separately rather than merge. */
 internal data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
+/**
+ * Session rows grouped by their owning Gateway, with every ADMITTED Gateway present even when it has
+ * contributed no rows. `routes.teams()` drops the headless host daemon, so a machine that is enrolled
+ * and running but idle answers with nothing at all, and a grouping built from rows alone draws no
+ * section for it - which made a second machine invisible rather than merely empty.
+ *
+ * The route Gateway sorts first; the rest follow by (Domain, Gateway).
+ */
+internal fun groupByGateway(
+	local: List<Team>,
+	admittedGateways: List<String>,
+	adminDomainId: String,
+	localGatewayId: String,
+): List<Pair<GatewayGroupKey, List<Team>>> {
+	val grouped = local.groupBy {
+		GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { localGatewayId })
+	}
+	// An admitted Gateway is placed in my own Domain, the only Domain an admission can name. Before a
+	// local session confirms that Domain it cannot be named at all - no site in this app acts on a
+	// guessed Domain id - so only the ROUTE Gateway gets a section then, which a bare target already
+	// names correctly. Naming the others bare instead would spawn on the route machine and say nothing.
+	val admitted =
+		admittedGateways.filter { it.isNotEmpty() && (adminDomainId.isNotEmpty() || it == localGatewayId) }
+	val empties =
+		admitted
+			.map { GatewayGroupKey(adminDomainId, it) }
+			.filterNot { it in grouped }
+			.associateWith { emptyList<Team>() }
+	return (grouped + empties).toList().sortedBy { (key, _) ->
+		if (key.domainId == adminDomainId && key.gatewayId == localGatewayId) "" else "${key.domainId}/${key.gatewayId}"
+	}
+}
+
+/**
+ * What the create dialog was opened on: the Gateway, and the projects selectable there.
+ *
+ * Owns the ONE rule that turns a picked project into a spawn target, so address grammar lives here
+ * rather than in the dialog. A project on this device's own route Gateway stays BARE, because that is
+ * what a bare name already means everywhere else and re-spelling it would change the meaning of
+ * targets that work today. Anything else is qualified, which is the entire mechanism for spawning on
+ * another machine: `targetGatewayOf` reads the gateway out of the target and seals the frame there.
+ */
+internal data class CreateDialogTarget(
+	val domainId: String,
+	val gatewayId: String,
+	val isLocal: Boolean,
+	val projects: List<String>,
+) {
+	fun targetFor(project: String): String =
+		if (isLocal || domainId.isEmpty() || gatewayId.isEmpty()) {
+			project
+		} else {
+			runCatching { SpawnPoint.of(domainId, gatewayId, project).canonical }.getOrDefault(project)
+		}
+}
+
 ////////////////////////////////
 //  Composables
 
@@ -74,8 +131,11 @@ fun SessionsScreen(
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
+	// (spawn target, label, workdir). The target is a bare project on this device's route Gateway and a
+	// qualified spawn-point address on any other, which is the whole mechanism for spawning elsewhere.
 	onSpawn: (String, String, String?) -> Unit,
-	onListDirs: suspend (String) -> List<String> = { emptyList() },
+	// (path, host spawn-point target). The target names WHICH machine's filesystem to browse.
+	onListDirs: suspend (String, String) -> List<String> = { _, _ -> emptyList() },
 	onVerifyEnroll: (() -> Unit)? = null,
 	onRouterEndpoint: (() -> Unit)? = null,
 	// The board's live line per session card; { null } keeps every card's ordinary ladder.
@@ -90,8 +150,10 @@ fun SessionsScreen(
 	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
 	// Tapping a Gateway's Create button opens the new-session dialog with that Gateway's selectable
-	// projects (host first, then its catalog devcontainer projects).
-	var createDialogProjects by remember { mutableStateOf<List<String>?>(null) }
+	// projects (host first, then its catalog devcontainer projects). Carries the Gateway it was opened
+	// on, because a project name alone does not say WHICH machine to spawn on, and a bare target
+	// resolves to this device's own route Gateway - the create would silently land on the wrong one.
+	var createDialogFor by remember { mutableStateOf<CreateDialogTarget?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
 	// Per-Gateway accordion collapse state (default expanded). rememberSaveable, not remember: the
@@ -157,16 +219,20 @@ fun SessionsScreen(
 			)
 		}
 	}
-	createDialogProjects?.let { projects ->
+	createDialogFor?.let { opened ->
 		CreateSessionDialog(
-			projects = projects,
+			gateway = opened.gatewayId,
+			projects = opened.projects,
 			pendingSpawns = state.pendingSpawns,
-			onListDirs = onListDirs,
-			onSpawn = { project, session, workdir ->
-				onSpawn(project, session, workdir)
-				createDialogProjects = null
+			// Both the browse and the spawn are addressed to the Gateway the dialog was opened on, so
+			// the directory picker reads the filesystem the session will actually run against.
+			targetOf = opened::targetFor,
+			onListDirs = { path -> onListDirs(path, opened.targetFor("host")) },
+			onSpawn = { target, session, workdir ->
+				onSpawn(target, session, workdir)
+				createDialogFor = null
 			},
-			onDismiss = { createDialogProjects = null },
+			onDismiss = { createDialogFor = null },
 		)
 	}
 
@@ -184,12 +250,18 @@ fun SessionsScreen(
 			// exactly while adminDomainId is still "" - a guard here would hide every linked friend in
 			// that state, not just a hypothetically misclassified local one.
 			val linkedDomains = CrossDomainLink.mergeLinkedDomains(state.teams, state.linkedPeerOwners, adminDomainId)
-			// One status surface: when the board is empty, EmptyBoard owns the whole message, so the
-			// health banner shows only ALONGSIDE real content and can never contradict the body. Mirrors
-			// EmptyBoard's own negated gate rather than raw `sessions` - `linkedDomains` can be non-empty
-			// purely from state.linkedPeerOwners (a linked friend known before this device's own first
-			// local session exists), a case raw `sessions.isNotEmpty()` would miss entirely.
-			if (local.isNotEmpty() || linkedDomains.isNotEmpty()) HealthHeader(state)
+			// Session rows plus every admitted Gateway, so an enrolled machine that is merely idle is
+			// still drawn and still offers Create.
+			val byGateway = groupByGateway(local, state.admittedGateways, adminDomainId, state.localGatewayId)
+			// EmptyBoard still wins whenever it has a real cause to name; an idle Gateway's section only
+			// replaces its bare "nothing here yet" fallback, which is a dead end with nothing to press.
+			// Reads `local` rather than `byGateway` on that second test: an idle section is not content
+			// EmptyBoard could contradict, so a stalled poll should still be reported.
+			val onboarding = (byGateway.isEmpty() && linkedDomains.isEmpty()) ||
+				(local.isEmpty() && linkedDomains.isEmpty() && emptyBoardHasCause(state))
+			// One status surface: while EmptyBoard is up it owns the whole message, so the health banner
+			// shows only ALONGSIDE real content and can never contradict the body.
+			if (!onboarding) HealthHeader(state)
 			if (state.gap) {
 				Surface(
 					color = MaterialTheme.colorScheme.errorContainer,
@@ -204,7 +276,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (local.isEmpty() && linkedDomains.isEmpty()) {
+			if (onboarding) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
 				EmptyBoard(
@@ -241,14 +313,6 @@ fun SessionsScreen(
 						delay(30_000)
 					}
 				}
-				// Grouped by the owning (Domain, Gateway) pair. Within each group: devcontainer projects,
-				// then loose sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
-				val byGateway = local
-					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
-					.toList()
-					.sortedBy { (key, _) ->
-						if (key.domainId == adminDomainId && key.gatewayId == state.localGatewayId) "" else "${key.domainId}/${key.gatewayId}"
-					}
 				LazyColumn(
 					Modifier.fillMaxSize(),
 					contentPadding = PaddingValues(12.dp),
@@ -265,11 +329,18 @@ fun SessionsScreen(
 						// can never see a non-local group.
 						val isPeer = key.domainId.isNotEmpty() && adminDomainId.isNotEmpty() && key.domainId != adminDomainId
 						val headerName = if (isPeer) composite else key.gatewayId
-						// Only your own Gateway can ever create a session on it (host-spawn is meaningless on
-						// a peer's machine), so the header's Create button and its project list are scoped the
-						// same way. Computed unconditionally (not gated on `collapsed`) so the button and its
+						// Every Gateway in your own Domain offers Create, not just the one this device happens
+						// to poll: which machine that is, is an accident of setup. A peer Domain does not,
+						// since spawning on a linked friend's machine is meaningless.
+						//
+						// Any OTHER machine must still be admitted, because a section can outlive its
+						// admission: a revoked Gateway's session rows survive in the cached presence list
+						// until a poll replaces them, and Create on one cannot be sealed. The route Gateway
+						// is exempt so a keyring this device cannot read never costs it the only Create it
+						// has. Computed unconditionally (not gated on `collapsed`) so the button and its
 						// project list are correct even while the section is collapsed.
-						val showCreate = !isPeer && key.gatewayId == state.localGatewayId
+						val showCreate =
+							!isPeer && (key.gatewayId == state.localGatewayId || key.gatewayId in state.admittedGateways)
 						fun localName(t: Team) = t.shortName
 						val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
 						item(key = "sw:$composite") {
@@ -285,8 +356,12 @@ fun SessionsScreen(
 								onCreate = {
 									// "host" first (the synthetic spawn point below), then catalog devcontainer
 									// projects; a real project literally named "host" is deduped against it.
-									createDialogProjects =
-										listOf("host") + spawnPoints.map { localName(it) }.filterNot { it == "host" }
+									createDialogFor = CreateDialogTarget(
+										domainId = key.domainId,
+										gatewayId = key.gatewayId,
+										isLocal = key.gatewayId == state.localGatewayId,
+										projects = listOf("host") + spawnPoints.map { localName(it) }.filterNot { it == "host" },
+									)
 								},
 							)
 						}

@@ -202,6 +202,11 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			repo.store.saveGatewayId(it)
 			repo.localGatewayId = it
 		}
+		// The one keyring write that is not a fold, so nothing else would publish the machines this
+		// device just adopted until a connect succeeds. AFTER the route id above: the board names a
+		// machine relative to the route Gateway, so refreshing first publishes a roster read against
+		// the id this device is replacing.
+		if (transport.domain != null) repo.refreshAdmittedGateways()
 		// This is the ONE path besides a real first-root that sets firstRooted=true - it never
 		// calls evie's first-root intake (the held device already rooted), so trace the latch
 		// origin explicitly or a stuck-latch investigation cannot tell the two apart.
