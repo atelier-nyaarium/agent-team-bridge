@@ -24,7 +24,11 @@ export interface DockerFacts {
 	systemSocket: boolean;
 	rootlessSocket: boolean;
 	dockerHostSet: boolean;
-	systemdUnit: "active" | "inactive" | "failed" | "no-systemd";
+	/** Read from the unit's LoadState, never inferred from `is-active`: that prints "inactive" for a
+	 * unit that does not exist at all, so the two states it matters most to tell apart look identical
+	 * there. "absent" beside a working docker CLI is the signature of Docker Desktop integration,
+	 * where the daemon runs on Windows and this distro only holds the client. */
+	systemdUnit: "active" | "inactive" | "failed" | "masked" | "absent" | "no-systemd";
 	wsl: boolean;
 	/** `docker compose` exists. A separate package from the CLI, and setup calls it by name. */
 	composePlugin: boolean;
@@ -86,6 +90,15 @@ export function diagnoseDocker(f: DockerFacts): DockerBlocker | null {
 		};
 	}
 
+	if (f.systemdUnit === "masked") {
+		return {
+			title: "The docker service is masked, so it cannot start.",
+			steps: ["sudo systemctl unmask docker", "sudo systemctl enable --now docker"],
+		};
+	}
+
+	// Only when the unit really EXISTS. Telling someone to start a service this machine does not
+	// have sends them to a command that errors, which is worse than saying nothing.
 	if (f.systemdUnit === "inactive" || f.systemdUnit === "failed") {
 		return {
 			title: "The docker daemon is installed but not running.",
@@ -97,12 +110,24 @@ export function diagnoseDocker(f: DockerFacts): DockerBlocker | null {
 		};
 	}
 
+	// No unit to start, and a CLI that works: on WSL that is Docker Desktop's integration being off
+	// for this distro, which is a Windows-side tickbox, not anything runnable from here.
 	if (f.wsl) {
 		return {
-			title: "Docker is not reachable from this WSL distro.",
+			title: "Docker is not reachable from this WSL distro, and it has no docker service to start.",
 			steps: [
-				"Docker Desktop: tick this distro under Settings, Resources, WSL integration.",
-				"Native install: enable systemd (systemd=true under [boot] in /etc/wsl.conf), run `wsl --shutdown` from Windows, then `sudo systemctl enable --now docker`.",
+				"Docker Desktop on Windows: Settings, Resources, WSL integration, enable it for this distro.",
+				"No Docker Desktop? Install Docker Engine natively here, then enable systemd: put `systemd=true` under [boot] in /etc/wsl.conf, run `wsl --shutdown` from Windows, and reopen this distro.",
+			],
+		};
+	}
+
+	if (f.systemdUnit === "absent") {
+		return {
+			title: "Docker's CLI is here but there is no docker service on this machine.",
+			steps: [
+				"The daemon is a separate package from the CLI: docs.docker.com/engine/install",
+				"Or point DOCKER_HOST at whichever machine runs the daemon.",
 			],
 		};
 	}

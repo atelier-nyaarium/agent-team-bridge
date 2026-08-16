@@ -8,17 +8,29 @@ import { blockerMessage, type DockerFacts, diagnoseDocker, isWsl, rootlessSocket
 //  The bun-only half of the preflight: it gathers facts and nothing else, so the rules that read
 //  them stay importable from the node-run test suite. Kept apart for that reason alone.
 
+/**
+ * Whether this machine has a docker service, and what it is doing.
+ *
+ * LoadState FIRST, and `is-active` only once the unit is known to exist. `systemctl is-active` on a
+ * unit that was never installed also prints "inactive", so reading existence from it produces
+ * "installed but not running" on a machine with no docker service at all - and sends the operator to
+ * `systemctl enable --now docker`, which simply errors. That is exactly what happened on a WSL box
+ * running Docker Desktop, where the daemon lives on Windows and the distro holds only the CLI.
+ */
 async function systemdUnitState(): Promise<DockerFacts["systemdUnit"]> {
-	const res = await $`systemctl is-active docker`.quiet().nothrow();
-	const out = res.stdout.toString().trim();
-	const err = res.stderr.toString().toLowerCase();
+	const load = await $`systemctl show -p LoadState --value docker.service`.quiet().nothrow();
+	const err = load.stderr.toString().toLowerCase();
 	// A distro with no systemd says so on stderr; a missing systemctl is the same answer for our
 	// purposes, since both mean "this machine does not start docker that way".
 	if (err.includes("not been booted with systemd") || err.includes("command not found")) return "no-systemd";
-	if (out === "active") return "active";
-	if (out === "failed") return "failed";
-	if (out === "inactive") return "inactive";
-	return "no-systemd";
+	const state = load.stdout.toString().trim();
+	if (state === "masked") return "masked";
+	if (state !== "loaded") return load.exitCode === 0 ? "absent" : "no-systemd";
+
+	const active = (await $`systemctl is-active docker`.quiet().nothrow()).stdout.toString().trim();
+	if (active === "active") return "active";
+	if (active === "failed") return "failed";
+	return "inactive";
 }
 
 export async function readDockerFacts(): Promise<DockerFacts> {
