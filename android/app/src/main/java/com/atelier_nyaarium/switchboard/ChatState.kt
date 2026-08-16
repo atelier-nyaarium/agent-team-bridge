@@ -57,6 +57,15 @@ data class ChatState(
 	 * section is always an actionable one and the two cannot drift. Republished on each keyring fold
 	 * rather than read per recomposition, since resolving a member verifies its admission. */
 	val admittedGateways: List<String> = emptyList(),
+	/** Which of those Gateways the Router currently holds a connection for, or NULL when it has not
+	 * said. Null is not "none": nothing is reported offline except on an answer that arrived, so a
+	 * Router that is older or momentarily unreachable makes the board say less rather than lie.
+	 *
+	 * Separate from [admittedGateways] because they answer different questions and perish at different
+	 * rates. Admission is durable and says a machine is yours; this is perishable and says it is
+	 * switched on. Folding them lost exactly the distinction between a machine sitting idle and one
+	 * nobody could reach. */
+	val connectedGateways: List<String>? = null,
 	/** Linked friend Domains from the route Gateway's cross-Domain peer set. Unioned with the
 	 * discovery-derived Domains in linkedDomains(), so a freshly-linked peer is visible even while its
 	 * gateway is offline and has shared nothing back. */

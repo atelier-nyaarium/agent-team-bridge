@@ -213,6 +213,36 @@ argument" is not "verified", and `list_dirs` is what that distinction cost.
   names. That is what makes the daemon-up-but-idle single machine reachable without inventing an id
   that the signing and routing sites all refuse to invent.
 
+## The first field report, and what it actually was
+
+The directory browser worked on the route Gateway and returned nothing on the second one. Three
+defects stacked, and only the last was where it looked.
+
+**The Router substituted a different machine.** `consoleSurface`'s relay fell through to
+`pushGatewayFrame` whenever the named gateway was not connected, and that picks the first connected
+gateway in the Domain. A frame sealed to ql-2815's box key was delivered to sakura, which cannot open
+it and answered `unseal failed`. Its log carries the proof, at the minute the owner was typing. The
+fallback is right for a frame that names no gateway and wrong for one that does; it was unreachable
+while a single gateway existed, and this feature is what made a console address a second one. So the
+claim that this shipped with "no gateway change" was wrong: the change was needed and missing.
+
+**The console swallowed the answer.** `SessionOps.listDirs` collapsed every failure into an empty
+list, so an offline machine, a Gateway with no host daemon and a folder with no subdirectories were
+one indistinguishable blank picker. That is why the report could only be "it does not work".
+
+**Nothing said the machine was offline.** The section header showed online/offline as the ELSE branch
+of the Create button, so ungating Create removed the status word from exactly the machines whose
+reachability had just started to matter. The plan had said an admitted machine with no sessions "reads
+as present but idle, which is the honest description" - it was not honest, because it could not tell
+idle from unreachable, and that sentence is what let the gap ship.
+
+Liveness now comes from the Router's own app-token `gateways` roster, on the discovery interval. It is
+the precondition the op itself turns on, so it cannot disagree with what the board can do. Null means
+the Router did not say and nothing is drawn: a machine is called offline only on an answer that
+arrived. A failed refresh KEEPS the previous answer rather than clearing it, so a stale "online" is
+possible while the Router is unreachable - accepted, because a blip reporting every machine offline is
+worse, and a console that cannot reach the Router is already saying so in the health header.
+
 ## Bug classes to avoid
 
 - **Rebuilding the transport.** The first draft of this plan did exactly that. Anything that reads
@@ -227,13 +257,31 @@ argument" is not "verified", and `list_dirs` is what that distinction cost.
   to qualify its target does not error, it spawns on the WRONG machine. The documented `forget` bug is
   the same shape - a foreign address folding onto a same-named local session.
 - **Assuming the family follows.** peek / close / forget already pass `targetGatewayOf`, but "already
-  passes the right argument" is not the same as "verified against a second machine".
+  passes the right argument" is not the same as "verified against a second machine". `list_dirs` was
+  the one that did not, and it shipped.
+- **Collapsing a failure into an empty result.** An unreachable machine and an empty folder are not
+  the same answer, and a picker that renders them identically turns every outage into "the feature is
+  broken". Anything returning a list to a person needs somewhere to put the reason there is none.
+- **Caching a failure the way a result is cached.** A failed listing stored under its directory key
+  never retries, so the machine coming back does not clear it. Successes are cached; failures are
+  displayed and stand aside.
+- **A status word that is the ELSE branch of a button.** Adding the button to more places silently
+  deletes the status from those places. Both belong in the header at once.
 
 ## Deploy order
 
-One app release. The gateway and Router are unchanged, so the usual gateway-first rule has nothing to
-sequence. Worth stating because the first draft did need it, and dropping a requirement quietly is how
-one gets skipped when it IS needed.
+**Router first, then the app.** The console-side work alone was one app release, which is what shipped
+in 8.3.6; the Router refusal that followed is not, so the rule the first draft dropped applies after
+all.
+
+- Old console against the new Router: better immediately. A frame naming a disconnected machine is
+  refused instead of being handed to another one; the old console still shows an empty picker for it,
+  since it has no way to say more.
+- New console against an old Router: the misdelivery persists, and the console reports it as
+  "Couldn't reach that machine" rather than listing the wrong machine's folders. The new `gateways`
+  request 501s and reads as unknown, so nothing is drawn as offline.
+
+Neither order breaks. Router first is preferred because it fixes the routing rather than describing it.
 
 ## Resolved
 

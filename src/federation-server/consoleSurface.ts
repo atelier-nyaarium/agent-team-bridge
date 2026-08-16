@@ -414,6 +414,18 @@ export class ConsoleSurface {
 			return bounce(503, `gateway not connected`, true);
 		}
 
+		// A NAMED gateway that is not connected is refused here, never delivered to another one. The
+		// fallback below picks the first connected gateway in the Domain, which is right for a frame
+		// that names none and wrong for a frame that does: the frame is sealed to the named gateway's
+		// box key, so the substitute cannot open it and answers "unseal failed" - a message about
+		// cryptography for what is only a machine being switched off. Unreachable while one gateway
+		// existed; the console began addressing a second one and it became the failure every op on an
+		// offline machine reported.
+		const route = (typeof targetGateway === "string" && targetGateway) || "";
+		if (route && !bridge.gatewayIds().includes(route)) {
+			return bounce(503, `gateway "${route}" is not connected`, true);
+		}
+
 		return new Promise<Response>((resolve) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(opId);
@@ -422,11 +434,7 @@ export class ConsoleSurface {
 			this.pending.set(opId, { resolve, timer });
 
 			const frame = { type: "console_relay", v: CONSOLE_PROTOCOL_VERSION, opId, signerSignPub, sealed };
-			const route = (typeof targetGateway === "string" && targetGateway) || "";
-			const pushed =
-				route && bridge.gatewayIds().includes(route)
-					? bridge.pushToGateway(route, frame)
-					: bridge.pushGatewayFrame(frame);
+			const pushed = route ? bridge.pushToGateway(route, frame) : bridge.pushGatewayFrame(frame);
 			if (!pushed) {
 				clearTimeout(timer);
 				this.pending.delete(opId);

@@ -75,6 +75,32 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 		return "reachable (HTTP $code)"
 	}
 
+	/**
+	 * Which of this Domain's Gateways are connected to the Router right now, or null when the Router
+	 * did not say (an older one, a transient failure). Null is NOT "none": a machine is only ever
+	 * reported offline on an answer that actually arrived.
+	 *
+	 * This is the precondition for reaching a Gateway at all - the Router refuses a console op naming
+	 * one it holds no connection for - so it is the same fact the op itself turns on, rather than a
+	 * second opinion about liveness that could disagree with it.
+	 */
+	fun fetchConnectedGateways(): List<String>? {
+		if (transport.prov.transport != "direct") return null
+		val req = Request.Builder()
+			.url("${transport.proxyBase}/console")
+			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
+			.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
+			.build()
+		transport.client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			val body = resp.body?.string() ?: return null
+			return runCatching {
+				val arr = org.json.JSONObject(body).optJSONArray("gateways") ?: return null
+				(0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("gatewayId")?.takeIf(String::isNotEmpty) }
+			}.getOrNull()
+		}
+	}
+
 	/** The Router's advertised public host and LAN addresses. Behind the app token, so a stranger on
 	 * the port sees the same /health as before and nothing about the network behind it. */
 	private fun fetchReach(): RouterReach? {

@@ -96,10 +96,10 @@ suspend fun ConsoleClient.createSession(
  * ~-rooted; an unreadable or missing one returns empty entries rather than an error.
  *
  * `hostTarget` names WHICH machine's filesystem to browse, and is the qualified host spawn point when
- * creating on another gateway. It was hardcoded bare, which resolves to the local gateway: picking a
- * directory for a session on another machine would have silently listed THIS one's filesystem and
- * handed back a path that does not exist there. */
-suspend fun ConsoleClient.listDirs(path: String, hostTarget: String = "host"): ConsoleListDirsResult =
+ * creating on another gateway. Required rather than defaulted to a bare "host": a bare target resolves
+ * to the route gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
+ * does not exist on the one the session will run on. */
+suspend fun ConsoleClient.listDirs(path: String, hostTarget: String): ConsoleListDirsResult =
 	transport.resultOf(
 		transport.relay(ConsoleOp.ListDirs(path = path), targetGateway = transport.targetGatewayOf(hostTarget)),
 		"list_dirs",

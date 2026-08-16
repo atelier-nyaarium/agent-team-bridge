@@ -215,7 +215,7 @@ fun CreateSessionDialog(
 	// A picked project's spawn target. The dialog never spells an address itself: the caller owns which
 	// Gateway this was opened on, and a project name alone would resolve to the polled one.
 	targetOf: (String) -> String,
-	onListDirs: suspend (String) -> List<String>,
+	onListDirs: suspend (String) -> DirListing,
 	onSpawn: (String, String, String?) -> Unit,
 	onDismiss: () -> Unit,
 ) {
@@ -327,12 +327,17 @@ private fun isRootedWorkdir(text: String): Boolean =
 fun DirectoryField(
 	value: TextFieldValue,
 	onValueChange: (TextFieldValue) -> Unit,
-	onListDirs: suspend (String) -> List<String>,
+	onListDirs: suspend (String) -> DirListing,
 	isError: Boolean = false,
 ) {
-	// Per-directory listing cache, keyed by the listed prefix. Missing = not fetched yet; the
-	// LaunchedEffect below fills it once per directory.
+	// Per-directory cache of SUCCESSFUL listings, keyed by the listed prefix. Missing = not fetched
+	// yet, which is what makes the fetch below happen at all.
 	val cache = remember { mutableStateMapOf<String, List<String>>() }
+	// Why a directory has no listing, kept apart from the cache ON PURPOSE. Caching a failure as if it
+	// were a listing makes it permanent for the dialog's life: the machine comes back, the owner
+	// retypes the same path, and the fetch never re-runs because the key is present. A failure is a
+	// fact about one moment, so it is displayed and then stands aside for the next attempt.
+	val failures = remember { mutableStateMapOf<String, String>() }
 	// Suggestions appear once the field is engaged, never under an untouched one: a dialog opened
 	// just to name a session should not carry a folder list it never asked for. Text alone also
 	// qualifies, so descending (which can move focus to the tapped row) never hides the list
@@ -347,11 +352,23 @@ fun DirectoryField(
 	val fragment = if (cut >= 0) text.substring(cut + 1) else text
 	// Only a rooted prefix is listable; a relative one ("foo/") lists nothing.
 	val listable = parent.startsWith("/") || parent.startsWith("~/")
+	// Retries a failed directory whenever these keys change again (a refocus, or moving away and back),
+	// which is the recovery path once the machine is reachable. Unchanged keys do not re-run it, so a
+	// machine that stays down is asked once per attempt rather than continuously.
 	LaunchedEffect(parent, listable, focused) {
-		if (listable && (focused || text.isNotEmpty()) && parent !in cache) cache[parent] = onListDirs(parent)
+		if (!listable || !(focused || text.isNotEmpty()) || parent in cache) return@LaunchedEffect
+		val listing = onListDirs(parent)
+		if (listing.error == null) {
+			cache[parent] = listing.dirs
+			failures.remove(parent)
+		} else {
+			failures[parent] = listing.error
+		}
 	}
 	val engaged = focused || text.isNotEmpty()
-	val matches = (if (listable && engaged) cache[parent].orEmpty() else emptyList())
+	val showing = listable && engaged
+	val failure = if (showing) failures[parent] else null
+	val matches = (if (showing) cache[parent].orEmpty() else emptyList())
 		.filter { it.startsWith(fragment, ignoreCase = true) }
 	// Dot dirs to the bottom, greyed below, but present and tappable (a .config dive is legitimate).
 	val (dotted, plain) = matches.partition { it.startsWith(".") }
@@ -364,8 +381,11 @@ fun DirectoryField(
 			label = { Text("Directory") },
 			placeholder = { Text("(default)") },
 			singleLine = true,
-			isError = isError,
-			supportingText = if (isError) ({ Text("Pick a folder below, or start with ~/ or /") }) else null,
+			// A failed listing takes the supporting line, since a rooted path the picker could not read
+			// is the more useful thing to say about it than the rooting rule it already satisfies.
+			isError = isError || failure != null,
+			supportingText = failure?.let { { Text(it) } }
+				?: if (isError) ({ Text("Pick a folder below, or start with ~/ or /") }) else null,
 			trailingIcon = if (text.isEmpty()) null else ({
 				IconButton(onClick = hapticClick { onValueChange(TextFieldValue("")) }) {
 					Icon(Icons.Default.Close, contentDescription = "Reset to default")

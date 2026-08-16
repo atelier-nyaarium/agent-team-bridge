@@ -135,7 +135,7 @@ fun SessionsScreen(
 	// qualified spawn-point address on any other, which is the whole mechanism for spawning elsewhere.
 	onSpawn: (String, String, String?) -> Unit,
 	// (path, host spawn-point target). The target names WHICH machine's filesystem to browse.
-	onListDirs: suspend (String, String) -> List<String> = { _, _ -> emptyList() },
+	onListDirs: suspend (String, String) -> DirListing = { _, _ -> DirListing(emptyList()) },
 	onVerifyEnroll: (() -> Unit)? = null,
 	onRouterEndpoint: (() -> Unit)? = null,
 	// The board's live line per session card; { null } keeps every card's ordinary ladder.
@@ -363,6 +363,9 @@ fun SessionsScreen(
 										projects = listOf("host") + spawnPoints.map { localName(it) }.filterNot { it == "host" },
 									)
 								},
+								// Only for my own Domain: the Router's roster covers the machines I own, and a
+								// linked friend's Gateway not being in it says nothing about whether it is up.
+								reachable = if (isPeer) null else state.connectedGateways?.contains(key.gatewayId),
 							)
 						}
 						if (!collapsed) {

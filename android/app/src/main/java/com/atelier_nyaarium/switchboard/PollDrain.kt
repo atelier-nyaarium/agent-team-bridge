@@ -213,6 +213,11 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					if (now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
 						lastDiscoveryAt = now
 						repo.presence.refreshDiscovery()
+						// Which Gateways the Router can currently reach, on the same interval and for the
+						// same reason: perishable, no push, and pulled at a bounded cadence. Rides here
+						// rather than connect, because a machine that goes down mid-session is exactly the
+						// case worth reporting and a connect-time read would still call it online.
+						repo.presence.refreshConnectedGateways()
 					}
 					if (repo.pluginReportPending) repo.reportEnabledPlugins()
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).

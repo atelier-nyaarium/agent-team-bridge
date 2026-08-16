@@ -131,19 +131,38 @@ internal fun GatewayHeader(
 	onToggle: () -> Unit,
 	showCreate: Boolean = false,
 	onCreate: (() -> Unit)? = null,
+	// Whether the Router currently holds a connection for this machine. NULL means it did not say, and
+	// nothing is drawn: a machine is only ever called offline on an answer that arrived.
+	reachable: Boolean? = null,
 ) {
 	CollapsibleSectionHeader(name, collapsed, onToggle) {
+		// Shown BESIDE Create, not instead of it. This label used to be the else-branch of the Create
+		// button, which was fine while only one Gateway could offer one; once every own-Domain machine
+		// did, the label vanished from exactly the machines whose reachability is worth knowing, and a
+		// switched-off one looked identical to an idle one.
+		if (reachable == false) {
+			Text(
+				"offline",
+				style = MaterialTheme.typography.labelSmall,
+				color = MaterialTheme.colorScheme.error,
+			)
+			Spacer(Modifier.width(8.dp))
+		}
 		if (showCreate && onCreate != null) {
-			// Your own Gateway only - a contained button (not a bare icon) reads as tappable on sight.
-			// Its own click region wins over the row's collapse-toggle for taps landing inside it.
+			// A contained button (not a bare icon) reads as tappable on sight. Its own click region wins
+			// over the row's collapse-toggle for taps landing inside it. Still offered while offline: the
+			// op refuses and says so, which beats a machine whose controls quietly disappear.
 			Button(onClick = hapticClick(onCreate)) {
 				Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
 				Spacer(Modifier.width(6.dp))
 				Text("Create")
 			}
-		} else {
+		} else if (reachable != false) {
+			// Every section without a Create button keeps a status word. Gating this on `reachable ==
+			// null` instead left a section with no Create and a known-reachable Gateway showing nothing
+			// at all, which is the one combination that says least about a machine.
 			Text(
-				if (online) "online" else "offline",
+				if (reachable ?: online) "online" else "offline",
 				style = MaterialTheme.typography.labelSmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
