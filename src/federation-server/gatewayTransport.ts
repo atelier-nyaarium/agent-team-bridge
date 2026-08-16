@@ -93,6 +93,9 @@ export class GatewayTransport {
 		this.connections.set(connId, ws);
 		this.reverseConnections.set(ws, connId);
 		console.log(`[${this.label}] Client ${connId} connected (${this.connections.size} active)`);
+		// Dormant: no provider implements listTools, so this never fires. It would not work if one did -
+		// `EvieInboundFrameSchema` has no `tool_registry` member, so the gateway drops the frame. Give
+		// the schema a member before giving this a sender.
 		const tools = this.provider.listTools?.();
 		if (tools) ws.send(JSON.stringify({ type: "tool_registry", tools }));
 		try {
