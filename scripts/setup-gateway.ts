@@ -5,8 +5,8 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import { $ } from "bun";
 import { requireDocker } from "./lib/docker-probe.js";
-import { ask, confirm, dc, detectLanHost, envGet, envSet, err, note, secureFile } from "./lib/host.js";
-import { ROUTER_PORT } from "./lib/routerStart.js";
+import { ask, confirm, dc, detectLanHost, ensureNetwork, envGet, envSet, err, note, secureFile } from "./lib/host.js";
+import { FEDERATION_NETWORK, ROUTER_PORT } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
 import {
 	ADMIT_PAYLOAD_URL,
@@ -86,12 +86,21 @@ async function armGateway(): Promise<string> {
 	const nonce = randomBytes(16).toString("hex");
 	const host = await detectLanHost();
 	console.log(`Starting gateway, enrollment on ${host}:20000`);
+	// Compose declares this network external and will not create it. A machine that runs the Router
+	// has one already; a gateway-only machine does not, and compose then refuses to start anything.
+	await ensureNetwork(FEDERATION_NETWORK);
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await clearTransport();
 	const up = await dc("up", "--build", "-d")
 		.env({ ...process.env, ENROLL_NONCE: nonce, ENROLL_LAN_HOST: host })
 		.nothrow();
-	if (up.exitCode !== 0) throw new Error("could not start the gateway (is docker running?)");
+	// Carry compose's own last words. "is docker running?" was the whole message once, and it is a
+	// guess that reads as authoritative - on the machine that hit the missing network, docker was
+	// running perfectly and the message sent the operator to check the one thing that was fine.
+	if (up.exitCode !== 0) {
+		const detail = up.stderr.toString().trim().split("\n").slice(-3).join("\n");
+		throw new Error(`could not start the gateway${detail ? `:\n${detail}` : ""}`);
+	}
 	if (!(await waitHealth())) {
 		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
 	}

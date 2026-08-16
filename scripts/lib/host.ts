@@ -101,6 +101,18 @@ export function dcFederation(...args: string[]) {
 	return $`docker compose -f docker-compose.federation.yml -p switchboard-federation ${args}`;
 }
 
+/** Create a docker network unless it already exists.
+ *
+ * `switchboard-federation` is declared EXTERNAL by both compose files, so compose refuses to start
+ * anything when it is missing rather than creating it. On the Router's own machine something has
+ * always made it first; on a machine that only runs a gateway, nothing had, and `compose up` failed
+ * with "declared as external, but could not be found". Every path that brings a container up owns
+ * this, not just the start scripts. */
+export async function ensureNetwork(name: string): Promise<void> {
+	const exists = await $`docker network inspect ${name}`.quiet().nothrow();
+	if (exists.exitCode !== 0) await $`docker network create ${name}`.quiet().nothrow();
+}
+
 /** True when the gateway container is currently running. `.nothrow()` so a down docker daemon
  * reads as "not up" instead of throwing a raw shell error. */
 export async function containerUp(): Promise<boolean> {

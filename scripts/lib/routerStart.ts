@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { $ } from "bun";
-import { dcFederation, detectLanHost, envGet, envSet, jparse, note, secureFile } from "./host.js";
+import { dcFederation, detectLanHost, ensureNetwork, envGet, envSet, jparse, note, secureFile } from "./host.js";
 import { routerRunning } from "./routerState.js";
 
 ////////////////////////////////
@@ -11,7 +11,10 @@ import { routerRunning } from "./routerState.js";
 //  written here or by the provision prompt; nothing is left for the owner to hand-edit.
 
 export const ROUTER_PORT = 20001;
-const NETWORK = "switchboard-federation";
+/** The network both compose files declare EXTERNAL, so every path that starts a container has to
+ * make sure it exists first. Named here because the Router creates it in the common case and the
+ * gateway just joins it. */
+export const FEDERATION_NETWORK = "switchboard-federation";
 const HEALTH_TRIES = 30;
 const HEALTH_INTERVAL_MS = 2000;
 
@@ -86,8 +89,7 @@ export async function startRouter(
 ): Promise<{ certFingerprint: string; gateways: number; wasRunning: boolean }> {
 	const wasRunning = await routerRunning();
 	if (!wasRunning) note(`Starting the Router on ${env.lan}:${ROUTER_PORT}`);
-	const inspect = await $`docker network inspect ${NETWORK}`.quiet().nothrow();
-	if (inspect.exitCode !== 0) await $`docker network create ${NETWORK}`.quiet();
+	await ensureNetwork(FEDERATION_NETWORK);
 	const up = opts.build
 		? await dcFederation("up", "--build", "-d").quiet().nothrow()
 		: await dcFederation("up", "-d").quiet().nothrow();
