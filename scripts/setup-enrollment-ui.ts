@@ -114,8 +114,8 @@ export async function presentEnrollment(
 ): Promise<"continue" | "back"> {
 	for (;;) {
 		console.log(`\n${opts.title}`);
-		console.log("  1) Enroll with QR Code");
-		console.log("  2) Enroll with JSON Copy-pasta");
+		console.log("  1) Show as QR Code");
+		console.log("  2) Show as JSON Copy-pasta");
 		console.log("  b) Back");
 		const choice = ask(">").toLowerCase();
 
@@ -180,19 +180,19 @@ export async function qrMenu(): Promise<void> {
 		.text()
 		.catch(() => "");
 	if (!blob) {
-		err("could not read the blob (is it present?)");
+		err("could not read the setup code (is it present?)");
 		return;
 	}
 	try {
 		await presentEnrollment(blob, {
-			title: "Console enrollment - send to your phone:",
+			title: "Setup code - send to your phone:",
 			continueLabel: "Done",
-			qrScanHint: "Scan this in the Switchboard app to enroll your phone.",
-			jsonScanHint: "Paste the enrollment JSON into the Switchboard app.",
+			qrScanHint: "Scan this in the Switchboard app, on Scan your setup code.",
+			jsonScanHint: "Paste this into the Switchboard app, on Scan your setup code.",
 			qrGifPath: QR_GIF,
 			jsonFilePath: CONSOLE_JSON_FILE,
-			qrSaveLabel: "Save Enrollment QR Instead",
-			jsonSaveLabel: "Save Enrollment JSON Instead",
+			qrSaveLabel: "Save Setup Code QR Instead",
+			jsonSaveLabel: "Save Setup Code JSON Instead",
 		});
 	} finally {
 		cleanupTemps();

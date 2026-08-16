@@ -72,18 +72,25 @@ export async function routerHealth(lan: string): Promise<{ certFingerprint: stri
 	return { certFingerprint: parsed.certFingerprint, gateways: parsed.gateways ?? 0 };
 }
 
-/** Bring the Router up on what .env now says. `docker compose up` recreates the container only
- * when its config changed, so a re-run with the same values leaves a running Router alone and one
- * with a new bind or public host restarts it. Waits for /health and returns it, plus whether it was
- * already up, so a caller can say "ready" or "running" truthfully. */
+/** Bring the Router up on what .env now says. Waits for /health and returns it, plus whether the
+ * Router was already up, so a caller can say "ready" or "running" truthfully.
+ *
+ * `build` decides whether the image is rebuilt from the tree first. The start script always does,
+ * since that is the path a code change ships through. Provision does NOT on a running Router: the
+ * image copies the whole tree, so any edit since the last start yields a new image, and `up` then
+ * recreates a Router whose reach never changed. That drops every gateway and reads as an outage
+ * from a re-run that typed nothing. A running Router is only recreated here when its config moved. */
 export async function startRouter(
 	env: RouterEnv,
+	opts: { build: boolean },
 ): Promise<{ certFingerprint: string; gateways: number; wasRunning: boolean }> {
 	const wasRunning = await routerRunning();
 	if (!wasRunning) note(`Starting the Router on ${env.lan}:${ROUTER_PORT}`);
 	const inspect = await $`docker network inspect ${NETWORK}`.quiet().nothrow();
 	if (inspect.exitCode !== 0) await $`docker network create ${NETWORK}`.quiet();
-	const up = await dcFederation("up", "--build", "-d").quiet().nothrow();
+	const up = opts.build
+		? await dcFederation("up", "--build", "-d").quiet().nothrow()
+		: await dcFederation("up", "-d").quiet().nothrow();
 	if (up.exitCode !== 0) {
 		throw new Error(`docker compose up failed - the Router was never started\n${up.stderr.toString().trim()}`);
 	}
