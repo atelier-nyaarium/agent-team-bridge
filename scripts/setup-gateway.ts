@@ -197,12 +197,7 @@ async function readTransportText(): Promise<string | null> {
  * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
-	// No size advice here any more. The bundle used to carry the whole Domain snapshot and so grew
-	// with every member admitted, crossing what a terminal can paste; it now carries the root and this
-	// gateway's own admission only, which is a FIXED ~1.9 KB. Both "often too big" and "always too big"
-	// would be wrong, and a warning about a limit nothing approaches only teaches people to distrust
-	// the working option. `f` stays for the phone that cannot reach this machine at all.
-	console.log("  If your phone cannot reach this machine, save its bundle to a file here and pick f.");
+	console.log("  If your phone cannot reach this machine, paste its bundle here instead.");
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
 		// needs no keypress.
@@ -212,30 +207,22 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 		}
 		console.log("\n    Enter) Check again");
 		console.log("    p) Paste the bundle here");
-		console.log("    f) Read the bundle from a file");
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
 		if (choice === "b") return "back";
-		if (choice === "f") {
-			const path = ask("Path to the bundle file:");
-			if (!path) continue;
-			const text = await Bun.file(path.replace(/^~/, process.env.HOME ?? "~"))
-				.text()
-				.catch((e) => {
-					err(`could not read ${path}: ${e instanceof Error ? e.message : String(e)}`);
-					return "";
-				});
-			if (text.trim() && (await postPastedBundle(text.trim()))) return "installed";
-		}
 		if (choice === "p") {
 			const bundle = ask("Paste the bundle:");
-			// A terminal silently drops a paste past its buffer, so a near-limit blob that will not
-			// parse was almost certainly cut rather than malformed. Say that instead of forwarding a
-			// half document and letting the gateway answer "Invalid JSON" about our own truncation.
+			// A terminal silently drops a paste past its line buffer, so a near-limit blob that will not
+			// parse was cut rather than malformed, and saying "invalid" would blame the wrong thing.
+			//
+			// A current bundle cannot reach this: it is the root plus this gateway's own admission, a
+			// fixed ~1.9 KB even with absurd inputs. So hitting it means the SENDER is old - before 8.3.0
+			// the bundle carried the whole Domain snapshot and grew with every member admitted, which is
+			// exactly how it crossed the line. Name that, since updating the phone is the actual fix.
 			if (bundle.length >= TTY_PASTE_LIMIT - 1 && jparse(bundle) === null) {
 				err(
 					`the paste arrived as ${bundle.length} bytes and does not parse - your terminal cut it at its ~${TTY_PASTE_LIMIT} byte limit.\n` +
-						`  Save the bundle to a file instead (any editor, e.g. VS Code or nano), then choose f.`,
+						`  A current bundle is ~1.9 KB and cannot hit this. Update the Switchboard app (8.3.0+) and re-run enrollment.`,
 				);
 				continue;
 			}
