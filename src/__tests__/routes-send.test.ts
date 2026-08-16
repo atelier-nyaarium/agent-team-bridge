@@ -223,7 +223,7 @@ describe("routes", () => {
 		it("routes a target qualified with a different Gateway, 503 when the Router is down", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
 			const registry = makeRegistry({ "proj-a.dev": fakeWs });
-			// No evieClient in this ctx: the Router is unavailable, so a cross-Gateway
+			// No routerClient in this ctx: the Router is unavailable, so a cross-Gateway
 			// target (an arity-4 address whose gateway differs from ours) reports 503
 			// rather than misresolving to the same-named local session.
 			const ctx = makeCtx({ registry });

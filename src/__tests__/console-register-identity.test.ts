@@ -85,7 +85,7 @@ describe("createConsoleDispatcher: register + identity", () => {
 		expect(reply.result).not.toHaveProperty("domainStatus");
 	});
 
-	it("rejects a first_root op: it is decided at evie, never through a Gateway", async () => {
+	it("rejects a first_root op: it is decided at the Router, never through a Gateway", async () => {
 		const h = makeHarness();
 		const firstRoot = {
 			kind: "first_root" as const,

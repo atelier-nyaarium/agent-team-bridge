@@ -120,8 +120,8 @@ object SasCrypto {
 	//  Enroll SAS (owner-anchored, role-tagged)
 	//
 	//  Twin of the enroll* helpers in cross-domain-sas.ts: the in-person admin<->enrollee compare
-	//  brokered by an untrusted evie. Owner-anchored (no gateway keys) with FIXED-SLOT role-tagged
-	//  ADMIN / ENROLLEE blocks, so the preimage is injective and evie cannot transpose the blocks.
+	//  brokered by an untrusted Router. Owner-anchored (no gateway keys) with FIXED-SLOT role-tagged
+	//  ADMIN / ENROLLEE blocks, so the preimage is injective and the Router cannot transpose the blocks.
 	//  The reduction + salted commitment match crossDomainSas; only the preimage shape + version
 	//  literals differ. Pinned by tests/fixtures/enroll-sas/vectors.json. Role is "ADMIN" (showed
 	//  the QR) or "ENROLLEE" (scanned).

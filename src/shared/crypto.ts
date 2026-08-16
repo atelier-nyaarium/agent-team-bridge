@@ -13,7 +13,7 @@ import { z } from "zod";
 //  HKDF-SHA256 -> AES-256-GCM, and the sealed blob is signed by the sender's static
 //  Ed25519 identity. Forward secrecy comes from the ephemeral (its private half is
 //  discarded after sealing), authenticity from the signature, recipient-binding from
-//  the ECDH to the recipient's static key. evie routes the sealed blob content-blind.
+//  the ECDH to the recipient's static key. The Router routes the sealed blob content-blind.
 
 ////////////////////////////////
 //  Interfaces & Types

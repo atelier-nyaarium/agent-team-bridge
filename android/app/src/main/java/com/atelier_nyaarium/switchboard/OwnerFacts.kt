@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 internal class OwnerFacts(private val repo: ChatRepository) {
 	/** First-root a pending friend Domain if the imported blob carries one (and it is not yet
 	 * rooted). Builds a FirstRoot over this device's silent owner key + the invite nonce, self-signs
-	 * it (FederationManager), and POSTs it to evie's console-bridge firstRoot intake. Returns true to
+	 * it (FederationManager), and POSTs it to the Router's console-bridge firstRoot intake. Returns true to
 	 * let connect() proceed (nothing pending, already rooted, or a fresh root just succeeded), false
 	 * to abort connect after surfacing a terminal reject (an expired / already-claimed invite, which
 	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
@@ -37,7 +37,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 					DebugLog.log("FirstRoot", "rooted ok domain=${decision.domainId}")
 					true
 				} else {
-					// A transient evie reject (clock skew, CAS persist contention) leaves the latch
+					// A transient Router reject (clock skew, CAS persist contention) leaves the latch
 					// false and the poll loop re-attempts, so it surfaces as "connecting" (auto-retry),
 					// not a terminal "error" that the user reads as a dead end.
 					val reject = FriendOnboarding.classifyFirstRootError(result.error)
@@ -72,8 +72,8 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	suspend fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult =
 		withContext(Dispatchers.IO) { repo.federation.importOwnerBackup(blob, passphrase) }
 
-	/** Submit an owner-signed fact to evie and fold it into the local keyring ONLY if evie
-	 * accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
+	/** Submit an owner-signed fact to the Router and fold it into the local keyring ONLY if the
+	 * Router accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
 	 * this one place so an owner action cannot submit without the matching local merge
 	 * (otherwise a revoked member could remain visible on the board). Secondary effects (the
 	 * route-gateway pin, the console-admitted gate) stay at the call site after a true return. */
@@ -94,7 +94,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 			EnrollResult(ok = false, error = it.message)
 		}
 		if (!result.ok) {
-			DebugLog.log("Enroll", "$failLabel: evie rejected: ${result.error?.take(140) ?: "unknown"}")
+			DebugLog.log("Enroll", "$failLabel: Router rejected: ${result.error?.take(140) ?: "unknown"}")
 			repo._state.update { it.copy(error = "$failLabel: ${result.error?.take(120) ?: "unknown"}") }
 			return false
 		}
@@ -105,20 +105,20 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 		return true
 	}
 
-	/** Submit this Console's own owner-signed admission to evie so a Gateway trusts its
+	/** Submit this Console's own owner-signed admission to the Router so a Gateway trusts its
 	 * sealed ops. The enroll op is bearer-gated (not sealed), so it lands before the
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
 	 * The gateway may still be syncing the admission - the ENROLLING grace covers that. */
 	suspend fun submitConsoleAdmission() {
 		if (repo.store.consoleAdmitted) {
 			// Distinguishes "the app believes it is already admitted and never POSTs" (which would
-			// explain zero enroll ops reaching evie) from "it POSTs and the submit fails".
+			// explain zero enroll ops reaching the Router) from "it POSTs and the submit fails".
 			DebugLog.log("Enroll", "submit skipped: consoleAdmitted flag already set")
 			return
 		}
 		val signed = repo.federation.consoleAdmission(System.currentTimeMillis())
-		DebugLog.log("Enroll", "submitting console admission to evie (owner ${Crypto.fingerprint(signed.ownerSignPub)})")
-		// submitOwnerFact surfaces the real cause (e.g. evie rooted at a different owner key)
+		DebugLog.log("Enroll", "submitting console admission to the Router (owner ${Crypto.fingerprint(signed.ownerSignPub)})")
+		// submitOwnerFact surfaces the real cause (e.g. the Router rooted at a different owner key)
 		// so it does not hide behind the generic "finishing enrollment" the register hits next.
 		if (submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Console admission rejected")) {
 			repo.store.consoleAdmitted = true
@@ -130,9 +130,9 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 		}
 	}
 
-	/** Owner-admit a scanned Gateway: owner-sign its admission, submit it to evie, and
+	/** Owner-admit a scanned Gateway: owner-sign its admission, submit it to the Router, and
 	 * fold it into the local keyring so the Console can seal to it immediately (before
-	 * evie's snapshot syncs back). Returns the signed admission for the caller to seal
+	 * the Router's snapshot syncs back). Returns the signed admission for the caller to seal
 	 * into the bootstrap bundle, or null on failure. */
 	suspend fun admitGateway(gatewayId: String, signPub: String, boxPub: String): SignedAdmission? =
 		withContext(Dispatchers.IO) {
@@ -148,19 +148,19 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 			signed
 		}
 
-	/** Owner-revoke a member by its signing key: sign a revocation, submit it to evie,
+	/** Owner-revoke a member by its signing key: sign a revocation, submit it to the Router,
 	 * and drop the member from the local keyring. */
 	suspend fun revokeMember(signPub: String) = withContext(Dispatchers.IO) {
 		val signed = repo.federation.revoke(signPub, System.currentTimeMillis())
 		// The local merge folds the revocation into the keyring on success, so the member
-		// drops off the board now instead of waiting for evie to rebroadcast it.
+		// drops off the board now instead of waiting for the Router to rebroadcast it.
 		submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitRevocation(it)) }, repo.federation::mergeRevocation, "Revoke failed")
 	}
 
 	/** Owner-sign a cross-Domain link edge (this Domain -> a linked friend Domain) and submit
-	 * it to evie so its relay-affinity gate permits the cross-Domain crosstalk. Called on a
-	 * link-handshake confirm. Returns true iff evie accepted it. There is no local keyring
-	 * merge: the edge lives only in evie's edge set (the cross-Domain peer + its keys are
+	 * it to the Router so its relay-affinity gate permits the cross-Domain crosstalk. Called on a
+	 * link-handshake confirm. Returns true iff the Router accepted it. There is no local keyring
+	 * merge: the edge lives only in the Router's edge set (the cross-Domain peer + its keys are
 	 * written by the handshake confirm, not by this edge). */
 	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String, edgeNonce: String? = null): Boolean =
 		withContext(Dispatchers.IO) {
@@ -168,9 +168,9 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 			submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
 		}
 
-	/** Owner-sign a cross-Domain link-edge revocation and submit it to evie so its
+	/** Owner-sign a cross-Domain link-edge revocation and submit it to the Router so its
 	 * relay-affinity gate refuses the cross-Domain crosstalk again. Called on unlink. Returns
-	 * true iff evie accepted it. No local keyring merge, for the same reason as the edge. */
+	 * true iff the Router accepted it. No local keyring merge, for the same reason as the edge. */
 	suspend fun revokeXdomainLink(srcDomainId: String, dstDomainId: String): Boolean = withContext(Dispatchers.IO) {
 		val signed = repo.federation.signXdomainLinkRevocation(srcDomainId, dstDomainId, System.currentTimeMillis())
 		submitOwnerFact(signed, { repo.client().enroll(EnrollOp.RevokeXdomainLink(it)) }, {}, "Unlink failed")

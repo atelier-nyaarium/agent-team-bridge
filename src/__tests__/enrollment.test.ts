@@ -27,9 +27,9 @@ describe("enrollment", () => {
 			EnrollmentPayloadSchema.safeParse({
 				type: "enroll-owner",
 				domainId: "d",
-				evieAddr: "https://evie",
-				evieSignPub: "s",
-				evieBoxPub: "b",
+				routerAddr: "https://router",
+				routerSignPub: "s",
+				routerBoxPub: "b",
 				nonce: "n",
 			}).success,
 		).toBe(true);
@@ -90,7 +90,7 @@ describe("enrollment", () => {
 			boxPub: device.box.pub,
 			approvalId: "a",
 			nonce: "n",
-			reach: "https://evie.example/approve",
+			reach: "https://router.example/approve",
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 2000, "cg==");
 		expect(signed.admission.kind).toBe("console");

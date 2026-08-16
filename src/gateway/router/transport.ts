@@ -8,19 +8,19 @@ import { DEFAULT_ROUTER_PORT, type RouterReach } from "../../shared/router-reach
 /** The Gateway's reach-relay credentials: the self-hosted Router, dialed by URL and pinned by its
  * leaf fingerprint. `transport` survives the k8s retirement as a stored discriminant, since blobs
  * written before it still carry the field and a Gateway must reject one rather than mis-read it. */
-export interface EvieTransport {
+export interface RouterTransport {
 	transport: "direct";
 	routerUrl: string;
 	routerCertFp: string;
 	bearer: string;
 }
 
-type RawTransport = Partial<EvieTransport>;
+type RawTransport = Partial<RouterTransport>;
 
 ////////////////////////////////
 //  Functions & Helpers
 
-function normalize(raw: RawTransport): EvieTransport | null {
+function normalize(raw: RawTransport): RouterTransport | null {
 	if (raw.transport !== "direct" || !raw.routerUrl || !raw.routerCertFp || !raw.bearer) return null;
 	return {
 		transport: "direct",
@@ -33,7 +33,7 @@ function normalize(raw: RawTransport): EvieTransport | null {
 /** Resolve the transport from `transport.json` in the federation dir. Null when it is absent,
  * unparseable, or not the direct shape, which leaves the gateway standalone and armed for
  * enrollment rather than dialing something it cannot authenticate. */
-export function loadEvieTransport(federationDir: string): EvieTransport | null {
+export function loadRouterTransport(federationDir: string): RouterTransport | null {
 	const file = path.join(federationDir, "transport.json");
 	if (!fs.existsSync(file)) return null;
 	try {
@@ -49,7 +49,7 @@ export function loadEvieTransport(federationDir: string): EvieTransport | null {
  * `url` is the BOOTSTRAP only: the client re-derives its dial ring from what the Router advertises,
  * and this stays as the last candidate. The ws:// rewrite happens per candidate in the client, so
  * this keeps the stored scheme. */
-export function evieWsConnection(t: EvieTransport): {
+export function routerWsConnection(t: RouterTransport): {
 	url: string;
 	headers: Record<string, string>;
 	tls: { certFp: string };
@@ -98,6 +98,6 @@ export function saveRouterReach(federationDir: string, reach: RouterReach): void
 	try {
 		fs.writeFileSync(path.join(federationDir, "reach.json"), JSON.stringify(reach), { mode: 0o600 });
 	} catch (e) {
-		console.warn(`[evie] could not cache the Router's reach: ${e instanceof Error ? e.message : e}`);
+		console.warn(`[router] could not cache the Router's reach: ${e instanceof Error ? e.message : e}`);
 	}
 }

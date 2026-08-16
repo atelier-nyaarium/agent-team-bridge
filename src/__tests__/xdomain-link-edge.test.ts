@@ -31,7 +31,7 @@ import {
 //  the canonical bytes / signature either runtime derives differently fails one of the
 //  two suites. This suite also guards the fixture against a hand-edit (the recorded bytes
 //  + signature must reproduce from the live TS reference). The edge/revocation here is the
-//  content-blind relay-affinity edge submitted to evie, distinct from the gateway-key
+//  content-blind relay-affinity edge submitted to the Router, distinct from the gateway-key
 //  XDomainLink artifact pinned in xdomain-link.test.ts.
 
 interface SignedVec<T> {

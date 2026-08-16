@@ -16,7 +16,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
  * switchboard's `src/shared/federation-lifecycle.ts`. The admin pre-stages a friend's pending
  * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
  * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
- * rooted owner renames the network (set_display_name). evie verifies each against the
+ * rooted owner renames the network (set_display_name). The Router verifies each against the
  * matching key, so the canonical signing bytes - a versioned, newline-joined, fixed-order
  * encoding binding fingerprint(signerSignPub) - must reproduce exactly. The cross-platform
  * vector in ProvisionOpsTest pins it. Distinct version prefixes keep the four artifacts
@@ -67,7 +67,7 @@ object ProvisionOpsCrypto {
 	/**
 	 * first_root is SELF-signed by the fresh owner key (no admission exists yet): the owner key
 	 * the Domain roots at lives INSIDE the artifact, and the verifier checks the signature
-	 * against firstRoot.ownerSignPub. The one-time QR nonce (checked unspent at evie) is the
+	 * against firstRoot.ownerSignPub. The one-time QR nonce (checked unspent at the Router) is the
 	 * authorization; the self-signature only proves possession of the submitted owner key.
 	 */
 	fun firstRootSigningBytes(f: FirstRoot): ByteArray =
@@ -109,7 +109,7 @@ object ProvisionOpsCrypto {
 
 	/**
 	 * delete_domain is the app-only "Revoke and Delete Domain": the rooted owner proves possession of
-	 * the rooted key to purge its whole Domain slice from evie. Owner-signed like set_display_name, so
+	 * the rooted key to purge its whole Domain slice from the Router. Owner-signed like set_display_name, so
 	 * the bytes bind fingerprint(ownerSignPub); the distinct version prefix keeps a rename signature
 	 * from replaying as a deletion over the same fields.
 	 */
@@ -136,7 +136,7 @@ object ProvisionOpsCrypto {
 	/**
 	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by
 	 * signing ROSTER_V1 over its OWN key + a fresh timestamp + nonce (proof of possession, mirroring
-	 * the registration proof). evie verifies the signature, freshness, and non-replay, then resolves
+	 * the registration proof). The Router verifies the signature, freshness, and non-replay, then resolves
 	 * the key to an admitted console. The preimage binds the RAW signer key (not a fingerprint), so
 	 * it reproduces byte-for-byte against rosterRequestSigningBytes in federation-lifecycle.ts.
 	 */
@@ -160,7 +160,7 @@ object ProvisionOpsCrypto {
 
 	/**
 	 * The transport request proof: an owner proves it holds a rooted owner key by signing
-	 * TRANSPORT_REQUEST_V1 over its OWN key + a fresh timestamp + nonce, so evie can resolve the
+	 * TRANSPORT_REQUEST_V1 over its OWN key + a fresh timestamp + nonce, so the Router can resolve the
 	 * signer to a rooted owner and return the gateway-bridge transport. A distinct version tag from
 	 * ROSTER_V1 / TRUST_PENDING_V1, so no proof crosses over. Reproduces byte-for-byte against
 	 * transportRequestSigningBytes in federation-lifecycle.ts.

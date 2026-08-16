@@ -51,7 +51,7 @@ data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: Strin
  * revocations), the console member identity, and the mirrored keyring the Console
  * resolves peers against. The owner key never leaves the device except as a
  * passphrase-encrypted backup. Admissions and revocations are signed here and submitted
- * to evie; the Console verifies every Gateway it seals to against this keyring.
+ * to the Router; the Console verifies every Gateway it seals to against this keyring.
  */
 class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
@@ -118,7 +118,7 @@ class FederationManager(private val store: AppStateStore) {
 
 	private fun nonce(): String = Base64.getEncoder().encodeToString(ByteArray(18).also { rnd.nextBytes(it) })
 
-	/** This Console's own owner-signed kind:console admission, to submit to evie so a
+	/** This Console's own owner-signed kind:console admission, to submit to the Router so a
 	 * Gateway will trust its sealed ops. */
 	fun consoleAdmission(nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
@@ -167,7 +167,7 @@ class FederationManager(private val store: AppStateStore) {
 
 	/** Owner-sign a cross-Domain link edge: an attestation that traffic from this owner's
 	 * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked with.
-	 * evie's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
+	 * the Router's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
 	 * exists. Content-blind: it names only the two Domain ids. */
 	fun signXdomainLinkEdge(
 		srcDomainId: String,
@@ -176,14 +176,14 @@ class FederationManager(private val store: AppStateStore) {
 		edgeNonce: String? = null,
 	): SignedXDomainLinkEdge {
 		val owner = ownerIdentity()
-		// A caller may pin the nonce so a retry re-signs the same edge identity, which evie dedupes
-		// by (srcDomainId, nonce); an unpinned caller mints a fresh one.
+		// A caller may pin the nonce so a retry re-signs the same edge identity, which the Router
+		// dedupes by (srcDomainId, nonce); an unpinned caller mints a fresh one.
 		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, edgeNonce ?: nonce())
 		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
 	}
 
 	/** Owner-sign a cross-Domain link-edge revocation: withdraws the attestation above so
-	 * evie drops the edge and its relay-affinity gate refuses the cross-Domain relay again.
+	 * the Router drops the edge and its relay-affinity gate refuses the cross-Domain relay again.
 	 * The revocation prefix is distinct from the edge's, so neither signature replays as the
 	 * other. */
 	fun signXdomainLinkRevocation(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkRevocation {
@@ -225,7 +225,7 @@ class FederationManager(private val store: AppStateStore) {
 	fun freshLinkNonce(): String = nonce()
 
 	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
-	 * signing key so evie can scope the roster to this owner's network. */
+	 * signing key so the Router can scope the roster to this owner's network. */
 	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
 		val console = consoleIdentity()
 		val n = nonce()
@@ -238,7 +238,7 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	/** Build a signed gateway-bridge transport request. The owner key (not the console key) signs
-	 * the TRANSPORT_REQUEST proof, because evie resolves the signer to a rooted owner and returns
+	 * the TRANSPORT_REQUEST proof, because the Router resolves the signer to a rooted owner and returns
 	 * that network's transport after verifying and scoping to this owner. */
 	fun signTransportRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TransportRequest {
 		val owner = ownerIdentity()
@@ -252,7 +252,7 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	/** Build a signed "who armed trust toward me?" query. The arms are indexed by owner key, so the
-	 * owner key (not the console key) signs the TRUST_PENDING proof; evie verifies and scopes to
+	 * owner key (not the console key) signs the TRUST_PENDING proof; the Router verifies and scopes to
 	 * this owner before listing the arms. */
 	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
 		val owner = ownerIdentity()
@@ -285,12 +285,12 @@ class FederationManager(private val store: AppStateStore) {
 	fun freshApprovalToken(): String = nonce()
 
 	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR out of band
-	 * and is never sent to evie, so the untrusted broker cannot grind a candidate compare code; the
+	 * and is never sent to the Router, so the untrusted broker cannot grind a candidate compare code; the
 	 * residual is the 6-digit blind online guess, not an offline search. */
 	fun freshEnrollPin(): String = nonce()
 
-	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (evie learns the
-	 * peer's keys only at reveal, after it has had to commit to its own substitution). */
+	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (the Router learns
+	 * the peer's keys only at reveal, after it has had to commit to its own substitution). */
 	fun freshEnrollSalt(): String = nonce()
 
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
@@ -341,9 +341,9 @@ class FederationManager(private val store: AppStateStore) {
 	 * Console. The server snapshot is folded OVER the current one for both admissions and
 	 * revocations, deduped by signing key plus nonce and ordered by issue time. Both are append-only
 	 * owner-signed facts, so the union is safe and convergent: a member the owner just admitted or
-	 * revoked locally survives until evie rebroadcasts it, then the dedupe makes the rebroadcast
+	 * revoked locally survives until the Router rebroadcasts it, then the dedupe makes the rebroadcast
 	 * idempotent. Taking revocations canonical-from-server alone would drop a locally-merged
-	 * revocation on the next poll, letting a just-revoked member reappear until evie caught up. */
+	 * revocation on the next poll, letting a just-revoked member reappear until the Router caught up. */
 	@Synchronized
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String): Boolean {
 		// Read the owner key without minting one. A sync arriving before this device has an owner,
@@ -376,7 +376,7 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	/** Fold a freshly owner-signed admission into the local keyring so the Console can seal to a
-	 * member it just admitted, before evie's snapshot syncs back. Synchronized with applyDomainSync
+	 * member it just admitted, before the Router's snapshot syncs back. Synchronized with applyDomainSync
 	 * so a concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeAdmission(signed: SignedAdmission) {
@@ -386,7 +386,7 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	/** Fold a freshly owner-signed revocation into the local keyring so the revoked member drops off
-	 * the board immediately, before evie rebroadcasts it. Synchronized with applyDomainSync so a
+	 * the board immediately, before the Router rebroadcasts it. Synchronized with applyDomainSync so a
 	 * concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeRevocation(signed: SignedRevocation) {
@@ -456,8 +456,8 @@ class FederationManager(private val store: AppStateStore) {
 
 	/** Self-sign this device's first-root of a PENDING Domain at its owner key. No admission exists
 	 * yet, so the artifact is self-signed (the verifier checks the signature against the embedded
-	 * ownerSignPub) and the one-time invite `nonce` from the scanned blob is the authorization. evie
-	 * roots the Domain idempotently on the same key and refuses a re-root at a different one. */
+	 * ownerSignPub) and the one-time invite `nonce` from the scanned blob is the authorization. The
+	 * Router roots the Domain idempotently on the same key and refuses a re-root at a different one. */
 	fun signFirstRoot(domainId: String, nonce: String, nowMs: Long): SignedFirstRoot {
 		val owner = ownerIdentity()
 		val firstRoot = FirstRoot(domainId, owner.sign.pub, owner.box.pub, nonce, nowMs)
@@ -466,7 +466,7 @@ class FederationManager(private val store: AppStateStore) {
 
 	/** Owner-sign a request to pre-stage a friend's PENDING tenant (an opaque domainId plus the
 	 * friend's display name, no owner root). The signing nonce is this request's anti-replay token;
-	 * evie mints the separate one-time invite nonce carried in the QR and returns it. */
+	 * the Router mints the separate one-time invite nonce carried in the QR and returns it. */
 	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
 		val provision = ProvisionTenant(domainId, displayName, nowMs, nonce())
@@ -480,9 +480,9 @@ class FederationManager(private val store: AppStateStore) {
 		return ProvisionOpsCrypto.signRemove(removal, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a rename of this owner's own display name. evie CAS-merges it onto the Domain
+	/** Owner-sign a rename of this owner's own display name. The Router CAS-merges it onto the Domain
 	 * record and pushes it to the Domain's gateways. The `domainId` is this owner's own rooted
-	 * Domain; evie verifies the signature against the Domain's pinned owner key. */
+	 * Domain; the Router verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
@@ -490,7 +490,7 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	/** Owner-sign a request to purge this owner's OWN Domain (the app-only "Revoke and Delete Domain").
-	 * evie verifies the signature against the Domain's rooted owner key before dropping the whole slice.
+	 * The Router verifies the signature against the Domain's rooted owner key before dropping the whole slice.
 	 * The `domainId` is this owner's own rooted Domain. */
 	fun signDeleteDomain(domainId: String, nowMs: Long): SignedDeleteDomain {
 		val owner = ownerIdentity()

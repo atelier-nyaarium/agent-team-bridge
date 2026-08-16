@@ -10,7 +10,7 @@ import {
 	bobGw,
 	bobOwner,
 	channelWs,
-	fakeEvie,
+	fakeRouter,
 	gateRoutes,
 	lib,
 	makeCtx,
@@ -29,7 +29,7 @@ import {
 //  Cross-Domain send flow (real crypto, two Domains)
 //
 //  alice-gw (Domain "alice") sends to bob.bob-gw.lib.dev (Domain "bob"). The seal MUST be v2
-//  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), evie stays
+//  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), the Router stays
 //  content-blind, and the op lands at bob's destination share gate. The local seal path
 //  is untouched (covered by the same-Domain tests).
 
@@ -50,9 +50,9 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		});
 
 		let landed: FederatedOp | undefined;
-		// The evie mock plays bob-gw: it opens the v2 frame with bob's sealer (asserting v2 +
+		// The router mock plays bob-gw: it opens the v2 frame with bob's sealer (asserting v2 +
 		// the resolved Domain), runs bob's gated handler, and seals the reply back.
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			onCall: (action, params) => {
 				if (action !== "gateway_relay") return { ok: true };
 				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
@@ -78,7 +78,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			"alice",
 		);
 		const ctx = makeCtx("alice-gw", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: aliceSealer,
 			crossDomainPeers: alicePeers,
 		});
@@ -96,8 +96,8 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		expect(json.session_id).toBe("conv.c1.bob.bob-gw.lib.dev");
 		expect(ctx.store.has("conv.c1.bob.bob-gw.lib.dev")).toBe(true);
 
-		// The op crossed sealed (evie saw only ciphertext, never the body), landed gated.
-		const relay = evie.calls.find((c) => c.action === "gateway_relay");
+		// The op crossed sealed (the Router saw only ciphertext, never the body), landed gated.
+		const relay = router.calls.find((c) => c.action === "gateway_relay");
 		expect(relay?.params.srcDomain).toBe("alice");
 		expect(JSON.stringify(relay?.params.payload)).not.toContain("collab");
 		expect(landed).toMatchObject({ kind: "send", to: "lib.dev", from: "alice.alice-gw.app.dev" });
@@ -118,7 +118,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			shareState: bobShare,
 		});
 
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			onCall: (action, params) => {
 				if (action !== "gateway_relay") return { ok: true };
 				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
@@ -147,7 +147,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			"alice",
 		);
 		const ctx = makeCtx("alice-gw", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: aliceSealer,
 			crossDomainPeers: alicePeers,
 		});
@@ -169,7 +169,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 	});
 
 	it("DISCOVERY merges a linked peer's shared sessions (the peer's gate filters them)", async () => {
-		// alice discovers: her local team + bob's shared sessions. evie's roster (same-Domain)
+		// alice discovers: her local team + bob's shared sessions. The Router's roster (same-Domain)
 		// is empty here; the cross-Domain leg queries bob, whose handler returns only shares.
 		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
@@ -183,7 +183,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			shareState: bobShare,
 		});
 
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			onCall: (action, params) => {
 				if (action === "list_gateways") return { gateways: [] }; // no same-Domain peers
 				if (action !== "gateway_relay") return { ok: true };
@@ -206,7 +206,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			"alice",
 		);
 		const ctx = makeCtx("alice-gw", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: aliceSealer,
 			crossDomainPeers: alicePeers,
 			registry: registryWith({ "app.dev": channelWs([]) }),

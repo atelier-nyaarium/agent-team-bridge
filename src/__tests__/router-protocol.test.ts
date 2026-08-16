@@ -1,34 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { EvieInboundFrameSchema, ToolCallFrameSchema } from "../shared/evie-protocol.js";
+import { RouterInboundFrameSchema, ToolCallFrameSchema } from "../shared/router-protocol.js";
 
 ////////////////////////////////
-//  Evie bridge frame schemas
+//  Router bridge frame schemas
 //
-//  The boundary union evieClient parses inbound frames with. The console_relay
+//  The boundary union the Router client parses inbound frames with. The console_relay
 //  member is deliberately loose (the relay pump owns full validation); the
 //  rest are exact decode shapes.
 
-describe("evie inbound frame union", () => {
+describe("Router inbound frame union", () => {
 	it("rejects a retired tool_registry frame (the tool proxy is gone)", () => {
-		expect(EvieInboundFrameSchema.safeParse({ type: "tool_registry", tools: [] }).success).toBe(false);
+		expect(RouterInboundFrameSchema.safeParse({ type: "tool_registry", tools: [] }).success).toBe(false);
 	});
 
 	it("parses tool_result and tool_error frames", () => {
 		expect(
-			EvieInboundFrameSchema.safeParse({ type: "tool_result", callId: "c1", result: { ok: true } }).success,
+			RouterInboundFrameSchema.safeParse({ type: "tool_result", callId: "c1", result: { ok: true } }).success,
 		).toBe(true);
-		expect(EvieInboundFrameSchema.safeParse({ type: "tool_error", callId: "c1", error: "boom" }).success).toBe(
+		expect(RouterInboundFrameSchema.safeParse({ type: "tool_error", callId: "c1", error: "boom" }).success).toBe(
 			true,
 		);
 	});
 
-	it("accepts tool_error with callId null (evie sends it for unattributable failures)", () => {
-		const result = EvieInboundFrameSchema.safeParse({ type: "tool_error", callId: null, error: "invalid JSON" });
+	it("accepts tool_error with callId null (the Router sends it for unattributable failures)", () => {
+		const result = RouterInboundFrameSchema.safeParse({ type: "tool_error", callId: null, error: "invalid JSON" });
 		expect(result.success).toBe(true);
 	});
 
 	it("keeps console_relay loose - the relay pump owns full validation", () => {
-		const result = EvieInboundFrameSchema.safeParse({
+		const result = RouterInboundFrameSchema.safeParse({
 			type: "console_relay",
 			v: 1,
 			device: "pixel",
@@ -41,13 +41,13 @@ describe("evie inbound frame union", () => {
 	});
 
 	it("rejects unknown frame types (consumer logs and drops)", () => {
-		expect(EvieInboundFrameSchema.safeParse({ type: "mystery_frame", payload: 1 }).success).toBe(false);
+		expect(RouterInboundFrameSchema.safeParse({ type: "mystery_frame", payload: 1 }).success).toBe(false);
 	});
 
 	it("rejects dm_forward frames - the Discord human path is retired", () => {
 		// dm_forward no longer has a union member, so even a fully-formed one falls
 		// through to the unknown-type drop. Guards against silently re-adding it.
-		const result = EvieInboundFrameSchema.safeParse({
+		const result = RouterInboundFrameSchema.safeParse({
 			type: "dm_forward",
 			content: "hi",
 			userId: "u1",

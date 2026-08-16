@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { evieWsConnection, loadEvieTransport, loadRouterReach, saveRouterReach } from "../gateway/evie/transport.js";
+import {
+	loadRouterReach,
+	loadRouterTransport,
+	routerWsConnection,
+	saveRouterReach,
+} from "../gateway/router/transport.js";
 
 ////////////////////////////////
 //  Constants
@@ -34,14 +39,14 @@ afterEach(() => {
 ////////////////////////////////
 //  Tests
 
-describe("loadEvieTransport", () => {
+describe("loadRouterTransport", () => {
 	it("resolves nothing when no file is present", () => {
-		expect(loadEvieTransport(dir)).toBeNull();
+		expect(loadRouterTransport(dir)).toBeNull();
 	});
 
 	it("reads the direct branch", () => {
 		write(DIRECT);
-		const loaded = loadEvieTransport(dir);
+		const loaded = loadRouterTransport(dir);
 		expect({ transport: loaded?.transport, url: loaded?.routerUrl }).toEqual({
 			transport: "direct",
 			url: DIRECT.routerUrl,
@@ -52,27 +57,27 @@ describe("loadEvieTransport", () => {
 	// half-adopted: its fields describe a relay this build can no longer reach.
 	it("refuses a retired k8s file rather than half-reading it", () => {
 		write({ apiUrl: "https://api.example", saToken: "sa", caPem: "pem" });
-		expect(loadEvieTransport(dir)).toBeNull();
+		expect(loadRouterTransport(dir)).toBeNull();
 	});
 
 	it("refuses a direct branch missing its own fields", () => {
 		write({ transport: "direct", routerUrl: DIRECT.routerUrl });
-		expect(loadEvieTransport(dir)).toBeNull();
+		expect(loadRouterTransport(dir)).toBeNull();
 	});
 
 	it("resolves nothing from a malformed file", () => {
 		writeFileSync(path.join(dir, "transport.json"), "{not json");
-		expect(loadEvieTransport(dir)).toBeNull();
+		expect(loadRouterTransport(dir)).toBeNull();
 	});
 });
 
-describe("evieWsConnection", () => {
+describe("routerWsConnection", () => {
 	// The stored scheme survives: this url is the BOOTSTRAP candidate, and the client rewrites
 	// http->ws per candidate as it dials. Rewriting here instead would feed a ws:// address into the
 	// reach ring, where it is indistinguishable from an advertised one.
 	it("carries the bootstrap URL with the leaf pinned, lowercased", () => {
 		write(DIRECT);
-		const conn = evieWsConnection(loadEvieTransport(dir)!);
+		const conn = routerWsConnection(loadRouterTransport(dir)!);
 		expect(conn.url).toBe("https://federation-router:20001");
 		expect(conn.tls).toEqual({ certFp: "ab12" });
 		expect(conn.headers.Authorization).toBe(`Bearer ${DIRECT.bearer}`);

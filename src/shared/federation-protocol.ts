@@ -1,20 +1,20 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
 import { sign, verify } from "./crypto.js";
-import { BLOB_CHUNK_BYTES } from "./evie-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NoticeTierWireFields, NoticeTitle } from "./notice.js";
+import { BLOB_CHUNK_BYTES } from "./router-protocol.js";
 import { isSlug } from "./session-id.js";
 
 ////////////////////////////////
-//  Federation inner protocol (gateway <-> gateway, via evie)
+//  Federation inner protocol (gateway <-> gateway, via the Router)
 //
-//  evie routes the OUTER envelope (evie-protocol.ts) and never reads the payload. This
-//  module is the inner vocabulary the two gateways share and evie does not. It is NOT
+//  The Router routes the OUTER envelope (router-protocol.ts) and never reads the payload. This
+//  module is the inner vocabulary the two gateways share and the Router does not. It is NOT
 //  codegen'd to Kotlin: cross-Gateway traffic is gateway-to-gateway, and the console
 //  reaches the mesh through its route Gateway.
 
-export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
+export { FEDERATION_PROTOCOL_VERSION } from "./router-protocol.js";
 
 ////////////////////////////////
 //  Schemas
@@ -68,7 +68,7 @@ export const ReturnRouteSchema = z.object({
 });
 
 /** The op a Gateway executes on a peer's behalf. Always carried E2E-sealed inside the
- * gateway_relay payload (`sealer.ts`); evie relays the envelope but never sees the op. */
+ * gateway_relay payload (`sealer.ts`); the Router relays the envelope but never sees the op. */
 export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("send"),
@@ -185,14 +185,14 @@ export const SealedEnvelopeSchema = z.object({
 	signature: z.string(),
 });
 
-/** The gateway_relay payload. Cross-Gateway traffic is ALWAYS E2E-sealed, so evie sees
+/** The gateway_relay payload. Cross-Gateway traffic is ALWAYS E2E-sealed, so the Router sees
  * only this opaque sealed blob and cannot read or forge the op. */
 export const GatewayRelayPayloadSchema = z.object({
 	sealed: SealedEnvelopeSchema,
 });
 
 /** The full gateway_relay frame the destination gateway's relay pump validates (the
- * loose `gateway_relay` member of EvieInboundFrameSchema parses to this). */
+ * loose `gateway_relay` member of RouterInboundFrameSchema parses to this). */
 export const GatewayRelayFrameSchema = z.object({
 	type: z.literal("gateway_relay"),
 	v: z.number().int().positive(),
@@ -230,7 +230,7 @@ export type GatewayRelayFrame = z.infer<typeof GatewayRelayFrameSchema>;
 //  A cross-Domain link authorizes a gateway-scoped sealed channel between two
 //  Gateways owned by DIFFERENT owners (different Domains). It is NOT an admission
 //  (admissions are single-owner, intra-Domain) and is NOT a SYNC-HASH leaf - it is
-//  switchboard-only gateway-to-gateway vocabulary evie never sees, so it lives here,
+//  switchboard-only gateway-to-gateway vocabulary the Router never sees, so it lives here,
 //  not in admission.ts.
 //
 //  Trust is mutual: EACH owner signs its OWN side of the link (binding the friend's
@@ -334,7 +334,7 @@ export function verifyXDomainLink(s: SignedXDomainLink, expectedOwnerSignPubB64:
 //  gateway it bound. Signed by MY owner key (only I can withdraw my own trust) and verified under
 //  it. `revokedAt` is the floor: a trust link issued at or before it is dead (so a replayed stale
 //  link cannot re-establish trust), while a genuine re-trust (a fresh link issued AFTER the
-//  revoke) is honored. Gateway-persisted like the link itself; evie never sees it.
+//  revoke) is honored. Gateway-persisted like the link itself; the Router never sees it.
 
 export const XDomainUntrustSchema = z
 	.object({

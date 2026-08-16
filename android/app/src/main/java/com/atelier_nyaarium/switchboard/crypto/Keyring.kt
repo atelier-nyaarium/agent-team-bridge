@@ -75,8 +75,8 @@ class Keyring(val snapshot: DomainSnapshot) {
 
 /** The canonical form of a Domain snapshot. Admissions and revocations are append-only
  * owner-signed facts, so they are deduped by signing key + nonce and ordered by issue time.
- * Every snapshot merge (a sync from a Gateway, or a local admit/revoke folded in before evie
- * rebroadcasts it) routes through here, so the same set of facts always yields identical
+ * Every snapshot merge (a sync from a Gateway, or a local admit/revoke folded in before the
+ * Router rebroadcasts it) routes through here, so the same set of facts always yields identical
  * bytes and resolve() sees each fact exactly once. */
 internal fun canonicalSnapshot(
 	ownerSignPub: String,

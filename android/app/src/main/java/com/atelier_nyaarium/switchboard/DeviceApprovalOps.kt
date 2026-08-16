@@ -15,8 +15,8 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	////////////////////////////////
 	//  Add a device (USER self-enroll: the owner authorizes their OWN fresh device, no admin)
 
-	/** evie's public device-approval reach for the authorize-console QR, or null when this network has
-	 * no public ingress (the Add-a-device entry is then shown disabled). */
+	/** The Router's public device-approval reach for the authorize-console QR, or null when this network
+	 * has no public ingress (the Add-a-device entry is then shown disabled). */
 	fun deviceApprovalReach(): String? =
 		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
@@ -208,7 +208,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		// the id this device is replacing.
 		if (transport.domain != null) repo.refreshAdmittedGateways()
 		// This is the ONE path besides a real first-root that sets firstRooted=true - it never
-		// calls evie's first-root intake (the held device already rooted), so trace the latch
+		// calls the Router's first-root intake (the held device already rooted), so trace the latch
 		// origin explicitly or a stuck-latch investigation cannot tell the two apart.
 		DebugLog.log(
 			"AddDevice",

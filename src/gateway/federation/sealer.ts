@@ -22,7 +22,7 @@ export interface OpenedFrame {
 
 /** Seals an object to a peer Gateway and opens a peer Gateway's sealed object, resolving the
  * peer's keys local-first (the single-owner allowlist) then the disjoint cross-Domain peer
- * set. The seal is E2E (gateway to gateway); evie never holds either Gateway's private keys.
+ * set. The seal is E2E (gateway to gateway); the Router never holds either Gateway's private keys.
  * `open`/`openWithSource` take the source Gateway's Domain (the Router stamps it on the relay
  * frame) so a cross-Domain peer resolves by the full `(domainId, gatewayId)` pair; absent, it
  * falls back to a bare-gatewayId scan. `openWithSource` also reports whether the verified
@@ -37,7 +37,7 @@ export interface Sealer {
 //  Functions & Helpers
 
 // A sealed envelope older than this is rejected, so a captured authentic frame cannot be
-// re-executed after the in-memory replay-guard window has rolled. Above evie's
+// re-executed after the in-memory replay-guard window has rolled. Above the Router's
 // gateway_relay hold (70s) plus relay latency.
 const SEAL_MAX_AGE_MS = 120_000;
 
@@ -54,7 +54,7 @@ function resolveCrossByGateway(crossDomainPeers: CrossDomainPeers, gatewayId: st
 
 /** The local (single-owner, intra-Domain) signed-and-encrypted inner frame. Carrying
  * `src`/`dst`/`at` inside the seal binds them cryptographically (the seal signature covers
- * the ciphertext), so evie, which controls the cleartext routing fields, cannot relabel the
+ * the ciphertext), so the Router, which controls the cleartext routing fields, cannot relabel the
  * origin/destination or replay a stale frame past the freshness window. */
 interface SealedBodyV1 {
 	v: 1;
@@ -66,7 +66,7 @@ interface SealedBodyV1 {
 
 /** The cross-Domain signed-and-encrypted inner frame. Adds the source and destination Domain
  * ids alongside the gateway ids, because a gateway id is not globally unique across Domains:
- * open() cross-checks the full `(domain, gateway)` pair on both ends, so an evie relabel
+ * open() cross-checks the full `(domain, gateway)` pair on both ends, so a Router relabel
  * across Domains cannot misattribute an authentic frame. */
 interface SealedBodyV2 {
 	v: 2;
@@ -107,7 +107,7 @@ export function createSealer(
 		}
 		const wrapped = JSON.parse(plain.toString("utf8")) as SealedBody;
 		// The cleartext srcGateway selected the verify key; cross-check it against the
-		// signed-in src so an evie relabel cannot misattribute an authentic frame.
+		// signed-in src so a Router relabel cannot misattribute an authentic frame.
 		if (wrapped?.src !== srcGateway) throw new Error(`seal: source mismatch (claimed "${srcGateway}")`);
 		if (wrapped.dst !== localGatewayId) throw new Error(`seal: not addressed to this Gateway`);
 		if (Math.abs(now() - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS) throw new Error(`seal: stale envelope`);

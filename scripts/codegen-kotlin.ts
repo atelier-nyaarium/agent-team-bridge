@@ -29,7 +29,6 @@ import {
 	SignedRevocationSchema,
 } from "../src/shared/admission.js";
 import { CONSOLE_PROTOCOL_VERSION } from "../src/shared/console-protocol.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../src/shared/evie-protocol.js";
 import {
 	ConsoleApprovalOpSchema,
 	ConsoleApprovalResultSchema,
@@ -48,6 +47,7 @@ import {
 	TrustPendingResultSchema,
 } from "../src/shared/federation-lifecycle.js";
 import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../src/shared/router-protocol.js";
 import {
 	BOARD_ATTACHMENTS_MAX,
 	BOARD_AUTO_DOWNLOAD_MAX_BYTES,
@@ -119,7 +119,7 @@ const ROOTS: z.ZodType[] = [
 	EnrollResultSchema,
 	EnrollHandshakeOpSchema,
 	EnrollHandshakeResultSchema,
-	// Device self-enroll approval: the held device composes the ops, decodes evie's broker reply.
+	// Device self-enroll approval: the held device composes the ops, decodes the Router's reply.
 	ConsoleApprovalOpSchema,
 	ConsoleApprovalResultSchema,
 	PendingTenantSchema,
@@ -135,7 +135,7 @@ const ROOTS: z.ZodType[] = [
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
 	TrustPendingResultSchema,
-	// An owner pulling its network's gateway-bridge transport (proof-of-possession + evie's reply).
+	// An owner pulling its network's gateway-bridge transport (proof-of-possession + the Router's reply).
 	TransportRequestSchema,
 	TransportResultSchema,
 ];
@@ -154,7 +154,7 @@ const SEALED_ROOTS = new Set([
 ]);
 
 ////////////////////////////////
-//  zod -> cleaned JSON Schema (evie's conversion hygiene)
+//  zod -> cleaned JSON Schema (evie-bot's conversion hygiene)
 
 type Json = Record<string, unknown>;
 
@@ -391,8 +391,8 @@ const header = `// generated from src/shared/schemas.ts + src/shared/console-pro
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
 // it MUST pair with explicitNulls = false. Note the console's POST body is the
-// op-only envelope {device, conversationId, opId, op}; evie composes the full
-// console_relay frame, so ConsoleRelayFrame is decode-side here.
+// op-only envelope {device, conversationId, opId, op}; the Router composes the
+// full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto

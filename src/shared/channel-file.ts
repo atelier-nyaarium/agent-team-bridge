@@ -5,8 +5,8 @@ import { z } from "zod";
 //
 //  The wire truth for a message's attachment list. Lives in its own zod-only module because BOTH
 //  schemas.ts and federation-protocol.ts consume it and schemas.ts imports from federation-protocol,
-//  so defining it in either would cycle. NOT a synced leaf: evie routes messages content-blind and
-//  has no consumer of these shapes, so this file changes without the leaf ritual.
+//  so defining it in either would cycle. NOT a synced leaf: the Router routes messages content-blind
+//  and has no consumer of these shapes, so this file changes without the leaf ritual.
 
 ////////////////////////////////
 //  Schemas

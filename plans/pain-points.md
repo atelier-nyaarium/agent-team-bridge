@@ -206,8 +206,8 @@ did not match" rather than an obviously-wrong-directory error) until traced back
 
 Migrated from `plans/console-hardening.md` (deleted, shipped - the four phases the idle-pushback
 manager's own crust sweep spun off: Phase A's per-team attachment purge on `forget()`, Phase B's
-long-poll timeout chain pin, Phase C's consolidation of the 10 duplicated evie-direct request
-shapes behind `postEvieDirect`, and Phase D's cancellable `ConsoleClient` transport). Shipped
+long-poll timeout chain pin, Phase C's consolidation of the 10 duplicated router-direct request
+shapes behind `postRouterDirect`, and Phase D's cancellable `ConsoleClient` transport). Shipped
 through a full `audited-implementation` cycle per phase: plan alignment, red-team (Phase D needed
 two rounds - the first fix pass introduced two real regressions, a `deliver()` placeholder deleted
 on success and a `spawnSession()` clobber race, both caught and corrected before commit), a
@@ -288,7 +288,7 @@ on the scouting agents' tone alone.
   domain AND gateway; the other 5 test gateway alone, against the codebase's own documented
   invariant that a gateway id is unique only within a Domain.
 - [medium] `android/.../ConsoleClient.kt : relay()` - **latent logging footgun for future work** -
-  Phase C's `postEvieDirect` redaction fix only covers the 9 evie-direct ops; `relay()` (Phase D's
+  Phase C's `postRouterDirect` redaction fix only covers the 9 router-direct ops; `relay()` (Phase D's
   target) logs nothing today, but several of the ~21 ops it serves carry genuine plaintext secrets
   once `unsealReply()` decrypts them. A future trace line placed on the decoded result (rather than
   the still-sealed raw response) would leak. Not a live issue - nothing logs there yet.
@@ -324,7 +324,7 @@ on the scouting agents' tone alone.
   - the one response-body log line Phase C's redaction rule doesn't cover; `ConsoleApprovalResult`'s
   fields are public keys/display name/opaque ciphertext, not the onboarding bundle plaintext.
 - [low] `proto/Protocol.kt : TrustPendingResult.rendezvousId` - **naming trap, not a bug** -
-  confirmed safe to log (evie-served broker data, not a bearer secret), but
+  confirmed safe to log (router-served broker data, not a bearer secret), but
   `ChatRepository.trustExchange`'s comments call it "the pin" when passing it to
   `EnrollCeremony.sas`, reading as alarming out of context.
 
@@ -350,7 +350,7 @@ and the TypeScript suite; committed in small, separately-verified commits. Not y
 origin as of this entry.
 
 The four above-low items originally listed here (the `ConsoleClient` cancellability rework, the
-10x duplicated evie-direct request shape, the `LONG_POLL_HOLD_MS` chain pin, and `forget()`'s
+10x duplicated router-direct request shape, the `LONG_POLL_HOLD_MS` chain pin, and `forget()`'s
 per-team attachment purge) were extracted into `plans/console-hardening.md` (2026-07-16) as
 phases A-D with facts-from-code and fix directions. The three low/cosmetic items stay here:
 
@@ -573,16 +573,16 @@ register can influence them:
 
 ### Graceful-shutdown reconnector cleanup
 
-The shared `Reconnector` exposes `cancel()`; evieClient and `closeRouter` use it, but two shutdown
+The shared `Reconnector` exposes `cancel()`; routerClient and `closeRouter` use it, but two shutdown
 paths still leak a pending reconnect timer. Cosmetic on a process that is exiting, but inconsistent.
 
 - [low] `src/mcp/devcontainer/hostDaemon.ts : reconnector` - module-scoped, never cancelled;
   `main-host-daemon.ts` registers no SIGTERM/SIGINT handler. Needs an exported `stopHostDaemon()`
   calling `reconnector.cancel()` + signal handlers.
-- [low] `src/gateway/index.ts : activateFederation` - the SIGTERM handler calls `evieClient.stop()`
-  but SIGINT does not, so a Ctrl-C leaks evieClient's reconnector + heartbeat timers. Consolidate
+- [low] `src/gateway/index.ts : startGateway` - the SIGTERM handler calls `routerClient.stop()`
+  but SIGINT does not, so a Ctrl-C leaks routerClient's reconnector + heartbeat timers. Consolidate
   SIGTERM/SIGINT into one shutdown handler.
-- [low] `src/gateway/evie/evieClient.ts : connect : ws.on("close")` - pre-existing: a stale socket's
+- [low] `src/gateway/router/routerClient.ts : connect : ws.on("close")` - pre-existing: a stale socket's
   close handler unconditionally `ws = null` + `onDisconnect`; if it fired after a new socket
   connected it could null the new one. Guard the handlers on socket identity. Low risk in practice
   (the reconnect delay outlasts the close event).
@@ -590,7 +590,7 @@ paths still leak a pending reconnect timer. Cosmetic on a process that is exitin
 ### Coordinator / timeout pattern consolidation (large-defer)
 
 - The four waiter/timeout coordinators (`WakeCoordinator`, `gateway/hostOpCoordinator`,
-  `evie/evieClient` pendingCalls, `shared/pending-job-store`) share a request-wait-resolve-timeout
+  `router/routerClient` pendingCalls, `shared/pending-job-store`) share a request-wait-resolve-timeout
   shape; a `TimedWaiter` abstraction could consolidate them. Over-abstraction caveat: they differ
   (multi-waiter vs single, the mutable re-arm in `ackReceived`, persistence + TTL in
   PendingJobStore). Only worth it if a clean shared core emerges; otherwise tailored is clearer.
@@ -912,7 +912,7 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   functions - `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`/`pluginAction` (plus
   `PluginActionRequestSchema` and `HumanNotifySchema`) - and passes the ownership test as a
   genuinely separable sub-concern from core session routing. Worth extracting into its own module
-  (natural home: `src/gateway/console/`), taking `mailboxStore`/`ownerId`/`evieClient`/
+  (natural home: `src/gateway/console/`), taking `mailboxStore`/`ownerId`/`routerClient`/
   `localGatewayId`/`resolvesLocalGateway`/`relayWithRetry` as explicit injected deps, matching the
   precedent `gatewayRelay.ts`'s narrow `FederationRoutes` dependency already sets. If picked up,
   bundle with hoisting `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat
@@ -1016,7 +1016,7 @@ reconciler now exist as shipped, tested code in `src/gateway/federation/crossDom
 picking that plan back up should mean sharing/mirroring this code, not re-deriving the pattern from
 scratch. See that file's own "When this is picked back up" section, which points here.
 
-## Console poll drain vs the evie WS frame ceiling (found by the artifact-references plan audit, 2026-07-23)
+## Console poll drain vs the router WS frame ceiling (found by the artifact-references plan audit, 2026-07-23)
 
 The console's poll reply ships the ENTIRE unacked mailbox backlog in one sealed
 `console_relay_reply`: `drain` returns every entry, the handler returns them wholesale (no
@@ -1025,7 +1025,7 @@ evie's `BridgeTransport` calls `Bun.serve` with no `maxPayloadLength`; Bun's def
 it CLOSES the WebSocket on a larger message. So the effective ceiling on one drain is roughly
 9 MB of decoded attachment bytes across the whole backlog. A phone parked on the 12-hour idle
 tier while attachment-bearing notices accumulate (screenshots already make this reachable today,
-no new feature needed) can cross it, and the failure mode is nasty: the gateway's entire evie WS
+no new feature needed) can cross it, and the failure mode is nasty: the gateway's entire router WS
 drops BEFORE delivery, the console never receives so never acks, and every subsequent poll
 re-kills the WS - while the actively-polling console keeps refreshing `lastActivity`, so the 1h
 mailbox idle TTL never clears the poison.
@@ -1193,7 +1193,7 @@ lines. The plan is deleted; what follows is what it left behind.
   positional selection rule: a snapshot declares `role: "ref-snapshot"` at compose time and a
   receiver classifies from the entry it already holds. An attachment named
   `switchboard-references.json` is now an ordinary attachment and must ship, which
-  `evieFiles.test.ts` asserts. Adding a compose-boundary filename check would re-derive role from
+  `channelFiles.test.ts` asserts. Adding a compose-boundary filename check would re-derive role from
   content, which is the exact defect six commits were spent removing.
 - **No cross-runtime vector pins `safeName`/`uniqueName`.** Its absence is why both filename
   divergences (an astral character splitting into two underscores; dedupe seeded from a set rather

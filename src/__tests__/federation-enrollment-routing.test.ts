@@ -13,7 +13,7 @@ import { signAdmission, signRevocation } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signXDomainLinkEdge } from "../shared/federation-lifecycle.js";
 
-const evie = generateIdentity();
+const router = generateIdentity();
 const now = 1_000_000;
 
 function fakeMultiDomainIO(): SecretIO {
@@ -115,11 +115,11 @@ describe("resolveEnrollRoute (multi-tenant owner-fact routing)", () => {
 	});
 
 	it("a guest admission lands in the guest coordinator; the admin coordinator (the old routing) rejects it", () => {
-		const adminC = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "admin-dom");
-		const pa = adminC.mintEnrollOwner("admin-dom", "https://evie", now);
+		const adminC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "admin-dom");
+		const pa = adminC.mintEnrollOwner("admin-dom", "https://router", now);
 		adminC.redeemEnrollOwner(pa.nonce, adminOwner.sign.pub, adminOwner.box.pub, now);
-		const guestC = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "guest-dom");
-		const pg = guestC.mintEnrollOwner("guest-dom", "https://evie", now);
+		const guestC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "guest-dom");
+		const pg = guestC.mintEnrollOwner("guest-dom", "https://router", now);
 		guestC.redeemEnrollOwner(pg.nonce, guestOwner.sign.pub, guestOwner.box.pub, now);
 
 		const op = { kind: "submit_admission" as const, admission: gatewayAdmission(guestOwner) };
@@ -138,11 +138,11 @@ describe("EnrollmentCoordinator domain isolation over one store", () => {
 		await store.init();
 		const ownerAdmin = generateIdentity();
 		const ownerWork = generateIdentity();
-		const admin = new EnrollmentCoordinator(evie, store.domainStore("alice"), "alice");
-		const work = new EnrollmentCoordinator(evie, store.domainStore("work"), "work");
-		const ph = admin.mintEnrollOwner("alice", "https://evie", now);
+		const admin = new EnrollmentCoordinator(router, store.domainStore("alice"), "alice");
+		const work = new EnrollmentCoordinator(router, store.domainStore("work"), "work");
+		const ph = admin.mintEnrollOwner("alice", "https://router", now);
 		admin.redeemEnrollOwner(ph.nonce, ownerAdmin.sign.pub, ownerAdmin.box.pub, now);
-		const pw = work.mintEnrollOwner("work", "https://evie", now);
+		const pw = work.mintEnrollOwner("work", "https://router", now);
 		work.redeemEnrollOwner(pw.nonce, ownerWork.sign.pub, ownerWork.box.pub, now);
 		expect(admin.getDomainSnapshot()?.ownerSignPub).toBe(ownerAdmin.sign.pub);
 		expect(work.getDomainSnapshot()?.ownerSignPub).toBe(ownerWork.sign.pub);

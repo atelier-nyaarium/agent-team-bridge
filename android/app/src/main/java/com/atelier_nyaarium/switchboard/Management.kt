@@ -260,7 +260,7 @@ fun GatewaysScreen(
 /** Add Gateway: scan the Gateway's admit-gateway QR (or paste the same payload as JSON text),
  * confirm the SAS against the Gateway terminal, then owner-sign + submit the admission. Bundle
  * delivery to a remote Gateway (LAN/paste) follows; a host-configured Gateway (e.g. the local one)
- * gets its admission through evie's domain sync alone. */
+ * gets its admission through the Router's domain sync alone. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {

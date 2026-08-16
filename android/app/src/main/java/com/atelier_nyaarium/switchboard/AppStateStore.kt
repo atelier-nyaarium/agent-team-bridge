@@ -323,7 +323,7 @@ class AppStateStore(context: Context) :
 
 	/** The mirrored Domain snapshot (keyring) the Console resolves peers against. Public material
 	 * only (admissions + revocations + owner pubkey), so the plaintext fallback is acceptable.
-	 * `version` is evie's keyring hash, stored alongside so a poll can skip an unchanged pull. */
+	 * `version` is the Router's keyring hash, stored alongside so a poll can skip an unchanged pull. */
 	fun saveDomain(json: String, version: String) {
 		prefs.edit().putString(KEY_DOMAIN, json).putString(KEY_DOMAIN_VERSION, version).apply()
 	}
@@ -332,7 +332,7 @@ class AppStateStore(context: Context) :
 
 	fun loadDomainVersion(): String = prefs.getString(KEY_DOMAIN_VERSION, "") ?: ""
 
-	/** Whether this Console's own admission has been submitted to evie. Gates the
+	/** Whether this Console's own admission has been submitted to the Router. Gates the
 	 * one-time submit so connect does not re-issue a fresh-nonce admission each cycle. */
 	var consoleAdmitted: Boolean
 		get() = prefs.getBoolean(KEY_CONSOLE_ADMITTED, false)
@@ -341,7 +341,7 @@ class AppStateStore(context: Context) :
 		}
 
 	/** Whether this device has already first-rooted the pending Domain from its invite blob. Gates
-	 * the one-time first_root: the op is idempotent at evie, but the latch avoids a needless
+	 * the one-time first_root: the op is idempotent at the Router, but the latch avoids a needless
 	 * round-trip and lets connect tell "still pending" from "rooted, proceed". Cleared by a
 	 * re-import so a fresh invite re-roots. */
 	var firstRooted: Boolean
@@ -360,7 +360,7 @@ class AppStateStore(context: Context) :
 		}
 
 	/** This owner's display name, cached locally so the profile shows it without a round-trip. The
-	 * authoritative copy lives on the Domain at evie; this is refreshed from discovery and updated
+	 * authoritative copy lives on the Domain at the Router; this is refreshed from discovery and updated
 	 * on a local rename. */
 	var displayName: String
 		get() = prefs.getString(KEY_PROFILE_NAME, "") ?: ""
@@ -370,7 +370,7 @@ class AppStateStore(context: Context) :
 
 	/** The guest tenants this owner has staged (the "Networks you host" list), a JSON array of
 	 * {domainId, displayName, nonce}. Persisted locally so the list and each row's invite QR survive
-	 * restarts: evie holds the canonical pending/rooted state, but only the host remembers the label
+	 * restarts: the Router holds the canonical pending/rooted state, but only the host remembers the label
 	 * and current invite nonce needed to re-render the QR. */
 	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()
 

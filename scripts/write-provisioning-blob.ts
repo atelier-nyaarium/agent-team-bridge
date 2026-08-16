@@ -4,7 +4,7 @@
 //
 // Transport-only in the phone-anchored model: the Console generates its own identity and resolves
 // Gateway keys from the synced keyring, so the identity/gateway fields stay unpopulated. The
-// gateway-bridge transport creds are pulled from evie on demand by the Console, never bundled here.
+// gateway-bridge transport creds are pulled from the Router on demand by the Console, never bundled here.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 

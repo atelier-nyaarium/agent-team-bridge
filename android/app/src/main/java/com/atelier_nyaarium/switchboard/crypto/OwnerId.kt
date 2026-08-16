@@ -8,7 +8,7 @@ import java.util.Base64
  * lowercase. The Kotlin twin of the gateway's `shared/owner-id.ts:ownerKeyId`; the two MUST agree
  * (pinned by `tests/fixtures/owner-id/vectors.json`) because this keys the owner's shared console
  * inbox and is the console's own address spawn segment - a divergence silently breaks that match.
- * Switchboard-only (evie never keys a console inbox), so it stays out of the evie-synced Crypto core.
+ * Switchboard-only (the Router never keys a console inbox), so it stays out of the shared Crypto core.
  */
 fun ownerKeyId(signPubB64: String): String =
 	MessageDigest.getInstance("SHA-256")

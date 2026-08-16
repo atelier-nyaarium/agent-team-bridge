@@ -118,7 +118,7 @@ jobs:
             Updates install over each other. Install this one manually once; after it,
             in-app updates resume. Sideload: `adb install -r switchboard-release.apk`
 
-            **switchboard-debug.apk** - debug build with ingest log streaming to evie,
+            **switchboard-debug.apk** - debug build with ingest log streaming to the Federation Router,
             signed with the SAME stable key as the release, so it installs straight
             over the release build (and back) for a one-tap side-step to debug.
             Sideload: `adb install -r switchboard-debug.apk`

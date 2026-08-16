@@ -53,7 +53,7 @@ import kotlinx.coroutines.launch
 //  Users (the cross-tenant roster: everyone on this network)
 
 /**
- * The Users surface: every member on this network, by name + presence. Fetched from evie
+ * The Users surface: every member on this network, by name + presence. Fetched from the Router
  * (TrustOps.fetchRoster - the cross-tenant aggregation), which returns each member's owner
  * identity + display name + an online dot. This is the roster's first render: a name, a presence
  * dot, the owner fingerprint, and a "you" marker on your own row. The richer surface (the Trusted
@@ -73,7 +73,7 @@ fun UsersScreen(
 	// Only the admin enrolls users + hosts guest networks; a guest sees neither.
 	val isAdmin = remember { repo.isAdmin() }
 	var menuOpen by remember { mutableStateOf(false) }
-	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
+	// One-shot fetch on entry. Null = loading; a Result carries the rows or the Router's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	// Non-throwing read: a corrupt owner key degrades to empty (no row ever matches it) rather
 	// than crashing the roster. The connect path surfaces a corrupt key as a terminal cause.

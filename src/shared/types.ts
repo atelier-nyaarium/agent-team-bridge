@@ -18,7 +18,7 @@ import type {
  * Channel attachment metadata carried over the bridge (console-origin files).
  *
  * A `blobId` names the bytes on the blob plane, which the host MCP plugin pulls down a chunk at a
- * time into /tmp/evie-files/<msgId>/. Absence means the entry is metadata-only: the sender could
+ * time into /tmp/switchboard-channel-files/<msgId>/. Absence means the entry is metadata-only: the sender could
  * not stage the bytes, so the agent sees the file was there and nothing more.
  */
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;

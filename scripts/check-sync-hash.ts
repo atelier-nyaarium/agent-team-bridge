@@ -1,5 +1,5 @@
-// Per-copy faithfulness guard for the synced leaf modules (notice.ts,
-// evie-protocol.ts). Each file's header carries a `// SYNC-HASH: <sha256>` of
+// Per-copy faithfulness guard for the synced leaf modules (notice.ts).
+// Each file's header carries a `// SYNC-HASH: <sha256>` of
 // its own body (everything except that line). The source and its verbatim
 // copies all carry the same line, so this single check - run inside ANY repo
 // holding the file - catches a hand-edit that diverged a copy from the hash it

@@ -18,7 +18,7 @@ import { type CrossDomainParty, crossDomainCommitment, crossDomainSas } from "..
 import type {
 	CrossDomainHandshakeReplyParams,
 	CrossDomainHandshakeRevealReplyParams,
-} from "../shared/evie-protocol.js";
+} from "../shared/router-protocol.js";
 
 ////////////////////////////////
 //  Harness

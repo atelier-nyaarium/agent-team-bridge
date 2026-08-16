@@ -133,11 +133,11 @@ export function createConsoleDispatcher({
 				console.log(
 					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
-				// Validate the evie-sourced Domain status against the closed union so a garbage
-				// value is dropped, not forwarded. Omitted when unknown (pre-feature evie), so the
+				// Validate the Router-sourced Domain status against the closed union so a garbage
+				// value is dropped, not forwarded. Omitted when unknown (pre-feature Router), so the
 				// app falls back to the already-rooted path. The value is "rooted" or "unrooted"
 				// (a fresh admin Domain), never "pending" (the app learns that from the
-				// provisioning blob's pendingTenant and first-roots directly at evie).
+				// provisioning blob's pendingTenant and first-roots directly at the Router).
 				const status = DomainStatusSchema.safeParse(domainStatus?.());
 				return {
 					device,
@@ -149,12 +149,12 @@ export function createConsoleDispatcher({
 			}
 
 			case "first_root": {
-				// first_root is decided at evie, never on a Gateway: a pending friend Domain has no
+				// first_root is decided at the Router, never on a Gateway: a pending friend Domain has no
 				// Gateway yet, and the pre-root console has no admission, so the self-signed frame
 				// cannot even open here (the consoleSealer requires an admitted kind:console). The
-				// app POSTs the SignedFirstRoot directly to evie's console bridge. Reject explicitly
+				// app POSTs the SignedFirstRoot directly to the Router's console bridge. Reject explicitly
 				// so a misrouted frame fails clear rather than falling through.
-				throw new Error("first_root is handled directly at evie, not through a Gateway");
+				throw new Error("first_root is handled directly at the Router, not through a Gateway");
 			}
 
 			case "list_teams": {

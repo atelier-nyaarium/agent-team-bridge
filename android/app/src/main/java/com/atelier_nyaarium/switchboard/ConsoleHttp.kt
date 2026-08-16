@@ -77,9 +77,9 @@ internal object ConsoleHttp {
 			.build()
 	}
 
-	/** What postEvieDirect's resp log line shows for a response body: the real (truncated) text when
+	/** What postRouterDirect's resp log line shows for a response body: the real (truncated) text when
 	 * logBody is true, else a char-count placeholder that can never contain the body's own content -
-	 * pulled out of postEvieDirect so this policy is directly unit-testable without going through
+	 * pulled out of postRouterDirect so this policy is directly unit-testable without going through
 	 * DebugLog (which a pure-JVM test cannot observe). */
 	internal fun loggedBodyPreview(text: String, logBody: Boolean): String =
 		if (logBody) text.take(160) else "(redacted, ${text.length} chars)"
@@ -95,7 +95,7 @@ internal object ConsoleHttp {
 	 * and the Response closed INSIDE the OkHttp callback, before resuming - so a cancellation racing
 	 * the callback can only ever abandon an already-closed, already-read HttpTextResult, never a
 	 * leaked Response, and every caller's own parsing/decoding runs after resume, on the CALLER's
-	 * dispatcher, not OkHttp's callback thread. Shared by relay() and postEvieDirect() so this
+	 * dispatcher, not OkHttp's callback thread. Shared by relay() and postRouterDirect() so this
 	 * cancellability lands in exactly these two places. */
 	internal suspend fun executeCancellable(httpClient: OkHttpClient, req: Request): HttpTextResult =
 		suspendCancellableCoroutine { cont ->
@@ -129,21 +129,21 @@ internal object ConsoleHttp {
 			)
 		}
 
-	/** Shared evie-direct POST: every op that bypasses relay() and talks to evie's console-bridge
+	/** Shared Router-direct POST: every op that bypasses relay() and talks to the Router's console-bridge
 	 * straight (enroll, postConsoleApproval, firstRoot, requestGatewayTransport, enrollHandshake,
 	 * roster, trustHandshake, trustPending, provisionTenant) shares this exact decode contract - 2xx
 	 * decodes as R (falling back through `fail` on a malformed body); non-2xx tries R first (a
 	 * coordinator reject can carry a typed body), then a bare {error} bounce, then a plain HTTP-code
 	 * fallback via `fail`. Takes its client/url/tokens as parameters rather than reading `this` so a
 	 * MockWebServer test can drive it with no Context-backed ConsoleClient; production code never
-	 * calls this directly - it goes through ConsoleClient's own instance-level `postEvieDirect(tag,
+	 * calls this directly - it goes through ConsoleClient's own instance-level `postRouterDirect(tag,
 	 * describe, body, logBody, fail)`, which fills in that instance's client/url/tokens.
 	 * `tag`+`describe` together must stay unique enough to disambiguate in the debug log (e.g. the
 	 * Trust pair, or provisionTenant vs enroll sharing the "Enroll" tag). `logBody` gates only the
 	 * resp line's body preview - requestGatewayTransport (a minted SA token) and provisionTenant (a
 	 * one-time invite nonce) pass false so their 2xx bodies never reach the debug log, which the
-	 * debug build ships off-device to evie /ingest as well as logcat. */
-	internal suspend inline fun <reified R> postEvieDirect(
+	 * debug build ships off-device to the relay's own /ingest as well as logcat. */
+	internal suspend inline fun <reified R> postRouterDirect(
 		httpClient: OkHttpClient,
 		url: String,
 		saToken: String,
@@ -185,11 +185,11 @@ internal object ConsoleHttp {
 		return fail(err ?: "HTTP ${resp.code}")
 	}
 
-	/** The fresh device N's public path: a plain HTTPS POST of the op JSON to evie's nonce-gated
+	/** The fresh device N's public path: a plain HTTPS POST of the op JSON to the Router's nonce-gated
 	 * ingress, carrying NO SA token and NO app token (N holds none). Only the join/fetch steps reach
 	 * here; the nonce in the op body is the gate. TLS is the public host's real cert (system trust).
 	 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body).
-	 * Deliberately NOT built on postEvieDirect: different client (publicClient, no CA pin), no auth
+	 * Deliberately NOT built on postRouterDirect: different client (publicClient, no CA pin), no auth
 	 * headers, and no isSuccessful branch on the decode (the ingress always answers 200). */
 	fun postPublicApproval(reachUrl: String, op: ConsoleApprovalOp): ConsoleApprovalResult {
 		val req = Request.Builder()

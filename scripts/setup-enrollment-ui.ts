@@ -84,9 +84,9 @@ async function presentArtifact(
 	}
 }
 
-/** The blob, validated to fit a single QR. The gateway-bridge transport creds are pulled from evie
- * on demand, not bundled, so the blob sits well under a QR's ~2.9 KB ceiling. Guards against a future
- * field pushing it over with a clear error instead of qrcode-generator's raw overflow. */
+/** The blob, validated to fit a single QR. The gateway-bridge transport creds are pulled from the
+ * Router on demand, not bundled, so the blob sits well under a QR's ~2.9 KB ceiling. Guards against a
+ * future field pushing it over with a clear error instead of qrcode-generator's raw overflow. */
 function qrPayload(blobText: string): string {
 	if (!fitsInQr(blobText)) {
 		throw new Error(`blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);

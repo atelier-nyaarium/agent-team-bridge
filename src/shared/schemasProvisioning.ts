@@ -12,13 +12,13 @@ import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 // The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
 // for a pending (unrooted) Domain, both a friend invite and the admin's own fresh setup. A
 // pending Domain has no gateway, so the app cannot learn it is pending from a register reply;
-// it reads this off the blob and first-roots directly against evie with the nonce. Absent for a
+// it reads this off the blob and first-roots directly against the Router with the nonce. Absent for a
 // re-provision of an already-rooted Domain. Named (.meta id) so the codegen emits a nested class.
 export const PendingTenantRefSchema = z
 	.object({
 		// The opaque pending Domain id the friend's first_root roots.
 		domainId: slugField(),
-		// The one-time invite nonce (base64) evie checks unspent before rooting.
+		// The one-time invite nonce (base64) the Router checks unspent before rooting.
 		nonce: b64Field(),
 	})
 	.meta({ id: "PendingTenantRef" });
@@ -32,9 +32,9 @@ export const EnrollHandshakeRefSchema = z
 		adminOwnerSignPub: b64Field(),
 		adminOwnerBoxPub: b64Field(),
 		adminDomainId: slugField(),
-		// The unguessable id naming the evie broker window both phones drive.
+		// The unguessable id naming the Router broker window both phones drive.
 		handshakeId: b64Field(),
-		// The one-time shared secret both phones fold into the SAS but NEVER send to evie.
+		// The one-time shared secret both phones fold into the SAS but NEVER send to the Router.
 		pin: b64Field(),
 	})
 	.meta({ id: "EnrollHandshakeRef" });
@@ -69,7 +69,7 @@ export const ProvisioningSchema = z
 		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
 		// provision / re-provision.
 		enrollHandshake: EnrollHandshakeRefSchema.optional(),
-		// evie's public nonce-gated device-approval ingress, the reach a fresh device POSTs its
+		// The Router's public nonce-gated device-approval ingress, the reach a fresh device POSTs its
 		// join/fetch to in the "Add a device" self-enroll. A held device stamps it into the
 		// authorize-console QR; absent means this network has no public ingress and the Add-a-device
 		// entry is shown disabled.

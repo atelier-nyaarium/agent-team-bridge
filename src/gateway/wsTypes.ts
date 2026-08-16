@@ -101,7 +101,7 @@ export interface WsData {
 	proxyProject?: string;
 	proxyAuth?: string;
 	// True for a console mailbox peer: a duck-typed socket whose send() appends to a
-	// DeviceMailbox instead of writing a wire. Liveness comes from the console<->evie
+	// DeviceMailbox instead of writing a wire. Liveness comes from the console<->Router
 	// connection, so it is excluded from the ping/pong heartbeat.
 	virtual?: boolean;
 }

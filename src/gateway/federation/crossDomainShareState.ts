@@ -47,7 +47,7 @@ export const XDOMAIN_SHARE_FILE = "cross-domain-share-state.json";
 
 /** The per-session share set on a Gateway: which local sessions are offered to which friend
  * Domains, persisted to the Gateway's volume (0600). Discovery and the relay both read this one
- * source, so an un-share takes effect without evie. One session shared to N Domains is N records. */
+ * source, so an un-share takes effect without the Router. One session shared to N Domains is N records. */
 export class CrossDomainShareState {
 	private file: string;
 	private state: CrossDomainShareFile;

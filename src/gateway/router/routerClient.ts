@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
 import { createReconnector } from "../../shared/reconnect.js";
+import {
+	FEDERATION_PROTOCOL_VERSION,
+	RouterInboundFrameSchema,
+	type ToolCallFrame,
+} from "../../shared/router-protocol.js";
 import {
 	DEFAULT_ROUTER_PORT,
 	isPrivateHost,
@@ -11,21 +15,21 @@ import {
 	reachHost,
 } from "../../shared/router-reach.js";
 
-// One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->evie socket (here and
+// One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->Router socket (here and
 // evie-bot's BridgeTransport). 64 MiB clears a max-cap attachment payload's sealed frame (~1.78x
 // the decoded bytes) with headroom; routes.test.ts pins that relationship.
-export const EVIE_WS_MAX_PAYLOAD_BYTES = 67_108_864;
+export const ROUTER_WS_MAX_PAYLOAD_BYTES = 67_108_864;
 
 ////////////////////////////////
 //  Interfaces & Types
 
-export interface EvieToolCallResult {
+export interface RouterToolCallResult {
 	callId: string;
 	result?: unknown;
 	error?: string;
 }
 
-export interface EvieClientConfig {
+export interface RouterClientConfig {
 	/** The bootstrap base URL: the docker alias on the Router's own machine, or whatever Gateway
 	 * Setup was told elsewhere. Only the FIRST door - once the Router answers, its advertised
 	 * addresses lead the ring and this falls to last. */
@@ -61,8 +65,8 @@ export interface EvieClientConfig {
 	// owner-signed admission + a fresh possession proof), recomputed at each (re)register
 	// so the proof timestamp is current. Returns null pre-enrollment.
 	buildRegisterAuth?: () => Record<string, unknown> | null;
-	// The mirrored Domain (owner root + allowlist) evie returns in the register
-	// reply; the Gateway applies it so a revocation bites even while evie is offline.
+	// The mirrored Domain (owner root + allowlist) the Router returns in the register
+	// reply; the Gateway applies it so a revocation bites even while the Router is offline.
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
@@ -83,8 +87,8 @@ export interface EvieClientConfig {
 	reconnectInitialDelayMs?: number;
 }
 
-export interface EvieClient {
-	callTool: (action: string, params: Record<string, unknown>) => Promise<EvieToolCallResult>;
+export interface RouterClient {
+	callTool: (action: string, params: Record<string, unknown>) => Promise<RouterToolCallResult>;
 	isConnected: () => boolean;
 	stop: () => void;
 }
@@ -93,11 +97,11 @@ export interface EvieClient {
 //  Functions & Helpers
 
 const TOOL_CALL_TIMEOUT_MS = 120_000;
-// When evie refuses gateway_register because the Domain is still pending (staged but not
+// When the Router refuses gateway_register because the Domain is still pending (staged but not
 // yet rooted), re-register on this cadence. The open-handler's register fires before the
 // admin's phone first-roots the Domain, and the heartbeat keeps the WS warm so the socket
 // never reconnects to re-register on its own. The cap bounds the spin so a genuinely stuck
-// setup stops re-trying instead of polling evie indefinitely.
+// setup stops re-trying instead of polling the Router indefinitely.
 const PENDING_REREGISTER_DELAY_MS = 15_000;
 const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
 // Application-level keepalive: a ping detects a silently-dropped path that neither end has
@@ -111,7 +115,7 @@ const MISSED_PONGS_LIMIT = 2;
 // budget; anything else may legitimately be slow to reach.
 const CONNECT_TIMEOUT_MS = 15_000;
 
-function tlsOptions(tls: EvieClientConfig["tls"]): Record<string, unknown> {
+function tlsOptions(tls: RouterClientConfig["tls"]): Record<string, unknown> {
 	if (!tls) return {};
 	// A pinned leaf has no chain to validate, so chain verification is turned off and
 	// verifyPinnedLeaf below is what actually authenticates the peer.
@@ -126,13 +130,13 @@ function verifyPinnedLeaf(ws: WebSocket, expectedFp: string): void {
 		const raw = socket?.getPeerCertificate?.(true)?.raw;
 		const actual = raw ? crypto.createHash("sha256").update(raw).digest("hex") : "";
 		if (actual !== expectedFp.toLowerCase()) {
-			console.error(`[evie-client] router cert fingerprint mismatch; refusing the connection`);
+			console.error(`[router-client] router cert fingerprint mismatch; refusing the connection`);
 			ws.terminate();
 		}
 	});
 }
 
-export function startEvieClient(config: EvieClientConfig): EvieClient {
+export function startRouterClient(config: RouterClientConfig): RouterClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
 	// The addresses this Gateway knows for its Router, and which one the next connect dials. Unlike
@@ -157,7 +161,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let droppedFrames = 0;
 	const pendingCalls = new Map<
 		string,
-		{ resolve: (result: EvieToolCallResult) => void; timer: ReturnType<typeof setTimeout> }
+		{ resolve: (result: RouterToolCallResult) => void; timer: ReturnType<typeof setTimeout> }
 	>();
 
 	function connect(): void {
@@ -169,15 +173,15 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		// Whether THIS socket ever opened, so the close handler can tell "that address is shut" from
 		// "the connection we had dropped", which must not walk the ring off a working address.
 		let opened = false;
-		console.log(`[evie-client] connecting to ${target}...`);
+		console.log(`[router-client] connecting to ${target}...`);
 
 		ws = new WebSocket(wsUrl, {
 			headers: config.headers,
 			// Explicit rather than ws's inherited 100 MiB default: this socket carries every relay
 			// frame for the whole gateway, and an oversized inbound message does not merely fail,
 			// it can close the connection and drop all federation traffic with it. Must stay >= the
-			// matching explicit limit on evie's BridgeTransport, or a frame evie accepts kills us.
-			maxPayload: EVIE_WS_MAX_PAYLOAD_BYTES,
+			// matching explicit limit on evie-bot's BridgeTransport, or a frame the Router accepts kills us.
+			maxPayload: ROUTER_WS_MAX_PAYLOAD_BYTES,
 			// Bun's WebSocket reads pinned TLS options under `tls`, NOT at the top level. A top-level
 			// `ca` is silently ignored, so it falls back to the system trust store and rejects the
 			// private cluster-signed API server cert ("TLS handshake failed").
@@ -190,12 +194,12 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		const budget = isPrivateHost(reachHost(target)) ? LAN_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
 		const connectTimer = setTimeout(() => {
 			if (opened) return;
-			console.error(`[evie-client] ${target} did not answer in ${budget}ms, trying the next address`);
+			console.error(`[router-client] ${target} did not answer in ${budget}ms, trying the next address`);
 			ws?.terminate();
 		}, budget);
 
 		ws.on("open", () => {
-			console.log(`[evie-client] connected`);
+			console.log(`[router-client] connected`);
 			missedPongs = 0;
 			opened = true;
 			clearTimeout(connectTimer);
@@ -216,18 +220,18 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				msg = JSON.parse(raw.toString());
 			} catch {
 				droppedFrames++;
-				console.warn(`[evie-client] dropped non-JSON frame (${droppedFrames} dropped total)`);
+				console.warn(`[router-client] dropped non-JSON frame (${droppedFrames} dropped total)`);
 				return;
 			}
 
 			// Boundary parse: unknown frame types and malformed envelopes drop
 			// with a counter instead of being blind-cast (or silently ignored).
-			const parsed = EvieInboundFrameSchema.safeParse(msg);
+			const parsed = RouterInboundFrameSchema.safeParse(msg);
 			if (!parsed.success) {
 				droppedFrames++;
 				const kind = (msg as { type?: unknown } | null)?.type;
 				console.warn(
-					`[evie-client] dropped frame type=${JSON.stringify(kind)} (${droppedFrames} dropped total): ${parsed.error.issues[0]?.message ?? "malformed"}`,
+					`[router-client] dropped frame type=${JSON.stringify(kind)} (${droppedFrames} dropped total): ${parsed.error.issues[0]?.message ?? "malformed"}`,
 				);
 				return;
 			}
@@ -247,7 +251,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					break;
 				}
 				case "domain_update": {
-					// evie pushed an updated keyring (an owner admit/revoke). Apply it
+					// The Router pushed an updated keyring (an owner admit/revoke). Apply it
 					// immediately so a revocation bites without waiting for the next register.
 					config.onDomainSync?.(frame.domain);
 					// A rename rides the same push: refresh the held displayName so the owner's
@@ -265,10 +269,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					break;
 				}
 				case "tool_error": {
-					// tool_error legitimately carries callId: null (evie could not
+					// tool_error legitimately carries callId: null (the Router could not
 					// attribute the failure to a call); nothing pends under null.
 					if (frame.callId === null) {
-						console.warn(`[evie-client] tool_error with no callId: ${frame.error ?? "unknown"}`);
+						console.warn(`[router-client] tool_error with no callId: ${frame.error ?? "unknown"}`);
 						break;
 					}
 					const pending = pendingCalls.get(frame.callId);
@@ -306,13 +310,13 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			pendingCalls.clear();
 			config.onDisconnect?.();
 			if (!stopped) {
-				console.error(`[evie-client] disconnected, reconnecting with backoff...`);
+				console.error(`[router-client] disconnected, reconnecting with backoff...`);
 				reconnector.schedule();
 			}
 		});
 
 		ws.on("error", (err: Error) => {
-			console.error(`[evie-client] error: ${err.message}`);
+			console.error(`[router-client] error: ${err.message}`);
 		});
 	}
 
@@ -342,7 +346,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					  }
 					| undefined;
 				if (res.error) {
-					console.error(`[evie-client] gateway_register failed: ${res.error}`);
+					console.error(`[router-client] gateway_register failed: ${res.error}`);
 					return;
 				}
 				if (r?.ok === false) {
@@ -351,17 +355,17 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
 					// rather than mask a real denial behind an endless re-register loop.
 					if (r.pending) schedulePendingRetry(r.error);
-					else console.error(`[evie-client] Router rejected registration: ${r.error}`);
+					else console.error(`[router-client] Router rejected registration: ${r.error}`);
 					return;
 				}
 				// A successful register clears any pending-retry left from earlier attempts.
 				clearPendingRetry();
 				const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
-				console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
+				console.log(`[router-client] registered as Gateway "${config.gatewayId}"${peers}`);
 				if (r?.domain) config.onDomainSync?.(r.domain);
 				else
 					console.warn(
-						`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
+						`[federation] registered but the Router returned no Domain snapshot - the Domain may not be rooted, or the Router is outdated`,
 					);
 				// The Router's own addresses, learned on the reply rather than asked for: the Gateway
 				// authenticates with a WS bearer and cannot call the console-token `reach` op at all.
@@ -381,7 +385,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				}
 			})
 			.catch((e) =>
-				console.error(`[evie-client] gateway_register chain error: ${e instanceof Error ? e.message : e}`),
+				console.error(`[router-client] gateway_register chain error: ${e instanceof Error ? e.message : e}`),
 			);
 	}
 
@@ -390,14 +394,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		if (pendingRetryTimer) return; // one timer in flight; do not stack
 		if (pendingRetryAttempts >= PENDING_REREGISTER_MAX_ATTEMPTS) {
 			console.error(
-				`[evie-client] Domain still pending after ${pendingRetryAttempts} re-register attempts, giving up: ${reason ?? "pending"}`,
+				`[router-client] Domain still pending after ${pendingRetryAttempts} re-register attempts, giving up: ${reason ?? "pending"}`,
 			);
 			return;
 		}
 		const delayMs = config.pendingReregisterDelayMs ?? PENDING_REREGISTER_DELAY_MS;
 		pendingRetryAttempts++;
 		console.warn(
-			`[evie-client] Domain not yet rooted (${reason ?? "pending"}); re-registering in ${delayMs / 1000}s (attempt ${pendingRetryAttempts}/${PENDING_REREGISTER_MAX_ATTEMPTS})`,
+			`[router-client] Domain not yet rooted (${reason ?? "pending"}); re-registering in ${delayMs / 1000}s (attempt ${pendingRetryAttempts}/${PENDING_REREGISTER_MAX_ATTEMPTS})`,
 		);
 		pendingRetryTimer = setTimeout(() => {
 			pendingRetryTimer = null;
@@ -422,7 +426,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			// consecutive unanswered pings terminate - matching the gateway's team socket.
 			missedPongs++;
 			if (missedPongs >= MISSED_PONGS_LIMIT) {
-				console.error(`[evie-client] no pong for ${missedPongs} beats, terminating to reconnect`);
+				console.error(`[router-client] no pong for ${missedPongs} beats, terminating to reconnect`);
 				ws.terminate();
 				return;
 			}
@@ -440,14 +444,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		}
 	}
 
-	async function callTool(action: string, params: Record<string, unknown>): Promise<EvieToolCallResult> {
+	async function callTool(action: string, params: Record<string, unknown>): Promise<RouterToolCallResult> {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			return { callId: "", error: `Not connected to the federation Router` };
 		}
 
 		const callId = crypto.randomUUID();
 
-		return new Promise<EvieToolCallResult>((resolve) => {
+		return new Promise<RouterToolCallResult>((resolve) => {
 			const timer = setTimeout(() => {
 				pendingCalls.delete(callId);
 				resolve({ callId, error: `Tool call timed out after ${TOOL_CALL_TIMEOUT_MS / 1000}s` });
@@ -478,7 +482,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			ws.close();
 			ws = null;
 		}
-		console.log(`[evie-client] stopped`);
+		console.log(`[router-client] stopped`);
 	}
 
 	connect();

@@ -26,7 +26,7 @@ import {
 //  Console Relay Frame Schema
 //
 //  Validates console_relay frames at the gateway trust boundary. The frame body
-//  is console-authored and evie relays it opaquely, so the gateway must not
+//  is console-authored and the Router relays it opaquely, so the gateway must not
 //  blind-cast it. The console-protocol.ts types derive from these schemas via
 //  z.infer - this file is the single truth for the console wire.
 
@@ -65,7 +65,7 @@ export const ConsoleOpSchema = z
 		// First-root a PENDING (rootless) Domain at the friend's silently-generated owner key.
 		// A pending Domain has no gateway, so first-rooting does not normally travel this op:
 		// the app reads the pending state plus the invite nonce from the blob's `pendingTenant`
-		// and POSTs the SignedFirstRoot directly to evie's console-bridge firstRoot intake.
+		// and POSTs the SignedFirstRoot directly to the Router's console-bridge firstRoot intake.
 		// This gateway-side variant is a defensive reject: a gateway only exists once the
 		// Domain is already rooted, so a first_root reaching it is past rooting.
 		z.object({ kind: z.literal("first_root"), firstRoot: SignedFirstRootSchema }),
@@ -437,12 +437,12 @@ export const ConsoleRelayFrameSchema = z
 		// The console's raw Ed25519 signing public key (base64). Selects the key the gateway
 		// verifies the seal against, then checked against the owner-signed allowlist (must be an
 		// admitted kind:console subject). Cleartext because it is a public key, not a secret.
-		// conversationId, device, and the op move inside the seal, so evie sees only this opaque
-		// blob and cannot read or forge the op.
+		// conversationId, device, and the op move inside the seal, so the Router sees only this
+		// opaque blob and cannot read or forge the op.
 		signerSignPub: z.string().min(1),
-		// The Gateway this op targets, so evie routes per-target (the Console seals to each Gateway
-		// directly). Plaintext routing metadata, like signerSignPub; absent falls back to evie's
-		// latest-Gateway routing.
+		// The Gateway this op targets, so the Router routes per-target (the Console seals to each
+		// Gateway directly). Plaintext routing metadata, like signerSignPub; absent falls back to
+		// the Router's latest-Gateway routing.
 		targetGateway: z.string().optional(),
 		sealed: SealedEnvelopeSchema,
 	})

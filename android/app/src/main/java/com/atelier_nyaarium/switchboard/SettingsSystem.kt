@@ -108,7 +108,7 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 			text = {
 				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 					Text("This purges your Domain from the servers, not just this phone. It can't be undone.")
-					Text("- Your Domain is removed from evie", style = MaterialTheme.typography.bodySmall)
+					Text("- Your Domain is removed from the Router", style = MaterialTheme.typography.bodySmall)
 					Text("- Every gateway + device is revoked", style = MaterialTheme.typography.bodySmall)
 					deleteError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 				}

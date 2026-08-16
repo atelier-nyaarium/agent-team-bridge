@@ -9,11 +9,11 @@ import { ReplayGuard } from "../federation/replayGuard.js";
 
 /** Opens an inbound sealed console frame and seals a reply back to the console. The
  * console-channel twin of the cross-Gateway Sealer: confidentiality + authenticity are
- * E2E (console <-> this gateway), so evie relays an opaque blob it cannot read or
+ * E2E (console <-> this gateway), so the Router relays an opaque blob it cannot read or
  * forge. The console's keys resolve through the owner-signed allowlist (an admitted
  * kind:console subject - the owner's own device self-admits as one), so a frame is
  * trusted because it is signed by an admitted console, never because it arrived on
- * the evie socket. */
+ * the Router socket. */
 export interface ConsoleSealer {
 	/** Verify the signer is an admitted console, verify its signature + decrypt with
 	 * this gateway's box key, replay-check, freshness-check; return the inner op
@@ -29,7 +29,7 @@ export interface ConsoleSealer {
 //  Functions & Helpers
 
 // A sealed console frame older than this is rejected. Generous over the
-// console->evie->gateway relay path; the per-message nonce + the durable replay
+// console->Router->gateway relay path; the per-message nonce + the durable replay
 // guard bound an actual replay, and the freshness window caps how long a captured
 // frame could be replayed before the guard alone would (after a long outage).
 const CONSOLE_SEAL_MAX_AGE_MS = 120_000;

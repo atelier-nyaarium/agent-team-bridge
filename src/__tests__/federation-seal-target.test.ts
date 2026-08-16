@@ -8,7 +8,7 @@ import { sealTargetFor } from "../gateway/federation/sealTarget.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity, type SealedEnvelope } from "../shared/crypto.js";
-import { fakeEvie, makeCtx, peersOf, soloAllowlist, xdPeer } from "./helpers/federation.js";
+import { fakeRouter, makeCtx, peersOf, soloAllowlist, xdPeer } from "./helpers/federation.js";
 
 ////////////////////////////////
 //  sealTargetFor is local-first (a local/friend gateway-id collision)
@@ -67,11 +67,11 @@ describe("sealTargetFor local-first (gateway-id collision)", () => {
 		const senderPeers = peersOf(xdPeer(friendOwner, "friend", "gw1", friendGw1, localOwner));
 		const senderSealer = createSealer(senderGw, localAllowlist, "sender-gw", senderPeers, "alice");
 
-		// Capture the sealed payload + the srcDomain evie was handed. The local gw1 opens it; the
+		// Capture the sealed payload + the srcDomain the Router was handed. The local gw1 opens it; the
 		// friend's gw1 must NOT be able to (proving it was sealed to the local Domain, not the friend).
 		let sealedToOpen: SealedEnvelope | undefined;
 		let srcDomainSent: unknown;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			onCall: (action, params) => {
 				if (action !== "gateway_relay") return { ok: true };
 				sealedToOpen = (params.payload as { sealed: SealedEnvelope }).sealed;
@@ -116,7 +116,7 @@ describe("sealTargetFor local-first (gateway-id collision)", () => {
 		});
 
 		const ctx = makeCtx("sender-gw", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: senderSealer,
 			crossDomainPeers: senderPeers,
 			resolvesLocalGateway: (gatewayId) => localAllowlist.resolveGateway(gatewayId) !== null,
@@ -188,7 +188,7 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 	}
 
 	it("a bare cross-Domain send to a gateway id shared by two linked Domains is ambiguous (no seal)", async () => {
-		const { ctx } = senderCtx({ evieClient: fakeEvie({}).client });
+		const { ctx } = senderCtx({ routerClient: fakeRouter({}).client });
 		const { send } = createRoutes(ctx);
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
 			from: "app.dev",
@@ -213,7 +213,7 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 			peersOf(xdPeer(senderOwner, "alice", "sender-gw", senderGw, friend2Owner)),
 			"friend2",
 		);
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			onCall: (action, params) => {
 				if (action !== "gateway_relay") return { ok: true };
 				expect(params.srcDomain).toBe("alice");
@@ -226,7 +226,7 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 				};
 			},
 		});
-		const { ctx } = senderCtx({ evieClient: evie.client });
+		const { ctx } = senderCtx({ routerClient: router.client });
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
@@ -246,7 +246,7 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 });
 
 ////////////////////////////////
-//  The pure decision, called directly (no Sealer, no evie, no route table)
+//  The pure decision, called directly (no Sealer, no Router, no route table)
 
 describe("sealTargetFor decision", () => {
 	const friendA = generateIdentity();

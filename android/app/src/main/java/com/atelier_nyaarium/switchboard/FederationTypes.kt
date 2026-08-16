@@ -68,13 +68,13 @@ data class ConsoleTransport(
 
 /** Outcome of "Revoke and Delete Domain". */
 sealed class DeleteDomainOutcome {
-	/** evie verified the owner and dropped the slice; local state was wiped. */
+	/** The Router verified the owner and dropped the slice; local state was wiped. */
 	object Deleted : DeleteDomainOutcome()
 
-	/** evie was unreachable, so local state was wiped but the server-side purge is unconfirmed. */
+	/** The Router was unreachable, so local state was wiped but the server-side purge is unconfirmed. */
 	object WipedUnconfirmed : DeleteDomainOutcome()
 
-	/** evie refused. Local state is intact, so the owner key survives for a retry. */
+	/** The Router refused. Local state is intact, so the owner key survives for a retry. */
 	data class Rejected(val error: String) : DeleteDomainOutcome()
 }
 
@@ -106,7 +106,7 @@ data class CrossDomainReceiverPairing(
 ////////////////////////////////
 //  Functions & Helpers
 
-/** How often each phone re-polls the evie broker during the in-person enroll ceremony. Short,
+/** How often each phone re-polls the Router broker during the in-person enroll ceremony. Short,
  * because the peer is on screen beside you. */
 internal const val ENROLL_POLL_MS = 2_000L
 

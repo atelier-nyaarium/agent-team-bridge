@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { BLOB_CHUNK_BYTES } from "./evie-protocol.js";
+import { BLOB_CHUNK_BYTES } from "./router-protocol.js";
 
 ////////////////////////////////
-//  Channel File Schema (inbound from evie-bot bridge)
+//  Channel File Schema (inbound from the Router bridge)
 //
-//  ChannelFile lives in channel-file.ts (zod-only, NOT a synced leaf - evie
-//  never reads it); the blob constants stay in the evie-protocol leaf. Both
+//  ChannelFile lives in channel-file.ts (zod-only, NOT a synced leaf - the Router
+//  never reads it); the blob constants stay in the router-protocol leaf. Both
 //  re-export here so the console-protocol schemas and existing importers keep
 //  one import surface.
 

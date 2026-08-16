@@ -26,7 +26,7 @@ export const TeamInfoSchema = z
 		// discovery roster so a linked friend Domain shows the owner's self-set label instead
 		// of a local alias. Null when the Domain has no owner-set label.
 		displayName: z.string().nullish(),
-		// True when the Domain that owns this session is the admin's own Domain (the evie-runner
+		// True when the Domain that owns this session is the admin's own Domain (the Router operator
 		// who provisions others). The console reads it on its local session to decide whether to
 		// show the admin surfaces. Stamped only for the admin Domain, so absence means false.
 		isAdminDomain: z.boolean().optional(),

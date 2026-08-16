@@ -1,12 +1,12 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { type EvieClient, startEvieClient } from "../gateway/evie/evieClient.js";
+import { type RouterClient, startRouterClient } from "../gateway/router/routerClient.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-interface FakeEvie {
+interface FakeRouter {
 	wss: WebSocketServer;
 	port: number;
 	sockets: WebSocket[];
@@ -15,7 +15,7 @@ interface FakeEvie {
 ////////////////////////////////
 //  Functions & Helpers
 
-function startFakeEvie(onMessage: (sock: WebSocket, msg: Record<string, unknown>) => void): Promise<FakeEvie> {
+function startFakeRouter(onMessage: (sock: WebSocket, msg: Record<string, unknown>) => void): Promise<FakeRouter> {
 	return new Promise((resolve) => {
 		const sockets: WebSocket[] = [];
 		const wss = new WebSocketServer({ port: 0 }, () => {
@@ -28,9 +28,9 @@ function startFakeEvie(onMessage: (sock: WebSocket, msg: Record<string, unknown>
 	});
 }
 
-function closeAll(client: EvieClient | null, evie: FakeEvie | null): Promise<void> {
+function closeAll(client: RouterClient | null, router: FakeRouter | null): Promise<void> {
 	client?.stop();
-	return new Promise((resolve) => (evie ? evie.wss.close(() => resolve()) : resolve()));
+	return new Promise((resolve) => (router ? router.wss.close(() => resolve()) : resolve()));
 }
 
 function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -51,21 +51,21 @@ function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
 ////////////////////////////////
 //  Tests
 
-describe("evieClient pending-Domain re-register", () => {
-	let client: EvieClient | null = null;
-	let evie: FakeEvie | null = null;
+describe("routerClient pending-Domain re-register", () => {
+	let client: RouterClient | null = null;
+	let router: FakeRouter | null = null;
 
 	afterEach(async () => {
-		await closeAll(client, evie);
+		await closeAll(client, router);
 		client = null;
-		evie = null;
+		router = null;
 	});
 
 	it("retries after a pending refusal and registers once the Domain roots", async () => {
-		// evie refuses the first register with the pending signal (Domain staged but not yet
+		// The Router refuses the first register with the pending signal (Domain staged but not yet
 		// rooted), then accepts the retry (the admin's phone first-rooted the admin Domain in between).
 		const registers: Record<string, unknown>[] = [];
-		evie = await startFakeEvie((sock, msg) => {
+		router = await startFakeRouter((sock, msg) => {
 			if (msg.type !== "tool_call" || msg.action !== "gateway_register") return;
 			registers.push(msg.params as Record<string, unknown>);
 			const reply =
@@ -76,8 +76,8 @@ describe("evieClient pending-Domain re-register", () => {
 		});
 
 		let lastStatus: string | undefined;
-		client = startEvieClient({
-			url: `ws://localhost:${evie.port}`,
+		client = startRouterClient({
+			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
 			domainId: "alice",
@@ -103,7 +103,7 @@ describe("evieClient pending-Domain re-register", () => {
 		// A revoked / wrong-domain denial carries no pending flag; it is terminal, so the
 		// client must NOT spin a re-register loop that would mask the real rejection.
 		const registers: Record<string, unknown>[] = [];
-		evie = await startFakeEvie((sock, msg) => {
+		router = await startFakeRouter((sock, msg) => {
 			if (msg.type !== "tool_call" || msg.action !== "gateway_register") return;
 			registers.push(msg.params as Record<string, unknown>);
 			sock.send(
@@ -115,8 +115,8 @@ describe("evieClient pending-Domain re-register", () => {
 			);
 		});
 
-		client = startEvieClient({
-			url: `ws://localhost:${evie.port}`,
+		client = startRouterClient({
+			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
 			domainId: "alice",
@@ -135,7 +135,7 @@ describe("evieClient pending-Domain re-register", () => {
 		// also fire (no duplicate/leaked register racing the fresh connection).
 		let connections = 0;
 		const registersPerConn: number[] = [];
-		evie = await startFakeEvie((sock, msg) => {
+		router = await startFakeRouter((sock, msg) => {
 			if (msg.type !== "tool_call" || msg.action !== "gateway_register") return;
 			const connIdx = (sock as unknown as { __connIdx: number }).__connIdx;
 			registersPerConn[connIdx] = (registersPerConn[connIdx] ?? 0) + 1;
@@ -146,13 +146,13 @@ describe("evieClient pending-Domain re-register", () => {
 					: { ok: true, gateways: [] };
 			sock.send(JSON.stringify({ type: "tool_result", callId: msg.callId, result: reply }));
 		});
-		evie.wss.on("connection", (sock) => {
+		router.wss.on("connection", (sock) => {
 			(sock as unknown as { __connIdx: number }).__connIdx = connections++;
 		});
 
 		// A long pending delay so the close, not the timer, is what ends the first attempt.
-		client = startEvieClient({
-			url: `ws://localhost:${evie.port}`,
+		client = startRouterClient({
+			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
 			domainId: "alice",
@@ -161,7 +161,7 @@ describe("evieClient pending-Domain re-register", () => {
 
 		await waitFor(() => (registersPerConn[0] ?? 0) >= 1);
 		// Drop the first socket; the client reconnects (initial backoff delay) and re-registers.
-		evie.sockets[0].terminate();
+		router.sockets[0].terminate();
 
 		await waitFor(() => client?.isConnected() === true, 10_000);
 		await waitFor(() => (registersPerConn[1] ?? 0) >= 1, 10_000);

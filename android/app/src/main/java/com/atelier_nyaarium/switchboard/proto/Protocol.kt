@@ -10,8 +10,8 @@
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
 // it MUST pair with explicitNulls = false. Note the console's POST body is the
-// op-only envelope {device, conversationId, opId, op}; evie composes the full
-// console_relay frame, so ConsoleRelayFrame is decode-side here.
+// op-only envelope {device, conversationId, opId, op}; the Router composes the
+// full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto

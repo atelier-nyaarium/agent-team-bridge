@@ -1,5 +1,5 @@
 import { BlobStore, blobIdFor } from "../shared/blob-store.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { routerPost } from "./bridge/helpers.js";
 
 ////////////////////////////////

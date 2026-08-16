@@ -1,7 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
-import { MAX_BLOB_BYTES } from "../../shared/evie-protocol.js";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
+import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBlob } from "../blobTransfer.js";
 import { parseDsCard } from "../designer/dsCard.js";

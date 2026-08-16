@@ -152,7 +152,7 @@ one, and at a few dozen entries not one worth machinery.
 
 ## Decided without asking
 
-- **The fetch tool materializes through the `evieFiles` machinery**, one folder per entry, files under
+- **The fetch tool materializes through the `channelFiles` machinery**, one folder per entry, files under
   their real names, so an agent gets ordinary paths to Read rather than a new access idiom. That
   machinery already carries the sweeper, the filename sanitizer, collision-free naming, atomic landing
   and per-file failure marking; nothing there is designed twice.
@@ -443,7 +443,7 @@ the lap that attacked it. The Plan section references these and adds nothing of 
   number moves to `BOARD_AUTO_DOWNLOAD_MAX_BYTES`: at or under it a console fetches on open, above it
   the tile says the size and waits for a tap. The count cap of 10 per entry stays, and its reason is
   now stated too - it bounds what one fetch enumerates.
-- Materialize through the `evieFiles` machinery with the entry id as the bucket key: `cleanupTmpDir`
+- Materialize through the `channelFiles` machinery with the entry id as the bucket key: `cleanupTmpDir`
   sweeping, `safeFilename`, `resolveCollisionFreePath`, `landAtomic`, and the per-file `fetchFailed`
   marker distinguishing "bytes failed" from "never had bytes". Nothing bespoke.
 - Guidance lives in the TOOL DESCRIPTION: how to fetch, that a `changed` notice may mean a new

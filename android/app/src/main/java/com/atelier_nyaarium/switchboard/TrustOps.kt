@@ -17,9 +17,9 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		receiverPin.clear()
 	}
 
-	/** Fetch the cross-tenant roster (the Users surface): every member on this evie, by name +
-	 * presence. evie-direct + signed-proof scoped; a non-member or auth failure surfaces as a
-	 * failure with evie's opaque reason. The rendering surface consumes the rows. */
+	/** Fetch the cross-tenant roster (the Users surface): every member on this Router, by name +
+	 * presence. Router-direct + signed-proof scoped; a non-member or auth failure surfaces as a
+	 * failure with the Router's opaque reason. The rendering surface consumes the rows. */
 	suspend fun fetchRoster(): Result<List<com.atelier_nyaarium.switchboard.proto.RosterMember>> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -186,8 +186,8 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	}
 
 	/** Re-submit ONLY the relay-affinity edge for an already-linked peer (the local peer write
-	 * happened at confirm; only the Router edge failed). Idempotent at evie (it dedups by nonce), so
-	 * this needs no unlink+relink. Returns the same outcome shape so the wizard can loop on a repeat
+	 * happened at confirm; only the Router edge failed). Idempotent at the Router (it dedups by
+	 * nonce), so this needs no unlink+relink. Returns the same outcome shape so the wizard can loop on a repeat
 	 * failure or advance to Done. */
 	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
@@ -233,8 +233,8 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
 			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
 			runCatchingCancellable { repo.client().crossDomainUntrust(peerOwnerSignPub) }
-			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
-			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
+			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so the
+			// Router drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
 			for (d in peerDomains) {
 				runCatchingCancellable { repo.ownerFacts.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
 			}

@@ -52,7 +52,7 @@ import java.util.concurrent.atomic.AtomicLong
  *  2. FOCUS. A QR on a glossy screen at close range can sit in the macro dead-zone, so we
  *     kick a center focus-metering action once the preview lays out.
  * Frame is fed WITH `rotationDegrees` so orientation is correct. `onResult` fires once.
- * DebugLog traces (debug build flushes them to evie) confirm the analysis size + decode.
+ * DebugLog traces (debug build flushes them to the Router) confirm the analysis size + decode.
  */
 @OptIn(ExperimentalGetImage::class)
 @Composable
@@ -90,7 +90,7 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 	val frames = remember { AtomicLong(0L) }
 	// A camera/scanner init failure (a device CameraX quirk, an R8-shaken member, a missing model)
 	// is captured here and rendered on-screen rather than crashing the app. On-screen so it is
-	// diagnosable even mid-enrollment, when DebugLog has no creds to flush to evie.
+	// diagnosable even mid-enrollment, when DebugLog has no creds to flush to the Router.
 	var camError by remember { mutableStateOf<String?>(null) }
 
 	DisposableEffect(Unit) {

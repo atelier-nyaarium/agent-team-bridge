@@ -1,8 +1,8 @@
 # Agents
 
 Cross-team communication and devcontainer coordination for Claude agent teams. Teams register with a
-Gateway over WebSocket; Gateways federate through evie-bot (a content-blind router in k8s) to reach
-other machines and the native Android console.
+Gateway over WebSocket; Gateways federate through a self-hosted, content-blind Federation Router to
+reach other machines and the native Android console.
 
 This file is a MAP, not a history. Keep entries to a sentence. Anything derivable by reading the
 code does not belong here; rationale lives in `git log`.
@@ -36,7 +36,7 @@ code does not belong here; rationale lives in `git log`.
     per-agent critical section that folds daemon receipts and events into it, and the one
     authenticated route behind all five tools; the pure reducers and the shared types live in
     `codexAgentReducers.ts` and `codexAgentTypes.ts` (see Codex delegation below)
-  - `evie/` - WS client to evie-bot over the k8s API service-proxy
+  - `router/` - WS client to the self-hosted Router
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store. `consoleTypes.ts` holds the deps and
     route interfaces, bounds and pure predicates `consoleHandler.ts`'s dispatcher is built on
@@ -145,7 +145,7 @@ code does not belong here; rationale lives in `git log`.
     exists so it can gate tool registration. `capabilitiesTool.ts` serves the guidance itself
 - `src/federation-server/` - the self-hosted federation Router: one TLS listener serving the gateway
   WS, the console op surface and the token-exempt device-approval ingress. Ported from evie's bridge;
-  see Self-hosted Router below. NOT yet deployed - the live path is still evie over k8s
+  see Self-hosted Router below. This IS the live path
   - `routerServer.ts` - the listener and the ONE guarded seam every request enters through:
     `route()` returns a Response and never touches `ServerResponse`, `serve()` is the only adapter.
     Pinned by `federation-launch-seam-residue.test.ts`
@@ -175,13 +175,13 @@ code does not belong here; rationale lives in `git log`.
     domain files (identity, activities, targets, agent state, relay frames, App Server protocol,
     agent record, catalog), re-exporting the original public surface by name so the split files'
     internal helpers stay out of it. Never fed to the Kotlin codegen
-  - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
+  - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (the Router never reads it);
     its own module because schemas.ts and federation-protocol.ts both consume it and would cycle.
     A file DECLARES what it is here (`role`, plus the ref and design-card facts a receiver would
     otherwise have to open the bytes to learn); no receiver may re-derive that from content,
     filename, array position, or message direction
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
-  - `crypto.ts` / `admission.ts` / `evie-protocol.ts` / `federation-lifecycle.ts` (a barrel over the
+  - `crypto.ts` / `admission.ts` / `router-protocol.ts` / `federation-lifecycle.ts` (a barrel over the
     seven per-flow `federation-*` files) - the federation trust model and its wire vocabulary
   - `notice.ts` - the four notice tiers both reply tools and the console wire share; the one remaining
     synced leaf (see Synced leaves below)
@@ -217,8 +217,8 @@ code does not belong here; rationale lives in `git log`.
 **Gateway** (`main-gateway.ts`) runs in Docker as one machine's central router.
 **Host daemon** (`main-host-daemon.ts`) runs headless on the host and owns the reserved `host` WS
 slot: devcontainer wake, session spawn, and the console terminal view. It carries no Claude session.
-**Federation Router** (`main-federation.ts`) is the self-hosted replacement for evie's relay, built
-but not yet deployed.
+**Federation Router** (`main-federation.ts`) is the self-hosted replacement for evie's relay, and is
+what every Gateway and console reaches today.
 
 | Port  | Service                             |
 |-------|-------------------------------------|
@@ -291,7 +291,7 @@ gate from manufacturing an accidental permit.
 ### Self-hosted Router
 
 `src/federation-server/` replaced evie's relay: the same wire protocol, run in Docker at home, so
-`src/gateway/evie/evieClient.ts` connects to it unchanged and only the transport under it differs.
+`src/gateway/router/routerClient.ts` connects to it unchanged and only the transport under it differs.
 Everything below about trust, sealing and admissions holds identically - the Router is content-blind
 for the same reasons evie was, and moving it home changed reachability, not trust.
 
@@ -324,7 +324,7 @@ around it diverges on purpose, and collapsing any of it re-introduces a paid-for
 
 - **The phone fails over PER OP, the Gateway PER RECONNECT.** One holds independent HTTPS requests,
   the other one long-lived socket. `withReachFailover` stays in Kotlin; the Gateway's ring lives in
-  `evieClient`'s reconnect loop, advancing only when a socket never OPENED - a drop on a working
+  `routerClient`'s reconnect loop, advancing only when a socket never OPENED - a drop on a working
   address must not walk off it.
 - **The Gateway cannot call the `reach` op at all.** It holds a WS bearer, not the console app token,
   so it learns the addresses from its `gateway_register` reply instead. One optional field, so an
@@ -375,13 +375,13 @@ measuring it once and seeing it succeed proves nothing.
 
 ### Federation and trust
 
-evie is a content-blind router. Gateways register a gateway id on connect; a Gateway reaches another
-via evie's `gateway_relay`, routed by `dstGateway` alone and correlated by `relayId`. Payloads are
-E2E sealed, so evie can neither read nor forge them. Discovery fans out `list_teams` over evie's
-presence roster and merges locally; evie aggregates nothing.
+The Router is content-blind. Gateways register a gateway id on connect; a Gateway reaches another
+via the Router's `gateway_relay`, routed by `dstGateway` alone and correlated by `relayId`. Payloads
+are E2E sealed, so the Router can neither read nor forge them. Discovery fans out `list_teams` over
+the Router's presence roster and merges locally; the Router aggregates nothing.
 
 Trust roots in a single owner device. Membership is an allowlist of owner-signed admissions mirrored
-on evie AND every Gateway, so a revocation bites while evie is unreachable.
+on the Router AND every Gateway, so a revocation bites while the Router is unreachable.
 
 - **Crypto** (`shared/crypto.ts`): Ed25519 signing pair + X25519 box pair, raw 32-byte keys base64.
   Seal is ephemeral X25519 ECDH into HKDF-SHA256 into AES-256-GCM, signed by the sender's static key.
@@ -391,11 +391,11 @@ on evie AND every Gateway, so a revocation bites while evie is unreachable.
 - **Registration gate:** `gateway_register` carries signPub/boxPub, the owner-signed admission, and a
   fresh possession proof. There is no bearer fallback.
 - **Arming mode:** a gateway with no Domain id boots standalone, serving `/health` and `/enroll` with
-  no evie client. The bridge activates only when both a `transport.json` and a Domain id resolve, so
-  a missing Domain arms for enrollment rather than failing closed.
+  no Router client. The bridge activates only when both a `transport.json` and a Domain id resolve,
+  so a missing Domain arms for enrollment rather than failing closed.
 - **Enrollment:** the owner root key is generated silently on the phone and never leaves it. A fresh
   setup stages a PENDING tenant Domain and emits a transport-only 0600 blob carrying
-  `pendingTenant{domainId, nonce}`; the phone self-signs a `FIRST_ROOT_V1` and roots it evie-direct
+  `pendingTenant{domainId, nonce}`; the phone self-signs a `FIRST_ROOT_V1` and roots it router-direct
   in one atomic CAS write, so a redeem race has exactly one winner.
 - **Replay:** `ReplayGuard` checks AFTER the signature verifies.
 - **Trust-on-first-enroll:** the first owner-signed snapshot roots a gateway; a later snapshot rooted
@@ -404,8 +404,8 @@ on evie AND every Gateway, so a revocation bites while evie is unreachable.
 The console-to-gateway path is sealed the same way: the console seals each op into a
 `ConsoleRelayFrame` signed by its enrolled key, and the gateway verifies the signer against an
 owner-signed `kind:console` admission before dispatch. Only a pre-seal failure returns cleartext, so
-the console can prompt enrollment. Still open on this track: evie self-provisioning the console-bridge
-k8s objects, and retiring `CONSOLE_BRIDGE_TOKEN`.
+the console can prompt enrollment. Still open on this track: retiring `CONSOLE_BRIDGE_TOKEN`, which
+is the one shared app-token the whole console op surface still sits behind.
 
 ### Versioned state planes
 
@@ -425,8 +425,8 @@ root. An absent known-version means "ship nothing"; an empty array means "ship c
 
 ### Console bridge (Android)
 
-The console is a poll-based client, not a live socket: evie relays opaque `console_relay` frames and
-the gateway answers each with a `console_relay_reply`. It is keyed by its per-install
+The console is a poll-based client, not a live socket: the Router relays opaque `console_relay`
+frames and the gateway answers each with a `console_relay_reply`. It is keyed by its per-install
 `conversationId`; the Device Name is only a display label. `ConsolePeer` inserts into the team and
 conversation registries like a real peer, so wake, persistent conversations, and push delivery are
 reused unchanged; its `send()` appends to a `DeviceMailbox` that the `poll` op drains.
@@ -1063,7 +1063,7 @@ mismatch.
 |--------|------|
 | `notice.ts` | `nyaaskills/src/shared/notice.ts` |
 
-`crypto.ts`, `admission.ts`, `evie-protocol.ts` and the eight `federation-*` modules were leaves too,
+`crypto.ts`, `admission.ts`, `router-protocol.ts` and the eight `federation-*` modules were leaves too,
 mirrored into evie's bridge. They are ORDINARY modules now: the Router serves federation itself, evie
 holds no copy, and their stamps came off with the copies. `federation-lifecycle.ts` stays a pure
 barrel over the seven per-flow `federation-*` files, for readability rather than for a second repo.
@@ -1131,13 +1131,12 @@ Tests live in `src/__tests__/`. `bun run test` for all, or `bun run test <path>`
 ### Debugging the console on-device
 
 The release ships `switchboard-debug.apk` beside `switchboard-release.apk`, signed with the SAME key
-so it installs over the release build and back. The debug build flushes `DebugLog` to evie's
+so it installs over the release build and back. The debug build flushes `DebugLog` to the Router's
 `POST /ingest` each poll cycle; release never does. The in-app updater is variant-aware, so getting
 onto debug requires sideloading once.
 
 ```bash
-KUBECONFIG=~/projects/evie-bot/kubeconfig.yaml kubectl -n evie-bot \
-  logs deploy/evie-bot-deployment --tail=200 | grep '\[console-ingest\]'
+docker logs switchboard-federation --since 15m 2>&1 | grep '\[console-ingest\]'
 ```
 
 `DebugLog` already traces the enroll scan and the poll/drain flow (`[Poll]`, `[Drain]`). **A log line
@@ -1247,7 +1246,7 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
 3. Domain id is not fail-closed; a gateway without one arms for enrollment. A creds-less secondary
    gets it from the sealed bootstrap bundle. `1) Setup Gateway` arms this gateway, shows its admit
    payload, waits for the phone's sealed bundle, and connects in-process with no restart. Its
-   `transportInstalled` accepts ONLY the direct shape, the same rule as `loadEvieTransport`, or the
+   `transportInstalled` accepts ONLY the direct shape, the same rule as `loadRouterTransport`, or the
    menu says "already enrolled" over a file the gateway itself reads as "arm for enrollment".
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
@@ -1261,14 +1260,13 @@ fine. That is how the empty-read misread above was produced.
 
 ### Cutting over to the self-hosted Router
 
-The Router (`src/federation-server/`) is built, tested and running, but NOTHING is cut over: the
-gateway and console still reach evie through the k8s service-proxy. Both transports coexist by
-design, chosen per record by a `transport` field that reads as `k8s` when absent. This is the
-runbook for the switch, and it is deliberately a human decision, not a script.
+DONE, and kept as the record of how it was done, since a second machine or a rebuilt one repeats
+steps 3 to 6. The gateway and console both reach the Router; `RouterTransport` admits only the
+`direct` shape, so there is no k8s branch left to choose between.
 
-The one-way door: **rollback stays clean only until the Router accepts its first federation
-mutation** (an admission, a revocation, a tenant op). Before that, repointing back to the cluster
-loses nothing. After it, the cluster's copy is stale and repointing can resurrect a revoked member.
+The one-way door has been passed: **rollback stayed clean only until the Router accepted its first
+federation mutation** (an admission, a revocation, a tenant op). The cluster's copy is stale now, and
+repointing back to it would resurrect revoked members.
 
 1. `./backup-federation.sh` with the Router stopped. It refuses while it runs, asserts the cert,
    key and state all landed, and includes both tokens - a data-only archive authenticates nobody.
@@ -1287,7 +1285,7 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
    branch (`transport: "direct"`, `routerUrl` the docker-network alias `https://federation-router:20001`,
    `routerCertFp` from `/health`, `bearer` the `FEDERATION_WS_TOKEN` from `.env`), keeping the old
    file as `transport.k8s.json` for the rollback. Then `./start-gateway.sh`. Confirm
-   `router_connected: true` on the gateway's `/health`, `[evie] direct transport ->` in its log,
+   `router_connected: true` on the gateway's `/health`, `[router] direct transport ->` in its log,
    and `Gateway registered: <domain>/<id>` in the Router's.
 5. Point the phone at the LAN address in Settings, Federation, Federation Router. The port defaults
    to 20001 and the fingerprint comes from the Router's `/health`, as PLAIN hex. Editing there
@@ -1297,7 +1295,7 @@ loses nothing. After it, the cluster's copy is stale and repointing can resurrec
 ### Retiring the k8s path
 
 The server side is DONE. Nothing under `src/gateway`, `scripts/` or the Dockerfile reaches a cluster:
-`gateway/evie/transport.ts` loads only the direct branch, the `EVIE_*` env vars are gone, kubectl is
+`gateway/router/transport.ts` loads only the direct branch, the `EVIE_*` env vars are gone, kubectl is
 out of the image, and provision / purge / verify all speak to the Router through
 `scripts/lib/routerState.ts` and `/health`. A `transport.json` still holding the k8s shape resolves
 to null, so such a Gateway arms for enrollment rather than half-reading a relay it cannot reach.

@@ -70,15 +70,15 @@ export class EnrollmentCoordinator {
 		return this.state.ownerSignPub !== null;
 	}
 
-	public mintEnrollOwner(domainId: string, evieAddr: string, nowMs: number): EnrollOwnerPayload {
+	public mintEnrollOwner(domainId: string, routerAddr: string, nowMs: number): EnrollOwnerPayload {
 		const nonce = randomBytes(18).toString("base64url");
 		this.nonces.set(nonce, nowMs + this.nonceTtlMs);
 		return {
 			type: "enroll-owner",
 			domainId,
-			evieAddr,
-			evieSignPub: this.identity.sign.pub,
-			evieBoxPub: this.identity.box.pub,
+			routerAddr,
+			routerSignPub: this.identity.sign.pub,
+			routerBoxPub: this.identity.box.pub,
 			nonce,
 		};
 	}

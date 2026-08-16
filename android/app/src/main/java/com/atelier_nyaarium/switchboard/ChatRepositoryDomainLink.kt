@@ -187,8 +187,8 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		DebugLog.log("Connect", "apiReachable ok")
 		// First-root step (friend invite): a blob carrying a pendingTenant means this app must
 		// root that pending Domain at its silently-generated owner key BEFORE submitting its own
-		// admission (evie only trusts the owner-signed admission once the Domain is rooted at that
-		// owner key). A reject (expired / already-claimed invite) is terminal: the root was
+		// admission (the Router only trusts the owner-signed admission once the Domain is rooted at
+		// that owner key). A reject (expired / already-claimed invite) is terminal: the root was
 		// decided, not dropped, so stop with the friendly guidance.
 		if (!ownerFacts.firstRootIfPending()) return@withContext
 		// Reflect the first-root latch into the UI state now, so if the steps below fail with the
@@ -266,8 +266,8 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		e.rethrowIfCancellation()
 		val (cause, kind) = classifyConnError(e)
 		// "is not admitted" means the Gateway holds no admission for this Console. If we believed
-		// we were admitted, the flag is stale (the submit never landed in evie) - clear it so the
-		// next connect re-submits the admission instead of waiting forever on a calm sync-lag.
+		// we were admitted, the flag is stale (the submit never landed at the Router) - clear it so
+		// the next connect re-submits the admission instead of waiting forever on a calm sync-lag.
 		if (kind == ConnKind.ENROLLING) store.consoleAdmitted = false
 		_state.update { s ->
 			when (kind) {
@@ -312,11 +312,12 @@ internal fun ChatRepository.confirmedDomainIdOrThrow(): String =
 	confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 
 /** True only when a LOCAL session confirms this device owns the ADMIN Domain (the one that runs
- * evie and provisions others), so it can host guest networks. evie stamps isAdminDomain on the
- * register reply and the gateway carries it onto the local TeamInfo. A guest (its own non-admin
- * Domain) returns false, and so does a device whose Domain is not yet confirmed - so the
- * Guest-networks admin section is hidden rather than shown as a dead button evie would reject
- * (provision_tenant is gated on the admin key, so "not admin-signed" for anyone else). */
+ * the Router and provisions others), so it can host guest networks. The Router stamps
+ * isAdminDomain on the register reply and the gateway carries it onto the local TeamInfo. A guest
+ * (its own non-admin Domain) returns false, and so does a device whose Domain is not yet
+ * confirmed - so the Guest-networks admin section is hidden rather than shown as a dead button the
+ * Router would reject (provision_tenant is gated on the admin key, so "not admin-signed" for
+ * anyone else). */
 fun ChatRepository.isAdmin(): Boolean {
 	val gw = localGatewayId
 	return _state.value.teams.any { (it.gatewayId.ifEmpty { gw }) == gw && it.isAdminDomain }

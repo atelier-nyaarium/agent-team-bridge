@@ -1,7 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { type EvieClient, startEvieClient } from "../gateway/evie/evieClient.js";
+import { type RouterClient, startRouterClient } from "../gateway/router/routerClient.js";
 import type { RouterReach } from "../shared/router-reach.js";
 
 ////////////////////////////////
@@ -69,15 +69,15 @@ function waitFor(predicate: () => boolean, timeoutMs = 4_000): Promise<void> {
 	});
 }
 
-function client(config: Parameters<typeof startEvieClient>[0]): EvieClient {
-	return startEvieClient(config);
+function client(config: Parameters<typeof startRouterClient>[0]): RouterClient {
+	return startRouterClient(config);
 }
 
 ////////////////////////////////
 //  Tests
 
-describe("evieClient reach failover", () => {
-	let live: EvieClient | null = null;
+describe("routerClient reach failover", () => {
+	let live: RouterClient | null = null;
 	let router: FakeRouter | null = null;
 
 	afterEach(async () => {

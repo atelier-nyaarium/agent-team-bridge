@@ -36,7 +36,7 @@ export const ConsoleRegisterResultSchema = z
 		// Whether this console's Domain is rooted yet, as the connected gateway sees it. A gateway
 		// only exists for a Domain past rooting, so this reply reports only `rooted` (or `unrooted`
 		// for a fresh admin Domain), never `pending`. Absent until this gateway completes its own
-		// evie register; the app then treats the Domain as already rooted.
+		// Router register; the app then treats the Domain as already rooted.
 		domainStatus: DomainStatusSchema.optional(),
 	})
 	.meta({ id: "ConsoleRegisterResult" });

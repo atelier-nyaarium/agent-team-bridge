@@ -25,8 +25,8 @@ import type { ResponsePayload } from "../../shared/types.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-export interface FakeEvie {
-	client: NonNullable<RoutesDeps["evieClient"]>;
+export interface FakeRouter {
+	client: NonNullable<RoutesDeps["routerClient"]>;
 	calls: { action: string; params: Record<string, unknown> }[];
 }
 
@@ -60,14 +60,14 @@ export function sealerFor(self: Identity, localGatewayId: string, peers: Record<
 export const sealerA = sealerFor(A, "hosta", { hostb: B });
 export const sealerB = sealerFor(B, "hostb", { hosta: A });
 
-/** A mock evie that, for gateway_relay, plays the DESTINATION Gateway: opens the sealed
+/** A mock Router that, for gateway_relay, plays the DESTINATION Gateway: opens the sealed
  * op with the destination's sealer, runs `handle`, and seals the result back. */
-export function fakeEvie(opts: {
+export function fakeRouter(opts: {
 	destSealer?: Sealer;
 	srcGateway?: string;
 	handle?: (op: FederatedOp) => unknown;
 	onCall?: (action: string, params: Record<string, unknown>) => unknown;
-}): FakeEvie {
+}): FakeRouter {
 	const calls: { action: string; params: Record<string, unknown> }[] = [];
 	const client = {
 		isConnected: () => true,
@@ -84,7 +84,7 @@ export function fakeEvie(opts: {
 			// resolves to its reply object, not a Promise.
 			return { callId: "fake", result: (await opts.onCall?.(action, params)) ?? { ok: true } };
 		},
-	} as unknown as NonNullable<RoutesDeps["evieClient"]>;
+	} as unknown as NonNullable<RoutesDeps["routerClient"]>;
 	return { client, calls };
 }
 
@@ -258,7 +258,7 @@ export const crossSend = (to: string): FederatedOp => ({
 //  Harness: cross-Domain send flow (real crypto, two Domains)
 //
 //  alice-gw (Domain "alice") sends to bob.bob-gw.lib.dev (Domain "bob"). The seal MUST be v2
-//  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), evie stays
+//  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), the Router stays
 //  content-blind, and the op lands at bob's destination share gate. The local seal path
 //  is untouched (covered by the same-Domain harness above).
 

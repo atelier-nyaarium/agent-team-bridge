@@ -85,7 +85,7 @@ export function expectedSas(a: Domain, b: Domain, pin: string): string {
 
 /** A Router seam that drives both commit-reveal rounds straight into a receiver
  * coordinator (the Router is a direct wire here). This is exactly how index.ts routes,
- * minus the evie hop. */
+ * with the network hop to the Router skipped. */
 export function directRoute(receiver: CrossDomainHandshakeCoordinator): CrossDomainRouter {
 	return {
 		sendCommit: async (_gw, req) => receiver.handleIncomingCommit(req),

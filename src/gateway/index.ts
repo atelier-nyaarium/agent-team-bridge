@@ -9,12 +9,12 @@ import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
-import { MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
+import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
 import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -24,9 +24,9 @@ import {
 	armingOf,
 	type BootState,
 	decideBootPhase,
-	type EvieHandlers,
 	type FederationSlice,
 	federationOf,
+	type RouterHandlers,
 } from "./boot.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
@@ -50,15 +50,6 @@ import { createConsoleSealer } from "./console/consoleSealer.js";
 import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
-import { startEvieClient } from "./evie/evieClient.js";
-import {
-	type EvieTransport,
-	evieWsConnection,
-	loadEvieTransport,
-	loadRouterReach,
-	routerBootstrapOverride,
-	saveRouterReach,
-} from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import {
@@ -85,6 +76,15 @@ import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
+import { startRouterClient } from "./router/routerClient.js";
+import {
+	loadRouterReach,
+	loadRouterTransport,
+	type RouterTransport,
+	routerBootstrapOverride,
+	routerWsConnection,
+	saveRouterReach,
+} from "./router/transport.js";
 import { createRoutes, createRoutesCarryOver } from "./routes.js";
 import { createSessionAuthority, presentedByRequest } from "./sessionAuthority.js";
 import { WakeCoordinator } from "./wake.js";
@@ -278,8 +278,8 @@ export async function startGateway(): Promise<void> {
 	);
 
 	const planeRegistry = new PlaneRegistry();
-	// domainMeta (learned from evie's register reply) rides the federation slice: a fresh plane's
-	// constructor calls snapshot() synchronously, and fed() already answers null pre-federation.
+	// domainMeta (learned from the Router's register reply) rides the federation slice: a fresh
+	// plane's constructor calls snapshot() synchronously, and fed() already answers null pre-federation.
 	const presence = new PresenceFacade({
 		sessionStore,
 		registry,
@@ -439,7 +439,7 @@ export async function startGateway(): Promise<void> {
 	// period, and the 3s persist tick overwrites the cleanShutdown flag this just wrote.
 	const shutdown = () => {
 		persistDelivery(true);
-		fed()?.evieClient.stop();
+		fed()?.routerClient.stop();
 		process.exit(0);
 	};
 	process.on("SIGTERM", shutdown);
@@ -477,7 +477,7 @@ export async function startGateway(): Promise<void> {
 	// The host op timeout must EXCEED the host's worst-case work so a succeeding-but-slow op
 	// never spuriously times out (a sendText runs two sequential 8s execs = up to 16s, and a
 	// timeout on a keystroke send is indeterminate - the retry would re-inject). 20s clears that
-	// with margin and still nests well under the console relay hold (evie ~55s, apiserver
+	// with margin and still nests well under the console relay hold (the Router ~55s, apiserver
 	// ConsoleHttp.PROXY_CEILING_MS 60s - the full chain is pinned in
 	// ChatRepositoryConstantsTest, not here; this comment is context, not a source of truth).
 	const HOST_OP_TIMEOUT_MS = 20_000;
@@ -578,19 +578,19 @@ export async function startGateway(): Promise<void> {
 			?.crossDomainPeers.all()
 			.some((p) => p.friendDomainId === domainId) ?? false;
 
-	const evieTransport = loadEvieTransport(federationDir);
+	const routerTransport = loadRouterTransport(federationDir);
 	const enrollNonce = process.env.ENROLL_NONCE;
 	// The whole boot-time phase decision, named and pinned by tests; the enterArming and
 	// enterFederationActive call sites below act on it.
 	const bootDecision = decideBootPhase({
-		hasTransport: evieTransport !== null,
+		hasTransport: routerTransport !== null,
 		hasDomainId: localDomainId !== null,
 		hasEnrollNonce: !!enrollNonce,
 	});
 
 	// Builds everything FederationActive owns. Only enterFederationActive calls this; the slice's
 	// handlers land there as a second stage, once the federation-aware routes exist.
-	function buildFederationSlice(transport: EvieTransport, domainId: string): FederationSlice {
+	function buildFederationSlice(transport: RouterTransport, domainId: string): FederationSlice {
 		// Deferred reads (handlers, domainMeta) resolve through the slice returned below; every
 		// deferred caller fires from a WS event, well after this function returns.
 		let slice: FederationSlice;
@@ -636,7 +636,7 @@ export async function startGateway(): Promise<void> {
 		// Per-session share state: which local sessions are offered to which linked friend
 		// Domains, persisted alongside the peer set. Plain gateway-local state (the device's
 		// submit op is authenticated by the existing console seal), read by discovery and the
-		// relay so an un-share bites without evie.
+		// relay so an un-share bites without the Router.
 		const shareState = new CrossDomainShareState(federationDir, (reason) => {
 			if (reason.kind === "domain") slice.handlers?.presenceSource.recomputeDomain(reason.domainId);
 			else slice.handlers?.presenceSource.recomputeAll();
@@ -651,7 +651,7 @@ export async function startGateway(): Promise<void> {
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		});
 		const sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, domainId, replayGuard);
-		// The requester leg routes both commit-reveal rounds through the Router seam below; evie
+		// The requester leg routes both commit-reveal rounds through the Router seam below; the Router
 		// (content-blind) forwards each frame to the receiver Gateway and holds the reply.
 		// The seam reads the client through the slice, assigned further down, so it stays lazy.
 		const routeHandshake = async (
@@ -659,7 +659,7 @@ export async function startGateway(): Promise<void> {
 			receiverGatewayId: string,
 			payload: unknown,
 		): Promise<unknown> => {
-			const res = await slice.evieClient.callTool(action, {
+			const res = await slice.routerClient.callTool(action, {
 				handshakeId: randomBytes(18).toString("base64url"),
 				srcDomain: domainId,
 				srcGateway: localGatewayId,
@@ -696,21 +696,21 @@ export async function startGateway(): Promise<void> {
 		const consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-gateway QR so the owner can scan this Gateway
-		// into the Domain. Once admitted (mirrored from evie), this falls silent.
+		// into the Domain. Once admitted (mirrored from the Router), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
 		// The federation WS: dial the Router and pin its leaf fingerprint. Creds are delivered by
 		// enrollment, so there is nothing to mount and nothing to configure by hand.
-		const connection = evieWsConnection(transport);
+		const connection = routerWsConnection(transport);
 		// The operator's own answer to "where is the Router", from Gateway Setup, wins over the address
 		// the sealed bundle names: the phone knows the Router by its public host, which a machine on the
 		// Router's own LAN may not be able to reach at all on a first connection. Both stay in the ring.
 		const bootstrap = routerBootstrapOverride() ?? connection.url;
-		console.log(`[evie] direct transport -> ${bootstrap}`);
+		console.log(`[router] direct transport -> ${bootstrap}`);
 
 		// Frame handlers land on the slice after the routes rebuild; a frame arriving before that
 		// is dropped (the console re-polls).
-		const evieClient = startEvieClient({
+		const routerClient = startRouterClient({
 			url: bootstrap,
 			headers: connection.headers,
 			tls: connection.tls,
@@ -728,7 +728,7 @@ export async function startGateway(): Promise<void> {
 				slice.handlers?.crossDomainHandshake(frame);
 			},
 			onDomainSync: (domain) => {
-				// evie mirrors the owner root + allowlist on each register reply; apply
+				// The Router mirrors the owner root + allowlist on each register reply; apply
 				// the owner-verified snapshot so this Gateway enforces revocations locally.
 				const parsed = DomainSnapshotSchema.safeParse(domain);
 				if (!parsed.success) {
@@ -752,7 +752,7 @@ export async function startGateway(): Promise<void> {
 			},
 			buildRegisterAuth: () => {
 				// Present this Gateway's owner-signed admission + a fresh possession proof,
-				// so evie can gate registration once a Domain owner exists. Null (token
+				// so the Router can gate registration once a Domain owner exists. Null (token
 				// only) until enrollment writes the self-admission into the allowlist.
 				const self = allowlist.selfAdmission(identity.sign.pub);
 				if (!self) return null;
@@ -768,7 +768,7 @@ export async function startGateway(): Promise<void> {
 				};
 			},
 			onDisconnect: () => {
-				console.error(`[evie] disconnected from the federation Router`);
+				console.error(`[router] disconnected from the Router`);
 			},
 		});
 
@@ -779,7 +779,7 @@ export async function startGateway(): Promise<void> {
 			coordinator,
 			sealer,
 			consoleSealer,
-			evieClient,
+			routerClient,
 			replayPersist: () => replayDurable.save(replayGuard.snapshot()),
 			domainMeta: null,
 			handlers: null,
@@ -859,17 +859,19 @@ export async function startGateway(): Promise<void> {
 			enrollTlsServer?.stop();
 			enrollTlsServer = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
-			// no restart: activate evie in-process from the just-installed creds.
-			const installedTransport = loadEvieTransport(federationDir);
+			// no restart: connect to the Router in-process from the just-installed creds.
+			const installedTransport = loadRouterTransport(federationDir);
 			const installedDomainId = resolveLocalDomainId(federationDir);
 			if (installedTransport && installedDomainId) {
 				try {
 					enterFederationActive(installedTransport, installedDomainId);
-					console.log(`[enroll] installed credentials for Gateway "${localGatewayId}"; connecting to evie.`);
+					console.log(
+						`[enroll] installed credentials for Gateway "${localGatewayId}"; connecting to the Router.`,
+					);
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					console.error(
-						`[enroll] credentials installed but evie activation failed: ${msg}. Re-run setup.sh (Setup Gateway).`,
+						`[enroll] credentials installed but Router activation failed: ${msg}. Re-run setup.sh (Setup Gateway).`,
 					);
 				}
 			} else {
@@ -989,7 +991,7 @@ export async function startGateway(): Promise<void> {
 			sessionStore,
 			presence,
 			mailboxStore,
-			evieClient: f?.evieClient ?? null,
+			routerClient: f?.routerClient ?? null,
 			sealer: f?.sealer ?? null,
 			crossDomainPeers: f?.crossDomainPeers ?? null,
 			// Local-first seal-target resolution on the send side: a target gateway the local
@@ -1021,9 +1023,9 @@ export async function startGateway(): Promise<void> {
 
 	let routes = buildRoutes();
 
-	// Builds the evie-frame handlers against the federation-aware `routes` the transition just
+	// Builds the Router-frame handlers against the federation-aware `routes` the transition just
 	// rebuilt; the returned presenceSource is what the slice's onChange hooks reach.
-	function buildEvieHandlers(federation: FederationSlice): EvieHandlers {
+	function buildRouterHandlers(federation: FederationSlice): RouterHandlers {
 		const presencePusher = createCoalescedPresencePusher((domainId, sessions) =>
 			routes.pushPresenceToDomain(domainId, sessions),
 		);
@@ -1092,7 +1094,7 @@ export async function startGateway(): Promise<void> {
 				return snapshot ? { version: federation.allowlist.version() ?? "", snapshot } : null;
 			},
 			// The console register reply carries this Gateway's Domain status (learned from
-			// evie's register reply) so the app knows to first-root vs just-provision.
+			// the Router's register reply) so the app knows to first-root vs just-provision.
 			domainStatus: () => federation.domainMeta?.domainStatus,
 			planeRegistry,
 			presence,
@@ -1179,7 +1181,7 @@ export async function startGateway(): Promise<void> {
 			sealer: federation.consoleSealer,
 			handleFrame: consoleHandler.handleFrame,
 			sendReply: (reply) =>
-				federation.evieClient.callTool("console_relay_reply", reply as unknown as Record<string, unknown>),
+				federation.routerClient.callTool("console_relay_reply", reply as unknown as Record<string, unknown>),
 		});
 
 		// Federation: a peer Gateway's frames land here, run against the local routes,
@@ -1216,7 +1218,7 @@ export async function startGateway(): Promise<void> {
 			sealer: federation.sealer,
 			handleOp: gatewayRelayHandler.handleOp,
 			sendReply: (reply) =>
-				federation.evieClient.callTool("gateway_relay_reply", reply as unknown as Record<string, unknown>),
+				federation.routerClient.callTool("gateway_relay_reply", reply as unknown as Record<string, unknown>),
 		});
 
 		// Cross-Domain handshake (receiver leg): a pre-trust handshake frame the Router
@@ -1226,12 +1228,12 @@ export async function startGateway(): Promise<void> {
 			handleIncomingCommit: (req) => federation.coordinator.handleIncomingCommit(req),
 			handleIncomingReveal: (req) => federation.coordinator.handleIncomingReveal(req),
 			sendCommitReply: (reply) =>
-				federation.evieClient.callTool(
+				federation.routerClient.callTool(
 					"cross_domain_handshake_reply",
 					reply as unknown as Record<string, unknown>,
 				),
 			sendRevealReply: (reply) =>
-				federation.evieClient.callTool(
+				federation.routerClient.callTool(
 					"cross_domain_handshake_reveal_reply",
 					reply as unknown as Record<string, unknown>,
 				),
@@ -1270,17 +1272,17 @@ export async function startGateway(): Promise<void> {
 
 	// The ONE transition into FederationActive, and the one place deciding what survives it:
 	// routesCarryOver crosses the rebuild, everything else in the slice is fresh.
-	function enterFederationActive(transport: EvieTransport, domainId: string): void {
+	function enterFederationActive(transport: RouterTransport, domainId: string): void {
 		if (boot.phase === "federationActive") return;
 		localDomainId = domainId;
 		const federation = buildFederationSlice(transport, domainId);
 		boot = { phase: "federationActive", federation };
 		routes = buildRoutes();
-		federation.handlers = buildEvieHandlers(federation);
+		federation.handlers = buildRouterHandlers(federation);
 		startShareSweep(federation);
 	}
-	if (bootDecision === "activate" && evieTransport && localDomainId) {
-		enterFederationActive(evieTransport, localDomainId);
+	if (bootDecision === "activate" && routerTransport && localDomainId) {
+		enterFederationActive(routerTransport, localDomainId);
 	}
 
 	async function router(req: Request): Promise<Response> {
