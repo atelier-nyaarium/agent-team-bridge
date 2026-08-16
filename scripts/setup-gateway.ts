@@ -194,8 +194,11 @@ async function readTransportText(): Promise<string | null> {
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
 	console.log("  If your phone cannot reach this machine, save its bundle to a file here and pick f.");
+	// Not "always too big": the bundle carries the Domain snapshot, so it grows with every member
+	// admitted. A first gateway on a fresh Domain fits; the same paste stops fitting later, which is
+	// why the truncation went unnoticed until a second machine.
 	console.log(
-		`  A bundle is larger than a terminal can paste (~${TTY_PASTE_LIMIT} bytes), so f is the reliable route.`,
+		`  A bundle often exceeds what a terminal can paste (~${TTY_PASTE_LIMIT} bytes), so f is the reliable one.`,
 	);
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
