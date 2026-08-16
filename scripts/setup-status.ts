@@ -5,6 +5,7 @@
 import { $ } from "bun";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
 import { readAdminDomain } from "./bootstrap-domain.js";
+import { dockerBlockerTitle } from "./lib/docker-probe.js";
 import { detectLanHosts, envGet, jparse } from "./lib/host.js";
 import { ROUTER_PORT, readPublicReach, routerHealth, shortFp } from "./lib/routerStart.js";
 import { readRouterFed, routerRunning } from "./lib/routerState.js";
@@ -26,6 +27,9 @@ export interface SetupStatus {
 	publicHost: string;
 	publicPort: number;
 	routerRunning: boolean;
+	/** What is stopping docker from working here, or empty when nothing is. Every option ends in
+	 * `compose up`, so this outranks every other row: none of them can change while it is set. */
+	dockerBlocker: string;
 	/** The Router this machine dials when it does not run one, as `host:port`. Empty on a machine
 	 * that hosts its own. */
 	remoteRouter: string;
@@ -57,20 +61,31 @@ export async function fetchRegisteredGateways(lan: string): Promise<RegisteredGa
 }
 
 export async function readSetupStatus(): Promise<SetupStatus> {
-	const [lanHosts, lanBound, reach, running, domainId, gatewayId, gatewayEnrolled, remoteHost, remotePort] =
-		await Promise.all([
-			detectLanHosts(),
-			envGet("FEDERATION_BIND"),
-			readPublicReach(),
-			routerRunning(),
-			envGet("FEDERATION_DOMAIN_ID"),
-			// Sanitized the way the gateway sanitizes its own id at register, or `Sakura` in .env never
-			// matches the `sakura` the Router holds and this machine reads as never registered.
-			envGet("GATEWAY_ID").then((id) => sanitizeGatewayId(id || gatewayHostname())),
-			transportInstalled(),
-			envGet("FEDERATION_ROUTER_HOST"),
-			envGet("FEDERATION_ROUTER_PORT"),
-		]);
+	const [
+		lanHosts,
+		lanBound,
+		reach,
+		running,
+		domainId,
+		gatewayId,
+		gatewayEnrolled,
+		remoteHost,
+		remotePort,
+		dockerBlocker,
+	] = await Promise.all([
+		detectLanHosts(),
+		envGet("FEDERATION_BIND"),
+		readPublicReach(),
+		routerRunning(),
+		envGet("FEDERATION_DOMAIN_ID"),
+		// Sanitized the way the gateway sanitizes its own id at register, or `Sakura` in .env never
+		// matches the `sakura` the Router holds and this machine reads as never registered.
+		envGet("GATEWAY_ID").then((id) => sanitizeGatewayId(id || gatewayHostname())),
+		transportInstalled(),
+		envGet("FEDERATION_ROUTER_HOST"),
+		envGet("FEDERATION_ROUTER_PORT"),
+		dockerBlockerTitle(),
+	]);
 	// A machine that only runs a gateway has no local Router, and reading its rows as "not running,
 	// Domain none" says nothing is set up when in fact everything is - it just lives elsewhere. So the
 	// Router row names the REMOTE one this gateway was pointed at.
@@ -100,6 +115,7 @@ export async function readSetupStatus(): Promise<SetupStatus> {
 		publicHost: reach.publicHost,
 		publicPort: reach.publicPort,
 		routerRunning: running,
+		dockerBlocker: dockerBlocker ?? "",
 		remoteRouter: remoteRouter ? `${remoteRouter}:${Number(remotePort) || ROUTER_PORT}` : "",
 		certFingerprint,
 		domain,
@@ -118,6 +134,9 @@ export function printSetupStatus(s: SetupStatus): void {
 	// The Router binds the first address, so the list order answers "which one is it on". A bound
 	// address missing from the list is a machine that moved, which only a restart re-binds.
 	const drifted = s.lanBound && !s.lanHosts.includes(s.lanBound);
+	// FIRST, and only when it is in the way. Nothing below can change while docker is unreachable,
+	// so an operator reading top-down meets the blocker before the rows it makes meaningless.
+	if (s.dockerBlocker) row("Docker", s.dockerBlocker, "pick 1 or 2 for the fix");
 	row(
 		"LAN",
 		s.lanHosts.join(", ") || s.lanBound || "none",
