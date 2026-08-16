@@ -152,6 +152,15 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			.onSuccess { applyPresence(it) }
 	}
 
+	/** Which of this owner's Gateways the Router currently holds a connection for. Best-effort, and a
+	 * failure LEAVES the prior answer rather than clearing it: a momentary hiccup reporting every
+	 * machine offline is worse than a slightly stale roster, since offline is the state that makes the
+	 * board stop offering things. */
+	suspend fun refreshConnectedGateways() {
+		val ids = runCatchingCancellable { repo.client().fetchConnectedGateways() }.getOrNull() ?: return
+		if (ids != repo._state.value.connectedGateways) repo._state.update { it.copy(connectedGateways = ids) }
+	}
+
 	/** The one plane-merge path: every fresh presence-plane snapshot lands in state through here
 	 * and only here. Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive
 	 * `teams` from it directly (see reapplyCachedTeams) without waiting for a fresh server push -

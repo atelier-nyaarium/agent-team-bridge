@@ -125,16 +125,23 @@ internal class SessionOps(private val repo: ChatRepository) {
 		tmuxSend(team, key = "Enter")
 	}
 
-	/** The directory picker's type-ahead read: subdirectories of one host dir. Failures collapse to
-	 * an empty list - the picker just shows no suggestions.
+	/**
+	 * The directory picker's type-ahead read: subdirectories of one host dir.
 	 *
 	 * `hostTarget` names WHICH machine to read, so a workdir picked for a session on another Gateway
-	 * comes from that machine's filesystem rather than this device's route Gateway. */
-	suspend fun listDirs(path: String, hostTarget: String = "host"): List<String> = withContext(Dispatchers.IO) {
+	 * comes from that machine's filesystem. Required, with no bare default: a bare target resolves to
+	 * this device's route Gateway, so an omitted one would list the wrong machine and say nothing.
+	 *
+	 * Reports WHY there is no listing rather than collapsing to an empty one. An unreachable machine,
+	 * a Gateway with no host daemon and a folder with no subdirectories all produced the same blank
+	 * picker, which is how a switched-off machine read as a broken feature.
+	 */
+	suspend fun listDirs(path: String, hostTarget: String): DirListing = withContext(Dispatchers.IO) {
 		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
 		// picker inspectable with no gateway behind it.
-		repo.sandboxDirs?.let { return@withContext it[path].orEmpty() }
-		runCatchingCancellable { repo.client().listDirs(path, hostTarget).entries }.getOrDefault(emptyList())
+		repo.sandboxDirs?.let { return@withContext DirListing(it[path].orEmpty()) }
+		runCatchingCancellable { DirListing(repo.client().listDirs(path, hostTarget).entries) }
+			.getOrElse { DirListing(emptyList(), error = dirListError(it)) }
 	}
 
 	/** This owner's admitted Gateways, the route one included. Keyring-derived, so a Gateway with no

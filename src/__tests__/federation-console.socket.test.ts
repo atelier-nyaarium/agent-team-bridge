@@ -98,6 +98,55 @@ describe("federation router console surface", () => {
 		expect((await first).status).toBe(200);
 	});
 
+	it("refuses a frame naming a gateway that is not connected, rather than substituting one", async () => {
+		// The connected gateway must NOT receive it. A frame is sealed to the box key of the gateway it
+		// names, so a substitute cannot open it and answers "unseal failed" - reporting a switched-off
+		// machine as a cryptography failure, which is what every console op against an offline second
+		// machine did.
+		fixture = await startRouter();
+		const gateway = openGateway(fixture.port);
+		sockets.push(gateway);
+		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
+		await callTool(gateway, "gateway_register", registerParams(fixture));
+		let delivered = false;
+		void relayReaches(gateway, "elsewhere").then(() => {
+			delivered = true;
+		});
+		const res = await requestBody("/console", {
+			opId: "elsewhere",
+			signerSignPub: "console",
+			sealed: { value: "opaque" },
+			targetGateway: "not-connected",
+		});
+		expect(res.status).toBe(503);
+		expect(delivered).toBe(false);
+	});
+
+	it("delivers a frame naming the connected gateway", async () => {
+		fixture = await startRouter();
+		const gateway = openGateway(fixture.port);
+		sockets.push(gateway);
+		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
+		await callTool(gateway, "gateway_register", registerParams(fixture));
+		const held = relayReaches(gateway, "named");
+		const pending = requestBody("/console", {
+			opId: "named",
+			signerSignPub: "console",
+			sealed: { value: "opaque" },
+			targetGateway: "laptop",
+		});
+		await held;
+		gateway.send(
+			JSON.stringify({
+				type: "tool_call",
+				callId: "named-reply",
+				action: "console_relay_reply",
+				params: { opId: "named", ok: true, result: {} },
+			}),
+		);
+		expect((await pending).status).toBe(200);
+	});
+
 	it("holds and settles a console relay through the gateway socket", async () => {
 		fixture = await startRouter();
 		const gateway = openGateway(fixture.port);
