@@ -299,13 +299,24 @@ and phone holds, which is a re-provision of each, not a restart. That cert is al
 ephemeral one the 20003 enrollment listener mints per arming.
 
 **Reach: one Router, several addresses, and the phone learns them from the Router.** A home router
-that does not hairpin drops a LAN-to-public SYN, so the public address is unreachable from INSIDE
-and the LAN address from OUTSIDE, and neither can be the one stored truth. The owner types either
-one; the Router advertises the rest through the app-token-gated `reach` op (`{publicHost,
-lanAddresses}`, from `FEDERATION_PUBLIC_HOST` / `FEDERATION_BIND`); the console persists what it
-learned beside the blob (`RouterReach`, wiped with it) and tries candidates in order - LAN first so a
-phone at home never pays a hairpin timeout, public next, the typed address last, the last one that
-answered first of all (`reachCandidates`, pure and tested).
+hairpins a LAN-to-public connection unreliably or not at all, so the public address is not dependable
+from INSIDE and the LAN address is unreachable from OUTSIDE, and neither can be the one stored truth.
+The owner types either one; the Router advertises the rest through the app-token-gated `reach` op
+(`{publicHost, lanAddresses}`, from `FEDERATION_PUBLIC_HOST` / `FEDERATION_BIND`); the console
+persists what it learned beside the blob (`RouterReach`, wiped with it) and tries candidates in a
+FIXED order - every LAN address, then the public host, then the typed address (`reachCandidates`,
+pure and tested).
+
+- **The stored address is only "which Router do I start at".** After the first answer the Router is
+  the truth, so `reached()` rewrites the blob's `routerUrl` to the advertised public host: a
+  bootstrap left on a raw LAN IP would go stale on a DHCP change, and the LAN address it names
+  arrives fresh in `lanAddresses` on every connect anyway.
+- **No "last address that worked" field.** One existed and was removed: connecting once from away
+  recorded the public host, which then jumped the queue at home and paid a full hairpin timeout on
+  every cold start. It optimised the rare case and pessimised the common one.
+- **A private candidate gets `LAN_CONNECT_TIMEOUT_MS`, not the full connect timeout.** That is the
+  whole reason "LAN first, always" is affordable: away from home the address is unroutable, and this
+  bounds the wrong guess at seconds, once per process, instead of a 15s stall on every launch.
 
 - **NOT on `/health`.** That answer is public by necessity, and a LAN address on it tells any scanner
   this port-forward ends on a home network at a specific private address. Behind the token there is
@@ -320,9 +331,12 @@ answered first of all (`reachCandidates`, pure and tested).
 - The Router logs an unauthenticated 401 and a TLS handshake failure at the outer gate. Both were
   silent once, and a mismatched console looked identical to one that never dialed.
 
-The outage that produced all of this: the phone held the public domain, OkHttp's pool kept ONE
-socket alive from a moment the hairpin happened to pass, and everything rode it until it dropped.
-"Works, then does not, then a reinstall fixes it" is what a single lucky connection looks like.
+The outage that produced all of this: the phone held the public domain, the home router hairpinned
+new connections only sometimes, and OkHttp's pool kept ONE socket alive that had got through - so
+every op rode that socket until it dropped, while each fresh connection (the debug ingest, every
+probe) timed out. "Works, then does not, then a reinstall fixes it" is what an intermittent path plus
+a pooled connection looks like, and it is worse to diagnose than a path that never works at all:
+measuring it once and seeing it succeed proves nothing.
 
 ### Federation and trust
 
