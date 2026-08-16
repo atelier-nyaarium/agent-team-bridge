@@ -69,7 +69,6 @@ export async function detectLanHosts(): Promise<string[]> {
 	return [...new Set([primary, ...all])].filter((a) => a && a !== "0.0.0.0");
 }
 
-/** Every LAN-reachable IPv4 this machine holds, the internet-facing one
 /** Best-effort 0600 on a host-local secret file. POSIX applies the mode; on Windows fs.chmod only
  * toggles the read-only bit, so a caller must not treat this as a hard guarantee there. Never throws. */
 export function secureFile(filePath: string): void {
