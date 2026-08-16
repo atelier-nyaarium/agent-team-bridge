@@ -197,13 +197,12 @@ async function readTransportText(): Promise<string | null> {
  * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
+	// No size advice here any more. The bundle used to carry the whole Domain snapshot and so grew
+	// with every member admitted, crossing what a terminal can paste; it now carries the root and this
+	// gateway's own admission only, which is a FIXED ~1.9 KB. Both "often too big" and "always too big"
+	// would be wrong, and a warning about a limit nothing approaches only teaches people to distrust
+	// the working option. `f` stays for the phone that cannot reach this machine at all.
 	console.log("  If your phone cannot reach this machine, save its bundle to a file here and pick f.");
-	// Not "always too big": the bundle carries the Domain snapshot, so it grows with every member
-	// admitted. A first gateway on a fresh Domain fits; the same paste stops fitting later, which is
-	// why the truncation went unnoticed until a second machine.
-	console.log(
-		`  A bundle often exceeds what a terminal can paste (~${TTY_PASTE_LIMIT} bytes), so f is the reliable one.`,
-	);
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
 		// needs no keypress.
@@ -212,8 +211,8 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 			await Bun.sleep(1000);
 		}
 		console.log("\n    Enter) Check again");
-		console.log("    f) Read the bundle from a file  (use this one - see below)");
 		console.log("    p) Paste the bundle here");
+		console.log("    f) Read the bundle from a file");
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
 		if (choice === "b") return "back";
