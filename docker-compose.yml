@@ -29,6 +29,12 @@ services:
       # the host LAN address it advertises in the admit-gateway QR for bundle delivery.
       - ENROLL_NONCE=${ENROLL_NONCE:-}
       - ENROLL_LAN_HOST=${ENROLL_LAN_HOST:-}
+      # Where this machine first knocks on the Router, asked by Gateway Setup. Overrides the address
+      # the sealed bundle names, which the phone knows as the PUBLIC host - unreachable as a first
+      # connection from a machine on the Router's own LAN behind a router that will not hairpin.
+      # Only the first door: the Router's advertised addresses lead the ring after the first register.
+      - FEDERATION_ROUTER_HOST=${FEDERATION_ROUTER_HOST:-}
+      - FEDERATION_ROUTER_PORT=${FEDERATION_ROUTER_PORT:-}
     networks:
       - switchboard-network
       - switchboard-federation

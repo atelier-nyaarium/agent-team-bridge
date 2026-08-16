@@ -144,6 +144,11 @@ export type TransportResult = z.infer<typeof TransportResultSchema>;
 /** Default roster-proof freshness window (epoch ms), same posture as the registration proof. */
 export const ROSTER_MAX_SKEW_MS = 120_000;
 
+/** Transport-proof freshness window. Its own constant rather than a shared one: this reply carries
+ * the gateway-plane bearer, so its window is a security parameter that must be tunable without
+ * widening the roster's. Same value today, for unrelated reasons. */
+export const TRANSPORT_MAX_SKEW_MS = 120_000;
+
 export function rosterRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
 	return Buffer.from(["ROSTER_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
 }

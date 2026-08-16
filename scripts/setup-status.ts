@@ -26,6 +26,9 @@ export interface SetupStatus {
 	publicHost: string;
 	publicPort: number;
 	routerRunning: boolean;
+	/** The Router this machine dials when it does not run one, as `host:port`. Empty on a machine
+	 * that hosts its own. */
+	remoteRouter: string;
 	certFingerprint: string | null;
 	domain: "none" | "pending" | "rooted";
 	gatewayId: string;
@@ -54,17 +57,24 @@ export async function fetchRegisteredGateways(lan: string): Promise<RegisteredGa
 }
 
 export async function readSetupStatus(): Promise<SetupStatus> {
-	const [lanHosts, lanBound, reach, running, domainId, gatewayId, gatewayEnrolled] = await Promise.all([
-		detectLanHosts(),
-		envGet("FEDERATION_BIND"),
-		readPublicReach(),
-		routerRunning(),
-		envGet("FEDERATION_DOMAIN_ID"),
-		// Sanitized the way the gateway sanitizes its own id at register, or `Sakura` in .env never
-		// matches the `sakura` the Router holds and this machine reads as never registered.
-		envGet("GATEWAY_ID").then((id) => sanitizeGatewayId(id || gatewayHostname())),
-		transportInstalled(),
-	]);
+	const [lanHosts, lanBound, reach, running, domainId, gatewayId, gatewayEnrolled, remoteHost, remotePort] =
+		await Promise.all([
+			detectLanHosts(),
+			envGet("FEDERATION_BIND"),
+			readPublicReach(),
+			routerRunning(),
+			envGet("FEDERATION_DOMAIN_ID"),
+			// Sanitized the way the gateway sanitizes its own id at register, or `Sakura` in .env never
+			// matches the `sakura` the Router holds and this machine reads as never registered.
+			envGet("GATEWAY_ID").then((id) => sanitizeGatewayId(id || gatewayHostname())),
+			transportInstalled(),
+			envGet("FEDERATION_ROUTER_HOST"),
+			envGet("FEDERATION_ROUTER_PORT"),
+		]);
+	// A machine that only runs a gateway has no local Router, and reading its rows as "not running,
+	// Domain none" says nothing is set up when in fact everything is - it just lives elsewhere. So the
+	// Router row names the REMOTE one this gateway was pointed at.
+	const remoteRouter = !running && remoteHost && remoteHost !== "federation-router" ? remoteHost : "";
 
 	let certFingerprint: string | null = null;
 	let gateways: RegisteredGateway[] | null = null;
@@ -90,6 +100,7 @@ export async function readSetupStatus(): Promise<SetupStatus> {
 		publicHost: reach.publicHost,
 		publicPort: reach.publicPort,
 		routerRunning: running,
+		remoteRouter: remoteRouter ? `${remoteRouter}:${Number(remotePort) || ROUTER_PORT}` : "",
 		certFingerprint,
 		domain,
 		gatewayId,
@@ -112,10 +123,14 @@ export function printSetupStatus(s: SetupStatus): void {
 		s.lanHosts.join(", ") || s.lanBound || "none",
 		drifted ? `Router bound to ${s.lanBound}, restart ./start-federation.sh` : "",
 	);
-	row("Public", s.publicHost ? `${s.publicHost}:${s.publicPort}` : "not set");
-	row("Router", s.routerRunning ? "running" : "not running");
-	row("Fingerprint", s.certFingerprint ? shortFp(s.certFingerprint) : "--");
-	row("Domain", s.domain);
+	// Public reach is the local Router's own setting, so it says nothing on a machine that only
+	// dials one; that machine's Router row carries the remote address instead.
+	if (!s.remoteRouter) row("Public", s.publicHost ? `${s.publicHost}:${s.publicPort}` : "not set");
+	row("Router", s.routerRunning ? "running" : s.remoteRouter ? `${s.remoteRouter}   remote` : "not running");
+	if (!s.remoteRouter) {
+		row("Fingerprint", s.certFingerprint ? shortFp(s.certFingerprint) : "--");
+		row("Domain", s.domain);
+	}
 	const registered = s.gateways?.some((g) => g.gatewayId === s.gatewayId) ?? false;
 	row("Gateway", s.gatewayEnrolled ? (registered ? "enrolled" : "enrolled, not registered") : "not enrolled");
 	if (s.routerRunning) {

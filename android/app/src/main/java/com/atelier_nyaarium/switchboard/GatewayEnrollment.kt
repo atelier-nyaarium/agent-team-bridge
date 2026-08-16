@@ -62,16 +62,36 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 				null,
 			)
 		}
-		if (!result.ok || result.saToken == null || result.caPem == null) {
+		// The Router names its own branch. Direct carries what the Gateway dials and pins; the k8s
+		// branch stays readable only so an older Router still enrolls a Gateway, and goes when the
+		// last one is retired. Either way the required fields are checked HERE, so a half-answer
+		// fails with a cause rather than sealing a bundle the Gateway will refuse to install.
+		val direct = result.transport == "direct"
+		val missing = if (direct) {
+			result.routerUrl == null || result.routerCertFp == null || result.bearer == null
+		} else {
+			result.saToken == null || result.caPem == null
+		}
+		if (!result.ok || missing) {
 			return@withContext EnrollDelivery(
 				true,
 				"Added, but couldn't finish Gateway setup: ${result.error?.take(120) ?: "transport unavailable"}",
 				null,
 			)
 		}
-		// The 4-field GatewayTransport; the Gateway fills namespace/service/port defaults when it
-		// installs the bundle, and appToken is omitted (gateway-bridge auth is the SA token + admission).
-		val transport = GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
+		// The Gateway dials `routerUrl` as its BOOTSTRAP and re-learns the Router's other addresses
+		// from its own register reply, so this address only has to work once, from wherever that
+		// machine stands.
+		val transport = if (direct) {
+			GatewayTransport(
+				transport = "direct",
+				routerUrl = result.routerUrl,
+				routerCertFp = result.routerCertFp,
+				bearer = result.bearer,
+			)
+		} else {
+			GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
+		}
 		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && scanned.certFp != null && isPrivateLanHost(scanned.lanHost)) {

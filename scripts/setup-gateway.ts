@@ -5,6 +5,8 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import { $ } from "bun";
 import { ask, confirm, dc, detectLanHost, envGet, envSet, err, note, secureFile } from "./lib/host.js";
+import { ROUTER_PORT } from "./lib/routerStart.js";
+import { routerRunning } from "./lib/routerState.js";
 import {
 	ADMIT_PAYLOAD_URL,
 	ENROLL_URL,
@@ -45,6 +47,35 @@ async function clearTransport(): Promise<void> {
 	if (!(await Bun.file(TRANSPORT_FILE_HOST).exists())) return;
 	const mount = `${process.cwd()}/volumes/gateway-data:/w`;
 	await $`docker run --rm -u 0 -v ${mount} busybox rm -f /w/federation/transport.json`.quiet().nothrow();
+}
+
+/**
+ * Where THIS machine first knocks on the Router. Asked once, before arming.
+ *
+ * The bundle the phone seals also names an address, but the phone knows the Router by its PUBLIC
+ * host, and a machine on the same LAN as the Router would then have to hairpin out and back to make
+ * its very first connection - with nothing learned yet to fall back to. So the operator names a door
+ * that works from where this machine actually stands.
+ *
+ * It is only the first knock, never the trust: the fingerprint and bearer arrive sealed in the
+ * bundle, so a wrong address fails to connect and cannot redirect anything. After the first register
+ * the Router's own advertised addresses lead the ring and this falls to last.
+ *
+ * On the Router's own machine the answer is the compose alias, which is why that is the default there.
+ */
+async function askRouterBootstrap(): Promise<void> {
+	const localRouter = await routerRunning();
+	const currentHost = (await envGet("FEDERATION_ROUTER_HOST")) || (localRouter ? "federation-router" : "");
+	const currentPort = Number(await envGet("FEDERATION_ROUTER_PORT")) || ROUTER_PORT;
+	if (!process.stdin.isTTY) return;
+	const host = ask(`Federation router host [${currentHost || "none"}]:`) || currentHost;
+	if (!host) throw new Error("a Federation Router host is required to enroll this gateway");
+	const portAnswer = ask(`Federation router port [${currentPort}]:`);
+	const port = portAnswer === "" ? currentPort : Number(portAnswer);
+	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`not a port: ${portAnswer}`);
+	await envSet("FEDERATION_ROUTER_HOST", host);
+	await envSet("FEDERATION_ROUTER_PORT", String(port));
+	secureFile(".env");
 }
 
 /** Bring the gateway up with a fresh one-time enrollment nonce and its LAN address, so it opens the
@@ -178,6 +209,7 @@ export async function setupGateway(): Promise<void> {
 		if (!confirm(`Gateway "${id}" already enrolled. Re-enroll?`)) return;
 	}
 
+	await askRouterBootstrap();
 	const nonce = await armGateway();
 	const payload = await readAdmitPayload(nonce);
 

@@ -29,6 +29,10 @@ export interface GatewayBridgeParams {
 	getDomainMeta: (domainId: string) => DomainMeta | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	adminDomainId: () => string | null;
+	/** The Router's own addresses, put on every register reply so a Gateway learns where else it can
+	 * be reached. The Gateway holds a WS bearer, not the console app token, so it cannot ask the
+	 * `reach` op; this reply is the only channel it has. */
+	reach?: () => { publicHost?: string | null; publicPort?: number | null; lanAddresses?: string[] };
 }
 
 export class GatewayBridge implements ToolProvider {
@@ -61,15 +65,25 @@ export class GatewayBridge implements ToolProvider {
 	private readonly getDomainMeta: (domainId: string) => DomainMeta | null;
 	private readonly hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	private readonly adminDomainIdGetter: () => string | null;
+	private readonly reachGetter: GatewayBridgeParams["reach"];
 	private readonly seenRegisterNonces = new Map<string, number>();
 
-	public constructor({ port, authToken, getDomain, getDomainMeta, hasLinkEdge, adminDomainId }: GatewayBridgeParams) {
+	public constructor({
+		port,
+		authToken,
+		getDomain,
+		getDomainMeta,
+		hasLinkEdge,
+		adminDomainId,
+		reach,
+	}: GatewayBridgeParams) {
 		this.port = port;
 		this.authToken = authToken;
 		this.getDomain = getDomain;
 		this.getDomainMeta = getDomainMeta;
 		this.hasLinkEdge = hasLinkEdge;
 		this.adminDomainIdGetter = adminDomainId;
+		this.reachGetter = reach;
 		this.handleCall = this.handleCall.bind(this);
 		this.onConnect = this.onConnect.bind(this);
 		this.onDisconnect = this.onDisconnect.bind(this);
@@ -354,6 +368,10 @@ export class GatewayBridge implements ToolProvider {
 			if (meta.displayName != null) reply.displayName = meta.displayName;
 		}
 		reply.isAdminDomain = domainId === this.adminDomain();
+		// Only when there is something to say: an empty reach would overwrite what a Gateway already
+		// learned with nothing, and a Router configured with neither address has nothing to teach.
+		const reach = this.reachGetter?.();
+		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
 		return reply;
 	}
 

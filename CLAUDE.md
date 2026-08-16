@@ -317,6 +317,31 @@ address (`reachCandidates`, pure and tested).
   absent means the Router's own. One port for every candidate was the shape before this and would
   have dialed the LAN on the forwarded port the moment one was configured.
 
+**The GATEWAY is the second client of this rule, and only the rule is shared.** `src/shared/router-reach.ts`
+owns the ordering and `RouterReach.kt` is its twin, held equal by `tests/fixtures/router-reach/vectors.json`
+(registered in `_signing-vectors-manifest.json`, so both runtimes are forced to read it). Everything
+around it diverges on purpose, and collapsing any of it re-introduces a paid-for bug:
+
+- **The phone fails over PER OP, the Gateway PER RECONNECT.** One holds independent HTTPS requests,
+  the other one long-lived socket. `withReachFailover` stays in Kotlin; the Gateway's ring lives in
+  `evieClient`'s reconnect loop, advancing only when a socket never OPENED - a drop on a working
+  address must not walk off it.
+- **The Gateway cannot call the `reach` op at all.** It holds a WS bearer, not the console app token,
+  so it learns the addresses from its `gateway_register` reply instead. One optional field, so an
+  older Router simply says nothing and the ring keeps what it had.
+- **A candidate gets a bounded time to open** (`CONNECT_TIMEOUT_MS`, or `LAN_CONNECT_TIMEOUT_MS` when
+  private). Without it the socket inherits the OS connect timeout and one stale LAN address wedges
+  the Gateway offline for minutes past the point the public host would have worked.
+- **No bootstrap self-correction on the Gateway**, unlike the phone. The typed address stays LAST in
+  the ring, so it is never stale, only last. A fixed server does not need its door moved.
+- **`FEDERATION_ROUTER_HOST` beats the sealed bundle's address.** The phone knows the Router by its
+  PUBLIC host, and a machine on the Router's own LAN may not reach that on a first connection, with
+  nothing learned yet to fall back to. Gateway Setup asks for a door that works from where that
+  machine stands; trust still arrives only in the bundle, so a wrong answer fails to connect and
+  cannot redirect anything.
+- **`reach.json` is its own file beside `transport.json`**, never merged into it: the transport is
+  DELIVERED and must stay byte-stable, this is LEARNED and rewritten on any register.
+
 - **The stored address is only "which Router do I start at".** After the first answer the Router is
   the truth, so `reached()` rewrites the blob's `routerUrl` to the advertised public host: a
   bootstrap left on a raw LAN IP would go stale on a DHCP change, and the LAN address it names
@@ -1283,6 +1308,11 @@ The one k8s-speaking file left is `scripts/federation-export.ts`, on purpose: it
 migration that reads the cluster's Secret into the Router, and it stays until the owner deletes the
 cluster objects. evie-bot's side (the bridges, the eleven synced copies, the deploy objects) is
 deleted and committed locally there, NOT pushed - the owner pushes evie.
+
+Gateway enrollment is off it: the Router answers `onTransport` with the direct branch (owner-signed,
+fresh, non-replayed, and only for an owner who ROOTS a Domain here, since that reply carries the WS
+bearer), and `GatewayEnrollment.kt` builds a direct bundle from it. The k8s branch stays READABLE on
+both so an older Router still enrolls a Gateway; it goes with the rest below.
 
 What remains is CLIENT-side and needs a console release:
 
