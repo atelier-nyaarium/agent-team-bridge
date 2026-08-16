@@ -437,6 +437,12 @@ export class GatewayBridge implements ToolProvider {
 				ws.send(
 					JSON.stringify({
 						type: "gateway_relay",
+						// REQUIRED by the schema every destination parses this with. Omitted here, so every
+						// gateway-to-gateway relay was rejected at the far end as "expected number, received
+						// undefined" - discovery, cross-Gateway send, board and push fan-out, all of it. It
+						// stayed invisible because a Domain with one Gateway never relays to another, and
+						// `discover()` maps a failed relay to an empty list with no log.
+						v: FEDERATION_PROTOCOL_VERSION,
 						relayId,
 						srcGateway,
 						srcDomain: senderDomainId,

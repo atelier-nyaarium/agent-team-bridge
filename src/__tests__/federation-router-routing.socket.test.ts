@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { callTool, openGateway, type RouterFixture, registerParams, startRouter } from "./helpers/federation-router.js";
+import { GatewayRelayFrameSchema } from "../shared/federation-protocol.js";
+import {
+	callTool,
+	type Frame,
+	nextFrame,
+	openGateway,
+	type RouterFixture,
+	registerParams,
+	startRouter,
+} from "./helpers/federation-router.js";
 
 describe("federation router routing", () => {
 	let fixture: RouterFixture | null = null;
@@ -34,5 +43,31 @@ describe("federation router routing", () => {
 		await new Promise<void>((resolve) => unregistered.addEventListener("open", () => resolve(), { once: true }));
 		const empty = await callTool(unregistered, "list_gateways", {});
 		expect(empty.result).toEqual({ gateways: [] });
+	});
+
+	it("forwards a relay frame the destination's own schema accepts", async () => {
+		// Parsed with the SCHEMA THE DESTINATION USES, not a hand-written shape. The Router omitted the
+		// required `v`, so every gateway-to-gateway relay was rejected at the far end and `discover()`
+		// turned that into an empty list with no log. A Domain with one Gateway never relays, so this
+		// only surfaced when a second machine was enrolled and contributed nothing.
+		fixture = await startRouter();
+		const src = openGateway(fixture.port);
+		sockets.push(src);
+		await new Promise<void>((resolve) => src.addEventListener("open", () => resolve(), { once: true }));
+		await callTool(src, "gateway_register", registerParams(fixture));
+		const dst = openGateway(fixture.port);
+		sockets.push(dst);
+		await new Promise<void>((resolve) => dst.addEventListener("open", () => resolve(), { once: true }));
+		await callTool(dst, "gateway_register", registerParams(fixture, "other", "other-proof"));
+
+		const arriving: Promise<Frame> = nextFrame(dst, (frame) => frame.type === "gateway_relay");
+		void callTool(src, "gateway_relay", {
+			relayId: "r1",
+			srcGateway: "laptop",
+			dstGateway: "other",
+			payload: { sealed: { ephemeralPub: "e", nonce: "n", ciphertext: "c", signature: "s" } },
+		});
+		const parsed = GatewayRelayFrameSchema.safeParse(await arriving);
+		expect(parsed.success, parsed.error?.issues[0]?.message).toBe(true);
 	});
 });

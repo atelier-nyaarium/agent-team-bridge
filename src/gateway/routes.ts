@@ -545,6 +545,11 @@ export function createRoutes({
 		const sameDomain = await Promise.all(
 			roster.map(async (h) => {
 				const r = await relayListTeams(h.gatewayId);
+				// A peer that cannot be reached contributes nothing, which is the only sane merge - but it
+				// must not do so SILENTLY. A protocol break rejected every one of these frames at the far
+				// end and the only symptom anywhere was a machine with no sessions, which reads as an idle
+				// machine. One line here is the difference between that and a diagnosis.
+				if (!r.ok) console.warn(`[discover] "${h.gatewayId}" contributed nothing: ${r.error}`);
 				return r.ok ? r.teams : [];
 			}),
 		);
@@ -562,7 +567,10 @@ export function createRoutes({
 				if (seenPeerGateways.has(key)) return [] as TeamInfo[];
 				seenPeerGateways.add(key);
 				const r = await relayListTeams(peer.friendGatewayId);
-				if (!r.ok) return [] as TeamInfo[];
+				if (!r.ok) {
+					console.warn(`[discover] linked peer "${key}" contributed nothing: ${r.error}`);
+					return [] as TeamInfo[];
+				}
 				// Tag each shared session with the peer's Domain id (authoritative HERE: this
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
