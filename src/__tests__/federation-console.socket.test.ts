@@ -5,6 +5,8 @@ import { signTrustPendingRequest } from "../shared/federation-proofs.js";
 import {
 	CONSOLE_TOKEN,
 	callTool,
+	type Frame,
+	nextFrame,
 	openGateway,
 	type RouterFixture,
 	registerParams,
@@ -64,14 +66,25 @@ describe("federation router console surface", () => {
 		expect((await request("offline")).status).toBe(503);
 	});
 
+	// Waiting for the relay frame, never a fixed sleep. The Router holds the request and THEN pushes
+	// to the gateway, so that frame arriving is proof the op is held and a reply will find it. A
+	// `setTimeout(10)` here instead was the whole flake: under load the reply arrived before the hold
+	// was registered, settleConsoleRelay found no pending entry and dropped it, and the request sat
+	// until the test timed out - failing in CI while passing on an idle laptop.
+	function relayReaches(gateway: WebSocket, opId: string): Promise<Frame> {
+		return nextFrame(gateway, (frame) => frame.type === "console_relay" && frame.opId === opId);
+	}
+
 	it("rejects a duplicate while the first request is held", async () => {
 		fixture = await startRouter();
 		const gateway = openGateway(fixture.port);
 		sockets.push(gateway);
 		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
 		await callTool(gateway, "gateway_register", registerParams(fixture));
+		// Attached BEFORE the request, or the frame can land before anyone is listening for it.
+		const held = relayReaches(gateway, "duplicate");
 		const first = request("duplicate");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await held;
 		const duplicate = await request("duplicate");
 		expect(duplicate.status).toBe(409);
 		gateway.send(
@@ -91,8 +104,9 @@ describe("federation router console surface", () => {
 		sockets.push(gateway);
 		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
 		await callTool(gateway, "gateway_register", registerParams(fixture));
+		const held = relayReaches(gateway, "settle");
 		const pending = request("settle");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await held;
 		gateway.send(
 			JSON.stringify({
 				type: "tool_call",
@@ -110,8 +124,9 @@ describe("federation router console surface", () => {
 		sockets.push(gateway);
 		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
 		await callTool(gateway, "gateway_register", registerParams(fixture));
+		const held = relayReaches(gateway, "shutdown");
 		const pending = request("shutdown");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await held;
 		const stopped = fixture.server.stop();
 		expect((await pending).status).toBe(503);
 		await stopped;
