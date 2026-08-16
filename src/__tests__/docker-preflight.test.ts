@@ -80,6 +80,38 @@ describe("docker preflight", () => {
 		expect(blocker?.steps.join(" ")).toContain("systemd=true");
 	});
 
+	// The one that shipped wrong. `systemctl is-active` prints "inactive" for a unit that does not
+	// exist, so reading existence from it told a Docker Desktop user to start a service their distro
+	// has never had. Absent must never produce the start command.
+	it("does not offer a start command for a docker service this machine does not have", () => {
+		const blocker = diagnoseDocker(
+			facts({ daemonReachable: false, systemSocket: false, systemdUnit: "absent", wsl: true }),
+		);
+		expect(blocker?.steps.join(" ")).not.toContain("systemctl enable");
+		expect(blocker?.steps.join(" ")).toContain("WSL integration");
+	});
+
+	// Same absence off WSL is a different story: no Docker Desktop to integrate, the daemon package
+	// is simply not installed.
+	it("calls an absent unit a missing daemon package when this is not WSL", () => {
+		const blocker = diagnoseDocker(facts({ daemonReachable: false, systemSocket: false, systemdUnit: "absent" }));
+		expect(blocker?.steps.join(" ")).not.toContain("systemctl enable");
+		expect(blocker?.title).toContain("no docker service");
+	});
+
+	// A present-but-stopped unit still gets the start command; that distinction is the whole point.
+	it("still offers the start command when the unit genuinely exists on WSL", () => {
+		const blocker = diagnoseDocker(
+			facts({ daemonReachable: false, systemSocket: false, systemdUnit: "inactive", wsl: true }),
+		);
+		expect(blocker?.steps[0]).toBe("sudo systemctl enable --now docker");
+	});
+
+	it("unmasks before trying to start a masked unit", () => {
+		const blocker = diagnoseDocker(facts({ daemonReachable: false, systemdUnit: "masked" }));
+		expect(blocker?.steps[0]).toContain("unmask");
+	});
+
 	it("tells a WSL machine with no CLI about both install routes", () => {
 		const blocker = diagnoseDocker(facts({ cliPresent: false, daemonReachable: false, wsl: true }));
 		expect(blocker?.steps.join(" ")).toContain("WSL integration");
