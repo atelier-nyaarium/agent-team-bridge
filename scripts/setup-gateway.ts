@@ -5,7 +5,20 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import { $ } from "bun";
 import { requireDocker } from "./lib/docker-probe.js";
-import { ask, confirm, dc, detectLanHost, ensureNetwork, envGet, envSet, err, note, secureFile } from "./lib/host.js";
+import {
+	ask,
+	confirm,
+	dc,
+	detectLanHost,
+	ensureNetwork,
+	envGet,
+	envSet,
+	err,
+	jparse,
+	note,
+	secureFile,
+	TTY_PASTE_LIMIT,
+} from "./lib/host.js";
 import { FEDERATION_NETWORK, ROUTER_PORT } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
 import {
@@ -180,6 +193,10 @@ async function readTransportText(): Promise<string | null> {
  * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
 async function waitForInstall(): Promise<"installed" | "back"> {
 	console.log("\nWaiting for phone to deliver the bundle");
+	console.log("  If your phone cannot reach this machine, save its bundle to a file here and pick f.");
+	console.log(
+		`  A bundle is larger than a terminal can paste (~${TTY_PASTE_LIMIT} bytes), so f is the reliable route.`,
+	);
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
 		// needs no keypress.
@@ -188,12 +205,34 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 			await Bun.sleep(1000);
 		}
 		console.log("\n    Enter) Check again");
-		console.log("    p) Paste the bundle here instead");
+		console.log("    f) Read the bundle from a file  (use this one - see below)");
+		console.log("    p) Paste the bundle here");
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
 		if (choice === "b") return "back";
+		if (choice === "f") {
+			const path = ask("Path to the bundle file:");
+			if (!path) continue;
+			const text = await Bun.file(path.replace(/^~/, process.env.HOME ?? "~"))
+				.text()
+				.catch((e) => {
+					err(`could not read ${path}: ${e instanceof Error ? e.message : String(e)}`);
+					return "";
+				});
+			if (text.trim() && (await postPastedBundle(text.trim()))) return "installed";
+		}
 		if (choice === "p") {
 			const bundle = ask("Paste the bundle:");
+			// A terminal silently drops a paste past its buffer, so a near-limit blob that will not
+			// parse was almost certainly cut rather than malformed. Say that instead of forwarding a
+			// half document and letting the gateway answer "Invalid JSON" about our own truncation.
+			if (bundle.length >= TTY_PASTE_LIMIT - 1 && jparse(bundle) === null) {
+				err(
+					`the paste arrived as ${bundle.length} bytes and does not parse - your terminal cut it at its ~${TTY_PASTE_LIMIT} byte limit.\n` +
+						`  Save the bundle to a file instead (any editor, e.g. VS Code or nano), then choose f.`,
+				);
+				continue;
+			}
 			if (bundle && (await postPastedBundle(bundle))) return "installed";
 		}
 	}
