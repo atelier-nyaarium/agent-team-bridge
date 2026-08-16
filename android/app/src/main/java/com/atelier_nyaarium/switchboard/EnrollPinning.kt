@@ -37,7 +37,7 @@ internal fun checkPinnedLeaf(chain: Array<X509Certificate>, expectedFpHex: Strin
  * An OkHttp client that trusts EXACTLY the gateway's enroll cert via [checkPinnedLeaf]. Hostname
  * verification stays the OkHttp DEFAULT - the cert carries the LAN IP in subjectAltName, so a
  * redirected host still fails the standard check (no permissive verifier). Dedicated to the single
- * enroll POST; never shared with the evie client.
+ * enroll POST; never shared with the Router client.
  */
 internal fun buildLeafFingerprintPinnedClient(certFpHex: String): OkHttpClient {
 	val tm: X509TrustManager =

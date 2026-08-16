@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 ////////////////////////////////
-//  Evie bridge wire protocol
+//  Router wire protocol
 //
-//  Frames exchanged over the gateway<->evie-bot WebSocket. Imports nothing but
+//  Frames exchanged over the gateway<->Router WebSocket. Imports nothing but
 //  zod so the verbatim copy needs no import surgery; sibling shared modules
 //  import FROM it, never into it.
 //
@@ -45,14 +45,14 @@ export const MAX_BLOB_BYTES = 500_000_000;
 
 /**
  * Ceiling a single sealed relay frame may not cross, asserted in tests against the WebSocket
- * limits set explicitly on both ends of the gateway<->evie socket. An oversized frame does not
+ * limits set explicitly on both ends of the gateway<->Router socket. An oversized frame does not
  * merely fail there: it closes the socket and takes every team's traffic with it.
  */
 export const MAX_RELAY_FRAME_BYTES = 8_000_000;
 
-/** Frames the gateway RECEIVES from evie-bot. Unknown `type` values fail the
+/** Frames the gateway RECEIVES from the Router. Unknown `type` values fail the
  * union; the consumer logs and drops them (observability, not crash). */
-export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
+export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("tool_result"),
 		callId: z.string(),
@@ -60,7 +60,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	}),
 	z.object({
 		type: z.literal("tool_error"),
-		// Nullable on purpose: evie's BridgeTransport sends callId: null for
+		// Nullable on purpose: the Router sends callId: null for
 		// invalid JSON and malformed envelopes that never carried an id.
 		callId: z.string().nullable(),
 		error: z.string().optional(),
@@ -70,7 +70,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 		type: z.literal("console_relay"),
 	}),
 	// Loose: a cross-Gateway frame. The gateway-relay pump runs the full federation
-	// parse (federation-protocol.ts); evie routed by destination Gateway, never reading payload.
+	// parse (federation-protocol.ts); the Router routes by destination Gateway, never reading payload.
 	z.looseObject({
 		type: z.literal("gateway_relay"),
 	}),
@@ -100,7 +100,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 ]);
 
 /** The one frame the gateway SENDS (besides console_relay_reply, which travels
- * AS a tool_call and is intercepted by tool name on the evie side). */
+ * AS a tool_call and is intercepted by tool name on the Router side). */
 export const ToolCallFrameSchema = z.object({
 	type: z.literal("tool_call"),
 	callId: z.string().min(1),
@@ -109,28 +109,28 @@ export const ToolCallFrameSchema = z.object({
 });
 
 ////////////////////////////////
-//  Federation (multi-Gateway routing through evie)
+//  Federation (multi-Gateway routing through the Router)
 //
-//  evie is the content-blind Router. A Gateway REGISTERS its gateway id on
-//  connect, then reaches another Gateway by calling evie's `gateway_relay` tool; evie
+//  The Router is content-blind. A Gateway REGISTERS its gateway id on
+//  connect, then reaches another Gateway by calling the Router's `gateway_relay` tool; it
 //  routes the frame to the destination Gateway's socket by `dstGateway` alone and
 //  correlates the eventual `gateway_relay_reply` by `relayId`. The `payload` is
-//  opaque to evie (a sealed blob only the destination Gateway can open), so these
+//  opaque to the Router (a sealed blob only the destination Gateway can open), so these
 //  schemas validate only the routing envelope.
 
-/** Bumped when a federation wire shape changes. evie rejects a Gateway registering
+/** Bumped when a federation wire shape changes. The Router rejects a Gateway registering
  * below its own floor with a typed close; the Gateway then degrades to single-Gateway. */
 export const FEDERATION_PROTOCOL_VERSION = 1;
 
 /** `gateway_register` tool-call params: a Gateway announces its id + wire version,
  * plus the optional admitted-identity proof (signPub/boxPub + an owner-signed
  * admission + a fresh possession proof). The auth fields stay opaque strings here;
- * evie parses `admission` and checks it with verifyRegistration. Optional at this
+ * the Router parses `admission` and checks it with verifyRegistration. Optional at this
  * parse layer (parse-then-verify): verifyRegistration is the gate that rejects an
  * unadmitted Gateway, with no bearer fallback. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
-	// This Gateway's Domain id (multi-tenant evie). Optional + min(1) on the wire so a
+	// This Gateway's Domain id (multi-tenant Router). Optional + min(1) on the wire so a
 	// legacy/malformed frame still parses, but the Router's sanitizeDomainId rejects an
 	// absent or empty id at register time - there is no implicit default Domain.
 	domainId: z.string().min(1).max(64).optional(),
@@ -142,12 +142,12 @@ export const GatewayRegisterParamsSchema = z.object({
 	// Ed25519 signature over registerSigningBytes(gatewayId, proofAt, proofNonce) (base64).
 	proof: z.string().min(1).optional(),
 	proofAt: z.number().int().nonnegative().optional(),
-	// Fresh per-registration random; evie rejects a seen nonce within the freshness
+	// Fresh per-registration random; the Router rejects a seen nonce within the freshness
 	// window so a captured proof cannot be replayed even inside the skew.
 	proofNonce: z.string().min(1).optional(),
 });
 
-/** `gateway_relay` tool-call params: the routing envelope evie routes on. */
+/** `gateway_relay` tool-call params: the routing envelope the Router routes on. */
 export const GatewayRelayRouteSchema = z.object({
 	relayId: z.string().min(1).max(128),
 	srcGateway: z.string().min(1).max(64),
@@ -157,7 +157,7 @@ export const GatewayRelayRouteSchema = z.object({
 	// full (domainId, gatewayId) pair, since a gateway id is not unique across Domains.
 	// Optional + min(1) on the wire, but the Router always stamps a real src Domain.
 	srcDomain: z.string().min(1).max(64).optional(),
-	// Opaque to evie. The destination gateway parses/unseals it.
+	// Opaque to the Router. The destination gateway parses/unseals it.
 	payload: z.unknown(),
 });
 
@@ -243,7 +243,7 @@ export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
 ////////////////////////////////
 //  Types
 
-export type EvieInboundFrame = z.infer<typeof EvieInboundFrameSchema>;
+export type RouterInboundFrame = z.infer<typeof RouterInboundFrameSchema>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
 export type GatewayRegisterParams = z.infer<typeof GatewayRegisterParamsSchema>;
 export type GatewayRelayRoute = z.infer<typeof GatewayRelayRouteSchema>;

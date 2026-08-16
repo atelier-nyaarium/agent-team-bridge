@@ -11,10 +11,10 @@ import { SignedXDomainLinkEdgeSchema, SignedXDomainLinkRevocationSchema } from "
 ////////////////////////////////
 //  Schemas
 
-/** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
- * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
- * the single-use nonce evie minted, and the submit ops carry an owner-signed artifact
- * evie verifies against the rooted owner key. The console sends them over the same
+/** The owner device's enrollment requests to the Router (NOT relayed to a Gateway - the
+ * Router is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
+ * the single-use nonce the Router minted, and the submit ops carry an owner-signed artifact
+ * the Router verifies against the rooted owner key. The console sends them over the same
  * app-token-gated bridge as its gateway ops. */
 export const EnrollOpSchema = z
 	.discriminatedUnion("kind", [
@@ -31,18 +31,18 @@ export const EnrollOpSchema = z
 		// Friend cross-Domain onboarding: the admin stages (provision_tenant) or drops
 		// (remove_tenant) a pending tenant, and the rooted owner renames it (set_display_name).
 		// first_root is NOT on this surface: a pending Domain has no gateway, so the friend's app
-		// POSTs the SignedFirstRoot DIRECTLY to evie's console-bridge firstRoot intake (no
+		// POSTs the SignedFirstRoot DIRECTLY to the Router's console-bridge firstRoot intake (no
 		// admission exists yet pre-root; the one-time invite nonce is its authorization).
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
 		z.object({ kind: z.literal("set_display_name"), rename: SignedSetDisplayNameSchema }),
-		// A rooted owner purges their OWN Domain (app-only users; admins use setup.sh). evie
+		// A rooted owner purges their OWN Domain (app-only users; admins use setup.sh). The Router
 		// verifies the signer is the rooted owner, then drops the whole slice.
 		z.object({ kind: z.literal("delete_domain"), deletion: SignedDeleteDomainSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
-/** evie's reply to an enroll op. */
+/** The Router's reply to an enroll op. */
 export const EnrollResultSchema = z
 	.object({ ok: z.boolean(), error: z.string().optional() })
 	.meta({ id: "EnrollResult" });

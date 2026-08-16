@@ -106,7 +106,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	it("never returns a SAS or any computed value beyond the relayed frames", () => {
 		const c = new EnrollHandshakeCoordinator();
 		const r = c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "c" });
-		// Only ok/error/peerCommitment/peerReveal exist; evie computes nothing.
+		// Only ok/error/peerCommitment/peerReveal exist; the Router computes nothing.
 		expect(Object.keys(r).sort()).toEqual(["ok", "peerCommitment"].sort());
 		expect("sas" in r).toBe(false);
 	});

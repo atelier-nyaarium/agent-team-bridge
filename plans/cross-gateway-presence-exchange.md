@@ -22,17 +22,17 @@ prose) found it was never implemented at all - not partially, not stubbed, never
   `response_push`, `console_push`. No `presence_push` kind exists at the wire level at all, and
   `gatewayRelay.ts`'s dispatch switch matches exactly those same 5 cases.
 - No 10s (or any) anti-entropy timer exists anywhere in `src/gateway/index.ts` or
-  `src/gateway/evie/evieClient.ts` - only the unrelated tripwire (60s), persist tick (3s),
-  presence-watch push (2s, local-daemon-only, never touches evie), heartbeat, vibe-check, and
+  `src/gateway/router/routerClient.ts` - only the unrelated tripwire (60s), persist tick (3s),
+  presence-watch push (2s, local-daemon-only, never touches the router), heartbeat, vibe-check, and
   share-sweep timers.
 - `src/__tests__/federation.test.ts` (2200+ lines, extensive `send`/`wake`/`list_teams`/
   `response_push`/`console_push`/cross-Domain-sharing coverage) has zero tests resembling the
   plan's mandated two-gateway/three-gateway harness for outbound coalescing, epoch authority,
-  roster-vanish, cost-floor re-arm, or evie-reconnect revalidation.
+  roster-vanish, cost-floor re-arm, or router-reconnect revalidation.
 - Commit `e07dbd5` ("Replace pull-based presence with a versioned, hash-gated presence plane")
   added the entire 843-line plan document (all three audit laps already baked in) in the SAME
   commit as the Phase 1 code - but its diff never touches `gatewayRelay.ts`,
-  `federation-protocol.ts`, or `evieClient.ts`. No commit since (`b11cdce`, `f53d082`, `a04dc8c`,
+  `federation-protocol.ts`, or `routerClient.ts`. No commit since (`b11cdce`, `f53d082`, `a04dc8c`,
   `45660cc`) touches them either. Commit `f53d082`'s own message admits it directly: "the
   presence plane only ever covered this Gateway's own local sessions."
 - Nowhere in the plan's own process-tracking (the flagged-deviations sections, the Phase 2 bullet
@@ -87,8 +87,8 @@ in the first place.
 Per-source sub-planes keyed `(sourceGateway, bootEpoch, version)`.
 
 - **Two separate timers, one transport:** the anti-entropy exchange is a gateway-lifecycle timer,
-  owned by and running for as long as the gateway holds its evie connection - independent of
-  whether any console is attached, same lifecycle class as the existing evie heartbeat. Cadence:
+  owned by and running for as long as the gateway holds its router connection - independent of
+  whether any console is attached, same lifecycle class as the existing router heartbeat. Cadence:
   10s (tight enough that "lost push heals within one tick" is a real sub-15s bound, loose enough
   that a single-gateway Domain's cost-floor short-circuit still means near-zero steady-state cost
   for the common case). Intent relay to ramp peer daemons is a separate, genuinely intent-gated
@@ -123,9 +123,9 @@ Per-source sub-planes keyed `(sourceGateway, bootEpoch, version)`.
   unconditionally; only the expensive per-peer exchange calls short-circuit to zero when the
   roster comes back empty. A single-gateway Domain's steady-state cost is one cheap roster lookup
   every 10s and nothing else.
-- **Evie-reconnect immediate revalidation:** on evie WS reconnect, immediately fire one exchange
+- **Router-reconnect immediate revalidation:** on router WS reconnect, immediately fire one exchange
   attempt against every currently-tracked peer and mark each peer's freshness provisional until
-  that round completes, bounding "a peer that died during my own evie outage" detection to
+  that round completes, bounding "a peer that died during my own router outage" detection to
   roughly the outage duration plus one round trip.
 - **Console failover:** a console presents its known versions to whichever gateway it currently
   polls; a newly-adopted route gateway applies the poll-wait hub's single compare rule (any

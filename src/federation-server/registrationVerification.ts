@@ -4,7 +4,7 @@ import {
 	type SignedRevocation,
 	verifyRegistration,
 } from "../shared/admission.js";
-import type { GatewayRegisterParams } from "../shared/evie-protocol.js";
+import type { GatewayRegisterParams } from "../shared/router-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types

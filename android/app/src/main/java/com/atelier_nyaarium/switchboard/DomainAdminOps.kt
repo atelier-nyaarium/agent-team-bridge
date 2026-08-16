@@ -11,8 +11,8 @@ import org.json.JSONObject
  * Domain, and stage/regenerate/remove the hosted-tenant invites (the "Networks you host" surface). */
 internal class DomainAdminOps(private val repo: ChatRepository) {
 	/** Rename this owner's own display name: owner-sign a SET_ADMIN_NAME op over the admin Domain and
-	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
-	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
+	 * submit it Router-direct. On success cache the new name + reflect it immediately (the Router pushes
+	 * a domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
@@ -28,9 +28,9 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	}
 
 	/** Revoke and delete this owner's OWN Domain (the app-only path; admins purge via setup.sh).
-	 * Owner-sign the deletion FIRST, while the key still exists, then POST it evie-direct and await the
+	 * Owner-sign the deletion FIRST, while the key still exists, then POST it Router-direct and await the
 	 * result under a 30s ceiling. A confirmed purge AND an unconfirmed timeout/unreachable both wipe
-	 * local state so the device is never left half-deleted; only an explicit evie rejection keeps state
+	 * local state so the device is never left half-deleted; only an explicit Router rejection keeps state
 	 * so the owner key survives a retry. The biometric gate (a destructive owner-key action) is at the
 	 * call site, mirroring revoke/admit. */
 	suspend fun deleteDomain(): DeleteDomainOutcome = withContext(Dispatchers.IO) {
@@ -74,8 +74,8 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	}
 
 	/** Stage a new guest tenant: mint an opaque domainId, owner-sign a provision_tenant op, submit
-	 * it evie-direct, and persist the row with the one-time invite nonce evie returns (the QR is
-	 * built from it). Returns the new row, or a failure carrying evie's reason. */
+	 * it Router-direct, and persist the row with the one-time invite nonce the Router returns (the QR
+	 * is built from it). Returns the new row, or a failure carrying the Router's reason. */
 	suspend fun provisionTenant(displayName: String): Result<HostedTenant> = withContext(Dispatchers.IO) {
 		val label = displayName.trim()
 		if (label.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
@@ -92,7 +92,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	}
 
 	/** Regenerate a pending tenant's one-time invite: re-submit provision_tenant for the SAME
-	 * domainId, which mints a fresh nonce at evie (invalidating the prior one) without a remove +
+	 * domainId, which mints a fresh nonce at the Router (invalidating the prior one) without a remove +
 	 * re-add. Returns the refreshed row. */
 	suspend fun regenerateInvite(domainId: String, displayName: String): Result<HostedTenant> =
 		withContext(Dispatchers.IO) {
@@ -113,12 +113,12 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 
 	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
 	 * admin was itself provisioned with (this owner's own blob) plus the pending tenant's
-	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the admin and
+	 * {domainId, nonce}. The friend reaches the SAME shared console-bridge as the admin and
 	 * first-roots over the console-bridge /relay path; the admin's own console-bridge SA +
 	 * CONSOLE_BRIDGE_TOKEN is what authorizes the friend's first_root there. The route Gateway's
 	 * bootstrap-transport would instead hand over the gateway-bridge SA + BRIDGE_TOKEN, which the
-	 * console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port so the
-	 * friend defaults to evie-console-bridge:20004. The JSON is what the paste / file-import path
+	 * console-bridge service-proxy RBAC-403s and 401s on the app token. The blob omits service/port so
+	 * the friend defaults to evie-console-bridge:20004. The JSON is what the paste / file-import path
 	 * also accepts. */
 	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
 		runCatching {
@@ -126,7 +126,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 			val prov = Provisioning.parse(blob)
 			// Mint (once per tenant) the enroll-handshake secrets that seed the in-person compare and
 			// embed them in the QR alongside this admin's owner keys + Domain. The pin rides the QR OUT
-			// OF BAND (never sent to evie); the handshakeId keys the broker window the admin's leg polls.
+			// OF BAND (never sent to the Router); the handshakeId keys the broker window the admin's leg polls.
 			val invite = repo.enrollInvites.computeIfAbsent(tenant.domainId) {
 				EnrollInvite(handshakeId = repo.federation.freshHandshakeId(), pin = repo.federation.freshEnrollPin())
 			}
@@ -153,8 +153,8 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		}
 	}
 
-	/** Drop a hosted tenant: owner-sign a remove_tenant op, submit it evie-direct, and forget the
-	 * local row. evie deletes the Domain slice (and evicts a live guest gateway). */
+	/** Drop a hosted tenant: owner-sign a remove_tenant op, submit it Router-direct, and forget the
+	 * local row. The Router deletes the Domain slice (and evicts a live guest gateway). */
 	suspend fun removeHostedTenant(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			val signed = repo.federation.signRemoveTenant(domainId, System.currentTimeMillis())

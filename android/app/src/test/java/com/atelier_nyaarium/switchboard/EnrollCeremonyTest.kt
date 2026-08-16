@@ -72,7 +72,7 @@ class EnrollCeremonyTest {
 	fun verifyPeerRejectsTampering() {
 		val salt = "salt-1"
 		val commitment = SasCrypto.enrollCommitment(enrollee, EnrollCeremony.ENROLLEE, salt)
-		// A swapped key in the reveal (evie substitution) no longer opens the commitment.
+		// A swapped key in the reveal (a Router substitution) no longer opens the commitment.
 		val swappedKey = enrollee.copy(ownerSignPub = "attackerSign")
 		assertFalse(EnrollCeremony.verifyPeer(commitment, swappedKey, EnrollCeremony.ENROLLEE, salt))
 		// A wrong salt fails too.

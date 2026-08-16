@@ -11,7 +11,7 @@ import { signAdmission } from "../shared/admission.js";
 import type { ConsoleOp, ConsoleOpEnvelope, ConsoleRelayReply, ConsoleReplyBody } from "../shared/console-protocol.js";
 import { generateIdentity, type Identity, type SealedEnvelope, seal, unseal } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
+import { MAX_RELAY_FRAME_BYTES } from "../shared/router-protocol.js";
 
 ////////////////////////////////
 //  Harness
@@ -120,7 +120,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 	});
 
 	it("refuses to put an oversized reply on the shared socket, failing the op instead", async () => {
-		// An oversized frame does not fail politely: evie's WebSocket closes the gateway connection
+		// An oversized frame does not fail politely: the Router's WebSocket closes the gateway connection
 		// and every team's traffic goes with it. So the budget has to be enforced where a frame
 		// becomes bytes, not merely agreed upon by constants. Without the check this test does not
 		// fail loudly, it takes down the socket in production and looks fine here.
@@ -237,7 +237,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 			sealer: createConsoleSealer(gateway, admittedAllowlist(device)),
 			handleFrame: handler.handleFrame,
 			sendReply: async () => {
-				throw new Error("evie gone");
+				throw new Error("router gone");
 			},
 		});
 

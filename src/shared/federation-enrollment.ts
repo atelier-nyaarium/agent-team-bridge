@@ -8,11 +8,11 @@ import { fingerprint } from "./crypto.js";
 //  One Android scanner decodes a TYPE-tagged payload and routes by type. Three
 //  flows, each anti-MITM via a short-authentication-string (SAS): the same key
 //  fingerprint is shown on the scanner AND out-of-band (the gateway's console /
-//  the evie admin terminal), and the human confirms they match - a relayed or
+//  the Router admin terminal), and the human confirms they match - a relayed or
 //  screenshotted QR cannot forge the out-of-band side.
 //
-//  - enroll-owner: evie admin command -> owner console. Roots the owner device at
-//    the Domain; the owner confirms evie's signing fingerprint from the terminal.
+//  - enroll-owner: Router admin command -> owner console. Roots the owner device at
+//    the Domain; the owner confirms the Router's signing fingerprint from the terminal.
 //  - admit-gateway: a gateway -> owner console. The owner confirms the Gateway
 //    fingerprint on the gateway console, then signs an admission for it.
 //  - authorize-console: owner console -> a second owner device.
@@ -21,8 +21,8 @@ import { fingerprint } from "./crypto.js";
 //  Schemas
 
 const ServiceBundleSchema = z.object({
-	// Reach-evie basics + service keys the wizard delivers (never hand-pasted).
-	evieAddr: z.string().optional(),
+	// Router-reach basics + service keys the wizard delivers (never hand-pasted).
+	routerAddr: z.string().optional(),
 	transportToken: z.string().optional(),
 });
 
@@ -31,10 +31,10 @@ export const EnrollmentPayloadSchema = z
 		z.object({
 			type: z.literal("enroll-owner"),
 			domainId: z.string().min(1),
-			evieAddr: z.string().min(1),
-			evieSignPub: z.string().min(1),
-			evieBoxPub: z.string().min(1),
-			// Single-use, tight-TTL nonce redeemed once at evie (anti-replay R1).
+			routerAddr: z.string().min(1),
+			routerSignPub: z.string().min(1),
+			routerBoxPub: z.string().min(1),
+			// Single-use, tight-TTL nonce redeemed once at the Router (anti-replay R1).
 			nonce: z.string().min(1),
 			bundle: ServiceBundleSchema.optional(),
 		}),
@@ -64,7 +64,7 @@ export const EnrollmentPayloadSchema = z
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
 			// The device-approval rendezvous (the "Add a device" self-enroll). The held device arms a
-			// one-time window at evie and prints these beside the owner keys: `reach` is evie's public
+			// one-time window at the Router and prints these beside the owner keys: `reach` is the Router's public
 			// nonce-gated ingress the new device POSTs its fresh console keys to, under `approvalId`,
 			// gated by `nonce`. All public - never an SA token (the transport reaches the new device sealed).
 			approvalId: z.string().min(1),
@@ -87,7 +87,7 @@ export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "author
 export function payloadSas(payload: EnrollmentPayload): string {
 	switch (payload.type) {
 		case "enroll-owner":
-			return fingerprint(payload.evieSignPub);
+			return fingerprint(payload.routerSignPub);
 		case "admit-gateway":
 		case "authorize-console":
 			return fingerprint(payload.signPub);

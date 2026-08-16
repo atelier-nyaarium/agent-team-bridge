@@ -5,14 +5,14 @@ import { sign, verify } from "./crypto.js";
 //  Domain admission + allowlist (the trust model)
 //
 //  Membership is an allowlist of owner-signed admissions: the owner device attests a
-//  subject's keys (a Gateway or console) into the Domain. evie and each Gateway hold
-//  the allowlist, so a revocation bites even while evie is unreachable. The owner is
+//  subject's keys (a Gateway or console) into the Domain. The Router and each Gateway hold
+//  the allowlist, so a revocation bites even while the Router is unreachable. The owner is
 //  the single root of trust; an admission or revocation is honored only if it verifies
 //  under the expected owner key.
 //
 //  The signing bytes are a versioned, newline-joined, fixed-order encoding. Every field
 //  is base64, a slug, or a decimal int, so none can contain a newline and the encoding
-//  reproduces byte-for-byte on switchboard, evie, and Android. Do NOT sign raw JSON: key
+//  reproduces byte-for-byte on switchboard and Android. Do NOT sign raw JSON: key
 //  order is not canonical.
 
 ////////////////////////////////
@@ -64,8 +64,8 @@ export const SignedRevocationSchema = z
 	})
 	.meta({ id: "SignedRevocation" });
 
-/** The mirrored Domain state evie pushes to each Gateway (owner root plus the
- * owner-signed allowlist) so a revocation bites even while evie is unreachable.
+/** The mirrored Domain state the Router pushes to each Gateway (owner root plus the
+ * owner-signed allowlist) so a revocation bites even while the Router is unreachable.
  * Present only once the Domain is rooted. */
 export const DomainSnapshotSchema = z
 	.object({
@@ -187,7 +187,7 @@ export function resolveAdmitted(
 //  observer could replay one to impersonate the admitted Gateway. The registering
 //  Gateway proves it holds the admitted signing key by signing a self-timestamped
 //  challenge carrying a fresh random nonce. The verifier checks the signature against
-//  the admission's signPub, that the timestamp is fresh, and (statefully, on evie) that
+//  the admission's signPub, that the timestamp is fresh, and (statefully, on the Router) that
 //  the nonce has not been seen within the window, so a captured proof cannot be replayed
 //  even inside the skew window. The bytes use the same versioned newline encoding as
 //  admissions.
@@ -236,7 +236,7 @@ export interface RegistrationTrust {
 /** Verify an admitted Gateway's registration end to end: the admission is owner-signed
  * and not revoked, binds this Gateway id, both keys, and a `gateway` kind, and the proof
  * shows the connection holds the admitted signing key freshly. Returns null on success,
- * or a short rejection reason. The caller (evie) also rejects a replayed `nonce` within
+ * or a short rejection reason. The caller (the Router) also rejects a replayed `nonce` within
  * the window; this pure check cannot dedup statefully. */
 export function verifyRegistration(claim: RegistrationClaim, trust: RegistrationTrust): string | null {
 	const admitted = resolveAdmitted([claim.admission], trust.revocations ?? [], trust.ownerSignPub, claim.signPub);

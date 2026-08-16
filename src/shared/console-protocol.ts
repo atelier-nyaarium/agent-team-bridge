@@ -37,7 +37,7 @@ import type {
 ////////////////////////////////
 //  Console bridge protocol
 //
-//  The Android app reaches the gateway through evie, which relays opaque
+//  The Android app reaches the gateway through the Router, which relays opaque
 //  envelopes by (device, opId) and understands none of these shapes. All
 //  console/chat semantics live in the gateway.
 //
@@ -87,12 +87,12 @@ export type CrossDomainListPeersOp = Extract<ConsoleOp, { kind: "cross_domain_li
 export type CrossDomainUnlinkOp = Extract<ConsoleOp, { kind: "cross_domain_unlink" }>;
 
 ////////////////////////////////
-//  Relay frames (carried over the gateway<->evie WebSocket)
+//  Relay frames (carried over the gateway<->Router WebSocket)
 //
 //  The wire frame is sealed: only opId + signerSignPub are cleartext, the op rides
 //  inside `sealed` as a ConsoleOpEnvelope. The gateway opens the seal into an
 //  OpenedConsoleFrame (the flattened op + its verified signer) before dispatch, and
-//  seals a ConsoleReplyBody back. evie sees neither.
+//  seals a ConsoleReplyBody back. The Router sees neither.
 
 export type SealedEnvelope = z.infer<typeof SealedEnvelopeSchema>;
 export type ConsoleRelayFrame = z.infer<typeof ConsoleRelayFrameSchema>;

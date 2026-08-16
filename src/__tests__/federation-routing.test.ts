@@ -4,12 +4,12 @@ import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
-import { channelWs, fakeEvie, makeCtx, registryWith, sealerA, sealerB, storeWith } from "./helpers/federation.js";
+import { channelWs, fakeRouter, makeCtx, registryWith, sealerA, sealerB, storeWith } from "./helpers/federation.js";
 
 describe("federation routing (E2E sealed)", () => {
 	it("ORIGIN: seals a cross-Gateway send with the return-route and keeps a local anchor", async () => {
 		let seen: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: (op) => {
@@ -17,7 +17,7 @@ describe("federation routing (E2E sealed)", () => {
 				return { session_id: "conv.conv-1.alice.hostb.api.dev", status: "running" };
 			},
 		});
-		const ctx = makeCtx("hosta", { evieClient: evie.client, sealer: sealerA });
+		const ctx = makeCtx("hosta", { routerClient: router.client, sealer: sealerA });
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
@@ -36,8 +36,8 @@ describe("federation routing (E2E sealed)", () => {
 			from: "alice.hosta.recipe-app.dev",
 			returnRoute: { srcGateway: "hosta", srcSession: "conv.conv-1.alice.hostb.api.dev" },
 		});
-		// evie only ever saw an opaque sealed envelope, never the op.
-		const relay = evie.calls.find((c) => c.action === "gateway_relay");
+		// The Router only ever saw an opaque sealed envelope, never the op.
+		const relay = router.calls.find((c) => c.action === "gateway_relay");
 		expect((relay?.params.payload as { sealed: SealedEnvelope }).sealed.ciphertext).toBeTruthy();
 		expect(JSON.stringify(relay?.params.payload)).not.toContain("recipe-app");
 		expect(ctx.store.has("conv.conv-1.alice.hostb.api.dev")).toBe(true);
@@ -45,7 +45,7 @@ describe("federation routing (E2E sealed)", () => {
 
 	it("ORIGIN: a console cross-Gateway send builds an owner-id sender address, never throwing on a non-slug Device Name", async () => {
 		let seen: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: (op) => {
@@ -53,7 +53,7 @@ describe("federation routing (E2E sealed)", () => {
 				return { session_id: "conv.owner-1.alice.hostb.api.dev", status: "running" };
 			},
 		});
-		const ctx = makeCtx("hosta", { evieClient: evie.client, sealer: sealerA });
+		const ctx = makeCtx("hosta", { routerClient: router.client, sealer: sealerA });
 		const { send } = createRoutes(ctx);
 
 		// A console's `from` is a free-form Device Name (not a slug); fromConversationId is the 64-hex
@@ -75,9 +75,9 @@ describe("federation routing (E2E sealed)", () => {
 	});
 
 	it("ORIGIN: 503 when the Router is unavailable", async () => {
-		const evie = fakeEvie({});
-		(evie.client as { isConnected: () => boolean }).isConnected = () => false;
-		const { send } = createRoutes(makeCtx("hosta", { evieClient: evie.client, sealer: sealerA }));
+		const router = fakeRouter({});
+		(router.client as { isConnected: () => boolean }).isConnected = () => false;
+		const { send } = createRoutes(makeCtx("hosta", { routerClient: router.client, sealer: sealerA }));
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
 			from: "x",
 			fromConversationId: "conv-1",
@@ -90,7 +90,7 @@ describe("federation routing (E2E sealed)", () => {
 
 	it("DESTINATION: an inbound federated send lands locally and seals its reply back to the origin", async () => {
 		let pinned: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerA,
 			srcGateway: "hostb",
 			handle: (op) => {
@@ -100,7 +100,7 @@ describe("federation routing (E2E sealed)", () => {
 		});
 		const pushed: Record<string, unknown>[] = [];
 		const ctx = makeCtx("hostb", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerB,
 			registry: registryWith({ "api.dev": channelWs(pushed) }),
 		});
@@ -273,8 +273,8 @@ describe("federation routing (E2E sealed)", () => {
 		}
 	});
 
-	it("DISCOVERY: fans out a sealed list_teams over the evie roster and merges", async () => {
-		const evie = fakeEvie({
+	it("DISCOVERY: fans out a sealed list_teams over the router roster and merges", async () => {
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: () => ({
@@ -294,7 +294,7 @@ describe("federation routing (E2E sealed)", () => {
 				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
 		});
 		const ctx = makeCtx("hosta", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerA,
 			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
 			sessionStore: storeWith("recipe-app.dev"),
@@ -317,7 +317,7 @@ describe("federation routing (E2E sealed)", () => {
 	});
 
 	it("DISCOVERY: a malformed team row in a peer's reply discards that WHOLE gateway's reply, never landing unvalidated data", async () => {
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: () => ({
@@ -340,7 +340,7 @@ describe("federation routing (E2E sealed)", () => {
 				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
 		});
 		const ctx = makeCtx("hosta", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerA,
 			registry: registryWith({}),
 			sessionStore: storeWith(),
@@ -355,7 +355,7 @@ describe("federation routing (E2E sealed)", () => {
 describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked ConsoleRoutes.respond)", () => {
 	it("fires true once the relay-pin actually succeeds", async () => {
 		let pinned: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerA,
 			srcGateway: "hostb",
 			handle: (op) => {
@@ -363,7 +363,7 @@ describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked 
 				return { ok: true };
 			},
 		});
-		const ctx = makeCtx("hostb", { evieClient: evie.client, sealer: sealerB });
+		const ctx = makeCtx("hostb", { routerClient: router.client, sealer: sealerB });
 		const srcSession = "conv.conv-1.alice.hostb.api.dev";
 		ctx.store.create(srcSession, "recipe-app.dev", "api.dev", {
 			persistent: true,
@@ -393,7 +393,7 @@ describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked 
 		for (let i = 0; i < 10 && settled === undefined; i++) await Promise.resolve();
 		expect(settled).toBe(true);
 		expect(pinned).toMatchObject({ kind: "response_push", session_id: srcSession, response: "all good" });
-		expect(evie.calls.filter((c) => c.action === "gateway_relay").length).toBe(1);
+		expect(router.calls.filter((c) => c.action === "gateway_relay").length).toBe(1);
 	});
 
 	it("fires false only after relayWithRetry exhausts every attempt, driven by the real exponential backoff", async () => {
@@ -405,10 +405,10 @@ describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked 
 				stop: () => {},
 				callTool: async () => {
 					calls++;
-					return { callId: "fake", error: "evie unavailable" };
+					return { callId: "fake", error: "router unavailable" };
 				},
-			} as unknown as NonNullable<RoutesDeps["evieClient"]>;
-			const ctx = makeCtx("hostb", { evieClient: client, sealer: sealerB });
+			} as unknown as NonNullable<RoutesDeps["routerClient"]>;
+			const ctx = makeCtx("hostb", { routerClient: client, sealer: sealerB });
 			const srcSession = "conv.conv-1.alice.hostb.api.dev";
 			ctx.store.create(srcSession, "recipe-app.dev", "api.dev", {
 				persistent: true,

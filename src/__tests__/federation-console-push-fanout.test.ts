@@ -4,7 +4,7 @@ import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import {
 	channelWs,
-	fakeEvie,
+	fakeRouter,
 	gateRoutes,
 	makeCtx,
 	registryWith,
@@ -17,7 +17,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 	it("humanNotify relays the same notice to every OTHER same-Domain Gateway via list_gateways, self-excluding and filtering through the allowlist", async () => {
 		const { routes: hostbRoutes, consolePushCalls } = gateRoutes([]);
 		let landedOnHostb: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: (op) => {
@@ -34,7 +34,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const mailboxStore = new DeviceMailboxStore();
 		const ctx = makeCtx("hosta", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerA,
 			mailboxStore,
 			ownerId: () => "owner-1",
@@ -72,8 +72,8 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 			fullSpoken: "Spoken body.",
 		});
 		// Only hostb was actually relayed to - hosta (self) and eve-gw (unadmitted) were filtered
-		// out before ever reaching evie's gateway_relay call.
-		const relayed = evie.calls.filter((c) => c.action === "gateway_relay").map((c) => c.params.dstGateway);
+		// out before ever reaching the Router's gateway_relay call.
+		const relayed = router.calls.filter((c) => c.action === "gateway_relay").map((c) => c.params.dstGateway);
 		expect(relayed).toEqual(["hostb"]);
 	});
 
@@ -96,7 +96,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 	it("pluginAction relays a plugin_action entry to every OTHER same-Domain Gateway, same convergence path as a notice", async () => {
 		const { routes: hostbRoutes, consolePushCalls } = gateRoutes([]);
 		let landedOnHostb: FederatedOp | undefined;
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: (op) => {
@@ -111,7 +111,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const mailboxStore = new DeviceMailboxStore();
 		const ctx = makeCtx("hosta", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerA,
 			mailboxStore,
 			ownerId: () => "owner-1",
@@ -132,7 +132,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 	});
 
-	it("single-Gateway behavior is unchanged: no evieClient, humanNotify still delivers locally with no error", async () => {
+	it("single-Gateway behavior is unchanged: no routerClient, humanNotify still delivers locally with no error", async () => {
 		const mailboxStore = new DeviceMailboxStore();
 		const { humanNotify } = createRoutes(makeCtx("hosta", { mailboxStore, ownerId: () => "owner-1" }));
 		const res = humanNotify(TEST_REQ, { from: "recipe-app", title: "t", summary: "s", full: "body" });
@@ -141,12 +141,12 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 	});
 
 	it("consolePush (the landing side) never itself fans back out - no gossip loop", async () => {
-		// A connected evieClient is deliberately wired in: if consolePush ever grew a call to
-		// fanOutConsolePush (the regression this guards against), this evie mock would record it.
-		const evie = fakeEvie({});
+		// A connected routerClient is deliberately wired in: if consolePush ever grew a call to
+		// fanOutConsolePush (the regression this guards against), this router mock would record it.
+		const router = fakeRouter({});
 		const mailboxStore = new DeviceMailboxStore();
 		const ctx = makeCtx("hostb", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerB,
 			mailboxStore,
 			ownerId: () => "owner-1",
@@ -159,7 +159,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 
 		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
-		expect(evie.calls).toHaveLength(0);
+		expect(router.calls).toHaveLength(0);
 	});
 
 	it("mirrorPeer's peer-kind fan-out relays to a sibling Gateway, landing exactly once per mirror copy even under a relay retry", async () => {
@@ -167,7 +167,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		const { consolePush: hostbConsolePush } = createRoutes(
 			makeCtx("hostb", { mailboxStore: hostbMailbox, ownerId: () => "owner-1" }),
 		);
-		const evie = fakeEvie({
+		const router = fakeRouter({
 			destSealer: sealerB,
 			srcGateway: "hosta",
 			handle: (op) => {
@@ -180,7 +180,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const pushed: Record<string, unknown>[] = [];
 		const ctx = makeCtx("hosta", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerA,
 			mailboxStore: new DeviceMailboxStore(),
 			ownerId: () => "owner-1",

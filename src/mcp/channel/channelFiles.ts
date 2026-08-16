@@ -29,8 +29,8 @@ export interface RenderFilesBlockParams {
 ////////////////////////////////
 //  Constants
 
-export const EVIE_FILES_DIR = "/tmp/evie-files";
-export const EVIE_FILES_TTL_MS = 60 * 60 * 1000;
+export const CHANNEL_FILES_DIR = "/tmp/switchboard-channel-files";
+export const CHANNEL_FILES_TTL_MS = 60 * 60 * 1000;
 
 const MAX_LEAF_BYTES = 200;
 // Wider than any filesystem's granularity, far narrower than a clamp.
@@ -55,7 +55,7 @@ export function safeFilename(name: string): string {
 }
 
 /**
- * Land an inbound message's files under /tmp/evie-files/<discordMessageId>/.
+ * Land an inbound message's files under /tmp/switchboard-channel-files/<discordMessageId>/.
  *
  * Bytes stream a chunk at a time and are copied by the kernel, so any size costs fixed heap. A file
  * naming no bytes passes through as metadata-only. Expired buckets are swept at entry.
@@ -64,11 +64,11 @@ export async function materializeFiles({
 	discordMessageId,
 	files,
 }: MaterializeFilesParams): Promise<MaterializedFile[]> {
-	mkdirSync(EVIE_FILES_DIR, { recursive: true });
-	cleanupTmpDir({ dir: EVIE_FILES_DIR, maxAgeMs: EVIE_FILES_TTL_MS, mode: "dirs" });
+	mkdirSync(CHANNEL_FILES_DIR, { recursive: true });
+	cleanupTmpDir({ dir: CHANNEL_FILES_DIR, maxAgeMs: CHANNEL_FILES_TTL_MS, mode: "dirs" });
 
 	// A no-op for a snowflake, but stops another origin's id escaping via path.join.
-	const bucket = join(EVIE_FILES_DIR, safeFilename(discordMessageId));
+	const bucket = join(CHANNEL_FILES_DIR, safeFilename(discordMessageId));
 	const claimedLeaves = new Set<string>();
 	const out: MaterializedFile[] = [];
 
@@ -91,7 +91,7 @@ export async function materializeFiles({
 				// Collapsing this with metadata-only would abandon a recoverable transfer.
 				meta.fetchFailed = true;
 				console.error(
-					`[evie-files] failed to materialize "${file.filename}" for msg ${discordMessageId}: ${(err as Error).message}`,
+					`[channel-files] failed to materialize "${file.filename}" for msg ${discordMessageId}: ${(err as Error).message}`,
 				);
 			}
 		}
@@ -150,10 +150,10 @@ function restoreModifiedAt(targetPath: string, modifiedAt: number | undefined): 
 		// A stamp past the filesystem's ceiling is CLAMPED, not rejected, so only a read-back notices.
 		const landed = statSync(targetPath).mtime.getTime();
 		if (Math.abs(landed - modifiedAt) > MTIME_GRANULARITY_TOLERANCE_MS) {
-			console.error(`[evie-files] mtime on "${targetPath}" landed at ${landed}, not the sent ${modifiedAt}`);
+			console.error(`[channel-files] mtime on "${targetPath}" landed at ${landed}, not the sent ${modifiedAt}`);
 		}
 	} catch (err) {
-		console.error(`[evie-files] could not restore mtime on "${targetPath}": ${(err as Error).message}`);
+		console.error(`[channel-files] could not restore mtime on "${targetPath}": ${(err as Error).message}`);
 	}
 }
 

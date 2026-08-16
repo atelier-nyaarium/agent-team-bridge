@@ -23,12 +23,12 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * MockWebServer matrix test for ConsoleHttp.postEvieDirect's decode contract, pinned against a
+ * MockWebServer matrix test for ConsoleHttp.postRouterDirect's decode contract, pinned against a
  * real HTTP round trip - a decode-order transposition here is type-identical Kotlin that compiles
  * clean, so the build gates alone cannot catch it (console-hardening.md Phase C verification).
  * Also covers executeCancellable's cancellation and per-call-timeout behavior (Phase D).
  */
-class PostEvieDirectTest {
+class PostRouterDirectTest {
 	private lateinit var server: MockWebServer
 	private val client = OkHttpClient()
 
@@ -49,7 +49,7 @@ class PostEvieDirectTest {
 	// directly" even when both produce a similarly-shaped EnrollResult.
 	private fun taggedFail(msg: String) = EnrollResult(ok = false, error = "FAIL:$msg")
 
-	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleHttp.postEvieDirect(
+	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleHttp.postRouterDirect(
 		client,
 		server.url("/relay").toString(),
 		"sa-token",
@@ -62,38 +62,38 @@ class PostEvieDirectTest {
 	)
 
 	@Test
-	fun postEvieDirect_2xxDecodesTypedResultDirectly() = runBlocking {
+	fun postRouterDirect_2xxDecodesTypedResultDirectly() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
 		assertEquals(EnrollResult(ok = true, error = null), call())
 	}
 
 	@Test
-	fun postEvieDirect_2xxUndecodableBodyFallsBackToUnexpectedResponse() = runBlocking {
+	fun postRouterDirect_2xxUndecodableBodyFallsBackToUnexpectedResponse() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(200).setBody("not json"))
 		assertEquals("FAIL:unexpected response (HTTP 200)", call().error)
 	}
 
 	@Test
-	fun postEvieDirect_non2xxTypedBodyDecodesDirectlyBeforeBounce() = runBlocking {
+	fun postRouterDirect_non2xxTypedBodyDecodesDirectlyBeforeBounce() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(400).setBody("""{"ok":false,"error":"rejected"}"""))
 		// No "FAIL:" prefix - proves the typed decode won over the bounce/fallback path.
 		assertEquals(EnrollResult(ok = false, error = "rejected"), call())
 	}
 
 	@Test
-	fun postEvieDirect_non2xxBounceErrorUsedWhenBodyIsNotTypeR() = runBlocking {
+	fun postRouterDirect_non2xxBounceErrorUsedWhenBodyIsNotTypeR() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"bounced"}"""))
 		assertEquals("FAIL:bounced", call().error)
 	}
 
 	@Test
-	fun postEvieDirect_non2xxNeitherShapeFallsBackToHttpCode() = runBlocking {
+	fun postRouterDirect_non2xxNeitherShapeFallsBackToHttpCode() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(500).setBody("internal server error"))
 		assertEquals("FAIL:HTTP 500", call().error)
 	}
 
 	@Test
-	fun postEvieDirect_sendsAuthHeadersAndPostsToTheGivenUrl() = runBlocking {
+	fun postRouterDirect_sendsAuthHeadersAndPostsToTheGivenUrl() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
 		call()
 		val recorded = server.takeRequest()
@@ -104,20 +104,20 @@ class PostEvieDirectTest {
 	}
 
 	@Test(expected = IOException::class)
-	fun postEvieDirect_transportFailureRethrowsInsteadOfSwallowing() {
+	fun postRouterDirect_transportFailureRethrowsInsteadOfSwallowing() {
 		// Block body: a JUnit4 @Test method must compile to a void JVM method, and an expression
-		// body here would infer a non-Unit return type from postEvieDirect's own result.
+		// body here would infer a non-Unit return type from postRouterDirect's own result.
 		runBlocking {
 			val dead = MockWebServer()
 			dead.start()
 			val deadUrl = dead.url("/relay").toString()
 			dead.shutdown()
-			ConsoleHttp.postEvieDirect(client, deadUrl, "sa-token", "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
+			ConsoleHttp.postRouterDirect(client, deadUrl, "sa-token", "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
 		}
 	}
 
 	@Test
-	fun postEvieDirect_logBodyFalseNeverAffectsTheDecodedResult() = runBlocking {
+	fun postRouterDirect_logBodyFalseNeverAffectsTheDecodedResult() = runBlocking {
 		// logBody only gates what the resp log line shows - the decode itself must stay untouched.
 		server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
 		assertEquals(EnrollResult(ok = true, error = null), call(logBody = false))

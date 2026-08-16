@@ -10,8 +10,8 @@ package com.atelier_nyaarium.switchboard
 //  Interfaces & Types
 
 /** A hosted guest tenant row for the "Networks you host" admin list. Built locally from the
- * admin's own provisioned tenants; evie holds the canonical pending/rooted state, surfaced lazily
- * through discovery once the friend's gateway comes online. */
+ * admin's own provisioned tenants; the Router holds the canonical pending/rooted state, surfaced
+ * lazily through discovery once the friend's gateway comes online. */
 data class HostedTenant(
 	/** The opaque Domain id, never the row's title. */
 	val domainId: String,
@@ -43,8 +43,8 @@ sealed interface FirstRootDecision {
 	data object NotPending : FirstRootDecision
 }
 
-/** A classified first-root reject: the human message plus whether evie's rejection is transient
- * (the poll loop auto-retries) or terminal. Clock skew and CAS persist contention are transient;
+/** A classified first-root reject: the human message plus whether the Router's rejection is
+ * transient (the poll loop auto-retries) or terminal. Clock skew and CAS persist contention are transient;
  * an expired/used invite or an unconfigured host is terminal. */
 data class FirstRootReject(val message: String, val transient: Boolean)
 
@@ -82,11 +82,11 @@ object FriendOnboarding {
 		return FirstRootDecision.Root(pending.domainId, pending.nonce)
 	}
 
-	/** Classify evie's first-root reject into a human line + transient/terminal verdict. An opaque
-	 * invalid/expired/already-claimed invite is terminal and collapses to "ask the host for a fresh
-	 * code". Clock skew ("admin op is stale") and an evie Secret-CAS contention ("persist failed")
-	 * are transient, so the poll loop re-attempts and the friend is told to wait rather than shown a
-	 * hard failure. An unknown failure passes through trimmed as transient. */
+	/** Classify the Router's first-root reject into a human line + transient/terminal verdict. An
+	 * opaque invalid/expired/already-claimed invite is terminal and collapses to "ask the host for a
+	 * fresh code". Clock skew ("admin op is stale") and a persist-CAS contention at the Router
+	 * ("persist failed") are transient, so the poll loop re-attempts and the friend is told to wait
+	 * rather than shown a hard failure. An unknown failure passes through trimmed as transient. */
 	fun classifyFirstRootError(message: String?): FirstRootReject {
 		val m = message ?: "Setup could not be completed."
 		return when {

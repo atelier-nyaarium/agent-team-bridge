@@ -5,14 +5,14 @@ import { b64Field, slugField } from "./crypto.js";
 //  Enroll handshake (the FLOW-1 in-person mutual 6-digit compare)
 //
 //  A fresh enrollee has no gateway, so the commit-reveal that confirms the admin's + the
-//  enrollee's OWNER keys is brokered by evie as an UNTRUSTED DUMB BROKER: evie relays the two
-//  phones' commit then reveal frames by handshakeId and NEVER computes the SAS (the phones
+//  enrollee's OWNER keys is brokered by the Router as an UNTRUSTED DUMB BROKER: it relays the
+//  two phones' commit then reveal frames by handshakeId and NEVER computes the SAS (the phones
 //  compute it locally - SasCrypto.enrollSas - and the humans compare). These frames carry NO
 //  pin (it rides the QR out of band) and NO signature (only the resulting cross-Domain link
 //  edge is owner-signed). Each role slot is bound to its first committer; a second, different
 //  commitment for the same (handshakeId, role) is rejected (anti-hijack). The phone POSTs the
-//  frame DIRECTLY to evie's console-bridge enrollHandshake intake (pre-admission, app-token
-//  gated), re-POSTing the same step to poll for the peer's frame.
+//  frame DIRECTLY to the Router's console-bridge enrollHandshake intake (pre-admission,
+//  app-token gated), re-POSTing the same step to poll for the peer's frame.
 
 ////////////////////////////////
 //  Schemas
@@ -29,7 +29,7 @@ export const EnrollRevealSchema = z
 	})
 	.meta({ id: "EnrollReveal" });
 
-/** A phone's frame to evie's enroll-handshake broker, by step: `commit` (round-1 hiding
+/** A phone's frame to the Router's enroll-handshake broker, by step: `commit` (round-1 hiding
  * commitment to this side's owner keys), `reveal` (round-2 owner keys + salt, sent once the
  * peer's commitment is in), `cancel` (abort + evict on [No] / timeout). `handshakeId`
  * (unguessable, from the QR) names the window; `role` is ADMIN (showed the QR) or ENROLLEE
@@ -52,7 +52,7 @@ export const EnrollHandshakeOpSchema = z
 	])
 	.meta({ id: "EnrollHandshakeOp" });
 
-/** evie's reply to an enroll-handshake frame. `ok:false` + `error` is terminal (the window
+/** The Router's reply to an enroll-handshake frame. `ok:false` + `error` is terminal (the window
  * expired, hit the attempt cap, or a role-slot conflict). Otherwise the PEER's frame is
  * included once it lands so the phone can verify + compute the SAS locally; absent means keep
  * polling (re-POST the same step). */
@@ -70,12 +70,13 @@ export const EnrollHandshakeResultSchema = z
 ////////////////////////////////
 //  Trust rendezvous (FLOW-2: roster-initiated user-to-user trust)
 //
-//  Two members already on this evie establish owner-to-owner trust WITHOUT a QR. The initiator ARMS
-//  (commits; the rendezvous is indexed at evie under the TARGET owner key). The target discovers the
-//  armed intent with a "who armed trust toward me?" query (the highlight - no push), arms back, then
-//  both run the SAME commit-reveal owner-key compare as the enroll ceremony, REUSING enrollSas with
-//  sorted-owner-key roles + the rendezvousId as the pin (so no new SAS scheme). evie stays the dumb
-//  broker: it indexes the two owner keys + relays opaque commit/reveal, never computing the SAS.
+//  Two members already on this Router establish owner-to-owner trust WITHOUT a QR. The initiator
+//  ARMS (commits; the rendezvous is indexed at the Router under the TARGET owner key). The target
+//  discovers the armed intent with a "who armed trust toward me?" query (the highlight - no push),
+//  arms back, then both run the SAME commit-reveal owner-key compare as the enroll ceremony,
+//  REUSING enrollSas with sorted-owner-key roles + the rendezvousId as the pin (so no new SAS
+//  scheme). The Router stays the dumb broker: it indexes the two owner keys + relays opaque
+//  commit/reveal, never computing the SAS.
 
 export const TrustHandshakeOpSchema = z
 	.discriminatedUnion("step", [
@@ -105,7 +106,7 @@ export const TrustHandshakeOpSchema = z
 	])
 	.meta({ id: "TrustHandshakeOp" });
 
-/** evie's reply to a trust-handshake frame. Same shape + semantics as the enroll-handshake reply:
+/** The Router's reply to a trust-handshake frame. Same shape + semantics as the enroll-handshake reply:
  * `ok:false` is terminal; otherwise the peer's commit/reveal is included once it lands. */
 export const TrustHandshakeResultSchema = z
 	.object({

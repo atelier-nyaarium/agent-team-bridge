@@ -1,4 +1,3 @@
-import type { GatewayRelayReplyParams } from "../../shared/evie-protocol.js";
 import {
 	type ConsolePushEntry,
 	type CrossDomainPresenceSession,
@@ -8,6 +7,7 @@ import {
 } from "../../shared/federation-protocol.js";
 import { pickTiers } from "../../shared/notice.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
+import type { GatewayRelayReplyParams } from "../../shared/router-protocol.js";
 import { Address, parseSessionName } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { WakeResult } from "../wake.js";

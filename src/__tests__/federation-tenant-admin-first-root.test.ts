@@ -93,7 +93,7 @@ describe("TenantAdmin first_root (atomic one-time redemption, G2)", () => {
 		expect(res.error).toMatch(/invalid or expired invite/);
 	});
 
-	it("enforces the invite TTL server-side (issuedAt + ttlMs vs evie's clock)", async () => {
+	it("enforces the invite TTL server-side (issuedAt + ttlMs vs the Router's clock)", async () => {
 		const store = await freshStore();
 		let clock = now;
 		const admin = new TenantAdmin(

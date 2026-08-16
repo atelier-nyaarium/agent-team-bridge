@@ -20,7 +20,7 @@ internal enum class ConnKind {
 //  Functions & Helpers
 
 /** A just-enrolled device's first ops can transiently reject while the route Gateway re-syncs the
- * new admission from evie, which it only does on its next re-register. */
+ * new admission from the Router, which it only does on its next re-register. */
 private const val ENROLL_GRACE_MS = 90_000L
 
 /**

@@ -2,13 +2,13 @@ import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	CHANNEL_FILES_DIR,
 	dropReferenceArtifacts,
-	EVIE_FILES_DIR,
 	type MaterializeFilesParams,
 	materializeFiles,
 	renderFilesBlock,
 	safeFilename,
-} from "../mcp/channel/evieFiles.js";
+} from "../mcp/channel/channelFiles.js";
 import type { ChannelFile } from "../shared/types.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
@@ -47,7 +47,7 @@ beforeEach(() => {
 afterEach(() => {
 	while (createdBuckets.length > 0) {
 		const id = createdBuckets.pop()!;
-		rmSync(join(EVIE_FILES_DIR, id), { recursive: true, force: true });
+		rmSync(join(CHANNEL_FILES_DIR, id), { recursive: true, force: true });
 	}
 	h.wire?.dispose();
 	h.wire = null;
@@ -86,13 +86,13 @@ describe("materializeFiles", () => {
 		};
 	}
 
-	it("writes byte-bearing files to /tmp/evie-files/<msgId>/<safeFilename>", async () => {
+	it("writes byte-bearing files to /tmp/switchboard-channel-files/<msgId>/<safeFilename>", async () => {
 		const id = uniqueId();
 		const params: MaterializeFilesParams = { discordMessageId: id, files: [makeFile()] };
 		const out = await materializeFiles(params);
 
 		expect(out).toHaveLength(1);
-		expect(out[0].path).toBe(join(EVIE_FILES_DIR, id, "dog.png"));
+		expect(out[0].path).toBe(join(CHANNEL_FILES_DIR, id, "dog.png"));
 		expect(readFileSync(out[0].path!).toString()).toBe("test");
 	});
 
@@ -126,9 +126,9 @@ describe("materializeFiles", () => {
 			],
 		});
 
-		expect(out[0].path).toBe(join(EVIE_FILES_DIR, id, "shot.png"));
-		expect(out[1].path).toBe(join(EVIE_FILES_DIR, id, "shot-2.png"));
-		expect(out[2].path).toBe(join(EVIE_FILES_DIR, id, "shot-3.png"));
+		expect(out[0].path).toBe(join(CHANNEL_FILES_DIR, id, "shot.png"));
+		expect(out[1].path).toBe(join(CHANNEL_FILES_DIR, id, "shot-2.png"));
+		expect(out[2].path).toBe(join(CHANNEL_FILES_DIR, id, "shot-3.png"));
 	});
 
 	it("path-traversal filename gets sanitized to its basename", async () => {
@@ -138,7 +138,7 @@ describe("materializeFiles", () => {
 			files: [makeFile({ filename: "../../etc/passwd" })],
 		});
 
-		expect(out[0].path).toBe(join(EVIE_FILES_DIR, id, "passwd"));
+		expect(out[0].path).toBe(join(CHANNEL_FILES_DIR, id, "passwd"));
 	});
 });
 
@@ -149,7 +149,7 @@ describe("renderFilesBlock", () => {
 			files: [
 				{
 					descriptiveKey: "The 1st image named `dog.png`",
-					path: "/tmp/evie-files/abc/dog.png",
+					path: "/tmp/switchboard-channel-files/abc/dog.png",
 				},
 				{
 					descriptiveKey: "The PDF named `doc.pdf`",
@@ -234,7 +234,7 @@ describe("emitResponseNotification", () => {
 			],
 		});
 
-		const target = join(EVIE_FILES_DIR, id, "proof.png");
+		const target = join(CHANNEL_FILES_DIR, id, "proof.png");
 		expect(readFileSync(target, "utf8")).toBe("bytes");
 		expect(sent).toHaveLength(1);
 		expect(sent[0].params.content).toContain(target);
@@ -288,7 +288,7 @@ describe("emitChannelNotification", () => {
 			],
 		});
 
-		const target = join(EVIE_FILES_DIR, id, "repro.log");
+		const target = join(CHANNEL_FILES_DIR, id, "repro.log");
 		expect(readFileSync(target, "utf8")).toBe("trace");
 		expect(sent).toHaveLength(1);
 		expect(sent[0].params.content).toContain(target);
@@ -335,9 +335,9 @@ describe("emitChannelNotification", () => {
 			],
 		});
 
-		expect(readFileSync(join(EVIE_FILES_DIR, id, "wanted.txt"), "utf8")).toBe("yes");
-		expect(existsSync(join(EVIE_FILES_DIR, id, "switchboard-references.json"))).toBe(true);
-		expect(existsSync(join(EVIE_FILES_DIR, id, "routes.ts.txt"))).toBe(true);
+		expect(readFileSync(join(CHANNEL_FILES_DIR, id, "wanted.txt"), "utf8")).toBe("yes");
+		expect(existsSync(join(CHANNEL_FILES_DIR, id, "switchboard-references.json"))).toBe(true);
+		expect(existsSync(join(CHANNEL_FILES_DIR, id, "routes.ts.txt"))).toBe(true);
 	});
 
 	it("delivers the prose when a reply carries nothing but ref snapshots", async () => {
@@ -364,7 +364,7 @@ describe("emitChannelNotification", () => {
 		});
 
 		expect(sent).toHaveLength(1);
-		expect(existsSync(join(EVIE_FILES_DIR, id))).toBe(false);
+		expect(existsSync(join(CHANNEL_FILES_DIR, id))).toBe(false);
 	});
 });
 

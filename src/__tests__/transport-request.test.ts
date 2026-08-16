@@ -17,7 +17,7 @@ import { assertCanonicalBytes } from "./_canonical-bytes.js";
 //  vectors.json is read by BOTH this suite and TransportRequestTest.kt (Kotlin), so the
 //  hand-authored Kotlin twin (ProvisionOpsCrypto.transportRequestSigningBytes) cannot drift
 //  from this TS source: the canonical bytes / signature either runtime derives differently
-//  fails one of the two suites. The request is owner-signed proof of possession; evie resolves
+//  fails one of the two suites. The request is owner-signed proof of possession; the Router resolves
 //  the signer to a rooted owner and returns the gateway-bridge transport.
 
 interface SignedVec<T> {

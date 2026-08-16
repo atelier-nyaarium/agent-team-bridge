@@ -181,8 +181,8 @@ describe("first_root vectors (self-signed by the fresh owner key)", () => {
 	it("parses as a console op (a defensive reject), never an enroll op", () => {
 		const signed = signFirstRoot(vectors.firstRoot.value, friendOwnerSignPriv);
 		// first_root stays a ConsoleOp variant the gateway can defensively reject; the live
-		// first-root POSTs DIRECTLY to evie (a pending Domain has no gateway), and it is NOT on
-		// the evie enroll surface either (pre-root, the friend has no admission to authenticate).
+		// first-root POSTs DIRECTLY to the Router (a pending Domain has no gateway), and it is NOT
+		// on the Router's enroll surface either (pre-root, the friend has no admission to authenticate).
 		expect(ConsoleOpSchema.safeParse({ kind: "first_root", firstRoot: signed }).success).toBe(true);
 		expect(EnrollOpSchema.safeParse({ kind: "first_root", firstRoot: signed }).success).toBe(false);
 	});

@@ -251,9 +251,9 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions,
 			knownTaskBoardVersion = knownTaskBoardVersion,
 		)
-		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
+		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), the Router's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
-		// (58s) catches a vanished evie, and the apiserver proxy's PROXY_CEILING_MS (60s) outranks
+		// (58s) catches a vanished Router, and the apiserver proxy's PROXY_CEILING_MS (60s) outranks
 		// them all - pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < PROXY_CEILING_MS in
 		// ChatRepositoryConstantsTest. Each failure layer returns before the next races it.
 		val heldReadTimeoutMs = if (holdMs > 0) holdMs + ConsoleHttp.HELD_READ_MARGIN_MS else null

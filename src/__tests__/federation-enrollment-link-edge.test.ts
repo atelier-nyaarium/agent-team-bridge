@@ -13,14 +13,14 @@ import {
 	type XDomainLinkRevocation,
 } from "../shared/federation-lifecycle.js";
 
-const evie = generateIdentity();
+const router = generateIdentity();
 const owner = generateIdentity();
 const now = 1_000_000;
 
 describe("EnrollmentCoordinator cross-Domain link edge", () => {
 	function rootedFor(domainId: string) {
-		const c = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), domainId);
-		const p = c.mintEnrollOwner(domainId, "https://evie", now);
+		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), domainId);
+		const p = c.mintEnrollOwner(domainId, "https://router", now);
 		c.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		return c;
 	}
@@ -32,7 +32,7 @@ describe("EnrollmentCoordinator cross-Domain link edge", () => {
 	}
 
 	it("adding before rooting is refused", () => {
-		const c = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "alice");
+		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
 		const signed = signXDomainLinkEdge(edge("alice", "carol"), owner.sign.priv, owner.sign.pub);
 		expect(c.addLinkEdge(signed)).toMatch(/not rooted/);
 	});
@@ -88,11 +88,11 @@ describe("EnrollmentCoordinator cross-Domain link edge", () => {
 
 	it("persists edges so a reloaded coordinator still gates the pair", () => {
 		const store = inMemoryEnrollmentStore();
-		const c1 = new EnrollmentCoordinator(evie, store, "alice");
-		const p = c1.mintEnrollOwner("alice", "https://evie", now);
+		const c1 = new EnrollmentCoordinator(router, store, "alice");
+		const p = c1.mintEnrollOwner("alice", "https://router", now);
 		c1.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		c1.addLinkEdge(signXDomainLinkEdge(edge("alice", "carol"), owner.sign.priv, owner.sign.pub));
-		const c2 = new EnrollmentCoordinator(evie, store, "alice");
+		const c2 = new EnrollmentCoordinator(router, store, "alice");
 		expect(c2.hasLinkEdge("alice", "carol")).toBe(true);
 	});
 
@@ -106,7 +106,7 @@ describe("EnrollmentCoordinator cross-Domain link edge", () => {
 	});
 
 	it("revoking before rooting is refused", () => {
-		const c = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "alice");
+		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
 		const signed = signXDomainLinkRevocation(revocation("alice", "carol"), owner.sign.priv, owner.sign.pub);
 		expect(c.removeLinkEdge(signed)).toMatch(/not rooted/);
 	});
@@ -156,12 +156,12 @@ describe("EnrollmentCoordinator cross-Domain link edge", () => {
 
 	it("persists the revocation so a reloaded coordinator no longer gates the pair", () => {
 		const store = inMemoryEnrollmentStore();
-		const c1 = new EnrollmentCoordinator(evie, store, "alice");
-		const p = c1.mintEnrollOwner("alice", "https://evie", now);
+		const c1 = new EnrollmentCoordinator(router, store, "alice");
+		const p = c1.mintEnrollOwner("alice", "https://router", now);
 		c1.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		c1.addLinkEdge(signXDomainLinkEdge(edge("alice", "carol"), owner.sign.priv, owner.sign.pub));
 		c1.removeLinkEdge(signXDomainLinkRevocation(revocation("alice", "carol"), owner.sign.priv, owner.sign.pub));
-		const c2 = new EnrollmentCoordinator(evie, store, "alice");
+		const c2 = new EnrollmentCoordinator(router, store, "alice");
 		expect(c2.hasLinkEdge("alice", "carol")).toBe(false);
 	});
 
@@ -214,14 +214,14 @@ describe("EnrollmentCoordinator cross-Domain link edge", () => {
 
 	it("the revocation tombstone survives a reload and still blocks a replayed old edge", () => {
 		const store = inMemoryEnrollmentStore();
-		const c1 = new EnrollmentCoordinator(evie, store, "alice");
-		const p = c1.mintEnrollOwner("alice", "https://evie", now);
+		const c1 = new EnrollmentCoordinator(router, store, "alice");
+		const p = c1.mintEnrollOwner("alice", "https://router", now);
 		c1.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		const originalEdge = signXDomainLinkEdge(edge("alice", "carol"), owner.sign.priv, owner.sign.pub);
 		c1.addLinkEdge(originalEdge);
 		c1.removeLinkEdge(signXDomainLinkRevocation(revocation("alice", "carol"), owner.sign.priv, owner.sign.pub));
 
-		const c2 = new EnrollmentCoordinator(evie, store, "alice");
+		const c2 = new EnrollmentCoordinator(router, store, "alice");
 		expect(c2.hasLinkEdge("alice", "carol")).toBe(false);
 		expect(c2.addLinkEdge(originalEdge)).toBeNull();
 		expect(c2.hasLinkEdge("alice", "carol")).toBe(false);

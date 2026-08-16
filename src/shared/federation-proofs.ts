@@ -4,35 +4,35 @@ import { b64Field, displayField, sign, verify } from "./crypto.js";
 ////////////////////////////////
 //  Proof-of-possession query surfaces (roster / trust-pending / transport)
 //
-//  Three signed point-in-time queries to evie, one pattern: the caller signs a versioned,
-//  newline-joined challenge over its own signing key + a fresh timestamp + nonce. evie verifies
-//  the signature against the key, that the timestamp is fresh, and (statefully) that the nonce is
-//  unseen in the window; what the key must then prove differs per surface (see each schema's own
-//  doc). So a captured request cannot be replayed. Distinct version tags keep the three proofs
-//  non-interchangeable.
+//  Three signed point-in-time queries to the Router, one pattern: the caller signs a versioned,
+//  newline-joined challenge over its own signing key + a fresh timestamp + nonce. The Router
+//  verifies the signature against the key, that the timestamp is fresh, and (statefully) that the
+//  nonce is unseen in the window; what the key must then prove differs per surface (see each
+//  schema's own doc). So a captured request cannot be replayed. Distinct version tags keep the
+//  three proofs non-interchangeable.
 
 ////////////////////////////////
-//  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
+//  Cross-tenant roster (the "Users" surface: everyone on this Router, name + presence)
 //
-//  evie is the source of truth (per-Domain display names + owners in its Secret; presence is its
-//  live gateway-connection table). The visibility model is a full roster: every member on this evie
-//  is visible to every other member, non-transitive (the roster never reaches a member's linked
-//  peers). So the request only AUTHENTICATES the caller as some member of this evie (a console
-//  admitted in one of its Domains); there is no per-row visibility predicate. A row carries the
-//  owner identity + display name + presence ONLY: NO gatewayId and NO box key, so a row is never a
-//  seal/probe handle (the trust ceremony resolves a target's gateway server-side). evie
-//  OPAQUE-REJECTS a caller it cannot place in a Domain.
+//  The Router is the source of truth (per-Domain display names + owners in its store; presence is
+//  its live gateway-connection table). The visibility model is a full roster: every member on this
+//  Router is visible to every other member, non-transitive (the roster never reaches a member's
+//  linked peers). So the request only AUTHENTICATES the caller as some member of this Router (a
+//  console admitted in one of its Domains); there is no per-row visibility predicate. A row carries
+//  the owner identity + display name + presence ONLY: NO gatewayId and NO box key, so a row is
+//  never a seal/probe handle (the trust ceremony resolves a target's gateway server-side). The
+//  Router OPAQUE-REJECTS a caller it cannot place in a Domain.
 
 /** A console's signed request for the roster. The console signs ROSTER_V1 over its own signing key
- * + a fresh timestamp + nonce (proof of possession); evie verifies the signature, freshness, and
- * non-replay, then resolves the signer to an admitted console in one of its Domains. */
+ * + a fresh timestamp + nonce (proof of possession); the Router verifies the signature, freshness,
+ * and non-replay, then resolves the signer to an admitted console in one of its Domains. */
 export const RosterRequestSchema = z
 	.object({
 		// The console's raw Ed25519 signing key (the subject of an owner-signed kind:console admission).
 		signerSignPub: b64Field(),
-		// Proof timestamp (epoch ms), freshness-checked against evie's clock.
+		// Proof timestamp (epoch ms), freshness-checked against the Router's clock.
 		proofAt: z.number().int().nonnegative(),
-		// Single-use random (base64); evie rejects a replayed nonce within the freshness window.
+		// Single-use random (base64); the Router rejects a replayed nonce within the freshness window.
 		nonce: b64Field(),
 		// The console's Ed25519 signature over rosterRequestSigningBytes (base64).
 		proof: b64Field(),
@@ -47,13 +47,13 @@ export const RosterMemberSchema = z
 	.object({
 		ownerSignPub: b64Field(),
 		displayName: displayField(128),
-		// True iff this member's Domain has a live gateway connection at evie right now.
+		// True iff this member's Domain has a live gateway connection at the Router right now.
 		online: z.boolean(),
 	})
 	.meta({ id: "RosterMember" });
 
-/** evie's roster reply. `ok:false` + `error` is an OPAQUE reject (the caller could not be placed in a
- * Domain on this evie, or the proof failed) - it never enumerates Domain state. */
+/** The Router's roster reply. `ok:false` + `error` is an OPAQUE reject (the caller could not be
+ * placed in a Domain on this Router, or the proof failed) - it never enumerates Domain state. */
 export const RosterResultSchema = z
 	.object({
 		ok: z.boolean(),
@@ -65,8 +65,8 @@ export const RosterResultSchema = z
 
 /** A target's signed "who armed trust toward me?" query (the highlight). The target signs
  * TRUST_PENDING_V1 over its OWN owner signing key + a fresh timestamp + nonce (proof of possession);
- * evie verifies the signature, freshness, and non-replay, then returns the arms indexed under that
- * owner key. Only the owner-key holder can enumerate the arms aimed at it. */
+ * the Router verifies the signature, freshness, and non-replay, then returns the arms indexed under
+ * that owner key. Only the owner-key holder can enumerate the arms aimed at it. */
 export const TrustPendingRequestSchema = z
 	.object({
 		signerSignPub: b64Field(),
@@ -96,11 +96,11 @@ export const TrustPendingResultSchema = z
 ////////////////////////////////
 //  Transport request (an owner pulling its network's gateway-bridge transport)
 //
-//  An owner phone asks evie for the gateway-bridge transport blob (the cluster SA token + CA)
+//  An owner phone asks the Router for the gateway-bridge transport blob (the cluster SA token + CA)
 //  by proving it owns a rooted network. It signs TRANSPORT_REQUEST_V1 over its OWN owner signing
 //  key + a fresh timestamp + nonce (proof of possession), mirroring the roster / trust-pending
-//  proofs. evie verifies the signature, freshness, and non-replay, then resolves the signer to a
-//  rooted owner and returns the transport.
+//  proofs. The Router verifies the signature, freshness, and non-replay, then resolves the signer
+//  to a rooted owner and returns the transport.
 
 /** An owner's signed request for its network's gateway-bridge transport. */
 export const TransportRequestSchema = z
@@ -112,8 +112,8 @@ export const TransportRequestSchema = z
 	})
 	.meta({ id: "TransportRequest" });
 
-/** evie's transport reply. `ok:false` + `error` is an OPAQUE reject (the proof failed or the signer
- * is not a rooted owner). On success it carries the gateway-bridge transport creds. */
+/** The Router's transport reply. `ok:false` + `error` is an OPAQUE reject (the proof failed or the
+ * signer is not a rooted owner). On success it carries the gateway-bridge transport creds. */
 export const TransportResultSchema = z
 	.object({
 		ok: z.boolean(),
@@ -163,7 +163,7 @@ export function signRosterRequest(
 	return sign(rosterRequestSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
 }
 
-/** True if the roster request's proof verifies under its claimed signer key. The caller (evie)
+/** True if the roster request's proof verifies under its claimed signer key. The caller (the Router)
  * additionally checks freshness, non-replay, and that the signer is an admitted console. */
 export function verifyRosterRequest(req: RosterRequest): boolean {
 	return verify(rosterRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
@@ -189,8 +189,9 @@ export function signTrustPendingRequest(
 	return sign(trustPendingSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
 }
 
-/** True if the trust-pending query's proof verifies under its claimed owner key. The caller (evie)
- * additionally checks freshness + non-replay before returning the arms indexed under that owner. */
+/** True if the trust-pending query's proof verifies under its claimed owner key. The caller (the
+ * Router) additionally checks freshness + non-replay before returning the arms indexed under that
+ * owner. */
 export function verifyTrustPendingRequest(req: TrustPendingRequest): boolean {
 	return verify(trustPendingSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
 }
@@ -221,9 +222,9 @@ export function signTransportRequest(
 	};
 }
 
-/** True if the transport request's proof verifies under its claimed owner key. The caller (evie)
- * additionally checks freshness, non-replay, and that the signer is a rooted owner before returning
- * the transport. */
+/** True if the transport request's proof verifies under its claimed owner key. The caller (the
+ * Router) additionally checks freshness, non-replay, and that the signer is a rooted owner before
+ * returning the transport. */
 export function verifyTransportRequest(req: TransportRequest): boolean {
 	return verify(
 		transportRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce),

@@ -93,11 +93,11 @@ export interface ConsoleHandlerDeps {
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
-	/** This Gateway's own Domain lifecycle status, learned from evie's register reply, and
+	/** This Gateway's own Domain lifecycle status, learned from the Router's register reply, and
 	 * returned on the console register. A Gateway exists only for a Domain past rooting, so this
 	 * is "rooted" (or "unrooted" for a fresh admin Domain) and never "pending" (the pending case
 	 * reaches the app via the provisioning blob's pendingTenant). Undefined against a pre-feature
-	 * evie, where the app treats the Domain as already rooted. */
+	 * Router, where the app treats the Domain as already rooted. */
 	domainStatus?: () => string | undefined;
 	/** The versioned-state-plane registry: the poll op races `waitForBump` alongside the mailbox's
 	 * own `waitForAppend`, and piggybacks the presence plane's snapshot onto the reply when the
@@ -255,7 +255,7 @@ export class CreateSessionAmbiguousError extends Error {}
 export const FAKE_REQ = new Request("http://gateway/console");
 
 // Bound on how long a console send op may block inside the relay. The gateway's wake path can
-// hold /send for up to WAKE_TIMEOUT_MS (10 min), far past evie's opId hold. Past this bound the
+// hold /send for up to WAKE_TIMEOUT_MS (10 min), far past the Router's opId hold. Past this bound the
 // op returns the deterministic session id and the wake/send continues in the background, the
 // answer landing in the mailbox via the persistent conversation. The Android console's own
 // PINNED_READ_TIMEOUT_MS (ConsoleHttp.kt) must outlast this - pinned by
@@ -274,13 +274,13 @@ export const CREATE_SESSION_BOUND_MS = 25_000;
 
 // The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
 // outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
-// value. Must clear the relay chain with headroom: evie holds the console's HTTP request 55s and
+// value. Must clear the relay chain with headroom: the Router holds the console's HTTP request 55s and
 // the apiserver proxy allows 60s (ConsoleHttp.PROXY_CEILING_MS). The Android console's own
 // LONG_POLL_HOLD_MS must stay at or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts
 // and ChatRepositoryConstantsTest.kt, update all sides together.
 export const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 
-// At-most-once side effects: the console->evie->gateway path is at-least-once (a lost reply makes
+// At-most-once side effects: the console->Router->gateway path is at-least-once (a lost reply makes
 // the console retry the same opId), so a seen opId replays its cached reply instead of re-running
 // the op (which would duplicate a channel_push / response_push). Only mutating ops are cached,
 // only on success, and the cache is keyed per conversation so one install cannot evict or read

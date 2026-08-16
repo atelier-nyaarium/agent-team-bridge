@@ -161,7 +161,7 @@ async function postPastedBundle(bundle: string): Promise<boolean> {
 
 /** True once transport.json holds the direct branch the gateway itself accepts. Existence alone is
  * not the signal: a truncated file, or one still in the retired k8s shape, would read as a successful
- * enrollment here while `loadEvieTransport` reads it as null and arms for enrollment. Same rule as
+ * enrollment here while `loadRouterTransport` reads it as null and arms for enrollment. Same rule as
  * that loader, or the two answer opposite things about one file. */
 export async function transportInstalled(): Promise<boolean> {
 	const text = await readTransportText();

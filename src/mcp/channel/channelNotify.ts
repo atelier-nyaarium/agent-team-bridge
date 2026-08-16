@@ -1,6 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { ChannelFile, ChannelPushPayload, ResponsePushPayload } from "../../shared/types.js";
-import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./evieFiles.js";
+import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./channelFiles.js";
 
 ////////////////////////////////
 //  Functions & Helpers

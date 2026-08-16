@@ -39,7 +39,7 @@ export const XDOMAIN_PEERS_FILE = "cross-domain-peers.json";
 
 /** The cross-Domain peer set, persisted to the Gateway's volume at 0600. Disjoint from
  * the local allowlist: written only by the handshake, never by `allowlist.applySnapshot`
- * or any evie-relayed snapshot, so a local-Domain sync can never wipe it and it cannot
+ * or any Router-relayed snapshot, so a local-Domain sync can never wipe it and it cannot
  * contaminate intra-Domain resolution. The sealer resolves local peers first, then falls
  * back here, so a local peer's seal path is unchanged. */
 export class CrossDomainPeers {

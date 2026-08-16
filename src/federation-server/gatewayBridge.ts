@@ -11,7 +11,7 @@ import {
 	type GatewayRelayReplyParams,
 	GatewayRelayReplyParamsSchema,
 	GatewayRelayRouteSchema,
-} from "../shared/evie-protocol.js";
+} from "../shared/router-protocol.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";

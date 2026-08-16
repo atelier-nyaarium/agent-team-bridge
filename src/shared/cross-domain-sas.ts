@@ -134,17 +134,17 @@ export function crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: st
 //  Enroll SAS (owner-anchored, role-tagged) - the in-person admin<->enrollee compare
 //
 //  The enroll ceremony confirms two OWNERS' keys (the admin who showed the QR and the enrollee
-//  who scanned it), brokered by an untrusted evie. It does NOT reuse the gateway crossDomainSas:
+//  who scanned it), brokered by an untrusted Router. It does NOT reuse the gateway crossDomainSas:
 //  the enrollee has no gateway, so the binding is over OWNER keys (ownerSignPub + ownerBoxPub +
-//  domainId), never gateway keys. Two load-bearing differences, both because evie is untrusted:
+//  domainId), never gateway keys. Two load-bearing differences, both because the Router is untrusted:
 //
 //  - FIXED-SLOT, ROLE-TAGGED preimage (not a flat lexicographic sort). Each owner's three
 //    fields sit in a labelled ADMIN / ENROLLEE block at a fixed position, so a field-role swap
 //    changes the code - the SAS is injective by construction, not merely saved by the
 //    commitment. Role is unambiguous offline: the phone that SHOWED the QR is ADMIN, the one
 //    that SCANNED is ENROLLEE.
-//  - The pin rides in the QR (out of band) and is folded in here but NEVER sent to evie, so
-//    evie cannot compute a candidate code to grind.
+//  - The pin rides in the QR (out of band) and is folded in here but NEVER sent to the Router, so
+//    the Router cannot compute a candidate code to grind.
 //
 //  The 6-digit reduction and the hiding salted commitment are the SAME as the gateway SAS;
 //  only the preimage shape and the version literals (ENROLL_SAS_V1 / ENROLL_COMMIT_V1) differ,
@@ -161,7 +161,7 @@ export interface EnrollParty {
 }
 
 /** This side's role in the ceremony: ADMIN showed the QR, ENROLLEE scanned it. The role is
- * known from the physical act (not from evie), and tags the party's slot in both the
+ * known from the physical act (not from the Router), and tags the party's slot in both the
  * commitment and the SAS so the two blocks can never be transposed. */
 export type EnrollRole = "ADMIN" | "ENROLLEE";
 
@@ -179,7 +179,7 @@ export function enrollCommitmentPreimage(party: EnrollParty, role: EnrollRole, s
 
 /** A side's hiding commitment to its own owner keys + role: SHA-256 of the canonical
  * commitment preimage, base64. Sent in round 1 before either side reveals; the peer verifies
- * it against the round-2 reveal, which is what forces an untrusted evie to commit any
+ * it against the round-2 reveal, which is what forces an untrusted Router to commit any
  * substitution before it learns the real peer key. */
 export function enrollCommitment(party: EnrollParty, role: EnrollRole, salt: string): string {
 	return crypto
@@ -226,7 +226,7 @@ export function enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin
 
 /** The displayed 6-digit enroll safety code, computed identically to crossDomainSas (SHA-256
  * the preimage, first 8 digest bytes as a big-endian BigInt, mod 10^6, zero-pad to 6) but over
- * the owner-anchored role-tagged preimage. Computed PHONE-SIDE only (evie never computes it);
+ * the owner-anchored role-tagged preimage. Computed PHONE-SIDE only (the Router never computes it);
  * the two humans compare the two phones' codes in person. */
 export function enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: string): string {
 	return reduceToSas(enrollSasPreimage(admin, enrollee, pin));

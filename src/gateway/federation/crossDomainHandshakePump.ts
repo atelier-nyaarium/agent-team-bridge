@@ -2,7 +2,7 @@ import { z } from "zod";
 import type {
 	CrossDomainHandshakeReplyParams,
 	CrossDomainHandshakeRevealReplyParams,
-} from "../../shared/evie-protocol.js";
+} from "../../shared/router-protocol.js";
 import {
 	type XDomainCommitReplyWire,
 	type XDomainCommitWire,
@@ -15,7 +15,7 @@ import {
 ////////////////////////////////
 //  Router wiring (requester seam + receiver pump)
 //
-//  Bridges the coordinator to the evie client. The requester leg drives each round trip
+//  Bridges the coordinator to the Router client. The requester leg drives each round trip
 //  as a tool call; the receiver leg validates an inbound relayed frame, runs it through
 //  the coordinator, and replies as the matching reply tool call. Mirrors the gateway-relay
 //  wiring in gatewayRelay.ts (one parse, one error surface).

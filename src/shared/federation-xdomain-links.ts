@@ -6,7 +6,7 @@ import { sign, verify } from "./crypto.js";
 
 /** A content-blind cross-Domain link edge: an owner attests that traffic from its
  * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked
- * with. evie's relay-affinity gate honors a cross-Domain `gateway_relay` only when such
+ * with. The Router's relay-affinity gate honors a cross-Domain `gateway_relay` only when such
  * an owner-signed edge exists for the pair. Content-blind: it names only the two Domain
  * ids, never a session or a key. Both ids are slug-constrained so neither can carry a
  * newline that would make the signing bytes ambiguous against the other. */
@@ -28,7 +28,7 @@ export const XDomainLinkEdgeSchema = z
 export const SignedXDomainLinkEdgeSchema = z
 	.object({
 		edge: XDomainLinkEdgeSchema,
-		// The linking owner's root key (base64). evie checks it against the srcDomain's
+		// The linking owner's root key (base64). The Router checks it against the srcDomain's
 		// rooted owner key (the owner of the Domain the edge authorizes traffic FROM),
 		// never trusting this field alone.
 		ownerSignPub: z.string().min(1),
@@ -38,7 +38,7 @@ export const SignedXDomainLinkEdgeSchema = z
 	.meta({ id: "SignedXDomainLinkEdge" });
 
 /** The owner-signed revocation of a cross-Domain link edge: it withdraws the owner's
- * attestation that traffic from `srcDomainId` may relay to `dstDomainId`. evie drops every
+ * attestation that traffic from `srcDomainId` may relay to `dstDomainId`. The Router drops every
  * matching edge for the pair, so its relay-affinity gate refuses the cross-Domain
  * `gateway_relay` again. Content-blind and slug-constrained like the edge it revokes; the
  * shape adds the admission Revocation's revoke-time/nonce fields. */
@@ -60,7 +60,7 @@ export const XDomainLinkRevocationSchema = z
 export const SignedXDomainLinkRevocationSchema = z
 	.object({
 		revocation: XDomainLinkRevocationSchema,
-		// The revoking owner's root key (base64). evie checks it against the srcDomain's
+		// The revoking owner's root key (base64). The Router checks it against the srcDomain's
 		// rooted owner key (the owner of the Domain whose edge is being revoked), never
 		// trusting this field alone.
 		ownerSignPub: z.string().min(1),
@@ -79,7 +79,7 @@ export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevoca
 
 /** Versioned, newline-joined signing bytes for a cross-Domain link edge. Mirrors
  * `admissionSigningBytes` in shape; every field is base64 or a slug, so the encoding is
- * unambiguous and reproduces byte-for-byte on switchboard, evie, and Android. Do NOT
+ * unambiguous and reproduces byte-for-byte on switchboard, the Router, and Android. Do NOT
  * sign raw JSON. */
 export function xDomainLinkEdgeSigningBytes(edge: XDomainLinkEdge, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
@@ -119,7 +119,7 @@ export function verifyXDomainLinkEdge(s: SignedXDomainLinkEdge, expectedOwnerSig
 /** Versioned, newline-joined signing bytes for a cross-Domain link-edge revocation.
  * The prefix is distinct from the link edge's, so a captured edge signature can never be
  * replayed as a revocation (or the reverse). Every field is base64 or a slug, so the
- * encoding is unambiguous and reproduces byte-for-byte on switchboard, evie, and Android.
+ * encoding is unambiguous and reproduces byte-for-byte on switchboard, the Router, and Android.
  * Do NOT sign raw JSON. */
 export function xDomainLinkRevocationSigningBytes(rev: XDomainLinkRevocation, ownerSignPubB64: string): Buffer {
 	return Buffer.from(

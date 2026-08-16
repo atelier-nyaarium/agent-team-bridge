@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRoutes } from "../gateway/routes.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
-import { fakeEvie, makeCtx, sealerB } from "./helpers/federation.js";
+import { fakeRouter, makeCtx, sealerB } from "./helpers/federation.js";
 
 ////////////////////////////////
 //  Per-session un-share enforced on the destination reply forward (response_push)
@@ -30,20 +30,20 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 
 	function respondOnB(isShared: boolean) {
 		// Records gateway_relay so we can assert the response_push DID or did NOT forward.
-		const evie = fakeEvie({ onCall: () => ({ ok: true }) });
+		const router = fakeRouter({ onCall: () => ({ ok: true }) });
 		const ctx = makeCtx("hostb", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerB,
 			isSharedToForReply: (sessionTarget, domainId) =>
 				isShared && sessionTarget === "alice.hostb.lib.dev" && domainId === "alice",
 		});
 		seedDestJob(ctx.store);
 		const routes = createRoutes(ctx);
-		return { routes, evie };
+		return { routes, router };
 	}
 
 	it("DROPS the response_push for a session that was un-shared (does not forward to the origin)", async () => {
-		const { routes, evie } = respondOnB(false);
+		const { routes, router } = respondOnB(false);
 		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
 			session_id: SRC_SESSION,
 			status: "completed",
@@ -53,11 +53,11 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 		expect(json).toEqual({ delivered: false, dropped: "unshared" });
 		// Let any (erroneous) background relay attempt flush, then assert NONE happened.
 		await new Promise((r) => setTimeout(r, 0));
-		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeUndefined();
+		expect(router.calls.find((c) => c.action === "gateway_relay")).toBeUndefined();
 	});
 
 	it("FORWARDS the response_push normally for a session that is still shared", async () => {
-		const { routes, evie } = respondOnB(true);
+		const { routes, router } = respondOnB(true);
 		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
 			session_id: SRC_SESSION,
 			status: "completed",
@@ -66,15 +66,15 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 		expect((await res.json()).federated).toBe(true);
 		// The forward is fire-and-forget; let it run, then assert it relayed to the origin.
 		await new Promise((r) => setTimeout(r, 0));
-		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
+		expect(router.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
 	});
 
 	it("a SAME-DOMAIN federated reply (dstDomainId null) is never gated, even with no share", async () => {
 		// The reply gate fires only on a cross-Domain job (dstDomainId set). A same-Domain
 		// federated job has a returnRoute but null Domain binding, so it forwards unchanged.
-		const evie = fakeEvie({ onCall: () => ({ ok: true }) });
+		const router = fakeRouter({ onCall: () => ({ ok: true }) });
 		const ctx = makeCtx("hostb", {
-			evieClient: evie.client,
+			routerClient: router.client,
 			sealer: sealerB,
 			isSharedToForReply: () => false, // would drop IF consulted
 		});
@@ -92,6 +92,6 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 		});
 		expect((await res.json()).federated).toBe(true);
 		await new Promise((r) => setTimeout(r, 0));
-		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
+		expect(router.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
 	});
 });

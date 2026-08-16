@@ -38,9 +38,9 @@ import kotlinx.coroutines.launch
 /**
  * The mutual in-person trust compare, a transient overlay (leaving it cancels the broker window).
  * Both phones run the SAME flow parameterized by an [EnrollCeremonyContext]: commit + reveal through
- * the untrusted evie broker, compute the 6-digit code LOCALLY, then a glance compare - [They match]
- * commits the trust edge, [They differ] / leaving aborts. evie never sees the pin and never computes
- * the code, so a substituted key surfaces here as a diverging code, not a silent MITM.
+ * the untrusted Router broker, compute the 6-digit code LOCALLY, then a glance compare - [They match]
+ * commits the trust edge, [They differ] / leaving aborts. The Router never sees the pin and never
+ * computes the code, so a substituted key surfaces here as a diverging code, not a silent MITM.
  *
  * The admin shows the QR on the waiting panel (the new user scans it in person); the enrollee, who
  * already scanned, just waits for the admin to confirm. The compare itself is identical on both.
@@ -65,7 +65,7 @@ fun EnrollCeremonyScreen(
 	// still torn down on those paths.
 	val confirmed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 	// One owner-link nonce pinned for the whole ceremony so a retry (or a lost-ack re-submit) re-signs
-	// the SAME edge bytes, which evie dedupes - rather than accumulating a fresh edge per attempt.
+	// the SAME edge bytes, which the Router dedupes - rather than accumulating a fresh edge per attempt.
 	val edgeNonce = remember { repo.trust.freshLinkNonce() }
 
 	// Drive the commit-reveal exchange the moment the screen opens: commit this side, poll the broker

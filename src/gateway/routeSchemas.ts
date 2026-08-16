@@ -1,10 +1,10 @@
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { BoardEntry } from "../shared/console-protocol.js";
-import { MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import { ReturnRouteSchema } from "../shared/federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
 import { NoticeFull, NoticeFullSpoken, NoticeSummary, NoticeTierWireFields, NoticeTitle } from "../shared/notice.js";
+import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { BOARD_BODY_MAX, ChannelFilesSchema } from "../shared/schemas.js";
 import { isSlug } from "../shared/session-id.js";
 import type { ChannelFile, ConnectionMode } from "../shared/types.js";

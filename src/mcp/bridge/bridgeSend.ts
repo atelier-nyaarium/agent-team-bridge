@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ChannelFile, ResponsePayload } from "../../shared/types.js";
-import { dropReferenceArtifacts } from "../channel/evieFiles.js";
+import { dropReferenceArtifacts } from "../channel/channelFiles.js";
 import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "./replyTool.js";
 

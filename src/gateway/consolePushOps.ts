@@ -23,7 +23,7 @@ export interface ConsolePushOpsDeps {
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	/** This Gateway's own Domain owner id, the shared inbox key. Null pre-enrollment. */
 	ownerId?: (() => string | null) | null;
-	evieClient?: import("./evie/evieClient.js").EvieClient | null;
+	routerClient?: import("./router/routerClient.js").RouterClient | null;
 	/** Whether a gateway id resolves to a LOCAL peer, the allowlist filter the fan-out applies. */
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	localGatewayId: string;
@@ -44,7 +44,7 @@ export interface ConsolePushOpsDeps {
 export function createConsolePushOps({
 	mailboxStore,
 	ownerId,
-	evieClient,
+	routerClient,
 	resolvesLocalGateway,
 	localGatewayId,
 	localAddress,
@@ -136,23 +136,23 @@ export function createConsolePushOps({
 	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
 	 * same-Domain Gateway, so it lands wherever the owner's console actually polls - not just the
 	 * Gateway that composed it. Same-Domain peers are enumerated the same way discover() already
-	 * does (evie's list_gateways; no new discovery machinery), filtered through the
+	 * does (the Router's list_gateways; no new discovery machinery), filtered through the
 	 * locally-mirrored Allowlist where available (a mailbox WRITE deserves the extra check
 	 * discover()'s read-only list_teams fan-out doesn't bother with) and self-excluded as cheap
-	 * insurance against evie ever including the caller in its own roster. Fire-and-forget with
+	 * insurance against the Router ever including the caller in its own roster. Fire-and-forget with
 	 * retry (relayWithRetry); never throws. ORIGIN-ONLY: call this from an origination tap point
 	 * (mirrorPeer, humanNotify) alone - never from console_push's own landing case in handleOp, or
 	 * an entry would gossip-loop around the mesh forever. */
 	async function fanOutConsolePush(entry: ConsolePushEntry, dedupeKey: string): Promise<void> {
-		if (!evieClient?.isConnected()) return;
+		if (!routerClient?.isConnected()) return;
 		if (!resolvesLocalGateway) {
-			// Not just "no extra check" - trusting evie's roster alone for a mailbox WRITE is a
+			// Not just "no extra check" - trusting the Router's roster alone for a mailbox WRITE is a
 			// deliberately bigger trust extension than list_teams' read-only fan-out takes, so a
 			// missing filter is worth a log, not a silent downgrade.
 			console.warn("[console_push] fan-out running with no allowlist filter (resolvesLocalGateway unset)");
 		}
 		try {
-			const rosterCall = await evieClient.callTool("list_gateways", {});
+			const rosterCall = await routerClient.callTool("list_gateways", {});
 			const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 			for (const { gatewayId } of roster) {
 				if (gatewayId === localGatewayId) continue;

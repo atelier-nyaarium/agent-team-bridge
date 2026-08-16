@@ -9,7 +9,7 @@ import kotlinx.coroutines.withContext
  * and the confirm/cancel outcomes. The pure engine stays in SasExchange.kt / EnrollCeremony.kt. */
 internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 	////////////////////////////////
-	//  FLOW-1 enroll ceremony (the in-person admin <-> new-user trust compare, brokered by evie)
+	//  FLOW-1 enroll ceremony (the in-person admin <-> new-user trust compare, brokered by the Router)
 
 	/** The ADMIN leg context for a staged tenant's in-person compare: the handshakeId + pin the
 	 * invite embedded (minted on buildInviteBlob) plus this owner's party. Null until the admin has
@@ -47,7 +47,7 @@ internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 		repo.store.enrollCeremonyDone = true
 	}
 
-	/** The FLOW-1 leg to the human compare. evie is a dumb broker: every check is on the phone. */
+	/** The FLOW-1 leg to the human compare. The Router is a dumb broker: every check is on the phone. */
 	suspend fun enrollExchange(ctx: EnrollCeremonyContext): Result<EnrollExchange> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			runSasExchange(
@@ -91,8 +91,8 @@ internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 				// the peer's owner key, so trust the PERSON even if the relay edge below is rejected (a
 				// gateway-less friend still becomes a friend; relay enables later).
 				repo.federation.addTrustedOwner(peerOwnerSignPub)
-				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (evie dedupes
-				// by (src, nonce)) instead of accumulating a duplicate per attempt.
+				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (the Router
+				// dedupes by (src, nonce)) instead of accumulating a duplicate per attempt.
 				if (repo.ownerFacts.submitXdomainLink(myDomainId, peerDomainId, edgeNonce)) {
 					ConfirmOutcome.Linked
 				} else {

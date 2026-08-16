@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
  * cannot submit without the matching local merge, or a revoked member stays visible on the board)
  * holds only because every caller goes through one of the files below. `ChatRepository.federation` is
  * declared `internal`, not `private`, so nothing in the compiler stops another file in the module from
- * merging an admission evie rejected, or adding a trusted owner with no ceremony - this guard is what
+ * merging an admission the Router rejected, or adding a trusted owner with no ceremony - this guard is what
  * actually enforces the boundary.
  *
  * Deliberately in the TS suite: the Android tests only run on push to main, so a Kotlin-side

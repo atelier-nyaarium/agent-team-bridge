@@ -1,5 +1,5 @@
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types

@@ -89,7 +89,7 @@ describe("moving bytes between an agent and the gateway", () => {
 	});
 
 	it("delivers a payload larger than one chunk, and never reads more than a chunk at a time", async () => {
-		const { BLOB_CHUNK_BYTES } = await import("../shared/evie-protocol.js");
+		const { BLOB_CHUNK_BYTES } = await import("../shared/router-protocol.js");
 		// Deliberately not a multiple of the chunk size: a final short chunk is where an off-by-one
 		// in the resume cursor shows up.
 		const bytes = Buffer.alloc(BLOB_CHUNK_BYTES * 2 + 7, "x");
@@ -118,7 +118,7 @@ describe("moving bytes between an agent and the gateway", () => {
 	});
 
 	it("resumes an interrupted upload from where it stopped instead of restarting", async () => {
-		const { BLOB_CHUNK_BYTES } = await import("../shared/evie-protocol.js");
+		const { BLOB_CHUNK_BYTES } = await import("../shared/router-protocol.js");
 		const { downloadBlob, uploadBlob } = await import("../mcp/blobTransfer.js");
 		const bytes = Buffer.alloc(BLOB_CHUNK_BYTES * 3, "y");
 		bytes.write("tail", bytes.length - 4);
@@ -262,7 +262,7 @@ describe("moving bytes between an agent and the gateway", () => {
 
 	it("refuses a chunk over the transport cap rather than buffering it", async () => {
 		const { answerBlobOp, BlobTooLarge } = await import("../gateway/blobOps.js");
-		const { BLOB_CHUNK_BYTES } = await import("../shared/evie-protocol.js");
+		const { BLOB_CHUNK_BYTES } = await import("../shared/router-protocol.js");
 		const oversize = Buffer.alloc(BLOB_CHUNK_BYTES + 1, "z");
 
 		await expect(
@@ -278,7 +278,7 @@ describe("moving bytes between an agent and the gateway", () => {
 
 	it("refuses a transfer that would grow past the total cap, however small its chunks", async () => {
 		const { answerBlobOp, BlobTooLarge } = await import("../gateway/blobOps.js");
-		const { MAX_BLOB_BYTES } = await import("../shared/evie-protocol.js");
+		const { MAX_BLOB_BYTES } = await import("../shared/router-protocol.js");
 		const tail = Buffer.from("one byte too far");
 
 		// A sender that under-reported its `size` gets stopped by what actually landed, not by what
@@ -296,7 +296,7 @@ describe("moving bytes between an agent and the gateway", () => {
 
 	it("clamps an oversized read instead of allocating whatever the caller named", async () => {
 		const { answerBlobOp } = await import("../gateway/blobOps.js");
-		const { BLOB_CHUNK_BYTES } = await import("../shared/evie-protocol.js");
+		const { BLOB_CHUNK_BYTES } = await import("../shared/router-protocol.js");
 		const bytes = Buffer.alloc(BLOB_CHUNK_BYTES * 2, "w");
 		fs.writeFileSync(source, bytes);
 		const { uploadBlob } = await import("../mcp/blobTransfer.js");

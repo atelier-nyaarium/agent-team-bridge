@@ -273,7 +273,7 @@ describe("routes", () => {
 		});
 
 		it("pullPresenceFromDomain resolves null when every one of the Domain's gateways is unreachable", async () => {
-			// No evieClient wired in this ctx, so relayToGateway fails closed for every gateway -
+			// No routerClient wired in this ctx, so relayToGateway fails closed for every gateway -
 			// exactly the "reached none of them" case that must never be confused with "reached them
 			// and they genuinely share nothing" (which resolves an empty array, not null).
 			const crossDomainPeers = {

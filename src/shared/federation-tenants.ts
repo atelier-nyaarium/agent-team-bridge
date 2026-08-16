@@ -7,13 +7,13 @@ import { b64Field, displayField, fingerprint, sign, slugField, verify } from "./
 //  The admin pre-stages a friend's Domain as a PENDING tenant (a domainId + a
 //  displayName label, NO owner root) and mints a one-time invite QR; the friend's app
 //  first-roots the Domain at its silently-generated owner key on first connect. The
-//  signing artifacts below ride the app-token-gated bridge to evie:
+//  signing artifacts below ride the app-token-gated bridge to the Router:
 //
-//  - provision_tenant / remove_tenant: ADMIN-signed. evie creates / drops the pending tenant.
+//  - provision_tenant / remove_tenant: ADMIN-signed. The Router creates / drops the pending tenant.
 //  - first_root: SELF-signed by the friend's fresh owner key (no admission exists yet),
-//    carrying the one-time QR nonce; evie roots the pending Domain at it, idempotent on the
+//    carrying the one-time QR nonce; the Router roots the pending Domain at it, idempotent on the
 //    same key, refusing a re-root at a different key.
-//  - set_display_name: OWNER-signed; evie CAS-merges the rename and pushes it to the Domain's
+//  - set_display_name: OWNER-signed; the Router CAS-merges the rename and pushes it to the Domain's
 //    own gateways, while linked Peers see it on their next discovery refresh.
 //
 //  Each preimage is the SAME versioned, newline-joined, fixed-order encoding as
@@ -27,7 +27,7 @@ import { b64Field, displayField, fingerprint, sign, slugField, verify } from "./
 //  Schemas
 
 /** A pending (rootless) tenant the admin pre-stages: a domainId + a displayName
- * display label, the one-time invite nonce (issuedAt + ttlMs server-checked at evie),
+ * display label, the one-time invite nonce (issuedAt + ttlMs server-checked at the Router),
  * and `rooted` flipped true once a friend's first_root spends the nonce. */
 export const PendingTenantSchema = z
 	.object({
@@ -40,7 +40,7 @@ export const PendingTenantSchema = z
 		nonce: b64Field(),
 		// When the invite was minted (epoch ms); the TTL is measured from this.
 		issuedAt: z.number().int().nonnegative(),
-		// Invite lifetime (ms); evie sweeps an unredeemed pending tenant at issuedAt + ttlMs.
+		// Invite lifetime (ms); the Router sweeps an unredeemed pending tenant at issuedAt + ttlMs.
 		ttlMs: z.number().int().nonnegative(),
 		// True once a friend's first_root has rooted this Domain; the invite is then spent.
 		rooted: z.boolean(),
@@ -48,7 +48,7 @@ export const PendingTenantSchema = z
 	.meta({ id: "PendingTenant" });
 
 /** The admin's request to create a pending tenant (admin-signed). The signing bytes
- * bind the admin's own fingerprint, so evie can pin the request to the admin's key. */
+ * bind the admin's own fingerprint, so the Router can pin the request to the admin's key. */
 export const ProvisionTenantSchema = z
 	.object({
 		domainId: slugField(),
@@ -61,7 +61,7 @@ export const ProvisionTenantSchema = z
 export const SignedProvisionTenantSchema = z
 	.object({
 		provision: ProvisionTenantSchema,
-		// The admin's root signing public key (base64). evie checks it against the
+		// The admin's root signing public key (base64). The Router checks it against the
 		// admin's known key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
 		adminSignPub: b64Field(),
@@ -89,7 +89,7 @@ export const SignedRemoveTenantSchema = z
 
 /** The friend console's first-root of a pending Domain (SELF-signed by the fresh owner
  * key). No admission exists yet, so the verifier checks the signature against the frame's
- * OWN ownerSignPub; the one-time QR `nonce` (server-checked unspent at evie) is the
+ * OWN ownerSignPub; the one-time QR `nonce` (server-checked unspent at the Router) is the
  * authorization, the self-signature only proves possession of the submitted owner key. */
 export const FirstRootSchema = z
 	.object({
@@ -97,7 +97,7 @@ export const FirstRootSchema = z
 		// The friend's silently-generated owner root keys (base64) the Domain roots at.
 		ownerSignPub: b64Field(),
 		ownerBoxPub: b64Field(),
-		// The one-time invite nonce from the QR (base64); evie roots only if it is unspent.
+		// The one-time invite nonce from the QR (base64); the Router roots only if it is unspent.
 		nonce: b64Field(),
 		issuedAt: z.number().int().nonnegative(),
 	})
@@ -113,7 +113,7 @@ export const SignedFirstRootSchema = z
 	})
 	.meta({ id: "SignedFirstRoot" });
 
-/** The owner's request to rename their Domain's display name (owner-signed). evie CAS-merges
+/** The owner's request to rename their Domain's display name (owner-signed). The Router CAS-merges
  * it and pushes a domain_update to the Domain's OWN gateways, so the rename is immediate there;
  * linked Peers pick it up lazily on their next discovery refresh. */
 export const SetDisplayNameSchema = z
@@ -128,7 +128,7 @@ export const SetDisplayNameSchema = z
 export const SignedSetDisplayNameSchema = z
 	.object({
 		rename: SetDisplayNameSchema,
-		// The rooted owner's root signing public key (base64). evie checks it against the
+		// The rooted owner's root signing public key (base64). The Router checks it against the
 		// Domain's rooted owner key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
 		ownerSignPub: b64Field(),
@@ -138,8 +138,8 @@ export const SignedSetDisplayNameSchema = z
 	.meta({ id: "SignedSetDisplayName" });
 
 /** A user deleting their OWN Domain (the app-only "Revoke and Delete Domain"). The rooted owner
- * signs a request to purge their whole Domain slice from evie - admissions, revocations, and links.
- * evie verifies the signer IS the Domain's rooted owner before dropping the slice. */
+ * signs a request to purge their whole Domain slice from the Router - admissions, revocations, and links.
+ * The Router verifies the signer IS the Domain's rooted owner before dropping the slice. */
 export const DeleteDomainSchema = z
 	.object({
 		domainId: slugField(),
@@ -151,7 +151,7 @@ export const DeleteDomainSchema = z
 export const SignedDeleteDomainSchema = z
 	.object({
 		deletion: DeleteDomainSchema,
-		// The rooted owner's root signing public key (base64). evie checks it against the
+		// The rooted owner's root signing public key (base64). The Router checks it against the
 		// Domain's rooted owner key, never trusting this field alone.
 		ownerSignPub: b64Field(),
 		// The owner's Ed25519 signature over deleteDomainSigningBytes (base64).
@@ -265,7 +265,7 @@ export function signFirstRoot(firstRoot: FirstRoot, ownerSignPrivB64: string): S
 
 /** True if the first-root self-signature checks against the owner key it roots at
  * (firstRoot.ownerSignPub). Proves possession of the submitted owner key; the one-time
- * nonce (checked unspent at evie) is the authorization. */
+ * nonce (checked unspent at the Router) is the authorization. */
 export function verifyFirstRoot(s: SignedFirstRoot): boolean {
 	return verify(firstRootSigningBytes(s.firstRoot), s.signature, s.firstRoot.ownerSignPub);
 }

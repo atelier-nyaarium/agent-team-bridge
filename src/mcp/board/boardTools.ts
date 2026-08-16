@@ -6,7 +6,7 @@ import { z } from "zod";
 import { BOARD_BODY_MAX } from "../../shared/schemas.js";
 import { sweepStaging } from "../blobTransfer.js";
 import { postBoard } from "../bridge/helpers.js";
-import { EVIE_FILES_DIR, materializeFiles, safeFilename } from "../channel/evieFiles.js";
+import { CHANNEL_FILES_DIR, materializeFiles, safeFilename } from "../channel/channelFiles.js";
 
 ////////////////////////////////
 //  Schemas
@@ -227,7 +227,7 @@ async function fetchAttachments(args: { id: string; filenames?: string[] }): Pro
 	// Before the transfer, or a big fetch lands on whatever the last one left.
 	sweepStaging();
 	// REPLACED, not added to, or a re-read grows shot-2.png, shot-3.png forever.
-	rmSync(join(EVIE_FILES_DIR, safeFilename(args.id)), { recursive: true, force: true });
+	rmSync(join(CHANNEL_FILES_DIR, safeFilename(args.id)), { recursive: true, force: true });
 	const landed = await materializeFiles({
 		discordMessageId: args.id,
 		files: wanted.map((a) => ({

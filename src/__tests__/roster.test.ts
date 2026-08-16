@@ -10,7 +10,7 @@ import {
 } from "../shared/federation-lifecycle.js";
 
 // A console proves it holds an admitted signing key by signing ROSTER_V1 over its own key + a
-// fresh timestamp + nonce. evie verifies the proof, then resolves the key to an admitted console.
+// fresh timestamp + nonce. The Router verifies the proof, then resolves the key to an admitted console.
 const console1 = generateIdentity();
 
 function request(over: Partial<{ proofAt: number; nonce: string }> = {}) {

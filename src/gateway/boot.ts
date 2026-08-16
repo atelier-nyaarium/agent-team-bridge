@@ -1,9 +1,8 @@
 // The gateway's boot lifecycle as ONE value: Standalone (no mesh), Arming (enrollment window
-// open), FederationActive (evie bridge up). The phase is a value a reader receives, never a
+// open), FederationActive (Router connection up). The phase is a value a reader receives, never a
 // null check each site re-derives.
 
 import type { ConsoleSealer } from "./console/consoleSealer.js";
-import type { EvieClient } from "./evie/evieClient.js";
 import type { Allowlist } from "./federation/allowlist.js";
 import type { CrossDomainHandshakeCoordinator } from "./federation/crossDomainHandshake.js";
 import type { CrossDomainPeers } from "./federation/crossDomainPeers.js";
@@ -11,20 +10,21 @@ import type { CrossDomainPresenceSource } from "./federation/crossDomainPresence
 import type { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import type { AdmitGatewayPayload } from "./federation/enrollQr.js";
 import type { Sealer } from "./federation/sealer.js";
+import type { RouterClient } from "./router/routerClient.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** This Gateway's Domain lifecycle metadata, learned from evie's register reply. */
+/** This Gateway's Domain lifecycle metadata, learned from the Router's register reply. */
 export interface DomainMeta {
 	domainStatus?: string;
 	displayName?: string | null;
 	isAdminDomain?: boolean;
 }
 
-/** The evie-frame handlers, built against the federation-aware routes after the rebuild.
+/** The Router frame handlers, built against the federation-aware routes after the rebuild.
  * A frame arriving before they land on the slice is dropped (the console re-polls). */
-export interface EvieHandlers {
+export interface RouterHandlers {
 	consoleRelay: (frame: unknown) => void;
 	gatewayRelay: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
@@ -32,7 +32,7 @@ export interface EvieHandlers {
 	presenceSource: CrossDomainPresenceSource;
 }
 
-/** Everything FederationActive owns. Only domainMeta (evie's first register reply) and
+/** Everything FederationActive owns. Only domainMeta (the Router's first register reply) and
  * handlers (built against the rebuilt routes) populate after construction. */
 export interface FederationSlice {
 	allowlist: Allowlist;
@@ -41,10 +41,10 @@ export interface FederationSlice {
 	coordinator: CrossDomainHandshakeCoordinator;
 	sealer: Sealer;
 	consoleSealer: ConsoleSealer;
-	evieClient: EvieClient;
+	routerClient: RouterClient;
 	replayPersist: () => void;
 	domainMeta: DomainMeta | null;
-	handlers: EvieHandlers | null;
+	handlers: RouterHandlers | null;
 }
 
 /** The open enrollment window. Leaving the arming phase is what closes it: both fields die with

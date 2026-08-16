@@ -33,7 +33,7 @@ const ALLOWLIST_FILE = "federation-allowlist.json";
 
 /** The mirrored Domain allowlist on a Gateway (audit R3): the owner root plus the
  * owner-signed admissions / revocations, persisted to the Gateway's volume so a
- * revocation bites even while evie is unreachable. Resolution maps a Gateway id to
+ * revocation bites even while the Router is unreachable. Resolution maps a Gateway id to
  * its admitted keys for sealing, and a sender key to its admission for unsealing. */
 export class Allowlist {
 	private file: string;
@@ -63,7 +63,7 @@ export class Allowlist {
 		return this.state.ownerSignPub;
 	}
 
-	/** The current owner-rooted snapshot, or null before rooting. Mirrors evie's
+	/** The current owner-rooted snapshot, or null before rooting. Mirrors the Router's
 	 * canonical keyring (the Console syncs it through its route Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
@@ -93,7 +93,7 @@ export class Allowlist {
 		this.persist();
 	}
 
-	/** Mirror the Domain state evie pushed (audit R3). Idempotent: replaces the
+	/** Mirror the Domain state the Router pushed (audit R3). Idempotent: replaces the
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
 	 * rather than accumulating duplicates. The first snapshot roots the Gateway
 	 * (trust-on-first-enroll); a later snapshot rooted at a different owner key is
@@ -126,7 +126,7 @@ export class Allowlist {
 	}
 
 	/** This Gateway's own owner-signed admission (newest verified for its signing
-	 * key), to present at registration so evie can gate it. Null pre-enrollment. */
+	 * key), to present at registration so the Router can gate it. Null pre-enrollment. */
 	selfAdmission(signPubB64: string): SignedAdmission | null {
 		if (!this.state.ownerSignPub) return null;
 		let best: SignedAdmission | null = null;

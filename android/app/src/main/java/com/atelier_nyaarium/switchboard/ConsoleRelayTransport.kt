@@ -247,7 +247,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
 		// An op seals to the Gateway hosting its session (resolved from the keyring), naming it so
-		// evie routes there. Register/poll/list default to the route Gateway.
+		// the Router routes there. Register/poll/list default to the route Gateway.
 		val gatewayId = targetGateway?.takeIf { it.isNotEmpty() } ?: resolveGatewayId()
 		val hostKeys = requireGatewayKeys(gatewayId)
 
@@ -283,8 +283,8 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		return unsealReply(reply.sealed, identity, hostKeys.signPub)
 	}
 
-	/** This instance's evie-direct POST, filling in ConsoleHttp's testable postEvieDirect primitive
-	 * with this ConsoleClient's own client/url/tokens. Every production evie-direct call site goes
+	/** This instance's Router-direct POST, filling in ConsoleHttp's testable postRouterDirect primitive
+	 * with this ConsoleClient's own client/url/tokens. Every production Router-direct call site goes
 	 * through here instead of repeating those four positional args - besides the duplication, three of
 	 * them are adjacent same-typed Strings (url, saToken, appToken) that Kotlin cannot keyword-enforce
 	 * positionally, so a hand-repeated call is one transposition away from swapping which credential
@@ -292,14 +292,14 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	 * result carries secret material the debug log must never echo passes false; every other site
 	 * states true explicitly, so a new site cannot compile without deciding rather than silently
 	 * inheriting a "log everything" default. */
-	internal suspend inline fun <reified R> postEvieDirect(
+	internal suspend inline fun <reified R> postRouterDirect(
 		tag: String,
 		describe: String,
 		body: RequestBody,
 		logBody: Boolean,
 		fail: (String) -> R,
 	): R = withReachFailover { base ->
-		ConsoleHttp.postEvieDirect(clientFor(base), "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+		ConsoleHttp.postRouterDirect(clientFor(base), "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */

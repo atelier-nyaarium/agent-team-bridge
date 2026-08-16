@@ -29,7 +29,7 @@ export function sanitizeDomainId(raw: string): string {
 /** The local Gateway's Domain id, or null when it has not been enrolled yet. Resolution order: the
  * enrollment-delivered `domain-id` file, then the `FEDERATION_DOMAIN_ID` env (the admin box's own
  * record). Null means the gateway boots standalone and opens its enrollment listener; a Domain is
- * required only to connect to evie. */
+ * required only to connect to the Router. */
 export function resolveLocalDomainId(federationDir: string): string | null {
 	const id = readDomainIdFile(federationDir) ?? process.env.FEDERATION_DOMAIN_ID;
 	return id ? sanitizeDomainId(id) : null;

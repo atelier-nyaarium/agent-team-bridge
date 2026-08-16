@@ -16,7 +16,7 @@ const TEST_DOMAIN_ID = "alice";
 ////////////////////////////////
 //  Harness
 
-const evie = generateIdentity();
+const router = generateIdentity();
 const owner = generateIdentity();
 const otherOwner = generateIdentity();
 const member = generateIdentity();
@@ -37,7 +37,7 @@ function adminAdmission(ownerId = owner): SignedAdmission {
 function v2Secret() {
 	return JSON.stringify({
 		schema: 2,
-		identity: evie,
+		identity: router,
 		enrollment: {
 			[TEST_DOMAIN_ID]: {
 				ownerSignPub: owner.sign.pub,
@@ -72,7 +72,7 @@ interface SliceWithName {
 function v2RootedWithName(name: string) {
 	return JSON.stringify({
 		schema: 2,
-		identity: evie,
+		identity: router,
 		enrollment: {
 			[TEST_DOMAIN_ID]: {
 				ownerSignPub: owner.sign.pub,
@@ -91,8 +91,8 @@ function v2RootedWithName(name: string) {
 describe("pendingAdminDomain (the fresh-setup pending admin slice)", () => {
 	const NONCE = randomBytes(18).toString("base64");
 
-	it("writes a rootless admin slice mirroring evie's PendingTenantRecord", () => {
-		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
+	it("writes a rootless admin slice mirroring the Router's PendingTenantRecord", () => {
+		const fresh = JSON.stringify({ schema: 2, identity: router, enrollment: {} });
 		const { federationJson } = pendingAdminDomain(fresh, TEST_DOMAIN_ID, "Nyaarium", NONCE, 1000, 86_400_000);
 		expect((federationJson as { schema?: number }).schema).toBe(2);
 		const slice = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[TEST_DOMAIN_ID];
@@ -115,10 +115,10 @@ describe("pendingAdminDomain (the fresh-setup pending admin slice)", () => {
 		expect(NONCE).not.toMatch(/[-_]/);
 	});
 
-	it("preserves evie's identity and every friend Domain when pre-staging the admin Domain", () => {
+	it("preserves the Router's identity and every friend Domain when pre-staging the admin Domain", () => {
 		// A v2 Secret already hosting a friend Domain "work": pre-staging the admin Domain must not touch it.
 		const { federationJson } = pendingAdminDomain(v2Secret(), TEST_DOMAIN_ID, "Nyaarium", NONCE, 1000, 86_400_000);
-		expect(federationJson.identity.sign.pub).toBe(evie.sign.pub);
+		expect(federationJson.identity.sign.pub).toBe(router.sign.pub);
 		const enrollment = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment;
 		expect(enrollment.work.ownerSignPub).toBe(otherOwner.sign.pub);
 		expect(enrollment[TEST_DOMAIN_ID].ownerSignPub).toBeNull();
@@ -138,7 +138,7 @@ describe("readAdminDomain (fresh vs re-provision detection)", () => {
 	});
 
 	it("reads NOT-rooted for a freshly pre-staged pending admin Domain, surfacing the pending displayName", () => {
-		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
+		const fresh = JSON.stringify({ schema: 2, identity: router, enrollment: {} });
 		const { federationJson } = pendingAdminDomain(
 			fresh,
 			TEST_DOMAIN_ID,
@@ -155,7 +155,7 @@ describe("readAdminDomain (fresh vs re-provision detection)", () => {
 	});
 
 	it("reads NOT-rooted for an absent admin Domain (a never-staged Secret)", () => {
-		const r = readAdminDomain(JSON.stringify({ schema: 2, identity: evie, enrollment: {} }), TEST_DOMAIN_ID);
+		const r = readAdminDomain(JSON.stringify({ schema: 2, identity: router, enrollment: {} }), TEST_DOMAIN_ID);
 		expect(r).toEqual({ rooted: false, ownerSignPub: null, displayName: null });
 	});
 
@@ -190,7 +190,7 @@ describe("provisioning blob pendingTenant (the pending vs rooted discriminator)"
 });
 
 ////////////////////////////////
-//  Purge helpers (removeGatewayAdmission / removeDomain) - the evie-side deletes
+//  Purge helpers (removeGatewayAdmission / removeDomain) - the Router-side deletes
 //
 //  The lossless property: the mutation operates on the raw parsed JSON, so every field the setup
 //  write paths never carry (a friend Domain's linkEdges / linkRevocations / isAdminDomain) survives.
@@ -232,7 +232,7 @@ function purgeFixture() {
 	};
 	return JSON.stringify({
 		schema: 2,
-		identity: evie,
+		identity: router,
 		enrollment: {
 			[TEST_DOMAIN_ID]: {
 				ownerSignPub: owner.sign.pub,
@@ -283,10 +283,10 @@ describe("removeGatewayAdmission (purge gateway: drop one gateway's admission)",
 		expect(after.enrollment.work.linkRevocations).toHaveLength(1);
 	});
 
-	it("preserves evie's identity verbatim", () => {
+	it("preserves the Router's identity verbatim", () => {
 		const after = JSON.parse(removeGatewayAdmission(purgeFixture(), TEST_DOMAIN_ID, "gw-drop"));
-		expect(after.identity.sign.pub).toBe(evie.sign.pub);
-		expect(after.identity.sign.priv).toBe(evie.sign.priv);
+		expect(after.identity.sign.pub).toBe(router.sign.pub);
+		expect(after.identity.sign.priv).toBe(router.sign.priv);
 	});
 
 	it("is idempotent for an absent gateway id (no slice change)", () => {
@@ -311,7 +311,7 @@ describe("removeDomain (purge federation: drop one Domain, keep the rest)", () =
 		// The friend tenant survives whole (including its linkEdges).
 		expect(after.enrollment.work).toEqual(before.enrollment.work);
 		expect(after.enrollment.work.linkEdges).toHaveLength(1);
-		expect(after.identity.sign.pub).toBe(evie.sign.pub);
+		expect(after.identity.sign.pub).toBe(router.sign.pub);
 	});
 
 	it("is idempotent for an absent Domain", () => {

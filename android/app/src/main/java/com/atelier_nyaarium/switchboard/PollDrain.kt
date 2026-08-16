@@ -532,7 +532,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					e.rethrowIfCancellation()
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
-						// outage: an evie still on the shorter hold (upgrade window) or
+						// outage: the Router still on the shorter hold (upgrade window) or
 						// a transient gateway drop mid-hold. Back off, do not alarm.
 						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
 						heldEmpty = true

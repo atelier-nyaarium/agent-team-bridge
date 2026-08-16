@@ -356,7 +356,7 @@ already-recorded `sessionResume`/knownTeamPaths entries) is omitted below.
   surviving between ticks can take the entire gateway down for every connected team - the identical
   failure class this same session's diff identified and fixed one call away, in the exact function
   this diff also modified (the new `teamLastRepushAt` sweep sits at its top).
-  `src/gateway/evie/evieClient.ts` has the same unguarded `ws.ping()` pattern, so it wasn't
+  `src/gateway/router/routerClient.ts` has the same unguarded `ws.ping()` pattern, so it wasn't
   reconsidered as a class when this diff touched the adjacent guarding logic either.
 
 **Design notes (not bugs):**

@@ -11,7 +11,7 @@ This is aimed at people who already use **Dev Containers** and want agent teams 
 Teams register with the gateway over WebSocket. Any agent can call `crosstalk_send` to reach another team. The gateway handles message delivery, the response lifecycle, and request serialization.
 
 - Agents use **channel mode**: messages arrive as push notifications and replies push back automatically, so there is no polling.
-- The gateway connects to **evie-bot** (a content-blind router running in Kubernetes) to reach the gateways on other machines and to relay the Android console. evie forwards end-to-end-sealed frames between gateways without reading them.
+- The gateway connects to a self-hosted **Federation Router** (a content-blind relay) to reach the gateways on other machines and to relay the Android console. The Router forwards end-to-end-sealed frames between gateways without reading them.
 
 See `skills/crosstalk/SKILL.md` for the full tool reference and response format.
 
@@ -27,7 +27,7 @@ Host Machine
 Docker: switchboard (port 20000)
   Gateway (main-gateway.ts)
     HTTP routes + WebSocket hub
-    Evie WS client over the k8s API service-proxy (SA token + owner-signed admission)
+    Router WS client, direct TLS (bearer token + owner-signed admission)
       cross-gateway federation routing + Android console relay
 
 DevContainers (one per project)
@@ -121,14 +121,14 @@ Every session registers the same core tools; the game-client connector is the on
 | `mcpConnectorStatus` / `mcpConnectorServe` / `mcpConnectorUnserve` | Game client connector control |
 | Project tools | Dynamic tools from the project's `mcp-schema.js` |
 
-## Evie Bridge
+## Federation Router
 
-When a service-proxy transport (`transport.json`, delivered by enrollment) is present in the gateway's federation dir, the gateway connects to evie-bot over the Kubernetes API server's service-proxy. The transport's SA token authenticates to the API server (scoped by RBAC), the cluster CA is pinned for TLS, and registration is gated by the owner-signed admission.
+When a direct transport (`transport.json`, delivered by enrollment) is present in the gateway's federation dir, the gateway connects to the self-hosted Federation Router over TLS. The transport's bearer token authenticates the WS upgrade, the Router's leaf certificate fingerprint is pinned for TLS, and registration is gated by the owner-signed admission.
 
-evie is a **content-blind router**: it relays sealed frames without reading them. It carries:
+The Router is **content-blind**: it relays sealed frames without reading them. It carries:
 
-- **Cross-gateway federation**: a gateway reaches teams on another machine's gateway through evie, which routes each end-to-end-sealed frame by destination gateway id and never parses the payload.
-- **Console relay**: the native Android console reaches the gateway through evie, which relays the console's opaque frames over the same WebSocket.
+- **Cross-gateway federation**: a gateway reaches teams on another machine's gateway through the Router, which routes each end-to-end-sealed frame by destination gateway id and never parses the payload.
+- **Console relay**: the native Android console reaches the gateway through the Router, which relays the console's opaque frames over the same WebSocket.
 
 ## Circular dependency warning
 

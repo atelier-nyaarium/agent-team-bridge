@@ -82,7 +82,7 @@ export interface RoutesDeps {
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: GatewayConfig;
-	evieClient?: import("./evie/evieClient.js").EvieClient | null;
+	routerClient?: import("./router/routerClient.js").RouterClient | null;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
@@ -105,7 +105,7 @@ export interface RoutesDeps {
 	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
 	// session was un-shared has its in-flight reply DROPPED here rather than relayed back to the origin. The
 	// share state is the single source both the inbound gate and this reply gate read, so an
-	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
+	// un-share bites without the Router. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	// The session targets currently shared to a friend Domain (the same slimmed discovery filter
 	// gatewayRelay.ts's list_teams case applies) - read by presenceForDomain to compute what a
@@ -190,7 +190,7 @@ export function createRoutes({
 	presence,
 	mailboxStore,
 	config,
-	evieClient,
+	routerClient,
 	sealer,
 	blobStore,
 	crossDomainPeers,
@@ -275,14 +275,14 @@ export function createRoutes({
 	}
 
 	/** Forward a federated op to another Gateway through the Router and unwrap the
-	 * reply. evie holds the call until the destination Gateway answers (or times
+	 * reply. The Router holds the call until the destination Gateway answers (or times
 	 * out), so a resolved result means the destination handled the op. */
 	async function relayToGateway(
 		dstGateway: string,
 		op: FederatedOp,
 		dstDomain?: string,
 	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
-		if (!evieClient?.isConnected())
+		if (!routerClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
 		// Resolve the target to a SealTarget once: a local peer is the bare string (v1); a
@@ -301,7 +301,7 @@ export function createRoutes({
 		// used to open the destination's v2 reply by the full (domainId, gatewayId) pair.
 		const resolvedDstDomain = typeof target === "string" ? undefined : target.domainId;
 		const relayId = crypto.randomUUID();
-		const call = await evieClient.callTool("gateway_relay", {
+		const call = await routerClient.callTool("gateway_relay", {
 			relayId,
 			srcGateway: localGatewayId,
 			dstGateway,
@@ -321,7 +321,7 @@ export function createRoutes({
 		}
 	}
 
-	/** Relay a cross-Gateway op in the background, retrying on transient failure (evie
+	/** Relay a cross-Gateway op in the background, retrying on transient failure (the Router
 	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
 	 * dropped first attempt does not strand the origin's request. Resolves once the
@@ -337,7 +337,7 @@ export function createRoutes({
 		let attempt = 0;
 		return new Promise((resolveOutcome) => {
 			const tryOnce = async (): Promise<void> => {
-				// A relay throw (evie disconnect mid-call, call timeout) is just another transient
+				// A relay throw (Router disconnect mid-call, call timeout) is just another transient
 				// failure: fold it into the retry path so it never escapes as an unhandled rejection.
 				let error: string | undefined;
 				try {
@@ -368,7 +368,7 @@ export function createRoutes({
 	const { mirrorPeer, consolePush, humanNotify, pluginAction } = createConsolePushOps({
 		mailboxStore,
 		ownerId,
-		evieClient,
+		routerClient,
 		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
@@ -430,7 +430,7 @@ export function createRoutes({
 			files,
 			displayLabel,
 		} = args;
-		if (!evieClient?.isConnected()) {
+		if (!routerClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
 		if (!fromConversationId) {
@@ -531,16 +531,16 @@ export function createRoutes({
 	}
 
 	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
-	 * Gateway (the evie roster is Domain-scoped), and a fan-out to every LINKED cross-Domain
-	 * peer. evie supplies only the presence roster (content-blind); each peer's team list is
-	 * fetched directly via a gateway_relay list_teams, so evie never sees who runs what. A
+	 * Gateway (the Router's roster is Domain-scoped), and a fan-out to every LINKED cross-Domain
+	 * peer. The Router supplies only the presence roster (content-blind); each peer's team list is
+	 * fetched directly via a gateway_relay list_teams, so the Router never sees who runs what. A
 	 * cross-Domain peer returns ONLY the sessions it has shared to this Domain (its own
 	 * relay handler applies the share filter), so an unshared friend session never appears.
 	 * A peer that errors or times out is simply omitted. */
 	async function discover(): Promise<Response> {
 		const local = (await teams().json()) as TeamInfo[];
-		if (!evieClient?.isConnected()) return jsonResponse(local);
-		const rosterCall = await evieClient.callTool("list_gateways", {});
+		if (!routerClient?.isConnected()) return jsonResponse(local);
+		const rosterCall = await routerClient.callTool("list_gateways", {});
 		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 		const sameDomain = await Promise.all(
 			roster.map(async (h) => {
@@ -1114,7 +1114,7 @@ export function createRoutes({
 			// verified friend Domain): an already-accepted send whose session was un-shared after it
 			// landed must have its in-flight reply DROPPED, not relayed back to the origin. The share state is the
 			// same source the inbound op gate reads, so an un-share bites every direction without
-			// evie. The session target is the canonical domain.gateway.spawn.session parsed from the job's own
+			// the Router. The session target is the canonical domain.gateway.spawn.session parsed from the job's own
 			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
 			// (dstDomainId null) skips the gate, unchanged.
 			if (deliverResult.dstDomainId) {
@@ -1309,7 +1309,7 @@ export function createRoutes({
 			ok: true,
 			teams: registry.size,
 			pending_jobs: store.size,
-			router_connected: evieClient?.isConnected() ?? false,
+			router_connected: routerClient?.isConnected() ?? false,
 		});
 	}
 

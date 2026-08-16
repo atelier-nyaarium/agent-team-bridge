@@ -22,7 +22,7 @@ import kotlinx.serialization.json.Json
 /**
  * Credential blob the console holds. Reaches the console bridge through the k8s API
  * service-proxy: the SA token authenticates to the API server, the app token (a separate
- * forwarded header) authenticates to evie.
+ * forwarded header) authenticates to the Router.
  *
  * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime
  * behavior a schema cannot express: device defaulting to Build.MODEL, conversationId
@@ -52,9 +52,9 @@ data class Provisioning(
 	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
 	 * to run the ceremony as enrollee. */
 	val enrollHandshake: EnrollHandshakeRef? = null,
-	/** evie's public nonce-gated device-approval ingress. A held device stamps it into the
-	 * authorize-console QR so a fresh device can reach evie with no creds; absent means this network
-	 * has no public ingress and the Add-a-device entry is disabled. */
+	/** The Router's public nonce-gated device-approval ingress. A held device stamps it into the
+	 * authorize-console QR so a fresh device can reach the Router with no creds; absent means this
+	 * network has no public ingress and the Add-a-device entry is disabled. */
 	val deviceApprovalReach: String? = null,
 ) {
 	companion object {
@@ -83,7 +83,7 @@ data class Provisioning(
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
-/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment coordinator,
+/** The owner enroll envelope: `enrollOp` (not `op`) routes to the Router's enrollment coordinator,
  * which answers an EnrollResult directly instead of relaying to a Gateway. */
 @Serializable
 internal data class EnrollEnvelope(
@@ -95,46 +95,46 @@ internal data class EnrollEnvelope(
 
 /** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
-// internal (not private): referenced from postEvieDirect, an internal inline fun - an inline
+// internal (not private): referenced from postRouterDirect, an internal inline fun - an inline
 // function's body cannot access a private-in-file type even from the same file (the compiler
 // treats inlining as a visibility-widening operation). Same bug class as ConsoleHttp's
 // PINNED_*/HELD_*/PROXY_CEILING_MS constants; see their comment for the general rule.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
-/** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
- * firstRoot intake, decided at evie and never relayed to a Gateway. */
+/** First-root POST body: a top-level `firstRoot` field routes to the Router's console-bridge
+ * firstRoot intake, decided at the Router and never relayed to a Gateway. */
 @Serializable
 internal data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
 
-/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
+/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to the Router's
  * console-bridge enroll-handshake broker, a dumb relay never sent to a Gateway. */
 @Serializable
 internal data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
 
-/** Roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler,
+/** Roster POST body: a top-level `roster` field routes to the Router's cross-tenant roster handler,
  * which aggregates across Domains a gateway cannot see and answers itself. */
 @Serializable
 internal data class RosterEnvelope(val roster: RosterRequest)
 
-/** Transport-request POST body: a top-level `transport` field routes to evie's console-bridge
+/** Transport-request POST body: a top-level `transport` field routes to the Router's console-bridge
  * transport intake, which holds the gateway-bridge Secret and answers itself. */
 @Serializable
 internal data class TransportEnvelope(val transport: TransportRequest)
 
 /** Device-approval POST body for the AUTHENTICATED held device: a top-level `consoleApproval` field
- * routes to evie's console-bridge device-approval coordinator (arm/poll/approve/cancel). The public
- * join/fetch steps go to the credential-less ingress instead (see postPublicApproval). */
+ * routes to the Router's console-bridge device-approval coordinator (arm/poll/approve/cancel). The
+ * public join/fetch steps go to the credential-less ingress instead (see postPublicApproval). */
 @Serializable
 internal data class ConsoleApprovalEnvelope(val consoleApproval: ConsoleApprovalOp)
 
-/** Trust-rendezvous POST bodies: top-level fields routing to evie's trust broker and pending query. */
+/** Trust-rendezvous POST bodies: top-level fields routing to the Router's trust broker and pending query. */
 @Serializable
 internal data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
 
 @Serializable
 internal data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
-/** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the minted
+/** The Router's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the minted
  * one-time invite `nonce` the admin's app builds the friend's QR from. The wire EnrollResult schema
  * omits `nonce`, so this is a richer local decode. */
 @Serializable

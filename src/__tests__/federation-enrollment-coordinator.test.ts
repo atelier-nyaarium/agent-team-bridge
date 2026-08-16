@@ -4,12 +4,12 @@ import type { EnrollmentState } from "../federation-server/federationSecret.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 
-const evie = generateIdentity();
+const router = generateIdentity();
 const owner = generateIdentity();
 const now = 1_000_000;
 
 function coordinator(initial?: EnrollmentState) {
-	return new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(initial), "alice");
+	return new EnrollmentCoordinator(router, inMemoryEnrollmentStore(initial), "alice");
 }
 
 describe("EnrollmentCoordinator enroll-owner", () => {
@@ -17,8 +17,8 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 		const c = coordinator();
 		expect(c.rooted).toBe(false);
 		expect(c.getDomainSnapshot()).toBeNull();
-		const payload = c.mintEnrollOwner("alice", "https://evie", now);
-		expect(payload.evieSignPub).toBe(evie.sign.pub);
+		const payload = c.mintEnrollOwner("alice", "https://router", now);
+		expect(payload.routerSignPub).toBe(router.sign.pub);
 		const denied = c.redeemEnrollOwner(payload.nonce, owner.sign.pub, owner.box.pub, now + 1000);
 		expect(denied).toBeNull();
 		expect(c.rooted).toBe(true);
@@ -33,7 +33,7 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 
 	it("rejects an expired nonce", () => {
 		const c = coordinator();
-		const payload = c.mintEnrollOwner("alice", "https://evie", now);
+		const payload = c.mintEnrollOwner("alice", "https://router", now);
 		const denied = c.redeemEnrollOwner(payload.nonce, owner.sign.pub, owner.box.pub, now + 600_001);
 		expect(denied).toMatch(/expired/);
 		expect(c.rooted).toBe(false);
@@ -41,7 +41,7 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 
 	it("a nonce is single-use", () => {
 		const c = coordinator();
-		const payload = c.mintEnrollOwner("alice", "https://evie", now);
+		const payload = c.mintEnrollOwner("alice", "https://router", now);
 		expect(c.redeemEnrollOwner(payload.nonce, owner.sign.pub, owner.box.pub, now)).toBeNull();
 		const second = generateIdentity();
 		expect(c.redeemEnrollOwner(payload.nonce, second.sign.pub, second.box.pub, now)).toMatch(/already-redeemed/);
@@ -50,17 +50,17 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 
 	it("refuses to re-root at a different owner", () => {
 		const c = coordinator();
-		const p1 = c.mintEnrollOwner("alice", "https://evie", now);
+		const p1 = c.mintEnrollOwner("alice", "https://router", now);
 		c.redeemEnrollOwner(p1.nonce, owner.sign.pub, owner.box.pub, now);
 		const intruder = generateIdentity();
-		const p2 = c.mintEnrollOwner("alice", "https://evie", now);
+		const p2 = c.mintEnrollOwner("alice", "https://router", now);
 		expect(c.redeemEnrollOwner(p2.nonce, intruder.sign.pub, intruder.box.pub, now)).toMatch(/different owner/);
 		expect(c.getDomainSnapshot()?.ownerSignPub).toBe(owner.sign.pub);
 	});
 
 	it("fires the QR cleanup when the nonce is redeemed", () => {
 		const c = coordinator();
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		let deleted = false;
 		c.registerNonceCleanup(p.nonce, () => {
 			deleted = true;
@@ -71,7 +71,7 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 
 	it("fires the cleanup even on an expired redeem (the QR is dead either way)", () => {
 		const c = coordinator();
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		let deleted = false;
 		c.registerNonceCleanup(p.nonce, () => {
 			deleted = true;
@@ -82,7 +82,7 @@ describe("EnrollmentCoordinator enroll-owner", () => {
 
 	it("a throwing cleanup does not break redeem", () => {
 		const c = coordinator();
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		c.registerNonceCleanup(p.nonce, () => {
 			throw new Error("DM already gone");
 		});
@@ -111,7 +111,7 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 	it("admits an owner-signed admission and surfaces revocations in the trust", () => {
 		const c = coordinator();
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		c.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		const signed = signAdmission(admission("laptop"), owner.sign.priv, owner.sign.pub);
 		expect(c.admit(signed)).toBeNull();
@@ -122,7 +122,7 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 	function rooted() {
 		const c = coordinator();
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		c.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		return c;
 	}
@@ -154,10 +154,10 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 	it("persists the root so a reloaded coordinator is already rooted", () => {
 		const store = inMemoryEnrollmentStore();
-		const c1 = new EnrollmentCoordinator(evie, store, "alice");
-		const p = c1.mintEnrollOwner("alice", "https://evie", now);
+		const c1 = new EnrollmentCoordinator(router, store, "alice");
+		const p = c1.mintEnrollOwner("alice", "https://router", now);
 		c1.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
-		const c2 = new EnrollmentCoordinator(evie, store, "alice");
+		const c2 = new EnrollmentCoordinator(router, store, "alice");
 		expect(c2.rooted).toBe(true);
 		expect(c2.getDomainSnapshot()?.ownerSignPub).toBe(owner.sign.pub);
 	});
@@ -165,12 +165,12 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 describe("EnrollmentCoordinator domain status + display name (friend onboarding)", () => {
 	it("getDomainStatus reflects unrooted / pending / rooted", () => {
-		const unrooted = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "alice");
+		const unrooted = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
 		expect(unrooted.getDomainStatus()).toBe("unrooted");
 		expect(unrooted.displayName).toBeNull();
 
 		const pending = new EnrollmentCoordinator(
-			evie,
+			router,
 			inMemoryEnrollmentStore({
 				ownerSignPub: null,
 				ownerBoxPub: null,
@@ -185,15 +185,15 @@ describe("EnrollmentCoordinator domain status + display name (friend onboarding)
 		expect(pending.displayName).toBe("Carol");
 		expect(pending.getDomainSnapshot()).toBeNull();
 
-		const c = new EnrollmentCoordinator(evie, inMemoryEnrollmentStore(), "alice");
-		const p = c.mintEnrollOwner("alice", "https://evie", now);
+		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
+		const p = c.mintEnrollOwner("alice", "https://router", now);
 		c.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		expect(c.getDomainStatus()).toBe("rooted");
 	});
 
 	it("getDomainSnapshot carries the displayName once rooted", () => {
 		const c = new EnrollmentCoordinator(
-			evie,
+			router,
 			inMemoryEnrollmentStore({
 				ownerSignPub: owner.sign.pub,
 				ownerBoxPub: owner.box.pub,

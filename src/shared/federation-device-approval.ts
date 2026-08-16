@@ -6,10 +6,10 @@ import { b64Field, displayField } from "./crypto.js";
 //
 //  The owner authorizes their OWN new device, no admin. A held device H (an admitted,
 //  authenticated console) ARMs a one-time window; the fresh device N (no creds) JOINs over
-//  evie's public nonce-gated ingress with its generated console keys; H POLLs, shows N's
+//  the Router's public nonce-gated ingress with its generated console keys; H POLLs, shows N's
 //  fingerprint, and on a human Approve owner-signs a kind:console admission AND seals the
 //  console transport to N's box key, parking it via `approve`; N FETCHes the sealed reply
-//  (nonce-gated) and provisions. evie is the DUMB BROKER keyed by `approvalId`: it relays the
+//  (nonce-gated) and provisions. The Router is the DUMB BROKER keyed by `approvalId`: it relays the
 //  join then the sealed reply, reading neither. The QR carries only PUBLIC material (owner
 //  keys + domainId + approvalId + nonce + reach); the SA token reaches N only sealed.
 
@@ -40,7 +40,7 @@ const ConsoleApprovalJoinSchema = z
 	})
 	.meta({ id: "ConsoleApprovalJoin" });
 
-/** A device-approval frame to evie's broker, by step. `arm`/`poll`/`approve`/`cancel` come from
+/** A device-approval frame to the Router's broker, by step. `arm`/`poll`/`approve`/`cancel` come from
  * the AUTHENTICATED held device H (keyed by `approvalId`); `join`/`fetch` come from the fresh
  * device N over the public nonce-gated ingress (`nonce` is the gate). `approve` parks the sealed
  * transport reply; `fetch` retrieves it once H approved. */
@@ -62,7 +62,7 @@ export const ConsoleApprovalOpSchema = z
 	])
 	.meta({ id: "ConsoleApprovalOp" });
 
-/** evie's reply to a device-approval frame. `ok:false` + `error` is terminal (window expired, a
+/** The Router's reply to a device-approval frame. `ok:false` + `error` is terminal (window expired, a
  * cap hit, or a nonce/identity mismatch). `join` is present on a `poll` once N has joined; `sealed`
  * is present on a `fetch` once H approved (N unseals the transport with its box key). */
 export const ConsoleApprovalResultSchema = z

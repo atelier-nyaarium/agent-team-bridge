@@ -36,7 +36,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 	 * fetch the bootstrap transport from the route Gateway, seal a bootstrap bundle, and deliver
 	 * it over the LAN, falling back to handing the admin the sealed text to paste. A
 	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
-	 * through evie's domain sync. */
+	 * through the Router's domain sync. */
 	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {
 		val signed = repo.ownerFacts.admitGateway(scanned.gatewayId, scanned.signPub, scanned.boxPub)
 			// admitGateway sets _state.error to the real cause (e.g. "Admit failed: admission not
@@ -45,7 +45,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 			?: return@withContext EnrollDelivery(false, repo._state.value.error ?: "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
-		// Pull the gateway-bridge transport (proxy SA token + CA) from evie by proving this owner roots
+		// Pull the gateway-bridge transport (proxy SA token + CA) from the Router by proving this owner roots
 		// a network. apiUrl + the network id come from the provisioning blob: apiUrl is the SAME external
 		// apiserver the console bridge uses, and domainId is the rooted Domain the Gateway adopts.
 		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()

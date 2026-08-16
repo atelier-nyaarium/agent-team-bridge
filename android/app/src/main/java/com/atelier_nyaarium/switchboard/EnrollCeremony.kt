@@ -7,12 +7,12 @@ import com.atelier_nyaarium.switchboard.proto.SasCrypto
 /**
  * Pure (Android-free) core of the in-person enroll ceremony: role pairing, role-ordered SAS
  * derivation, the commit-reveal verification, and each flow's out-of-band peer binding, all run
- * against the untrusted evie broker. The networked walk is SasExchange.kt; the transports are
+ * against the untrusted Router broker. The networked walk is SasExchange.kt; the transports are
  * EnrollCeremonyOps.kt and TrustOps.kt.
  *
- * evie only relays the two phones' commit then reveal frames; it never computes this SAS and never
- * verifies a commitment. Every check below is local to the phone, so a substituted key surfaces as
- * a commitment mismatch or a diverging compare code.
+ * The Router only relays the two phones' commit then reveal frames; it never computes this SAS and
+ * never verifies a commitment. Every check below is local to the phone, so a substituted key
+ * surfaces as a commitment mismatch or a diverging compare code.
  */
 
 ////////////////////////////////
@@ -20,7 +20,7 @@ import com.atelier_nyaarium.switchboard.proto.SasCrypto
 
 /** One leg of the in-person enroll compare. The admin (showed the QR) and the enrollee (scanned it)
  * each build their own context: the shared handshakeId, the pin (rides the QR out of band, never
- * sent to evie), this owner's party, and on the enrollee side the admin party pinned from the QR. */
+ * sent to the Router), this owner's party, and on the enrollee side the admin party pinned from the QR. */
 data class EnrollCeremonyContext(
 	val role: String,
 	val handshakeId: String,
@@ -75,7 +75,7 @@ object EnrollCeremony {
 
 	/** True iff the peer's reveal opens to its round-1 commitment - the commit-reveal binding. The
 	 * phone re-hashes the revealed keys+salt under the peer's role and aborts on a mismatch, so a
-	 * relay that swapped a key in the reveal is caught. evie does not check this. */
+	 * relay that swapped a key in the reveal is caught. The Router does not check this. */
 	fun verifyPeer(peerCommitment: String, peerParty: EnrollParty, peerRole: String, peerSalt: String): Boolean =
 		SasCrypto.verifyEnrollCommitment(peerCommitment, peerParty, peerRole, peerSalt)
 
@@ -88,7 +88,7 @@ object EnrollCeremony {
 		return SasCrypto.enrollSas(admin, enrollee, pin)
 	}
 
-	/** FLOW-1's out-of-band binding: the admin's revealed keys must equal the scanned QR, so evie
+	/** FLOW-1's out-of-band binding: the admin's revealed keys must equal the scanned QR, so the Router
 	 * cannot substitute the admin reveal. A null [expectedPeer] is the admin's own leg, which has no
 	 * out-of-band knowledge of the enrollee and relies on the compare. Returns the abort message. */
 	fun qrMismatch(expectedPeer: EnrollParty?, peerParty: EnrollParty): String? =
@@ -98,7 +98,7 @@ object EnrollCeremony {
 			null
 		}
 
-	/** FLOW-2's out-of-band binding: the peer must reveal the OWNER the rendezvous named, so evie
+	/** FLOW-2's out-of-band binding: the peer must reveal the OWNER the rendezvous named, so the Router
 	 * cannot splice in a different person. Returns the abort message. */
 	fun ownerMismatch(expectedOwnerSignPub: String, peerParty: EnrollParty): String? =
 		if (peerParty.ownerSignPub != expectedOwnerSignPub) {

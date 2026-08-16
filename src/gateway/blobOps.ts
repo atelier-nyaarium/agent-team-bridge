@@ -1,5 +1,5 @@
 import type { BlobStore } from "../shared/blob-store.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { EVIE_WS_MAX_PAYLOAD_BYTES } from "../gateway/evie/evieClient.js";
+import { ROUTER_WS_MAX_PAYLOAD_BYTES } from "../gateway/router/routerClient.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES } from "../gateway/routes.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/router-protocol.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
@@ -150,11 +150,11 @@ describe("routes", () => {
 		it("a sealed chunk frame stays under the relay budget, which stays under the WS ceiling", () => {
 			// The chunk constant is sized against the phone's heap; this pins the OTHER end of that
 			// choice, that a chunk cannot grow into a frame the socket will refuse. An oversized
-			// frame closes the gateway<->evie socket and drops every team's traffic, so the two
+			// frame closes the gateway<->Router socket and drops every team's traffic, so the two
 			// numbers must not be able to drift independently.
 			const sealedChunk = BLOB_CHUNK_BYTES * 2;
 			expect(sealedChunk).toBeLessThan(MAX_RELAY_FRAME_BYTES);
-			expect(MAX_RELAY_FRAME_BYTES).toBeLessThan(EVIE_WS_MAX_PAYLOAD_BYTES);
+			expect(MAX_RELAY_FRAME_BYTES).toBeLessThan(ROUTER_WS_MAX_PAYLOAD_BYTES);
 		});
 
 		it("lets an attachment be far larger than any single frame, which is the point of the plane", () => {
@@ -163,7 +163,7 @@ describe("routes", () => {
 			// limit. Bytes travel in chunks now, so a file is deliberately allowed to dwarf a frame,
 			// and re-adding a "payload fits in a frame" assertion would quietly re-impose the cap the
 			// blob plane exists to remove.
-			expect(MAX_BLOB_BYTES).toBeGreaterThan(EVIE_WS_MAX_PAYLOAD_BYTES);
+			expect(MAX_BLOB_BYTES).toBeGreaterThan(ROUTER_WS_MAX_PAYLOAD_BYTES);
 			// What must still hold is the per-CHUNK bound, asserted above.
 			expect(BLOB_CHUNK_BYTES * 2).toBeLessThan(MAX_RELAY_FRAME_BYTES);
 		});

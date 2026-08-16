@@ -5,7 +5,7 @@ import {
 	type ConsoleReplyBody,
 	type OpenedConsoleFrame,
 } from "../../shared/console-protocol.js";
-import { MAX_RELAY_FRAME_BYTES } from "../../shared/evie-protocol.js";
+import { MAX_RELAY_FRAME_BYTES } from "../../shared/router-protocol.js";
 import { ConsoleRelayFrameSchema } from "../../shared/schemas.js";
 import type { ConsoleSealer } from "./consoleSealer.js";
 
@@ -23,8 +23,8 @@ export interface RelayPumpDeps {
 //  Functions & Helpers
 
 /**
- * Production glue between the evie WebSocket and the console handler. A console frame
- * is sealed end to end (evie relays it opaquely), so the gateway schema-validates
+ * Production glue between the Router WebSocket and the console handler. A console frame
+ * is sealed end to end (the Router relays it opaquely), so the gateway schema-validates
  * the envelope, OPENS the seal (verifying the console's signature against the
  * owner-signed allowlist + decrypting), dispatches the inner op, and seals the
  * reply back. A malformed or unverifiable frame settles the held console request
@@ -96,7 +96,7 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 				const sealed = sealer.seal(frame.signerSignPub, body);
 				// The budget is enforced HERE, at the one point a frame becomes bytes on the shared
 				// socket, rather than being a number three constants agree about in a test. An
-				// oversized frame does not fail politely: evie's WebSocket closes the gateway
+				// oversized frame does not fail politely: the Router's WebSocket closes the gateway
 				// connection and every team's traffic goes with it. Refusing this one reply keeps the
 				// blast radius at the op that caused it.
 				const framed = JSON.stringify(sealed).length;

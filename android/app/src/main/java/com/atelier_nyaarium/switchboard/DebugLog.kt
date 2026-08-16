@@ -13,7 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Debug-only log stream. This build writes NO on-device file. DEBUG builds buffer the last RING_CAP
- * lines and flush them to evie's POST /ingest once per poll cycle; release builds emit logcat only
+ * lines and flush them to the relay's own POST /ingest once per poll cycle; release builds emit logcat only
  * (every ring/ingest path sits inside `if (BuildConfig.DEBUG)`). Lines also go to logcat under the
  * `sb/<tag>` tag.
  *

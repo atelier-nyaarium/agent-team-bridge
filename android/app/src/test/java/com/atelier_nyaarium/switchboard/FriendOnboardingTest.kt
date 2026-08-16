@@ -105,7 +105,7 @@ class FriendOnboardingTest {
 
 	@Test
 	fun clockSkewRejectIsTransientWithASyncHint() {
-		// evie's "admin op is stale" is a >2min device clock skew; the latch stays false and the
+		// The Router's "admin op is stale" is a >2min device clock skew; the latch stays false and the
 		// poll loop re-attempts, so it must classify transient (auto-retry) with a clock-sync hint.
 		val r = FriendOnboarding.classifyFirstRootError("admin op is stale")
 		assertTrue(r.transient)
@@ -114,7 +114,7 @@ class FriendOnboardingTest {
 
 	@Test
 	fun persistContentionIsTransientTryAgain() {
-		// A CAS persist contention at evie is momentary; classify transient so the UI reflects the
+		// A CAS persist contention at the Router is momentary; classify transient so the UI reflects the
 		// auto-retry rather than a hard failure.
 		val r = FriendOnboarding.classifyFirstRootError("persist failed: conflict")
 		assertTrue(r.transient)
