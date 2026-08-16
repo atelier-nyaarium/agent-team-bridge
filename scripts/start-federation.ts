@@ -13,7 +13,7 @@ async function main(): Promise<void> {
 	const env = await ensureRouterEnv();
 	if (!env.publicHost)
 		note("No public address set. Run ./setup.sh to add one so a phone off this LAN can reach the Router.");
-	const health = await startRouter(env);
+	const health = await startRouter(env, { build: true });
 	note(`Router ${health.wasRunning ? "running" : "ready"}. Fingerprint ${shortFp(health.certFingerprint)}`);
 	console.log(health.certFingerprint);
 }

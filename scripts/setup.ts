@@ -1,24 +1,28 @@
-// Admin setup - the single bootstrap for this machine's Router, gateway and the owner's Console. It
-// asks the one thing it cannot detect (the public address), writes .env itself, starts the Router,
-// enrolls the gateway and emits the blob the owner's Console imports. Driven by setup.sh, a thin
-// launcher that execs this. The menu loop lives here; each dial option's logic is a sibling module:
-// setup-status.ts (the header above the dial), setup-gateway.ts (enroll), setup-provision.ts (Admin
-// Provision), setup-purge.ts (Purge Gateway / Purge Federation), setup-enrollment-ui.ts (the QR/JSON
-// present flow), setup-board-guard.ts (the typed purge confirmation), setup-constants.ts (shared
-// paths).
+// Switchboard setup - the single bootstrap for this machine's Federation Router, its gateway, and the
+// owner's Console. It asks the one thing it cannot detect (the public address), writes .env itself,
+// starts the Router, enrolls the gateway and emits the setup code the Console scans. Driven by
+// setup.sh, a thin launcher that execs this. The menu loop lives here; each dial option's logic is a
+// sibling module: setup-status.ts (the header above the dial), setup-gateway.ts (Gateway Setup),
+// setup-provision.ts (Router Setup), setup-purge.ts (Purge Gateway / Purge Federation),
+// setup-enrollment-ui.ts (the QR/JSON present flow), setup-board-guard.ts (the typed purge
+// confirmation), setup-constants.ts (shared paths).
 //
-//   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
-//                        Non-TTY runs Provision direct on .env as it stands.
-//   --qr                 re-open the enrollment-QR menu for the current blob.
+// User-facing wording follows the APP's, since the same person reads both screens minutes apart:
+// "Federation Router" is what its Settings calls the Router, and what the phone scans is a "setup
+// code" there, never a blob. `provision` stays the internal name for the Router Setup path.
+//
+//   (no args)            interactive menu: Router Setup, Gateway Setup, or purge.
+//                        Non-TTY runs Router Setup direct on .env as it stands.
+//   --qr                 re-show the current setup code as a QR or JSON.
 //   --verify             health-probe the Router and this Gateway's link to it.
 //   --help
 //
 // The Domain ROOT private key is generated on the Console and never reaches the host, so this script
-// never holds, prompts for, or roots with the owner key. Provision branches on whether the admin
+// never holds, prompts for, or roots with the owner key. Router Setup branches on whether the admin
 // Domain is already rooted in the Router's federation state: a fresh (absent/unrooted) Domain is
-// pre-staged as a PENDING tenant (display name + one-time invite nonce, no owner root) and the blob
-// carries `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and
-// emits the blob only. The blob is transport-only (the Router's address, pin and app token; no
+// pre-staged as a PENDING tenant (display name + one-time invite nonce, no owner root) and the setup
+// code carries `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips
+// staging and emits the code only. It is transport-only (the Router's address, pin and app token; no
 // identity, no Gateway keys).
 
 import fs from "node:fs";
@@ -35,10 +39,10 @@ import { verify } from "./setup-verify.js";
 //  Constants
 
 const USAGE = [
-	"Admin setup - the SINGLE bootstrap for this gateway and the Android Console.",
+	"Switchboard setup - the SINGLE bootstrap for this machine's Federation Router and gateway.",
 	"",
-	"  ./setup.sh          menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
-	"  ./setup.sh --qr     re-open the enrollment-QR menu for the current blob",
+	"  ./setup.sh          menu: Router Setup, Gateway Setup, purge (non-TTY runs Router Setup direct)",
+	"  ./setup.sh --qr     re-show the current setup code as a QR or JSON",
 	"  ./setup.sh --verify health-probe the Router and this Gateway's link to it",
 	"  ./setup.sh --help",
 ].join("\n");
@@ -65,17 +69,20 @@ async function topMenu(): Promise<void> {
 		const status = await readSetupStatus();
 		console.log(`\n\u{1F365} Switchboard - Setup on ${host}\n`);
 		printSetupStatus(status);
+		// Wording matches the app's own, since these two screens are read by the same person minutes
+		// apart: "Federation Router" is what Settings calls it, and what the phone scans is a "setup
+		// code" there, never a blob.
 		console.log("\nGateway:");
 		console.log(
 			status.gatewayEnrolled
-				? "  1) Setup Gateway        - Re-enroll this machine and (re)show its QR\n"
-				: "  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n",
+				? "  1) Gateway Setup        - Re-enroll this machine and show its Add Gateway code\n"
+				: "  1) Gateway Setup        - Enroll this machine and show its Add Gateway code\n",
 		);
-		console.log("Admin:");
+		console.log("Federation Router:");
 		console.log(
 			status.domain === "rooted"
-				? "  2) Admin Provision      - Change the public address, refresh the blob\n"
-				: "  2) Admin Provision      - Set up your network on this machine's Router\n",
+				? "  2) Router Setup         - Change the public address, show a new setup code\n"
+				: "  2) Router Setup         - Set the public address and make a setup code\n",
 		);
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");

@@ -4,6 +4,7 @@
 
 import dgram from "node:dgram";
 import fs from "node:fs";
+import os from "node:os";
 import { $ } from "bun";
 
 ////////////////////////////////
@@ -55,6 +56,20 @@ export function detectLanHost(): Promise<string> {
 	});
 }
 
+/** Every non-internal IPv4 this machine holds, the route-out address first. That first entry is the
+ * one the Router binds, so the order is also the answer to "which of these is it on". Docker and VPN
+ * addresses are kept rather than guessed at by interface name: they are real addresses, and hiding
+ * one makes a bind that landed on it unexplainable. */
+export async function detectLanHosts(): Promise<string[]> {
+	const primary = await detectLanHost();
+	const all = Object.values(os.networkInterfaces())
+		.flat()
+		.filter((n) => n && n.family === "IPv4" && !n.internal)
+		.map((n) => (n as os.NetworkInterfaceInfo).address);
+	return [...new Set([primary, ...all])].filter((a) => a && a !== "0.0.0.0");
+}
+
+/** Every LAN-reachable IPv4 this machine holds, the internet-facing one
 /** Best-effort 0600 on a host-local secret file. POSIX applies the mode; on Windows fs.chmod only
  * toggles the read-only bit, so a caller must not treat this as a hard guarantee there. Never throws. */
 export function secureFile(filePath: string): void {

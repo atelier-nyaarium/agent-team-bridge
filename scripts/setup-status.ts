@@ -5,7 +5,7 @@
 import { $ } from "bun";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
 import { readAdminDomain } from "./bootstrap-domain.js";
-import { detectLanHost, envGet, jparse } from "./lib/host.js";
+import { detectLanHosts, envGet, jparse } from "./lib/host.js";
 import { ROUTER_PORT, readPublicReach, routerHealth, shortFp } from "./lib/routerStart.js";
 import { readRouterFed, routerRunning } from "./lib/routerState.js";
 import { gatewayHostname, transportInstalled } from "./setup-gateway.js";
@@ -19,9 +19,9 @@ export interface RegisteredGateway {
 }
 
 export interface SetupStatus {
-	/** The LAN address this machine holds now, and the one the Router is bound to. They differ
-	 * after a DHCP move until the next start. */
-	lanNow: string;
+	/** Every IPv4 this machine holds, route-out first, and the one the Router is bound to. The bound
+	 * address drops out of the list after a DHCP move, until the next start. */
+	lanHosts: string[];
 	lanBound: string;
 	publicHost: string;
 	publicPort: number;
@@ -54,8 +54,8 @@ export async function fetchRegisteredGateways(lan: string): Promise<RegisteredGa
 }
 
 export async function readSetupStatus(): Promise<SetupStatus> {
-	const [lanNow, lanBound, reach, running, domainId, gatewayId, gatewayEnrolled] = await Promise.all([
-		detectLanHost(),
+	const [lanHosts, lanBound, reach, running, domainId, gatewayId, gatewayEnrolled] = await Promise.all([
+		detectLanHosts(),
 		envGet("FEDERATION_BIND"),
 		readPublicReach(),
 		routerRunning(),
@@ -70,7 +70,7 @@ export async function readSetupStatus(): Promise<SetupStatus> {
 	let gateways: RegisteredGateway[] | null = null;
 	let domain: SetupStatus["domain"] = "none";
 	if (running) {
-		const probeHost = lanBound || lanNow;
+		const probeHost = lanBound || lanHosts[0];
 		const [health, fed, registered] = await Promise.all([
 			routerHealth(probeHost),
 			readRouterFed(),
@@ -85,7 +85,7 @@ export async function readSetupStatus(): Promise<SetupStatus> {
 	}
 
 	return {
-		lanNow,
+		lanHosts,
 		lanBound,
 		publicHost: reach.publicHost,
 		publicPort: reach.publicPort,
@@ -104,8 +104,14 @@ export function printSetupStatus(s: SetupStatus): void {
 	const row = (label: string, value: string, tail = ""): void => {
 		console.log(`  ${label.padEnd(13)}${value}${tail ? `   ${tail}` : ""}`);
 	};
-	const lanTail = s.lanBound && s.lanBound !== s.lanNow ? `now ${s.lanNow}, restart ./start-federation.sh` : "";
-	row("LAN", s.lanBound || s.lanNow, lanTail);
+	// The Router binds the first address, so the list order answers "which one is it on". A bound
+	// address missing from the list is a machine that moved, which only a restart re-binds.
+	const drifted = s.lanBound && !s.lanHosts.includes(s.lanBound);
+	row(
+		"LAN",
+		s.lanHosts.join(", ") || s.lanBound || "none",
+		drifted ? `Router bound to ${s.lanBound}, restart ./start-federation.sh` : "",
+	);
 	row("Public", s.publicHost ? `${s.publicHost}:${s.publicPort}` : "not set");
 	row("Router", s.routerRunning ? "running" : "not running");
 	row("Fingerprint", s.certFingerprint ? shortFp(s.certFingerprint) : "--");

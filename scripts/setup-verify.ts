@@ -2,7 +2,7 @@ import { $ } from "bun";
 import { envGet, jparse, note } from "./lib/host.js";
 import { ROUTER_PORT, readPublicReach, routerHealth } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
-import { fetchRegisteredGateways } from "./setup-status.js";
+import { fetchRegisteredGateways, type RegisteredGateway } from "./setup-status.js";
 
 ////////////////////////////////
 //  Constants
@@ -11,6 +11,9 @@ import { fetchRegisteredGateways } from "./setup-status.js";
 //  what it advertises, and that the Gateway is actually registered rather than merely running.
 
 const GATEWAY_HEALTH = "http://127.0.0.1:20000/health";
+// A dropped Gateway reconnects on a backoff that reaches a few seconds; 30s covers it with room.
+const LINK_TRIES = 15;
+const LINK_INTERVAL_MS = 2000;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -58,24 +61,50 @@ export async function verify(): Promise<void> {
 		note("The running Router advertises an older public address than .env holds - restart ./start-federation.sh");
 	}
 
-	const registered = await fetchRegisteredGateways(bind);
-	if (registered === null) throw new Error("the Router refused the gateways op");
-	if (registered.length === 0) note("Gateways: none registered");
-	else for (const g of registered) note(`Gateway ${g.gatewayId}: ${g.signFp ?? "(no identity presented)"}`);
-
 	const gwText = await $`curl -s --max-time 5 ${GATEWAY_HEALTH}`.quiet().nothrow().text();
-	const gateway = jparse<{ ok?: boolean; router_connected?: boolean }>(gwText.trim());
+	const gateway = jparse<{ ok?: boolean }>(gwText.trim());
 	if (!gateway?.ok) throw new Error("the Gateway did not answer /health - run ./start-gateway.sh");
-	if (!gateway.router_connected) {
+
+	// The link is checked on BOTH sides, and given time. A Gateway reads `router_connected` off its
+	// own socket, which stays OPEN across a half-open connection, so it can claim a link the Router
+	// is not holding - and every console op relayed over that link fails while both ends look healthy.
+	// And a Router that was just (re)started drops the Gateway, which reconnects on a backoff of a
+	// few seconds; a single read in that window reports an outage that is already healing.
+	const link = await awaitGatewayLink(bind);
+	if (link.registered.length === 0) note("Gateways: none registered");
+	else for (const g of link.registered) note(`Gateway ${g.gatewayId}: ${g.signFp ?? "(no identity presented)"}`);
+	if (!link.connected) {
 		throw new Error("the Gateway is up but NOT connected to the Router - check its transport.json and its log");
 	}
-	// Both sides, not one. A Gateway reads `router_connected` off its own socket, which stays OPEN
-	// across a half-open connection, so it can claim a link the Router is not holding - and every
-	// console op relayed over that link fails while both ends look healthy.
-	if (!router.gateways) {
+	if (!link.held) {
 		throw new Error(
 			"the Gateway believes it is connected but the Router holds NO registration - restart the Gateway",
 		);
 	}
 	note(`Gateway healthy and registered.`);
+}
+
+/** Poll until the Gateway says it is connected AND the Router holds a registration, or the wait
+ * runs out. Returns the last thing each side said, so the caller reports which leg is missing. */
+async function awaitGatewayLink(
+	bind: string,
+): Promise<{ connected: boolean; held: boolean; registered: RegisteredGateway[] }> {
+	let connected = false;
+	let held = false;
+	let registered: RegisteredGateway[] = [];
+	for (let i = 0; i < LINK_TRIES; i++) {
+		const [gwText, list, router] = await Promise.all([
+			$`curl -s --max-time 5 ${GATEWAY_HEALTH}`.quiet().nothrow().text(),
+			fetchRegisteredGateways(bind),
+			routerHealth(bind),
+		]);
+		if (list === null) throw new Error("the Router refused the gateways op");
+		connected = jparse<{ router_connected?: boolean }>(gwText.trim())?.router_connected ?? false;
+		held = (router?.gateways ?? 0) > 0;
+		registered = list;
+		if (connected && held) break;
+		if (i === 0) note("Waiting for the Gateway to register with the Router");
+		await Bun.sleep(LINK_INTERVAL_MS);
+	}
+	return { connected, held, registered };
 }

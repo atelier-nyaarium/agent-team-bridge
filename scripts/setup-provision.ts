@@ -41,17 +41,31 @@ async function askPublicReach(): Promise<{ publicHost: string; publicPort: numbe
 	return { publicHost, publicPort };
 }
 
-/** Ask, write, and bring the Router up on the answer. `docker compose up` leaves an unchanged
- * Router running and restarts one whose bind or public reach moved, so this is safe on every run.
- * Non-TTY takes .env as it stands. */
+/** Ask, write, and bring the Router up on the answer. A running Router whose reach did not move is
+ * left alone entirely, not even handed to compose: recreating it drops every gateway for a few
+ * seconds, and enter, enter should cost nothing. One whose reach moved is recreated on the image it
+ * already runs; only a Router that is not up gets a build, since that is a fresh machine. Non-TTY
+ * takes .env as it stands. */
 async function ensureRouter(): Promise<void> {
+	const before = await readPublicReach();
+	const bindBefore = await envGet("FEDERATION_BIND");
+	const wasRunning = await routerRunning();
 	if (process.stdin.isTTY) {
 		const { publicHost, publicPort } = await askPublicReach();
 		await writePublicReach(publicHost, publicPort);
 	}
 	const env = await ensureRouterEnv();
-	const health = await startRouter(env);
-	note(`Router ${health.wasRunning ? "running" : "ready"}. Fingerprint ${shortFp(health.certFingerprint)}`);
+	const unchanged =
+		env.publicHost === before.publicHost && env.publicPort === before.publicPort && env.lan === bindBefore;
+	if (wasRunning && unchanged) {
+		const health = await routerHealth(env.lan);
+		if (health) {
+			note(`Router running. Fingerprint ${shortFp(health.certFingerprint)}`);
+			return;
+		}
+	}
+	const health = await startRouter(env, { build: !wasRunning });
+	note(`Router ${health.wasRunning ? "restarted" : "ready"}. Fingerprint ${shortFp(health.certFingerprint)}`);
 }
 
 ////////////////////////////////
@@ -87,7 +101,7 @@ async function routerReach(): Promise<{ routerUrl: string; routerCertFp: string 
 		throw new Error(`the Router at ${bind}:${ROUTER_PORT} did not answer /health - run ./start-federation.sh`);
 	const { publicHost, publicPort } = await readPublicReach();
 	if (!publicHost)
-		note("No public address: the blob names the LAN address, so a phone must be on this network to first connect.");
+		note("No public address: the setup code names the LAN address, so a phone must be on this network to scan it.");
 	const routerUrl = publicHost ? `https://${publicHost}:${publicPort}` : `https://${bind}:${ROUTER_PORT}`;
 	return { routerUrl, routerCertFp: health.certFingerprint };
 }
@@ -143,7 +157,7 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	// settings, persisted on the phone), so a re-provision never wipes voice. Do not re-add them.
 	await writeProvisioningBlob({ transport: "direct", routerUrl, routerCertFp, appToken, pendingTenant }, BLOB_FILE);
 	secureFile(BLOB_FILE);
-	note(`Blob: ${BLOB_FILE}`);
+	note(`Setup code: ${BLOB_FILE}`);
 }
 
 ////////////////////////////////
@@ -179,6 +193,6 @@ export async function provision(): Promise<void> {
 	await emitBlob(pendingTenant);
 	await verify();
 	console.log();
-	note(`Setup complete. Blob: ${BLOB_FILE}`);
-	if (pendingTenant) note("Next: scan the QR on your phone, then run 1) Setup Gateway.");
+	note(`Setup complete. Setup code: ${BLOB_FILE}`);
+	if (pendingTenant) note("Next: scan the setup code on your phone, then run 1) Gateway Setup.");
 }
