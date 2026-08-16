@@ -308,11 +308,23 @@ class FederationManager(private val store: AppStateStore) {
 		domainId: String?,
 	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
+		// The bundle carries the ROOT and this Gateway's own admission, nothing more. That is all it
+		// needs to register: the owner key roots its trust (trust-on-first-enroll), and its own admission
+		// is what it presents at gateway_register. Every other member and every revocation arrives on
+		// the register reply and is verified against that same root, so shipping the whole roster here
+		// only made the bundle grow with the Domain - past what a terminal can paste (~4 KB), which is
+		// how the paste route broke on the first machine that was not the first machine.
+		val ring = keyring().snapshot
 		val bundle = GatewayBootstrapBundle(
 			nonce = nonce,
 			transport = transport,
 			admission = admission,
-			domain = keyring().snapshot,
+			domain = DomainSnapshot(
+				ownerSignPub = ring.ownerSignPub,
+				admissions = listOf(admission),
+				revocations = emptyList(),
+				displayName = ring.displayName,
+			),
 			domainId = domainId,
 		)
 		val plain = json.encodeToString(GatewayBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
