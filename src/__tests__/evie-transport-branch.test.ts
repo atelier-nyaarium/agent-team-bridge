@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { evieWsConnection, loadEvieTransport } from "../gateway/evie/transport.js";
+import { evieWsConnection, loadEvieTransport, loadRouterReach, saveRouterReach } from "../gateway/evie/transport.js";
 
 ////////////////////////////////
 //  Constants
@@ -67,11 +67,33 @@ describe("loadEvieTransport", () => {
 });
 
 describe("evieWsConnection", () => {
-	it("dials by URL with the leaf pinned, lowercased", () => {
+	// The stored scheme survives: this url is the BOOTSTRAP candidate, and the client rewrites
+	// http->ws per candidate as it dials. Rewriting here instead would feed a ws:// address into the
+	// reach ring, where it is indistinguishable from an advertised one.
+	it("carries the bootstrap URL with the leaf pinned, lowercased", () => {
 		write(DIRECT);
 		const conn = evieWsConnection(loadEvieTransport(dir)!);
-		expect(conn.url).toBe("wss://federation-router:20001");
+		expect(conn.url).toBe("https://federation-router:20001");
 		expect(conn.tls).toEqual({ certFp: "ab12" });
 		expect(conn.headers.Authorization).toBe(`Bearer ${DIRECT.bearer}`);
+	});
+});
+
+describe("loadRouterReach", () => {
+	it("resolves empty when nothing has been learned, and round-trips what has", () => {
+		expect(loadRouterReach(dir)).toEqual({});
+		saveRouterReach(dir, { publicHost: "r.example.com", publicPort: 8443, lanAddresses: ["192.168.1.238"] });
+		expect(loadRouterReach(dir)).toEqual({
+			publicHost: "r.example.com",
+			publicPort: 8443,
+			lanAddresses: ["192.168.1.238"],
+		});
+	});
+
+	// A corrupt cache must not stop the Gateway connecting: the bootstrap alone still dials, and the
+	// next register reply refills it.
+	it("resolves empty from a malformed cache rather than throwing", () => {
+		writeFileSync(path.join(dir, "reach.json"), "{not json");
+		expect(loadRouterReach(dir)).toEqual({});
 	});
 });

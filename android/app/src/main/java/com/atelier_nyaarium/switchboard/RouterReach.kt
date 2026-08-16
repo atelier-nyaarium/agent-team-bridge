@@ -54,11 +54,18 @@ data class RouterReach(
  * are dialed on [routerPort], the Router's own; the public host on its advertised `publicPort`, or
  * the Router's own when none is advertised. The two differ whenever a port forward remaps, and one
  * number for both is exactly the mistake that would dial the LAN on the forwarded port.
+ *
+ * The TWIN of `src/shared/router-reach.ts`, held equivalent by tests/fixtures/router-reach/vectors.json,
+ * which RouterReachVectorsTest and the vitest suite both iterate. The Gateway runs the same rule over
+ * its own transport, so a change here that is not made there diverges two clients of one Router.
  */
 fun reachCandidates(reach: RouterReach, blobRouterUrl: String, routerPort: Int): List<String> {
-	fun url(host: String, port: Int): String = if (host.startsWith("http")) host.trimEnd('/') else "https://$host:$port"
+	// Anything already carrying a scheme is a full base URL, kept verbatim; only a bare host gains
+	// https and the port. Matched on "://" rather than an http prefix because the Gateway twin's
+	// bootstrap can be ws:// or wss://.
+	fun url(host: String, port: Int): String = if (host.contains("://")) host.trimEnd('/') else "https://$host:$port"
 	return buildList {
-		reach.lanAddresses.forEach { add(url(it, routerPort)) }
+		reach.lanAddresses.filter { it.isNotBlank() }.forEach { add(url(it, routerPort)) }
 		reach.publicHost?.takeIf { it.isNotBlank() }?.let { add(url(it, reach.publicPort ?: routerPort)) }
 		if (blobRouterUrl.isNotBlank()) add(url(blobRouterUrl, routerPort))
 	}.distinct()

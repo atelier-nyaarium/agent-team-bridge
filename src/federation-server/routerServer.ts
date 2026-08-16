@@ -9,10 +9,14 @@ import {
 	ROSTER_MAX_SKEW_MS,
 	type RosterRequest,
 	type RosterResult,
+	TRANSPORT_MAX_SKEW_MS,
 	TRUST_PENDING_MAX_SKEW_MS,
+	type TransportRequest,
+	type TransportResult,
 	type TrustPendingRequest,
 	type TrustPendingResult,
 	verifyRosterRequest,
+	verifyTransportRequest,
 	verifyTrustPendingRequest,
 } from "../shared/federation-proofs.js";
 import { ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
@@ -59,6 +63,7 @@ export class RouterServer {
 	private readonly tenantAdmin: TenantAdmin;
 	private readonly coordinators = new Map<string, EnrollmentCoordinator>();
 	private readonly rosterNonces = new Map<string, number>();
+	private readonly transportNonces = new Map<string, number>();
 	private readonly trustPendingNonces = new Map<string, number>();
 	private readonly tls: RouterTls;
 
@@ -85,6 +90,7 @@ export class RouterServer {
 			},
 			hasLinkEdge: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
+			reach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
 		});
 		this.console = new ConsoleSurface({
 			port: params.port,
@@ -106,8 +112,7 @@ export class RouterServer {
 			onTrustHandshake: (op) => this.trustRendezvous.handle(op),
 			onTrustPending: (op) => this.handleTrustPending(op),
 			onRoster: (req) => this.handleRoster(req),
-			// Direct transport fields arrive later.
-			onTransport: () => ({ ok: false, error: "transport not available" }),
+			onTransport: (req) => this.handleTransport(req),
 			onReach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
 			onGateways: () => {
 				const adminDomainId = params.store.adminDomainId();
@@ -376,6 +381,49 @@ export class RouterServer {
 			revocations: state.revocations,
 		}));
 		return buildRoster(req.signerSignPub, domains, this.bridge.onlineDomainIds());
+	}
+
+	/**
+	 * Hand a Gateway what it needs to dial this Router and pin it: the address, the leaf fingerprint,
+	 * and the WS bearer. Gated on an owner-signed, fresh, non-replayed proof that the signer roots a
+	 * Domain here, the same posture as the roster - this reply carries the bearer, so an unverified
+	 * caller getting one would be handing out the key to the gateway plane.
+	 *
+	 * The address is the PUBLIC host when configured, else the LAN bind. Never the docker alias: that
+	 * resolves only in this machine's compose project, and a bundle carrying it strands every other
+	 * machine. Whichever it is, it is only the FIRST door - the Gateway re-learns both sides from its
+	 * register reply and orders them by the shared reach rule from then on.
+	 */
+	private handleTransport(req: TransportRequest): TransportResult {
+		const opaque: TransportResult = { ok: false, error: "not a member of this network" };
+		if (!verifyTransportRequest(req)) return opaque;
+		const now = Date.now();
+		if (Math.abs(now - req.proofAt) > TRANSPORT_MAX_SKEW_MS) return opaque;
+		for (const [nonce, at] of this.transportNonces) {
+			if (Math.abs(now - at) > TRANSPORT_MAX_SKEW_MS) this.transportNonces.delete(nonce);
+		}
+		if (this.transportNonces.has(req.nonce)) return opaque;
+		// Only an owner who ROOTS a Domain on this Router may pull it, so a member of someone else's
+		// network, or a revoked key, gets the same opaque answer as a bad signature.
+		const roots = this.params.store
+			.listDomains()
+			.some(({ state }) => state.ownerSignPub && state.ownerSignPub === req.signerSignPub);
+		if (!roots) return opaque;
+		this.transportNonces.set(req.nonce, req.proofAt);
+
+		const reach = this.params.reach;
+		const host = reach?.publicHost || reach?.lanAddresses?.[0];
+		if (!host) {
+			return { ok: false, error: "the Router has no reachable address configured - run ./setup.sh on its host" };
+		}
+		const port = reach?.publicHost ? (reach.publicPort ?? this.params.port) : this.params.port;
+		return {
+			ok: true,
+			transport: "direct",
+			routerUrl: `https://${host}:${port}`,
+			routerCertFp: this.tls.certFp,
+			bearer: this.params.federationToken,
+		};
 	}
 
 	// An unverifiable, stale or replayed proof answers empty, never an enumeration.

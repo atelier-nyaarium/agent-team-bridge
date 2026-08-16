@@ -2,6 +2,14 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
 import { createReconnector } from "../../shared/reconnect.js";
+import {
+	DEFAULT_ROUTER_PORT,
+	isPrivateHost,
+	LAN_CONNECT_TIMEOUT_MS,
+	type RouterReach,
+	reachCandidates,
+	reachHost,
+} from "../../shared/router-reach.js";
 
 // One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->evie socket (here and
 // evie-bot's BridgeTransport). 64 MiB clears a max-cap attachment payload's sealed frame (~1.78x
@@ -18,7 +26,15 @@ export interface EvieToolCallResult {
 }
 
 export interface EvieClientConfig {
+	/** The bootstrap base URL: the docker alias on the Router's own machine, or whatever Gateway
+	 * Setup was told elsewhere. Only the FIRST door - once the Router answers, its advertised
+	 * addresses lead the ring and this falls to last. */
 	url: string;
+	/** What the Router last said about itself, restored across restarts. Absent on a first connect. */
+	reach?: RouterReach;
+	/** The Router advertised its addresses on the register reply. Persist them; the next connect
+	 * attempt (and every reconnect) re-derives the ring from them. */
+	onReach?: (reach: RouterReach) => void;
 	// WebSocket handshake headers. The bearer the Router gates the upgrade on, so the auth
 	// shape lives with the caller, not here.
 	headers: Record<string, string>;
@@ -62,6 +78,9 @@ export interface EvieClientConfig {
 	// PENDING_REREGISTER_DELAY_MS default); tests pass a small value to exercise the retry
 	// without waiting out the real interval.
 	pendingReregisterDelayMs?: number;
+	// Override the reconnect backoff floor, same reason: a test proving the dial ring steps past a
+	// dead address should not hold a socket open for the production 5s between attempts.
+	reconnectInitialDelayMs?: number;
 }
 
 export interface EvieClient {
@@ -85,6 +104,12 @@ const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
 // noticed, since two missed pongs terminate the socket and trigger a reconnect.
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
+// How long a candidate gets to OPEN before the ring steps past it. Without this the socket inherits
+// the OS connect timeout, which for an unroutable address is minutes - so a stale LAN address the
+// Router once advertised would wedge the Gateway offline long past the point the public host would
+// have worked. A private address answers from the same subnet or not at all, so it gets the short
+// budget; anything else may legitimately be slow to reach.
+const CONNECT_TIMEOUT_MS = 15_000;
 
 function tlsOptions(tls: EvieClientConfig["tls"]): Record<string, unknown> {
 	if (!tls) return {};
@@ -110,7 +135,21 @@ function verifyPinnedLeaf(ws: WebSocket, expectedFp: string): void {
 export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
-	const reconnector = createReconnector(connect, { initialDelayMs: 5_000, maxDelayMs: 30_000 });
+	// The addresses this Gateway knows for its Router, and which one the next connect dials. Unlike
+	// the phone, which fails over per HTTP op, a Gateway holds ONE socket: the ring advances on a
+	// failed connect and resets on a successful open, so a Router that moved is found on the next
+	// backoff rather than never. Before this the client redialed one fixed URL forever, and an
+	// address that stopped working was an outage no amount of reconnecting could clear.
+	let reach: RouterReach = config.reach ?? {};
+	let candidateIndex = 0;
+	const candidatesNow = (): string[] => {
+		const ring = reachCandidates(reach, config.url, DEFAULT_ROUTER_PORT);
+		return ring.length ? ring : [config.url];
+	};
+	const reconnector = createReconnector(connect, {
+		initialDelayMs: config.reconnectInitialDelayMs ?? 5_000,
+		maxDelayMs: 30_000,
+	});
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingRetryAttempts = 0;
@@ -124,9 +163,15 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	function connect(): void {
 		if (stopped) return;
 
-		console.log(`[evie-client] connecting to ${config.url}...`);
+		const ring = candidatesNow();
+		const target = ring[candidateIndex % ring.length] ?? config.url;
+		const wsUrl = target.replace(/^http/, "ws");
+		// Whether THIS socket ever opened, so the close handler can tell "that address is shut" from
+		// "the connection we had dropped", which must not walk the ring off a working address.
+		let opened = false;
+		console.log(`[evie-client] connecting to ${target}...`);
 
-		ws = new WebSocket(config.url, {
+		ws = new WebSocket(wsUrl, {
 			headers: config.headers,
 			// Explicit rather than ws's inherited 100 MiB default: this socket carries every relay
 			// frame for the whole gateway, and an oversized inbound message does not merely fail,
@@ -140,9 +185,23 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		});
 		if (config.tls && "certFp" in config.tls) verifyPinnedLeaf(ws, config.tls.certFp);
 
+		// Bound the wait on THIS candidate. Terminating routes into the close handler, which is the
+		// one place the ring advances, so a timeout and a refused connection are handled identically.
+		const budget = isPrivateHost(reachHost(target)) ? LAN_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
+		const connectTimer = setTimeout(() => {
+			if (opened) return;
+			console.error(`[evie-client] ${target} did not answer in ${budget}ms, trying the next address`);
+			ws?.terminate();
+		}, budget);
+
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
 			missedPongs = 0;
+			opened = true;
+			clearTimeout(connectTimer);
+			// This candidate answered, so the next reconnect starts here rather than walking the ring
+			// again. A LAN address that works stays first, which is the whole point of the order.
+			candidateIndex = Math.max(0, ring.indexOf(target));
 			reconnector.reset();
 			// Drop any pending-retry timer left from a prior socket so its cadence does not
 			// double up with the new open-handler's register.
@@ -229,7 +288,12 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws.on("close", () => {
 			ws = null;
+			clearTimeout(connectTimer);
 			stopHeartbeat();
+			// This candidate did not stay up. Advance so the next attempt tries a different address:
+			// a socket that never opened means this door is shut, and one that opened and dropped is
+			// re-tried from here anyway because the open handler pinned the index to it.
+			if (!opened) candidateIndex = (candidateIndex + 1) % Math.max(1, ring.length);
 			// The reconnect re-registers from the open handler, so cancel the pending-retry
 			// timer rather than fire a register at a dead socket.
 			clearPendingRetry();
@@ -274,6 +338,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 							domainStatus?: string;
 							displayName?: string | null;
 							isAdminDomain?: boolean;
+							reach?: RouterReach;
 					  }
 					| undefined;
 				if (res.error) {
@@ -298,6 +363,13 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					console.warn(
 						`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
 					);
+				// The Router's own addresses, learned on the reply rather than asked for: the Gateway
+				// authenticates with a WS bearer and cannot call the console-token `reach` op at all.
+				// An older Router sends nothing and the ring keeps what it had.
+				if (r?.reach && (r.reach.publicHost || r.reach.lanAddresses?.length)) {
+					reach = r.reach;
+					config.onReach?.(r.reach);
+				}
 				// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
 				// console register reply / discovery roster.
 				if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {

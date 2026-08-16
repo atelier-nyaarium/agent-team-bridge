@@ -51,7 +51,14 @@ import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { type EvieTransport, evieWsConnection, loadEvieTransport } from "./evie/transport.js";
+import {
+	type EvieTransport,
+	evieWsConnection,
+	loadEvieTransport,
+	loadRouterReach,
+	routerBootstrapOverride,
+	saveRouterReach,
+} from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import {
@@ -695,16 +702,22 @@ export async function startGateway(): Promise<void> {
 		// The federation WS: dial the Router and pin its leaf fingerprint. Creds are delivered by
 		// enrollment, so there is nothing to mount and nothing to configure by hand.
 		const connection = evieWsConnection(transport);
-		console.log(`[evie] direct transport -> ${transport.routerUrl}`);
+		// The operator's own answer to "where is the Router", from Gateway Setup, wins over the address
+		// the sealed bundle names: the phone knows the Router by its public host, which a machine on the
+		// Router's own LAN may not be able to reach at all on a first connection. Both stay in the ring.
+		const bootstrap = routerBootstrapOverride() ?? connection.url;
+		console.log(`[evie] direct transport -> ${bootstrap}`);
 
 		// Frame handlers land on the slice after the routes rebuild; a frame arriving before that
 		// is dropped (the console re-polls).
 		const evieClient = startEvieClient({
-			url: connection.url,
+			url: bootstrap,
 			headers: connection.headers,
 			tls: connection.tls,
 			gatewayId: localGatewayId,
 			domainId,
+			reach: loadRouterReach(federationDir),
+			onReach: (learned) => saveRouterReach(federationDir, learned),
 			onConsoleRelay: (frame) => {
 				slice.handlers?.consoleRelay(frame);
 			},

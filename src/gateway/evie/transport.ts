@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_ROUTER_PORT, type RouterReach } from "../../shared/router-reach.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -43,15 +44,60 @@ export function loadEvieTransport(federationDir: string): EvieTransport | null {
 }
 
 /** Build the WebSocket connection params. The Router's cert is self-signed and carries no useful
- * subject, so the leaf fingerprint IS the trust and hostname verification is irrelevant. */
+ * subject, so the leaf fingerprint IS the trust and hostname verification is irrelevant.
+ *
+ * `url` is the BOOTSTRAP only: the client re-derives its dial ring from what the Router advertises,
+ * and this stays as the last candidate. The ws:// rewrite happens per candidate in the client, so
+ * this keeps the stored scheme. */
 export function evieWsConnection(t: EvieTransport): {
 	url: string;
 	headers: Record<string, string>;
 	tls: { certFp: string };
 } {
 	return {
-		url: t.routerUrl.replace(/^http/, "ws"),
+		url: t.routerUrl,
 		headers: { Authorization: `Bearer ${t.bearer}` },
 		tls: { certFp: t.routerCertFp },
 	};
+}
+
+/** The bootstrap address Gateway Setup wrote, as a base URL, or null when it asked for none. The
+ * operator names a door that works from where THIS machine stands; the phone's sealed bundle names
+ * the Router's public host, which is not always reachable from the Router's own LAN. */
+export function routerBootstrapOverride(): string | null {
+	const host = (process.env.FEDERATION_ROUTER_HOST ?? "").trim();
+	if (!host) return null;
+	if (host.includes("://")) return host.replace(/\/+$/, "");
+	const port = Number((process.env.FEDERATION_ROUTER_PORT ?? "").trim()) || DEFAULT_ROUTER_PORT;
+	return `https://${host}:${port}`;
+}
+
+////////////////////////////////
+//  Learned reach
+
+/** What the Router last told this Gateway about its own addresses. Its own file beside
+ * `transport.json`, not merged into it: the transport is DELIVERED (sealed, by the owner's phone)
+ * and must stay byte-stable, while this is LEARNED and rewritten on any register. A restart with a
+ * stale copy is harmless, since the ring re-derives on the next reply. */
+export function loadRouterReach(federationDir: string): RouterReach {
+	try {
+		const raw = JSON.parse(fs.readFileSync(path.join(federationDir, "reach.json"), "utf8")) as RouterReach;
+		return {
+			publicHost: typeof raw.publicHost === "string" ? raw.publicHost : null,
+			publicPort: typeof raw.publicPort === "number" ? raw.publicPort : null,
+			lanAddresses: Array.isArray(raw.lanAddresses) ? raw.lanAddresses.filter((a) => typeof a === "string") : [],
+		};
+	} catch {
+		return {};
+	}
+}
+
+/** Persist what the Router advertised. Never throws: losing this costs one extra ring walk after a
+ * restart, and a Gateway that cannot write its cache must still stay connected. */
+export function saveRouterReach(federationDir: string, reach: RouterReach): void {
+	try {
+		fs.writeFileSync(path.join(federationDir, "reach.json"), JSON.stringify(reach), { mode: 0o600 });
+	} catch (e) {
+		console.warn(`[evie] could not cache the Router's reach: ${e instanceof Error ? e.message : e}`);
+	}
 }

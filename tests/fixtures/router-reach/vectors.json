@@ -1,0 +1,91 @@
+{
+	"_comment": "Cross-runtime vectors for the Router reach ordering rule. Read by BOTH src/__tests__/router-reach.test.ts and android/.../RouterReachVectorsTest.kt, so the hand-authored Kotlin twin cannot drift from src/shared/router-reach.ts. The order IS the behaviour: LAN first so a client at home never pays a hairpin timeout, public next so it works away, the bootstrap last so a Router that advertises nothing still resolves. A wrong order shows up as an outage in exactly one physical location.",
+	"routerPort": 20001,
+	"candidates": [
+		{
+			"name": "lan before public before bootstrap",
+			"reach": { "publicHost": "switchboard.example.com", "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "https://switchboard.example.com:20001",
+			"expected": ["https://192.168.1.238:20001", "https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "a forwarded public port never reaches the lan candidates",
+			"reach": { "publicHost": "switchboard.example.com", "publicPort": 8443, "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "https://192.168.1.238:20001",
+			"expected": ["https://192.168.1.238:20001", "https://switchboard.example.com:8443"]
+		},
+		{
+			"name": "an absent public port means the router's own",
+			"reach": { "publicHost": "switchboard.example.com", "lanAddresses": [] },
+			"bootstrapUrl": "https://192.168.1.238:20001",
+			"expected": ["https://switchboard.example.com:20001", "https://192.168.1.238:20001"]
+		},
+		{
+			"name": "every lan address is tried, in the order advertised",
+			"reach": { "publicHost": null, "lanAddresses": ["192.168.1.238", "10.0.0.5"] },
+			"bootstrapUrl": "https://192.168.1.238:20001",
+			"expected": ["https://192.168.1.238:20001", "https://10.0.0.5:20001"]
+		},
+		{
+			"name": "nothing learned falls back to the bootstrap alone",
+			"reach": {},
+			"bootstrapUrl": "https://switchboard.example.com:20001",
+			"expected": ["https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "a bare host bootstrap gains scheme and the router port",
+			"reach": {},
+			"bootstrapUrl": "192.168.1.238",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "the gateway's docker alias is an ordinary bootstrap",
+			"reach": { "publicHost": "switchboard.example.com", "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "https://federation-router:20001",
+			"expected": [
+				"https://192.168.1.238:20001",
+				"https://switchboard.example.com:20001",
+				"https://federation-router:20001"
+			]
+		},
+		{
+			"name": "no bootstrap at all is legal once the router has been heard from",
+			"reach": { "publicHost": "switchboard.example.com", "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "",
+			"expected": ["https://192.168.1.238:20001", "https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "an empty reach and an empty bootstrap yield nothing to dial",
+			"reach": { "publicHost": null, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": []
+		},
+		{
+			"name": "a trailing slash on the bootstrap does not make a second candidate",
+			"reach": { "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "https://192.168.1.238:20001/",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "a bootstrap that already carries any scheme is kept verbatim, not re-prefixed",
+			"reach": {},
+			"bootstrapUrl": "ws://127.0.0.1:41234",
+			"expected": ["ws://127.0.0.1:41234"]
+		}
+	],
+	"privateHosts": [
+		{ "host": "192.168.1.238", "private": true },
+		{ "host": "10.0.0.5", "private": true },
+		{ "host": "172.16.4.4", "private": true },
+		{ "host": "172.31.255.1", "private": true },
+		{ "host": "169.254.1.1", "private": true },
+		{ "host": "127.0.0.1", "private": true },
+		{ "host": "localhost", "private": true },
+		{ "host": "172.15.0.1", "private": false },
+		{ "host": "172.32.0.1", "private": false },
+		{ "host": "172.56.15.53", "private": false },
+		{ "host": "switchboard.example.com", "private": false },
+		{ "host": "8.8.8.8", "private": false },
+		{ "host": "99.47.67.157", "private": false }
+	]
+}
