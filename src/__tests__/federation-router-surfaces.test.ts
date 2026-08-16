@@ -53,4 +53,39 @@ describe("federation router surfaces", () => {
 			(await surface.handleRequest(new Request("https://router/console", { method: "POST", body: "{}" }))).status,
 		).toBe(401);
 	});
+
+	// reach and gateways are configuration and a roster, not state a signer could contest, so the
+	// app token is their whole gate. Behind it, the answers are what the Router was handed.
+	it("serves reach and gateways behind the app token, publicPort only when advertised", async () => {
+		const surface = new ConsoleSurface({
+			port: 0,
+			authToken: "secret",
+			getBridge: () => null,
+			onReach: () => ({
+				publicHost: "switchboard.example.com",
+				publicPort: 8443,
+				lanAddresses: ["192.168.1.238"],
+			}),
+			onGateways: () => ({ gateways: [{ gatewayId: "sakura", signFp: "3E9A-77C1-0B4D-F2A6" }] }),
+		});
+		const post = (body: string, token?: string) =>
+			surface.handleRequest(
+				new Request("https://router/console", {
+					method: "POST",
+					headers: token ? { "x-console-bridge-token": `Bearer ${token}` } : {},
+					body,
+				}),
+			);
+		expect((await post('{"gateways":{}}')).status).toBe(401);
+		const reach = await post('{"reach":{}}', "secret");
+		expect(reach.status).toBe(200);
+		expect(await reach.json()).toEqual({
+			publicHost: "switchboard.example.com",
+			publicPort: 8443,
+			lanAddresses: ["192.168.1.238"],
+		});
+		const gateways = await post('{"gateways":{}}', "secret");
+		expect(gateways.status).toBe(200);
+		expect(await gateways.json()).toEqual({ gateways: [{ gatewayId: "sakura", signFp: "3E9A-77C1-0B4D-F2A6" }] });
+	});
 });

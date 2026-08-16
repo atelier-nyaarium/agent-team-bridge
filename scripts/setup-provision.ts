@@ -6,19 +6,53 @@
 // file the Router owns, and a write to it is "stop, write, start" because the store is single-writer.
 
 import { randomBytes } from "node:crypto";
-import { $ } from "bun";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { pendingAdminDomain, readAdminDomain } from "./bootstrap-domain.js";
-import { ask, dcFederation, envGet, envSet, jparse, note, secureFile } from "./lib/host.js";
+import { ask, dcFederation, envGet, envSet, note, secureFile } from "./lib/host.js";
+import {
+	ensureRouterEnv,
+	ROUTER_PORT,
+	readPublicReach,
+	routerHealth,
+	shortFp,
+	startRouter,
+	writePublicReach,
+} from "./lib/routerStart.js";
 import { readRouterFed, routerRunning, writeRouterFed } from "./lib/routerState.js";
 import { BLOB_FILE, INVITE_TTL_MS } from "./setup-constants.js";
 import { verify } from "./setup-verify.js";
 import { writeProvisioningBlob } from "./write-provisioning-blob.js";
 
 ////////////////////////////////
-//  Constants
+//  Router reach
 
-const ROUTER_PORT = 20001;
+/** The one thing setup asks about the Router: where it is reached from OUTSIDE. The LAN address is
+ * detected and never asked. Empty host means LAN only and the port is not asked. Prefilled from
+ * .env, so a re-run is enter, enter. */
+async function askPublicReach(): Promise<{ publicHost: string; publicPort: number }> {
+	const current = await readPublicReach();
+	const hostAnswer = ask(`Public host [${current.publicHost || "none"}]:`);
+	const publicHost = hostAnswer === "" ? current.publicHost : hostAnswer.toLowerCase() === "none" ? "" : hostAnswer;
+	if (!publicHost) return { publicHost: "", publicPort: ROUTER_PORT };
+	const portAnswer = ask(`Public port [${current.publicPort}]:`);
+	const publicPort = portAnswer === "" ? current.publicPort : Number(portAnswer);
+	if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535)
+		throw new Error(`not a port: ${portAnswer}`);
+	return { publicHost, publicPort };
+}
+
+/** Ask, write, and bring the Router up on the answer. `docker compose up` leaves an unchanged
+ * Router running and restarts one whose bind or public reach moved, so this is safe on every run.
+ * Non-TTY takes .env as it stands. */
+async function ensureRouter(): Promise<void> {
+	if (process.stdin.isTTY) {
+		const { publicHost, publicPort } = await askPublicReach();
+		await writePublicReach(publicHost, publicPort);
+	}
+	const env = await ensureRouterEnv();
+	const health = await startRouter(env);
+	note(`Router ${health.wasRunning ? "running" : "ready"}. Fingerprint ${shortFp(health.certFingerprint)}`);
+}
 
 ////////////////////////////////
 //  Router reads
@@ -42,28 +76,20 @@ async function readFed(): Promise<string> {
 
 /** The address the blob names, and the leaf it pins. The fingerprint comes from the running Router's
  * /health so a blob can never carry a pin the Router does not actually present. The address is the
- * PUBLIC host when one is configured, else the LAN bind: a phone only needs one address it can reach
- * to learn every other from the Router's `reach` op, and the public one is the one that works from
- * anywhere once the port is forwarded. */
+ * PUBLIC host and port when one is configured, else the LAN bind: a phone only needs one address it
+ * can reach to learn every other from the Router's `reach` op, and the public one is the one that
+ * works from anywhere once the port is forwarded. */
 async function routerReach(): Promise<{ routerUrl: string; routerCertFp: string }> {
 	const bind = await envGet("FEDERATION_BIND");
-	if (!bind || bind === "127.0.0.1" || bind === "0.0.0.0") {
-		throw new Error(
-			"FEDERATION_BIND in .env must be this machine's LAN address (not loopback or 0.0.0.0) - a phone cannot reach the Router otherwise",
-		);
-	}
-	const health = await $`curl -sk --max-time 5 https://${bind}:${ROUTER_PORT}/health`.quiet().nothrow().text();
-	const parsed = jparse<{ ok?: boolean; certFingerprint?: string }>(health.trim());
-	if (!parsed?.ok || !parsed.certFingerprint) {
+	if (!bind) throw new Error("no LAN bind in .env - run ./start-federation.sh");
+	const health = await routerHealth(bind);
+	if (!health)
 		throw new Error(`the Router at ${bind}:${ROUTER_PORT} did not answer /health - run ./start-federation.sh`);
-	}
-	const publicHost = await envGet("FEDERATION_PUBLIC_HOST");
-	const host = publicHost || bind;
+	const { publicHost, publicPort } = await readPublicReach();
 	if (!publicHost)
-		note(
-			"FEDERATION_PUBLIC_HOST is unset: the blob names the LAN address, so a phone must be on this network to first connect.",
-		);
-	return { routerUrl: `https://${host}:${ROUTER_PORT}`, routerCertFp: parsed.certFingerprint };
+		note("No public address: the blob names the LAN address, so a phone must be on this network to first connect.");
+	const routerUrl = publicHost ? `https://${publicHost}:${publicPort}` : `https://${bind}:${ROUTER_PORT}`;
+	return { routerUrl, routerCertFp: health.certFingerprint };
 }
 
 ////////////////////////////////
@@ -123,14 +149,13 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 ////////////////////////////////
 //  Entry
 
-/** The fresh-vs-reprovision state machine. Reads the Router's admin Domain slice: a fresh
- * (absent/unrooted) Domain is pre-staged as a PENDING tenant and the blob carries `pendingTenant` so
- * the phone first-roots on scan; an already-rooted Domain skips staging and emits the blob only.
- * Verifies the Router and this Gateway's link to it either way. */
+/** The fresh-vs-reprovision state machine. Asks the public reach and brings the Router up on it,
+ * then reads the Router's admin Domain slice: a fresh (absent/unrooted) Domain is pre-staged as a
+ * PENDING tenant and the blob carries `pendingTenant` so the phone first-roots on scan; an
+ * already-rooted Domain skips staging and emits the blob only. Verifies the Router and this
+ * Gateway's link to it either way. */
 export async function provision(): Promise<void> {
-	if (!(await routerRunning())) {
-		throw new Error("the federation Router is not running - run ./start-federation.sh first");
-	}
+	await ensureRouter();
 	const fed = await readFed();
 	// The admin Domain id: a random hex id, minted on the first provision and pinned in the gateway
 	// env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
@@ -155,4 +180,5 @@ export async function provision(): Promise<void> {
 	await verify();
 	console.log();
 	note(`Setup complete. Blob: ${BLOB_FILE}`);
+	if (pendingTenant) note("Next: scan the QR on your phone, then run 1) Setup Gateway.");
 }

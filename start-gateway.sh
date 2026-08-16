@@ -35,8 +35,7 @@ fi
 echo "Waiting for the gateway to be ready..."
 for _ in $(seq 1 30); do
 	if curl -sf http://localhost:20000/health > /dev/null 2>&1; then
-		echo "Gateway ready (Host: $EFF_ID). Waiting 10s for evie-bot..."
-		sleep 10
+		echo "Gateway ready (Host: $EFF_ID)."
 		exit 0
 	fi
 	sleep 2

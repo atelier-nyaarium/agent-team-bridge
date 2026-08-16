@@ -58,4 +58,31 @@ class RouterReachTest {
 		assertEquals(8443, reachPort("https://router.example.com:8443", 20001))
 		assertEquals(20001, reachPort("https://router.example.com", 20001))
 	}
+
+	// A port forward remaps the public port and nothing else. Dialing the LAN on the forwarded port
+	// reaches nothing at home, which is the one place the LAN rule is supposed to be cheap.
+	@Test
+	fun publicPortNeverLeaksOntoLanCandidates() {
+		val reach = RouterReach(publicHost = "switchboard.example.com", publicPort = 8443, lanAddresses = listOf("192.168.1.238"))
+		assertEquals(
+			listOf("https://192.168.1.238:20001", "https://switchboard.example.com:8443", typed),
+			reachCandidates(reach, typed, 20001),
+		)
+	}
+
+	// An older Router that names a public host and no port means its own port, not one this device
+	// might remember from somewhere else.
+	@Test
+	fun absentPublicPortMeansTheRoutersOwn() {
+		val reach = RouterReach(publicHost = "switchboard.example.com", lanAddresses = listOf("192.168.1.238"))
+		assertEquals("https://switchboard.example.com:20001", reachCandidates(reach, typed, 20001)[1])
+	}
+
+	@Test
+	fun publicPortSurvivesTheStoreRoundTrip() {
+		val reach = RouterReach(publicHost = "switchboard.example.com", publicPort = 8443, lanAddresses = listOf("10.0.0.5"))
+		assertEquals(reach, RouterReach.decode(reach.encode()))
+		// A record written before the field existed decodes with none, never a default number.
+		assertEquals(null, RouterReach.decode("""{"publicHost":"a","lanAddresses":[]}""").publicPort)
+	}
 }

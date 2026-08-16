@@ -4,8 +4,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** The Router's own port. Every address it advertises is served on this one port, so a fresh field
- * needs only a host typed into it and every candidate is dialed the same way. */
+/** The Router's own port. Every LAN address is dialed on it; the public host may sit behind a port
+ * forward that remaps it, which is what `publicPort` in [RouterReach] carries. */
 const val DEFAULT_ROUTER_PORT = 20001
 
 ////////////////////////////////
@@ -26,6 +26,8 @@ const val DEFAULT_ROUTER_PORT = 20001
 @Serializable
 data class RouterReach(
 	val publicHost: String? = null,
+	/** The port the public host is forwarded on. Absent means the Router's own port. */
+	val publicPort: Int? = null,
 	val lanAddresses: List<String> = emptyList(),
 ) {
 	fun encode(): String = json.encodeToString(this)
@@ -48,14 +50,17 @@ data class RouterReach(
  * 3. The blob's own `routerUrl` last, deduplicated. Whatever the owner typed at setup, which is
  *    still a real address and is all an older Router that advertises nothing leaves us.
  *
- * Every entry is a full base URL with scheme and port; the caller appends the path.
+ * Every entry is a full base URL with scheme and port; the caller appends the path. LAN addresses
+ * are dialed on [routerPort], the Router's own; the public host on its advertised `publicPort`, or
+ * the Router's own when none is advertised. The two differ whenever a port forward remaps, and one
+ * number for both is exactly the mistake that would dial the LAN on the forwarded port.
  */
-fun reachCandidates(reach: RouterReach, blobRouterUrl: String, port: Int): List<String> {
-	fun url(host: String): String = if (host.startsWith("http")) host.trimEnd('/') else "https://$host:$port"
+fun reachCandidates(reach: RouterReach, blobRouterUrl: String, routerPort: Int): List<String> {
+	fun url(host: String, port: Int): String = if (host.startsWith("http")) host.trimEnd('/') else "https://$host:$port"
 	return buildList {
-		reach.lanAddresses.forEach { add(url(it)) }
-		reach.publicHost?.takeIf { it.isNotBlank() }?.let { add(url(it)) }
-		if (blobRouterUrl.isNotBlank()) add(url(blobRouterUrl))
+		reach.lanAddresses.forEach { add(url(it, routerPort)) }
+		reach.publicHost?.takeIf { it.isNotBlank() }?.let { add(url(it, reach.publicPort ?: routerPort)) }
+		if (blobRouterUrl.isNotBlank()) add(url(blobRouterUrl, routerPort))
 	}.distinct()
 }
 
@@ -75,7 +80,7 @@ fun isPrivateHost(host: String): Boolean =
 		host.startsWith("127.") ||
 		Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(host)
 
-/** The port a candidate is dialed on: the blob's `routerUrl` port when it has one, else the default.
- * A Router serves every address on the same port, so one number covers the whole list. */
+/** The port the blob's `routerUrl` names, else [default]. Used to keep a bootstrap rewrite on the
+ * port the owner typed when the Router advertises none. */
 fun reachPort(blobRouterUrl: String, default: Int): Int =
 	runCatching { java.net.URI(blobRouterUrl).port }.getOrNull()?.takeIf { it > 0 } ?: default
