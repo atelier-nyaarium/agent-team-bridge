@@ -2,6 +2,7 @@
 // compose for the gateway and the Router), the interactive menu/prompt loop, .env read/write, and
 // logging.
 
+import { randomBytes } from "node:crypto";
 import dgram from "node:dgram";
 import fs from "node:fs";
 import os from "node:os";
@@ -110,6 +111,19 @@ export function dcFederation(...args: string[]) {
 export async function ensureNetwork(name: string): Promise<void> {
 	const exists = await $`docker network inspect ${name}`.quiet().nothrow();
 	if (exists.exitCode !== 0) await $`docker network create ${name}`.quiet().nothrow();
+}
+
+/** Mint the secret the host daemon presents for the reserved `host` WS slot, unless .env has one.
+ *
+ * The gateway is FAIL-CLOSED on that slot: an unset token rejects every host register, so the daemon
+ * can never attach and the machine contributes no devcontainer catalog, no spawn point and no
+ * sessions - it registers with the Router and then shows up empty. `start-gateway.sh` has always
+ * minted this, but Gateway Setup brings the container up itself, so a machine set up through the
+ * menu alone never got one. Same shape as the external network it also had to learn to create. */
+export async function ensureHostWsToken(): Promise<void> {
+	if (await envGet("HOST_WS_TOKEN")) return;
+	await envSet("HOST_WS_TOKEN", randomBytes(32).toString("hex"));
+	secureFile(".env");
 }
 
 /** True when the gateway container is currently running. `.nothrow()` so a down docker daemon

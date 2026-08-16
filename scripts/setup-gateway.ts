@@ -10,6 +10,7 @@ import {
 	confirm,
 	dc,
 	detectLanHost,
+	ensureHostWsToken,
 	ensureNetwork,
 	envGet,
 	envSet,
@@ -102,6 +103,9 @@ async function armGateway(): Promise<string> {
 	// Compose declares this network external and will not create it. A machine that runs the Router
 	// has one already; a gateway-only machine does not, and compose then refuses to start anything.
 	await ensureNetwork(FEDERATION_NETWORK);
+	// Before `up`, so the container starts holding it: without this the host slot is fail-closed and
+	// the daemon can never attach, leaving a correctly-enrolled gateway with nothing to show.
+	await ensureHostWsToken();
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await clearTransport();
 	const up = await dc("up", "--build", "-d")
@@ -287,6 +291,10 @@ export async function setupGateway(): Promise<void> {
 			if ((await waitForInstall()) === "installed") {
 				console.log();
 				note(`Gateway "${id}" enrolled; connecting to the Router.`);
+				// An enrolled gateway with no daemon registers fine and then shows NOTHING on the
+				// phone: the daemon is what owns the devcontainer catalog and the host spawn point, so
+				// without it this machine has no sessions to list and reads as a failed enrollment.
+				note("Next: run ./start-host-daemon.sh here, or this machine stays empty on your phone.");
 				return;
 			}
 		}
