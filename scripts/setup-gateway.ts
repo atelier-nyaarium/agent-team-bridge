@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import { $ } from "bun";
+import { requireDocker } from "./lib/docker-probe.js";
 import { ask, confirm, dc, detectLanHost, envGet, envSet, err, note, secureFile } from "./lib/host.js";
 import { ROUTER_PORT } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
@@ -196,6 +197,10 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 export async function setupGateway(): Promise<void> {
 	// A downstream Gateway starts with no Domain knowledge. The Console that scans this QR already
 	// owns the network and delivers the sealed enrollment bundle after the scan.
+
+	// Before anything is asked. Every step below ends in `docker compose up`, so a stopped daemon
+	// otherwise fails at the LAST one, after the operator has typed a Router address for nothing.
+	await requireDocker();
 
 	// The gateway is named by this machine's hostname; a pre-set GATEWAY_ID overrides it for
 	// duplicate hostnames, so there is no name prompt.

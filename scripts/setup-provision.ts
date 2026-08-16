@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { pendingAdminDomain, readAdminDomain } from "./bootstrap-domain.js";
+import { requireDocker } from "./lib/docker-probe.js";
 import { ask, dcFederation, envGet, envSet, note, secureFile } from "./lib/host.js";
 import {
 	ensureRouterEnv,
@@ -47,6 +48,8 @@ async function askPublicReach(): Promise<{ publicHost: string; publicPort: numbe
  * already runs; only a Router that is not up gets a build, since that is a fresh machine. Non-TTY
  * takes .env as it stands. */
 async function ensureRouter(): Promise<void> {
+	// Before the prompt, for the same reason Gateway Setup checks first: this ends in `compose up`.
+	await requireDocker();
 	const before = await readPublicReach();
 	const bindBefore = await envGet("FEDERATION_BIND");
 	const wasRunning = await routerRunning();
