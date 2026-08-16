@@ -248,6 +248,12 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				pollFailStreak = 0,
 				localGatewayId = localGatewayId,
 				enrollingSince = 0L,
+				// In THIS update, not a refreshAdmittedGateways() call after it. A keyring that arrived
+				// while this process was not running folds through no mutator, so a connect is the only
+				// thing that surfaces it - and publishing it separately means one emission carries the
+				// session rows while the roster is still empty, drawing a machine's section with its
+				// Create missing until the next.
+				admittedGateways = sessions.keyringGateways(),
 			)
 		}
 		presence.refreshDisplayNameFromTeams()

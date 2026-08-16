@@ -93,10 +93,15 @@ suspend fun ConsoleClient.createSession(
 
 /** List the immediate subdirectories of one host directory (the create-session directory
  * picker's type-ahead). Read-only, fresh each call, like peek. The path must be absolute or
- * ~-rooted; an unreadable or missing one returns empty entries rather than an error. */
-suspend fun ConsoleClient.listDirs(path: String): ConsoleListDirsResult =
+ * ~-rooted; an unreadable or missing one returns empty entries rather than an error.
+ *
+ * `hostTarget` names WHICH machine's filesystem to browse, and is the qualified host spawn point when
+ * creating on another gateway. It was hardcoded bare, which resolves to the local gateway: picking a
+ * directory for a session on another machine would have silently listed THIS one's filesystem and
+ * handed back a path that does not exist there. */
+suspend fun ConsoleClient.listDirs(path: String, hostTarget: String = "host"): ConsoleListDirsResult =
 	transport.resultOf(
-		transport.relay(ConsoleOp.ListDirs(path = path), targetGateway = transport.targetGatewayOf("host")),
+		transport.relay(ConsoleOp.ListDirs(path = path), targetGateway = transport.targetGatewayOf(hostTarget)),
 		"list_dirs",
 	)
 

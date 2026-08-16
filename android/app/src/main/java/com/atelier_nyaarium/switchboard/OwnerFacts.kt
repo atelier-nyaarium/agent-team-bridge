@@ -99,6 +99,9 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 			return false
 		}
 		merge(signed)
+		// Every owner-signed fold lands here, so the sessions board picks up an admit or a revoke now
+		// rather than on the next Domain sync.
+		repo.refreshAdmittedGateways()
 		return true
 	}
 

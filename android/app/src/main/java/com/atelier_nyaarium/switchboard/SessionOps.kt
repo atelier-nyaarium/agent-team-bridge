@@ -50,12 +50,18 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * message; a retry with the same project + label shortly after reuses the prior attempt's opId
 	 * (see recentSpawnOpIds) so it reattaches instead of duplicating. A label the gateway could not
 	 * use as-is (unsupported characters) still creates the session under its minted id, surfaced with
-	 * its own transient message rather than silently losing the typed name. A call for a (project,
+	 * its own transient message rather than silently losing the typed name. A call for a (target,
 	 * label) still pending from an earlier, unresolved call is a silent no-op (see pendingSpawns)
 	 * rather than a second, ambiguous create. Runs on the caller's scope (the Activity's), so a tap
-	 * always fires even before the poll loop's scope exists. */
-	suspend fun spawnSession(project: String, label: String, workdir: String? = null) = coroutineScope {
-		val key = project to label
+	 * always fires even before the poll loop's scope exists.
+	 *
+	 * `target` is a spawn point, bare for this Gateway and QUALIFIED (`domain.gateway.spawn`) for
+	 * another of the owner's machines - `targetGatewayOf` reads the gateway out of it and seals there,
+	 * so naming the machine in the target is the whole of remote spawn. It is also what the pending
+	 * and retry maps key on, rather than the bare project: the same project name exists on every
+	 * machine, so keying on it would make a create on one machine suppress a create on another. */
+	suspend fun spawnSession(target: String, label: String, workdir: String? = null) = coroutineScope {
+		val key = target to label
 		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
 		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
 		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
@@ -71,7 +77,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 			// just-adopted record's tile shows on this device's own NEXT poll with no manual nudge -
 			// unlike the pre-plane teams() pull, a fresh presence snapshot needs no explicit trigger.
 			runCatchingCancellable {
-				withContext(Dispatchers.IO) { repo.client().createSession(project, displayLabel = label, workdir = workdir, opId = opId) }
+				withContext(Dispatchers.IO) { repo.client().createSession(target, displayLabel = label, workdir = workdir, opId = opId) }
 			}
 				.onSuccess { result ->
 					recentSpawnOpIds.remove(key)
@@ -120,20 +126,27 @@ internal class SessionOps(private val repo: ChatRepository) {
 	}
 
 	/** The directory picker's type-ahead read: subdirectories of one host dir. Failures collapse to
-	 * an empty list - the picker just shows no suggestions. */
-	suspend fun listDirs(path: String): List<String> = withContext(Dispatchers.IO) {
+	 * an empty list - the picker just shows no suggestions.
+	 *
+	 * `hostTarget` names WHICH machine to read, so a workdir picked for a session on another Gateway
+	 * comes from that machine's filesystem rather than this device's route Gateway. */
+	suspend fun listDirs(path: String, hostTarget: String = "host"): List<String> = withContext(Dispatchers.IO) {
 		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
 		// picker inspectable with no gateway behind it.
 		repo.sandboxDirs?.let { return@withContext it[path].orEmpty() }
-		runCatchingCancellable { repo.client().listDirs(path).entries }.getOrDefault(emptyList())
+		runCatchingCancellable { repo.client().listDirs(path, hostTarget).entries }.getOrDefault(emptyList())
 	}
 
-	/** This owner's admitted Gateways other than the route one. Keyring-derived, so a Gateway with
-	 * no sessions in the roster is still reached, and a linked friend's is never included. */
+	/** This owner's admitted Gateways, the route one included. Keyring-derived, so a Gateway with no
+	 * sessions in the roster is still named, and a linked friend's never is. */
+	// internal (not private): ChatRepository.refreshAdmittedGateways publishes this into ChatState, so
+	// the sessions board draws a machine it can seal to even before that machine has any sessions.
+	fun keyringGateways(): List<String> = Keyring.parse(repo.store.loadDomain())?.admittedGatewayIds() ?: emptyList()
+
+	/** The same list without the route Gateway, for the fan-outs that have already asked it. */
 	// internal (not private): BoardOps.refreshBoard and BoardOps.boardAssignTargets fan out to every
 	// other Gateway the same way forget and ChatRepository.reportPluginsToOtherGateways do.
-	fun otherKeyringGateways(route: String): List<String> =
-		(Keyring.parse(repo.store.loadDomain())?.admittedGatewayIds() ?: emptyList()).filter { it != route }
+	fun otherKeyringGateways(route: String): List<String> = keyringGateways().filter { it != route }
 
 	val terminalRefreshMs: Long get() = repo.store.terminalRefreshMs
 

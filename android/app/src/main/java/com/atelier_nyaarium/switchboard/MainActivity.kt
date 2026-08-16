@@ -542,8 +542,8 @@ fun App(
 						// synchronously and bumps the presence plane with it, so its own tile appears via
 						// this device's own next poll (spinner while it boots) with no separate refresh.
 						// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
-						onSpawn = { project, label, workdir -> repo.command { sessions.spawnSession(project, label, workdir) } },
-						onListDirs = { path -> repo.sessions.listDirs(path) },
+						onSpawn = { target, label, workdir -> repo.command { sessions.spawnSession(target, label, workdir) } },
+						onListDirs = { path, hostTarget -> repo.sessions.listDirs(path, hostTarget) },
 						// Launch the enrollee compare from the empty board when one is still owed (the
 						// device rooted an enroll invite but has not completed the in-person trust step).
 						onVerifyEnroll = (if (state.provisioned) repo.ceremony.pendingEnrolleeCeremony() else null)

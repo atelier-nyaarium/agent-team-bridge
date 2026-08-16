@@ -47,7 +47,9 @@ import kotlinx.serialization.json.Json
  * eventually, and that is fine for a sandbox.
  */
 class SandboxFixtures(private val filesDir: File, private val assets: AssetManager) {
-	/** Two sessions: one carries every seeded surface, the second only exists so the tab row draws. */
+	/** Two sessions: one carries every seeded surface, the second only exists so the tab row draws.
+	 * Both carry a domainId, which is what lets the sessions board qualify a spawn target and so
+	 * exercise the create-on-another-machine path rather than falling back to a bare name. */
 	fun teams(): List<Team> = listOf(
 		Team(
 			name = SESSION,
@@ -56,6 +58,7 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			queueDepth = 0,
 			kind = "loose",
 			sessionLabel = "Sandbox",
+			domainId = DOMAIN,
 		),
 		Team(
 			name = SESSION_2,
@@ -64,8 +67,12 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			queueDepth = 0,
 			kind = "loose",
 			sessionLabel = "Second",
+			domainId = DOMAIN,
 		),
 	)
+
+	/** Three admitted machines for two with sessions, so the board's idle-Gateway section is reachable. */
+	fun admittedGateways(): List<String> = listOf(GATEWAY, "parsing", "idle-box")
 
 	fun threads(): Map<String, List<Message>> = mapOf(SESSION to buildThread())
 
@@ -353,6 +360,10 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		/** Must be the gateway segment of [SESSION]: `Team.gatewayId` derives from the address, and the
 		 * thread strip looks the board up under whatever that answers. */
 		const val GATEWAY = "sandbox"
+
+		/** Must be the domain segment of both session addresses, or the board classifies them as a
+		 * linked friend's and renders them in the peers section instead. */
+		const val DOMAIN = "local"
 
 		/** A stable non-zero mailbox epoch for the seeded rows: countsUnread() needs seq > 0, and
 		 * the anchor resolves by (epoch, seq) equality, so both must be real values here. */

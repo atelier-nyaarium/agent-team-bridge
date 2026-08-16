@@ -40,7 +40,14 @@ class SandboxApp : Application() {
 		fixtures.seedBoard(AppStateStore(this))
 		val repo = Repo.get(this)
 		val threads = fixtures.threads()
-		repo.seedSandbox(fixtures.teams(), threads, fixtures.dirs(), fixtures.drafts(), fixtures.goals())
+		repo.seedSandbox(
+			fixtures.teams(),
+			threads,
+			fixtures.dirs(),
+			fixtures.drafts(),
+			fixtures.goals(),
+			fixtures.admittedGateways(),
+		)
 		// Seeding writes rows straight into state, bypassing the mailbox drain where the inbound
 		// handlers run, so the dock would stay empty however correct the ingest is. Run the same
 		// wire-declared conversion the handler runs, so the gallery is inspectable here.
