@@ -273,15 +273,16 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 	});
 
 	it("the wire schema rejects an entry.kind outside the relayable set, and a title over the notice-contract bound", () => {
-		// message/reply joined the set when remote-held conversations gained convergence; "sent" (a
-		// device's own-echo bookkeeping) stays local-only.
-		for (const smuggledKind of ["sent", "bogus"]) {
+		for (const smuggledKind of ["bogus", "board", ""]) {
 			expect(
 				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: smuggledKind } })
 					.success,
 			).toBe(false);
 		}
-		for (const relayable of ["message", "reply"]) {
+		// message/reply/sent all joined the set when remote-held conversations gained convergence: a
+		// send sealed to another Gateway files its echo there too, so the owner's other devices only
+		// ever see their own message through this.
+		for (const relayable of ["message", "reply", "sent"]) {
 			expect(
 				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: relayable } })
 					.success,
