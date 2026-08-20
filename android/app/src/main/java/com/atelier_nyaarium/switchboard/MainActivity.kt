@@ -440,10 +440,15 @@ fun App(
 					repo.boardOps.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
 				},
 				terminal = TerminalState(
-					// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off
-					// in v1, and the host machine's terminal is reached through the dedicated "host" target.
+					// A composite session on any of MY machines has a daemon-drivable pane: every terminal
+					// op routes to the session's own Gateway via targetGatewayOf. A linked friend's stays
+					// gated off, since their Gateway refuses the ops and the view would only render that.
 					eligible = isComposite(localFieldOf(openTeam!!)) &&
-						(session?.gatewayId.isNullOrEmpty() || session.gatewayId == state.localGatewayId),
+						run {
+							val admin = adminDomainId(state.sessions(), state.localGatewayId)
+							val dom = session?.domainId
+							dom.isNullOrEmpty() || admin.isEmpty() || dom == admin
+						},
 					sessionStatus = session?.status,
 					// Daemon-derived (presence plane), so it can be true even before "online" - a peeked
 					// pane stuck at a login prompt is knowable while the MCP handshake is still pending.
