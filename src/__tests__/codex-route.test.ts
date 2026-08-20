@@ -130,14 +130,22 @@ describe("Codex gateway route", () => {
 		expect(body.error?.code).toBe("not_found");
 	});
 
-	it("answers an unknown session identically to an unknown agent", async () => {
+	it("tells a token-less caller it is unbound, and answers an unknown token like an unknown agent", async () => {
 		const context = setup();
-		const response = await context.route.handle(new Request("http://gateway/codex", { method: "POST" }), {
+		// No token: the caller already knows it sent none, so naming the cause leaks nothing. The bare
+		// "not found" here collapsed three causes into one string (issue #252).
+		const tokenless = await context.route.handle(new Request("http://gateway/codex", { method: "POST" }), {
 			kind: "list",
 		});
-
-		expect(response.status).toBe(404);
-		expect(await response.json()).toEqual({ error: "not found" });
+		expect(tokenless.status).toBe(401);
+		expect(((await tokenless.json()) as { error: string }).error).toContain("not bound");
+		// An unknown token stays indistinguishable from an unknown agent, so nobody probes sessions.
+		const unknown = await context.route.handle(
+			new Request("http://gateway/codex", { method: "POST", headers: { "x-session-token": "wrong" } }),
+			{ kind: "list" },
+		);
+		expect(unknown.status).toBe(404);
+		expect(await unknown.json()).toEqual({ error: "not found" });
 	});
 
 	it("lists only this session's agents", async () => {

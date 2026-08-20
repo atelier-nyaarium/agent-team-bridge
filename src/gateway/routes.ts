@@ -608,10 +608,13 @@ export function createRoutes({
 	}
 
 	/** HTTP wrapper. The bare array is the legacy shape older plugins parse; `?coverage=1` opts into
-	 * the object form. */
+	 * the object form. Carries this Gateway's own identity so the caller can tell ITS row from a
+	 * same-named session on another machine. */
 	async function discover(url?: URL): Promise<Response> {
 		const full = await discoverFull();
-		if (url?.searchParams.get("coverage") === "1") return jsonResponse(full);
+		if (url?.searchParams.get("coverage") === "1") {
+			return jsonResponse({ ...full, localGatewayId, localDomainId: localDomain });
+		}
 		return jsonResponse(full.teams);
 	}
 
@@ -686,11 +689,6 @@ export function createRoutes({
 	 */
 	function refuseForeignPoll(req: Request, sessionId: string): Response | null {
 		if (!auth) return null;
-		// Asked first, so an unproven caller cannot tell a live job from an id that names nothing.
-		if (!provedLocalSession(req)) {
-			console.warn(`[auth] refused a poll without any session binding`);
-			return jsonResponse({ error: "this job is not open to this caller" }, 403);
-		}
 		const asker = store.askerOf(sessionId);
 		// An unknown id is the caller's own 404 to receive, not a refusal.
 		if (asker === undefined) return null;
@@ -700,8 +698,13 @@ export function createRoutes({
 			return jsonResponse({ error: "this job's answer is not collected over local HTTP" }, 403);
 		}
 		if (auth.satisfies(auth.toActFor(key), presentedByRequest(req))) return null;
+		// The SAME body and status an id that names nothing gets: an unproven caller must not be able
+		// to tell a live job from a dead id. This per-job answer replaced a machine-wide pre-check that
+		// refused an unbound session the job IT created (issue #252): an unbound asker resolves to
+		// UNBOUND, which its own tokenless poll satisfies, while a bound session's job still demands
+		// the binding.
 		console.warn(`[auth] refused a poll of a job asked by "${asker}" from another session`);
-		return jsonResponse({ error: "this job belongs to another session" }, 403);
+		return jsonResponse({ error: `No pending job for session_id "${sessionId}"` }, 404);
 	}
 
 	async function send(

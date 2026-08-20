@@ -30,6 +30,9 @@ export class ConsolePeer {
 		// Notified with the session_id of each inbound agent message, so the
 		// handler can scope the console's respond op to threads it actually received.
 		private onInboundSession?: (sessionId: string) => void,
+		// Qualifies a bare sender before the entry is stored: fanOutConsolePush relays entries
+		// verbatim, and a sibling's console stamps its ROUTE Gateway onto any bare name.
+		private qualifyFrom: (from: string) => string = (from) => from,
 	) {
 		this.data = {
 			teamName: device,
@@ -58,7 +61,7 @@ export class ConsolePeer {
 			box.append({
 				kind: "message",
 				session_id: p.session_id,
-				from: p.from,
+				from: p.from === undefined ? undefined : this.qualifyFrom(p.from),
 				body: p.body,
 				files: p.files,
 			});

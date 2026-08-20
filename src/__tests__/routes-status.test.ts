@@ -89,12 +89,34 @@ describe("routes", () => {
 					{ session_id: "conv-1" },
 				);
 
-			expect(pollAs().status).toBe(403);
-			expect(pollAs(bystanderToken).status).toBe(403);
+			// Refused callers get the SAME 404 an id naming nothing gets, so a live job cannot be told
+			// apart from a dead id by anyone but its asker.
+			const tokenless = pollAs();
+			expect(tokenless.status).toBe(404);
+			expect(((await tokenless.json()) as { error: string }).error).toContain("No pending job");
+			expect(pollAs(bystanderToken).status).toBe(404);
 
 			const mine = pollAs(askerToken);
 			expect(mine.status).toBe(200);
 			expect(await mine.json()).toMatchObject({ response: "the answer" });
+		});
+
+		it("lets an unbound session poll the job it created (issue #252)", async () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			const sessionStore = new SessionStore();
+			// A hand-launched session: a record exists but no binding was ever delivered.
+			const asker = sessionStore.mint({ spawn: "app" });
+			// Another session's ACTIVE binding must not gate a job that session did not ask.
+			const bound = sessionStore.mint({ spawn: "other" });
+			sessionStore.ensureBindToken(bound);
+			sessionStore.activateBinding(bound);
+			store.create("conv-2", sessionStore.teamOf(asker), "coolib.dev", { persistent: true });
+			store.deliver("conv-2", { response: "the answer" } as ResponsePayload);
+			const { poll } = createRoutes(makeCtx({ store, sessionStore }));
+
+			const res = poll(new Request("http://localhost/poll", { method: "POST" }), { session_id: "conv-2" });
+			expect(res.status).toBe(200);
+			expect(await res.json()).toMatchObject({ response: "the answer" });
 		});
 
 		it("returns running when job is timed out but no result yet", async () => {

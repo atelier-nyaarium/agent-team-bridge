@@ -65,6 +65,19 @@ export function createConsoleTargets({ localDomainId, localGatewayId, isProjectN
 		return Address.local(localDomain, localGatewayId, project, session);
 	}
 
+	/** The bare local team field for a name that resolves to THIS Gateway, else null. The tolerant
+	 * sibling of boardSessionKey for callers where foreign is a non-answer, not a refusal. */
+	function tryLocalName(named: string): string | null {
+		let t: Address | SpawnPoint;
+		try {
+			t = parse(named);
+		} catch {
+			return null;
+		}
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) return null;
+		return t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session);
+	}
+
 	/** The bare `spawn.session` key a board entry stores, from whatever the console named the session
 	 * as. The board's every other reader - the MCP route, sessionEnded, the TTL sweep - keys by the
 	 * local field, so an un-normalized value is stored but never matched again. */
@@ -129,6 +142,7 @@ export function createConsoleTargets({ localDomainId, localGatewayId, isProjectN
 		localDomain,
 		parse,
 		localAddress,
+		tryLocalName,
 		boardSessionKey,
 		requireLocalComposite,
 		localSpawn,

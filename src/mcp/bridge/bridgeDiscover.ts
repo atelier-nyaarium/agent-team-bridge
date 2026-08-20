@@ -137,10 +137,17 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 					Array.isArray(raw) ? raw : ((raw as { teams?: DiscoverEntry[] }).teams ?? [])
 				) as DiscoverEntry[];
 				const coverage = Array.isArray(raw) ? undefined : (raw as { coverage?: DiscoverCoverage }).coverage;
-				// "host" is filtered BY NAME: a catalog entry could share the literal team name.
-				const others = teams.filter(
-					(t) => t && t.team !== bridgeProjectName() && t.team !== "host" && t.kind !== "console",
-				);
+				const localGatewayId = Array.isArray(raw)
+					? undefined
+					: (raw as { localGatewayId?: string }).localGatewayId;
+				// A row is THIS session only when it is on this session's own Gateway: filtering by bare
+				// name alone hid a same-named session on every other machine. An older gateway names no
+				// gateway, so the bare-name filter stands there. "host" is filtered BY NAME either way: a
+				// catalog entry could share the literal team name.
+				const isSelf = (t: DiscoverEntry) =>
+					t.team === bridgeProjectName() &&
+					(!localGatewayId || !t.gatewayId || t.gatewayId === localGatewayId);
+				const others = teams.filter((t) => t && !isSelf(t) && t.team !== "host" && t.kind !== "console");
 
 				// Post-grouping: grouping can drop an entry, so a nonzero count renders no line.
 				const lines = formatDiscoverLines(others);

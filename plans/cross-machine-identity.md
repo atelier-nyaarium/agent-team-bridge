@@ -150,13 +150,37 @@ already covers the display side.
 
 Deploy order: gateway first, console last, field optional throughout - the standard rule.
 
-## Phase B - ambiguity (deferred, re-evaluate after A)
+## Phase B - ambiguity
 
-Delete the bare form from cross-machine wire positions: `MailboxEntry.from` always-qualified,
-`localFieldOrSelf` deleted, residue tests pinning both. Catches 4 of 6 instances including the open
-notice misattribution.
+Done in this pass:
 
-## Phase C - identity (deferred, re-evaluate after A)
+- The notice misattribution (instance 3), fixed at BOTH ends. `humanNotify` and `ConsolePeer` stamp
+  a qualified `from` before the fan-out; the console reads the notice store key's sender FIRST and
+  only falls back to `from` (an older gateway).
+- `boardGatewayOf` reads the gateway from the ADDRESS, not a presence-row lookup that could miss and
+  fall back to the route Gateway.
+- `wakeSession` / `relaunchSession` build a qualified spawn target, so both now work on any admitted
+  machine instead of silently refusing or re-creating on the wrong one.
+- `crosstalk_discover` self-excludes by (gateway, name), not bare name, using the `localGatewayId`
+  the `?coverage=1` object now carries. A same-named session on another machine is listed again.
+- The terminal-focus intent is normalized to the bare local team at intake (`tryLocalName`), so the
+  cadence ramp compares like with like and actually fires.
 
-One resolver for the seven identity gates; `handshakeConfirmed` gets a single owner. Issue #252's
-family.
+Deferred within B: deleting `localFieldOrSelf` (its board-key callers are legitimate local-field
+holders; revisit with the brand question), and the focus intent for a REMOTE session's terminal
+(poll reaches the route Gateway only, so ramping another machine's cadence needs its own relay).
+
+## Phase C - identity (first slice done, rest deferred)
+
+Done in this pass, from issue #252:
+
+- The gateway agent-tool branch requires the session binding token as well as the capability, so a
+  hand-launched session gets working LOCAL agents instead of five tools that can never succeed.
+- A token-less caller on `/codex` and `/copilot` is told it is unbound (401); an unknown token keeps
+  the anti-probing "not found".
+- `refuseForeignPoll` answers per-job instead of machine-wide: an unbound session can poll the job
+  it created, refused callers get the same 404 a dead id gets (strictly less probe signal than the
+  old 403), and a bound session's job still demands its binding.
+
+Deferred: the single resolver for all seven identity gates, `handshakeConfirmed`'s six readers, and
+the hand-launched channel deafness (a launch-mode fact the gateway cannot see).

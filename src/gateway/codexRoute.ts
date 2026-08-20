@@ -16,6 +16,7 @@ import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
 import { type CodexAgentService, CodexTransitionError } from "./codexAgentService.js";
 import type { CodexRelay } from "./codexRelay.js";
+import { presentedByRequest } from "./sessionAuthority.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -137,9 +138,21 @@ export class CodexRoute {
 		if (!parsed.success) return json({ error: "invalid Codex request" }, 400);
 
 		const owner = this.deps.service.resolveOwner(req);
-		// Indistinguishable from an unknown agent on purpose: neither answer may tell a caller whether
-		// somebody else's session exists.
-		if (!owner) return json({ error: "not found" }, 404);
+		if (!owner) {
+			// A caller that presented NO token already knows it - naming that leaks nothing, and the
+			// bare "not found" collapsed three causes into one string (issue #252). An unknown token
+			// keeps the answer indistinguishable from an unknown agent, so nobody can probe whether
+			// another session exists.
+			if (!presentedByRequest(req).token) {
+				return json(
+					{
+						error: "this session is not bound to the gateway (launch it from the console, or install the codex CLI for a local agent)",
+					},
+					401,
+				);
+			}
+			return json({ error: "not found" }, 404);
+		}
 
 		const request = parsed.data;
 		try {

@@ -66,7 +66,9 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		// unknown keys, so a schema missing the field would silently drop it between Gateways).
 		expect(consolePushCalls[0].entry).toMatchObject({
 			kind: "notice",
-			from: "recipe-app",
+			// Qualified BEFORE the fan-out: the landing console would stamp its own route Gateway onto
+			// a bare sender, misattributing the notice.
+			from: "alice.hosta.recipe-app.claude",
 			title: "cycle done",
 			summary: "s",
 			fullSpoken: "Spoken body.",

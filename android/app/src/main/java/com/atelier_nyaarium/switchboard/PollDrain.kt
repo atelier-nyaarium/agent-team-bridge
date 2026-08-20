@@ -351,9 +351,11 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						// when that address is THIS device (an agent-initiated push to our own session
 						// threads under `from`, the sender, not under ourselves).
 						val team: String? = if (e.kind == "notice") {
-							// Notice: prefer `from`, fall back to the notice store key's sender.
-							e.from?.let { repo.fromCanonical(it) }
-								?: (parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
+							// The store key's sender FIRST: it is qualified at the origin, while `from` may be
+							// bare (an older gateway), and qualifying a bare name here stamps THIS device's
+							// route Gateway onto a notice from another machine.
+							(parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
+								?: e.from?.let { repo.fromCanonical(it) }
 						} else {
 							when (val sk = parseStoreKey(e.session_id)) {
 								is SessionKey.Conv ->
