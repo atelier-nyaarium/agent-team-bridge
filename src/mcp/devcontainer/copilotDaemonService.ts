@@ -7,6 +7,7 @@ import {
 	type CopilotDaemonEvent,
 	CopilotDaemonEventSchema,
 	type CopilotDaemonFailureCode,
+	CopilotDaemonHelloSchema,
 	type CopilotDaemonReceipt,
 	CopilotDaemonReceiptSchema,
 	isReliableCopilotMessage,
@@ -81,6 +82,7 @@ export class CopilotDaemonService {
 			targets: deps.targets,
 			send: deps.send,
 			isReliable: isReliableCopilotMessage,
+			helloSchema: CopilotDaemonHelloSchema,
 		});
 	}
 

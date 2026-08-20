@@ -6,6 +6,7 @@ import {
 	CodexDaemonCommandSchema,
 	type CodexDaemonEvent,
 	CodexDaemonEventSchema,
+	CodexDaemonHelloSchema,
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
 	isReliableCodexMessage,
@@ -52,6 +53,7 @@ export class CodexDaemonService {
 			targets: deps.targets,
 			send: deps.send,
 			isReliable: isReliableCodexMessage,
+			helloSchema: CodexDaemonHelloSchema,
 		});
 	}
 

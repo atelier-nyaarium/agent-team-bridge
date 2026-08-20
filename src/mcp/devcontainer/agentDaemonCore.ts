@@ -30,6 +30,9 @@ export interface AgentDaemonCoreOptions {
 	targets: TargetSupervisor;
 	send(message: Record<string, unknown>): void;
 	isReliable(message: unknown): boolean;
+	// Validates hello() before it is sent, matching every sibling frame on this wire. The receiver's
+	// schema is .strict(), so an unvalidated drift here is rejected at the far end with no local sign.
+	helloSchema?: { parse(value: unknown): unknown };
 }
 
 interface AgentCommand {
@@ -57,7 +60,7 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 	constructor(private readonly options: AgentDaemonCoreOptions) {}
 
 	hello(): Record<string, unknown> {
-		return {
+		const frame = {
 			type: agentFrameType(this.options.backendId, "hello"),
 			daemonInstanceId: this.options.daemonInstanceId,
 			targets: [...this.sessions.values()].map((session) => ({
@@ -65,6 +68,8 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 				generation: session.generation,
 			})),
 		};
+		this.options.helloSchema?.parse(frame);
+		return frame;
 	}
 
 	replay(): void {
