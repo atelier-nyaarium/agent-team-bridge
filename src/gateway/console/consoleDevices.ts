@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import { capFifo } from "../../shared/cap-fifo.js";
 import { type ConsoleReplyBody, MAX_OPS_PER_CONVERSATION, type MailboxInput } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
+import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
+import type { DeliverToOwner } from "../consolePushOps.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
 
@@ -11,11 +14,12 @@ export interface ConsoleDevicesDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	mailboxStore: DeviceMailboxStore;
+	// The owner-delivery funnel (consolePushOps.deliverToOwner): the ONE mailbox writer, so a
+	// device append cannot exist without the convergence relay riding along.
+	deliver: DeliverToOwner;
 	isProjectName?: (name: string) => boolean;
 	// See ConsolePeer's own param doc; identity when absent (tests).
 	qualifyFrom?: (from: string) => string;
-	// See ConsolePeer's own param doc; no relay when absent (tests, single-gateway setups).
-	fanOut?: (entry: Record<string, unknown>, dedupeKey?: string) => void;
 }
 
 export type ConsoleDevices = ReturnType<typeof createConsoleDevices>;
@@ -29,9 +33,9 @@ export function createConsoleDevices({
 	registry,
 	conversationRegistry,
 	mailboxStore,
+	deliver,
 	isProjectName,
 	qualifyFrom,
-	fanOut,
 }: ConsoleDevicesDeps) {
 	// The per-install conversationId is the device identity: it keys the registry sub, the
 	// signing-key binding, the idempotency cache, and the device-name binding. The mailbox is
@@ -63,17 +67,22 @@ export function createConsoleDevices({
 		mailboxStore.get(ownerId)?.recordSession(sessionId);
 	}
 
-	/** Append only if the device is still live, so a late continuation cannot
-	 * resurrect a torn-down install. Routes to the owner inbox the device shares;
-	 * gated on device liveness, so a rename (same conversation) still delivers. */
+	/** Deliver only if the device is still live, so a late continuation cannot
+	 * resurrect a torn-down install. This owns WHETHER the device may deliver;
+	 * the funnel owns the append and the convergence relay. Gated on device
+	 * liveness, so a rename (same conversation) still delivers. */
 	function appendIfLive(conversationId: string, entry: MailboxInput, dedupeKey?: string): void {
 		const ownerId = deviceOwner.get(conversationId);
 		if (!ownerId || !bindings.has(conversationId)) return;
-		mailboxStore.get(ownerId)?.append(entry, dedupeKey);
-		// A frame binds the peer on whatever Gateway it was sealed to, so a send aimed at a session
-		// held elsewhere files its own echo and its late failure into a mailbox the console never
-		// polls. Relaying from this funnel is what keeps a fourth caller from reopening that.
-		fanOut?.(entry as Record<string, unknown>, dedupeKey);
+		deliver({
+			entry: entry as ConsolePushEntry,
+			// The funnel never mints a key, so the no-key callers (the late send-failure reply)
+			// get their per-delivery identity here.
+			dedupeKey: dedupeKey ?? crypto.randomUUID(),
+			origin: "local",
+			resolveMailbox: () => mailboxStore.get(ownerId),
+			label: "console-device",
+		});
 	}
 
 	function assertValidIdentity(device: string, conversationId: string): void {
@@ -156,16 +165,22 @@ export function createConsoleDevices({
 		}
 
 		const peer = new ConsolePeer(
-			// While the device is live, re-create an evicted box so deliveries survive a store
-			// sweep; once torn down, return undefined so a late push cannot resurrect an owner
-			// inbox the index no longer tracks.
-			() => (bindings.has(conversationId) ? mailboxStore.ensure(ownerId) : undefined),
+			(entry, dedupeKey) =>
+				deliver({
+					entry,
+					dedupeKey,
+					origin: "local",
+					// While the device is live, re-create an evicted box so deliveries survive a store
+					// sweep; once torn down, return undefined so a late push cannot resurrect an owner
+					// inbox the index no longer tracks.
+					resolveMailbox: () => (bindings.has(conversationId) ? mailboxStore.ensure(ownerId) : undefined),
+					label: "console-peer",
+				}),
 			device,
 			conversationId,
 			conversationId,
 			(sessionId) => recordInbound(ownerId, sessionId),
 			qualifyFrom,
-			fanOut,
 		);
 		subs.set(conversationId, peer.asWs());
 		conversationRegistry.set(conversationId, peer.asWs());

@@ -6,7 +6,6 @@ import type {
 	CrossDomainShareTarget,
 	OpenedConsoleFrame,
 } from "../../shared/console-protocol.js";
-import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import {
 	ALLOWED_KEYS,
 	type HostListDirsResult,
@@ -102,6 +101,9 @@ export function createConsoleDispatcher({
 		registry,
 		conversationRegistry,
 		mailboxStore,
+		// The owner-delivery funnel: appends AND converges, so a conversation held HERE still
+		// reaches the Gateway the console polls (see ConsolePeer's doc).
+		deliver: routes.deliverToOwner,
 		isProjectName,
 		// Qualified in stays itself, a bare local team gains this Gateway, a Device Name stays raw.
 		qualifyFrom: (from) => {
@@ -110,13 +112,6 @@ export function createConsoleDispatcher({
 			} catch {
 				return from;
 			}
-		},
-		// A conversation held HERE must reach the Gateway the console polls (see ConsolePeer's doc).
-		fanOut: (entry, dedupeKey) => {
-			// A spawn-point send has no session, so its echo names no thread the far side could file
-			// it under. Relaying one only throws inside a floating promise; it stays local instead.
-			if (!entry.session_id) return;
-			void routes.fanOutConsolePush?.(entry as ConsolePushEntry, dedupeKey ?? crypto.randomUUID());
 		},
 	});
 

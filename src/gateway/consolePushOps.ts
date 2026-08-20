@@ -18,6 +18,22 @@ import type { CallerScope } from "./routes.js";
 ////////////////////////////////
 //  Interfaces & Types
 
+export interface DeliverToOwnerOptions {
+	entry: ConsolePushEntry;
+	/** Caller-chosen; the funnel never mints one, so an omission is a compile error, not a
+	 * silently non-idempotent relay. */
+	dedupeKey: string;
+	/** "relay" is the ONLY non-fanning append: the gossip-loop guard as API, not discipline. */
+	origin: "local" | "relay";
+	/** Device-scoped producers pass their own liveness accessor (undefined = torn down, deliver
+	 * nothing). Absent means owner-scoped: the shared inbox, ensured by owner id. */
+	resolveMailbox?: () => import("../shared/device-mailbox.js").DeviceMailbox | undefined;
+	/** Log label for a failed append. */
+	label?: string;
+}
+
+export type DeliverToOwner = (opts: DeliverToOwnerOptions) => boolean;
+
 export interface ConsolePushOpsDeps {
 	/** Console mailboxes. Absent when the console bridge is off, which makes every path here a no-op. */
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -51,21 +67,52 @@ export function createConsolePushOps({
 	refuseImpersonation,
 	relayWithRetry,
 }: ConsolePushOpsDeps) {
-	/** THE single writer of a mailbox append that embeds `dedupeKey` onto the entry (the
-	 * MailboxEntrySchema field, carried verbatim through any further relay) AND passes the
-	 * identical value as `append()`'s own dedup parameter (DeviceMailbox's seenKeys map) - the
-	 * two necessarily-equal uses of one key can never independently drift by going through two
-	 * separate call sites. Never throws; swallows and logs under `label`, since every caller of
-	 * this (mirrorPeer, consolePush, humanNotify) treats console-mailbox delivery as best-effort. */
-	function landMailboxEntry(owner: string, entry: ConsolePushEntry, dedupeKey: string, label: string): boolean {
-		if (!mailboxStore) return false;
+	/** THE owner-mailbox writer. Every console-bound entry lands through here and nowhere else
+	 * (console-mailbox-delivery-residue.test.ts fails the build on any other `.append(` under
+	 * src/gateway), so the convergence relay cannot be forgotten by a new producer - the defect
+	 * that cost three separate fixes when five call sites each held the invariant by discipline.
+	 *
+	 * Embeds `dedupeKey` onto the entry AND passes the identical value as `append()`'s dedup
+	 * parameter, so the two necessarily-equal uses of one key cannot drift. Only what actually
+	 * landed is fanned: fanOutConsolePush's contract is "already appended locally". Fan-out is
+	 * skipped for an empty session_id (a spawn-point echo names no thread; the relay schema
+	 * would reject it inside a floating promise). Never throws. */
+	function deliverToOwner({
+		entry,
+		dedupeKey,
+		origin,
+		resolveMailbox,
+		label = "deliver",
+	}: DeliverToOwnerOptions): boolean {
+		// The same caps the landing side holds against a relayed-in entry, held here against every
+		// origin too. Origins pre-validate (send/respond/humanNotify 4xx first), so a trip here is
+		// a producer bug worth a log, never a user-visible path.
+		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
+			console.warn(`[${label}] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
+			return false;
+		}
+		if (entry.payload && payloadBytes(entry.payload) > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
+			console.warn(
+				`[${label}] dropped an oversized plugin_action payload (over ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes)`,
+			);
+			return false;
+		}
+		let mailbox: import("../shared/device-mailbox.js").DeviceMailbox | undefined;
+		if (resolveMailbox) {
+			mailbox = resolveMailbox();
+		} else {
+			const owner = ownerId?.();
+			if (owner && mailboxStore) mailbox = mailboxStore.ensure(owner);
+		}
+		if (!mailbox) return false;
 		try {
-			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
-			return true;
+			mailbox.append({ ...entry, dedupeKey }, dedupeKey);
 		} catch (err) {
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
+		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
+		return true;
 	}
 
 	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
@@ -99,11 +146,9 @@ export function createConsolePushOps({
 			to,
 			...payload,
 		};
-		// Never load-bearing: a failure here must not turn an already-delivered/already-relayed
-		// primary operation into a spurious failure for the caller, so the local outcome is
-		// ignored and the fan-out is attempted regardless.
-		landMailboxEntry(owner, entry, dedupeKey, "mirror");
-		void fanOutConsolePush(entry, dedupeKey);
+		// Never load-bearing: the outcome is ignored, so a failed mirror cannot turn an
+		// already-delivered primary operation into a spurious failure for the caller.
+		deliverToOwner({ entry, dedupeKey, origin: "local", label: "mirror" });
 	}
 
 	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
@@ -118,19 +163,7 @@ export function createConsolePushOps({
 	 * plugin_action payload exceeds its own byte cap, or if the append itself fails - mirroring
 	 * mirrorPeer's own "purely additive, never load-bearing" posture. */
 	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
-		const owner = ownerId?.();
-		if (!owner || !mailboxStore) return { delivered: false };
-		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
-			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
-			return { delivered: false };
-		}
-		if (entry.payload && payloadBytes(entry.payload) > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
-			console.warn(
-				`[console_push] dropped an oversized plugin_action payload (over ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes)`,
-			);
-			return { delivered: false };
-		}
-		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
+		return { delivered: deliverToOwner({ entry, dedupeKey, origin: "relay", label: "console_push" }) };
 	}
 
 	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
@@ -221,10 +254,9 @@ export function createConsolePushOps({
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {
+		if (!deliverToOwner({ entry, dedupeKey, origin: "local", label: "notify" })) {
 			return jsonResponse({ error: "failed to store notice" }, 500);
 		}
-		void fanOutConsolePush(entry, dedupeKey);
 		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
 		return jsonResponse({ delivered: true });
 	}
@@ -265,13 +297,12 @@ export function createConsolePushOps({
 			actionType,
 			...(payload ? { payload } : {}),
 		};
-		if (!landMailboxEntry(owner, entry, dedupeKey, "plugin_action")) {
+		if (!deliverToOwner({ entry, dedupeKey, origin: "local", label: "plugin_action" })) {
 			return jsonResponse({ error: "failed to store plugin action" }, 500);
 		}
-		void fanOutConsolePush(entry, dedupeKey);
 		console.log(`[plugin_action] ${pluginId}:${actionType} from ${from} delivered to owner ${owner}`);
 		return jsonResponse({ delivered: true });
 	}
 
-	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush };
+	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush, deliverToOwner };
 }

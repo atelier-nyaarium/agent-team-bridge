@@ -50,7 +50,10 @@ class PeerMirrorAttributionTest {
 	}
 
 	@Test
-	fun peerEntryFallsBackToTheThreadWhenItsOwnFromDoesNotResolve() {
+	fun peerEntryShowsAnUnresolvableFromRawInsteadOfForgingTheThreadKey() {
+		// The thread key is a real identity (the target), so substituting it forges the sender -
+		// the same family as stamping the route Gateway onto a bare relayed name. An unparseable
+		// name shown raw is honest; a plausible wrong identity is not.
 		val a = resolveMessageAttribution(
 			kind = "peer",
 			entryFrom = "not-an-address",
@@ -58,15 +61,14 @@ class PeerMirrorAttributionTest {
 			team = "alice.sakura.coolapp.main",
 			canonicalize = { null },
 		)
-		assertEquals("alice.sakura.coolapp.main", a.from)
-		assertNull("an unresolvable to is dropped rather than shown raw", a.to)
-		assertTrue("still a peer row even though to didn't resolve", a.isPeer)
+		assertEquals("not-an-address", a.from)
+		assertTrue(a.isPeer)
 	}
 
 	@Test
 	fun peerEntryStaysMarkedAsPeerEvenWhenOnlyToFailsToResolve() {
 		// A real, resolved from paired with an unresolvable to must still persist as a peer row, never
-		// fall back to an ordinary one.
+		// fall back to an ordinary one. The unresolvable to is kept raw, same honesty rule as from.
 		val a = resolveMessageAttribution(
 			kind = "peer",
 			entryFrom = "alice.sakura.coolapp.main",
@@ -75,7 +77,7 @@ class PeerMirrorAttributionTest {
 			canonicalize = { s -> s.takeIf { it == "alice.sakura.coolapp.main" } },
 		)
 		assertEquals("alice.sakura.coolapp.main", a.from)
-		assertNull(a.to)
+		assertEquals("not-an-address", a.to)
 		assertTrue(a.isPeer)
 	}
 

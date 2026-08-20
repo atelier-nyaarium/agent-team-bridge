@@ -4,6 +4,7 @@ import {
 	type ConsoleRoutes,
 	createConsoleDispatcher,
 } from "../../gateway/console/consoleHandler.js";
+import type { DeliverToOwner } from "../../gateway/consolePushOps.js";
 import type { WakeResult } from "../../gateway/wake.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../../shared/console-protocol.js";
@@ -94,8 +95,26 @@ export function realTeamWs(team: string, subId: string): ServerWebSocket<WsData>
 	} as unknown as ServerWebSocket<WsData>;
 }
 
+/** The funnel's real semantics for harnesses: append locally, fan on local origin. `fanOut` is
+ * the spy seam tests assert relays on. */
+export function makeDeliverToOwner(
+	mailboxStore: DeviceMailboxStore,
+	owner: string = OWNER,
+	fanOut?: (entry: Record<string, unknown>, dedupeKey: string) => unknown,
+): DeliverToOwner {
+	return ({ entry, dedupeKey, origin, resolveMailbox }) => {
+		const mailbox = resolveMailbox ? resolveMailbox() : mailboxStore.ensure(owner);
+		if (!mailbox) return false;
+		mailbox.append({ ...entry, dedupeKey }, dedupeKey);
+		if (origin === "local" && entry.session_id) void fanOut?.(entry as Record<string, unknown>, dedupeKey);
+		return true;
+	};
+}
+
 export function makeHarness(
-	overrides: Partial<ConsoleRoutes> = {},
+	overrides: Partial<ConsoleRoutes> & {
+		fanOutConsolePush?: (entry: Record<string, unknown>, dedupeKey: string) => unknown;
+	} = {},
 	deps: Partial<
 		Pick<
 			ConsoleHandlerDeps,
@@ -116,8 +135,10 @@ export function makeHarness(
 	const mailboxStore = new DeviceMailboxStore();
 	const sendCalls: Record<string, unknown>[] = [];
 	const respondCalls: Record<string, unknown>[] = [];
+	const { fanOutConsolePush, ...routeOverrides } = overrides;
 
 	const routes: ConsoleRoutes = {
+		deliverToOwner: makeDeliverToOwner(mailboxStore, OWNER, fanOutConsolePush),
 		send: async (_req, body) => {
 			sendCalls.push(body);
 			return jsonRes({ session_id: "conv:host:team-a", status: "running" });
@@ -147,7 +168,7 @@ export function makeHarness(
 			] as unknown as TeamInfo[],
 			coverage: { rosterKnown: true, asked: 0, answered: 0 },
 		}),
-		...overrides,
+		...routeOverrides,
 	};
 
 	const handler = createConsoleDispatcher({
@@ -190,6 +211,7 @@ export function makeTerminalHarness(
 ) {
 	const hostOps: Record<string, unknown>[] = [];
 	const routes: ConsoleRoutes = {
+		deliverToOwner: makeDeliverToOwner(new DeviceMailboxStore()),
 		send: async () => jsonRes({ session_id: "s", status: "running" }),
 		respond: () => jsonRes({ delivered: true }),
 		teams: () => jsonRes([]),

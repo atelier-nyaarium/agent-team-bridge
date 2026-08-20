@@ -4,12 +4,22 @@ import { createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { frame, jsonRes, makeHarness, OWNER, realTeamWs } from "./helpers/console.js";
+import { frame, jsonRes, makeDeliverToOwner, makeHarness, OWNER, realTeamWs } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
+
+/** The funnel reduced to a single known box, for ConsolePeer unit tests. */
+function boxDeliver(box: DeviceMailbox) {
+	return (entry: Record<string, unknown>, dedupeKey: string) => {
+		box.append({ ...entry, dedupeKey } as Parameters<DeviceMailbox["append"]>[0], dedupeKey);
+		return true;
+	};
+}
 
 describe("ConsolePeer", () => {
 	it("channel_push lands as a message entry", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(boxDeliver(box), "pixel", "conv-pixel", "conv-pixel");
 		peer.send(
 			JSON.stringify({
 				type: "channel_push",
@@ -25,7 +35,7 @@ describe("ConsolePeer", () => {
 
 	it("response_push lands as a reply entry", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(boxDeliver(box), "pixel", "conv-pixel", "conv-pixel");
 		peer.send(
 			JSON.stringify({
 				type: "response_push",
@@ -40,7 +50,7 @@ describe("ConsolePeer", () => {
 
 	it("non-delivery frame types and garbage are ignored", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(boxDeliver(box), "pixel", "conv-pixel", "conv-pixel");
 		peer.send("not json");
 		peer.send(JSON.stringify({ type: "evie_tools", tools: [] }));
 		expect(box.size).toBe(0);
@@ -125,6 +135,7 @@ describe("createConsoleDispatcher: register + identity", () => {
 			localGatewayId: "test-host",
 			localDomainId: "test-domain",
 			routes: {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),

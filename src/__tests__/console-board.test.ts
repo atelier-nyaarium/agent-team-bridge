@@ -11,7 +11,9 @@ import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
-import { fakeDurable, frame, jsonRes, OWNER } from "./helpers/console.js";
+import { fakeDurable, frame, jsonRes, makeDeliverToOwner, OWNER } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
 
 describe("createConsoleDispatcher", () => {
 	describe("durable send/respond idempotency (restart-proof): board ops", () => {
@@ -25,6 +27,7 @@ describe("createConsoleDispatcher", () => {
 				localGatewayId: "test-host",
 				localDomainId: "test-domain",
 				routes: {
+					deliverToOwner: stubDeliver,
 					send: async () => jsonRes({}),
 					respond: () => jsonRes({}),
 					teams: () => jsonRes([]),
@@ -69,6 +72,7 @@ describe("createConsoleDispatcher", () => {
 				localGatewayId: "test-host",
 				localDomainId: "test-domain",
 				routes: {
+					deliverToOwner: stubDeliver,
 					send: async () => jsonRes({}),
 					respond: () => jsonRes({}),
 					teams: () => jsonRes([]),
@@ -134,6 +138,7 @@ describe("createConsoleDispatcher", () => {
 				localGatewayId: "test-host",
 				localDomainId: "test-domain",
 				routes: {
+					deliverToOwner: stubDeliver,
 					send: async () => jsonRes({}),
 					respond: () => jsonRes({}),
 					teams: () => jsonRes([]),
@@ -188,6 +193,7 @@ describe("createConsoleDispatcher", () => {
 				localGatewayId: "test-host",
 				localDomainId: "test-domain",
 				routes: {
+					deliverToOwner: stubDeliver,
 					send: async () => jsonRes({}),
 					respond: () => jsonRes({}),
 					teams: () => jsonRes([]),
@@ -227,6 +233,7 @@ describe("createConsoleDispatcher", () => {
 				localGatewayId: "test-host",
 				localDomainId: "test-domain",
 				routes: {
+					deliverToOwner: stubDeliver,
 					send: async () => jsonRes({}),
 					respond: () => jsonRes({}),
 					teams: () => jsonRes([]),

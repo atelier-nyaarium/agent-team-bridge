@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { frame, jsonRes, OWNER_PUB } from "./helpers/console.js";
+import { frame, jsonRes, makeDeliverToOwner, OWNER_PUB } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
 
 describe("console cross-Domain handshake ops", () => {
 	// A linked-but-offline peer: written into the peer set by a confirmed link, but its gateway is
@@ -21,6 +23,7 @@ describe("console cross-Domain handshake ops", () => {
 			listPeers: [],
 		};
 		const routes: ConsoleRoutes = {
+			deliverToOwner: stubDeliver,
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
 			respond: () => jsonRes({ delivered: true }),
 			teams: () => jsonRes([]),
@@ -241,6 +244,7 @@ describe("console cross-Domain handshake ops", () => {
 			localGatewayId: "test-host",
 			localDomainId: "test-domain",
 			routes: {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
@@ -264,6 +268,7 @@ describe("console cross-Domain unlink op", () => {
 		const calls: string[] = [];
 		const counts = opts.counts ?? { carol: { peers: 1, shares: 2, jobs: 3 } };
 		const routes: ConsoleRoutes = {
+			deliverToOwner: stubDeliver,
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
 			respond: () => jsonRes({ delivered: true }),
 			teams: () => jsonRes([]),
@@ -322,6 +327,7 @@ describe("console cross-Domain unlink op", () => {
 			localGatewayId: "test-host",
 			localDomainId: "test-domain",
 			routes: {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),

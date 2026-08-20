@@ -343,6 +343,12 @@ export function createRoutes({
 				try {
 					const r = await relayToGateway(dstGateway, op, dstDomain);
 					if (r.ok) {
+						// A landing-side refusal (an oversized console_push the sibling dropped) answers ok
+						// with delivered:false. Permanent, so never retried - but silent-to-origin is how a
+						// stranded entry looks exactly like a converged one, so it gets a log here.
+						if (op.kind === "console_push" && (r.result as { delivered?: boolean })?.delivered === false) {
+							console.warn(`[relay] ${label} to ${dstGateway} landed but was refused (delivered: false)`);
+						}
 						resolveOutcome({ ok: true });
 						return;
 					}
@@ -365,7 +371,7 @@ export function createRoutes({
 	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session)
 	// hands each module the freshly-captured deps, so nothing here keeps serving the pre-federation
 	// closure. Anything whose loss would change behaviour rides carryOver instead.
-	const { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush } = createConsolePushOps({
+	const { mirrorPeer, consolePush, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
 		mailboxStore,
 		ownerId,
 		routerClient,
@@ -1225,19 +1231,23 @@ export function createRoutes({
 			// drop it. The mailbox is the delivery truth; the peer is a wake hint.
 			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
 			if (mailbox) {
-				const entry = {
-					kind: "reply" as const,
-					session_id: respondSessionId,
-					body: response.response,
-					...pickTiers(response),
-					status: response.status,
-					files: files && files.length > 0 ? files : undefined,
-				};
-				mailbox.append(entry);
 				// This direct append is the PRIMARY console-reply path (the ConsolePeer is only a wake
-				// hint), so the convergence relay must ride here too - hooking the peer alone left a
-				// reply from a remote-held conversation in a mailbox the console never polls.
-				void fanOutConsolePush(entry, crypto.randomUUID());
+				// hint), and the funnel converges it - hooking the peer alone left a reply from a
+				// remote-held conversation in a mailbox the console never polls.
+				deliverToOwner({
+					entry: {
+						kind: "reply",
+						session_id: respondSessionId,
+						body: response.response,
+						...pickTiers(response),
+						status: response.status,
+						files: files && files.length > 0 ? files : undefined,
+					},
+					dedupeKey: crypto.randomUUID(),
+					origin: "local",
+					resolveMailbox: () => mailbox,
+					label: "respond",
+				});
 				pushedViaConversation = true;
 				console.log(
 					`[respond] appended to console mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
@@ -1536,7 +1546,7 @@ export function createRoutes({
 		health,
 		humanNotify,
 		consolePush,
-		fanOutConsolePush,
+		deliverToOwner,
 		pluginAction,
 		taskBoard,
 		presenceForDomain,
