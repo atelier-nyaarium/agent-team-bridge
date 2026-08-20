@@ -5,7 +5,7 @@ import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBlob } from "../blobTransfer.js";
 import { parseDsCard } from "../designer/dsCard.js";
-import { routerPost } from "./helpers.js";
+import { routerPost, unansweredHandshakeId } from "./helpers.js";
 
 // Advisory and derived; the gateway holds the real backstop.
 const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
@@ -194,6 +194,17 @@ export async function postReply(
 		return { content: [{ type: "text" as const, text: "Reply sent." }] };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return toolError(`Failed to send reply: ${message}`);
+		return toolError(`Failed to send reply: ${message}${handshakeHint(message)}`);
 	}
+}
+
+/** The gateway refuses a reply whose own handshake is unconfirmed, and deliberately will not name
+ * the pending id. That assumes the agent still holds it, which is exactly what fails: a compaction
+ * or a turn boundary loses the push and leaves nothing to answer with. This process kept it, so it
+ * says so here - naming to ourselves what the gateway pushed to us adds no reach a caller lacks. */
+function handshakeHint(message: string): string {
+	if (!/handshake/i.test(message)) return "";
+	const hsId = unansweredHandshakeId();
+	if (!hsId) return "";
+	return `\n\nThe handshake this session owes is \`${hsId}\`. Answer it with channel_reply_structured (session_id \`${hsId}\`, responseData \`{ "isMainOrLead": true }\` if you are the primary session, false if you are a worker), then resend this reply.`;
 }

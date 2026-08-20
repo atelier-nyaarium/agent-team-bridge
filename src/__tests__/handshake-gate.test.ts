@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { HandshakeGate } from "../gateway/handshakeGate.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
-import { HANDSHAKE_REPUSH_DEDUPE_MS, HANDSHAKE_REPUSH_MAX_ATTEMPTS } from "../gateway/wsTypes.js";
+import {
+	HANDSHAKE_PENDING_TTL_MS,
+	HANDSHAKE_REPUSH_DEDUPE_MS,
+	HANDSHAKE_REPUSH_MAX_ATTEMPTS,
+} from "../gateway/wsTypes.js";
 import { SessionStore } from "../shared/session-store.js";
 
 const WINDOW = HANDSHAKE_REPUSH_DEDUPE_MS;
+const TTL = HANDSHAKE_PENDING_TTL_MS;
 
 /** The handshake rules, exercised without a socket: id ownership, throttles, caps, lead memory. */
 describe("HandshakeGate", () => {
@@ -103,6 +108,40 @@ describe("HandshakeGate", () => {
 		}
 		advance(WINDOW);
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("capped");
+	});
+
+	it("a capped entry stops BLOCKING once its TTL passes, so the lockout self-heals (issue #251)", () => {
+		// The two bounds have different jobs: the attempt cap stops pushing, the TTL stops blocking.
+		// Without the second, a session that missed all five prompts was refused for the life of its
+		// socket, told to restart, with no way to learn its own hs- id.
+		const { gate, advance } = makeGate();
+		gate.mint("app.dev", "s1");
+		for (let i = 0; i < HANDSHAKE_REPUSH_MAX_ATTEMPTS; i++) {
+			advance(WINDOW);
+			repushOnce(gate, "app.dev", "s1");
+		}
+		expect(gate.decideRepush("app.dev", "s1").kind).toBe("capped");
+		// Still enforced right up to the TTL: the last push it received is answerable until then.
+		expect(gate.pendingIdFor("app.dev", "s1")).toBeDefined();
+
+		advance(TTL);
+		// Now every reader treats it as absent, which is the gate's own fail-open case.
+		expect(gate.pendingIdFor("app.dev", "s1")).toBeUndefined();
+		expect(gate.decideRepush("app.dev", "s1").kind).toBe("no-pending");
+	});
+
+	it("an expired handshake is no longer answerable, and the sweep reclaims it", () => {
+		const { gate, advance } = makeGate();
+		const { hsId } = gate.mint("app.dev", "s1");
+		expect(gate.pendingOf(hsId)).toBeDefined();
+
+		advance(TTL);
+		// Unenforced by now, so confirming a lead off it would settle a challenge that gates nothing.
+		expect(gate.pendingOf(hsId)).toBeUndefined();
+		expect(gate.sweep()).toBeGreaterThanOrEqual(1);
+		// Idempotent: the second pass finds nothing left of it to drop.
+		gate.mint("other.dev", "s2");
+		expect(gate.sweep()).toBe(0);
 	});
 
 	it("forget drops the coordinates' pending entry so a repush finds nothing", () => {
