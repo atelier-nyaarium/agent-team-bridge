@@ -79,6 +79,43 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		expect(relayed).toEqual(["hostb"]);
 	});
 
+	it("a console-bound reply relays to the sibling Gateway - the direct mailbox append, not just the ConsolePeer, must converge", async () => {
+		// The real Test2 case: the console's send sealed to THIS gateway, the session replied, and
+		// routes.respond appended straight to the owner mailbox (the peer is only a wake hint) - so a
+		// hook on the peer alone left the reply in a mailbox the console never polls.
+		const { routes: hostbRoutes, consolePushCalls } = gateRoutes([]);
+		const router = fakeRouter({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: (op) => {
+				const push = op as { entry: unknown; dedupeKey: string };
+				return hostbRoutes.consolePush(push.entry as never, push.dedupeKey);
+			},
+			onCall: (action) => (action === "list_gateways" ? { gateways: [{ gatewayId: "hostb" }] } : { ok: true }),
+		});
+		const mailboxStore = new DeviceMailboxStore();
+		mailboxStore.ensure("owner-1");
+		const ctx = makeCtx("hosta", {
+			routerClient: router.client,
+			sealer: sealerA,
+			mailboxStore,
+			ownerId: () => "owner-1",
+			resolvesLocalGateway: (gatewayId) => gatewayId === "hostb",
+			registry: registryWith({ "test2.dev": channelWs([]) }),
+		});
+		const sid = "conv.owner-1.alice.hosta.test2.dev";
+		ctx.store.create(sid, "Pixel", "test2.dev", { persistent: true, fromConversationId: "owner-1" });
+		const { respond } = createRoutes(ctx);
+
+		const res = respond(TEST_REQ, { session_id: sid, response: "hi back", status: "completed" });
+		expect(res.status).toBe(200);
+		// The reply landed locally...
+		expect(mailboxStore.get("owner-1")?.drain().entries.at(-1)).toMatchObject({ kind: "reply", body: "hi back" });
+		// ...AND converged to the sibling, where the console actually polls.
+		await vi.waitFor(() => expect(consolePushCalls).toHaveLength(1));
+		expect(consolePushCalls[0].entry).toMatchObject({ kind: "reply", session_id: sid, body: "hi back" });
+	});
+
 	it("a relay retry (the same dedupeKey re-delivered) lands on the sibling Gateway exactly once", async () => {
 		const mailboxStore = new DeviceMailboxStore();
 		const bobCtx = makeCtx("hostb", { mailboxStore, ownerId: () => "owner-1" });

@@ -1225,14 +1225,19 @@ export function createRoutes({
 			// drop it. The mailbox is the delivery truth; the peer is a wake hint.
 			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
 			if (mailbox) {
-				mailbox.append({
-					kind: "reply",
+				const entry = {
+					kind: "reply" as const,
 					session_id: respondSessionId,
 					body: response.response,
 					...pickTiers(response),
 					status: response.status,
 					files: files && files.length > 0 ? files : undefined,
-				});
+				};
+				mailbox.append(entry);
+				// This direct append is the PRIMARY console-reply path (the ConsolePeer is only a wake
+				// hint), so the convergence relay must ride here too - hooking the peer alone left a
+				// reply from a remote-held conversation in a mailbox the console never polls.
+				void fanOutConsolePush(entry, crypto.randomUUID());
 				pushedViaConversation = true;
 				console.log(
 					`[respond] appended to console mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
