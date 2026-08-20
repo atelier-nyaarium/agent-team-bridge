@@ -15,6 +15,7 @@ import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
 import { type CopilotAgentService, CopilotTransitionError } from "./copilotAgentService.js";
 import type { CopilotRelay } from "./copilotRelay.js";
+import { presentedByRequest } from "./sessionAuthority.js";
 
 export interface CopilotRouteDeps {
 	service: CopilotAgentService;
@@ -104,7 +105,19 @@ export class CopilotRoute {
 				400,
 			);
 		const owner = this.deps.service.resolveOwner(req);
-		if (!owner) return json({ error: "not found" }, 404);
+		if (!owner) {
+			// Same split as CodexRoute: a token-less caller is told so (it leaks nothing it does not
+			// already know), an unknown token stays "not found" against session probing.
+			if (!presentedByRequest(req).token) {
+				return json(
+					{
+						error: "this session is not bound to the gateway (launch it from the console, or install the copilot CLI for a local agent)",
+					},
+					401,
+				);
+			}
+			return json({ error: "not found" }, 404);
+		}
 		try {
 			switch (parsed.data.kind) {
 				case "start":

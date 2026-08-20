@@ -17,6 +17,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-durable-fast");
 			const h1 = createConsoleDispatcher({
@@ -64,6 +65,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-durable-bg");
 			const h1 = createConsoleDispatcher({
@@ -134,6 +136,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-durable-race");
 			const h1 = createConsoleDispatcher({
@@ -193,6 +196,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-durable-success-race");
 			const h1 = createConsoleDispatcher({
@@ -248,6 +252,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "team-a", body: "hi" }, "op-durable-eviction-race");
 			const h = createConsoleDispatcher({
@@ -300,6 +305,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "asleep.dev", body: "hi" }, "op-durable-bg-fail");
 			const h1 = createConsoleDispatcher({
@@ -346,6 +352,7 @@ describe("createConsoleDispatcher", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const f = frame({ kind: "send", to: "asleep.dev", body: "hi" }, "op-durable-bg-fail-same-proc");
 			const h1 = createConsoleDispatcher({
@@ -387,6 +394,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -167,9 +168,12 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * Best-effort; a failure surfaces as a transient message. */
 	fun wakeSession(team: String) {
 		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
-		if (t !is Address || t.gateway != repo._state.value.localGatewayId) return
+		if (t !is Address) return
+		// The QUALIFIED spawn point, so the create routes to the session's own Gateway. Rebuilding a
+		// bare `t.spawn` sent every wake to the route Gateway; a guard hid that as "cannot wake".
+		val target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical
 		repo.drain.scope?.launch(Dispatchers.IO) {
-			runCatchingCancellable { repo.client().createSession(target = t.spawn, sessionName = t.session) }
+			runCatchingCancellable { repo.client().createSession(target = target, sessionName = t.session) }
 				.onFailure { e ->
 					repo._state.update { it.copy(transientMessage = e.message ?: "wake failed") }
 				}
@@ -180,15 +184,19 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * close_session (kill the tmux, KEEP the record) then create_session (fresh launch, resuming the
 	 * record's transcript). Composed from those two existing ops because a bare create cannot do
 	 * this - the daemon's ensureSession no-ops whenever the tmux session still exists, whether or
-	 * not claude is still running inside it (a Ctrl-C-killed pane is exactly that state). Local
-	 * addressable sessions only; throws on failure so the terminal surfaces it inline (tmuxSend's
-	 * contract). */
+	 * not claude is still running inside it (a Ctrl-C-killed pane is exactly that state). Throws on
+	 * failure so the terminal surfaces it inline (tmuxSend's contract). */
 	suspend fun relaunchSession(team: String) {
 		withContext(Dispatchers.IO) {
 			val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
-			if (t !is Address || t.gateway != repo._state.value.localGatewayId) error("not a local session")
+			if (t !is Address) error("not an addressable session")
 			repo.client().closeSession(team)
-			repo.client().createSession(target = t.spawn, sessionName = t.session)
+			// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
+			// the route Gateway after closing it on its own.
+			repo.client().createSession(
+				target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical,
+				sessionName = t.session,
+			)
 		}
 	}
 

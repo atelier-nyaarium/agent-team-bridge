@@ -206,13 +206,17 @@ export function createConsolePushOps({
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
 		}
 		const dedupeKey = crypto.randomUUID();
+		// Qualified, never the bare team field: fanOutConsolePush relays this entry verbatim to
+		// sibling Gateways, and a console qualifies a bare `from` with its ROUTE Gateway - filing a
+		// notice from machine B under a thread that looks like machine A's.
+		const sender = localAddress(from);
 		const entry: ConsolePushEntry = {
 			kind: "notice",
 			// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
 			// never throws here - unlike a console send's free-form Device Name. notify_human is an
 			// agent-only tool; a console never posts a notice, so the sender is always a slug.
-			session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
-			from,
+			session_id: storeKey({ kind: "notice", sender }),
+			from: sender.canonical,
 			body: full,
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),

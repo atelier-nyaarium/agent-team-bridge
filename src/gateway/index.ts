@@ -1327,7 +1327,7 @@ export async function startGateway(): Promise<void> {
 		if (method === "GET" && url.pathname === "/pending") return routes.pending(req);
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
 		if (method === "GET" && url.pathname === "/capabilities") return routes.capabilities();
-		if (method === "GET" && url.pathname === "/discover") return routes.discover();
+		if (method === "GET" && url.pathname === "/discover") return routes.discover(url);
 		if (method === "POST" && url.pathname === "/send") return routes.send(req, body);
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);

@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.DiscoverCoverage
 import com.atelier_nyaarium.switchboard.proto.LOCAL_DOMAIN_SENTINEL
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.TeamInfo
@@ -92,6 +93,28 @@ internal fun gatewayOf(canonical: String): String =
 		is Address -> t.gateway
 		is SpawnPoint -> t.gateway
 	}
+
+/** A list_teams answer with its own completeness. Null coverage (an older gateway) claims nothing. */
+internal data class TeamsAnswer(val teams: List<Team>, val coverage: DiscoverCoverage? = null)
+
+/** Merge a fresh presence answer over the prior rows, keeping prior rows the answer does not speak
+ * for. Fresh wins on a name collision. Pure, so the two merge policies (plane push, discovery with
+ * coverage) share one rule and stay testable. */
+internal fun mergePresence(prior: List<Team>, fresh: List<Team>, keepPrior: (Team) -> Boolean): List<Team> {
+	val freshNames = fresh.mapTo(HashSet()) { it.name }
+	return fresh + prior.filter { it.name !in freshNames && keepPrior(it) }
+}
+
+/** The carry-forward keys a coverage names: bare gateway ids plus "domainId/gatewayId" peer keys. */
+internal fun unreachableKeys(coverage: DiscoverCoverage?): Set<String> =
+	((coverage?.unreachable ?: emptyList()) + (coverage?.unreachablePeers ?: emptyList())).toSet()
+
+/** Whether a row belongs to a gateway the answer could not reach (so its rows must be held, not
+ * swept as absent). */
+internal fun rowOnUnreachable(row: Team, keys: Set<String>, localGatewayId: String): Boolean {
+	val gw = row.gatewayId.ifEmpty { localGatewayId }
+	return gw in keys || "${row.domainId.orEmpty()}/$gw" in keys
+}
 
 /** The one TeamInfo -> Team mapper, shared by the legacy `teams()` list_teams relay AND the
  * presence-plane piggyback on a poll response - both carry the identical wire shape, so mapping

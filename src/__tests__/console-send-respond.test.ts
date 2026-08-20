@@ -136,6 +136,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 
@@ -168,6 +169,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 
@@ -213,6 +215,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 
@@ -288,6 +291,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 

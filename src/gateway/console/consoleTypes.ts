@@ -11,6 +11,7 @@ import type {
 	CrossDomainRequestResult,
 	CrossDomainShareTarget,
 	CrossDomainUnlinkResult,
+	DiscoverCoverage,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
@@ -41,7 +42,9 @@ export interface ConsoleRoutes {
 	) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
-	discover: () => Promise<Response>;
+	discover: (url?: URL) => Promise<Response>;
+	// Same rows plus completeness, so a partial answer cannot pass as a full one.
+	discoverFull: () => Promise<{ teams: TeamInfo[]; coverage: DiscoverCoverage }>;
 }
 
 /** The JSON body shape returned by routes.send, shared by the in-time and backgrounded

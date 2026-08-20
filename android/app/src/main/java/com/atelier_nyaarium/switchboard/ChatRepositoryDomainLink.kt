@@ -232,9 +232,16 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		// A teams refresh failure is not a connect failure: register succeeded, so we
 		// are connected. Log and proceed with the prior team list rather than masking
 		// the error as an empty board (which would blank live sessions).
-		val teams = runCatchingCancellable { client().teams(localGatewayId) }.getOrElse {
+		val answer = runCatchingCancellable { client().teams(localGatewayId) }.getOrElse {
 			DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
-			_state.value.teams
+			TeamsAnswer(_state.value.teams)
+		}
+		// Hold rows for gateways the answer names as unreachable; they were not asked.
+		val keys = unreachableKeys(answer.coverage)
+		val teams = if (keys.isEmpty()) {
+			answer.teams
+		} else {
+			mergePresence(_state.value.teams, answer.teams) { rowOnUnreachable(it, keys, localGatewayId) }
 		}
 		// Seed the merge path's raw cache so a tombstone expiring before the first poll lands
 		// still has something to self-heal from (see applyPresence/reapplyCachedTeams).

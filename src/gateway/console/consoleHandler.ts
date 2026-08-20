@@ -97,7 +97,20 @@ export function createConsoleDispatcher({
 	}
 
 	// The one owner of every device's peer state, key binding and idempotency cache (see consoleDevices.ts).
-	const devices = createConsoleDevices({ registry, conversationRegistry, mailboxStore, isProjectName });
+	const devices = createConsoleDevices({
+		registry,
+		conversationRegistry,
+		mailboxStore,
+		isProjectName,
+		// Qualified in stays itself, a bare local team gains this Gateway, a Device Name stays raw.
+		qualifyFrom: (from) => {
+			try {
+				return targets.parse(from).canonical;
+			} catch {
+				return from;
+			}
+		},
+	});
 
 	function requireBoard(): BoardStore {
 		if (!boardStore) throw new Error("task board is not available on this Gateway");
@@ -160,11 +173,12 @@ export function createConsoleDispatcher({
 			case "list_teams": {
 				// Fan out across the mesh so the console sees every Gateway's sessions, each
 				// carrying its own `gatewayId` (the console keys threads by domain.gateway.spawn.session).
-				const teams = (await (await routes.discover()).json()) as TeamInfo[];
+				const { teams, coverage } = await routes.discoverFull();
 				// A console does not list other consoles as send targets, and excludes itself.
 				// teams() already drops the headless "host" daemon.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
+					coverage,
 				};
 			}
 
@@ -353,7 +367,18 @@ export function createConsoleDispatcher({
 				// ramp to what is actually being watched. A poll with no focus (a legacy console, or
 				// one between declarations) leaves any existing declaration to expire on its own TTL
 				// rather than clearing it early - see IntentTracker's own doc.
-				if (op.focus) intentTracker?.declare(conversationId, op.focus);
+				if (op.focus) {
+					// The console names its focus by qualified address; cadenceFor compares against the
+					// BARE presence team. Stored verbatim, the compare could never be true and every
+					// terminal sat at the background cadence. A foreign address stays as-is (it matches
+					// nothing here, correctly - that session's cadence belongs to its own Gateway).
+					const declared = op.focus.terminalTeam;
+					const local = declared === undefined ? null : targets.tryLocalName(declared);
+					intentTracker?.declare(
+						conversationId,
+						local === null ? op.focus : { ...op.focus, terminalTeam: local },
+					);
+				}
 
 				// Long-poll: an empty drain holds the op open (bounded under the relay-chain
 				// timeouts) until an append or a presence bump wakes it, then drains/rechecks again.

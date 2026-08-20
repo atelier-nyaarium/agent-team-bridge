@@ -63,11 +63,13 @@ internal class BoardOps(private val repo: ChatRepository) {
 		return gw.isNotEmpty() && gw != repo.localGatewayId
 	}
 
-	/** The Gateway a session's board entries home on: its own, else the route Gateway. Takes a chat's
-	 * `Team.name` (the qualified address). */
+	/** The Gateway a session's board entries home on, read from the ADDRESS itself. A presence-row
+	 * lookup missed any team not currently listed and fell back to the route Gateway, landing a
+	 * remote session's board reads and queued-write drops on the wrong machine. Takes a chat's
+	 * `Team.name` (the qualified address); only an unparseable bare name falls to the route. */
 	fun boardGatewayOf(team: String?): String {
-		val gw = team?.let { s -> repo._state.value.teams.firstOrNull { it.name == s }?.gatewayId }
-		return gw?.ifEmpty { null } ?: repo.localGatewayId
+		val fromName = team?.let { runCatching { gatewayOf(it) }.getOrNull() }?.ifEmpty { null }
+		return fromName ?: repo.localGatewayId
 	}
 
 	/** The same answer for an entry's stored `sessionId`, which is the bare local field rather than

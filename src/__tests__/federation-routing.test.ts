@@ -350,6 +350,48 @@ describe("federation routing (E2E sealed)", () => {
 		expect(teams.find((t) => t.team === "api.dev")).toBeUndefined();
 		expect(teams.find((t) => t.team === "broken.dev")).toBeUndefined();
 	});
+
+	it("DISCOVERY: coverage names an unreachable peer instead of folding it into an empty answer", async () => {
+		const router = fakeRouter({
+			onCall: (action) => {
+				if (action === "list_gateways") return { gateways: [{ gatewayId: "hostb", online: true }] };
+				// The relay itself fails, which is what a dead or refused peer looks like.
+				return { ok: false, error: 'gateway "hostb" is offline' };
+			},
+		});
+		const ctx = makeCtx("hosta", {
+			routerClient: router.client,
+			sealer: sealerA,
+			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
+			sessionStore: storeWith("recipe-app.dev"),
+		});
+		const { discoverFull } = createRoutes(ctx);
+		const { teams, coverage } = await discoverFull();
+		// The local rows still land; the peer's absence is DECLARED rather than silent.
+		expect(teams.some((t) => t.team === "recipe-app.dev")).toBe(true);
+		expect(coverage).toMatchObject({ rosterKnown: true, asked: 1, answered: 0, unreachable: ["hostb"] });
+	});
+
+	it("DISCOVERY: an unreadable roster is rosterKnown:false, never an empty mesh", async () => {
+		const router = fakeRouter({
+			onCall: (action) => {
+				if (action === "list_gateways") throw new Error("boom");
+				return { ok: true };
+			},
+		});
+		// A refused registration must read the same way: the roster is unknown, not empty.
+		router.client.callTool = async () => ({ callId: "x", error: "not registered" });
+		const ctx = makeCtx("hosta", {
+			routerClient: router.client,
+			sealer: sealerA,
+			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
+			sessionStore: storeWith("recipe-app.dev"),
+		});
+		const { discoverFull } = createRoutes(ctx);
+		const { teams, coverage } = await discoverFull();
+		expect(teams.some((t) => t.team === "recipe-app.dev")).toBe(true);
+		expect(coverage).toMatchObject({ rosterKnown: false, asked: 0, answered: 0 });
+	});
 });
 
 describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked ConsoleRoutes.respond)", () => {

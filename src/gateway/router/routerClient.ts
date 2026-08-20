@@ -90,6 +90,8 @@ export interface RouterClientConfig {
 export interface RouterClient {
 	callTool: (action: string, params: Record<string, unknown>) => Promise<RouterToolCallResult>;
 	isConnected: () => boolean;
+	/** True only while the Router has ACCEPTED this Gateway's registration. */
+	isRegistered: () => boolean;
 	stop: () => void;
 }
 
@@ -139,6 +141,8 @@ function verifyPinnedLeaf(ws: WebSocket, expectedFp: string): void {
 export function startRouterClient(config: RouterClientConfig): RouterClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
+	// A refused register leaves the socket open, so "connected" cannot answer "registered".
+	let registered = false;
 	// The addresses this Gateway knows for its Router, and which one the next connect dials. Unlike
 	// the phone, which fails over per HTTP op, a Gateway holds ONE socket: the ring advances on a
 	// failed connect and resets on a successful open, so a Router that moved is found on the next
@@ -294,6 +298,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			ws = null;
 			clearTimeout(connectTimer);
 			stopHeartbeat();
+			registered = false;
 			// This candidate did not stay up. Advance so the next attempt tries a different address:
 			// a socket that never opened means this door is shut, and one that opened and dropped is
 			// re-tried from here anyway because the open handler pinned the index to it.
@@ -346,10 +351,12 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 					  }
 					| undefined;
 				if (res.error) {
+					registered = false;
 					console.error(`[router-client] gateway_register failed: ${res.error}`);
 					return;
 				}
 				if (r?.ok === false) {
+					registered = false;
 					// A pending-tagged refusal is transient: the Domain is staged but not yet rooted.
 					// Retry on a bounded cadence so registration lands as soon as the root arrives.
 					// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
@@ -360,6 +367,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				}
 				// A successful register clears any pending-retry left from earlier attempts.
 				clearPendingRetry();
+				registered = true;
 				const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 				console.log(`[router-client] registered as Gateway "${config.gatewayId}"${peers}`);
 				if (r?.domain) config.onDomainSync?.(r.domain);
@@ -487,5 +495,9 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 
 	connect();
 
-	return { callTool, isConnected, stop };
+	function isRegistered(): boolean {
+		return registered && isConnected();
+	}
+
+	return { callTool, isConnected, isRegistered, stop };
 }

@@ -33,7 +33,9 @@ describe("routes", () => {
 			expect(snap.entries[0]).toMatchObject({
 				kind: "notice",
 				session_id: "notice.alice.test-host.recipe-app.claude",
-				from: "recipe-app",
+				// QUALIFIED: this entry is relayed verbatim to sibling Gateways, and a console stamps its
+				// route Gateway onto any bare sender - misattributing the notice to the wrong machine.
+				from: "alice.test-host.recipe-app.claude",
 				title: "cycle done",
 				summary: "All phases shipped. Nothing is blocked.",
 				body: "# report\n\nall good",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	coverageCaveat,
 	type DiscoverEntry,
 	formatDiscoverLines,
 	groupDiscoverEntries,
@@ -128,5 +129,20 @@ describe("relativeAge", () => {
 	});
 	it("clamps a future timestamp to just now (no negative age)", () => {
 		expect(relativeAge(now + 10_000, now)).toBe("just now");
+	});
+});
+
+describe("coverageCaveat", () => {
+	it("is silent for a complete answer and for an older gateway that claims nothing", () => {
+		expect(coverageCaveat(undefined)).toBe("");
+		expect(coverageCaveat({ rosterKnown: true, asked: 2, answered: 2 })).toBe("");
+	});
+	it("names the machines whose sessions are missing", () => {
+		const caveat = coverageCaveat({ rosterKnown: true, asked: 2, answered: 1, unreachable: ["ql-2815"] });
+		expect(caveat).toContain("ql-2815");
+		expect(caveat).toContain("missing");
+	});
+	it("says so when the roster itself was unreadable", () => {
+		expect(coverageCaveat({ rosterKnown: false, asked: 0, answered: 0 })).toContain("roster");
 	});
 });

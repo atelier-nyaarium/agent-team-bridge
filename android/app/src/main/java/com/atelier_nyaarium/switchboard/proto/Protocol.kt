@@ -469,6 +469,7 @@ data class ConsoleRegisterResult(
 @Serializable
 data class ConsoleListTeamsResult(
 	val teams: List<TeamInfo>,
+	val coverage: DiscoverCoverage? = null,
 )
 
 @Serializable
@@ -1012,6 +1013,15 @@ data class SealedEnvelope(
 	val nonce: String,
 	val ciphertext: String,
 	val signature: String,
+)
+
+@Serializable
+data class DiscoverCoverage(
+	val rosterKnown: Boolean,
+	val asked: Long,
+	val answered: Long,
+	val unreachable: List<String>? = null,
+	val unreachablePeers: List<String>? = null,
 )
 
 @Serializable

@@ -54,10 +54,15 @@ const AGENT_GATEWAY_DISPATCH: Record<AgentBackendId, AgentDispatch> = {
 };
 
 /** The daemon's declaration wins: it carries coordination this process cannot offer. Otherwise a
- * locally installed CLI is enough, which is what lets a Gatewayless session delegate. */
+ * locally installed CLI is enough, which is what lets a Gatewayless session delegate.
+ *
+ * The gateway branch ALSO needs this session's binding token: the capability is a machine-wide fact,
+ * the route additionally demands a per-session one, and a hand-launched session satisfies the first
+ * while failing the second - registering five tools that could never succeed (issue #252). */
 function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescriptor, capabilities: Capability[]): void {
 	const register = AGENT_TOOL_REGISTRARS[backend.id];
-	if (hasCapability(capabilities, agentCapabilityId(backend.id))) {
+	const bound = !!process.env.SWITCHBOARD_SESSION_TOKEN;
+	if (bound && hasCapability(capabilities, agentCapabilityId(backend.id))) {
 		register(mcpServer, AGENT_GATEWAY_DISPATCH[backend.id]);
 		return;
 	}

@@ -41,9 +41,27 @@ export const ConsoleRegisterResultSchema = z
 	})
 	.meta({ id: "ConsoleRegisterResult" });
 
+/** How complete a mesh fan-out's answer is. A partial result must say so: without this, a peer
+ * that could not be asked is indistinguishable from a peer with nothing to say, and its sessions
+ * are swept as absent. `rosterKnown: false` means the peer list itself was unreadable (not
+ * registered with the Router, or the roster call failed), so `asked` says nothing about the mesh. */
+export const DiscoverCoverageSchema = z
+	.object({
+		rosterKnown: z.boolean(),
+		asked: z.number().int().nonnegative(),
+		answered: z.number().int().nonnegative(),
+		// Same-Domain gateway ids that were asked and did not answer.
+		unreachable: z.array(z.string().max(64)).max(64).optional(),
+		// Linked-friend gateways that did not answer, as "domainId/gatewayId".
+		unreachablePeers: z.array(z.string().max(130)).max(64).optional(),
+	})
+	.meta({ id: "DiscoverCoverage" });
+
 export const ConsoleListTeamsResultSchema = z
 	.object({
 		teams: z.array(TeamInfoSchema),
+		// Optional: absent from an older gateway, which claims nothing about completeness.
+		coverage: DiscoverCoverageSchema.optional(),
 	})
 	.meta({ id: "ConsoleListTeamsResult" });
 

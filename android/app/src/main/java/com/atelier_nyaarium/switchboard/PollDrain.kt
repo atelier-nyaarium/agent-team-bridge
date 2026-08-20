@@ -264,7 +264,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						mb.presence?.let { rows ->
 							val bumpAt = System.currentTimeMillis()
 							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							repo.presence.applyPresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
+							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
 						}
 					}
 					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
@@ -351,9 +351,11 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						// when that address is THIS device (an agent-initiated push to our own session
 						// threads under `from`, the sender, not under ourselves).
 						val team: String? = if (e.kind == "notice") {
-							// Notice: prefer `from`, fall back to the notice store key's sender.
-							e.from?.let { repo.fromCanonical(it) }
-								?: (parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
+							// The store key's sender FIRST: it is qualified at the origin, while `from` may be
+							// bare (an older gateway), and qualifying a bare name here stamps THIS device's
+							// route Gateway onto a notice from another machine.
+							(parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
+								?: e.from?.let { repo.fromCanonical(it) }
 						} else {
 							when (val sk = parseStoreKey(e.session_id)) {
 								is SessionKey.Conv ->

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
-import type { BoardEntry } from "../shared/console-protocol.js";
+import type { BoardEntry, DiscoverCoverage } from "../shared/console-protocol.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import { pickTiers } from "../shared/notice.js";
@@ -537,19 +537,34 @@ export function createRoutes({
 	 * cross-Domain peer returns ONLY the sessions it has shared to this Domain (its own
 	 * relay handler applies the share filter), so an unshared friend session never appears.
 	 * A peer that errors or times out is simply omitted. */
-	async function discover(): Promise<Response> {
+	/** Mesh discovery, WITH its own completeness. A partial answer must say so: a peer that could
+	 * not be asked is otherwise indistinguishable from one with nothing to say, and its sessions get
+	 * swept as absent. That ambiguity hid a total relay outage for a day. */
+	async function discoverFull(): Promise<{ teams: TeamInfo[]; coverage: DiscoverCoverage }> {
 		const local = (await teams().json()) as TeamInfo[];
-		if (!routerClient?.isConnected()) return jsonResponse(local);
+		const unreachable: string[] = [];
+		const unreachablePeers: string[] = [];
+		// isRegistered, not isConnected: a REFUSED registration leaves the socket open, and reading
+		// that as "no peers" reports a revoked Gateway as an empty mesh.
+		if (!routerClient?.isRegistered()) {
+			if (routerClient?.isConnected()) console.warn(`[discover] roster unknown: not registered with the Router`);
+			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 } };
+		}
 		const rosterCall = await routerClient.callTool("list_gateways", {});
+		// callTool never rejects; a timeout or refusal arrives as `error`. Without this read, a
+		// failed roster and an empty one are the same value.
+		if (rosterCall.error) {
+			console.warn(`[discover] roster unknown: ${rosterCall.error}`);
+			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 } };
+		}
 		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 		const sameDomain = await Promise.all(
 			roster.map(async (h) => {
 				const r = await relayListTeams(h.gatewayId);
-				// A peer that cannot be reached contributes nothing, which is the only sane merge - but it
-				// must not do so SILENTLY. A protocol break rejected every one of these frames at the far
-				// end and the only symptom anywhere was a machine with no sessions, which reads as an idle
-				// machine. One line here is the difference between that and a diagnosis.
-				if (!r.ok) console.warn(`[discover] "${h.gatewayId}" contributed nothing: ${r.error}`);
+				if (!r.ok) {
+					console.warn(`[discover] "${h.gatewayId}" contributed nothing: ${r.error}`);
+					unreachable.push(h.gatewayId);
+				}
 				return r.ok ? r.teams : [];
 			}),
 		);
@@ -569,6 +584,7 @@ export function createRoutes({
 				const r = await relayListTeams(peer.friendGatewayId);
 				if (!r.ok) {
 					console.warn(`[discover] linked peer "${key}" contributed nothing: ${r.error}`);
+					unreachablePeers.push(key);
 					return [] as TeamInfo[];
 				}
 				// Tag each shared session with the peer's Domain id (authoritative HERE: this
@@ -580,7 +596,26 @@ export function createRoutes({
 				return r.teams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
 		);
-		return jsonResponse([...local, ...sameDomain.flat(), ...crossDomain.flat()]);
+		const asked = roster.length + seenPeerGateways.size;
+		const coverage: DiscoverCoverage = {
+			rosterKnown: true,
+			asked,
+			answered: asked - unreachable.length - unreachablePeers.length,
+			...(unreachable.length ? { unreachable } : {}),
+			...(unreachablePeers.length ? { unreachablePeers } : {}),
+		};
+		return { teams: [...local, ...sameDomain.flat(), ...crossDomain.flat()], coverage };
+	}
+
+	/** HTTP wrapper. The bare array is the legacy shape older plugins parse; `?coverage=1` opts into
+	 * the object form. Carries this Gateway's own identity so the caller can tell ITS row from a
+	 * same-named session on another machine. */
+	async function discover(url?: URL): Promise<Response> {
+		const full = await discoverFull();
+		if (url?.searchParams.get("coverage") === "1") {
+			return jsonResponse({ ...full, localGatewayId, localDomainId: localDomain });
+		}
+		return jsonResponse(full.teams);
 	}
 
 	/**
@@ -654,11 +689,6 @@ export function createRoutes({
 	 */
 	function refuseForeignPoll(req: Request, sessionId: string): Response | null {
 		if (!auth) return null;
-		// Asked first, so an unproven caller cannot tell a live job from an id that names nothing.
-		if (!provedLocalSession(req)) {
-			console.warn(`[auth] refused a poll without any session binding`);
-			return jsonResponse({ error: "this job is not open to this caller" }, 403);
-		}
 		const asker = store.askerOf(sessionId);
 		// An unknown id is the caller's own 404 to receive, not a refusal.
 		if (asker === undefined) return null;
@@ -668,8 +698,13 @@ export function createRoutes({
 			return jsonResponse({ error: "this job's answer is not collected over local HTTP" }, 403);
 		}
 		if (auth.satisfies(auth.toActFor(key), presentedByRequest(req))) return null;
+		// The SAME body and status an id that names nothing gets: an unproven caller must not be able
+		// to tell a live job from a dead id. This per-job answer replaced a machine-wide pre-check that
+		// refused an unbound session the job IT created (issue #252): an unbound asker resolves to
+		// UNBOUND, which its own tokenless poll satisfies, while a bound session's job still demands
+		// the binding.
 		console.warn(`[auth] refused a poll of a job asked by "${asker}" from another session`);
-		return jsonResponse({ error: "this job belongs to another session" }, 403);
+		return jsonResponse({ error: `No pending job for session_id "${sessionId}"` }, 404);
 	}
 
 	async function send(
@@ -1310,6 +1345,8 @@ export function createRoutes({
 			teams: registry.size,
 			pending_jobs: store.size,
 			router_connected: routerClient?.isConnected() ?? false,
+			// Distinct from connected: a refused register leaves the socket open.
+			router_registered: routerClient?.isRegistered() ?? false,
 		});
 	}
 
@@ -1486,6 +1523,7 @@ export function createRoutes({
 		capabilities,
 		teams,
 		discover,
+		discoverFull,
 		send,
 		respond,
 		poll,

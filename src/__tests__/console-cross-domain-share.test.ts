@@ -48,6 +48,10 @@ describe("console cross-Domain share ops", () => {
 			respond: () => jsonRes({ delivered: true }),
 			teams: teamsList,
 			discover: async () => teamsList(),
+			discoverFull: async () => ({
+				teams: await teamsList().json(),
+				coverage: { rosterKnown: true, asked: 0, answered: 0 },
+			}),
 		};
 		const handler = createConsoleDispatcher({
 			registry: new Map(),
@@ -332,6 +336,7 @@ describe("console cross-Domain share ops", () => {
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 		const reply = await handler.handleFrame(
