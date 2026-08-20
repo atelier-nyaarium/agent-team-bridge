@@ -582,6 +582,13 @@ class ChatRepository(
 		// internal (not private): BoardOps.boardAttachmentState / kickBoardDownload read this bound.
 		internal const val BOARD_FETCH_GIVE_UP = 3
 
+		/** Consecutive PROVEN-absent answers (the Gateway confirmed every holder had nothing) before a
+		 * queued move stops waiting on the member and lets the Gateway's drop be the terminal answer.
+		 * Counted apart from GIVE_UP, which ordinary outages also feed and which a waiting move
+		 * deliberately ignores. */
+		// internal (not private): BoardOps.kickBoardDownload reads this bound.
+		internal const val BOARD_FETCH_DEAD_AFTER = 3
+
 		// A scheduled send's own bounded failure recovery: reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire
 		// that fails outright gets exactly one automatic retry this far out before falling back to

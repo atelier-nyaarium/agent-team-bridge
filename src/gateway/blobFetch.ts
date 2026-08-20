@@ -1,5 +1,6 @@
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/router-protocol.js";
+import type { BlobFetchOutcome } from "./blobOps.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -19,7 +20,7 @@ export interface BlobFetcherDeps {
 	/** In-progress cross-Gateway fetches, keyed by blob. Cleared on settle, so this is a coalescer
 	 * rather than a cache: a later reader of an absent blob still triggers a fresh attempt. Owned by
 	 * the caller, so a routes rebuild does not un-coalesce the fetches already running. */
-	inFlight: Map<string, Promise<boolean>>;
+	inFlight: Map<string, Promise<BlobFetchOutcome>>;
 }
 
 ////////////////////////////////
@@ -45,7 +46,7 @@ export function createBlobFetcher({
 	 * a peer whose cursor stops advancing. A failure returns false rather than throwing, because the
 	 * caller's next move is to report the file unavailable, not to fail the whole message.
 	 */
-	function fetchBlobFromGateway(blobId: string, fromGateway: string): Promise<boolean> {
+	function fetchBlobFromGateway(blobId: string, fromGateway: string): Promise<BlobFetchOutcome> {
 		// Single-flight per blob. A client-facing door now initiates outbound mesh traffic, and while
 		// the bytes are absent every request re-enters here, so concurrent readers of one attachment
 		// would each open their own 16-round-trip relay loop for identical content. They share one.
@@ -78,32 +79,52 @@ export function createBlobFetcher({
 		return [undefined, ...domains];
 	}
 
-	async function runBlobFetch(blobId: string, fromGateway: string): Promise<boolean> {
-		if (!blobStore || fromGateway === localGatewayId) return false;
+	async function runBlobFetch(blobId: string, fromGateway: string): Promise<BlobFetchOutcome> {
+		// No store is no EVIDENCE - this gateway cannot even look, so nothing definitive is known.
+		if (!blobStore) return "unreachable";
+		let sawUnreachable = false;
 		for (const domain of holderCandidates(fromGateway)) {
-			if (await fetchBlobFrom(blobId, fromGateway, domain)) return true;
+			// The bare candidate naming THIS Gateway is bytes it does not hold: definitively nothing
+			// HERE, with no relay to make. The loop still runs for a cross-Domain friend whose gateway
+			// id collides with ours - the friend can genuinely be the holder, and skipping it turned
+			// "my desktop has nothing" into "nobody has it".
+			if (domain === undefined && fromGateway === localGatewayId) {
+				// A partial means bytes ARE arriving from somewhere (an upload in flight), which is not
+				// a definitive nothing - only a clean zero keeps the self case absent-eligible.
+				if (blobStore.stat(blobId).have > 0) sawUnreachable = true;
+				continue;
+			}
+			const outcome = await fetchBlobFrom(blobId, fromGateway, domain);
+			if (outcome === "fetched") return "fetched";
+			if (outcome === "unreachable") sawUnreachable = true;
 		}
-		return false;
+		// "absent" requires EVERY candidate to have answered: one that never replied could still be
+		// the holder, and reporting it dead would retire a fetch a reboot would have satisfied.
+		return sawUnreachable ? "unreachable" : "absent";
 	}
 
-	async function fetchBlobFrom(blobId: string, fromGateway: string, fromDomain?: string): Promise<boolean> {
-		if (!blobStore) return false;
+	async function fetchBlobFrom(blobId: string, fromGateway: string, fromDomain?: string): Promise<BlobFetchOutcome> {
+		if (!blobStore) return "unreachable";
 		let offset = blobStore.stat(blobId).have;
 		for (;;) {
-			if (offset > MAX_BLOB_BYTES) return false;
+			if (offset > MAX_BLOB_BYTES) return "unreachable";
 			const relay = await relayToGateway(
 				fromGateway,
 				{ kind: "blob_fetch", blobId, offset, length: BLOB_CHUNK_BYTES },
 				fromDomain,
 			);
-			if (!relay.ok) return false;
+			if (!relay.ok) return "unreachable";
 			const res = relay.result as { chunk?: string; eof?: boolean } | undefined;
-			if (!res) return false;
+			if (!res) return "unreachable";
 			const bytes = Buffer.from(res.chunk ?? "", "base64");
-			if (bytes.length === 0 && !res.eof) return false;
+			// The holder ANSWERED and had no bytes at this offset. At 0 that is "I hold nothing" - the
+			// one piece of evidence that distinguishes a dead attachment from a machine that is merely
+			// off. Mid-transfer it is a truncated holder, which is not a definitive statement about the
+			// blob existing elsewhere, so only the from-nothing case reports absent.
+			if (bytes.length === 0 && !res.eof) return offset === 0 ? "absent" : "unreachable";
 			const written = blobStore.write(blobId, offset, bytes, !!res.eof);
-			if (res.eof) return written.complete;
-			if (written.have <= offset) return false;
+			if (res.eof) return written.complete ? "fetched" : "unreachable";
+			if (written.have <= offset) return "unreachable";
 			offset = written.have;
 		}
 	}

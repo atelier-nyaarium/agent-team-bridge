@@ -169,7 +169,7 @@ export interface RoutesCarryOver {
 	boardOperationReplies: Map<string, Record<string, unknown>>;
 	/** In-flight cross-Gateway blob fetches. Losing this un-coalesces the fetches already running,
 	 * so the same bytes are pulled twice. */
-	blobFetches: Map<string, Promise<boolean>>;
+	blobFetches: Map<string, Promise<import("./blobOps.js").BlobFetchOutcome>>;
 }
 
 export function createRoutesCarryOver(): RoutesCarryOver {

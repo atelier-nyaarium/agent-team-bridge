@@ -255,6 +255,10 @@ export const ConsoleBlobGetResultSchema = z
 		// One chunk, base64'd; absent when the range was empty.
 		chunk: z.string().optional(),
 		eof: z.boolean(),
+		// True only when the pull PROVED the bytes exist nowhere: every named holder answered and had
+		// nothing, and the asked Gateway holds nothing either. What lets a client retire a fetch that
+		// can never succeed. Optional so an older Gateway simply never says it.
+		absent: z.boolean().optional(),
 	})
 	.meta({ id: "ConsoleBlobGetResult" });
 

@@ -9,10 +9,14 @@ export type BlobOp =
 	| { kind: "blob_put"; blobId: string; offset: number; chunk: string; final: boolean }
 	| { kind: "blob_get"; blobId: string; offset: number; length: number; fromGateway?: string };
 
-/** Pulls a whole blob in from the Gateway that holds it, one bounded range at a time, and returns
- * true once this Gateway has it. Absent when federation is not wired, which leaves a blob held
- * elsewhere simply unavailable rather than pretending otherwise. */
-export type BlobFetcher = (blobId: string, fromGateway: string) => Promise<boolean>;
+/** What a mesh pull actually learned. "absent" is load-bearing: every named holder ANSWERED and
+ * had nothing, which is the only evidence that retrying is pointless - "unreachable" must never
+ * collapse into it, or a rebooting machine reads as a dead attachment. */
+export type BlobFetchOutcome = "fetched" | "absent" | "unreachable";
+
+/** Pulls a whole blob in from the Gateway that holds it, one bounded range at a time. Absent when
+ * federation is not wired, which leaves a blob held elsewhere simply unavailable. */
+export type BlobFetcher = (blobId: string, fromGateway: string) => Promise<BlobFetchOutcome>;
 
 /** Bytes a board entry owns, which outlive the cache. Null when no entry holds this blob. */
 export type DurableBlobSource = {
@@ -20,7 +24,7 @@ export type DurableBlobSource = {
 	readAny(blobId: string, offset: number, length: number): { bytes: Buffer; eof: boolean } | null;
 };
 
-export type BlobOpResult = { have: number; complete: boolean } | { chunk?: string; eof: boolean };
+export type BlobOpResult = { have: number; complete: boolean } | { chunk?: string; eof: boolean; absent?: boolean };
 
 /** A put refused on size: either the chunk is over the per-request cap, or the blob it would grow
  * is over the total. Named so the HTTP door can answer 413 rather than 500, since the difference
@@ -85,8 +89,9 @@ export async function answerBlobOp(
 	// exactly why a hand-crafted one must not become an amplifier.
 	// A locally-held board attachment counts as held: pulling it across the mesh would re-fetch bytes
 	// this Gateway already owns, and after the cache sweeps that is EVERY read of an entry's picture.
+	let fetched: BlobFetchOutcome | undefined;
 	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId) && !durable?.hasAny(op.blobId)) {
-		await fetch(op.blobId, op.fromGateway);
+		fetched = await fetch(op.blobId, op.fromGateway);
 	}
 
 	switch (op.kind) {
@@ -105,6 +110,21 @@ export async function answerBlobOp(
 		}
 
 		case "blob_get": {
+			// A proven-absent pull answers BEFORE the ordinary read, which THROWS for a blob nobody
+			// holds and would swallow the one piece of evidence this op exists to carry back: every
+			// named holder answered and had nothing, and this Gateway still has nothing either. That
+			// is what lets a client retire a fetch that can never succeed, instead of reading the
+			// same failure a rebooting holder produces.
+			// `have > 0` guards a concurrent upload: a .part satisfies neither path() nor hasAny(),
+			// and calling bytes that are actively landing "absent" would retire a live transfer.
+			if (
+				fetched === "absent" &&
+				!store.path(op.blobId) &&
+				!durable?.hasAny(op.blobId) &&
+				store.stat(op.blobId).have === 0
+			) {
+				return { eof: false, absent: true };
+			}
 			const r = readBlobRange(store, durable, op.blobId, op.offset, op.length);
 			// An absent chunk, not an empty string: reading at or past the end has no bytes to report,
 			// and "" would read as a zero-length chunk that landed.

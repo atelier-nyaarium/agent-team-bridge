@@ -149,7 +149,7 @@ export interface ConsoleHandlerDeps {
 	boardAttachments?: BoardAttachmentStore;
 	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
 	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */
-	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<boolean>;
+	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<import("../blobOps.js").BlobFetchOutcome>;
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 	/** Wake a team (the same trigger send() uses for an asleep target), bringing up a devcontainer's
 	 * cold container if needed. create_session uses this instead of relayToHost for a devcontainer
