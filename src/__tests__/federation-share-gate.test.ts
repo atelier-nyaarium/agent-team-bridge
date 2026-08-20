@@ -272,12 +272,20 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		expect(consolePushCalls).toEqual([{ entry: consolePushOp.entry, dedupeKey: "dk-1" }]);
 	});
 
-	it("the wire schema rejects an entry.kind smuggled outside notice/peer, and a title over the notice-contract bound", () => {
-		for (const smuggledKind of ["message", "reply", "sent"]) {
+	it("the wire schema rejects an entry.kind outside the relayable set, and a title over the notice-contract bound", () => {
+		// message/reply joined the set when remote-held conversations gained convergence; "sent" (a
+		// device's own-echo bookkeeping) stays local-only.
+		for (const smuggledKind of ["sent", "bogus"]) {
 			expect(
 				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: smuggledKind } })
 					.success,
 			).toBe(false);
+		}
+		for (const relayable of ["message", "reply"]) {
+			expect(
+				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: relayable } })
+					.success,
+			).toBe(true);
 		}
 		expect(
 			FederatedOpSchema.safeParse({

@@ -72,6 +72,27 @@ describe("createConsoleDispatcher: send + respond", () => {
 		);
 	}
 
+	it("fans a delivered message and reply out to sibling Gateways, so a conversation held here reaches the polled one", async () => {
+		// The console seals a same-Domain send directly to the target's Gateway, then only ever polls
+		// its route Gateway - without the fan-out, the reply sits in a mailbox nothing reads.
+		const fanned: { entry: Record<string, unknown>; dedupeKey: string }[] = [];
+		const h = makeHarness({
+			fanOutConsolePush: async (entry, dedupeKey) => {
+				fanned.push({ entry: entry as Record<string, unknown>, dedupeKey });
+			},
+		});
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const sid = "conv.team-a.test-domain.test-host.pixel.dev";
+		deliverInbound(h, sid);
+		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
+		peer.send(JSON.stringify({ type: "response_push", session_id: sid, response: "done", status: "completed" }));
+
+		expect(fanned.map((f) => f.entry.kind)).toEqual(["message", "reply"]);
+		expect(fanned[1].entry).toMatchObject({ session_id: sid, body: "done" });
+		// A fresh key per append: relayWithRetry reuses it, a new append never collides with it.
+		expect(new Set(fanned.map((f) => f.dedupeKey)).size).toBe(2);
+	});
+
 	it("respond forwards a received thread to routes.respond", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));

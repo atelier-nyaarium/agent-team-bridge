@@ -6,6 +6,7 @@ import type {
 	CrossDomainShareTarget,
 	OpenedConsoleFrame,
 } from "../../shared/console-protocol.js";
+import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import {
 	ALLOWED_KEYS,
 	type HostListDirsResult,
@@ -109,6 +110,10 @@ export function createConsoleDispatcher({
 			} catch {
 				return from;
 			}
+		},
+		// A conversation held HERE must reach the Gateway the console polls (see ConsolePeer's doc).
+		fanOut: (entry) => {
+			void routes.fanOutConsolePush?.(entry as ConsolePushEntry, crypto.randomUUID());
 		},
 	});
 

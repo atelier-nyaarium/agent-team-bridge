@@ -33,6 +33,10 @@ export class ConsolePeer {
 		// Qualifies a bare sender before the entry is stored: fanOutConsolePush relays entries
 		// verbatim, and a sibling's console stamps its ROUTE Gateway onto any bare name.
 		private qualifyFrom: (from: string) => string = (from) => from,
+		// Relays the appended entry to every other same-Domain Gateway. A conversation held on THIS
+		// Gateway otherwise files its replies in a mailbox the console never polls: the console seals
+		// a same-Domain send directly to the target's Gateway, but only ever polls its route one.
+		private fanOut?: (entry: Record<string, unknown>) => void,
 	) {
 		this.data = {
 			teamName: device,
@@ -58,13 +62,15 @@ export class ConsolePeer {
 			const box = this.getMailbox();
 			if (!box) return;
 			const p = msg as unknown as ChannelPushPayload;
-			box.append({
-				kind: "message",
+			const entry = {
+				kind: "message" as const,
 				session_id: p.session_id,
 				from: p.from === undefined ? undefined : this.qualifyFrom(p.from),
 				body: p.body,
 				files: p.files,
-			});
+			};
+			box.append(entry);
+			this.fanOut?.(entry);
 			this.onInboundSession?.(p.session_id);
 			return;
 		}
@@ -73,13 +79,15 @@ export class ConsolePeer {
 			const box = this.getMailbox();
 			if (!box) return;
 			const p = msg as unknown as ResponsePushPayload;
-			box.append({
-				kind: "reply",
+			const entry = {
+				kind: "reply" as const,
 				session_id: p.session_id,
 				body: p.response,
 				status: p.status,
 				files: p.files,
-			});
+			};
+			box.append(entry);
+			this.fanOut?.(entry);
 		}
 	}
 
