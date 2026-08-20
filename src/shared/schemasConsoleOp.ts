@@ -502,9 +502,6 @@ export const MailboxEntrySchema = z
 		// Reply/notice state on the wire (e.g. "running"/"error"). A `sent` echo never
 		// carries it: an owner's own outgoing message is always settled (status null).
 		status: z.string().optional(),
-		replyAsJson: z.record(z.string(), z.unknown()).optional(),
-		question: z.string().optional(),
-		reason: z.string().optional(),
 		files: ChannelFilesSchema.optional(),
 		// A `plugin_action` entry only: which plugin, which action, and its opaque payload. Routed
 		// by the console to a plugin-claimed handler instead of being rendered as a chat message.

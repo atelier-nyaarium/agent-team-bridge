@@ -65,7 +65,14 @@ internal fun resolveMessageAttribution(
 	canonicalize: (String) -> String?,
 ): MessageAttribution =
 	if (kind == "peer") {
-		MessageAttribution(entryFrom?.let(canonicalize) ?: team, entryTo?.let(canonicalize), isPeer = true)
+		// A from that fails to canonicalize is shown RAW, never replaced by the thread key: the
+		// substitute is a real identity (the target), which forges the sender. Same family as
+		// stamping the route Gateway onto a bare relayed name.
+		MessageAttribution(
+			entryFrom?.let { canonicalize(it) ?: it } ?: team,
+			entryTo?.let { canonicalize(it) ?: it },
+			isPeer = true,
+		)
 	} else {
 		MessageAttribution(team, null, isPeer = false)
 	}

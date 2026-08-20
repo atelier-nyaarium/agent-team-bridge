@@ -12,6 +12,7 @@ import type { ConsoleOp, ConsoleOpEnvelope, ConsoleRelayReply, ConsoleReplyBody 
 import { generateIdentity, type Identity, type SealedEnvelope, seal, unseal } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { MAX_RELAY_FRAME_BYTES } from "../shared/router-protocol.js";
+import { makeDeliverToOwner } from "./helpers/console.js";
 
 ////////////////////////////////
 //  Harness
@@ -29,6 +30,8 @@ afterEach(() => {
 function flush(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
+
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
@@ -82,6 +85,7 @@ function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 		localGatewayId: "test-host",
 		localDomainId: "test-domain",
 		routes: {
+			deliverToOwner: stubDeliver,
 			send: async () => jsonRes({}),
 			respond: () => jsonRes({}),
 			teams: () => jsonRes([]),
@@ -228,6 +232,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 			localGatewayId: "test-host",
 			localDomainId: "test-domain",
 			routes: {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),

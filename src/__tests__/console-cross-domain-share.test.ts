@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { frame, jsonRes } from "./helpers/console.js";
+import { frame, jsonRes, makeDeliverToOwner } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
 
 describe("console cross-Domain share ops", () => {
 	// A team list mixing every kind, so the kind gate can be exercised: a devcontainer and a
@@ -44,6 +46,7 @@ describe("console cross-Domain share ops", () => {
 			isLinkedDomain: (domainId: string) => linked.has(domainId),
 		};
 		const routes: ConsoleRoutes = {
+			deliverToOwner: stubDeliver,
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
 			respond: () => jsonRes({ delivered: true }),
 			teams: teamsList,
@@ -332,6 +335,7 @@ describe("console cross-Domain share ops", () => {
 			localGatewayId: "test-host",
 			localDomainId: "test-domain",
 			routes: {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),

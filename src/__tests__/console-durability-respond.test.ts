@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { fakeDurable, frame, jsonRes, OWNER } from "./helpers/console.js";
+import { fakeDurable, frame, jsonRes, makeDeliverToOwner, OWNER } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
 
 describe("createConsoleDispatcher", () => {
 	describe("durable send/respond idempotency (restart-proof): respond", () => {
@@ -11,6 +13,7 @@ describe("createConsoleDispatcher", () => {
 			let respondCalls = 0;
 			let settledCallback: ((ok: boolean) => void) | undefined;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: (_req, _body, opts) => {
 					respondCalls++;
@@ -54,6 +57,7 @@ describe("createConsoleDispatcher", () => {
 			const durable = fakeDurable();
 			let respondCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: () => {
 					respondCalls++;
@@ -99,6 +103,7 @@ describe("createConsoleDispatcher", () => {
 			const durableOpStore = new DurableOpStore(fakeDurable());
 			let respondCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: () => {
 					respondCalls++;
@@ -148,6 +153,7 @@ describe("createConsoleDispatcher", () => {
 			const durableOpStore = new DurableOpStore(fakeDurable());
 			let respondCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: () => {
 					respondCalls++;
@@ -186,6 +192,7 @@ describe("createConsoleDispatcher", () => {
 			let respondCalls = 0;
 			let settledCallback: ((ok: boolean) => void) | undefined;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: (_req, _body, opts) => {
 					respondCalls++;
@@ -243,6 +250,7 @@ describe("createConsoleDispatcher", () => {
 			let respondCalls = 0;
 			let settledCallback: ((ok: boolean) => void) | undefined;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: (_req, _body, opts) => {
 					respondCalls++;
@@ -290,6 +298,7 @@ describe("createConsoleDispatcher", () => {
 			const durableOpStore = new DurableOpStore(fakeDurable());
 			let respondCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => jsonRes({ session_id: "s", status: "running" }),
 				respond: () => {
 					respondCalls++;

@@ -443,9 +443,12 @@ reused unchanged; its `send()` appends to a `DeviceMailbox` that the `poll` op d
   local participant. Never fires for a console sender/target, and never load-bearing.
 - **Plugin actions:** a generic `kind: "plugin_action"` entry lets a tool drive a device-side plugin
   with no new wire type per action. `threadAddr` derives solely from the request's own `from`.
-- **Multi-gateway delivery:** the console polls one route Gateway, so `fanOutConsolePush` relays
-  content composed on another same-Domain Gateway. The landing side never re-fans-out (origin-only,
-  so nothing gossip-loops), is same-Domain-only with no exceptions, and dedups per `dedupeKey`.
+- **Multi-gateway delivery:** the console polls one route Gateway, so every console-bound entry
+  lands through `consolePushOps.deliverToOwner` - the SOLE mailbox writer (a residue test fails the
+  build on any other `.append(` under `src/gateway`), appending locally and relaying via
+  `fanOutConsolePush`. `origin: "relay"` is the only non-fanning append, so the landing side cannot
+  gossip-loop; same-Domain-only with no exceptions, deduped per `dedupeKey`. Device-scoped
+  producers pass `resolveMailbox` so a late delivery cannot resurrect a torn-down install's inbox.
 
 ### Console terminal view
 

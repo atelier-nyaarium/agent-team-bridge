@@ -14,13 +14,14 @@ import type {
 	DiscoverCoverage,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
-import type { ConsolePushEntry, SignedXDomainLink } from "../../shared/federation-protocol.js";
+import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import type { PlaneRegistry } from "../../shared/plane-registry.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { BoardDisposition, BoardStore } from "../boardStore.js";
+import type { DeliverToOwner } from "../consolePushOps.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
 import type { ReadAnchors } from "../readAnchors.js";
@@ -45,9 +46,9 @@ export interface ConsoleRoutes {
 	discover: (url?: URL) => Promise<Response>;
 	// Same rows plus completeness, so a partial answer cannot pass as a full one.
 	discoverFull: () => Promise<{ teams: TeamInfo[]; coverage: DiscoverCoverage }>;
-	// Relay a console-bound entry to every other same-Domain Gateway, so a conversation held HERE
-	// still reaches the Gateway the console actually polls. Absent in harnesses.
-	fanOutConsolePush?: (entry: ConsolePushEntry, dedupeKey: string) => Promise<void>;
+	// The owner-delivery funnel (consolePushOps.deliverToOwner): the ONE mailbox writer, appending
+	// locally and converging to every other same-Domain Gateway the console might actually poll.
+	deliverToOwner: DeliverToOwner;
 }
 
 /** The JSON body shape returned by routes.send, shared by the in-time and backgrounded

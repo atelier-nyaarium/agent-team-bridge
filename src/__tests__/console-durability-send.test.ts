@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { fakeDurable, frame, jsonRes, OWNER } from "./helpers/console.js";
+import { fakeDurable, frame, jsonRes, makeDeliverToOwner, OWNER } from "./helpers/console.js";
+
+const stubDeliver = makeDeliverToOwner(new DeviceMailboxStore());
 
 describe("createConsoleDispatcher", () => {
 	describe("durable send/respond idempotency (restart-proof): send", () => {
@@ -10,6 +12,7 @@ describe("createConsoleDispatcher", () => {
 			const durable = fakeDurable();
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => {
 					sendCalls++;
 					return jsonRes({ session_id: "conv:host:team-a", status: "running" });
@@ -57,6 +60,7 @@ describe("createConsoleDispatcher", () => {
 			const resolvers: Array<(res: Response) => void> = [];
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -128,6 +132,7 @@ describe("createConsoleDispatcher", () => {
 			const resolvers: Array<(res: Response) => void> = [];
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -188,6 +193,7 @@ describe("createConsoleDispatcher", () => {
 			const resolvers: Array<(res: Response) => void> = [];
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -244,6 +250,7 @@ describe("createConsoleDispatcher", () => {
 			const resolvers: Array<(res: Response) => void> = [];
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -297,6 +304,7 @@ describe("createConsoleDispatcher", () => {
 			let resolveSend: ((res: Response) => void) | undefined;
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -344,6 +352,7 @@ describe("createConsoleDispatcher", () => {
 			let resolveSend: ((res: Response) => void) | undefined;
 			let sendCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: () =>
 					new Promise<Response>((resolve) => {
 						sendCalls++;
@@ -384,6 +393,7 @@ describe("createConsoleDispatcher", () => {
 			let sendCalls = 0;
 			let respondCalls = 0;
 			const routes: ConsoleRoutes = {
+				deliverToOwner: stubDeliver,
 				send: async () => {
 					sendCalls++;
 					return jsonRes({ session_id: "s", status: "running" });

@@ -184,3 +184,19 @@ Done in this pass, from issue #252:
 
 Deferred: the single resolver for all seven identity gates, `handshakeConfirmed`'s six readers, and
 the hand-launched channel deafness (a launch-mode fact the gateway cannot see).
+
+## Convergence audit (post-funnel)
+
+The `deliverToOwner` funnel plus its residue test closed the mailbox half of the class. Audit
+findings deliberately recorded rather than fixed, each dormant until two devices poll DIFFERENT
+route Gateways (not a live configuration; every device provisions against the admin Gateway):
+
+- Read anchors do not converge between Gateways: `report_read` lands only on the route Gateway,
+  and each Gateway's `read-anchors:${ownerId}` plane serves its own store. Fix needs owner-scoped
+  origin-only relaying with a monotonic merge, its own design.
+- The mailbox cursor is one `(epoch, seq)`, not per Gateway: a device that switched route Gateways
+  would drain the sibling's converged copies as fresh rows (thread dedupe is `(epoch, seq)` only).
+  Needs a Gateway-scoped cursor or a cross-epoch logical entry identity.
+- The relay wire schema bounds `from`/`session_id` by length only. Producers all qualify today
+  (`qualifyFrom`, `storeKey`), and a canonicality `.refine` would reject entries from an
+  older-version sibling for the whole deploy window, so enforcement stays producer-side for now.

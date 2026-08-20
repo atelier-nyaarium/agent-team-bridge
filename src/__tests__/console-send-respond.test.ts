@@ -4,7 +4,7 @@ import { createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { FederatedOpSchema } from "../shared/federation-protocol.js";
-import { frame, type Harness, jsonRes, makeHarness, OWNER } from "./helpers/console.js";
+import { frame, type Harness, jsonRes, makeDeliverToOwner, makeHarness, OWNER } from "./helpers/console.js";
 
 describe("createConsoleDispatcher: send + respond", () => {
 	it("send forwards from/fromConversationId/to and returns the session", async () => {
@@ -191,6 +191,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 			localDomainId: "test-domain",
 			sendBoundMs: 50,
 			routes: {
+				deliverToOwner: makeDeliverToOwner(mailboxStore),
 				send: () => new Promise<Response>(() => {}),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
@@ -221,6 +222,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
+				deliverToOwner: makeDeliverToOwner(mailboxStore),
 				send: () =>
 					new Promise<Response>((resolve) => {
 						resolveSend = resolve;
@@ -267,6 +269,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
+				deliverToOwner: makeDeliverToOwner(mailboxStore),
 				send: () =>
 					new Promise<Response>((resolve) => {
 						resolveSend = resolve;
@@ -346,6 +349,7 @@ describe("createConsoleDispatcher: send + respond", () => {
 			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
+				deliverToOwner: makeDeliverToOwner(mailboxStore),
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
