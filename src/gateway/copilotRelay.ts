@@ -9,6 +9,7 @@ import {
 	CopilotDaemonReceiptSchema,
 } from "../shared/copilot-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
+import { RECONCILE_GUARD_MS } from "./codexRelay.js";
 import type { CopilotAgentService, CopilotApplication } from "./copilotAgentService.js";
 
 type CopilotCommandRequest = CopilotDaemonCommand extends infer Command
@@ -60,7 +61,9 @@ export class CopilotRelay {
 	private readonly sections = new Map<string, Promise<unknown>>();
 	private readonly streams = new Map<string, StreamProgress>();
 	private readonly listeners = new Map<string, Set<() => void>>();
-	private readonly reconciling = new Set<string>();
+	// Time-bounded like CodexRelay's (see its field doc): a receipt is the only other clear, and a
+	// daemon that never answers must not hold the guard - and the frames behind it - forever.
+	private readonly reconciling = new Map<string, number>();
 	private readonly deferred = new Map<string, Array<CopilotDaemonEvent | CopilotDaemonReceipt>>();
 
 	constructor(private readonly deps: CopilotRelayDeps) {}
@@ -124,6 +127,8 @@ export class CopilotRelay {
 	private onHello(raw: Record<string, unknown>): void {
 		const hello = CopilotDaemonHelloSchema.safeParse(raw);
 		if (!hello.success) return;
+		// A hello supersedes every outstanding reconcile (see CodexRelay.onHello).
+		this.reconciling.clear();
 		for (const owner of this.deps.sessionStore.list()) {
 			const ownerKey = this.deps.sessionStore.teamOf(owner);
 			for (const agent of this.deps.service.listOwnedAgents(owner)) {
@@ -228,8 +233,9 @@ export class CopilotRelay {
 	private requestReconciliation(ownerKey: string, agent: CopilotAgent): void {
 		if (!agent.sessionId || !agent.resolvedTarget) return;
 		const key = agentKey(ownerKey, agent.agentId);
-		if (this.reconciling.has(key)) return;
-		this.reconciling.add(key);
+		const askedAt = this.reconciling.get(key);
+		if (askedAt !== undefined && this.now() - askedAt < RECONCILE_GUARD_MS) return;
+		this.reconciling.set(key, this.now());
 		const sent = this.dispatch({
 			kind: "reconcile",
 			ownerKey,

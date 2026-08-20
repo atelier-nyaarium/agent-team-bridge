@@ -125,23 +125,24 @@ describe("HandshakeGate", () => {
 		expect(gate.pendingIdFor("app.dev", "s1")).toBeDefined();
 
 		advance(TTL);
-		// Now every reader treats it as absent, which is the gate's own fail-open case.
+		// Now the BLOCKING readers treat it as absent, which is the gate's own fail-open case.
 		expect(gate.pendingIdFor("app.dev", "s1")).toBeUndefined();
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("no-pending");
 	});
 
-	it("an expired handshake is no longer answerable, and the sweep reclaims it", () => {
+	it("an expired handshake stops blocking but stays ANSWERABLE, so a late answer still confirms", () => {
+		// Expiry ends what the entry may do to OTHERS, never what its own socket may do with it: the
+		// challenge's authenticity does not decay, and refusing a late answer would trade the old
+		// lockout for a session stuck "verifying" until reconnect. Boundedness needs no sweep - the
+		// map is held to live unconfirmed sockets by forget() on close.
 		const { gate, advance } = makeGate();
 		const { hsId } = gate.mint("app.dev", "s1");
-		expect(gate.pendingOf(hsId)).toBeDefined();
 
 		advance(TTL);
-		// Unenforced by now, so confirming a lead off it would settle a challenge that gates nothing.
+		expect(gate.pendingIdFor("app.dev", "s1")).toBeUndefined();
+		expect(gate.pendingOf(hsId)).toBeDefined();
+		gate.consume(hsId);
 		expect(gate.pendingOf(hsId)).toBeUndefined();
-		expect(gate.sweep()).toBeGreaterThanOrEqual(1);
-		// Idempotent: the second pass finds nothing left of it to drop.
-		gate.mint("other.dev", "s2");
-		expect(gate.sweep()).toBe(0);
 	});
 
 	it("forget drops the coordinates' pending entry so a repush finds nothing", () => {

@@ -200,3 +200,24 @@ route Gateways (not a live configuration; every device provisions against the ad
 - The relay wire schema bounds `from`/`session_id` by length only. Producers all qualify today
   (`qualifyFrom`, `storeKey`), and a canonicality `.refine` would reject entries from an
   older-version sibling for the whole deploy window, so enforcement stays producer-side for now.
+
+## Hold-expiry audit (post-#251)
+
+The class: a hold whose release event may never arrive. The structural verdict, after evaluating a
+shared Hold/Lease primitive against the real holds: the release semantics differ too much for one
+abstraction (persisted results, read-time expiry, fan-out wakeups, external failAll), so the rule
+stays per-site: **every hold names its release event AND a bound, and expiry lives in the read, not
+in a sweeper's cadence.** A repo-wide Map/Set scanner was evaluated and rejected - most holds are
+instance fields it cannot see, so it would enforce the wrong thing.
+
+Fixed under the rule: handshake pending (TTL on blocking, answerability kept), the codex/copilot
+reconcile guards (time-bounded + hello supersedes), connectorProxy's CONNECTING deadline, the
+console's wakingTeams (TTL at the read).
+
+Bounded already, deliberately not touched:
+- The console opCache's in-flight promise coalesces same-opId retries onto whatever the op does;
+  every current op is bounded (sendBoundMs, poll hold, hostOp timeouts). A per-entry timeout was
+  considered and rejected: evicting a mutating op's cache entry while its first attempt may still
+  run reopens double-execution, the exact thing the cache exists to stop. The bound is the op's.
+- A goal whose process dies between the send's ok and its sentAt write expires via GOAL_TIMEOUT_MS
+  without typing - a bounded miss, not a stuck hold.

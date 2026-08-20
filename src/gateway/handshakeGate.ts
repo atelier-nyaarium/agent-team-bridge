@@ -88,9 +88,12 @@ export class HandshakeGate {
 		return { hsId, push: HandshakeGate.buildPush(hsId) };
 	}
 
-	/** Whether an entry has outlived its blocking window. Answered HERE rather than only in sweep():
-	 * a lockout that self-heals on a 30s heartbeat is a lockout that does not self-heal at all if the
-	 * heartbeat is ever rewired, so expiry is a property of the read, not of the sweeper's cadence. */
+	/** Whether an entry has outlived its BLOCKING window. Expiry ends what the entry may do to
+	 * others (block replies, draw repushes), never what its own socket may still do with it: the
+	 * challenge's authenticity does not decay with age, so a late answer still confirms - refusing
+	 * it would trade the old lockout for a session stuck "verifying" until reconnect. Answered HERE
+	 * rather than only in a sweeper: a lockout that self-heals on a 30s heartbeat is a lockout that
+	 * does not self-heal at all if the heartbeat is ever rewired. */
 	private expired(p: HandshakePending, now: number): boolean {
 		return now - p.sentAt >= HANDSHAKE_PENDING_TTL_MS;
 	}
@@ -108,11 +111,11 @@ export class HandshakeGate {
 
 	/** The pending entry for an hs-* id, NOT consumed: the caller's auth gate runs between this read
 	 * and consume(), so a spoofed answer can be refused without eating the entry the real session
-	 * still needs. An expired entry is already unenforced, so answering it would confirm a lead on a
-	 * challenge that no longer gates anything. */
+	 * still needs. Deliberately NOT expiry-filtered: this is the answer path, and a late answer must
+	 * still confirm (see expired()'s doc) - the map stays bounded by live unconfirmed sockets via
+	 * forget() on close, so keeping the entry costs nothing. */
 	pendingOf(sessionId: string): HandshakePending | undefined {
-		const p = this.pending.get(sessionId);
-		return p && !this.expired(p, this.now()) ? p : undefined;
+		return this.pending.get(sessionId);
 	}
 
 	consume(sessionId: string): void {
@@ -166,22 +169,18 @@ export class HandshakeGate {
 		return this.confirmedLeadTeams.get(team);
 	}
 
-	/** Pure cleanup of what the readers already treat as gone: a throttle entry past its dedupe
-	 * window (bounding teamLastRepushAt against an unauthenticated register minting unbounded team
-	 * names), and a pending entry past its TTL (which every reader above already skips). Returns how
-	 * many entries were dropped, which is the boundedness contract a test can hold. */
+	/** Pure cleanup: a throttle entry past its dedupe window no longer throttles anything, and
+	 * teamLastRepushAt needs the bound (an unauthenticated register can mint unbounded team names).
+	 * `pending` is deliberately NOT swept - an expired entry no longer blocks or repushes, but its
+	 * own socket may still answer it (see pendingOf), and the map is already bounded by live
+	 * unconfirmed sockets via forget() on close. Returns how many entries were dropped, which is
+	 * the boundedness contract a test can hold. */
 	sweep(): number {
 		const now = this.now();
 		let dropped = 0;
 		for (const [team, lastAt] of this.teamLastRepushAt) {
 			if (now - lastAt >= HANDSHAKE_REPUSH_DEDUPE_MS) {
 				this.teamLastRepushAt.delete(team);
-				dropped += 1;
-			}
-		}
-		for (const [hsId, p] of this.pending) {
-			if (this.expired(p, now)) {
-				this.pending.delete(hsId);
 				dropped += 1;
 			}
 		}

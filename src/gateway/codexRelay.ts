@@ -53,6 +53,11 @@ interface StreamProgress {
  * repaired by reconciliation rather than by patience. */
 const MAX_DEFERRED_PER_AGENT = 128;
 
+/** How long one outstanding reconcile suppresses a re-ask. Its receipt is the only other clear, and
+ * a connected daemon that never answers must not hold the guard - and the frames behind it - forever.
+ * Comfortably above a reconcile's real round-trip (a thread/read against a live App Server). */
+export const RECONCILE_GUARD_MS = 300_000;
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -93,7 +98,11 @@ export class CodexRelay {
 	private readonly sections = new Map<string, Promise<unknown>>();
 	private readonly streams = new Map<string, StreamProgress>();
 	private readonly listeners = new Map<string, Set<() => void>>();
-	private readonly reconciling = new Set<string>();
+	// agentKey -> when the outstanding reconcile was sent. A Map rather than a Set because the guard
+	// must be time-bounded: a daemon that accepted the command and never answers would otherwise hold
+	// the guard forever, and the guard is the ONLY thing standing between held frames and the
+	// re-request that frees them (issue #251's class - a hold whose release may never arrive).
+	private readonly reconciling = new Map<string, number>();
 	private readonly deferred = new Map<string, Array<CodexDaemonEvent | CodexDaemonReceipt>>();
 
 	constructor(private readonly deps: CodexRelayDeps) {}
@@ -175,6 +184,9 @@ export class CodexRelay {
 	private onHello(raw: Record<string, unknown>): void {
 		const hello = CodexDaemonHelloSchema.safeParse(raw);
 		if (!hello.success) return;
+		// A hello supersedes every outstanding reconcile: whatever daemon would have answered them is
+		// gone or restarted, so holding the guard would suppress the very re-ask this hello exists for.
+		this.reconciling.clear();
 		// The gateway enumerates, not the daemon: only this side knows which records an owner still
 		// believes are working, and a restarted daemon knows nothing at all.
 		for (const owner of this.deps.sessionStore.list()) {
@@ -351,9 +363,11 @@ export class CodexRelay {
 		if (!agent.threadId || !agent.resolvedTarget) return;
 		const key = agentKey(ownerKey, agent.agentId);
 		// One outstanding request per agent: every withheld event in a stalled stream would otherwise
-		// ask again, and the answer to all of them is the same one message.
-		if (this.reconciling.has(key)) return;
-		this.reconciling.add(key);
+		// ask again, and the answer to all of them is the same one message. Time-bounded, because a
+		// receipt is the only clear and a connected daemon that never answers would hold it forever.
+		const askedAt = this.reconciling.get(key);
+		if (askedAt !== undefined && this.now() - askedAt < RECONCILE_GUARD_MS) return;
+		this.reconciling.set(key, this.now());
 		const sent = this.dispatch({
 			kind: "reconcile",
 			ownerKey,
