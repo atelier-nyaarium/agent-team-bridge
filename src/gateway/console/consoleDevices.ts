@@ -14,6 +14,8 @@ export interface ConsoleDevicesDeps {
 	isProjectName?: (name: string) => boolean;
 	// See ConsolePeer's own param doc; identity when absent (tests).
 	qualifyFrom?: (from: string) => string;
+	// See ConsolePeer's own param doc; no relay when absent (tests, single-gateway setups).
+	fanOut?: (entry: Record<string, unknown>) => void;
 }
 
 export type ConsoleDevices = ReturnType<typeof createConsoleDevices>;
@@ -29,6 +31,7 @@ export function createConsoleDevices({
 	mailboxStore,
 	isProjectName,
 	qualifyFrom,
+	fanOut,
 }: ConsoleDevicesDeps) {
 	// The per-install conversationId is the device identity: it keys the registry sub, the
 	// signing-key binding, the idempotency cache, and the device-name binding. The mailbox is
@@ -158,6 +161,7 @@ export function createConsoleDevices({
 			conversationId,
 			(sessionId) => recordInbound(ownerId, sessionId),
 			qualifyFrom,
+			fanOut,
 		);
 		subs.set(conversationId, peer.asWs());
 		conversationRegistry.set(conversationId, peer.asWs());

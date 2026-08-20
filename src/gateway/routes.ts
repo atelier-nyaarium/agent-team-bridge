@@ -365,7 +365,7 @@ export function createRoutes({
 	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session)
 	// hands each module the freshly-captured deps, so nothing here keeps serving the pre-federation
 	// closure. Anything whose loss would change behaviour rides carryOver instead.
-	const { mirrorPeer, consolePush, humanNotify, pluginAction } = createConsolePushOps({
+	const { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush } = createConsolePushOps({
 		mailboxStore,
 		ownerId,
 		routerClient,
@@ -1531,6 +1531,7 @@ export function createRoutes({
 		health,
 		humanNotify,
 		consolePush,
+		fanOutConsolePush,
 		pluginAction,
 		taskBoard,
 		presenceForDomain,

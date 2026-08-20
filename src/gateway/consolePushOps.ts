@@ -273,5 +273,5 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	return { mirrorPeer, consolePush, humanNotify, pluginAction };
+	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush };
 }

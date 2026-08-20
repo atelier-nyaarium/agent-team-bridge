@@ -125,7 +125,10 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("console_push"),
 		entry: z.object({
-			kind: z.enum(["notice", "peer", "plugin_action"]),
+			// message/reply: a console send to a session on ANOTHER Gateway seals directly there, so
+			// that Gateway holds the conversation - and the reply landed in a mailbox the console never
+			// polls. Relaying them is what makes a remote conversation's answers reach the phone at all.
+			kind: z.enum(["notice", "peer", "plugin_action", "message", "reply"]),
 			session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
