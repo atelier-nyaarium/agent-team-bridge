@@ -215,6 +215,23 @@ describe("Codex relay acknowledgement", () => {
 		]);
 	});
 
+	it("a daemon that never answers a reconcile cannot hold the guard forever: a fresh hello re-asks", () => {
+		// The guard's only other clear is a receipt. A daemon restart replays hello with a new
+		// instance; suppressing the re-ask would strand the held frames for the life of the process.
+		const context = working(setup());
+		const hello = (instance: string) => ({
+			type: "codex_hello",
+			daemonInstanceId: instance,
+			targets: [{ targetId: TARGET_ID, generation: 1 }],
+		});
+		context.relay.handleHostMessage(hello("daemon-2"));
+		expect(context.sent.filter((m) => m.kind === "reconcile")).toHaveLength(1);
+
+		// No receipt ever arrives. The restarted daemon says hello again - the ask must repeat.
+		context.relay.handleHostMessage(hello("daemon-3"));
+		expect(context.sent.filter((m) => m.kind === "reconcile")).toHaveLength(2);
+	});
+
 	it("does not reconcile an idle record", () => {
 		const context = working(setup());
 		context.service.applyEvent(

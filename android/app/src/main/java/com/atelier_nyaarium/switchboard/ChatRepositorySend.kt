@@ -43,8 +43,10 @@ suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = em
 	// Cold wake takes minutes with no wire traffic, so say so - as a notice card (ChatState.
 	// wakingTeams), not a transcript row. Only the send that RAISES the notice may clear it on
 	// failure, so a second send failing while the first is still in flight leaves the wait intact.
-	val raisedWakeNotice = wasAvailable && team !in _state.value.wakingTeams
-	if (raisedWakeNotice) _state.update { it.copy(wakingTeams = it.wakingTeams + team) }
+	// awaitingWake, not bare membership: an EXPIRED entry must not suppress a fresh raise, or the
+	// stale timestamp keeps the notice dead for every later send this process makes.
+	val raisedWakeNotice = wasAvailable && !_state.value.awaitingWake(team)
+	if (raisedWakeNotice) _state.update { it.copy(wakingTeams = it.wakingTeams + (team to System.currentTimeMillis())) }
 	deliver(team, echoId, text, picked, opId, raisedWakeNotice)
 	opId
 }

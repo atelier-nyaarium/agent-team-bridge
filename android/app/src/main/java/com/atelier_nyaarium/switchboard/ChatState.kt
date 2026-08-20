@@ -92,11 +92,20 @@ data class ChatState(
 	 * opId retry window: this is only "has not settled yet", so the dialog can refuse a second
 	 * identical submission rather than silently reattaching to the first. */
 	val pendingSpawns: Set<Pair<String, String>> = emptySet(),
-	/** Teams whose cold wake is being waited on, shown as a notice card rather than a transcript row:
-	 * a wake is this device's own local state, not something anybody said. Not persisted, since
-	 * nothing is coming to clear it after a process death. */
-	val wakingTeams: Set<String> = emptySet(),
+	/** Teams whose cold wake is being waited on (raise time), shown as a notice card rather than a
+	 * transcript row: a wake is this device's own local state, not something anybody said. Not
+	 * persisted, since nothing is coming to clear it after a process death. Time-valued because the
+	 * clearing event is an ANSWER, and a woken session that never answers would otherwise hold
+	 * "waking..." for the process's life - reads treat an entry past [WAKE_NOTICE_TTL_MS] as absent. */
+	val wakingTeams: Map<String, Long> = emptyMap(),
 ) {
+	/** Whether a send is genuinely still waiting on this team's cold boot. The expiry lives in the
+	 * READ, so a stale entry cannot freeze the chip however the writers evolve. */
+	fun awaitingWake(team: String, now: Long = System.currentTimeMillis()): Boolean {
+		val raisedAt = wakingTeams[team] ?: return false
+		return now - raisedAt < WAKE_NOTICE_TTL_MS
+	}
+
 	/** Live teams plus any team we already have a thread with. A thread-only peer is gone from the
 	 * bridge and cannot be woken, so it is synthesized as an ended loose session with no mode. Team
 	 * names and thread keys are both the canonical address string, so the plain membership test below
@@ -147,7 +156,7 @@ data class ChatState(
 	fun working(team: String): Boolean {
 		teams.firstOrNull { it.name == team }?.working?.let { return it }
 		sessionWorking[team]?.let { return it }
-		if (team in wakingTeams) return true
+		if (awaitingWake(team)) return true
 		val last = threads[team]?.lastOrNull() ?: return false
 		return (last.fromMe && (last.status == null || last.status == "pending")) || last.status == "running"
 	}
@@ -223,6 +232,9 @@ data class ChatState(
 /** Consecutive misses before [ChatState.withFreshTeams] prunes a local label override. More than one
  * so a single transient gap in a fetch cannot wipe a legitimate pending edit. */
 private const val ABSENCE_PRUNE_STREAK = 2
+
+// Matches the gateway's own wake budget: past this, a wake that produced no answer is not coming.
+private const val WAKE_NOTICE_TTL_MS = 10 * 60_000L
 
 /** Recompute `team`'s unread from `thread` and this state's own anchor for it. The single derivation
  * every writer converges on, so `unread` can never drift from `threads`/`readAnchors`. */

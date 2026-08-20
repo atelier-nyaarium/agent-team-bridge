@@ -35,8 +35,18 @@ class ChatStateWorkingTest {
 
 	@Test
 	fun aColdWakeReadsAsWorkingWithNeitherSource() {
-		assertEquals(true, ChatState(wakingTeams = setOf(team)).working(team))
+		assertEquals(true, ChatState(wakingTeams = mapOf(team to System.currentTimeMillis())).working(team))
 		assertEquals(false, ChatState().working(team))
 		assertEquals(false, ChatState().needsLogin(team))
+	}
+
+	@Test
+	fun aWakeNobodyAnswersExpiresInsteadOfHoldingWorkingForever() {
+		// The clearing event is an ANSWER, and a woken session that never answers would otherwise
+		// pin "waking..." for the process's life. The expiry lives in the read.
+		val raisedAt = 1_000_000L
+		val s = ChatState(wakingTeams = mapOf(team to raisedAt))
+		assertEquals(true, s.awaitingWake(team, now = raisedAt + 1))
+		assertEquals(false, s.awaitingWake(team, now = raisedAt + 10 * 60_000L))
 	}
 }

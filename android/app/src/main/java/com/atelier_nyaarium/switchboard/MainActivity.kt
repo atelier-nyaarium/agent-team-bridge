@@ -388,7 +388,7 @@ fun App(
 				onSessions = { openTeam = null },
 				composer = ComposerState(
 					draft = state.drafts[openTeam!!] ?: Draft(),
-					sendAwaitingWake = openTeam!! in state.wakingTeams,
+					sendAwaitingWake = state.awaitingWake(openTeam!!),
 					onSend = { text, uris -> repo.command { send(openTeam!!, text, uris) } },
 					onTextChange = { repo.setDraftText(openTeam!!, it) },
 					onAddFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },

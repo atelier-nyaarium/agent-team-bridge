@@ -64,6 +64,12 @@ function createHandshakeRoleCache() {
 		unanswered(): string | null {
 			return role === null ? lastReceivedId : null;
 		},
+		/** A reconnect re-registers, and the gateway's mint() forgets the old id before pushing a
+		 * fresh one - so until that push lands, the remembered id is known-dead. No hint beats a
+		 * hint that 404s. receivedIds is kept: a late confirm of the old id must stay a no-op. */
+		resetUnanswered(): void {
+			lastReceivedId = null;
+		},
 	};
 }
 const handshakeRole = createHandshakeRoleCache();
@@ -236,6 +242,9 @@ export function connectToRouter(): void {
 	routerWs.on("open", () => {
 		console.error(`[bridge] connected to router (mode: ${mode})`);
 		reconnector.reset();
+		// This register makes the gateway mint a FRESH handshake, so the previously remembered
+		// unanswered id is dead from here until the new push lands (see resetUnanswered's doc).
+		handshakeRole.resetUnanswered();
 		routerWs!.send(JSON.stringify(buildRegisterMsg(crypto.randomUUID().slice(0, 8), mode)));
 	});
 
