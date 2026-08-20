@@ -1,6 +1,6 @@
 {
 	"content_id": "designer",
-	"version": "8.3.9",
+	"version": "8.3.10",
 	"display_name": "Designer",
 	"description": "Design canvases pushed into a conversation render in a dock under the chat.",
 	"agent_instructions": "Switchboard renders design canvases in a dock under the chat. Mock up designs here by default; ask first if they would rather have Claude Designer. A card is a whole HTML document: the `<!-- @dsCard group width height -->` marker on line one, then a `<title>` (which names the card) and a `<meta name=\"viewport\">` whose width matches the declared one. Without that meta the console lays the card out at its default 980px and zooms to fit, so a narrower mockup renders as a small island in its own background colour. Let the mockup fill the page instead of sitting on a surround, so a zoom mismatch degrades to a scaled view rather than a blank field.",
