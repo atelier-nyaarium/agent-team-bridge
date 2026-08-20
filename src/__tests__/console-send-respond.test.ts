@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { FederatedOpSchema } from "../shared/federation-protocol.js";
 import { frame, type Harness, jsonRes, makeHarness, OWNER } from "./helpers/console.js";
 
 describe("createConsoleDispatcher: send + respond", () => {
@@ -91,6 +92,43 @@ describe("createConsoleDispatcher: send + respond", () => {
 		expect(fanned[1].entry).toMatchObject({ session_id: sid, body: "done" });
 		// A fresh key per append: relayWithRetry reuses it, a new append never collides with it.
 		expect(new Set(fanned.map((f) => f.dedupeKey)).size).toBe(2);
+	});
+
+	it("fans the owner's own sent echo out too, carrying the opId the sending device matches on", async () => {
+		// The peer binds on whatever Gateway a frame was sealed to, so a send aimed at a session held
+		// elsewhere files its echo there - invisible to the owner's other devices without this.
+		const fanned: { entry: Record<string, unknown>; dedupeKey: string }[] = [];
+		const h = makeHarness({
+			fanOutConsolePush: async (entry, dedupeKey) => {
+				fanned.push({ entry: entry as Record<string, unknown>, dedupeKey });
+			},
+		});
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		await h.handler.handleFrame(frame({ kind: "send", to: "team-a.dev", body: "hello" }, "op-sent"));
+
+		const sent = fanned.find((f) => f.entry.kind === "sent");
+		expect(sent?.entry).toMatchObject({ body: "hello", opId: "op-sent" });
+		// The stable echo key, not a fresh one: a reconcile re-send of the same opId must dedupe on
+		// the landing Gateway exactly as it does here.
+		expect(sent?.dedupeKey).toContain("op-sent");
+		// It has to survive the relay schema, or the far side strips opId and the row renders twice.
+		const relayed = FederatedOpSchema.parse({ kind: "console_push", entry: sent?.entry, dedupeKey: "k" });
+		expect(relayed).toMatchObject({ entry: { kind: "sent", opId: "op-sent", body: "hello" } });
+	});
+
+	it("never relays a spawn-point echo, which has no session to file it under", async () => {
+		const fanned: Record<string, unknown>[] = [];
+		const h = makeHarness({
+			fanOutConsolePush: async (entry) => {
+				fanned.push(entry as Record<string, unknown>);
+			},
+		});
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		// A bare project is a spawn-point, so expectedSession is "" - relaying it would only throw
+		// inside a floating promise, since the relay schema requires a session_id.
+		await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "hello" }, "op-bare"));
+
+		expect(fanned.filter((e) => e.kind === "sent")).toHaveLength(0);
 	});
 
 	it("respond forwards a received thread to routes.respond", async () => {

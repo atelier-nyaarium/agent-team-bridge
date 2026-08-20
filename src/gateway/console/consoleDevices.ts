@@ -15,7 +15,7 @@ export interface ConsoleDevicesDeps {
 	// See ConsolePeer's own param doc; identity when absent (tests).
 	qualifyFrom?: (from: string) => string;
 	// See ConsolePeer's own param doc; no relay when absent (tests, single-gateway setups).
-	fanOut?: (entry: Record<string, unknown>) => void;
+	fanOut?: (entry: Record<string, unknown>, dedupeKey?: string) => void;
 }
 
 export type ConsoleDevices = ReturnType<typeof createConsoleDevices>;
@@ -70,6 +70,10 @@ export function createConsoleDevices({
 		const ownerId = deviceOwner.get(conversationId);
 		if (!ownerId || !bindings.has(conversationId)) return;
 		mailboxStore.get(ownerId)?.append(entry, dedupeKey);
+		// A frame binds the peer on whatever Gateway it was sealed to, so a send aimed at a session
+		// held elsewhere files its own echo and its late failure into a mailbox the console never
+		// polls. Relaying from this funnel is what keeps a fourth caller from reopening that.
+		fanOut?.(entry as Record<string, unknown>, dedupeKey);
 	}
 
 	function assertValidIdentity(device: string, conversationId: string): void {

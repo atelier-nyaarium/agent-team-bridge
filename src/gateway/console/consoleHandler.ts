@@ -112,8 +112,11 @@ export function createConsoleDispatcher({
 			}
 		},
 		// A conversation held HERE must reach the Gateway the console polls (see ConsolePeer's doc).
-		fanOut: (entry) => {
-			void routes.fanOutConsolePush?.(entry as ConsolePushEntry, crypto.randomUUID());
+		fanOut: (entry, dedupeKey) => {
+			// A spawn-point send has no session, so its echo names no thread the far side could file
+			// it under. Relaying one only throws inside a floating promise; it stays local instead.
+			if (!entry.session_id) return;
+			void routes.fanOutConsolePush?.(entry as ConsolePushEntry, dedupeKey ?? crypto.randomUUID());
 		},
 	});
 

@@ -125,10 +125,10 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("console_push"),
 		entry: z.object({
-			// message/reply: a console send to a session on ANOTHER Gateway seals directly there, so
+			// message/reply/sent: a console send to a session on ANOTHER Gateway seals directly there, so
 			// that Gateway holds the conversation - and the reply landed in a mailbox the console never
 			// polls. Relaying them is what makes a remote conversation's answers reach the phone at all.
-			kind: z.enum(["notice", "peer", "plugin_action", "message", "reply"]),
+			kind: z.enum(["notice", "peer", "plugin_action", "message", "reply", "sent"]),
 			session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
@@ -142,6 +142,9 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			title: NoticeTitle.optional(),
 			body: z.string().optional(),
 			status: z.string().optional(),
+			// A `sent` echo only. Without it a zod parse strips the field and the sending device
+			// cannot match its optimistic row, so the owner's own message renders twice.
+			opId: z.string().min(1).max(MAX_STORE_KEY_LEN).optional(),
 			files: ChannelFilesSchema.optional(),
 			// A `plugin_action` entry only - see MailboxEntrySchema (schemas.ts) for the field meaning.
 			// Slug-constrained (like every composite-key identifier elsewhere) so a relayed entry from
