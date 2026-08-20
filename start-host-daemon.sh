@@ -7,14 +7,19 @@ set -e
 # console terminal-view host_op (peek + tmux_send). It runs no Claude session - conversational
 # agents on this machine are spawned on demand through the console's host spawn-point (the daemon's
 # create_session) as ordinary loose peers.
+#
+# RESTARTS a running daemon rather than declining. It used to report "already running" and exit 0,
+# which left the OLD build serving after a pull while claiming success - the daemon is the one
+# component whose staleness is silent, since it fails only later at wake, peek and spawn.
+# Matches start-gateway.sh, which also cycles unconditionally.
 
 TMUX_SESSION="host-daemon"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-	echo "Host daemon '${TMUX_SESSION}' already running."
-	echo "  Attach: tmux attach -t $TMUX_SESSION"
-	exit 0
+# `-t =name` is exact-match: without it, "host-daemon" also matches "host-daemon-2".
+if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+	echo "Restarting host daemon (was running)..."
+	tmux kill-session -t "=$TMUX_SESSION" 2>/dev/null || true
 fi
 
 # Daemon settings from .env, passed explicitly into the tmux env because a pre-existing tmux server
@@ -26,9 +31,10 @@ echo "Starting host daemon..."
 # repeated fast crashes. bun is on PATH via ~/.bashrc.
 tmux new-session -d -s "$TMUX_SESSION" "bash -c 'cd ${SCRIPT_DIR} && source ~/.bashrc && export HOST_WS_TOKEN=${HOST_WS_TOKEN} && exec ./run-host-daemon.sh'"
 
-if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
 	echo "Host daemon running in background."
 	echo "  Attach: tmux attach -t $TMUX_SESSION"
 else
 	echo "ERROR: tmux session failed to start."
+	exit 1
 fi

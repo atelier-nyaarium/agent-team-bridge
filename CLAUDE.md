@@ -1149,6 +1149,18 @@ invite nonce, or minted secret. Only opaque ids, HTTP codes, and non-secret fiel
 bring it back. Always run `./start-host-daemon.sh` after. A forgotten daemon is silent until wake,
 peek, and session spawn all fail with `host daemon offline`; this cost a full outage once.
 
+The three start scripts do NOT behave alike, and the difference decides whether new code is running:
+
+- `start-gateway.sh` always cycles (`compose down` then `up --build`), and `git pull`s FIRST, so it
+  can move the tree before it builds.
+- `start-federation.sh` never brings the Router down. Plain `compose up`, so an unchanged Router
+  keeps running and only a config change recreates it - deliberate, since recreating drops every
+  gateway. It therefore does NOT pick up new Router code; use `--build` against its own compose
+  project for that.
+- `start-host-daemon.sh` kills a running daemon and relaunches it. It used to decline with "already
+  running", which left the old build serving while reporting success - invisible until wake, peek
+  and spawn failed. The daemon is the one component whose staleness has no immediate symptom.
+
 `./down.sh` is the ALL-components stop: gateway, federation Router, host daemon, and both networks.
 Bringing it back is three scripts, and the Router is its own compose project so it starts and stops
 on its own trigger: `./start-federation.sh && ./start-gateway.sh && ./start-host-daemon.sh`. Order

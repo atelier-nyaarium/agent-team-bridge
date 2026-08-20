@@ -14,12 +14,15 @@ Set-Location -Path $PSScriptRoot
 
 $pidFile = Join-Path $PSScriptRoot '.host-daemon.pid'
 
-# Already running? A live PID in the pid file means yes.
+# Restarts a running daemon rather than declining, matching start-host-daemon.sh: declining left the
+# OLD build serving after a pull while reporting success.
 if (Test-Path $pidFile) {
 	$existing = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
 	if ($existing -match '^\d+$' -and (Get-Process -Id ([int]$existing) -ErrorAction SilentlyContinue)) {
-		Write-Host "Host daemon already running (PID $existing)."
-		exit 0
+		Write-Host "Restarting host daemon (was running, PID $existing)..."
+		# The whole tree: the runner relaunches its child, so killing the parent alone orphans it.
+		Start-Process -FilePath 'taskkill.exe' -ArgumentList '/PID', $existing, '/T', '/F' `
+			-NoNewWindow -Wait -ErrorAction SilentlyContinue
 	}
 	Remove-Item $pidFile -ErrorAction SilentlyContinue
 }
