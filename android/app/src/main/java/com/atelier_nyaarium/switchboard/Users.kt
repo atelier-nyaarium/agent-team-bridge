@@ -96,8 +96,12 @@ fun UsersScreen(
 
 	suspend fun refresh() {
 		outcome = repo.trust.fetchRoster()
-		pending = repo.trust.fetchPendingTrust().getOrDefault(emptyList()).associate { it.initiatorOwnerSignPub to it.rendezvousId }
-		sharedCounts = repo.trust.sharedSessionCounts().getOrDefault(emptyMap())
+		// Keep the prior values on a failed read: replacing with empty shows zero pending invites and
+		// zero shared sessions, which reads as fact rather than as a read that did not land.
+		repo.trust.fetchPendingTrust().onSuccess { list ->
+			pending = list.associate { it.initiatorOwnerSignPub to it.rendezvousId }
+		}
+		repo.trust.sharedSessionCounts().onSuccess { sharedCounts = it }
 	}
 	LaunchedEffect(Unit) { refresh() }
 

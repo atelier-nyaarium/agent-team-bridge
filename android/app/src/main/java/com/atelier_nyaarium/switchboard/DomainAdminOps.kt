@@ -178,7 +178,11 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		// Parse skip-and-keep per row: a single malformed entry (a write tear, a manual edit) must not
 		// collapse the whole list to empty, because the next upsert/delete would then persist that loss
 		// and permanently discard every other staged tenant. One bad row is dropped; the rest survive.
-		val arr = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
+		val arr = runCatching { JSONArray(json) }.getOrNull()
+		if (arr == null) {
+			DebugLog.log("Persist", "hosted-tenants blob unparseable (${json.length} chars), treating as none")
+			return emptyList()
+		}
 		return (0 until arr.length()).mapNotNull { i ->
 			runCatching {
 				val o = arr.getJSONObject(i)

@@ -236,7 +236,12 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 	 * affected team when the map comes back smaller than it should be. */
 	internal fun loadPersistedScheduledSends(): Map<String, ScheduledSend> {
 		val json = store.loadScheduledSends() ?: return emptyMap()
-		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull()
+		if (root == null) {
+			// Banked sends vanishing with no trace reads as an app that forgot; leave a trace.
+			DebugLog.log("Persist", "scheduled-sends blob unparseable (${json.length} chars), dropping all")
+			return emptyMap()
+		}
 		return buildMap {
 			for (rawKey in root.keys()) {
 				if (!isAddressKey(rawKey)) continue
@@ -278,7 +283,11 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 	 * with no text or no arming instant is dropped: nothing to type, or no clock to time out against. */
 	internal fun loadPersistedGoals(): Map<String, PendingGoal> {
 		val json = store.loadGoals() ?: return emptyMap()
-		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull()
+		if (root == null) {
+			DebugLog.log("Persist", "goals blob unparseable (${json.length} chars), dropping all")
+			return emptyMap()
+		}
 		return buildMap {
 			for (rawKey in root.keys()) {
 				if (!isAddressKey(rawKey)) continue
@@ -344,7 +353,11 @@ internal class ChatPersistence(private val store: ChatPersistenceStore) {
 	 * is dropped, matching withDraft's own sparse-map invariant. */
 	internal fun loadPersistedDrafts(): Map<String, Draft> {
 		val json = store.loadDrafts() ?: return emptyMap()
-		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull()
+		if (root == null) {
+			DebugLog.log("Persist", "drafts blob unparseable (${json.length} chars), dropping all")
+			return emptyMap()
+		}
 		return buildMap {
 			for (rawKey in root.keys()) {
 				if (!isAddressKey(rawKey)) continue

@@ -79,8 +79,15 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 	var note by remember { mutableStateOf<String?>(null) }
 
 	suspend fun refresh() {
-		val everyone = repo.trust.sessionsSharedToEveryone().getOrDefault(emptySet())
-		val specific = repo.trust.crossDomainShares().getOrDefault(emptySet())
+		// A failed read must not paint every checkbox unchecked: keep the sheet unloaded and say so.
+		val everyoneRead = repo.trust.sessionsSharedToEveryone()
+		val specificRead = repo.trust.crossDomainShares()
+		if (everyoneRead.isFailure || specificRead.isFailure) {
+			note = "Couldn't read the current shares. Pull to retry."
+			return
+		}
+		val everyone = everyoneRead.getOrDefault(emptySet())
+		val specific = specificRead.getOrDefault(emptySet())
 		val byName = sessions.associate { s ->
 			s.name to SessionShares(
 				everyone = s.name in everyone,
