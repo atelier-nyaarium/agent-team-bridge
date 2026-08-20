@@ -141,6 +141,18 @@ export const HANDSHAKE_REPUSH_DEDUPE_MS = 30_000;
 // unconfirmed socket indefinitely. Self-closes once the victim confirms (its pending entry clears).
 export const HANDSHAKE_REPUSH_MAX_ATTEMPTS = 5;
 
+// How long a pending handshake may BLOCK its socket's replies. A separate job from the attempt cap
+// above, which only stops the gateway PUSHING: the cap left an unanswered entry in place forever, so
+// a session that missed all five prompts was refused for the life of its socket with no self-heal
+// and no way to learn its own hs- id (issue #251). Past this, every reader treats the entry as
+// absent, so the gate falls through to the fail-open case it already has for a socket with no
+// pending entry - unconfirmed, but never silenced.
+//
+// Comfortably above a full prompting cycle (5 attempts, each at least HANDSHAKE_REPUSH_DEDUPE_MS
+// apart), since the last push must still be answerable: an agent only surfaces a channel push at a
+// turn boundary, so a long autonomous run can legitimately take minutes to see one.
+export const HANDSHAKE_PENDING_TTL_MS = 600_000;
+
 export type HandshakeRepushOutcome = "pushed" | "throttled" | "capped" | "no-pending" | "socket-gone";
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {

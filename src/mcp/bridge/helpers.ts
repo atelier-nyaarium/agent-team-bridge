@@ -41,10 +41,12 @@ let channelServer: Server | null = null;
  * a worker's own cache. The guard lives on the write, not at every call site. */
 function createHandshakeRoleCache() {
 	let role: boolean | null = null;
+	let lastReceivedId: string | null = null;
 	const receivedIds = new Set<string>();
 	return {
 		noteReceived(hsSessionId: string): void {
 			receivedIds.add(hsSessionId);
+			lastReceivedId = hsSessionId;
 		},
 		confirm(hsSessionId: string, value: boolean): boolean {
 			if (!receivedIds.has(hsSessionId)) return false;
@@ -53,6 +55,14 @@ function createHandshakeRoleCache() {
 		},
 		get(): boolean | null {
 			return role;
+		},
+		/** The handshake this process was challenged with and has not answered. The gateway refuses
+		 * to name it (conversationId is not secret, so echoing it there would hand a victim's live
+		 * handshake id to anyone who knows one), but THIS process was legitimately pushed it - the
+		 * agent is simply the half that lost it, to a compaction or a turn boundary (issue #251).
+		 * Null once answered, since the reconnect path auto-replies from `role` and needs no agent. */
+		unanswered(): string | null {
+			return role === null ? lastReceivedId : null;
 		},
 	};
 }
@@ -71,6 +81,11 @@ export function setChannelServer(server: Server): void {
 /** False (no-op) for an id `noteReceived` never saw. */
 export function confirmHandshakeRole(hsSessionId: string, value: boolean): boolean {
 	return handshakeRole.confirm(hsSessionId, value);
+}
+
+/** See the cache's own doc: the handshake this process owes, for naming back to an agent that lost it. */
+export function unansweredHandshakeId(): string | null {
+	return handshakeRole.unanswered();
 }
 
 export function bridgeProjectName(): string {
