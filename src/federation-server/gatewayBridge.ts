@@ -635,7 +635,10 @@ export class GatewayBridge implements ToolProvider {
 
 	private handleListGateways(connId: ConnectionId): unknown {
 		const reg = this.connGateways.get(connId);
-		if (!reg) return { gateways: [] };
+		// Refused, not answered empty: "you are not registered" and "you have no peers" must stay
+		// distinct answers, or a revoked Gateway reads its own refusal as an empty mesh. An older
+		// gateway folds the error to [] exactly as it folded this empty answer.
+		if (!reg) throw new Error("not registered");
 		const { domainId, gatewayId: self } = reg;
 		const gateways = [...(this.gatewayConnections.get(domainId)?.keys() ?? [])]
 			.filter((h) => h !== self)

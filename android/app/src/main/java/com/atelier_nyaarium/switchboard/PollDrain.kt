@@ -264,7 +264,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						mb.presence?.let { rows ->
 							val bumpAt = System.currentTimeMillis()
 							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							repo.presence.applyPresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
+							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
 						}
 					}
 					// Linked-peers plane: same generalized shape, a single scalar version (no legacy

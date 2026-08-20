@@ -160,11 +160,12 @@ export function createConsoleDispatcher({
 			case "list_teams": {
 				// Fan out across the mesh so the console sees every Gateway's sessions, each
 				// carrying its own `gatewayId` (the console keys threads by domain.gateway.spawn.session).
-				const teams = (await (await routes.discover()).json()) as TeamInfo[];
+				const { teams, coverage } = await routes.discoverFull();
 				// A console does not list other consoles as send targets, and excludes itself.
 				// teams() already drops the headless "host" daemon.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
+					coverage,
 				};
 			}
 

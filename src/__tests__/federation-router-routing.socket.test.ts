@@ -41,8 +41,10 @@ describe("federation router routing", () => {
 		const unregistered = openGateway(fixture.port);
 		sockets.push(unregistered);
 		await new Promise<void>((resolve) => unregistered.addEventListener("open", () => resolve(), { once: true }));
-		const empty = await callTool(unregistered, "list_gateways", {});
-		expect(empty.result).toEqual({ gateways: [] });
+		// Refused, not answered empty: "not registered" and "no peers" must stay distinct answers.
+		const refused = await callTool(unregistered, "list_gateways", {});
+		expect(refused.error).toContain("not registered");
+		expect(refused.result).toBeUndefined();
 	});
 
 	it("forwards a relay frame the destination's own schema accepts", async () => {

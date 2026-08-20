@@ -71,6 +71,7 @@ export function fakeRouter(opts: {
 	const calls: { action: string; params: Record<string, unknown> }[] = [];
 	const client = {
 		isConnected: () => true,
+		isRegistered: () => true,
 		stop: () => {},
 		callTool: async (action: string, params: Record<string, unknown>) => {
 			calls.push({ action, params });

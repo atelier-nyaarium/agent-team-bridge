@@ -171,5 +171,9 @@ export function nextFrame(ws: WebSocket, predicate: (frame: Frame) => boolean): 
 export async function callTool(ws: WebSocket, action: string, params: Record<string, unknown>): Promise<Frame> {
 	const callId = crypto.randomUUID();
 	ws.send(JSON.stringify({ type: "tool_call", callId, action, params }));
-	return nextFrame(ws, (frame) => frame.type === "tool_result" && frame.callId === callId);
+	// A refused call answers tool_error; only matching tool_result would hang the test on it.
+	return nextFrame(
+		ws,
+		(frame) => (frame.type === "tool_result" || frame.type === "tool_error") && frame.callId === callId,
+	);
 }

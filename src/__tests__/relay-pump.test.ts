@@ -86,6 +86,7 @@ function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 			respond: () => jsonRes({}),
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
+			discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 		},
 	});
 	const pump = createConsoleRelayPump({
@@ -231,6 +232,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 		const pump = createConsoleRelayPump({

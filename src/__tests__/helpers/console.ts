@@ -11,6 +11,7 @@ import { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { DurableStore } from "../../shared/durable-store.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import type { SessionStore } from "../../shared/session-store.js";
+import type { TeamInfo } from "../../shared/types.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -138,6 +139,14 @@ export function makeHarness(
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
 			]),
+		discoverFull: async () => ({
+			teams: [
+				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
+			] as unknown as TeamInfo[],
+			coverage: { rosterKnown: true, asked: 0, answered: 0 },
+		}),
 		...overrides,
 	};
 
@@ -185,6 +194,7 @@ export function makeTerminalHarness(
 		respond: () => jsonRes({ delivered: true }),
 		teams: () => jsonRes([]),
 		discover: async () => jsonRes([]),
+		discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 	};
 	const handler = createConsoleDispatcher({
 		registry: new Map(),

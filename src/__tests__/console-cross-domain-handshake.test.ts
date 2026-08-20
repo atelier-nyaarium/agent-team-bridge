@@ -25,6 +25,7 @@ describe("console cross-Domain handshake ops", () => {
 			respond: () => jsonRes({ delivered: true }),
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
+			discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 		};
 		const crossDomain = {
 			listen: () => {
@@ -244,6 +245,7 @@ describe("console cross-Domain handshake ops", () => {
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 		const reply = await handler.handleFrame(frame({ kind: "cross_domain_listen" }, "nf1"));
@@ -266,6 +268,7 @@ describe("console cross-Domain unlink op", () => {
 			respond: () => jsonRes({ delivered: true }),
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
+			discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 		};
 		const handler = createConsoleDispatcher({
 			registry: new Map(),
@@ -323,6 +326,7 @@ describe("console cross-Domain unlink op", () => {
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 		});
 		const reply = await handler.handleFrame(frame({ kind: "cross_domain_unlink", domainId: "carol" }, "nf-ul"));

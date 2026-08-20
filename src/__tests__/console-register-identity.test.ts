@@ -129,6 +129,7 @@ describe("createConsoleDispatcher: register + identity", () => {
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
 			isProjectName: (name) => name === "recipe-app",
 		});

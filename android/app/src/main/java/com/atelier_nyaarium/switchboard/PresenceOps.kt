@@ -149,7 +149,33 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * apply uniformly regardless of source. Best-effort: a relay failure keeps the prior list. */
 	suspend fun refreshDiscovery() {
 		runCatchingCancellable { repo.client().teams(repo.localGatewayId) }
-			.onSuccess { applyPresence(it) }
+			.onSuccess { applyDiscovery(it) }
+	}
+
+	/** Land a discovery answer, holding rows for gateways the answer names as unreachable: those
+	 * machines were not asked, so their sessions must not be swept as absent. An answer with no
+	 * coverage (an older gateway) replaces wholesale, the pre-coverage behavior. */
+	suspend fun applyDiscovery(answer: TeamsAnswer) {
+		val keys = unreachableKeys(answer.coverage)
+		val fresh = if (keys.isEmpty()) {
+			answer.teams
+		} else {
+			mergePresence(lastRawTeams ?: emptyList(), answer.teams) { rowOnUnreachable(it, keys, repo.localGatewayId) }
+		}
+		applyPresence(fresh)
+	}
+
+	/** Land a presence-plane push. The plane carries the ROUTE Gateway's own rows only, so it speaks
+	 * for that gateway and no other: replacing wholesale swept every remote machine's rows on each
+	 * local presence change, until the next discovery tick restored them. */
+	suspend fun applyPlanePresence(fresh: List<Team>) {
+		val local = repo.localGatewayId
+		val planeDomain = fresh.firstOrNull()?.domainId
+		val merged = mergePresence(lastRawTeams ?: emptyList(), fresh) { row ->
+			val gw = row.gatewayId.ifEmpty { local }
+			gw != local || (row.domainId != null && planeDomain != null && row.domainId != planeDomain)
+		}
+		applyPresence(merged)
 	}
 
 	/** Which of this owner's Gateways the Router currently holds a connection for. Best-effort, and a

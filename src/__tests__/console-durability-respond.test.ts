@@ -19,6 +19,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -60,6 +61,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -104,6 +106,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -152,6 +155,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -190,6 +194,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -246,6 +251,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			const mailboxStore = new DeviceMailboxStore();
 			mailboxStore.ensure(OWNER).recordSession("s1");
@@ -291,6 +297,7 @@ describe("createConsoleDispatcher", () => {
 				},
 				teams: () => jsonRes([]),
 				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			};
 			// No respondable session recorded for "s1" yet - canRespond() fails and the "respond"
 			// case throws before ever calling routes.respond, so only handleFrame's generic

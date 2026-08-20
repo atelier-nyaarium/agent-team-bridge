@@ -30,6 +30,7 @@ import type {
 	CrossDomainShareTargetSchema,
 	CrossDomainUnlinkResultSchema,
 	CrossDomainUnshareResultSchema,
+	DiscoverCoverageSchema,
 	MailboxEntrySchema,
 	ReadAnchorWireEntrySchema,
 	SealedEnvelopeSchema,
@@ -118,6 +119,7 @@ export interface OpenedConsoleFrame {
 //  Op results (gateway -> console)
 
 export type ConsoleRegisterResult = z.infer<typeof ConsoleRegisterResultSchema>;
+export type DiscoverCoverage = z.infer<typeof DiscoverCoverageSchema>;
 export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema>;
 export type ConsoleSendResult = z.infer<typeof ConsoleSendResultSchema>;
 export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;

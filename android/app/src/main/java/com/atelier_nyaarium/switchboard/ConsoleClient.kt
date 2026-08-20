@@ -148,20 +148,21 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 
 	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
 	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
-	 * back to `localGatewayId` (this connection's Gateway, learned at register). */
-	suspend fun teams(localGatewayId: String = ""): List<Team> {
+	 * back to `localGatewayId` (this connection's Gateway, learned at register). Carries the answer's
+	 * own completeness; null coverage (an older gateway) claims nothing. */
+	internal suspend fun teams(localGatewayId: String = ""): TeamsAnswer {
 		val body = transport.relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board; the callers (connect, refreshTeams)
 		// wrap this in runCatching and keep the prior list.
 		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
-		return result.teams.map { teamInfoToTeam(it, localGatewayId) }
+		return TeamsAnswer(result.teams.map { teamInfoToTeam(it, localGatewayId) }, result.coverage)
 	}
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
 	suspend fun listTeams(): List<String> =
-		runCatchingCancellable { teams().map { it.name } }.getOrDefault(emptyList())
+		runCatchingCancellable { teams().teams.map { it.name } }.getOrDefault(emptyList())
 
 	/** Send a message to a team. The reply may arrive inline within the relay hold or land in the mailbox
 	 * for a later poll; either way the conversation is keyed server-side by (this device, team). */

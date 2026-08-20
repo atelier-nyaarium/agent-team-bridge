@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { DiscoverCoverage } from "../../shared/console-protocol.js";
 import { Address, isComposite, parseSessionName, SpawnPoint } from "../../shared/session-id.js";
 import { bridgeProjectName, routerGet } from "./helpers.js";
 
@@ -79,6 +80,17 @@ export function groupDiscoverEntries(entries: DiscoverEntry[]): DiscoverGroup[] 
 	return [...groups.values()];
 }
 
+/** One caveat line when the answer is partial; empty when complete or unclaimed (older gateway). */
+export function coverageCaveat(coverage: DiscoverCoverage | undefined): string {
+	if (!coverage) return "";
+	if (!coverage.rosterKnown) {
+		return `\n\nCaveat: the peer roster could not be read (Router unreachable or this Gateway is not registered), so machines beyond this Gateway may be missing.`;
+	}
+	const missing = [...(coverage.unreachable ?? []), ...(coverage.unreachablePeers ?? [])];
+	if (missing.length === 0) return "";
+	return `\n\nCaveat: asked ${coverage.asked} peer gateway(s), ${coverage.answered} answered. Unreachable: ${missing.join(", ")} - their sessions are missing above.`;
+}
+
 /** One header per bucket, its active sessions nested below. Exported for tests. */
 export function formatDiscoverLines(entries: DiscoverEntry[]): string[] {
 	return groupDiscoverEntries(entries).flatMap(({ domainId, gatewayId, project, sessions }) => [
@@ -119,7 +131,12 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 		},
 		async () => {
 			try {
-				const teams = (await routerGet("/discover")) as DiscoverEntry[];
+				// An older gateway ignores the query and answers the bare array (no coverage claim).
+				const raw = await routerGet("/discover?coverage=1");
+				const teams = (
+					Array.isArray(raw) ? raw : ((raw as { teams?: DiscoverEntry[] }).teams ?? [])
+				) as DiscoverEntry[];
+				const coverage = Array.isArray(raw) ? undefined : (raw as { coverage?: DiscoverCoverage }).coverage;
 				// "host" is filtered BY NAME: a catalog entry could share the literal team name.
 				const others = teams.filter(
 					(t) => t && t.team !== bridgeProjectName() && t.team !== "host" && t.kind !== "console",
@@ -127,12 +144,13 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 
 				// Post-grouping: grouping can drop an entry, so a nonzero count renders no line.
 				const lines = formatDiscoverLines(others);
+				const caveat = coverageCaveat(coverage);
 				if (lines.length === 0) {
-					return { content: [{ type: "text" as const, text: `No other sessions found.` }] };
+					return { content: [{ type: "text" as const, text: `No other sessions found.${caveat}` }] };
 				}
 
 				return {
-					content: [{ type: "text" as const, text: `Sessions on the bridge:\n${lines.join("\n")}` }],
+					content: [{ type: "text" as const, text: `Sessions on the bridge:\n${lines.join("\n")}${caveat}` }],
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
