@@ -16,6 +16,29 @@ class BoardStateTest {
 		PendingBoardAction(opId, gateway, op, dependsOn, attempts)
 
 	@Test
+	fun aProvenDeadFetchStopsTheWaitButNeverTouchesTheOpsOwnList() {
+		// The member leaves fetchFrom (nothing resumes the pull) and sources (readiness stops
+		// demanding it), while the op's attachment list stays whole: the GATEWAY drops the
+		// unresolvable member and reports it, which is the terminal answer - this device never
+		// predicts what another machine holds.
+		val members = listOf(BoardAttachment("dead-blob", "gw-b", "pic.png", "image/png", 9))
+		val attach = action("a", "gw-b", ConsoleOp.BoardSetAttachments("m1", members, supplied = emptyList()))
+			.copy(sources = mapOf("dead-blob" to "/gone/pic.png"), fetchFrom = mapOf("dead-blob" to "gw-a"))
+		val delete = action("d", "gw-a", ConsoleOp.BoardRemove(listOf("m1")), dependsOn = "a")
+
+		val next = markFetchDead(listOf(attach, delete), "m1", "dead-blob")
+		val healed = next.first { it.opId == "a" }
+		assertTrue(healed.fetchFrom.isEmpty())
+		assertTrue(healed.sources.isEmpty())
+		assertEquals(members, (healed.op as ConsoleOp.BoardSetAttachments).attachments)
+		// A different entry's action waiting on the same blobId is untouched: the proof was about
+		// THIS entry's queued move, and identity here is (entry, blob) like PendingFetch's.
+		val other = action("x", "gw-b", ConsoleOp.BoardSetAttachments("m2", members, supplied = emptyList()))
+			.copy(fetchFrom = mapOf("dead-blob" to "gw-a"))
+		assertEquals(mapOf("dead-blob" to "gw-a"), markFetchDead(listOf(other), "m1", "dead-blob").first().fetchFrom)
+	}
+
+	@Test
 	fun aStrugglingHeadStopsBlockingLaterWorkButIsStillRetried() {
 		val queue = listOf(
 			action("stuck", "gw", ConsoleOp.BoardSetState("a", "done"), attempts = 8),

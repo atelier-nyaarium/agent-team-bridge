@@ -271,6 +271,13 @@ internal class BoardOps(private val repo: ChatRepository) {
 	private val boardFetchFailures = java.util.Collections.synchronizedMap(mutableMapOf<String, Int>())
 	private val boardDownloadsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
+	// Consecutive PROVEN-absent answers (the Gateway confirmed every holder answered and had
+	// nothing), counted apart from ordinary failures: an outage must never trip this. Keyed
+	// (entryId, blobId) to match PendingFetch identity - two entries can wait on one picture, and a
+	// proof retires only the wait it was counted for. In-memory on purpose: a process death just
+	// re-proves it a few polls later, bounded either way.
+	private val boardFetchAbsent = java.util.Collections.synchronizedMap(mutableMapOf<Pair<String, String>, Int>())
+
 	fun boardAttachmentState(a: BoardAttachment): String = when {
 		a.blobId in boardDownloadsInFlight -> "downloading"
 		(boardFetchFailures[a.blobId] ?: 0) >= ChatRepository.BOARD_FETCH_GIVE_UP -> "failed"
@@ -280,8 +287,12 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
 		// A queued move is waiting on these, and nothing else can retire it, so giving up would leave
-		// the origin's linked delete holding that Gateway's lane closed forever.
-		val waiting = repo.board.pendingFetches().firstOrNull { it.blobId == a.blobId }
+		// the origin's linked delete holding that Gateway's lane closed forever. THIS entry's wait
+		// first: two entries can queue the same picture with different holders, and binding the kick
+		// to a sibling's wait would count - and retire - the wrong one.
+		val fetches = repo.board.pendingFetches()
+		val waiting = fetches.firstOrNull { it.blobId == a.blobId && it.entryId == entryId }
+			?: fetches.firstOrNull { it.blobId == a.blobId }
 		if (waiting == null && (boardFetchFailures[a.blobId] ?: 0) >= ChatRepository.BOARD_FETCH_GIVE_UP) return
 		if (!boardDownloadsInFlight.add(a.blobId)) return
 		// While a move is queued, the RECORD already names the destination, which by construction does
@@ -311,9 +322,27 @@ internal class BoardOps(private val repo: ChatRepository) {
 				// attachment twice on the device with the least room for it.
 				c.forgetBlob(a.blobId)
 				boardFetchFailures.remove(a.blobId)
+				boardFetchAbsent.keys.removeAll { it.second == a.blobId }
+				repo.board.revision.longValue++
+			} catch (e: BlobAbsent) {
+				// Proven, not inferred: the Gateway confirmed every holder answered and had nothing.
+				// After a few confirmations the queued move stops waiting on it (retireDeadFetch), the
+				// action drains, and the GATEWAY's own drop report is the terminal answer the owner
+				// sees - this device never predicts what another machine holds.
+				val key = (waiting?.entryId ?: entryId) to a.blobId
+				val proven = (boardFetchAbsent[key] ?: 0) + 1
+				boardFetchAbsent[key] = proven
+				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
+				DebugLog.log("Board", "attachment ${a.blobId.take(16)} proven absent ($proven) for ${key.first}")
+				if (proven >= ChatRepository.BOARD_FETCH_DEAD_AFTER && waiting != null) {
+					repo.board.retireDeadFetch(waiting.entryId, a.blobId)
+					boardFetchAbsent.remove(key)
+				}
 				repo.board.revision.longValue++
 			} catch (e: Exception) {
 				e.rethrowIfCancellation()
+				// An ordinary failure says nothing about existence, so the absent streak restarts.
+				boardFetchAbsent.keys.removeAll { it.second == a.blobId }
 				// Bounded like a message's own fetch: a picture whose bytes are gone must stop asking.
 				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
 				DebugLog.log("Board", "attachment fetch failed: ${e.message?.take(80)}")

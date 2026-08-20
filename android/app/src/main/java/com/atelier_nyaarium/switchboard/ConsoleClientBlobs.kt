@@ -115,6 +115,10 @@ fun ConsoleClient.pruneStaleBlobs(maxAgeMs: Long): Long = runCatching { blobs.pr
  * full. The store seal-verifies the digest, so a truncated or tampered transfer yields no file
  * at all rather than a subtly wrong one.
  */
+/** The Gateway PROVED the bytes exist nowhere (every named holder answered and had nothing), so a
+ * retry can never succeed. Its own type because callers act on it: an ordinary stall retries. */
+class BlobAbsent(blobId: String) : Exception("blob $blobId exists on no machine")
+
 suspend fun ConsoleClient.downloadBlob(blobId: String, fromGateway: String? = null): File {
 	blobs.path(blobId)?.let { return it }
 
@@ -125,6 +129,7 @@ suspend fun ConsoleClient.downloadBlob(blobId: String, fromGateway: String? = nu
 		if (offset > Protocol.MAX_BLOB_BYTES) error("blob $blobId exceeded ${Protocol.MAX_BLOB_BYTES} bytes")
 		val res = blobGet(blobId, offset, Protocol.BLOB_CHUNK_BYTES, fromGateway)
 		val bytes = res.chunk?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: ByteArray(0)
+		if (bytes.isEmpty() && res.absent == true) throw BlobAbsent(blobId)
 		// A short read that is not the end would otherwise spin here asking for the same offset.
 		if (bytes.isEmpty() && !res.eof) error("blob $blobId stalled at offset $offset")
 		val written = blobs.write(blobId, offset, bytes, res.eof)

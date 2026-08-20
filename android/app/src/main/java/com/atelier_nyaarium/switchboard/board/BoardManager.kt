@@ -453,6 +453,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 			action.fetchFrom.map { (blobId, gw) -> PendingFetch(entryId, blobId, gw) }
 		}
 
+	/** See [markFetchDead]'s own doc; this is its sole committer, keeping the queue single-writer. */
+	fun retireDeadFetch(entryId: String, blobId: String) {
+		mutate { it.copy(queue = markFetchDead(it.queue, entryId, blobId)) }
+	}
+
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }
 

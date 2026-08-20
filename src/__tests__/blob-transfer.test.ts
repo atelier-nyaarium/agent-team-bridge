@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BlobFetchOutcome } from "../gateway/blobOps.js";
 import { BlobStore, blobIdFor } from "../shared/blob-store.js";
 
 ////////////////////////////////
@@ -166,7 +167,7 @@ describe("moving bytes between an agent and the gateway", () => {
 		const fetcher = async (id: string, from: string) => {
 			expect(from).toBe("gw-holder");
 			const r = holder.read(id, 0, bytes.length);
-			return asked.write(id, 0, r.bytes, r.eof).complete;
+			return asked.write(id, 0, r.bytes, r.eof).complete ? ("fetched" as const) : ("unreachable" as const);
 		};
 		const res = (await answerBlobOp(
 			asked,
@@ -178,6 +179,55 @@ describe("moving bytes between an agent and the gateway", () => {
 		// And it CACHED, so the next reader costs nothing: content addressing means a name is its
 		// contents, so this cache never needs invalidating.
 		expect(asked.path(blobId)).not.toBeNull();
+	});
+
+	it("a proven-absent pull answers { absent: true } instead of throwing the ordinary read", async () => {
+		// The ordinary read THROWS for a blob nobody holds ("is not complete"), so without the
+		// short-circuit the one piece of evidence this op exists to carry back - every holder
+		// answered and had nothing - would be swallowed into the same error an outage produces,
+		// and the console's dead-fetch retirement would never trigger.
+		const { answerBlobOp } = await import("../gateway/blobOps.js");
+		const empty = new BlobStore(path.join(scratch, "proven-empty"));
+		const res = (await answerBlobOp(
+			empty,
+			{
+				kind: "blob_get",
+				blobId: blobIdFor(Buffer.from("nowhere")),
+				offset: 0,
+				length: 1024,
+				fromGateway: "gw-h",
+			},
+			async () => "absent" as const,
+		)) as { absent?: boolean; eof: boolean };
+		expect(res).toEqual({ eof: false, absent: true });
+
+		// An unreachable holder takes the ordinary path and throws like before: no proof, no verdict.
+		await expect(
+			answerBlobOp(
+				empty,
+				{
+					kind: "blob_get",
+					blobId: blobIdFor(Buffer.from("nowhere")),
+					offset: 0,
+					length: 1024,
+					fromGateway: "gw-h",
+				},
+				async () => "unreachable" as const,
+			),
+		).rejects.toThrow();
+
+		// A concurrent upload's partial (.part satisfies neither path() nor hasAny()) is bytes
+		// actively landing, and calling them absent would retire a live transfer.
+		const partialBytes = Buffer.alloc(2048, "p");
+		const partialId = blobIdFor(partialBytes);
+		empty.write(partialId, 0, partialBytes.subarray(0, 1024), false);
+		await expect(
+			answerBlobOp(
+				empty,
+				{ kind: "blob_get", blobId: partialId, offset: 0, length: 1024, fromGateway: "gw-h" },
+				async () => "absent" as const,
+			),
+		).rejects.toThrow();
 	});
 
 	it("never turns a stat into a cross-Gateway pull, however the caller asks", async () => {
@@ -194,7 +244,7 @@ describe("moving bytes between an agent and the gateway", () => {
 			{ kind: "blob_stat", blobId: blobIdFor(Buffer.from("absent")), fromGateway: "gw-holder" },
 			async () => {
 				pulled = true;
-				return true;
+				return "fetched" as const;
 			},
 		)) as { have: number; complete: boolean };
 
@@ -213,15 +263,15 @@ describe("moving bytes between an agent and the gateway", () => {
 		holder.write(blobId, 0, bytes, true);
 
 		let fetches = 0;
-		const inFlight = new Map<string, Promise<boolean>>();
+		const inFlight = new Map<string, Promise<BlobFetchOutcome>>();
 		const single = (id: string) => {
 			const running = inFlight.get(id);
 			if (running) return running;
-			const started = (async () => {
+			const started = (async (): Promise<BlobFetchOutcome> => {
 				fetches++;
 				await new Promise((r) => setTimeout(r, 5));
 				const r = holder.read(id, 0, bytes.length);
-				return asked.write(id, 0, r.bytes, r.eof).complete;
+				return asked.write(id, 0, r.bytes, r.eof).complete ? "fetched" : "unreachable";
 			})().finally(() => inFlight.delete(id));
 			inFlight.set(id, started);
 			return started;
@@ -253,7 +303,7 @@ describe("moving bytes between an agent and the gateway", () => {
 			{ kind: "blob_get", blobId, offset: 0, length: 1024, fromGateway: "gw-other" },
 			async () => {
 				asked = true;
-				return false;
+				return "unreachable" as const;
 			},
 		);
 

@@ -139,6 +139,23 @@ fun boardEntryIdsOf(op: ConsoleOp): Set<String> = when (op) {
 fun retireBoardAction(queue: List<PendingBoardAction>, opId: String): List<PendingBoardAction> =
 	queue.filter { it.opId != opId }
 
+/**
+ * Stop waiting on a member whose bytes PROVABLY exist nowhere: out of `fetchFrom` (nothing resumes
+ * the pull) and out of `sources` (readiness stops demanding it). The op's own attachment list is
+ * deliberately untouched and the member stays out of `supplied`, so the Gateway DROPS it and
+ * reports the drop - the terminal refusal - instead of this device predicting the Gateway's answer.
+ * Without this, a move whose picture is gone from every machine retries its pull on every poll
+ * forever, and the linked origin delete holds that Gateway's lane closed behind it.
+ */
+fun markFetchDead(queue: List<PendingBoardAction>, entryId: String, blobId: String): List<PendingBoardAction> =
+	queue.map { action ->
+		if (blobId in action.fetchFrom && entryId in boardEntryIdsOf(action.op)) {
+			action.copy(fetchFrom = action.fetchFrom - blobId, sources = action.sources - blobId)
+		} else {
+			action
+		}
+	}
+
 /** Abandon a REFUSED action, taking everything that depended on it. A move's delete half must never
  * become eligible because its write half was refused - that destroys the entry on both Gateways,
  * inverting the whole point of write-then-delete. */

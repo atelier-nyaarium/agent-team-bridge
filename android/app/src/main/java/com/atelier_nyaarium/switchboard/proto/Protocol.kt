@@ -1131,6 +1131,7 @@ data class ConsoleBlobPutResult(
 data class ConsoleBlobGetResult(
 	val chunk: String? = null,
 	val eof: Boolean,
+	val absent: Boolean? = null,
 )
 
 @Serializable
