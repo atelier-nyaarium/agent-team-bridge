@@ -40,6 +40,7 @@ import {
 	isAgentReady,
 	isAgentWorking,
 	killSession,
+	paneAgentState,
 	peekPane,
 	peekWithFallback,
 	sendKey,
@@ -261,15 +262,24 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		try {
 			const { created } = await ensureSession(target, launch);
 			let res = await awaitReady(target);
-			// `exec bash` outlives claude, so a reattach can land on a dead shell. A limit dialog is
-			// alive, not dead: relaunching would discard it and hit the same limit again.
-			if (!created && !res.ready && !res.limit && !isAgentWorking(res.screen)) {
-				// The frame could be a sub-second transition.
-				const recheck = await peekPane(target)
-					.then((p) => p.ansi)
-					.catch(() => res.screen);
+			// `exec bash` outlives claude, so a reattach can land on a dead shell. The SCREEN cannot
+			// see that: the frame the agent painted before it died still carries its own composer at
+			// column 0, so isAgentReady answers yes for a pane holding nothing but a prompt, and this
+			// recovery never ran for the case it was written for. So the OS is asked too, and either
+			// answer alone is enough to relaunch. A limit dialog is alive, not dead: relaunching would
+			// discard it and hit the same limit again.
+			const processGone = !created && (await paneAgentState(target)) === "gone";
+			const screenDead = !created && !res.ready && !isAgentWorking(res.screen);
+			if (!created && !res.limit && (processGone || screenDead)) {
+				// A proven-gone process needs no second look - the recheck reads the same lying frame.
+				const recheck = processGone
+					? ""
+					: await peekPane(target)
+							.then((p) => p.ansi)
+							.catch(() => res.screen);
 				const ready = isAgentReady(recheck);
-				if (ready || isAgentWorking(recheck)) {
+				if (!processGone && (ready || isAgentWorking(recheck))) {
+					// The frame was a sub-second transition after all.
 					res = { alive: true, ready, screen: recheck };
 				} else {
 					await killSession(target);
