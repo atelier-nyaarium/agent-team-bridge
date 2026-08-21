@@ -28,9 +28,10 @@ vi.mock("node:child_process", () => ({
 		child.stdout = new EventEmitter();
 		child.stderr = new EventEmitter();
 		child.kill = () => {};
-		// Only a capture-pane returns a screen; a send-keys / has-session / etc. has no stdout, so a
+		// Only a reading command returns stdout; a send-keys / has-session / etc. has none, so a
 		// scripted screen is not consumed by the "1" keypresses awaitReady interleaves with its peeks.
-		const out = args.includes("capture-pane") || args.includes("logs") ? stdoutData : "";
+		const reads = ["capture-pane", "logs", "display-message", "ps"];
+		const out = args.some((a) => reads.includes(a)) ? stdoutData : "";
 		queueMicrotask(() => {
 			if (out) child.stdout.emit("data", Buffer.from(out));
 			if (args.includes("logs") && logsStderr) child.stderr.emit("data", Buffer.from(logsStderr));
@@ -43,6 +44,7 @@ vi.mock("node:child_process", () => ({
 
 import {
 	awaitReady,
+	classifyPaneProcesses,
 	createSession,
 	ensureSession,
 	hasSession,
@@ -50,6 +52,7 @@ import {
 	isAgentWorking,
 	isLoggedOut,
 	killSession,
+	paneAgentState,
 	peekPane,
 	peekWithFallback,
 	selfSessionTarget,
@@ -300,6 +303,66 @@ describe("tmuxCore hasSession / ensureSession", () => {
 	});
 });
 
+describe("tmuxCore paneAgentState", () => {
+	// The real listings, taken from a pane whose agent was SIGKILLed and from a live one beside it.
+	const DEAD = ["sh", "bash"];
+	const LIVE = ["sh", "bash", "claude", "MainThread", "MainThread", "nyaascripts"];
+
+	it("reads a shells-only tty as gone and anything else as alive", () => {
+		expect(classifyPaneProcesses(DEAD)).toBe("gone");
+		expect(classifyPaneProcesses(LIVE)).toBe("alive");
+	});
+
+	it("never answers gone without evidence, since gone is what relaunches", () => {
+		// Nothing at all is a probe that failed to look: a pane always carries at least its shell.
+		expect(classifyPaneProcesses([])).toBe("unknown");
+		expect(classifyPaneProcesses(["", "  "])).toBe("unknown");
+		// An agent whose process is named something else must NOT read as gone - matching on a shell
+		// allowlist rather than on "claude" is what keeps a wrong guess from killing live work.
+		expect(classifyPaneProcesses(["sh", "bash", "node"])).toBe("alive");
+	});
+
+	it("asks the pane's own tty, inside the container for a devcontainer target", async () => {
+		stdoutData = "/dev/pts/7\n";
+		await paneAgentState({ kind: "devcontainer", name: "recipe-app", sessionName: "scratch" });
+		expect(calls[0]).toEqual([
+			"docker",
+			"exec",
+			"-u",
+			"vscode",
+			"recipe-app_devcontainer-dev-1",
+			"tmux",
+			"display-message",
+			"-p",
+			"-t",
+			"=scratch.0",
+			"#{pane_tty}",
+		]);
+		// The listing runs in the same namespace: a host ps would answer about the wrong machine.
+		expect(calls[1]).toEqual([
+			"docker",
+			"exec",
+			"-u",
+			"vscode",
+			"recipe-app_devcontainer-dev-1",
+			"ps",
+			"-t",
+			"/dev/pts/7",
+			"-o",
+			"comm=",
+		]);
+	});
+
+	it("answers unknown when the probe itself fails, rather than guessing gone", async () => {
+		exitCode = 1;
+		expect(await paneAgentState({ kind: "host", name: "host", sessionName: "scratch" })).toBe("unknown");
+		// A tty tmux would not name is equally no evidence.
+		exitCode = 0;
+		stdoutData = "";
+		expect(await paneAgentState({ kind: "host", name: "host", sessionName: "scratch" })).toBe("unknown");
+	});
+});
+
 describe("tmuxCore isAgentReady", () => {
 	it("is false for an empty or still-booting pane", () => {
 		expect(isAgentReady("")).toBe(false);
@@ -322,6 +385,20 @@ describe("tmuxCore isAgentReady", () => {
 		// capture-pane -e renders the composer line as e.g. "\e[39m❯ \e[2mTry\e[0m".
 		const esc = String.fromCharCode(27);
 		expect(isAgentReady(`${esc}[39m❯ ${esc}[2mTry${esc}[0m`)).toBe(true);
+	});
+
+	it("CANNOT see that the agent died, which is why the wake gate does not rely on it", () => {
+		// A real killed pane: the frame the agent painted is frozen exactly as it was and the shell's
+		// output lands after it, so the composer is still at column 0 and this answers TRUE for a pane
+		// running nothing. Pinned rather than fixed - no screen rule separates a frozen frame from a
+		// live one, so hostDaemon asks the OS (paneAgentState) instead of tightening this.
+		const killed = [
+			"────────────────",
+			"❯ bash: line 1: 1715643 Killed   claude --model opus",
+			"user@host:~$ ",
+		].join("\n");
+		expect(isAgentReady(killed)).toBe(true);
+		expect(classifyPaneProcesses(["sh", "bash"])).toBe("gone");
 	});
 });
 

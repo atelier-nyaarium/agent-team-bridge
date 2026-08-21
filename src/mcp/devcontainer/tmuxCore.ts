@@ -66,6 +66,14 @@ function tmuxArgv(target: TmuxTarget, sub: string[]): string[] {
 	return ["docker", "exec", "-u", "vscode", containerName(target.name), "tmux", ...sub];
 }
 
+/** Any other command, in the same place that target's tmux lives. Sibling of tmuxArgv, because a
+ * probe about a pane's processes is only true in the namespace the pane actually runs in. */
+function execArgv(target: TmuxTarget, argv: string[]): string[] {
+	if (target.kind === "host") return argv;
+	assertTmuxName(target.name);
+	return ["docker", "exec", "-u", "vscode", containerName(target.name), ...argv];
+}
+
 /** Spawn argv (no shell) and resolve stdout. */
 function run(argv: string[], timeoutMs = EXEC_TIMEOUT_MS, opts: { mergeStderr?: boolean } = {}): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -234,6 +242,48 @@ export async function killSession(target: TmuxTarget): Promise<void> {
 		if (classifyPeekError(err instanceof Error ? err.message : String(err)) !== "absent") throw err;
 	}
 	sendChains.delete(targetKey(target));
+}
+
+/**
+ * Whether an AGENT is running in the pane, as opposed to whether the pane exists.
+ *
+ * Three-valued on purpose. A wrong "gone" kills a live session's work, so every way of failing to
+ * find out - no ps, an unreadable tty, a container that will not exec - answers "unknown" and the
+ * caller leaves the session alone. Only positive evidence is "gone".
+ *
+ * The evidence is the pane's tty, never `#{pane_current_command}`: tmux reports the tty's
+ * foreground process group leader, and an agent launched inside the launcher's group reports as
+ * `sh` while a bare interactive shell reports as `bash`. That difference is job-control
+ * incidentals, not liveness, and it inverts the moment a launcher changes.
+ */
+export type PaneAgentState = "alive" | "gone" | "unknown";
+
+// What a pane holds when its agent died: the launcher and the shell that outlived it, and nothing
+// else. Deliberately a SHELL allowlist rather than an agent denylist - matching on "claude" would
+// answer "gone" for any install whose process is named differently, and that answer relaunches.
+const SHELL_COMMS = new Set(["sh", "bash", "zsh", "fish", "dash", "ash", "ps", "login", "su", "-bash", "-sh", "-zsh"]);
+
+/** The rule, apart from the probe that feeds it, so it can be tested without a tmux server. */
+export function classifyPaneProcesses(commLines: string[]): PaneAgentState {
+	const comms = commLines.map((line) => line.trim()).filter(Boolean);
+	// A pane always carries at least its own shell, so nothing at all means the probe failed to
+	// look rather than that the pane is empty.
+	if (comms.length === 0) return "unknown";
+	return comms.every((comm) => SHELL_COMMS.has(comm)) ? "gone" : "alive";
+}
+
+/** See [PaneAgentState]. Asks the OS what is on the pane's tty. */
+export async function paneAgentState(target: TmuxTarget): Promise<PaneAgentState> {
+	try {
+		const tty = (
+			await run(tmuxArgv(target, ["display-message", "-p", "-t", paneTarget(target), "#{pane_tty}"]))
+		).trim();
+		if (!tty.startsWith("/dev/")) return "unknown";
+		const listing = await run(execArgv(target, ["ps", "-t", tty, "-o", "comm="]));
+		return classifyPaneProcesses(listing.split("\n"));
+	} catch {
+		return "unknown";
+	}
 }
 
 /** Whether `target.sessionName` exists. */
