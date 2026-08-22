@@ -1,5 +1,4 @@
-import crypto from "node:crypto";
-import WebSocket from "ws";
+import type WebSocket from "ws";
 import { createReconnector } from "../../shared/reconnect.js";
 import {
 	FEDERATION_PROTOCOL_VERSION,
@@ -14,6 +13,7 @@ import {
 	reachCandidates,
 	reachHost,
 } from "../../shared/router-reach.js";
+import { pinnedDial, pinRefusal, realWebSocket } from "./pinnedSocket.js";
 
 // One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->Router socket (here and
 // evie-bot's BridgeTransport). 64 MiB clears a max-cap attachment payload's sealed frame (~1.78x
@@ -117,25 +117,19 @@ const MISSED_PONGS_LIMIT = 2;
 // budget; anything else may legitimately be slow to reach.
 const CONNECT_TIMEOUT_MS = 15_000;
 
-function tlsOptions(tls: RouterClientConfig["tls"]): Record<string, unknown> {
-	if (!tls) return {};
-	// A pinned leaf has no chain to validate, so chain verification is turned off and
-	// verifyPinnedLeaf below is what actually authenticates the peer.
-	return { rejectUnauthorized: false, tls: { rejectUnauthorized: false } };
+// The ws package rather than bun's substitute for it, which cannot pin. Resolved once: the lookup
+// walks the tree, and a failure here means no socket can be opened at all.
+const RealWebSocket = realWebSocket();
+
+// Where the pinned socket actually connects. ws derives these itself from the URL, but the dial is
+// ours now, so they are read from the same candidate the ring chose.
+function dialHost(target: string): string {
+	return reachHost(target);
 }
 
-/** Destroy the socket unless its leaf matches the pin. Nothing else authenticates a self-signed
- * Router, so a mismatch must close the connection rather than warn. */
-function verifyPinnedLeaf(ws: WebSocket, expectedFp: string): void {
-	ws.once("upgrade", (response) => {
-		const socket = (response as { socket?: { getPeerCertificate?: (d?: boolean) => { raw?: Buffer } } }).socket;
-		const raw = socket?.getPeerCertificate?.(true)?.raw;
-		const actual = raw ? crypto.createHash("sha256").update(raw).digest("hex") : "";
-		if (actual !== expectedFp.toLowerCase()) {
-			console.error(`[router-client] router cert fingerprint mismatch; refusing the connection`);
-			ws.terminate();
-		}
-	});
+function dialPort(target: string): number {
+	const parsed = Number(new URL(target).port);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ROUTER_PORT;
 }
 
 export function startRouterClient(config: RouterClientConfig): RouterClient {
@@ -179,19 +173,19 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		let opened = false;
 		console.log(`[router-client] connecting to ${target}...`);
 
-		ws = new WebSocket(wsUrl, {
+		// The pin is enforced on this socket during its TLS handshake, so a Router that cannot prove
+		// itself never receives the bearer these headers carry.
+		const dial = config.tls?.certFp ? pinnedDial(dialHost(target), dialPort(target), config.tls.certFp) : null;
+		ws = new RealWebSocket(wsUrl, {
 			headers: config.headers,
 			// Explicit rather than ws's inherited 100 MiB default: this socket carries every relay
 			// frame for the whole gateway, and an oversized inbound message does not merely fail,
 			// it can close the connection and drop all federation traffic with it. Must stay >= the
-			// matching explicit limit on evie-bot's BridgeTransport, or a frame the Router accepts kills us.
+			// matching explicit limit on the Router's own listener, or a frame it accepts kills us.
 			maxPayload: ROUTER_WS_MAX_PAYLOAD_BYTES,
-			// Bun's WebSocket reads pinned TLS options under `tls`, NOT at the top level. A top-level
-			// `ca` is silently ignored, so it falls back to the system trust store and rejects the
-			// private cluster-signed API server cert ("TLS handshake failed").
-			...tlsOptions(config.tls),
+			// ws types this as node's overloaded net.connect; ours is the one form ws actually calls.
+			...(dial ? { createConnection: dial.createConnection as WebSocket.ClientOptions["createConnection"] } : {}),
 		});
-		if (config.tls && "certFp" in config.tls) verifyPinnedLeaf(ws, config.tls.certFp);
 
 		// Bound the wait on THIS candidate. Terminating routes into the close handler, which is the
 		// one place the ring advances, so a timeout and a refused connection are handled identically.
@@ -203,6 +197,14 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		}, budget);
 
 		ws.on("open", () => {
+			// A socket that opened without the pin having run was never authenticated. Nothing else
+			// vouches for a self-signed Router, so this refuses rather than reporting a mismatch it
+			// did not observe.
+			if (dial && dial.verdict() !== "match") {
+				console.error(`[router-client] ${pinRefusal(dial.verdict())}; refusing the connection`);
+				ws?.terminate();
+				return;
+			}
 			console.log(`[router-client] connected`);
 			missedPongs = 0;
 			opened = true;
@@ -322,6 +324,12 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 
 		ws.on("error", (err: Error) => {
 			console.error(`[router-client] error: ${err.message}`);
+			// A runtime that ignores createConnection does its own chain check instead, which a
+			// self-signed leaf can never pass. The message names the certificate, so say what is
+			// actually wrong: the pin never got to run.
+			if (dial && dial.verdict() === "pending" && /self.signed|SELF_SIGNED|DEPTH_ZERO/i.test(err.message)) {
+				console.error(`[router-client] ${pinRefusal("pending")}`);
+			}
 		});
 	}
 
@@ -329,7 +337,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	// the open handler (the Router re-keys gateway id -> socket on every reconnect) and
 	// re-fired by the pending-retry timer when the Domain was still pending.
 	function registerGateway(): void {
-		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
 		void callTool("gateway_register", {
 			gatewayId: config.gatewayId,
 			domainId: config.domainId,
@@ -429,7 +437,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	function startHeartbeat(): void {
 		stopHeartbeat();
 		heartbeatTimer = setInterval(() => {
-			if (!ws || ws.readyState !== WebSocket.OPEN) return;
+			if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
 			// Increment first, then check (a pong resets the count to 0), so two
 			// consecutive unanswered pings terminate - matching the gateway's team socket.
 			missedPongs++;
@@ -453,7 +461,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	}
 
 	async function callTool(action: string, params: Record<string, unknown>): Promise<RouterToolCallResult> {
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
+		if (!ws || ws.readyState !== RealWebSocket.OPEN) {
 			return { callId: "", error: `Not connected to the federation Router` };
 		}
 
@@ -473,7 +481,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	}
 
 	function isConnected(): boolean {
-		return ws !== null && ws.readyState === WebSocket.OPEN;
+		return ws !== null && ws.readyState === RealWebSocket.OPEN;
 	}
 
 	function stop(): void {
