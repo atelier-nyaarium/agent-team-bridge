@@ -76,6 +76,10 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 		defaultCwd: () => process.cwd(),
 		followupDelivery: isCodex ? "started" : "followup",
 		maxActivities: isCodex ? CODEX_ACTIVITY_MAX_ITEMS : COPILOT_ACTIVITY_MAX_ITEMS,
+		// A codex thread is durable and gets resumed, so a reaped child's work is adopted by its
+		// replacement. An ACP session lives inside the Copilot child and dies with it, so reaping one
+		// would destroy agents the caller may still message - see the spec field's own doc.
+		threadsResumable: isCodex,
 		...(isCodex
 			? {}
 			: { busyMessage: "Copilot is still working. Await the turn or stop it before sending another." }),

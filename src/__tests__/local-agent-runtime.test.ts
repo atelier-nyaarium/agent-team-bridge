@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LocalAgentRuntime, type LocalBackendSpec } from "../mcp/local/localAgentRuntime.js";
+import { LOCAL_IDLE_REAP_MS, LocalAgentRuntime, type LocalBackendSpec } from "../mcp/local/localAgentRuntime.js";
 import type { LocalBackendSession, LocalTerminal } from "../mcp/local/localAgentSession.js";
 import type { AgentBackendId } from "../shared/agent-backend.js";
 import { CodexListAgentsResultSchema } from "../shared/codexAgentCatalog.js";
@@ -29,6 +29,7 @@ interface HarnessOptions {
 	busyMessage?: string;
 	canSteer?: boolean;
 	openThreadError?: Error;
+	threadsResumable?: boolean;
 }
 
 ////////////////////////////////
@@ -54,6 +55,9 @@ class FakeBackendSession implements LocalBackendSession {
 	private activityListener?: (turnId: string, text: string) => void;
 	private closedListener?: () => void;
 	private readonly openThreadError?: Error;
+	/** Parks openThread so a test can hold a child call in flight, which is the window a reaper
+	 * decided from turn state alone would close the transport in. */
+	openThreadGate?: Promise<void>;
 
 	constructor(options: FakeSessionOptions = {}) {
 		this.openThreadError = options.openThreadError;
@@ -68,6 +72,7 @@ class FakeBackendSession implements LocalBackendSession {
 	async openThread(options: { cwd: string; model?: string }): Promise<string> {
 		this.calls.push("openThread");
 		this.openThreadCalls.push(options);
+		if (this.openThreadGate) await this.openThreadGate;
 		if (this.openThreadError) throw this.openThreadError;
 		return "thread-1";
 	}
@@ -136,10 +141,15 @@ function makeHarness(options: HarnessOptions = {}) {
 		waitBudgetMs: options.waitBudgetMs ?? 100,
 		followupDelivery: options.followupDelivery ?? (backendId === "copilot" ? "followup" : "started"),
 		maxActivities: options.maxActivities ?? CODEX_ACTIVITY_MAX_ITEMS,
+		threadsResumable: options.threadsResumable ?? true,
 		...(options.busyMessage ? { busyMessage: options.busyMessage } : {}),
 	};
 	const runtime = new LocalAgentRuntime(spec, () => timestamp++);
-	return { runtime, session, openSession, spec };
+	// Jumps the clock the idle reaper reads, so a test drives it without waiting.
+	const advance = (ms: number) => {
+		timestamp += ms;
+	};
+	return { runtime, session, openSession, spec, advance };
 }
 
 async function waitForTurns(session: FakeBackendSession, count: number): Promise<void> {
@@ -541,5 +551,104 @@ describe("LocalAgentRuntime", () => {
 		harness.session.resolveTurn("turn-3", { status: "completed", finalResponse: "Third" });
 		expect(parseCodex(await afterClosePending).turn?.state).toBe("completed");
 		expect(harness.openSession.count).toBe(2);
+	});
+
+	it("reaps an idle child, and the next call transparently opens a replacement", async () => {
+		// The child is otherwise released only when the MCP's stdin closes, so an agent that ran once
+		// and then idled held its whole footprint for the rest of a long session.
+		const harness = makeHarness();
+		const startPending = harness.runtime.handle({ kind: "start", prompt: "Index the workspace" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "First" });
+		const started = parseCodex(await startPending);
+		expect(harness.openSession.count).toBe(1);
+
+		expect(harness.runtime.reapIfIdle()).toBe(false); // not idle long enough yet
+		harness.advance(LOCAL_IDLE_REAP_MS);
+		expect(harness.runtime.reapIfIdle()).toBe(true);
+		expect(harness.session.calls).toContain("close");
+
+		// The agent stays messageable: a replacement child adopts the thread.
+		const again = harness.runtime.handle({ kind: "message", agentId: started.agentId, prompt: "Once more" });
+		await waitForTurns(harness.session, 2);
+		harness.session.resolveTurn("turn-2", { status: "completed", finalResponse: "Second" });
+		expect(parseCodex(await again).turn?.state).toBe("completed");
+		expect(harness.openSession.count).toBe(2);
+	});
+
+	it("never reaps a child with a turn in flight, however long it has run", async () => {
+		// close() settles every pending turn as failed, so reaping here would convert working agents
+		// into errors in order to reclaim memory - the one trade this must never make.
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", prompt: "A long job" });
+		await waitForTurns(harness.session, 1);
+		harness.advance(LOCAL_IDLE_REAP_MS * 10);
+
+		expect(harness.runtime.reapIfIdle()).toBe(false);
+		expect(harness.session.calls).not.toContain("close");
+
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "Done" });
+		await pending;
+	});
+
+	it("never reaps while a child call is in flight, before any turn exists to guard it", async () => {
+		// The window the turn marker cannot see: openThread is issued before any turn record, so a
+		// reap decided from turn state alone closes the transport under the call. Same shape for
+		// startTurn until it resolves, and for a steer or interrupt that owns no turn of its own.
+		// Pins that SOMETHING guards beyond activeTurnId, which is the regression worth catching; it
+		// cannot distinguish a per-request lease from a per-call one, since the difference is a
+		// single microtask that no test can stand inside.
+		const harness = makeHarness();
+		let release = () => {};
+		harness.session.openThreadGate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+
+		const startPending = harness.runtime.handle({ kind: "start", prompt: "A slow opener" });
+		await Promise.resolve();
+		harness.advance(LOCAL_IDLE_REAP_MS * 10);
+		expect(harness.runtime.reapIfIdle()).toBe(false);
+		expect(harness.session.calls).not.toContain("close");
+
+		release();
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "Done" });
+		await startPending;
+	});
+
+	it("starts the idle clock at the TERMINAL, with the request long since returned", async () => {
+		// Ordered so applyTerminal's own stamp is the only thing that can set the clock: the wait
+		// budget expires first, so the request lease is already released and cannot mask a missing
+		// stamp. Without it the clock still reads the request's return, three windows ago, and the
+		// child is reaped the instant its turn finishes.
+		const harness = makeHarness({ waitBudgetMs: 5 });
+		const startPending = harness.runtime.handle({ kind: "start", prompt: "A long job" });
+		await waitForTurns(harness.session, 1);
+		await startPending; // returns on the budget; the turn keeps running
+
+		harness.advance(LOCAL_IDLE_REAP_MS * 3);
+		expect(harness.runtime.reapIfIdle()).toBe(false); // still guarded by the active turn
+
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "Done" });
+		await new Promise((resolve) => setTimeout(resolve, 0)); // let applyTerminal run
+		// The turn guard is gone now, so only the terminal's stamp keeps this false.
+		expect(harness.runtime.reapIfIdle()).toBe(false);
+
+		harness.advance(LOCAL_IDLE_REAP_MS);
+		expect(harness.runtime.reapIfIdle()).toBe(true);
+	});
+
+	it("never reaps a backend whose threads die with the child", async () => {
+		// An ACP session lives inside the Copilot process, so a reap would destroy agents the caller
+		// may still message - a memory saving that silently loses work is not a saving.
+		const harness = makeHarness({ backendId: "copilot", threadsResumable: false });
+		const startPending = harness.runtime.handle({ kind: "start", prompt: "A copilot job" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "Done" });
+		await startPending;
+
+		harness.advance(LOCAL_IDLE_REAP_MS * 10);
+		expect(harness.runtime.reapIfIdle()).toBe(false);
+		expect(harness.session.calls).not.toContain("close");
 	});
 });

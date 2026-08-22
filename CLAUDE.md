@@ -784,6 +784,16 @@ survives a Gatewayless setup. Installing the CLI is the whole opt-in on both pat
 - **A dead child must not stay cached.** The runtime memoizes its open session, so `LocalBackendSession`
   declares `onClosed` and the runtime evicts on it, identity-guarded so a late close cannot evict its
   successor. Without it every later call goes into a closed pipe and no replacement is ever requested.
+- **An idle child is reaped** (`LOCAL_IDLE_REAP_MS`), because stdin-close was otherwise its ONLY
+  release: measured at ~155MB flat per child, held for a whole session by agents that used it once.
+  Gated on `threadsResumable`, which is a FACT about the backend rather than a policy - a codex
+  thread is durable and its replacement resumes it, while an ACP session dies with the Copilot child,
+  so only codex is reaped. The guard is a lease held across the WHOLE request in `handle()`, not per
+  child call: a per-call lease releases between `startTurn` resolving and its turn record being
+  written, and the reaper fires in exactly that gap. At every instant either that lease is held or an
+  `activeTurnId` guards the child. `applyTerminal` stamps the idle clock itself, since a terminal
+  arrives on the event stream and reaches no lease - without it a long turn is reapable the instant
+  it ends.
 - **Codex resumes a thread before any follow-up turn**, the way the daemon does. App Server may unload
   an idle thread, and starting a turn on an unloaded one fails.
 - The child is reaped when stdin closes. Nothing else ever will, since no daemon supervises it.
