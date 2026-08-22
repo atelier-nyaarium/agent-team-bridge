@@ -19,8 +19,11 @@ import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./loca
  */
 export class CodexLocalSession implements LocalBackendSession {
 	private readonly pending = new Map<string, (terminal: LocalTerminal) => void>();
-	/** Threads this session has already run a turn on, which is exactly the set that needs resuming. */
-	private readonly used = new Set<string>();
+	/** Threads THIS session created and has not yet run, which is exactly the set that needs NO
+	 * resume. Everything else does - including a thread inherited from a reaped predecessor, which
+	 * this session has never loaded at all. Tracking the used set instead made a fresh child skip
+	 * the resume for an inherited thread and fail its first follow-up. */
+	private readonly fresh = new Set<string>();
 	private activityListener?: (turnId: string, text: string) => void;
 	private closedListener?: () => void;
 
@@ -50,14 +53,20 @@ export class CodexLocalSession implements LocalBackendSession {
 	}
 
 	async openThread(options: { cwd: string; model?: string }): Promise<string> {
-		return this.client.startThread({ cwd: options.cwd, model: options.model });
+		const threadId = await this.client.startThread({ cwd: options.cwd, model: options.model });
+		this.fresh.add(threadId);
+		return threadId;
 	}
 
 	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
-		// App Server may unload an idle thread, and starting a turn on an unloaded one fails.
-		if (this.used.has(threadId)) await this.client.resumeThread(threadId);
+		// App Server may unload an idle thread, and starting a turn on an unloaded one fails. Only a
+		// thread this session just created is known to be loaded already.
+		if (this.fresh.delete(threadId)) {
+			const turnId = await this.client.startTurn(threadId, prompt);
+			return { turnId, settled: this.park(turnId) };
+		}
+		await this.client.resumeThread(threadId);
 		const turnId = await this.client.startTurn(threadId, prompt);
-		this.used.add(threadId);
 		return { turnId, settled: this.park(turnId) };
 	}
 
