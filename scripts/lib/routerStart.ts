@@ -90,6 +90,9 @@ export async function startRouter(
 	const wasRunning = await routerRunning();
 	if (!wasRunning) note(`Starting the Router on ${env.lan}:${ROUTER_PORT}`);
 	await ensureNetwork(FEDERATION_NETWORK);
+	// --pull on a deliberate build, so the Dockerfile's floating base tag resolves to what it names
+	// now rather than to whatever this machine cached. A pull failure falls through to the cache.
+	if (opts.build) await dcFederation("build", "--pull").quiet().nothrow();
 	const up = opts.build
 		? await dcFederation("up", "--build", "-d").quiet().nothrow()
 		: await dcFederation("up", "-d").quiet().nothrow();

@@ -10,7 +10,8 @@
 		"build": "bun run scripts/build.ts",
 		"lint": "biome ci . && bunx tsc --noEmit",
 		"lint:fix": "biome check --write .",
-		"test": "vitest run"
+		"test": "vitest run",
+		"check:pinning": "bun run scripts/check-pinning-runtime.ts"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.29.0",

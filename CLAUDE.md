@@ -36,7 +36,8 @@ code does not belong here; rationale lives in `git log`.
     per-agent critical section that folds daemon receipts and events into it, and the one
     authenticated route behind all five tools; the pure reducers and the shared types live in
     `codexAgentReducers.ts` and `codexAgentTypes.ts` (see Codex delegation below)
-  - `router/` - WS client to the self-hosted Router
+  - `router/` - WS client to the self-hosted Router; `pinnedSocket.ts` owns the certificate pin and
+    is the only place that reaches past bun's `ws` substitute (see Pinning the Router below)
   - `console/` - gateway side of the Android channel: op dispatch, the `ConsolePeer` virtual peer,
     the capability store, the relay pump, the durable op store. `consoleTypes.ts` holds the deps and
     route interfaces, bounds and pure predicates `consoleHandler.ts`'s dispatcher is built on
@@ -372,6 +373,31 @@ every op rode that socket until it dropped, while each fresh connection (the deb
 probe) timed out. "Works, then does not, then a reinstall fixes it" is what an intermittent path plus
 a pooled connection looks like, and it is worse to diagnose than a path that never works at all:
 measuring it once and seeing it succeed proves nothing.
+
+### Pinning the Router
+
+The Router's leaf is self-signed, so its fingerprint IS its identity. `gateway/router/pinnedSocket.ts`
+owns the check and `routerClient` holds no certificate logic of its own.
+
+- **The pin runs on the TLS handshake, not after it.** The upgrade request carries the WS bearer, so
+  a check on ws's `upgrade` event fires once that bearer is already on the wire and can only close a
+  socket that has finished leaking. `pinnedDial` builds the TLS socket itself, hands it to ws through
+  `createConnection`, and compares the leaf on `secureConnect`; a wrong Router is destroyed before a
+  byte is written, which `router-cert-pinning.test.ts` asserts by watching what the listener SAW.
+- **`ws` is reached by resolved path, never by its bare name.** Bun substitutes its own WebSocket for
+  the `ws` specifier, and that substitute exposes no peer certificate and ignores `createConnection`,
+  so a pin written against the npm package silently does nothing. `require.resolve` and every subpath
+  import hit the same substitution, hence the walk up to `node_modules/ws/lib/websocket.js`.
+- **The verdict is four-valued and none of them collapse.** `match`, `mismatch`, `unreadable`, and
+  `pending` (the socket was never handed over, so nothing was checked). Reporting an unreadable
+  certificate as a wrong one is what turned a base-image bump into a fleet-wide "cert fingerprint
+  mismatch" naming the one thing that was correct.
+- **Chain verification is off and stays off.** A self-signed leaf has no chain, and its subject names
+  one CN that no dialled address matches, so hostname identity cannot be satisfied by any address the
+  ring holds. The fingerprint replaces both checks rather than supplementing them.
+- **bun 1.4+ is required**, and it is the runtime that decides, not the code. `oven/bun:1` is a
+  floating tag, so both start paths build with `--pull`; without it two machines on the same commit
+  land on different bun majors.
 
 ### Federation and trust
 
@@ -1140,6 +1166,13 @@ capability when its corresponding CLI is found on `PATH`; no environment variabl
 ### Testing
 
 Tests live in `src/__tests__/`. `bun run test` for all, or `bun run test <path>` for one.
+
+**vitest runs its workers under NODE, while the gateway, Router and daemon all run under bun.** So a
+difference between the two runtimes is invisible to the whole suite, and node is the forgiving one:
+`ws` is the real package there, where bun substitutes its own. Certificate pinning passed 2600 tests
+while refusing every connection in production for exactly this reason. `bun run check:pinning`
+(`scripts/check-pinning-runtime.ts`, a CI step) is the gate that runs on the shipping runtime; reach
+for the same shape for anything else whose behaviour is the runtime's rather than ours.
 
 ### Debugging the console on-device
 

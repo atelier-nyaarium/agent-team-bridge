@@ -44,6 +44,12 @@ jobs:
       - name: Test
         run: bun run test
 
+      # vitest runs under node, where `ws` is the real package; the gateway runs under bun, which
+      # substitutes its own WebSocket for that import. Certificate pinning is the one thing that
+      # difference decides, so it is checked here on bun rather than only in the suite.
+      - name: Router pinning works on the shipping runtime
+        run: bun run check:pinning
+
       - name: Codegen drift check
         # --exit-code alone is vacuous for untracked output; the porcelain
         # check also fails if generated files are new or deleted.
