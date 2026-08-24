@@ -881,6 +881,18 @@ permissions for the supervised target.
   which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
   Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
   `plans/pain-points.md` before reintroducing one.
+- **Terminal copy** (`TerminalCopy.kt`, `TerminalAnsi.kt`): a pane is a fixed grid, so a link longer
+  than a row arrives split across rows and every row arrives padded to the pane edge. `trimLineEnds`
+  drops that padding before the frame renders, keeping only cells carrying a background or reverse
+  (a tmux status line and a selected row both colour out to the edge), so a selection copies text
+  rather than blank cells. `selectedUrl` joins the rows back when what survives is ONE whitespace-free
+  URL with a scheme, and that same answer both rewrites the clipboard and arms the open button under
+  the Paused banner. Two things this cannot do differently: tmux's own `-J` already rejoins rows tmux
+  wrapped at the margin, but a TUI computing its own line breaks is never marked wrapped, so the join
+  has to happen on this side; and the COPY is where a link becomes legible at all, since Compose keeps
+  `Selection` internal and nothing can read what sits under the handles until it is copied. The button
+  opens any scheme an installed app claims, unlike a message link, whose set is fixed in `LinkMenu.kt`
+  - that one carries a scheme an agent wrote, this one carries what the owner selected by hand.
 - **Designer plugin:** docks a `design-card` file from its declared title/group/dimensions the
   moment the message lands, and resolves the bytes at RENDER from the live row (content-keyed, so an
   older revision cannot lend its bytes). A card therefore exists before its bytes and says whether

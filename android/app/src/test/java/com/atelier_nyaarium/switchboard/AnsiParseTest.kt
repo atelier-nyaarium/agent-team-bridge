@@ -139,4 +139,44 @@ class AnsiParseTest {
 		assertEquals(1, runs.size)
 		assertEquals("ab", runs[0].text)
 	}
+
+	@Test
+	fun rowPaddingIsDroppedWhenItCarriesNoColour() {
+		val runs = trimLineEnds(parseAnsiRuns("short   \nnext line    \n"))
+		assertEquals("short\nnext line\n", runs.joinToString("") { it.text })
+	}
+
+	@Test
+	fun paddingUnderABackgroundSurvives() {
+		// A tmux status line colours out to the pane edge, so its trailing cells are visible.
+		val runs = trimLineEnds(parseAnsiRuns("\u001b[44mstatus   \u001b[0m\nplain   \n"))
+		assertEquals("status   \nplain\n", runs.joinToString("") { it.text })
+	}
+
+	@Test
+	fun paddingUnderReverseSurvives() {
+		// Reverse paints a background from the fg, so those cells are visible too.
+		val runs = trimLineEnds(parseAnsiRuns("\u001b[7msel  \u001b[0m\n"))
+		assertEquals("sel  \n", runs.joinToString("") { it.text })
+	}
+
+	@Test
+	fun aRowOfOnlyPaddingBecomesEmpty() {
+		val runs = trimLineEnds(parseAnsiRuns("a\n      \nb"))
+		assertEquals("a\n\nb", runs.joinToString("") { it.text })
+	}
+
+	@Test
+	fun spacingInsideARowIsUntouched() {
+		// Only the end of a row is padding; spacing within it is layout and must stay.
+		val runs = trimLineEnds(parseAnsiRuns("col1   col2   "))
+		assertEquals("col1   col2", runs.joinToString("") { it.text })
+	}
+
+	@Test
+	fun paddingSpanningSeveralRunsIsFullyDropped() {
+		// A row can end in fresh colours whose only content is padding.
+		val runs = trimLineEnds(parseAnsiRuns("text\u001b[31m  \u001b[32m  \u001b[0m\ntail"))
+		assertEquals("text\ntail", runs.joinToString("") { it.text })
+	}
 }

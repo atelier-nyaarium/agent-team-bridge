@@ -136,6 +136,56 @@ internal fun parseAnsiRuns(input: String): List<AnsiRun> {
 	return runs
 }
 
+/**
+ * Drop the end-of-line padding a `-J` capture preserves, so a selection copies the text on a row
+ * and not the blank cells behind it. Trailing spaces are dropped only while they are INVISIBLE: a
+ * run carrying a background, or reverse (which paints one from the fg), is kept untouched, because
+ * a tmux status line and a selected row both colour out to the pane edge. Pure, JVM-testable.
+ */
+internal fun trimLineEnds(runs: List<AnsiRun>): List<AnsiRun> {
+	val out = ArrayList<AnsiRun>()
+	val line = ArrayList<AnsiRun>()
+
+	// Walk the finished line tail backwards, dropping spaces until a run is visible or holds text.
+	fun flushLine() {
+		var i = line.size - 1
+		while (i >= 0) {
+			val r = line[i]
+			if (r.bg != null || r.reverse) break
+			val kept = r.text.trimEnd(' ')
+			if (kept.length == r.text.length) break
+			if (kept.isEmpty()) {
+				line.removeAt(i)
+				i--
+				continue
+			}
+			line[i] = r.copy(text = kept)
+			break
+		}
+		out.addAll(line)
+		line.clear()
+	}
+
+	for (r in runs) {
+		var start = 0
+		while (true) {
+			val nl = r.text.indexOf('\n', start)
+			if (nl < 0) {
+				if (start < r.text.length) line.add(r.copy(text = r.text.substring(start)))
+				break
+			}
+			if (nl > start) line.add(r.copy(text = r.text.substring(start, nl)))
+			flushLine()
+			// The newline keeps the style of its own run, so a background that reached the row edge
+			// renders exactly as it did before.
+			out.add(r.copy(text = "\n"))
+			start = nl + 1
+		}
+	}
+	flushLine()
+	return out
+}
+
 // The pane's own default colors, used to resolve a null side when reverse must swap fg<->bg.
 private const val DEFAULT_FG = 0xFFCCCCCCL
 private const val DEFAULT_BG = 0xFF0C0C0CL
@@ -143,7 +193,7 @@ private const val DEFAULT_BG = 0xFF0C0C0CL
 /** The Compose adapter: styled runs to a colored AnnotatedString. Reverse swaps fg/bg (resolving
  * a null side to the pane default) so it renders as a real highlight, not same-on-same text. */
 fun ansiToAnnotated(input: String): AnnotatedString = buildAnnotatedString {
-	for (r in parseAnsiRuns(input)) {
+	for (r in trimLineEnds(parseAnsiRuns(input))) {
 		val style = if (r.reverse) {
 			SpanStyle(
 				color = Color(r.bg ?: DEFAULT_BG),
