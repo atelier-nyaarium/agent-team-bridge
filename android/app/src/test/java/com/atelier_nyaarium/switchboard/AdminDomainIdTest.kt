@@ -13,7 +13,7 @@ import org.junit.Test
  */
 class AdminDomainIdTest {
 
-	private fun team(name: String, domainId: String?) = Team(name, "available", "", 0, domainId = domainId)
+	private fun team(name: String, domainId: String?) = testTeam(name, status = Presence.AVAILABLE, domainId = domainId)
 
 	@Test
 	fun resolvesFromTheLocalGatewaysDomainTaggedSession() {

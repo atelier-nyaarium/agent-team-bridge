@@ -17,7 +17,7 @@ import org.junit.Test
 class ForgetTombstoneTest {
 
 	private fun makeTeam(name: String, status: String = "online") =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0)
+		testTeam(name = name, status = status, mode = "channel")
 
 	@Test
 	fun masksATombstonedTeamStillWithinItsTtl() {

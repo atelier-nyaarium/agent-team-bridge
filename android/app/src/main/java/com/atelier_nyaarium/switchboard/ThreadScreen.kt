@@ -181,7 +181,7 @@ fun ThreadScreen(
 	// session already known to be stuck (terminal.needsLogin) jumps straight to terminal, so the
 	// human sees the problem instantly instead of watching an otherwise-uneventful boot.
 	var terminalMode by remember(team) {
-		val booting = terminal.sessionStatus in setOf(null, "available", "verifying")
+		val booting = terminal.presence?.isOnline != true
 		mutableStateOf(terminal.eligible && booting && terminal.needsLogin)
 	}
 	if (terminalMode) BackHandler { terminalMode = false }
@@ -392,8 +392,7 @@ fun ThreadScreen(
 				TerminalView(
 					team = team,
 					refreshMs = terminal.refreshMs,
-					wakePending = terminal.wakeInFlight,
-					sessionStatus = terminal.sessionStatus,
+					presence = terminal.presence,
 					onWake = terminal.onWake,
 					onRelaunch = terminal.onRelaunch,
 					onPeek = terminal.onPeek,

@@ -102,23 +102,24 @@ fun SessionCard(
 	val strong = rememberStrongHaptic()
 	val display = state.label(team.name)
 	val unread = state.unread[team.name] ?: 0
-	val live = team.status == "online"
-	val statusWord = statusWord(team.status)
-	// The board tile reads the presence plane directly (Team.working/needsLogin, daemon-derived and
-	// pushed on the poll response) rather than this device's own peek - a board session has no peek
-	// stream of its own. Null means unknown (never observed, or
-	// derivation just became impossible), never false - a tile shows no pulse rather than a stale
-	// frozen one, so both chips are gated on an explicit `== true`, not a null-as-false fallback.
-	val checkTerminal = live && team.needsLogin == true
-	val limitHit = live && team.limitBlocked == true
+	val presence = team.presence
+	val live = presence.isOnline
+	val statusWord = presence.word
+	// The board tile reads the presence plane directly (daemon-derived and pushed on the poll
+	// response) rather than this device's own peek - a board session has no peek stream of its own.
+	// Null means unknown (never observed, or derivation just became impossible), never false - a tile
+	// shows no pulse rather than a stale frozen one, so both chips are gated on an explicit
+	// `== true`, not a null-as-false fallback.
+	val checkTerminal = live && presence.needsLogin == true
+	val limitHit = live && presence.limitBlocked == true
 	// "working" and "verifying" are one busy state sharing a single pulse bar. A limit-blocked session
 	// is stopped rather than busy, so it must not pulse even if the frame that derived it caught a
 	// spinner still on screen.
-	val busy = statusWord == "verifying" || (live && team.working == true && !limitHit)
+	val busy = presence.isVerifying || (live && presence.working == true && !limitHit)
 	// Ambient presence: full color while connected or busy, muted once asleep or gone ("down or
 	// asleep" both read the same muted way - only a connected/busy session keeps full-color text).
 	val titleColor =
-		if (statusWord == "available" || statusWord == "ended") {
+		if (!presence.isLive) {
 			MaterialTheme.colorScheme.onSurfaceVariant
 		} else {
 			MaterialTheme.colorScheme.onSurface
@@ -170,7 +171,7 @@ fun SessionCard(
 				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
 				// package.json the build reads). Not a warning - the host auto-updates daily, so
 				// a lag is benign and self-correcting. Neutral color, version only, no label.
-				team.version?.let { v ->
+				presence.version?.let { v ->
 					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
 				}
 				if (unread > 0) Badge { Text("$unread") }

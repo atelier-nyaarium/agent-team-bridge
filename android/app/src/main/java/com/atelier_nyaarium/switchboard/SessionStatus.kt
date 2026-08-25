@@ -23,14 +23,9 @@ import androidx.compose.ui.unit.dp
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The base board/thread word for a wire status, before any working/waking/login refinement. The
- * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
-internal fun statusWord(status: String): String = when (status) {
-	"online" -> "live"
-	"verifying" -> "verifying"
-	"available" -> "available"
-	else -> "ended"
-}
+// The status-word vocabulary moved to `Presence.word`, and the raw status string it reads went
+// private with it. It lived here as a free function over a String, which is precisely what let
+// fourteen call sites hold a status with no way to ask what it was worth; see Presence.kt.
 
 ////////////////////////////////
 //  Composables

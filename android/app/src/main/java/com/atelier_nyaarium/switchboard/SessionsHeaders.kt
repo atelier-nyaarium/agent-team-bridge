@@ -225,7 +225,7 @@ internal fun LinkedFriendSessionRow(session: CrossDomainPresenceSession) {
 			}
 		}
 		Text(
-			statusWord(session.status),
+			Presence.wordFor(session.status),
 			style = MaterialTheme.typography.labelSmall,
 			color = MaterialTheme.colorScheme.onSurfaceVariant,
 		)

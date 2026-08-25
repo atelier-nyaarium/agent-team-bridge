@@ -9,7 +9,7 @@ import org.junit.Test
  */
 class SessionOrderTest {
 
-	private fun team(name: String, status: String = "available") = Team(name, status, "", 0)
+	private fun team(name: String, status: String = Presence.AVAILABLE) = testTeam(name, status = status)
 
 	private fun stateWith(
 		teams: List<Team>,
@@ -71,8 +71,8 @@ class SessionOrderTest {
 		// A local rename override wins over the server-reported sessionLabel, same as label().
 		val state = stateWith(
 			teams = listOf(
-				Team("local.gw.proja.claude", "available", "", 0, sessionLabel = "Zzz Server"),
-				Team("local.gw.projb.claude", "available", "", 0, sessionLabel = "Aaa Server"),
+				testTeam("local.gw.proja.claude", status = Presence.AVAILABLE, sessionLabel = "Zzz Server"),
+				testTeam("local.gw.projb.claude", status = Presence.AVAILABLE, sessionLabel = "Aaa Server"),
 			),
 			labels = mapOf("local.gw.proja.claude" to "Aaa Local Override"),
 		)

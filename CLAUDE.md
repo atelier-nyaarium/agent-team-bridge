@@ -865,6 +865,38 @@ permissions for the supervised target.
   PAYLOAD and can change while the row is on screen has to be folded in, or the row keeps stale
   content forever. State pushed over the JS bridge instead (`window.thread.*` mutating in place) is
   outside it by design and needs no fold.
+- **Presence authority** (`Presence.kt`): a session's facts reach the phone by TWO channels with very
+  different latency, and NOTHING on the wire says which. The plane PUSHES the route Gateway's own rows
+  on every poll (`presence.ts`'s snapshot walks only its own store; `applyPlanePresence` is the sole
+  place a row is stamped LIVE); every OTHER machine is PULLED once per `DISCOVERY_REFRESH_MS`, which
+  `PollDrain` calls "the one thing left with no push mechanism". A consumer reading a bare value
+  silently assumes push latency and is wrong for every machine but one - which is why waking a session
+  on another machine showed a blank terminal until its handshake landed, and why the composer's wake
+  notice fired on the wrong sessions.
+  - **The status string is PRIVATE and `Presence`'s constructor is private.** The fix is not an
+    accessor, it is that `status == "available"` cannot be written at all: every question is a member
+    (`isLive`, `isOnline`, `word`, `mayHavePane`, `authoritative`), and a presence field added later
+    inherits the authority for free. That is the difference between fixing this defect and its class.
+    `presence-authority-residue.test.ts` is the backstop, in the TS suite so it blocks a PR (the Kotlin
+    tests run after merge), with positive controls so an empty sweep fails instead of looking clean.
+  - **A local action is a RECEIPT, never a status override** (`ActionReceipt`). This device's own
+    request is the freshest fact it holds, and `wakeSession` used to throw it away and then wait to be
+    told what it already knew. Scoped by opId, so an overlapping wake and relaunch cannot retire each
+    other's. Carries an outcome rather than only a time, because "asked", "accepted" and "failed" are
+    three different things a timer expresses none of. **Evidence always outranks it**: a row reporting
+    the session up retires the receipt rather than being overridden by it, since an optimistic value
+    that can outrank a real report is a UI that lies, which is worse than one that is late.
+  - **The TTL is a bound, not the expiry that matters**, and must stay longer than one discovery
+    interval (asserted in `PresenceTest`). Shorter, and a slow cold boot expires it before the roster
+    has spoken once, putting the blank terminal straight back.
+  - **UNREACHABLE peeks nothing.** A held row from a gateway the last discovery could not reach says
+    only what that machine WAS, so acting on it is a guaranteed round trip to nothing. Without it a
+    wake tap on a powered-off machine becomes a peek every couple of seconds for the receipt's whole
+    life. Residual: a machine the Router still believes is connected is not stamped UNREACHABLE, so
+    that case costs ~a dozen failing peeks before the receipt ages out (`failCount` backs the loop off).
+  - **A non-authoritative row is probed ONCE per terminal mount**, rather than trusted or polled
+    forever. A POLLED "available" is not evidence, but peeking it every cycle is the cost the idle gate
+    exists to avoid; one op settles it.
 - **Working / needs-login** (`ChatState.working`): the presence plane FIRST, a local peek only as the
   fallback. A peek lands solely while that session's terminal is on screen, so reading it first froze
   the thread's chip at whatever it saw last time. Every screen also declares its own focus intent, and

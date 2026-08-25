@@ -11,7 +11,7 @@ import org.junit.Test
 class GroupByGatewayTest {
 
 	// gatewayId derives from the qualified name, so the fixtures spell it there.
-	private fun team(name: String, domainId: String? = "alice") = Team(name, "available", "", 0, domainId = domainId)
+	private fun team(name: String, domainId: String? = "alice") = testTeam(name, status = Presence.AVAILABLE, domainId = domainId)
 
 	private fun keys(groups: List<Pair<GatewayGroupKey, List<Team>>>) = groups.map { it.first.gatewayId }
 

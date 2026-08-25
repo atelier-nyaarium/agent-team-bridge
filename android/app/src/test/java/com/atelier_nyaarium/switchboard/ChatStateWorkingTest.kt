@@ -12,7 +12,7 @@ class ChatStateWorkingTest {
 
 	private fun state(working: Boolean? = null, needsLogin: Boolean? = null, peeked: Boolean? = null) =
 		ChatState(
-			teams = listOf(Team(team, "online", "channel", 0, working = working, needsLogin = needsLogin)),
+			teams = listOf(testTeam(team, mode = "channel", working = working, needsLogin = needsLogin)),
 			sessionWorking = peeked?.let { mapOf(team to it) } ?: emptyMap(),
 			sessionNeedsLogin = peeked?.let { mapOf(team to it) } ?: emptyMap(),
 		)

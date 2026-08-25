@@ -18,14 +18,13 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
  * `domain.gateway.spawn` for a spawn-point); `shortName` and `gatewayId` derive from it. */
 data class Team(
 	val name: String,
-	val status: String,
-	val mode: String,
-	val queueDepth: Int,
+	// Everything a Gateway reports about this session, and what that report is WORTH. Deliberately
+	// one value rather than the loose fields it used to be: a bare `status`/`working`/`needsLogin`
+	// says nothing about whether it arrived on the pushed presence plane (current) or the 30-second
+	// discovery pull (not), and fourteen call sites read them as though they were always current.
+	// See Presence.kt for the whole reasoning; the status string in there has no accessor on purpose.
+	val presence: Presence,
 	val kind: String = "loose",
-	// Plugin version the agent's MCP process reported. Null for consoles, offline catalog
-	// entries, and gateways without the feature. The board shows it only when it differs
-	// from this app's own expected version.
-	val version: String? = null,
 	// The owning Gateway's Domain id, kept a separate field rather than folded into the canonical
 	// address. A gateway id is unique only within a Domain, so the board groups by the
 	// (domainId, gatewayId) pair. Null for a pre-federation Gateway and for the
@@ -42,18 +41,6 @@ data class Team(
 	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
 	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
 	val sessionLabel: String? = null,
-	// Daemon-derived working/needs-login, from the presence plane (2-frame-hysteresis confirmed
-	// server-side). Null means unknown (never observed, or derivation just became impossible), never
-	// false - a tile shows no pulse rather than a stale frozen one. Distinct from
-	// sessionWorking/sessionNeedsLogin, which back the terminal's own peek and still drive its
-	// local frame directly.
-	val working: Boolean? = null,
-	val needsLogin: Boolean? = null,
-	// The session is holding an unanswered usage-limit dialog and cannot progress until it is
-	// answered. limitDetail is the text after the headline's middle dot ("resets 5pm"), null when that
-	// headline carried no dot, so a blocked session still renders as blocked without one.
-	val limitBlocked: Boolean? = null,
-	val limitDetail: String? = null,
 	// Same-Domain federation freshness for a peer-gateway-sourced row; null for a local row (not a
 	// fourth "local" value - the field simply carries no federation freshness concept for one).
 	val presenceFresh: String? = null,
@@ -64,9 +51,10 @@ data class Team(
 	/** Owning Gateway id (the gateway segment of the canonical address). */
 	val gatewayId: String get() = gatewayOf(name)
 
-	/** A live socket serves this session: confirmed online, or verifying its handshake (connected
-	 * but the LLM has not re-answered, e.g. across a gateway restart). Both count as awake. */
-	val isLive: Boolean get() = status == "online" || status == "verifying"
+	/** A live socket serves this session. Forwarded rather than reached through `presence` because
+	 * it is the single most-read question on the board; everything else goes through [presence] so
+	 * the answer arrives with the authority that qualifies it. */
+	val isLive: Boolean get() = presence.isLive
 }
 
 ////////////////////////////////
@@ -93,6 +81,13 @@ internal fun gatewayOf(canonical: String): String =
 		is Address -> t.gateway
 		is SpawnPoint -> t.gateway
 	}
+
+/** Re-stamp what this row's report is worth. [teamInfoToTeam] stamps POLLED because it serves both
+ * delivery channels and cannot tell them apart; only the caller holding the answer knows more. */
+internal fun Team.withAuthority(a: Authority): Team = copy(presence = presence.withAuthority(a))
+
+/** Attach this device's own outstanding request for this session, or clear it. */
+internal fun Team.withReceipt(r: ActionReceipt?): Team = copy(presence = presence.withReceipt(r))
 
 /** A list_teams answer with its own completeness. Null coverage (an older gateway) claims nothing. */
 internal data class TeamsAnswer(val teams: List<Team>, val coverage: DiscoverCoverage? = null)
@@ -135,19 +130,27 @@ internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
 	}
 	return Team(
 		name = canonicalName,
-		status = it.status,
-		mode = it.mode ?: "",
-		queueDepth = it.queue_depth.toInt(),
+		// Stamped POLLED here because this mapper serves BOTH channels and cannot tell them apart
+		// from the row alone. The caller that knows which channel it is holding re-stamps: the plane
+		// push to LIVE, a discovery answer's unreachable gateways to UNREACHABLE. POLLED is the safe
+		// default of the three - it claims nothing, where LIVE would claim freshness this row may
+		// not have.
+		presence = Presence.reported(
+			status = it.status,
+			authority = Authority.POLLED,
+			mode = it.mode ?: "",
+			queueDepth = it.queue_depth.toInt(),
+			version = it.version,
+			working = it.working,
+			needsLogin = it.needsLogin,
+			limitBlocked = it.limitBlocked,
+			limitDetail = it.limitDetail,
+		),
 		kind = it.kind,
-		version = it.version,
 		domainId = it.domainId,
 		displayName = it.displayName,
 		isAdminDomain = it.isAdminDomain ?: false,
 		sessionLabel = it.sessionLabel,
-		working = it.working,
-		needsLogin = it.needsLogin,
-		limitBlocked = it.limitBlocked,
-		limitDetail = it.limitDetail,
 		presenceFresh = it.presenceFresh,
 	)
 }

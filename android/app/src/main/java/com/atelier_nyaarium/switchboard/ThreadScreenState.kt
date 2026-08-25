@@ -50,10 +50,12 @@ data class GoalState(
 data class TerminalState(
 	/** Only the host-agent and devcontainers have a daemon-drivable pane. */
 	val eligible: Boolean,
-	val sessionStatus: String?,
-	/** A session wake is in flight, a different fact from ComposerState.sendAwaitingWake. */
-	val wakeInFlight: Boolean,
-	/** Daemon-derived (presence plane), true independent of sessionStatus: the one signal at tap
+	/** What this session's own Gateway reports AND what that report is worth. Null when no row is
+	 * held for it at all. Replaces the bare status string this used to carry: the terminal decides
+	 * whether to peek from it, and that decision is wrong for two thirds of the owner's machines
+	 * unless it can tell a pushed row from one pulled up to 30s ago. See Presence.kt. */
+	val presence: Presence?,
+	/** Daemon-derived (presence plane), true independent of the status: the one signal at tap
 	 * time that separates a stuck boot from a plain one still in progress. */
 	val needsLogin: Boolean,
 	val limitBlocked: Boolean,

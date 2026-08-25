@@ -16,7 +16,7 @@ class ChatStateLabelsTest {
 	// -- Helper builders --
 
 	private fun makeTeam(name: String, sessionLabel: String? = null) =
-		Team(name = name, status = "online", mode = "channel", queueDepth = 0, sessionLabel = sessionLabel)
+		testTeam(name = name, mode = "channel", sessionLabel = sessionLabel)
 
 	// -- Local wins until the server has something to say --
 

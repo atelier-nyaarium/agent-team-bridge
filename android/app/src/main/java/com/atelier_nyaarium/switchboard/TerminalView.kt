@@ -63,8 +63,7 @@ import kotlinx.coroutines.launch
 fun TerminalView(
 	team: String,
 	refreshMs: Long,
-	wakePending: Boolean,
-	sessionStatus: String?,
+	presence: Presence?,
 	onWake: () -> Unit,
 	// Force-relaunch claude in a pane that still exists (close_session + create_session composed -
 	// see SessionOps.relaunchSession for why a bare wake cannot). Throws on failure.
@@ -100,7 +99,15 @@ fun TerminalView(
 	var failCount by remember(team) { mutableIntStateOf(0) }
 	// A wake has been asked for (a create/wake opened this thread, or the Wake button was tapped), so
 	// the off-session screen reads "Waking..." and offers Retry rather than a first-time "Wake".
-	var wakeRequested by remember(team) { mutableStateOf(wakePending) }
+	// Seeded from the repository's own outstanding receipt rather than from a status word: this
+	// device's request is the freshest fact it holds, and on a non-route Gateway it is up to a
+	// discovery interval ahead of anything the roster will say.
+	var wakeRequested by remember(team) { mutableStateOf(presence?.waking(System.currentTimeMillis()) == true) }
+	// One probing peek per mount whenever the row is not authoritative. A POLLED "available" is up to
+	// DISCOVERY_REFRESH_MS old and is therefore NOT evidence that the session is asleep, but peeking
+	// it forever is the cost the idle gate exists to avoid. One op settles it: a pane latches
+	// everSawTmuxFrame and the loop carries on, and an absent one falls back to the gate.
+	var probed by remember(team) { mutableStateOf(false) }
 	// A long-press freezes the frame (this halts peeking) so its text can be selected and copied
 	// without the next frame wiping the selection; the Paused banner resumes.
 	var paused by remember(team) { mutableStateOf(false) }
@@ -120,18 +127,28 @@ fun TerminalView(
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
-	LaunchedEffect(team, refreshMs, sessionStatus) {
+	LaunchedEffect(team, refreshMs, presence) {
 		lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
 			while (true) {
-				// A long-press pause freezes the frame; an asleep (available, not-yet-woken, never-seen-
-				// alive-this-mount) session has nothing to peek, so it idles on the Wake screen rather
-				// than docker-exec'ing a warm container every cycle. A tap on Wake sets wakeRequested and
-				// the loop starts peeking; once a real pane has been seen, everSawTmuxFrame keeps this
-				// peeking regardless of a later status flip (see its own doc above).
-				if (paused || (sessionStatus == "available" && !wakeRequested && !everSawTmuxFrame)) {
+				// A long-press pause freezes the frame; an asleep session has nothing to peek, so it
+				// idles on the Wake screen rather than docker-exec'ing a warm container every cycle. A
+				// tap on Wake sets wakeRequested and the loop starts peeking; once a real pane has been
+				// seen, everSawTmuxFrame keeps this peeking regardless of a later status flip.
+				//
+				// `mayHavePane` is where the answer stops depending on WHICH machine the session is on:
+				// it refuses to read an "available" row as evidence unless the Gateway that owns the
+				// session actually said so, and it refuses to peek at all for a Gateway known to be
+				// unreachable. The one probe covers the remaining gap for a merely-stale row.
+				val idle = presence != null &&
+					!wakeRequested &&
+					!everSawTmuxFrame &&
+					!presence.mayHavePane(System.currentTimeMillis()) &&
+					(presence.authoritative || probed)
+				if (paused || idle) {
 					delay(refreshMs)
 					continue
 				}
+				probed = true
 				onPeek(lastHash)
 					.onSuccess { r ->
 						// The frame is a live pane (ansi) or a pre-pane container-logs snapshot (text),
@@ -168,8 +185,8 @@ fun TerminalView(
 	// handshake completed) - the same signal the board tile's spinner keys off. A freshly created tmux
 	// pane can be peeked well before the Claude CLI inside it has started, so a capturable pane alone
 	// is not sufficient; only the "online" signal is trusted.
-	LaunchedEffect(team, sessionStatus) {
-		if (sessionStatus == "online") wakeRequested = false
+	LaunchedEffect(team, presence) {
+		if (presence?.isOnline == true) wakeRequested = false
 	}
 
 	fun fire(text: String?, key: String?, submit: Boolean = true) {
@@ -190,7 +207,13 @@ fun TerminalView(
 	// already shown a real pane this mount (everSawTmuxFrame) - e.g. Ctrl-C killing the foreground
 	// claude drops status back to "available" without touching the tmux pane itself, and that pane
 	// should keep showing rather than snap to the Wake screen.
-	val asleepIdle = sessionStatus == "available" && !wakeRequested && !everSawTmuxFrame
+	// Same rule as the peek loop's, so the screen and the polling cannot disagree about whether this
+	// session is asleep - two answers to one question is how the original defect got written.
+	val asleepIdle = presence != null &&
+		!wakeRequested &&
+		!everSawTmuxFrame &&
+		!presence.mayHavePane(System.currentTimeMillis()) &&
+		(presence.authoritative || probed)
 	// The wake/error screen shows once there is no frame to display (a failed peek, or a wake in flight
 	// before the first frame lands), or after a run of failures a prior frame has gone stale; a lone
 	// transient failure keeps the last frame so it does not flicker.
@@ -301,7 +324,7 @@ fun TerminalView(
 							Text(if (resuming) "Resuming..." else "Resume")
 						}
 					}
-				} else if (sessionStatus == "online") {
+				} else if (presence?.isOnline == true) {
 					Row(
 						Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 						horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -326,7 +349,7 @@ fun TerminalView(
 					// up), so the slash macros - claude TUI commands - have nothing to receive them. The row
 					// becomes the relaunch affordance instead; the control keys and input stay, since the
 					// bare shell underneath is still real and typeable.
-					val waking = relaunching || sessionStatus == "verifying"
+					val waking = relaunching || presence?.isVerifying == true || presence?.waking(System.currentTimeMillis()) == true
 					FilledTonalButton(
 						onClick = hapticClick {
 							relaunching = true

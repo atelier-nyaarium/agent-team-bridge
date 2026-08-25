@@ -49,7 +49,7 @@ class CrossDomainLinkTest {
 	// -- The PEERS roster union (Fix: a freshly-linked peer is otherwise invisible) --
 
 	private fun team(name: String, domainId: String?, status: String = "online") =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId)
+		testTeam(name = name, status = status, mode = "channel", domainId = domainId)
 
 	@Test
 	fun mergeListsALinkedButOfflinePeerWithNoDiscoverySessions() {
