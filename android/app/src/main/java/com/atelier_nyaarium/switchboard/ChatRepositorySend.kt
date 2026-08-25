@@ -39,7 +39,13 @@ suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = em
 		team,
 		Message(true, text, System.currentTimeMillis(), files = localFiles, status = "pending", opId = opId),
 	)
-	val wasAvailable = _state.value.teams.firstOrNull { it.name == team }?.status == "available"
+	// Deliberately NOT gated on `authoritative`, unlike the terminal's peek gate. On a non-route
+	// Gateway this row can be a discovery interval old in either direction, but the cost of being
+	// wrong here is a notice card that is briefly right or briefly absent, and awaitingWake's own
+	// expiry already absorbs a wrong guess. Requiring authority instead means never raising the
+	// notice for another machine at all, which is strictly worse than raising it late.
+	val row = _state.value.teams.firstOrNull { it.name == team }?.presence
+	val wasAvailable = row != null && !row.isLive && !row.hasEnded
 	// Cold wake takes minutes with no wire traffic, so say so - as a notice card (ChatState.
 	// wakingTeams), not a transcript row. Only the send that RAISES the notice may clear it on
 	// failure, so a second send failing while the first is still in flight leaves the wait intact.

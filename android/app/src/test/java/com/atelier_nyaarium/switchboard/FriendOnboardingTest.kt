@@ -28,7 +28,7 @@ class FriendOnboardingTest {
 		)
 
 	private fun team(name: String, domainId: String?, status: String = "online", displayName: String? = null) =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId, displayName = displayName)
+		testTeam(name = name, status = status, mode = "channel", domainId = domainId, displayName = displayName)
 
 	// -- The first-root decision (blob pendingTenant branch) --
 

@@ -160,7 +160,13 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		val fresh = if (keys.isEmpty()) {
 			answer.teams
 		} else {
+			// A held row from an unreachable gateway is re-stamped UNREACHABLE rather than kept at
+			// whatever it last claimed. That is the whole point of holding it: it says what that
+			// machine WAS, and nothing that costs a round trip to it should be attempted on that
+			// basis - which is what bounds a wake tap on a powered-off machine to zero peeks instead
+			// of one every couple of seconds.
 			mergePresence(lastRawTeams ?: emptyList(), answer.teams) { rowOnUnreachable(it, keys, repo.localGatewayId) }
+				.map { if (rowOnUnreachable(it, keys, repo.localGatewayId)) it.withAuthority(Authority.UNREACHABLE) else it }
 		}
 		applyPresence(fresh)
 	}
@@ -168,8 +174,12 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	/** Land a presence-plane push. The plane carries the ROUTE Gateway's own rows only, so it speaks
 	 * for that gateway and no other: replacing wholesale swept every remote machine's rows on each
 	 * local presence change, until the next discovery tick restored them. */
-	suspend fun applyPlanePresence(fresh: List<Team>) {
+	suspend fun applyPlanePresence(planeRows: List<Team>) {
 		val local = repo.localGatewayId
+		// The ONE place a row is called LIVE. These arrived on the push from the Gateway that owns
+		// them, so they are current as of this poll; every other row in the merged list keeps the
+		// POLLED that teamInfoToTeam stamped, because discovery cannot say more than that.
+		val fresh = planeRows.map { it.withAuthority(Authority.LIVE) }
 		val planeDomain = fresh.firstOrNull()?.domainId
 		val merged = mergePresence(lastRawTeams ?: emptyList(), fresh) { row ->
 			val gw = row.gatewayId.ifEmpty { local }
@@ -199,6 +209,38 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 
 	private val freshTeamsMutex = Mutex()
 
+	/**
+	 * Attach this device's own outstanding request to a row, and retire it the moment the row itself
+	 * proves the point.
+	 *
+	 * Evidence beats a request, always. A receipt only ever answers the question "is something coming
+	 * that no Gateway has reported yet", so a row that already says the session is up retires it
+	 * rather than being overridden by it. An optimistic value that can outrank a real report is a UI
+	 * that lies, which is worse than one that is late.
+	 */
+	private fun foldReceipt(row: Team): Team {
+		if (row.presence.isLive) {
+			repo.sessions.clearReceipt(row.name)
+			return row.withReceipt(null)
+		}
+		return row.withReceipt(repo.sessions.receiptFor(row.name, System.currentTimeMillis()))
+	}
+
+	// Coalesces the discovery pulls that follow an action. Several taps, or a wake landing beside the
+	// loop's own tick, must not each fan `list_teams` out across every machine.
+	private var lastActionPullAt = 0L
+	private val ACTION_PULL_DEBOUNCE_MS = 2_000L
+
+	/** Pull discovery right after an action whose effect this device cannot otherwise see for up to a
+	 * discovery interval: the action was sealed to the session's OWN Gateway, and only the route
+	 * Gateway's rows arrive by push. Debounced, and best-effort like every other discovery pull. */
+	suspend fun refreshAfterAction() {
+		val now = System.currentTimeMillis()
+		if (now - lastActionPullAt < ACTION_PULL_DEBOUNCE_MS) return
+		lastActionPullAt = now
+		refreshDiscovery()
+	}
+
 	/** Re-derives `teams` from the cached raw snapshot (see applyPresence) against the CURRENT
 	 * tombstone set: filterTombstoned's own sweep (forgottenUntil.entries.removeIf) means a
 	 * tombstone that has since expired no longer masks its team, so calling this on every poll
@@ -213,7 +255,8 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	suspend fun reapplyCachedTeams() {
 		val raw = lastRawTeams ?: return
 		freshTeamsMutex.withLock {
-			val visible = filterTombstoned(raw, repo.forgottenUntil, System.currentTimeMillis())
+			val now = System.currentTimeMillis()
+			val visible = filterTombstoned(raw, repo.forgottenUntil, now).map(::foldReceipt)
 			val next = repo._state.updateAndGet { it.withFreshTeams(visible) }
 			repo.persistence.persistLabels(next.labels)
 			repo.persistence.persistAbsenceStreaks(next.teamAbsenceStreaks)

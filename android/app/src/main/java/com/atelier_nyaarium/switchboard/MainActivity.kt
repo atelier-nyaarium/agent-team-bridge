@@ -307,16 +307,20 @@ fun App(
 			// from the list) stays un-renameable rather than defaulting open.
 			val presence = when {
 				session == null -> null
-				session.status == "online" -> when {
+				session.presence.isOnline -> when {
 					// Outranks "working...": the session reads as online while the dialog holds its pane,
 					// so without this a blocked session would present as healthy.
-					session.limitBlocked == true -> "limit hit"
+					session.presence.limitBlocked == true -> "limit hit"
 					state.needsLogin(session.name) -> "check terminal"
 					state.working(session.name) -> "working..."
 					else -> "live"
 				}
-				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
-				else -> statusWord(session.status)
+				// A wake THIS device asked for reads as waking straight away. Without it a non-route
+				// Gateway's session sits on its stale "available" until discovery next runs.
+				session.presence.waking(System.currentTimeMillis()) -> "waking..."
+				!session.presence.isLive && !session.presence.hasEnded ->
+					if (state.working(session.name)) "waking..." else session.presence.word
+				else -> session.presence.word
 			}
 			// Everything a forget tears down BESIDE the repo's own record. Shared by both forget paths so
 			// the plugin sweep and the notification cancels cannot end up on only one of them. The repo
@@ -449,16 +453,16 @@ fun App(
 							val dom = session?.domainId
 							dom.isNullOrEmpty() || admin.isEmpty() || dom == admin
 						},
-					sessionStatus = session?.status,
+					// The whole presence answer, not a status word: the terminal's peek gate has to know
+					// what the value is WORTH (pushed by this session's own Gateway, pulled 30s ago, or
+					// from a machine we cannot reach at all), and a bare string cannot say.
+					presence = session?.presence,
 					// Daemon-derived (presence plane), so it can be true even before "online" - a peeked
 					// pane stuck at a login prompt is knowable while the MCP handshake is still pending.
-					needsLogin = session?.needsLogin == true,
+					needsLogin = session?.presence?.needsLogin == true,
 					// Also daemon-derived, so the chat view learns about a block with no peek of its own.
-					limitBlocked = session?.limitBlocked == true,
-					limitDetail = session?.limitDetail,
-					// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so
-					// the terminal seeds "Waking..." rather than "asleep".
-					wakeInFlight = session?.status == "verifying",
+					limitBlocked = session?.presence?.limitBlocked == true,
+					limitDetail = session?.presence?.limitDetail,
 					onWake = { repo.sessions.wakeSession(openTeam!!) },
 					onRelaunch = { repo.sessions.relaunchSession(openTeam!!) },
 					refreshMs = repo.sessions.terminalRefreshMs,

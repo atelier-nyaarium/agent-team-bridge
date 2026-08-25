@@ -6,7 +6,7 @@ import org.junit.Test
 /** The gateway-scoped presence merge: a fresh answer replaces only the rows it speaks for. */
 class MergePresenceTest {
 
-	private fun team(name: String, domainId: String? = "alice") = Team(name, "available", "", 0, domainId = domainId)
+	private fun team(name: String, domainId: String? = "alice") = testTeam(name, status = Presence.AVAILABLE, domainId = domainId)
 
 	@Test
 	fun aPlaneStylePushHoldsRemoteRows() {

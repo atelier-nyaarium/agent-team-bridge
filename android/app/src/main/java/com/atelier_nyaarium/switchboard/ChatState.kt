@@ -112,7 +112,7 @@ data class ChatState(
 	 * cannot mint a phantom "ended" entry for a bare versus qualified form of the same team. */
 	fun sessions(): List<Team> {
 		val known = teams.mapTo(HashSet()) { it.name }
-		return teams + threads.keys.filter { it !in known }.map { Team(it, "ended", "", 0) }
+		return teams + threads.keys.filter { it !in known }.map { Team(it, Presence.ended()) }
 	}
 
 	/**
@@ -154,7 +154,7 @@ data class ChatState(
 	 * was on screen. Then a pending cold wake, then the message-status heuristic.
 	 */
 	fun working(team: String): Boolean {
-		teams.firstOrNull { it.name == team }?.working?.let { return it }
+		teams.firstOrNull { it.name == team }?.presence?.working?.let { return it }
 		sessionWorking[team]?.let { return it }
 		if (awaitingWake(team)) return true
 		val last = threads[team]?.lastOrNull() ?: return false
@@ -164,7 +164,7 @@ data class ChatState(
 	/** Independent of working: a logged-out session still presents a composer. Same order as
 	 * [working], and for the same reason. */
 	fun needsLogin(team: String): Boolean =
-		teams.firstOrNull { it.name == team }?.needsLogin ?: (sessionNeedsLogin[team] == true)
+		teams.firstOrNull { it.name == team }?.presence?.needsLogin ?: (sessionNeedsLogin[team] == true)
 
 	/** Bridge link health for the dashboard header. */
 	enum class Health { ONLINE, SYNCING, DEGRADED, OFFLINE }

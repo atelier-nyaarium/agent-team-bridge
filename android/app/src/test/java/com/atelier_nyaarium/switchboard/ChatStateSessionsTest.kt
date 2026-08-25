@@ -24,7 +24,7 @@ class ChatStateSessionsTest {
 	// -- Helper builders --
 
 	private fun makeTeam(name: String, status: String = "online") =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0)
+		testTeam(name = name, status = status, mode = "channel")
 
 	private fun makeMsg(text: String = "hello") =
 		Message(fromMe = false, text = text, at = 1000L)
@@ -53,10 +53,10 @@ class ChatStateSessionsTest {
 		)
 		val sessions = state.sessions()
 		assertEquals(1, sessions.size)
-		assertEquals("online", sessions[0].status)
+		assertTrue(sessions[0].presence.isOnline)
 		assertFalse(
 			"live session must never be synthesized as ended",
-			sessions.any { it.status == "ended" },
+			sessions.any { it.presence.hasEnded },
 		)
 	}
 
@@ -70,7 +70,7 @@ class ChatStateSessionsTest {
 		)
 		val sessions = state.sessions()
 		assertEquals(1, sessions.size)
-		assertEquals("ended", sessions[0].status)
+		assertTrue(sessions[0].presence.hasEnded)
 	}
 
 	// -- The join backbone: a gateway-minted conv session_id parses straight to the team's canonical --
@@ -91,8 +91,8 @@ class ChatStateSessionsTest {
 		)
 		val sessions = state.sessions()
 		assertEquals("must be exactly 1 session (no phantom ended)", 1, sessions.size)
-		assertEquals("online", sessions[0].status)
-		assertFalse(sessions.any { it.status == "ended" })
+		assertTrue(sessions[0].presence.isOnline)
+		assertFalse(sessions.any { it.presence.hasEnded })
 	}
 
 	// -- Notice routing: the notice store key threads under the sender's canonical address --

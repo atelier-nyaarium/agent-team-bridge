@@ -162,6 +162,47 @@ internal class SessionOps(private val repo: ChatRepository) {
 		repo.store.terminalRefreshMs = ms
 	}
 
+	// This device's own outstanding requests, keyed by team. The freshest fact this device holds
+	// about a session, and before it existed the wake below threw it away and then waited to be TOLD
+	// what it already knew - which on a non-route Gateway takes a discovery interval, and is exactly
+	// why waking another machine showed a blank terminal. Scoped by opId so an overlapping wake and
+	// relaunch cannot retire each other's; see ActionReceipt.
+	private val receipts = mutableMapOf<String, ActionReceipt>()
+
+	/** The receipt outstanding for a team, dropping one that has aged out or already failed. Read on
+	 * every roster rebuild, so an expiry needs no timer of its own. */
+	@Synchronized
+	fun receiptFor(team: String, now: Long): ActionReceipt? {
+		val r = receipts[team] ?: return null
+		if (!r.live(now)) {
+			receipts.remove(team)
+			return null
+		}
+		return r
+	}
+
+	@Synchronized
+	private fun noteReceipt(team: String, r: ActionReceipt) {
+		receipts[team] = r
+	}
+
+	/** Settle a receipt, but ONLY if it is still the one this call opened. A wake and a relaunch that
+	 * overlap would otherwise let the first one's answer retire the second one's request, putting the
+	 * session straight back to reading as asleep while it is still coming up. */
+	@Synchronized
+	private fun settleReceipt(team: String, opId: String, outcome: ActionReceipt.Outcome) {
+		val r = receipts[team] ?: return
+		if (r.opId != opId) return
+		if (outcome == ActionReceipt.Outcome.FAILED) receipts.remove(team) else receipts[team] = r.copy(outcome = outcome)
+	}
+
+	/** Evidence beats a request: any Gateway reporting the session up retires the receipt outright,
+	 * which is what stops an optimistic "waking" from outliving the thing it was predicting. */
+	@Synchronized
+	fun clearReceipt(team: String) {
+		receipts.remove(team)
+	}
+
 	/** Wake an asleep session (the terminal-view Wake button): reattach its record and bring its
 	 * container/tmux back up. Reuses create_session's reattach-and-wake path keyed on the session's
 	 * own spawn + leaf, so an existing record resumes rather than a duplicate being minted.
@@ -172,9 +213,24 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// The QUALIFIED spawn point, so the create routes to the session's own Gateway. Rebuilding a
 		// bare `t.spawn` sent every wake to the route Gateway; a guard hid that as "cannot wake".
 		val target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical
+		val opId = UUID.randomUUID().toString()
+		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
+		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
+		// the next poll, and pull the session's own Gateway so the roster catches up in about a
+		// second instead of waiting out DISCOVERY_REFRESH_MS.
+		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
 		repo.drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable { repo.client().createSession(target = target, sessionName = t.session) }
+				.onSuccess {
+					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
+					repo.presence.refreshAfterAction()
+				}
 				.onFailure { e ->
+					// FAILED retires the receipt rather than letting it run out its TTL: the surface
+					// must stop saying "waking" the moment we know nothing is coming, and the reason
+					// is already on its way to the user as a transient message.
+					settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
+					repo.presence.reapplyCachedTeams()
 					repo._state.update { it.copy(transientMessage = e.message ?: "wake failed") }
 				}
 		}
@@ -190,13 +246,28 @@ internal class SessionOps(private val repo: ChatRepository) {
 		withContext(Dispatchers.IO) {
 			val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
 			if (t !is Address) error("not an addressable session")
-			repo.client().closeSession(team)
-			// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
-			// the route Gateway after closing it on its own.
-			repo.client().createSession(
-				target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical,
-				sessionName = t.session,
-			)
+			// Its own receipt, its own opId. A relaunch CLOSES the session first, so the roster
+			// correctly drops to asleep mid-sequence; without a receipt covering the whole chain the
+			// terminal would stop peeking exactly while the replacement is coming up.
+			val opId = UUID.randomUUID().toString()
+			noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
+			repo.presence.reapplyCachedTeams()
+			try {
+				repo.client().closeSession(team)
+				// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
+				// the route Gateway after closing it on its own.
+				repo.client().createSession(
+					target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical,
+					sessionName = t.session,
+				)
+			} catch (e: Throwable) {
+				e.rethrowIfCancellation()
+				settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
+				repo.presence.reapplyCachedTeams()
+				throw e
+			}
+			settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
+			repo.presence.refreshAfterAction()
 		}
 	}
 
