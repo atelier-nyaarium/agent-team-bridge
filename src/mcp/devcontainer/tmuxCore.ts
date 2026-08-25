@@ -10,6 +10,7 @@ import {
 	type TmuxPeek,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
+import { trimPaneRowPadding } from "../../shared/pane-trim.js";
 import { parseSessionName } from "../../shared/session-id.js";
 
 // Re-exported so the daemon and tests keep this import path.
@@ -155,8 +156,10 @@ export async function peekPane(target: TmuxTarget, resize = true): Promise<TmuxP
 			]),
 		).catch(() => {});
 	}
-	// -J rejoins wrapped rows, so a long URL copies as one string.
-	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-J", "-p"]));
+	// -J rejoins wrapped rows, so a long URL copies as one string. Its price is that every row comes
+	// back padded to the pane edge, so the padding is dropped before anything sees the frame - the
+	// hash covers what SHIPS, or a 304 would be answered against bytes the console never received.
+	const ansi = trimPaneRowPadding(await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-J", "-p"])));
 	const hash = crypto.createHash("sha256").update(ansi).digest("hex").slice(0, 16);
 	return { ansi, hash };
 }
