@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import { $ } from "bun";
+import { fingerprint } from "../src/shared/crypto.js";
 import { requireDocker } from "./lib/docker-probe.js";
 import {
 	ask,
@@ -15,6 +16,7 @@ import {
 	envGet,
 	envSet,
 	err,
+	jparse,
 	note,
 	secureFile,
 } from "./lib/host.js";
@@ -32,6 +34,11 @@ import { cleanupTemps, presentEnrollment } from "./setup-enrollment-ui.js";
 
 ////////////////////////////////
 //  Gateway helpers
+
+/** The gateway's own enrollment window, mirrored here only to count it down. The gateway owns the
+ * real timer (src/gateway/index.ts, enterArming); this is a display of it, so a drift makes the
+ * countdown wrong rather than the window. */
+const ENROLL_WINDOW_MS = 600_000;
 
 export function gatewayHostname(): string {
 	return os.hostname().trim();
@@ -94,7 +101,7 @@ async function askRouterBootstrap(): Promise<void> {
 /** Bring the gateway up with a fresh one-time enrollment nonce and its LAN address, so it opens the
  * /enroll listener and writes its admit payload. Each call arms a new nonce, so a slow scan never
  * hits the gateway's ~10 min one-shot window. */
-async function armGateway(): Promise<string> {
+async function armGateway(): Promise<{ nonce: string; deadline: number }> {
 	const nonce = randomBytes(16).toString("hex");
 	const host = await detectLanHost();
 	console.log(`Starting gateway, enrollment on ${host}:20000`);
@@ -116,10 +123,40 @@ async function armGateway(): Promise<string> {
 		const detail = up.stderr.toString().trim().split("\n").slice(-3).join("\n");
 		throw new Error(`could not start the gateway${detail ? `:\n${detail}` : ""}`);
 	}
+	// The gateway starts its own window when the container reaches its arming code, which is after
+	// this returns, and setup only learns of it later still. Stamped HERE so the countdown runs EARLY
+	// rather than late: time shown that has already gone is the one direction that is not safe to be
+	// wrong in, and health-wait plus payload-fetch can otherwise eat 75s of it unaccounted.
+	const deadline = Date.now() + ENROLL_WINDOW_MS;
 	if (!(await waitHealth())) {
 		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
 	}
-	return nonce;
+	return { nonce, deadline };
+}
+
+/** How much of the enrollment window is left, as the line the settling screen rewrites in place. */
+function windowStatus(deadline: number): string {
+	const left = deadline - Date.now();
+	if (left <= 0) return "Enrollment window expired - press r to arm again.";
+	const secs = Math.floor(left / 1000);
+	return `Waiting for your phone... ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} left`;
+}
+
+/** The fingerprint the phone shows on its own confirm screen, from the same signing key the admit
+ * payload carries. Both sides run the same function over the same bytes, so a mismatch is a
+ * different gateway rather than a formatting difference. Without this the phone asks the admin to
+ * "confirm this matches the Gateway terminal" over a terminal that displayed no such value. */
+function sasOf(payload: string): string {
+	const signPub = jparse<{ signPub?: string }>(payload)?.signPub;
+	return signPub ? fingerprint(signPub) : "(this payload carried no signing key)";
+}
+
+/** A gateway that minted no enrollment cert offers no `lan` block, so the phone has no target to
+ * deliver to and only a paste can reach it. Said on the screen rather than left in `docker logs`,
+ * where the admin would wait out the whole window for a delivery that cannot arrive. */
+function lanNoteOf(payload: string): string | undefined {
+	if (jparse<{ lan?: unknown }>(payload)?.lan) return undefined;
+	return "This gateway opened no LAN listener, so your phone cannot deliver to it. Use Paste below.";
 }
 
 /** Fetch the admit payload the gateway holds in memory while arming, gated by the enroll nonce we
@@ -190,35 +227,10 @@ async function readTransportText(): Promise<string | null> {
 	return read.exitCode === 0 ? read.stdout.toString() : null;
 }
 
-/** Wait for the phone to deliver the sealed bundle, by either the phone's LAN POST or a bundle the
- * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
- * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
-async function waitForInstall(): Promise<"installed" | "back"> {
-	console.log("\nWaiting for phone to deliver the bundle");
-	console.log("  If your phone cannot reach this machine, paste its bundle here instead.");
-	for (;;) {
-		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
-		// needs no keypress.
-		for (let i = 0; i < 5; i++) {
-			if (await transportInstalled()) return "installed";
-			await Bun.sleep(1000);
-		}
-		console.log("\n    Enter) Check again");
-		console.log("    p) Paste the bundle here");
-		console.log("    b) Back");
-		const choice = ask("  >").toLowerCase();
-		if (choice === "b") return "back";
-		if (choice === "p") {
-			const bundle = ask("Paste the bundle:");
-			if (bundle && (await postPastedBundle(bundle))) return "installed";
-		}
-	}
-}
-
 /** Enroll THIS machine as a gateway, the same flow whether it is the first or the Nth. Names the
- * gateway, arms it for enrollment, shows its admit payload (as a QR or as JSON to copy), then waits
- * for the phone to deliver the connection bundle and restarts the gateway to connect. Any saved
- * artifact is wiped on success, on back-out, and on ^C. */
+ * gateway, arms it for enrollment, then shows its admit payload beside the code the phone must
+ * match, ON the same screen that waits for the phone's bundle. Any saved artifact is wiped on
+ * success, on back-out, and on ^C. */
 export async function setupGateway(): Promise<void> {
 	// A downstream Gateway starts with no Domain knowledge. The Console that scans this QR already
 	// owns the network and delivers the sealed enrollment bundle after the scan.
@@ -240,33 +252,53 @@ export async function setupGateway(): Promise<void> {
 	}
 
 	await askRouterBootstrap();
-	const nonce = await armGateway();
-	const payload = await readAdmitPayload(nonce);
+	let armed = await armGateway();
+	let payload = await readAdmitPayload(armed.nonce);
 
 	try {
 		for (;;) {
+			// One screen: the payload, the code the phone must match, and the wait. There is no
+			// advance action between them any more, which is what used to let an admin walk past the
+			// comparison without making it and then have no way back to it.
 			const action = await presentEnrollment(payload, {
 				title: `Gateway "${id}" - send to your phone:`,
-				continueLabel: "Done. Continue Enrollment",
 				qrScanHint: "Scan this QR in your phone's Add Gateway screen.",
 				jsonScanHint: "Paste the enrollment JSON into your phone's Add Gateway screen.",
 				qrGifPath: GW_QR_GIF,
 				jsonFilePath: GW_JSON_FILE,
 				qrSaveLabel: "Save Enrollment QR Instead",
 				jsonSaveLabel: "Save Enrollment JSON Instead",
+				settle: {
+					installed: transportInstalled,
+					status: () => windowStatus(armed.deadline),
+					expired: () => Date.now() >= armed.deadline,
+					sas: sasOf(payload),
+					lanNote: lanNoteOf(payload),
+				},
 			});
 			if (action === "back") return;
-
-			// Continue: wait for the bundle (LAN delivery or a paste), then connect.
-			if ((await waitForInstall()) === "installed") {
-				console.log();
-				note(`Gateway "${id}" enrolled; connecting to the Router.`);
-				// An enrolled gateway with no daemon registers fine and then shows NOTHING on the
-				// phone: the daemon is what owns the devcontainer catalog and the host spawn point, so
-				// without it this machine has no sessions to list and reads as a failed enrollment.
-				note("Next: run ./start-host-daemon.sh here, or this machine stays empty on your phone.");
-				return;
+			// A fresh nonce and a fresh window, without making the admin leave and re-enter setup.
+			if (action === "rearm") {
+				armed = await armGateway();
+				payload = await readAdmitPayload(armed.nonce);
+				continue;
 			}
+			if (action === "paste") {
+				const bundle = ask("Paste the bundle:");
+				if (!bundle || !(await postPastedBundle(bundle))) {
+					err("The gateway did not accept that bundle.");
+					continue;
+				}
+			} else if (action !== "settled") {
+				continue;
+			}
+			console.log();
+			note(`Gateway "${id}" enrolled; connecting to the Router.`);
+			// An enrolled gateway with no daemon registers fine and then shows NOTHING on the phone:
+			// the daemon is what owns the devcontainer catalog and the host spawn point, so without it
+			// this machine has no sessions to list and reads as a failed enrollment.
+			note("Next: run ./start-host-daemon.sh here, or this machine stays empty on your phone.");
+			return;
 		}
 	} finally {
 		cleanupTemps();
