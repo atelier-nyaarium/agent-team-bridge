@@ -194,6 +194,81 @@ export function confirm(label: string): boolean {
 	return ask(`${label} [y/N]:`).toLowerCase() === "y";
 }
 
+/**
+ * Read ONE keypress while polling for something to happen elsewhere, so a screen can settle on its
+ * own instead of standing there until the admin presses a key.
+ *
+ * `ask` cannot do this. It is Bun's global `prompt()`, which blocks the whole event loop: no timer,
+ * no fetch and no file check runs behind it, so a screen waiting on another device could never
+ * notice that device arriving. Raw mode is what buys the concurrency, and every option a settling
+ * screen offers is a single character anyway.
+ *
+ * Cooked mode is restored and stdin paused before this returns, whichever way it ends, so a later
+ * `ask` reads normally. Raw mode also swallows the interrupt, so ^C is re-raised by hand rather than
+ * leaving the admin unable to quit the screen.
+ */
+export async function readKeyWhile(opts: {
+	/** Resolves true once the thing being waited for has happened. */
+	poll: () => Promise<boolean>;
+	/** Redraw the status line. Called on every interval, never after settling. */
+	tick: () => void;
+	intervalMs: number;
+}): Promise<{ kind: "key"; key: string } | { kind: "settled" }> {
+	const stdin = process.stdin;
+	// Off a TTY there is no raw mode and no one watching a countdown. Check once, then read a line
+	// the ordinary blocking way, so a piped or scripted run behaves as it did before.
+	if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+		if (await opts.poll()) return { kind: "settled" };
+		return { kind: "key", key: ask("  >").slice(0, 1) || "\r" };
+	}
+	return await new Promise((resolve) => {
+		let closed = false;
+		let polling = false;
+		const finish = (r: { kind: "key"; key: string } | { kind: "settled" }): void => {
+			if (closed) return;
+			closed = true;
+			clearInterval(timer);
+			stdin.removeListener("data", onData);
+			stdin.setRawMode(false);
+			stdin.pause();
+			resolve(r);
+		};
+		const onData = (buf: Buffer): void => {
+			const s = buf.toString();
+			// Escape-constructed, so no raw control byte sits in the source file.
+			if (s === "\u0003") {
+				// Restore the terminal FIRST, then hand the interrupt to the real handler, or the
+				// admin is left in a raw-mode shell by the very keystroke meant to get them out.
+				closed = true;
+				clearInterval(timer);
+				stdin.removeListener("data", onData);
+				stdin.setRawMode(false);
+				stdin.pause();
+				process.kill(process.pid, "SIGINT");
+				return;
+			}
+			finish({ kind: "key", key: s });
+		};
+		stdin.setRawMode(true);
+		stdin.resume();
+		stdin.on("data", onData);
+		const timer = setInterval(() => {
+			// Guarded rather than awaited: a poll slower than the interval would otherwise stack up.
+			if (closed || polling) return;
+			polling = true;
+			opts.tick();
+			opts.poll()
+				.then((done) => {
+					if (done) finish({ kind: "settled" });
+				})
+				.catch(() => {})
+				.finally(() => {
+					polling = false;
+				});
+		}, opts.intervalMs);
+	});
+}
+
 ////////////////////////////////
 //  JSON
 

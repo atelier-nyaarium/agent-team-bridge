@@ -3,7 +3,7 @@
 // JSON, with clipboard copy and a save-to-file fallback, tracked for cleanup.
 
 import fs from "node:fs";
-import { ask, err, note, secureFile } from "./lib/host.js";
+import { ask, err, note, readKeyWhile, secureFile } from "./lib/host.js";
 import { fitsInQr, renderQrImageGif, renderQrTerminal } from "./render-provisioning-qr.js";
 import { BLOB_FILE, CONSOLE_JSON_FILE, QR_GIF } from "./setup-constants.js";
 
@@ -52,17 +52,90 @@ async function tryClipboardCopy(text: string): Promise<boolean> {
 	return false;
 }
 
+/** What the screen does instead of offering a way past itself. Supplied only by gateway enrollment;
+ * the admin Console flow has nothing to wait for and keeps its continue action. */
+export interface EnrollSettle {
+	/** True once the phone's sealed bundle has landed. Polled while the screen is open. */
+	installed: () => Promise<boolean>;
+	/** The status line under the options, rewritten in place on every poll. */
+	status: () => string;
+	/** True once the gateway's enrollment window has closed, which offers an arm-again in place. */
+	expired: () => boolean;
+	/** The fingerprint the phone must be showing. Printed beside the artifact, because a phone that
+	 * says "confirm this matches the Gateway terminal" over a terminal showing no such value is
+	 * asking for a comparison that cannot be made. */
+	sas: string;
+	/** Set when the gateway opened no LAN listener, so a paste is the only route in. */
+	lanNote?: string;
+}
+
+export type ArtifactAction = "continue" | "back" | "settled" | "rearm" | "paste";
+
+/**
+ * The settling half of the artifact screen: the payload is already on screen, and this waits for the
+ * phone rather than offering a way past.
+ *
+ * There is no continue action here ON PURPOSE. The keypress that used to sit between this screen and
+ * the wait loop is exactly what let an admin walk past the comparison without making it, and its
+ * label ("Done. Continue Enrollment") promised a next step that did not exist.
+ */
+async function waitOnArtifact(
+	heading: string,
+	saveLabel: string,
+	save: () => Promise<string>,
+	settle: EnrollSettle,
+): Promise<ArtifactAction> {
+	for (;;) {
+		console.log(`\n  ${heading}`);
+		console.log(`\n  Your phone must show this exact code:  ${settle.sas}`);
+		console.log("  If it shows anything else, do not approve it on the phone.");
+		if (settle.lanNote) console.log(`\n  ${settle.lanNote}`);
+		console.log(`\n    1) ${saveLabel}`);
+		console.log("    p) Paste the bundle here");
+		// Offered at all times, not only past the deadline. The options are printed once and only the
+		// status line is rewritten after that, so a listing gated on expiry would still say "1, p, b"
+		// under a status line telling the admin to press r. Re-arming early is useful anyway.
+		console.log("    r) Arm again, with a fresh code");
+		console.log("    b) Back");
+		console.log("");
+		const got = await readKeyWhile({
+			poll: settle.installed,
+			// Rewritten in place rather than appended, or a ten-minute wait scrolls the QR away.
+			tick: () => process.stdout.write(`\r\x1b[2K  ${settle.status()}`),
+			intervalMs: 1000,
+		});
+		process.stdout.write("\n");
+		if (got.kind === "settled") return "settled";
+		const key = got.key.toLowerCase();
+		if (key === "b") return "back";
+		// Handed back to the caller rather than read here: a paste needs a whole line, and the raw
+		// mode this screen runs in is torn down only once readKeyWhile has returned.
+		if (key === "p") return "paste";
+		if (key === "r") return "rearm";
+		if (key === "1") {
+			try {
+				note(`Saved: ${await save()}`);
+			} catch (e) {
+				err(e instanceof Error ? e.message : String(e));
+			}
+		}
+		// Anything else just redraws, which is also what a stray arrow key should do.
+	}
+}
+
 /** Render + display the gateway's admit payload, then offer to continue, save it to a file, or back
  * out. `render` prints the artifact on screen; `save` writes it to a temp file (tracked for cleanup)
- * and returns the path. Returns "continue" or "back". */
+ * and returns the path. With `settle`, the continue action is replaced by a wait on the phone. */
 async function presentArtifact(
 	heading: string,
 	continueLabel: string,
 	saveLabel: string,
 	render: () => void,
 	save: () => Promise<string>,
-): Promise<"continue" | "back"> {
+	settle?: EnrollSettle,
+): Promise<ArtifactAction> {
 	render();
+	if (settle) return await waitOnArtifact(heading, saveLabel, save, settle);
 	for (;;) {
 		console.log(`\n  ${heading}`);
 		console.log(`    1) ${continueLabel}`);
@@ -103,15 +176,17 @@ export async function presentEnrollment(
 	payload: string,
 	opts: {
 		title: string;
-		continueLabel: string;
+		/** The primary action's label. Unused with `settle`, which has no way past itself to label. */
+		continueLabel?: string;
 		qrScanHint: string;
 		jsonScanHint: string;
 		qrGifPath: string;
 		jsonFilePath: string;
 		qrSaveLabel: string;
 		jsonSaveLabel: string;
+		settle?: EnrollSettle;
 	},
-): Promise<"continue" | "back"> {
+): Promise<ArtifactAction> {
 	for (;;) {
 		console.log(`\n${opts.title}`);
 		console.log("  1) Show as QR Code");
@@ -123,7 +198,7 @@ export async function presentEnrollment(
 		if (choice === "1") {
 			const action = await presentArtifact(
 				opts.qrScanHint,
-				opts.continueLabel,
+				opts.continueLabel ?? "",
 				opts.qrSaveLabel,
 				() => {
 					// A payload too dense for a QR throws in qrPayload; offer JSON/save instead of crashing.
@@ -143,14 +218,16 @@ export async function presentEnrollment(
 					trackTemp(opts.qrGifPath);
 					return opts.qrGifPath;
 				},
+				opts.settle,
 			);
-			if (action === "continue") return "continue";
+			// Only a back-out returns to the QR-versus-JSON choice; every other action is the caller\u0027s.
+			if (action !== "back") return action;
 		} else if (choice === "2") {
 			const pretty = JSON.stringify(JSON.parse(payload), null, 2);
 			const copied = await tryClipboardCopy(pretty);
 			const action = await presentArtifact(
 				opts.jsonScanHint,
-				opts.continueLabel,
+				opts.continueLabel ?? "",
 				opts.jsonSaveLabel,
 				() => {
 					console.log(
@@ -165,8 +242,9 @@ export async function presentEnrollment(
 					trackTemp(opts.jsonFilePath);
 					return opts.jsonFilePath;
 				},
+				opts.settle,
 			);
-			if (action === "continue") return "continue";
+			if (action !== "back") return action;
 		} else {
 			err("Enter 1, 2, or b.");
 		}

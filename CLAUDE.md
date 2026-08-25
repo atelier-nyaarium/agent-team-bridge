@@ -1318,6 +1318,24 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    payload, waits for the phone's sealed bundle, and connects in-process with no restart. Its
    `transportInstalled` accepts ONLY the direct shape, the same rule as `loadRouterTransport`, or the
    menu says "already enrolled" over a file the gateway itself reads as "arm for enrollment".
+   - **The payload and the wait are ONE screen** (`EnrollSettle`), and there is no action between
+     them. A keypress used to sit there labelled "Done. Continue Enrollment", which promised a next
+     step that did not exist and let an admin walk past the comparison without making it and then
+     have no way back to it. `readKeyWhile` is what makes settling possible at all: `ask` is Bun's
+     global `prompt()`, which blocks the whole event loop, so nothing could poll for the phone behind
+     it. Raw mode buys the concurrency, restores cooked mode on every exit, and re-raises ^C by hand
+     because raw mode swallows it.
+   - **That screen prints the SAS**, `fingerprint(signPub)` from the same admit payload. Its twin is
+     Kotlin's `Crypto.fingerprint`, and the phone's own confirm screen says "Confirm this matches the
+     Gateway terminal" - which was asking for a comparison against a value the terminal never showed.
+   - **The countdown is stamped where `armGateway` returns it**, before the health wait, so it runs
+     EARLY rather than late. The gateway owns the real timer; health-wait plus payload-fetch can eat
+     75s of the window before the QR is even on screen. Re-arm is offered at ALL times, not only past
+     the deadline: the options print once and only the status line is rewritten, so a listing gated on
+     expiry would contradict the status line above it.
+   - **No `lan` block means no listener was ever opened** (`generateEnrollCert` returns null for a
+     non-IPv4 host, `0.0.0.0`, or an openssl failure), so the screen says paste is the only route in
+     rather than leaving the admin to wait out the window for a delivery that cannot arrive.
 4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
    `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
    local state and the host blob. Both mutate the Router's own state file through
