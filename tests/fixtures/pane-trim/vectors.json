@@ -1,0 +1,95 @@
+{
+	"_comment": "Cross-runtime vectors for end-of-line padding removal. `capture-pane -J` preserves trailing spaces as the price of rejoining wrapped rows, so the daemon drops them at capture (src/shared/pane-trim.ts, trimPaneRowPadding) and the console drops them again at render (TerminalAnsi.kt, trimLineEnds). The two must never disagree about which trailing spaces are padding: over-trimming on either side deletes cells a background or reverse painted, and only a row that actually carries one shows it. Read by BOTH src/__tests__/pane-trim.test.ts and android/.../PaneTrimVectorsTest.kt. `expectText` is the surviving TEXT with every escape removed, because that is the one thing both runtimes produce: the TS half returns bytes (escapes preserved, so a later row inherits the colour state tmux emitted), while the Kotlin half returns styled runs and its text is their concatenation. The escape-level promises are TS-only and are asserted in pane-trim.test.ts rather than here. Control bytes are written as \\u escapes so none sits raw in the file.",
+	"vectors": [
+		{
+			"name": "an ordinary row: -J padding goes",
+			"input": "short   \nnext line    \n",
+			"expectText": "short\nnext line\n"
+		},
+		{
+			"name": "padding under a background stays: a coloured row paints out to the pane edge",
+			"input": "\u001b[44mstatus   \u001b[0m\nplain   \n",
+			"expectText": "status   \nplain\n"
+		},
+		{
+			"name": "padding under reverse stays: reverse paints a background from the foreground",
+			"input": "\u001b[7msel  \u001b[0m\n",
+			"expectText": "sel  \n"
+		},
+		{
+			"name": "a row that is only padding empties, keeping its newline",
+			"input": "a\n      \nb",
+			"expectText": "a\n\nb"
+		},
+		{
+			"name": "spacing inside a row is layout, not padding",
+			"input": "col1   col2   ",
+			"expectText": "col1   col2"
+		},
+		{
+			"name": "padding spanning several colour changes goes entirely",
+			"input": "text\u001b[31m  \u001b[32m  \u001b[0m\ntail",
+			"expectText": "text\ntail"
+		},
+		{
+			"name": "a 256-colour background counts as painted",
+			"input": "\u001b[48;5;196mcell  \u001b[0m\n",
+			"expectText": "cell  \n"
+		},
+		{
+			"name": "a truecolor background counts as painted",
+			"input": "\u001b[48;2;10;20;30mcell  \u001b[0m\n",
+			"expectText": "cell  \n"
+		},
+		{
+			"name": "a 256-colour FOREGROUND whose index is 48 is not a background",
+			"input": "\u001b[38;5;48mfg   \n",
+			"expectText": "fg\n"
+		},
+		{
+			"name": "a truecolor foreground carrying 48, 7 and 44 as channels is not a background",
+			"input": "\u001b[38;2;48;7;44mfg   \n",
+			"expectText": "fg\n"
+		},
+		{
+			"name": "49 turns the background back off",
+			"input": "\u001b[44mbg\u001b[49m   \n",
+			"expectText": "bg\n"
+		},
+		{
+			"name": "27 turns reverse back off",
+			"input": "\u001b[7mrev\u001b[27m   \n",
+			"expectText": "rev\n"
+		},
+		{
+			"name": "an empty parameter is dropped, not read as a reset that would clear the background",
+			"input": "\u001b[44mbg\u001b[1;;7m  \n",
+			"expectText": "bg  \n"
+		},
+		{
+			"name": "an OSC 8 hyperlink is opaque, so a space inside its target is never padding",
+			"input": "\u001b]8;;https://example.com/a b\u0007label\u001b]8;;\u0007   \n",
+			"expectText": "label\n"
+		},
+		{
+			"name": "a non-SGR CSI is skipped without eating the character after it",
+			"input": "\u001b[2Krow   \n",
+			"expectText": "row\n"
+		},
+		{
+			"name": "colour state carries across rows, the way a capture emits it",
+			"input": "\u001b[44ma  \nb  \n",
+			"expectText": "a  \nb  \n"
+		},
+		{
+			"name": "the last row is trimmed even with no trailing newline",
+			"input": "only row   ",
+			"expectText": "only row"
+		},
+		{
+			"name": "a row with nothing to drop is untouched",
+			"input": "\u001b[32m❯\u001b[0m ready\n",
+			"expectText": "❯ ready\n"
+		}
+	]
+}

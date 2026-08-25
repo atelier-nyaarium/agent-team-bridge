@@ -196,6 +196,9 @@ code does not belong here; rationale lives in `git log`.
     durability. See Board attachments below
   - `board-rank.ts` - fractional ranks for task-board ordering: plain string order IS sibling order,
     and `rebalanceRanks` asserts every rank it mints because an invalid one poisons the durable file
+  - `agent-screen.ts` / `pane-trim.ts` - the pure reads of a captured tmux pane: what state the REPL
+    is in, and which trailing spaces are `-J` padding rather than content. Each has a hand-written
+    Kotlin twin (`AgentScreen.kt`, `TerminalAnsi.kt`) held to a shared fixture corpus
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
@@ -904,6 +907,18 @@ permissions for the supervised target.
   `Selection` internal and nothing can read what sits under the handles until it is copied. The button
   opens any scheme an installed app claims, unlike a message link, whose set is fixed in `LinkMenu.kt`
   - that one carries a scheme an agent wrote, this one carries what the owner selected by hand.
+  - **The padding is dropped TWICE, on purpose.** `-J` is what preserves it (tmux(1): "-J preserves
+    trailing spaces and joins any wrapped lines"), so `shared/pane-trim.ts` drops it at capture to cut
+    the polled frame by a quarter, and `trimLineEnds` drops it again at render because the daemon and
+    the console update on separate triggers and an older daemon still ships padded frames. Trimming is
+    idempotent, so the second pass is a no-op rather than a second opinion, and `tests/fixtures/pane-trim`
+    holds both to the same rows so they cannot drift. The daemon hashes the TRIMMED bytes: the peek
+    reply's 304 is answered against what the console actually received.
+  - **Colour-blind trimming is the wrong rule and looks right.** Only trailing spaces carrying no
+    background and no reverse are padding; a painted cell colours out to the pane edge and is content.
+    Measured on a live pane, 24 padded rows of which two had to be kept - few enough that eyeballing
+    the result proves nothing. It is also why dropping `-J` is not the free version of this: tmux
+    trims colour-blind, and the join is what the whole link copy depends on.
 - **Designer plugin:** docks a `design-card` file from its declared title/group/dimensions the
   moment the message lands, and resolves the bytes at RENDER from the live row (content-keyed, so an
   older revision cannot lend its bytes). A card therefore exists before its bytes and says whether
