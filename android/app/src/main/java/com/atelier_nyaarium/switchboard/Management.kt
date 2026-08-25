@@ -191,10 +191,14 @@ fun GatewaysScreen(
 	onManageSharing: (String) -> Unit,
 ) {
 	val scope = rememberCoroutineScope()
-	val activity = LocalContext.current as? FragmentActivity
-	// Re-read after a revoke so the list reflects the change.
+	val context = LocalContext.current
+	val activity = context as? FragmentActivity
+	// Re-read after a revoke, a resume, or a cleared record so the list reflects the change.
 	var refresh by remember { mutableStateOf(0) }
+	var busyId by remember { mutableStateOf<String?>(null) }
+	var resumeNote by remember { mutableStateOf<Pair<String, String>?>(null) }
 	val gateways = remember(refresh) { repo.ownerFacts.admittedMembers().filter { it.kind == "gateway" } }
+	val pending = remember(refresh) { repo.gatewayEnroll.pendingEnrolls() }
 	Scaffold(topBar = { TopAppBar(title = { Text("Gateways") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
@@ -208,19 +212,62 @@ fun GatewaysScreen(
 				val gid = g.gatewayId ?: continue
 				val count = teams.count { it.gatewayId == gid }
 				val online = teams.any { it.gatewayId == gid && it.isLive }
+				val state = gatewayCardState(count, online, pending[gid])
+				// A session proves this Gateway installed its bundle, so a record that outlived the
+				// enrollment is stale. Dropped on sight rather than left to contradict the card.
+				if (state !is GatewayCardState.Unfinished && pending.containsKey(gid)) {
+					LaunchedEffect(gid) {
+						repo.gatewayEnroll.clearPending(gid)
+						refresh++
+					}
+				}
 				Card(Modifier.fillMaxWidth()) {
 					Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 						Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
 							Text(gid, style = MaterialTheme.typography.titleMedium)
-							Text(
-								"${if (online) "online" else "offline"} · $count session${if (count == 1) "" else "s"}",
-								style = MaterialTheme.typography.bodySmall,
-							)
+							when (state) {
+								is GatewayCardState.Unfinished -> {
+									Text(
+										if (busyId == gid) "Finishing setup..." else "Setup unfinished · tap to resume",
+										style = MaterialTheme.typography.bodySmall,
+										color = MaterialTheme.colorScheme.error,
+									)
+									state.lastError?.let {
+										Text(it, style = MaterialTheme.typography.bodySmall)
+									}
+								}
+								is GatewayCardState.Live -> Text(
+									"online · ${state.sessions} session${if (state.sessions == 1) "" else "s"}",
+									style = MaterialTheme.typography.bodySmall,
+								)
+								GatewayCardState.Offline -> Text(
+									"offline · $count session${if (count == 1) "" else "s"}",
+									style = MaterialTheme.typography.bodySmall,
+								)
+							}
 							Text(
 								Crypto.fingerprint(g.signPub),
 								fontFamily = FontFamily.Monospace,
 								style = MaterialTheme.typography.bodySmall,
 							)
+							if (state is GatewayCardState.Unfinished) {
+								Button(
+									enabled = busyId == null,
+									onClick = hapticClick {
+										busyId = gid
+										scope.launch {
+											val r = repo.gatewayEnroll.resumeEnroll(gid)
+											busyId = null
+											resumeNote = gid to r.message
+											r.pasteBundle?.let { copyToClipboard(context, "gateway bundle", it) }
+											refresh++
+										}
+									},
+								) { Text(if (pending[gid]?.deliverable == true) "Resume setup" else "Copy bundle again") }
+							}
+							resumeNote?.takeIf { it.first == gid }?.let {
+								Text(it.second, style = MaterialTheme.typography.bodySmall)
+							}
 						}
 						var menuOpen by remember(g.signPub) { mutableStateOf(false) }
 						Box {
@@ -242,6 +289,9 @@ fun GatewaysScreen(
 										scope.launch {
 											if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 											repo.ownerFacts.revokeMember(g.signPub)
+											// Giving up on a Gateway retires its unfinished setup too, or the
+											// card comes back offering to resume something just revoked.
+											repo.gatewayEnroll.clearPending(gid)
 											refresh++
 										}
 									},

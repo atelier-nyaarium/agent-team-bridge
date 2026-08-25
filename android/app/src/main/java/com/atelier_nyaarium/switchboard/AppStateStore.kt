@@ -372,6 +372,13 @@ class AppStateStore(context: Context) :
 	 * {domainId, displayName, nonce}. Persisted locally so the list and each row's invite QR survive
 	 * restarts: the Router holds the canonical pending/rooted state, but only the host remembers the label
 	 * and current invite nonce needed to re-render the QR. */
+	/** Gateways admitted whose bundle was never confirmed delivered, keyed by gateway id. Durable
+	 * because the interruption this exists for is the app being killed: a record held in memory would
+	 * die with exactly the event it is meant to survive. */
+	fun savePendingEnrolls(json: String) = prefs.edit().putString(KEY_PENDING_ENROLLS, json).apply()
+
+	fun loadPendingEnrolls(): String? = prefs.getString(KEY_PENDING_ENROLLS, null)
+
 	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()
 
 	fun loadHostedTenants(): String? = prefs.getString(KEY_HOSTED_TENANTS, null)
@@ -425,6 +432,7 @@ class AppStateStore(context: Context) :
 		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
 		const val KEY_PROFILE_NAME = "federation_profile_name"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
+		const val KEY_PENDING_ENROLLS = "federation_pending_enrolls"
 		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
 		const val KEY_STTS_URL = "stts_url"
 		const val KEY_STTS_KEY = "stts_key"
@@ -475,6 +483,7 @@ class AppStateStore(context: Context) :
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_ROUTER_REACH, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
+			KEY_PENDING_ENROLLS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,

@@ -94,32 +94,90 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		}
 		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
-		if (scanned.lanHost != null && scanned.lanPort != null && scanned.certFp != null && isPrivateLanHost(scanned.lanHost)) {
-			val target = "${scanned.lanHost}:${scanned.lanPort}"
-			when (val r = postBundle(scanned.lanHost, scanned.lanPort, scanned.certFp, frameJson)) {
-				is BundlePost.Ok -> {
-					DebugLog.log("Enroll", "LAN delivery ok -> $target")
-					return@withContext EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
+		deliver(scanned.gatewayId, frameJson, scanned.lanHost, scanned.lanPort, scanned.certFp)
+	}
+
+	/** Re-deliver a bundle whose first attempt never landed, without a re-scan. The saved bundle is
+	 * still sealed to that Gateway and still carries its admission inside it, so nothing has to be
+	 * re-signed - as long as that Gateway is still on the arming the bundle was sealed against. */
+	suspend fun resumeEnroll(gatewayId: String): EnrollDelivery = withContext(Dispatchers.IO) {
+		val p = pendingEnrolls()[gatewayId]
+			?: return@withContext EnrollDelivery(true, "Nothing left to finish for this Gateway.", null)
+		deliver(p.gatewayId, p.bundle, p.lanHost, p.lanPort, p.certFp)
+	}
+
+	/** Gateways admitted whose bundle was never confirmed delivered, keyed by gateway id. */
+	fun pendingEnrolls(): Map<String, PendingEnroll> = decodePendingEnrolls(repo.store.loadPendingEnrolls())
+
+	fun clearPending(gatewayId: String) {
+		val now = pendingEnrolls()
+		if (!now.containsKey(gatewayId)) return
+		repo.store.savePendingEnrolls(encodePendingEnrolls(now - gatewayId))
+	}
+
+	private fun notePending(p: PendingEnroll) {
+		repo.store.savePendingEnrolls(encodePendingEnrolls(pendingEnrolls() + (p.gatewayId to p)))
+	}
+
+	/**
+	 * Deliver a sealed bundle and record what happened, so an enrollment that does not finish stays
+	 * legible instead of just being absent.
+	 *
+	 * The record is written BEFORE the post rather than after a failure. The interruption this exists
+	 * for is the app being killed, and a process that dies mid-POST would otherwise leave nothing at
+	 * all - which is the one case where the owner has no way to tell what happened.
+	 */
+	private fun deliver(
+		gatewayId: String,
+		frameJson: String,
+		lanHost: String?,
+		lanPort: Int?,
+		certFp: String?,
+	): EnrollDelivery {
+		// A non-LAN address is dropped here rather than dialled: isPrivateLanHost is what stops a
+		// tampered QR redirecting the bundle off the local network, so it gates the RECORD too.
+		val usable = lanHost != null && lanPort != null && certFp != null && isPrivateLanHost(lanHost)
+		val pending = PendingEnroll(
+			gatewayId = gatewayId,
+			bundle = frameJson,
+			lanHost = if (usable) lanHost else null,
+			lanPort = if (usable) lanPort else null,
+			certFp = if (usable) certFp else null,
+			at = System.currentTimeMillis(),
+		)
+		notePending(pending)
+		if (!usable) {
+			return EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", frameJson)
+		}
+		val target = "$lanHost:$lanPort"
+		return when (val r = postBundle(lanHost, lanPort, certFp, frameJson)) {
+			is BundlePost.Ok -> {
+				DebugLog.log("Enroll", "LAN delivery ok -> $target")
+				clearPending(gatewayId)
+				EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
+			}
+			is BundlePost.Rejected -> {
+				DebugLog.log("Enroll", "LAN delivery rejected $target HTTP ${r.code} body=${r.body}")
+				// A 404 is the Gateway saying it is not arming at all: the window closed, or it armed
+				// again. Either way THESE bytes are bound to the nonce of the arming that produced
+				// them and can never land, so offering a paste of them sends the owner at the same
+				// refusal by hand. Name the thing that actually unblocks it.
+				val stale = r.code == 404
+				val msg = if (stale) {
+					"That Gateway is not accepting enrollment now. Re-arm it with ./setup.sh, then scan its new code."
+				} else {
+					"The Gateway rejected the bundle (HTTP ${r.code}). Paste it into the Gateway's terminal instead."
 				}
-				is BundlePost.Rejected -> {
-					DebugLog.log("Enroll", "LAN delivery rejected $target HTTP ${r.code} body=${r.body}")
-					return@withContext EnrollDelivery(
-						true,
-						"The Gateway rejected the bundle (HTTP ${r.code}). Paste it into the Gateway's terminal instead.",
-						frameJson,
-					)
-				}
-				is BundlePost.Unreachable -> {
-					DebugLog.log("Enroll", "LAN delivery unreachable $target cause=${r.cause}")
-					return@withContext EnrollDelivery(
-						true,
-						"Couldn't reach the Gateway over the LAN. Paste the bundle into its terminal instead.",
-						frameJson,
-					)
-				}
+				notePending(pending.copy(lastError = msg))
+				EnrollDelivery(true, msg, if (stale) null else frameJson)
+			}
+			is BundlePost.Unreachable -> {
+				DebugLog.log("Enroll", "LAN delivery unreachable $target cause=${r.cause}")
+				val msg = "Couldn't reach the Gateway over the LAN. Paste the bundle into its terminal instead."
+				notePending(pending.copy(lastError = msg))
+				EnrollDelivery(true, msg, frameJson)
 			}
 		}
-		EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", frameJson)
 	}
 
 	/** The outcome of a LAN bundle POST, split so a Gateway-side rejection (a 4xx - meaning the bundle
