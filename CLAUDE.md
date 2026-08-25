@@ -881,6 +881,17 @@ permissions for the supervised target.
   which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
   Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
   `plans/pain-points.md` before reintroducing one.
+- **Unfinished gateway enrollment** (`PendingEnroll.kt`): the owner-signed admission goes out BEFORE
+  any delivery is attempted and has to, since `sealBundle` carries that same admission inside the
+  bundle and rolling it back would break the paste fallback that is the whole recovery path. So an
+  interrupted enrollment leaves a real keyring member that never received a byte, and the Gateways
+  card could not tell that apart from a machine that is switched off. The record is durable (the
+  interruption it exists for is the app being KILLED) and written before the POST, not after a
+  failure. `gatewayCardState` is the pure precedence: a session outranks the record, because a
+  session proves the bundle landed and a stale record must not argue with that. `resumeEnroll`
+  re-posts the SAVED bundle, since it is still sealed to that Gateway and still carries its
+  admission - but only while that Gateway is on the arming it was sealed against, which is why a 404
+  says to re-arm and re-scan instead of offering a paste that hits the same refusal.
 - **Terminal copy** (`TerminalCopy.kt`, `TerminalAnsi.kt`): a pane is a fixed grid, so a link longer
   than a row arrives split across rows and every row arrives padded to the pane edge. `trimLineEnds`
   drops that padding before the frame renders, keeping only cells carrying a background or reverse
