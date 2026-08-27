@@ -1,11 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-	pendingAdminDomain,
-	readAdminDomain,
-	removeDomain,
-	removeGatewayAdmission,
-} from "../../scripts/bootstrap-domain.js";
+import { pendingAdminDomain, readAdminDomain, removeDomain } from "../../scripts/bootstrap-domain.js";
 import { buildProvisioningBlob } from "../../scripts/write-provisioning-blob.js";
 import { type Admission, type SignedAdmission, signAdmission } from "../shared/admission.js";
 import { b64Field, generateIdentity } from "../shared/crypto.js";
@@ -254,53 +249,6 @@ function purgeFixture() {
 		},
 	});
 }
-
-describe("removeGatewayAdmission (purge gateway: drop one gateway's admission)", () => {
-	// One fixture string per test, reused for both the input and the baseline - the fixture's keys /
-	// nonces are randomly minted, so comparing two separate purgeFixture() calls would always differ.
-	it("drops ONLY the named gateway, keeping the other gateway, the console admission, and the revocation", () => {
-		const fixture = purgeFixture();
-		const before = JSON.parse(fixture);
-		const after = JSON.parse(removeGatewayAdmission(fixture, TEST_DOMAIN_ID, "gw-drop"));
-		const admissions = after.enrollment[TEST_DOMAIN_ID].admissions as SignedAdmission[];
-		const gwIds = admissions.filter((a) => a.admission.kind === "gateway").map((a) => a.admission.gatewayId);
-		expect(gwIds).toEqual(["gw-keep"]);
-		// The console admission and the revocation are untouched.
-		expect(admissions.some((a) => a.admission.kind === "console")).toBe(true);
-		expect(after.enrollment[TEST_DOMAIN_ID].revocations).toEqual(before.enrollment[TEST_DOMAIN_ID].revocations);
-		// The owner root + isAdminDomain survive.
-		expect(after.enrollment[TEST_DOMAIN_ID].ownerSignPub).toBe(owner.sign.pub);
-		expect(after.enrollment[TEST_DOMAIN_ID].isAdminDomain).toBe(true);
-	});
-
-	it("leaves the FRIEND Domain byte-for-byte intact (including its linkEdges - the lossless property)", () => {
-		const fixture = purgeFixture();
-		const before = JSON.parse(fixture);
-		const after = JSON.parse(removeGatewayAdmission(fixture, TEST_DOMAIN_ID, "gw-drop"));
-		expect(after.enrollment.work).toEqual(before.enrollment.work);
-		// The link-edge fields the setup write paths never carry are still present.
-		expect(after.enrollment.work.linkEdges).toHaveLength(1);
-		expect(after.enrollment.work.linkRevocations).toHaveLength(1);
-	});
-
-	it("preserves the Router's identity verbatim", () => {
-		const after = JSON.parse(removeGatewayAdmission(purgeFixture(), TEST_DOMAIN_ID, "gw-drop"));
-		expect(after.identity.sign.pub).toBe(router.sign.pub);
-		expect(after.identity.sign.priv).toBe(router.sign.priv);
-	});
-
-	it("is idempotent for an absent gateway id (no slice change)", () => {
-		const fixture = purgeFixture();
-		const before = JSON.parse(fixture);
-		const after = JSON.parse(removeGatewayAdmission(fixture, TEST_DOMAIN_ID, "nope"));
-		expect(after).toEqual(before);
-	});
-
-	it("is idempotent for an absent Domain (returns the input unchanged)", () => {
-		const input = purgeFixture();
-		expect(removeGatewayAdmission(input, "no-such-domain", "gw-drop")).toBe(input);
-	});
-});
 
 describe("removeDomain (purge federation: drop one Domain, keep the rest)", () => {
 	it("drops ONLY the admin Domain; the friend Domain and identity survive", () => {

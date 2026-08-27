@@ -1,16 +1,34 @@
 // The two teardown paths off setup.ts's top dial menu: Purge Gateway (option 9, this machine only)
-// and Purge Federation (option 0, the whole Domain). Both share the board-loss guard, the volume
-// wipe, and the Router state mutation below.
+// and Purge Federation (option 0, the whole Domain). Both share the board-loss guard and the volume
+// wipe; only Purge Federation mutates the Router's state.
 
 import fs from "node:fs";
 import { $ } from "bun";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
-import { removeDomain, removeGatewayAdmission } from "./bootstrap-domain.js";
-import { confirm, dc, dcFederation, dirExists, envGet } from "./lib/host.js";
+import { removeDomain } from "./bootstrap-domain.js";
+import { requireDocker } from "./lib/docker-probe.js";
+import { confirm, dc, dcFederation, dirExists, envGet, envUnset } from "./lib/host.js";
 import { readRouterFed, writeRouterFed } from "./lib/routerState.js";
 import { confirmBoardLoss } from "./setup-board-guard.js";
 import { BLOB_FILE, CONSOLE_JSON_FILE, GW_JSON_FILE, GW_QR_GIF, QR_GIF, SECRETS_DIR } from "./setup-constants.js";
 import { gatewayHostname } from "./setup-gateway.js";
+
+////////////////////////////////
+//  Constants
+
+/** The .env keys the GATEWAY's own setup writes (setup-gateway.ts, start-gateway.sh) and nothing
+ * else does. Every other key in that file belongs to the Router (routerStart.ts, setup-provision.ts)
+ * and a gateway purge must not know they exist. `FEDERATION_DOMAIN_ID` is the Router's: the gateway
+ * compose passes it through as a fallback, but it is minted by Router Setup, which re-stages a
+ * pending Domain OVER the rooted one when it finds the key absent. */
+export const GATEWAY_ENV_KEYS = [
+	"GATEWAY_ID",
+	"HOST_WS_TOKEN",
+	"FEDERATION_ROUTER_HOST",
+	"FEDERATION_ROUTER_PORT",
+] as const;
+
+const HOST_DAEMON_TMUX = "host-daemon";
 
 ////////////////////////////////
 //  Purge primitives (throw on failure; the menu catches per-op, the top level exits)
@@ -46,23 +64,78 @@ async function federationDelete(mutate: (fedJson: string) => string): Promise<vo
 	}
 }
 
+/** Stop the host daemon's tmux session. It exists only to serve this machine's gateway, and left
+ * running it reconnects forever to a container that no longer exists. Exact-match `=name`, the
+ * same form start-host-daemon.sh uses, so `host-daemon-2` is never the one killed.
+ *
+ * tmux is probed on its own first: Bun's shell answers a missing binary with the same exit 1 that
+ * `has-session` answers "no such session" with, so without the probe a Windows machine, which has
+ * no tmux, would be told the daemon "was not running" by a check that could not look. */
+async function stopHostDaemon(): Promise<string> {
+	if ((await $`tmux -V`.quiet().nothrow()).exitCode !== 0) return "no tmux on this machine, nothing to stop";
+	const has = await $`tmux has-session -t ${`=${HOST_DAEMON_TMUX}`}`.quiet().nothrow();
+	if (has.exitCode !== 0) return "was not running";
+	const kill = await $`tmux kill-session -t ${`=${HOST_DAEMON_TMUX}`}`.quiet().nothrow();
+	return kill.exitCode === 0 ? "stopped" : "could not be stopped (tmux kill-session failed)";
+}
+
 ////////////////////////////////
 //  Top-level operations
 
-/** Wipe this machine's gateway setup (.env + both gateway volumes) back to nothing. */
+/**
+ * Remove this machine's gateway and nothing else.
+ *
+ * What it can do: stop the daemon and the container, erase both volumes, and take the gateway's own
+ * keys out of .env. What it CANNOT do is tell the network: an admission is an owner-signed fact and
+ * every mirror of it (the Router, every other Gateway, the phone's keyring) retires one only on an
+ * owner-signed revocation, which this host cannot produce - the owner's SIGNING key never leaves the
+ * phone. Editing the admission out of the Router's file was tried: it reached the Router at once and
+ * the other Gateways at their next register, at the cost of bouncing the Router and dropping all of
+ * them, but never the phone, whose keyring unions and so kept listing the ghost and reading its
+ * board. The one thing that finishes the job is named here, not faked.
+ */
 export async function purgeGateway(): Promise<void> {
-	console.log("Wipes .env + volumes/gateway-data + volumes/gateway.");
-	if (!confirm("Purge everything?")) return;
-	if (!(await confirmBoardLoss())) return;
-	// Drop this Gateway's admission from the Router's Domain first (the admission stores the
-	// SANITIZED slug, so use it not the raw env), then erase the local state.
-	const domain = await envGet("FEDERATION_DOMAIN_ID");
+	// Before anything is stopped. The wipe runs through docker, so with docker down the purge would
+	// otherwise kill the daemon, fail at the volumes, and leave a gateway that comes back on its own
+	// with nothing serving its host slot.
+	await requireDocker();
 	const gw = sanitizeGatewayId((await envGet("GATEWAY_ID")) || gatewayHostname());
-	await federationDelete((fed) => removeGatewayAdmission(fed, domain, gw));
-	await dc("down", "--remove-orphans").quiet().nothrow();
-	await wipeState();
-	await $`rm -f .env ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
-	console.log("Purged.");
+	console.log(`Purge Gateway "${gw}"\n`);
+	console.log("Removes the gateway on this machine and nothing else:");
+	console.log("  - stops the host daemon and the gateway container");
+	console.log("  - erases volumes/gateway-data and volumes/gateway (its keys, sessions, mailboxes, task board)");
+	console.log(`  - drops its keys from .env (${GATEWAY_ENV_KEYS.join(", ")})`);
+	console.log("A Federation Router on this machine, its tokens and its Domain are not touched.\n");
+	if (!confirm(`Purge gateway "${gw}"?`)) return;
+	if (!(await confirmBoardLoss())) return;
+
+	const report = (step: string, outcome: string): void => console.log(`  ${step.padEnd(14)}${outcome}`);
+	console.log();
+	report("host daemon", await stopHostDaemon());
+	const down = await dc("down", "--remove-orphans").quiet().nothrow();
+	report(
+		"gateway",
+		down.exitCode === 0 ? "stopped" : "compose down failed (continuing; the volumes are wiped below)",
+	);
+	// A wipe that did not happen must not be followed by the .env cleanup below, or the machine is
+	// left with a gateway that restarts on its own having lost its token. Stop here and say so; every
+	// step above is safe to repeat.
+	try {
+		await wipeState();
+	} catch (e) {
+		report("volumes", `FAILED: ${e instanceof Error ? e.message : String(e)}`);
+		console.log("\nThe purge did NOT complete. Fix the cause and run 9) again; repeating it is safe.");
+		return;
+	}
+	report("volumes", "erased");
+	const remaining = await envUnset(GATEWAY_ENV_KEYS);
+	report(".env", remaining === 0 ? "removed (nothing else was in it)" : "gateway keys removed");
+	await $`rm -f ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
+	console.log(`\nGateway "${gw}" is purged from this machine.\n`);
+	console.log(`Its admission is still in your Domain. This script cannot revoke it - only you can, in the app:`);
+	console.log(`  Settings > Domain & Trust > Gateways > "${gw}" > Revoke`);
+	console.log(`Until then it shows there as offline and keeps its task-board column. Revoke it BEFORE`);
+	console.log(`enrolling this machine again, or the app lists "${gw}" twice.`);
 }
 
 /** Clean break: delete this owner's whole Domain from the Router, then erase the local state with

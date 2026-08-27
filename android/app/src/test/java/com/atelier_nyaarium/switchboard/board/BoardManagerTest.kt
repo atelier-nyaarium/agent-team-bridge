@@ -305,4 +305,49 @@ class BoardManagerTest {
 		// the reclaim shape the gateway explicitly refuses, rebuilt on the console.
 		assertFalse("a stored board that will not parse is UNKNOWN", BoardManager(FakeStore("{not json")).boardIsKnown)
 	}
+
+	@Test
+	fun aRevokedGatewaysColumnAndItsQueuedWritesGoWithIt() {
+		// A purged machine is wiped and gone, but nothing ever takes a column BACK: its last snapshot
+		// would be drawn as live work forever and board_read on every refresh. The keyring is the one
+		// fact that says gone rather than down, so a Gateway it no longer admits loses its column here.
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-route", listOf(entry("r1")), null, false)
+		board.applySnapshot("gw-gone", listOf(entry("g1")), null, false)
+		board.applySnapshot("gw-kept", listOf(entry("k1")), null, false)
+		board.enqueue(ConsoleOp.BoardSetState("g1", "done"), "gw-gone")
+		val keptOp = board.enqueue(ConsoleOp.BoardSetState("k1", "done"), "gw-kept")
+
+		board.retainGateways(listOf("gw-route", "gw-kept"))
+
+		assertEquals(setOf("gw-route", "gw-kept"), board.sourceGatewayIds().toSet())
+		assertTrue("the revoked column is gone", board.mergedEntries("gw-gone").isEmpty())
+		assertEquals("the kept column is untouched", listOf("k1"), board.mergedEntries("gw-kept").map { it.id })
+		assertEquals("only the kept write survives", listOf(keptOp), board.queuedActions.map { it.opId })
+	}
+
+	@Test
+	fun aRevokedMoveDestinationTakesTheOriginDeleteWithIt() {
+		// The delete half of a move waits on its write half. Dropping the write because its Gateway was
+		// revoked must drop the delete too, or the delete becomes eligible and the entry exists nowhere -
+		// the same inversion abandonBoardAction exists to prevent for a refusal.
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-route", listOf(entry("m1")), null, false)
+		board.enqueueMove(board.mergedEntries("gw-route"), fromGateway = "gw-route", toGateway = "gw-gone") { e, b -> "/tmp/$e/$b" }
+		assertEquals(2, board.queuedActions.size)
+
+		board.retainGateways(listOf("gw-route"))
+
+		assertTrue("the linked origin delete went with the destination write", board.queuedActions.isEmpty())
+		assertEquals("the entry is back on its origin", listOf("m1"), board.mergedEntries("gw-route").map { it.id })
+	}
+
+	@Test
+	fun anEmptyKeyringPrunesNothing() {
+		// What a device knows before its first sync. An empty answer is never permission to delete.
+		val board = BoardManager(storeStub())
+		board.applySnapshot("gw-a", listOf(entry("a1")), null, false)
+		board.retainGateways(emptyList())
+		assertEquals(listOf("a1"), board.mergedEntries("gw-a").map { it.id })
+	}
 }

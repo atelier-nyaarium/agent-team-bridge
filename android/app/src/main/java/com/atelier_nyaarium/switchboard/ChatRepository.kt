@@ -203,6 +203,9 @@ class ChatRepository(
 	internal fun refreshAdmittedGateways() {
 		val ids = sessions.keyringGateways()
 		if (ids != _state.value.admittedGateways) _state.update { it.copy(admittedGateways = ids) }
+		// The board's columns follow the same fact: a Gateway the owner revoked is gone, and its last
+		// snapshot must not outlive it here. Same hook, so the two can never disagree about who is in.
+		board.retainGateways(ids)
 	}
 	// The federation surface, split into collaborators by concern (see each class's own doc).
 	// Screens call through these (repo.ownerFacts.X, repo.devices.X, ...) rather than on ChatRepository

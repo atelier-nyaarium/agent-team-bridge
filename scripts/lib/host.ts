@@ -306,3 +306,30 @@ export async function envSet(key: string, value: string): Promise<void> {
 	kept.push(`${key}=${value}`);
 	await Bun.write(ENV_FILE, `${kept.join("\n")}\n`);
 }
+
+/**
+ * Drop the named keys from .env and keep every other line. Returns how many lines remain, so a
+ * caller can tell an emptied file from one still carrying another component's settings.
+ *
+ * The gateway and the Router share this one file, so a teardown that wants "back to nothing" for
+ * one of them must take its OWN keys and no more. Deleting the file took the Router's tokens with
+ * it, which minted fresh ones on its next start and locked out every phone and every other Gateway.
+ */
+export async function envUnset(keys: readonly string[]): Promise<number> {
+	// Only an ABSENT file reads as empty. Any other read failure must throw: treating it as empty
+	// would fall through to deleting a file whose contents this could not see, which for the one
+	// file the Router's tokens live in is the exact loss this function exists to prevent.
+	const env = await Bun.file(ENV_FILE)
+		.text()
+		.catch((e: NodeJS.ErrnoException) => {
+			if (e.code === "ENOENT") return "";
+			throw e;
+		});
+	const kept = env.split("\n").filter((l) => l !== "" && !keys.some((key) => l.startsWith(`${key}=`)));
+	if (kept.length === 0) {
+		await $`rm -f ${ENV_FILE}`.quiet().nothrow();
+	} else {
+		await Bun.write(ENV_FILE, `${kept.join("\n")}\n`);
+	}
+	return kept.length;
+}

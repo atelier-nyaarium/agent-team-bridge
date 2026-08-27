@@ -206,22 +206,6 @@ interface RawDomainSlice {
 	[k: string]: unknown;
 }
 
-/** Drop a gateway's admission from one Domain's allowlist (purge gateway). Removes only
- * `kind:"gateway"` entries whose `gatewayId` matches; console admissions, other gateways,
- * revocations, and every other field of the slice and of other Domains are untouched. Idempotent
- * when the Domain or the gateway id is absent. */
-export function removeGatewayAdmission(routerFedJson: string, domainId: string, gatewayId: string): string {
-	const fed = JSON.parse(routerFedJson) as RawFederation;
-	const slice = fed.enrollment?.[domainId];
-	if (!slice) return routerFedJson;
-	if (Array.isArray(slice.admissions)) {
-		slice.admissions = slice.admissions.filter(
-			(a) => !(a?.admission?.kind === "gateway" && a.admission.gatewayId === gatewayId),
-		);
-	}
-	return JSON.stringify(fed);
-}
-
 /** Drop a whole Domain from the Secret (purge federation), keeping the Router's identity and every other
  * Domain verbatim so a hosted friend tenant survives. Idempotent when the Domain is absent. */
 export function removeDomain(routerFedJson: string, domainId: string): string {

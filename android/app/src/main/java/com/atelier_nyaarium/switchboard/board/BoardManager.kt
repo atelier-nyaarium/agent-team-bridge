@@ -217,6 +217,32 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
+	/**
+	 * Drop the column of every Gateway the owner no longer admits, and every queued write bound for it.
+	 *
+	 * A column arrives from a Gateway and is never taken back by one: a purged machine is wiped and
+	 * gone, so its last snapshot would stay here forever, drawn as live work and read on every refresh
+	 * to a Gateway that answers nothing. The keyring is the one fact that says a Gateway is GONE rather
+	 * than merely down - a revocation is the owner's own signed word - so it is what this keys on.
+	 *
+	 * An EMPTY keyring prunes nothing. It is what a device knows before its first sync, and "an empty
+	 * answer is never permission to delete" holds here the way it does for attachment bytes. The
+	 * queue is pruned through [abandonBoardAction] so a move's linked half goes with it: an origin
+	 * delete must not become eligible because the write it waited on was dropped rather than refused.
+	 */
+	fun retainGateways(admitted: Collection<String>) {
+		if (admitted.isEmpty()) return
+		val keep = admitted.toSet()
+		mutate { blob ->
+			val gone = blob.gateways.keys.filter { it !in keep }
+			if (gone.isEmpty() && blob.queue.none { it.gatewayId !in keep }) return@mutate blob
+			var queue = blob.queue
+			for (action in blob.queue) if (action.gatewayId !in keep) queue = abandonBoardAction(queue, action.opId)
+			if (gone.isNotEmpty()) DebugLog.log("Board", "dropping columns of revoked gateways: $gone")
+			blob.copy(gateways = blob.gateways - gone.toSet(), queue = queue)
+		}
+	}
+
 	/** Gateways whose last snapshot was cut by the byte budget. The board says so rather than
 	 * presenting a partial column as complete. */
 	fun truncatedGateways(): List<String> = blob.gateways.filterValues { it.truncated }.keys.toList()
