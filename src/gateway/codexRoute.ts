@@ -12,6 +12,7 @@ import {
 	projectCodexListResult,
 	sanitizeCodexErrorText,
 } from "../shared/codex-agent.js";
+import { isHostSpawn } from "../shared/host-spawn.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
 import { type CodexAgentService, CodexTransitionError } from "./codexAgentService.js";
@@ -210,7 +211,7 @@ export class CodexRoute {
 		const agentId = codexAgentIdForOperation(request.operationId);
 		// Refused rather than ignored: a devcontainer thread runs at its project root, and accepting a
 		// path this side would silently drop would tell the caller its agent is somewhere it is not.
-		if (request.cwd !== undefined && owner.spawn !== "host") {
+		if (request.cwd !== undefined && !isHostSpawn(owner.spawn)) {
 			throw new CodexTransitionError("invalid_input", "cwd applies to host sessions only");
 		}
 		const target = this.deps.service.resolveExecutionTarget(owner, request.cwd);

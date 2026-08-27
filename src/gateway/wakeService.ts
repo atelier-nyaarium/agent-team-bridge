@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { isReservedHostSession } from "../shared/host-op.js";
+import { isHostSpawn } from "../shared/host-spawn.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import type { SessionStore } from "../shared/session-store.js";
 import type { PresenceFacade } from "./presence.js";
@@ -106,7 +107,7 @@ export class WakeService {
 		const { project, session } = parseSessionName(team);
 		// Never dispatch a wake that would relaunch over the host-daemon's own supervisor pane (the
 		// daemon refuses it too; this stops the wake message at the source).
-		if (project === "host" && isReservedHostSession(session)) {
+		if (isHostSpawn(project) && isReservedHostSession(session)) {
 			console.log(`[wake] ${team} is a reserved host session; not waking`);
 			return { ok: false };
 		}

@@ -46,9 +46,20 @@ const RESUME_PROMPT_RE = /Resuming the full session will consume/;
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The target for this process's own tmux session. */
+/** The target for this process's own tmux session.
+ *
+ * `kind` is "host" for a self-target whatever this process is: it means "the tmux server I can
+ * reach directly", and a plugin running INSIDE a devcontainer reaches its own tmux with bare `tmux`
+ * exactly as one on the host does. The `docker exec` form is for the daemon reaching in from
+ * outside, which is never this call.
+ *
+ * `name` is derived rather than hardcoded. It was `"host"` while the sibling field came from
+ * PROJECT_NAME, which was inert (the host argv branch never reads `name`) and wrong for every
+ * devcontainer session. A lie that is load-bearing nowhere today is still the one a later reader
+ * builds on. */
 export function selfSessionTarget(): TmuxTarget {
-	return { kind: "host", name: "host", sessionName: parseSessionName(process.env.PROJECT_NAME ?? "").session };
+	const { project, session } = parseSessionName(process.env.PROJECT_NAME ?? "");
+	return { kind: "host", name: project, sessionName: session };
 }
 
 // Bare -t matches by prefix, so "story" lands on "story-2".

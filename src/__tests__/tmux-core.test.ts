@@ -609,9 +609,19 @@ describe("tmuxCore selfSessionTarget", () => {
 		else process.env.PROJECT_NAME = saved;
 	});
 
-	it("derives the session name from the session segment of a composite PROJECT_NAME", () => {
+	// BOTH segments come from PROJECT_NAME. `name` was hardcoded "host" here, which this test pinned:
+	// a devcontainer session reported itself as the host spawn point. It was inert (the host argv
+	// branch never reads `name`) but it was still a lie a later reader would build on.
+	it("derives both segments from a composite PROJECT_NAME", () => {
 		process.env.PROJECT_NAME = "recipe-app.scratch";
-		expect(selfSessionTarget()).toEqual({ kind: "host", name: "host", sessionName: "scratch" });
+		expect(selfSessionTarget()).toEqual({ kind: "host", name: "recipe-app", sessionName: "scratch" });
+	});
+
+	// `kind` stays "host" whatever this process is: for a SELF target it means "the tmux server I can
+	// reach directly", and a plugin inside a devcontainer reaches its own tmux with bare `tmux` too.
+	it("stays host-kind for a devcontainer session, since a self target is always local tmux", () => {
+		process.env.PROJECT_NAME = "recipe-app.scratch";
+		expect(selfSessionTarget().kind).toBe("host");
 	});
 
 	it("uses the default session for a bare or unset PROJECT_NAME", () => {

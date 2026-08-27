@@ -1,4 +1,5 @@
 import { isReservedHostSession, isShellSafeName, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
+import { isHostSpawn } from "../../shared/host-spawn.js";
 import {
 	Address,
 	composeSessionName,
@@ -126,9 +127,9 @@ export function createConsoleTargets({ localDomainId, localGatewayId, isProjectN
 		const project = t.spawn;
 		const sessionName = explicitSession ?? (t instanceof SpawnPoint ? DEFAULT_SESSION : t.session);
 		let target: TmuxTarget;
-		if (project === "host") {
+		if (isHostSpawn(project)) {
 			if (isReservedHostSession(sessionName)) throw new Error(`"${sessionName}" is a reserved host session`);
-			target = { kind: "host", name: "host", sessionName };
+			target = { kind: "host", name: project, sessionName };
 		} else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
 		else throw new Error(`terminal view is not available for "${project}" (only the host and devcontainers)`);
 		// Both name and session reach the host's shell launch command; the grammar makes both strict

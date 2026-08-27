@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isReservedHostSession, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
+import { buildHostLaunch, isHostSpawn } from "../../shared/host-spawn.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
 
 ////////////////////////////////
@@ -30,6 +31,11 @@ export function scanDevcontainerProjects(): Array<{ team: string; projectPath: s
 		}
 		for (const entry of entries) {
 			const full = path.join(resolved, entry);
+			// A directory named after a host spawn point would make `windows.<session>` mean two
+			// different things - a PowerShell shell and a devcontainer - and `isHostSpawn` would win
+			// at every resolver while catalog membership disagreed. Refused at the scan so the
+			// ambiguity never enters the catalog at all.
+			if (isHostSpawn(entry)) continue;
 			try {
 				if (!fs.statSync(full).isDirectory()) continue;
 				if (fs.existsSync(path.join(full, ".devcontainer", "devcontainer.json"))) {
@@ -133,6 +139,10 @@ const CLAUDE_FLAGS =
 	"--dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium";
 
 // One `bash -c`: the PROJECT_NAME override must run in the same shell as claude, after ~/.bashrc.
+// A host target dispatches on its spawn NAME through the registry, which is what lets a machine
+// offer more than one shell; `kind` stays the tmux LOCATION (bare tmux here, `docker exec` there)
+// and says nothing about which interpreter runs. A second field naming the shell would have to agree
+// with the name forever, so there isn't one.
 export function buildLaunchCommand(
 	target: TmuxTarget,
 	opts: { resumeSessionId?: string; workdir?: string; sessionToken?: string } = {},
@@ -151,8 +161,12 @@ export function buildLaunchCommand(
 	if (target.kind === "host") {
 		// Either quote would break out of the nesting, so a workdir bearing one is dropped.
 		const safeWorkdir = opts.workdir && !opts.workdir.includes("'") && !opts.workdir.includes('"');
-		const cd = safeWorkdir ? `cd "${opts.workdir}"; ` : "";
-		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}${cd}${claude}; exec bash'`;
+		return buildHostLaunch(target.name, {
+			composite,
+			claude,
+			exportToken,
+			workdir: safeWorkdir ? opts.workdir : undefined,
+		});
 	}
 	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec ${claude}'`;
 }
@@ -174,9 +188,11 @@ export function shouldGreetLaunch(opts: { created: boolean; resumeSessionId?: st
 export function resolveWatchTarget(team: string): TmuxTarget | undefined {
 	const { project, session } = parseSessionName(team);
 	if (!isTmuxName(project) || !isTmuxName(session)) return undefined;
-	if (project === "host") {
+	// Registry-wide, so the daemon's reserved session is refused under EVERY host spawn point
+	// (`windows.host-daemon` as much as `host.host-daemon`) rather than only the one named here.
+	if (isHostSpawn(project)) {
 		if (isReservedHostSession(session)) return undefined;
-		return { kind: "host", name: "host", sessionName: session };
+		return { kind: "host", name: project, sessionName: session };
 	}
 	return { kind: "devcontainer", name: project, sessionName: session };
 }

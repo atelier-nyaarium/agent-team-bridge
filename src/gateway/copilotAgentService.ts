@@ -16,6 +16,7 @@ import {
 	type CopilotStoredTurn,
 	copilotOperationFingerprint,
 } from "../shared/copilot-agent.js";
+import { isHostSpawn } from "../shared/host-spawn.js";
 import type { CopilotCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
@@ -147,15 +148,14 @@ export class CopilotAgentService {
 	}
 
 	resolveExecutionTarget(owner: SessionRecord, cwd?: string) {
-		const target =
-			owner.spawn === "host"
-				? { kind: "host" as const, workdirHint: cwd ?? this.deps.sessionStore.hostWorkdirHint(owner) }
-				: (() => {
-						const hostProjectPath = this.deps.offlineCatalog.get(owner.spawn);
-						return hostProjectPath
-							? { kind: "devcontainer" as const, project: owner.spawn, hostProjectPath }
-							: null;
-					})();
+		const target = isHostSpawn(owner.spawn)
+			? { kind: "host" as const, workdirHint: cwd ?? this.deps.sessionStore.hostWorkdirHint(owner) }
+			: (() => {
+					const hostProjectPath = this.deps.offlineCatalog.get(owner.spawn);
+					return hostProjectPath
+						? { kind: "devcontainer" as const, project: owner.spawn, hostProjectPath }
+						: null;
+				})();
 		const parsed = target ? CopilotExecutionTargetSchema.safeParse(target) : null;
 		return parsed?.success ? parsed.data : null;
 	}

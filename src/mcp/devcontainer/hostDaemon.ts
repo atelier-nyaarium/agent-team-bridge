@@ -13,6 +13,7 @@ import {
 	isTmuxName,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
+import { isHostSpawn } from "../../shared/host-spawn.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { parseSessionName } from "../../shared/session-id.js";
 import { CodexDaemonService } from "./codexDaemonService.js";
@@ -245,14 +246,16 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		safeSend({ type: "wake_result", team: msg.team, success: false, error: "invalid session name" });
 		return;
 	}
-	// The daemon shares this tmux server.
-	if (project === "host") {
+	// The daemon shares this tmux server. Registry-wide rather than the bare literal, so every host
+	// spawn point reaches this branch and none falls through to the devcontainer path below, which
+	// would look for a container named after a shell.
+	if (isHostSpawn(project)) {
 		if (isReservedHostSession(session)) {
 			console.error(`[host-wake] refusing wake of "${msg.team}": "${session}" is a reserved host session`);
 			safeSend({ type: "wake_result", team: msg.team, success: false, error: "reserved host session" });
 			return;
 		}
-		const target: TmuxTarget = { kind: "host", name: "host", sessionName: session };
+		const target: TmuxTarget = { kind: "host", name: project, sessionName: session };
 		const launch = buildLaunchCommand(target, {
 			resumeSessionId: msg.resumeSessionId,
 			workdir: resolveHostWorkdir(msg.workdirHint),

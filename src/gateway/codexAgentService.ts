@@ -17,6 +17,7 @@ import {
 	type CodexStoredOperation,
 	codexOperationFingerprint,
 } from "../shared/codex-agent.js";
+import { isHostSpawn } from "../shared/host-spawn.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
 import {
 	decideAcceptance,
@@ -99,7 +100,7 @@ export class CodexAgentService {
 	 * unusable path lands in home rather than anywhere a caller named. */
 	resolveExecutionTarget(owner: SessionRecord, cwd?: string): CodexExecutionTarget | null {
 		let target: CodexExecutionTarget;
-		if (owner.spawn === "host") {
+		if (isHostSpawn(owner.spawn)) {
 			target = { kind: "host", workdirHint: cwd ?? this.sessionStore.hostWorkdirHint(owner) };
 		} else {
 			const hostProjectPath = this.offlineCatalog.get(owner.spawn);
