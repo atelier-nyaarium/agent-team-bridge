@@ -401,7 +401,13 @@ owns the check and `routerClient` holds no certificate logic of its own.
   ring holds. The fingerprint replaces both checks rather than supplementing them.
 - **bun 1.4+ is required**, and it is the runtime that decides, not the code. `oven/bun:1` is a
   floating tag, so both start paths build with `--pull`; without it two machines on the same commit
-  land on different bun majors.
+  land on different bun majors. The gateway now REFUSES to start below the floor (`assertBunFloor` in
+  `main-gateway.ts`, before anything can dial), because a native gateway runs whatever bun the host
+  has and the base image is no longer the only thing holding the line. `BUN_FLOOR` in
+  `shared/bun-floor.ts` is the one number, read by the guard and by `check-pinning-runtime.ts`; it is
+  an OBSERVED floor (where the outage was fixed, and what that script proves each CI run), not a bun
+  contract, so raise it only against the script's verdict. Under node the guard is a no-op: the real
+  `ws` is in play there.
 
 ### Federation and trust
 
