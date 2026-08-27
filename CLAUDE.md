@@ -1408,10 +1408,30 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    - **No `lan` block means no listener was ever opened** (`generateEnrollCert` returns null for a
      non-IPv4 host, `0.0.0.0`, or an openssl failure), so the screen says paste is the only route in
      rather than leaving the admin to wait out the window for a delivery that cannot arrive.
-4. Per-user purges: `9) Purge Gateway` drops only this gateway's admission then wipes local state;
-   `0) Purge Federation` drops only this owner's Domain slice (other tenants survive) then wipes
-   local state and the host blob. Both mutate the Router's own state file through
-   `scripts/lib/routerState.ts`.
+4. Per-user purges: `9) Purge Gateway` stops the daemon and the container, wipes both gateway
+   volumes and takes ONLY the gateway's own keys out of `.env` (`GATEWAY_ENV_KEYS`); `0) Purge
+   Federation` drops only this owner's Domain slice from the Router's state file (other tenants
+   survive) then wipes local state and the host blob.
+   - **Purge Gateway tells the network nothing, on purpose, and says so.** An admission is an
+     owner-signed fact mirrored on the Router, every Gateway and the phone, and each mirror retires
+     one only on an owner-signed REVOCATION - which this host cannot sign, since the owner's SIGNING
+     key never leaves the phone (the public key does reach the Router). It used to edit the admission
+     out of the Router's file instead: that bounced the Router (dropping every other Gateway and
+     phone), reached the Router and, at their next register, the other Gateways, but never the phone
+     (`applyDomainSync` UNIONS its keyring, so the ghost stayed listed and its board kept being read),
+     and it read the Domain id from `.env`, which only Router Setup writes, so on any phone-enrolled
+     machine it silently did nothing at all. The purge now names the one thing that finishes the
+     job: Revoke in the app.
+   - **`.env` is shared by the gateway and the Router**, so neither purge may `rm` it. Purge Gateway
+     deleted it once: nothing broke until the Router's next start minted fresh tokens, at which point
+     every phone read "sign-in rejected" and every other Gateway was locked out - delayed, and on the
+     machines that were NOT purged.
+   - **The phone drops a revoked Gateway's board column** (`BoardManager.retainGateways`, off the same
+     `refreshAdmittedGateways` hook that publishes the admitted list). A column is never taken back
+     by the Gateway that sent it, so without this a purged machine's last snapshot was drawn as live
+     work forever. An empty keyring prunes nothing. The dropped column's attachment buckets leave the
+     sweep's keep-set with it, so the phone's copies of that Gateway's pictures are reclaimed: that is
+     the item being gone, not a last-copy accident, and a bucket another column still names is kept.
 
 `scripts/lib/routerState.ts` keeps every Bun `$` template on ONE line: Bun does not treat a
 backslash-newline as a continuation, it splits the argv there and the stray backslash lands in it,
