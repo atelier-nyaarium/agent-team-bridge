@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import type { Capability } from "../shared/capabilities.js";
+import type { HostSpawnState } from "../shared/host-spawn.js";
 import type { SessionStore } from "../shared/session-store.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
@@ -16,6 +17,10 @@ export interface WebSocketDeps {
 	conversationRegistry: ConversationRegistry;
 	knownTeamPaths: Map<string, string>;
 	offlineCatalog: Map<string, string>;
+	/** Host spawn points the daemon DETECTED, beyond the universal `host`. Owned by the gateway so
+	 * the catalog frame that writes it and the discovery routes that read it share one value.
+	 * Optional because a harness that does not care about discovery should not have to supply one. */
+	hostSpawnPoints?: HostSpawnState;
 	wakeCoordinator: WakeCoordinator;
 	// Settles a host_op (peek/send) reply by reqId, and fails all in-flight ops when the host
 	// drops. Absent in tests that do not exercise the console terminal relay.

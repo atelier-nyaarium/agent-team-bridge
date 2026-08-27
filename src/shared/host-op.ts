@@ -12,6 +12,8 @@
 //  follows the same hand-typed + field-guard convention as the wake/catalog frames on
 //  that channel rather than the zod-at-the-boundary ethos reserved for the Router link.
 
+import { WINDOWS_SPAWN } from "./host-spawn.js";
+
 /** Which tmux a host op targets: a named session on the host machine (bare `tmux`), or in a
  * devcontainer (`docker exec`). A target carries its session NAME; the pane is always `.0`
  * (reserved for the agent), so a target can address one of several named sessions on the same
@@ -92,6 +94,29 @@ export function isWorkdirPath(path: string): boolean {
 	return !WORKDIR_PATH_FORBIDDEN.test(path);
 }
 
+/** A Windows path, spelled with FORWARD slashes.
+ *
+ * Backslash is in the forbidden set and stays there - it is banned because of shell nesting, and
+ * exempting it for one spawn point would reopen that for everyone. PowerShell accepts `C:/Users/me`
+ * everywhere it accepts the backslash form, so the wire simply never carries a backslash.
+ *
+ * Shares `WORKDIR_PATH_FORBIDDEN` and the length cap with `isWorkdirPath` rather than restating
+ * them, so the two validators cannot come to disagree about what a path may contain. */
+const WINDOWS_WORKDIR_PATH_RE = /^[A-Za-z]:\//;
+export function isWindowsWorkdirPath(path: string): boolean {
+	if (path.length === 0 || path.length > MAX_WORKDIR_PATH_LEN) return false;
+	if (!WINDOWS_WORKDIR_PATH_RE.test(path)) return false;
+	return !WORKDIR_PATH_FORBIDDEN.test(path);
+}
+
+/** The right path rule for a spawn point, so the boundary and the daemon cannot apply different
+ * ones. A `windows` session takes either shape: the picker walks Windows and yields `C:/...`, while
+ * a caller may still name a `/mnt/c/...` path, which the daemon translates. */
+export function isSpawnWorkdirPath(spawn: string | undefined, path: string): boolean {
+	if (spawn === WINDOWS_SPAWN) return isWindowsWorkdirPath(path) || isWorkdirPath(path);
+	return isWorkdirPath(path);
+}
+
 /** A conversationId must be a dotless slug so it stays ONE injective segment of a flattened channel
  * key (the upcoming dot-delimited grammar splits store keys on "."). Capped at 128 - it is a key
  * component, not a tmux name, so it is looser on length than a slug but identical on charset. Every
@@ -131,7 +156,9 @@ export type HostOp =
 	// List the immediate subdirectories of one host directory (the create-session directory
 	// picker's type-ahead). Host filesystem only, read-only, never deduped - each request lists
 	// fresh. The path is gateway-validated (isWorkdirPath) and the daemon re-guards.
-	| { kind: "listDirs"; path: string }
+	// `spawn` names WHICH host spawn point's filesystem to browse. Absent means the host's own, so an
+	// older gateway that does not send it keeps the behaviour it always had.
+	| { kind: "listDirs"; path: string; spawn?: string }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
 	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
 	// Tear down the target tmux session (the console's Forget). Idempotent: killing an

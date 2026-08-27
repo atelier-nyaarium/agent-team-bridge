@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceSession
+import com.atelier_nyaarium.switchboard.proto.GatewaySpawnPoints
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
@@ -95,6 +96,42 @@ internal fun groupByGateway(
 	}
 }
 
+/** Every id that names a shell on the machine rather than a devcontainer project. Kept here as the
+ * console's own copy of the gateway's registry: a project literally named `host` or `windows` is
+ * deduped against these, and the gateway's catalog scan refuses such a directory anyway. */
+internal val HOST_SPAWN_IDS = setOf("host", "windows")
+
+/** How a host spawn point is labelled in the picker. `host` is only called "WSL" when a `windows`
+ * peer is present on the SAME Gateway: on a Linux machine it is just the host, and renaming it there
+ * would be a lie. The wire word never changes either way - `host` is an address segment keying
+ * session records, resume state and board work, so this is presentation only. */
+internal fun hostSpawnLabel(id: String, offered: List<String>): String = when {
+	id == "windows" -> "Windows"
+	id == "host" && offered.contains("windows") -> "WSL"
+	else -> id
+}
+
+/**
+ * The host spawn points to offer for one Gateway, Windows first.
+ *
+ * `host` is always present and never advertised, because every machine has one; the advertised list
+ * carries only what was DETECTED. An empty or absent advertisement therefore yields exactly `host`,
+ * which is the behaviour every console had before this existed.
+ */
+internal fun hostSpawnChoices(
+	advertised: List<GatewaySpawnPoints>,
+	key: GatewayGroupKey,
+	adminDomainId: String,
+): List<String> {
+	val offered = advertised.filter { it.groupKey(adminDomainId) == key }.flatMap { it.hostSpawns }
+	// Detected points first, `host` last, stated rather than left to alphabetical accident: on a
+	// Windows machine the Windows side is what the owner means by default, and it is the one they had
+	// to go out of their way to make available. Unknown ids are dropped rather than offered, since a
+	// newer gateway may advertise a spawn point this console cannot label or reason about.
+	val detected = offered.filter { it in HOST_SPAWN_IDS && it != "host" }.distinct().sorted()
+	return detected + "host"
+}
+
 /**
  * What the create dialog was opened on: the Gateway, and the projects selectable there.
  *
@@ -135,7 +172,7 @@ fun SessionsScreen(
 	// qualified spawn-point address on any other, which is the whole mechanism for spawning elsewhere.
 	onSpawn: (String, String, String?) -> Unit,
 	// (path, host spawn-point target). The target names WHICH machine's filesystem to browse.
-	onListDirs: suspend (String, String) -> DirListing = { _, _ -> DirListing(emptyList()) },
+	onListDirs: suspend (String, String, String) -> DirListing = { _, _, _ -> DirListing(emptyList()) },
 	onVerifyEnroll: (() -> Unit)? = null,
 	onRouterEndpoint: (() -> Unit)? = null,
 	// The board's live line per session card; { null } keeps every card's ordinary ladder.
@@ -227,7 +264,10 @@ fun SessionsScreen(
 			// Both the browse and the spawn are addressed to the Gateway the dialog was opened on, so
 			// the directory picker reads the filesystem the session will actually run against.
 			targetOf = opened::targetFor,
-			onListDirs = { path -> onListDirs(path, opened.targetFor("host")) },
+			// The spawn point decides WHICH filesystem is browsed, so it rides the target the same
+			// way the eventual spawn does. Browsing `host` and then spawning `windows` would let the
+			// picker offer directories the launch refuses.
+				onListDirs = { path, spawn -> onListDirs(path, opened.targetFor(spawn), spawn) },
 			onSpawn = { target, session, workdir ->
 				onSpawn(target, session, workdir)
 				createDialogFor = null
@@ -354,13 +394,16 @@ fun SessionsScreen(
 							},
 								showCreate = showCreate,
 								onCreate = {
-									// "host" first (the synthetic spawn point below), then catalog devcontainer
-									// projects; a real project literally named "host" is deduped against it.
+									// This machine's shells first (always at least `host`, plus whatever its daemon
+									// detected), then catalog devcontainer projects. A real project named after a
+									// host spawn point is deduped against them, though the gateway's catalog scan
+									// refuses such a directory anyway.
 									createDialogFor = CreateDialogTarget(
 										domainId = key.domainId,
 										gatewayId = key.gatewayId,
 										isLocal = key.gatewayId == state.localGatewayId,
-										projects = listOf("host") + spawnPoints.map { localName(it) }.filterNot { it == "host" },
+										projects = hostSpawnChoices(state.gatewaySpawnPoints, key, adminDomainId) +
+											spawnPoints.map { localName(it) }.filterNot { it in HOST_SPAWN_IDS },
 									)
 								},
 								// Only for my own Domain: the Router's roster covers the machines I own, and a

@@ -99,9 +99,15 @@ suspend fun ConsoleClient.createSession(
  * creating on another gateway. Required rather than defaulted to a bare "host": a bare target resolves
  * to the route gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
  * does not exist on the one the session will run on. */
-suspend fun ConsoleClient.listDirs(path: String, hostTarget: String): ConsoleListDirsResult =
+suspend fun ConsoleClient.listDirs(path: String, hostTarget: String, spawn: String): ConsoleListDirsResult =
 	transport.resultOf(
-		transport.relay(ConsoleOp.ListDirs(path = path), targetGateway = transport.targetGatewayOf(hostTarget)),
+		// `spawn` says which of that machine's filesystems, where `hostTarget` says which machine. Passed
+		// rather than re-parsed out of the target: it is the same value the target was built from, so
+		// two spellings could only ever disagree.
+		transport.relay(
+			ConsoleOp.ListDirs(path = path, spawn = spawn),
+			targetGateway = transport.targetGatewayOf(hostTarget),
+		),
 		"list_dirs",
 	)
 

@@ -3,6 +3,7 @@ import type { NoticeTierWire } from "./notice.js";
 import type {
 	ChannelFileSchema,
 	ConnectionModeSchema,
+	GatewaySpawnPointsSchema,
 	ResponseStatusSchema,
 	TeamInfoSchema,
 	TeamKindSchema,
@@ -85,6 +86,7 @@ export interface RegisterMessage {
 export type TeamKind = z.infer<typeof TeamKindSchema>;
 
 export type TeamInfo = z.infer<typeof TeamInfoSchema>;
+export type GatewaySpawnPoints = z.infer<typeof GatewaySpawnPointsSchema>;
 
 export interface CatalogMessage {
 	type: "catalog";

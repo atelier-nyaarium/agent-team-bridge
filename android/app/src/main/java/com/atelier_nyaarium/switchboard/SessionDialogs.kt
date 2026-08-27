@@ -215,7 +215,9 @@ fun CreateSessionDialog(
 	// A picked project's spawn target. The dialog never spells an address itself: the caller owns which
 	// Gateway this was opened on, and a project name alone would resolve to the polled one.
 	targetOf: (String) -> String,
-	onListDirs: suspend (String) -> DirListing,
+	// (path, spawn point). The spawn names WHICH filesystem to browse: a windows session is listed by
+	// Windows itself, so the picker cannot offer a Linux directory its launch would then refuse.
+	onListDirs: suspend (String, String) -> DirListing,
 	onSpawn: (String, String, String?) -> Unit,
 	onDismiss: () -> Unit,
 ) {
@@ -227,7 +229,7 @@ fun CreateSessionDialog(
 	val trimmed = name.trim()
 	val dirText = dir.text.trim()
 	// Blank is the default workdir; anything else must be rooted before Spawn will send it.
-	val dirOk = dirText.isEmpty() || isRootedWorkdir(dirText)
+	val dirOk = dirText.isEmpty() || isRootedFor(selectedProject, dirText)
 	val selectedTarget = targetOf(selectedProject)
 	// Keyed on the TARGET, not the project: two machines each have a `host`, and the same label is in
 	// flight on only one of them.
@@ -255,8 +257,16 @@ fun CreateSessionDialog(
 					ExposedDropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
 						for (p in projects) {
 							DropdownMenuItem(
-								text = { Text(p) },
+								// Label only. `selectedProject` keeps the wire word, which is an address
+								// segment keying session records, resume state and board work.
+								text = { Text(hostSpawnLabel(p, projects)) },
 								onClick = hapticClick {
+									// The picked directory belongs to the filesystem it was browsed on, so
+									// changing spawn point retires it. Carrying it over lets a `~/project`
+									// ride onto a Windows session (whose validator accepts POSIX shapes,
+									// then refuses the UNC it translates to) and a `C:/...` ride onto the
+									// host, where it is simply not a path.
+									if (p != selectedProject) dir = TextFieldValue("")
 									selectedProject = p
 									projectMenuOpen = false
 								},
@@ -272,9 +282,16 @@ fun CreateSessionDialog(
 					singleLine = true,
 					modifier = Modifier.fillMaxWidth(),
 				)
-				if (selectedProject == "host") {
+				// Every host spawn point takes a picked directory; a devcontainer's is fixed.
+				if (selectedProject in HOST_SPAWN_IDS) {
 					Spacer(Modifier.height(12.dp))
-					DirectoryField(value = dir, onValueChange = { dir = it }, onListDirs = onListDirs, isError = !dirOk)
+					DirectoryField(
+						value = dir,
+						onValueChange = { dir = it },
+						spawn = selectedProject,
+						onListDirs = onListDirs,
+						isError = !dirOk,
+					)
 				}
 				if (isPending) {
 					Text(
@@ -288,7 +305,7 @@ fun CreateSessionDialog(
 			TextButton(
 				enabled = trimmed.isNotEmpty() && !isPending && dirOk,
 				onClick = hapticClick {
-					val workdir = dirText.takeIf { selectedProject == "host" && it.isNotEmpty() }
+					val workdir = dirText.takeIf { selectedProject in HOST_SPAWN_IDS && it.isNotEmpty() }
 					onSpawn(selectedTarget, trimmed, workdir)
 				},
 			) { Text("Spawn") }
@@ -313,6 +330,16 @@ internal const val WORKDIR_MAX_CHARS = 512
 private fun isRootedWorkdir(text: String): Boolean =
 	text.startsWith("/") || text == "~" || text.startsWith("~/")
 
+/** A Windows path, with FORWARD slashes. Backslash is forbidden on this wire for shell-nesting
+ * reasons and stays that way; PowerShell takes `C:/Users/me` everywhere it takes the other form.
+ * Mirrors the gateway's `isWindowsWorkdirPath`, which is what actually enforces it. */
+private val WINDOWS_ROOTED = Regex("^[A-Za-z]:/")
+
+/** The path rule for whichever spawn point is selected. A windows session accepts either shape: the
+ * picker walks Windows and yields `C:/...`, and a `/mnt/c/...` path still translates at launch. */
+private fun isRootedFor(project: String, text: String): Boolean =
+	if (project == "windows") WINDOWS_ROOTED.containsMatchIn(text) || isRootedWorkdir(text) else isRootedWorkdir(text)
+
 ////////////////////////////////
 //  Composables
 
@@ -327,7 +354,12 @@ private fun isRootedWorkdir(text: String): Boolean =
 fun DirectoryField(
 	value: TextFieldValue,
 	onValueChange: (TextFieldValue) -> Unit,
-	onListDirs: suspend (String) -> DirListing,
+	/** Which spawn point's filesystem this field browses. Decides both the listing and what counts
+	 * as a listable prefix, since a Windows path is rooted at a drive rather than at `/`. */
+	spawn: String,
+	// (path, spawn point). The spawn names WHICH filesystem to browse: a windows session is listed by
+	// Windows itself, so the picker cannot offer a Linux directory its launch would then refuse.
+	onListDirs: suspend (String, String) -> DirListing,
 	isError: Boolean = false,
 ) {
 	// Per-directory cache of SUCCESSFUL listings, keyed by the listed prefix. Missing = not fetched
@@ -348,16 +380,21 @@ fun DirectoryField(
 	// With no separator typed yet, home is the implied directory and the whole text is its filter.
 	// That covers a field cleared back to default (still focused, so the focus prefill cannot fire
 	// again) and a bare fragment, neither of which would otherwise have anything to list.
-	val parent = if (cut >= 0) text.substring(0, cut + 1) else "~/"
-	val fragment = if (cut >= 0) text.substring(cut + 1) else text
-	// Only a rooted prefix is listable; a relative one ("foo/") lists nothing.
-	val listable = parent.startsWith("/") || parent.startsWith("~/")
+	// A Windows session has no `~`, so an empty field implies nothing listable rather than home; the
+	// owner types a drive and the listing follows. Anywhere else home is still the implied directory.
+	val isWindows = spawn == "windows"
+	val parent = if (cut >= 0) text.substring(0, cut + 1) else if (isWindows) text else "~/"
+	val fragment = if (cut >= 0) text.substring(cut + 1) else if (isWindows) "" else text
+	// Only a rooted prefix is listable; a relative one ("foo/") lists nothing. A Windows path is
+	// rooted at a drive, so `/`-rooting is not the test there.
+	val listable =
+		if (isWindows) WINDOWS_ROOTED.containsMatchIn(parent) else parent.startsWith("/") || parent.startsWith("~/")
 	// Retries a failed directory whenever these keys change again (a refocus, or moving away and back),
 	// which is the recovery path once the machine is reachable. Unchanged keys do not re-run it, so a
 	// machine that stays down is asked once per attempt rather than continuously.
 	LaunchedEffect(parent, listable, focused) {
 		if (!listable || !(focused || text.isNotEmpty()) || parent in cache) return@LaunchedEffect
-		val listing = onListDirs(parent)
+		val listing = onListDirs(parent, spawn)
 		if (listing.error == null) {
 			cache[parent] = listing.dirs
 			failures.remove(parent)
@@ -385,7 +422,11 @@ fun DirectoryField(
 			// is the more useful thing to say about it than the rooting rule it already satisfies.
 			isError = isError || failure != null,
 			supportingText = failure?.let { { Text(it) } }
-				?: if (isError) ({ Text("Pick a folder below, or start with ~/ or /") }) else null,
+				?: if (isError) {
+					({ Text(if (isWindows) "Start with a drive, like C:/" else "Pick a folder below, or start with ~/ or /") })
+				} else {
+					null
+				},
 			trailingIcon = if (text.isEmpty()) null else ({
 				IconButton(onClick = hapticClick { onValueChange(TextFieldValue("")) }) {
 					Icon(Icons.Default.Close, contentDescription = "Reset to default")
@@ -393,7 +434,10 @@ fun DirectoryField(
 			}),
 			modifier = Modifier.fillMaxWidth().onFocusChanged { state ->
 				focused = state.isFocused
-				if (state.isFocused && text.isEmpty()) {
+				// A Windows session has no `~`, so prefilling one there hands the owner a path its own
+				// validator rejects and makes them clear it before they can type a drive. Left empty
+				// instead, which is also the value that means "the Windows home".
+				if (state.isFocused && text.isEmpty() && !isWindows) {
 					onValueChange(TextFieldValue("~/", selection = TextRange(2)))
 				}
 			},

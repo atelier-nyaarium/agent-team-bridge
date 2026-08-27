@@ -17,7 +17,7 @@ export interface TmuxOps {
 	reloadPlugins: (target: TmuxTarget) => Promise<void>;
 	killSession: (target: TmuxTarget) => Promise<void>;
 	// A local readdir, so it needs none of the peek machinery.
-	listDirs: (path: string) => Promise<HostListDirsResult>;
+	listDirs: (path: string, spawn?: string) => Promise<HostListDirsResult>;
 }
 
 /** Interactive preempts derive for slot admission, so a wedged board target cannot starve the
@@ -125,7 +125,7 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	async function run(op: HostOp): Promise<unknown> {
 		if (op.kind === "peek") return runPeek(op.target);
 		if (op.kind === "sendText" || op.kind === "sendKey") return runSend(op);
-		if (op.kind === "listDirs") return ops.listDirs(op.path);
+		if (op.kind === "listDirs") return ops.listDirs(op.path, op.spawn);
 		if (op.kind === "createSession")
 			return runDeduped(
 				op.dedupKey,

@@ -9,7 +9,7 @@ import { pickTiers } from "../../shared/notice.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
 import type { GatewayRelayReplyParams } from "../../shared/router-protocol.js";
 import { Address, parseSessionName } from "../../shared/session-id.js";
-import type { TeamInfo } from "../../shared/types.js";
+import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { WakeResult } from "../wake.js";
 import type { Sealer } from "./sealer.js";
 
@@ -22,6 +22,8 @@ export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Response;
 	teams: () => Response;
+	/** What THIS machine offers beyond `host`. Answered only to a same-Domain caller. */
+	localSpawnPoints: () => GatewaySpawnPoints[];
 	/** Land a fully-composed mailbox entry on THIS Gateway's own owner mailbox - the console_push
 	 * landing side. Local-append only; never fans out further (see the FederatedOp doc comment). */
 	consolePush: (entry: ConsolePushEntry, dedupeKey: string) => { delivered: boolean };
@@ -188,11 +190,15 @@ export function createGatewayRelayHandler({
 				// team's canonical target.
 				if (srcDomainId !== null) {
 					const shared = new Set(shareState?.sharesFor(srcDomainId) ?? []);
+					// No spawnPoints for a cross-Domain caller, deliberately. A host spawn point is a
+					// shell on this machine, not a session, so it is not shareable and naming it would
+					// tell a friend Domain what this machine runs. Same reason `host` has never had a
+					// presence row.
 					return {
 						teams: teams.filter((t) => shared.has(localShareTarget(t.team))),
 					};
 				}
-				return { teams };
+				return { teams, spawnPoints: routes.localSpawnPoints() };
 			}
 			case "wake": {
 				// Waking is a side effect on a session, so a cross-Domain wake is gated the

@@ -137,11 +137,11 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * a Gateway with no host daemon and a folder with no subdirectories all produced the same blank
 	 * picker, which is how a switched-off machine read as a broken feature.
 	 */
-	suspend fun listDirs(path: String, hostTarget: String): DirListing = withContext(Dispatchers.IO) {
+	suspend fun listDirs(path: String, hostTarget: String, spawn: String): DirListing = withContext(Dispatchers.IO) {
 		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
 		// picker inspectable with no gateway behind it.
 		repo.sandboxDirs?.let { return@withContext DirListing(it[path].orEmpty()) }
-		runCatchingCancellable { DirListing(repo.client().listDirs(path, hostTarget).entries) }
+		runCatchingCancellable { DirListing(repo.client().listDirs(path, hostTarget, spawn).entries) }
 			.getOrElse { DirListing(emptyList(), error = dirListError(it)) }
 	}
 

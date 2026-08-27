@@ -209,6 +209,8 @@ export function gateRoutes(teams: TeamInfoLite[]) {
 	const consolePushCalls: Array<{ entry: unknown; dedupeKey: string }> = [];
 	const routes = {
 		teams: () => new Response(JSON.stringify(teams), { headers: { "content-type": "application/json" } }),
+		// Answered only to a same-Domain caller; the cross-Domain branch returns before reading it.
+		localSpawnPoints: () => [{ domainId: "alice", gatewayId: "alice-gw", hostSpawns: ["windows"] }],
 		send: async (_req: Request, body: Record<string, unknown>) => {
 			sendCalls.push(body);
 			return new Response(JSON.stringify({ session_id: body.sessionId ?? "s", status: "running" }), {

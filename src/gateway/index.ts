@@ -11,6 +11,7 @@ import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
+import type { HostSpawnState } from "../shared/host-spawn.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
@@ -172,6 +173,10 @@ export async function startGateway(): Promise<void> {
 	const store = new PendingJobStore<ResponsePayload>();
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
+	// Written by the host daemon's catalog frame, read by discovery. Starts UNKNOWN, not empty: until
+	// a daemon has answered, this machine has said nothing about what it offers, and saying "nothing"
+	// on its behalf is a different and wrong claim.
+	const hostSpawnPoints: HostSpawnState = { known: false, ids: [] };
 	// A name is a spawn-point project iff it is in the catalog (the dir scan or a bare register).
 	// Composites are never added (the register write-guard), so membership alone is the signal -
 	// even for a dotted dir name that the mechanical isComposite test would misread as a session.
@@ -930,6 +935,7 @@ export async function startGateway(): Promise<void> {
 		config: { HEARTBEAT_INTERVAL_MS, MISSED_PINGS_LIMIT, hostWsToken: process.env.HOST_WS_TOKEN },
 		knownTeamPaths,
 		offlineCatalog,
+		hostSpawnPoints,
 		wakeCoordinator,
 		hostOpCoordinator,
 		onVirtualPeerEvicted: (conversationId) => {
@@ -990,6 +996,7 @@ export async function startGateway(): Promise<void> {
 			tryWakeTeam: (team, createOpts) => wakeService.tryWakeTeam(team, createOpts),
 			sessionStore,
 			presence,
+			hostSpawnPoints,
 			mailboxStore,
 			routerClient: f?.routerClient ?? null,
 			sealer: f?.sealer ?? null,

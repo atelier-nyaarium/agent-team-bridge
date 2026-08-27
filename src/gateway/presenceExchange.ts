@@ -5,9 +5,9 @@ import {
 	type FederatedOp,
 	MAX_CROSSDOMAIN_PRESENCE_SESSIONS,
 } from "../shared/federation-protocol.js";
-import { TeamInfoSchema } from "../shared/schemas.js";
+import { GatewaySpawnPointsSchema, TeamInfoSchema } from "../shared/schemas.js";
 import type { Address } from "../shared/session-id.js";
-import type { TeamInfo } from "../shared/types.js";
+import type { GatewaySpawnPoints, TeamInfo } from "../shared/types.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -39,6 +39,9 @@ export interface PresenceExchangeDeps {
  * much one reply can cost to process, matching the push path's own wire-level `.max()`. */
 const ListTeamsRelayResultSchema = z.object({
 	teams: z.array(TeamInfoSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS).optional(),
+	// Same-Domain peers only; a cross-Domain reply never carries it. Optional, so an older peer that
+	// omits it lands as "not advertised" rather than failing the whole reply and contributing nothing.
+	spawnPoints: z.array(GatewaySpawnPointsSchema).max(64).optional(),
 });
 
 ////////////////////////////////
@@ -164,7 +167,7 @@ export function createPresenceExchange({
 	async function relayListTeams(
 		dstGateway: string,
 		dstDomain?: string,
-	): Promise<{ ok: true; teams: TeamInfo[] } | { ok: false; error: string }> {
+	): Promise<{ ok: true; teams: TeamInfo[]; spawnPoints: GatewaySpawnPoints[] } | { ok: false; error: string }> {
 		const r = await relayToGateway(dstGateway, { kind: "list_teams" }, dstDomain);
 		if (!r.ok) return { ok: false, error: r.error ?? "relay failed" };
 		const parsed = ListTeamsRelayResultSchema.safeParse(r.result);
@@ -173,7 +176,11 @@ export function createPresenceExchange({
 			console.warn(`[relay] ${error}`);
 			return { ok: false, error };
 		}
-		return { ok: true, teams: parsed.data.teams ?? [] };
+		// A peer names its OWN gatewayId in each row, so a peer claiming to speak for a third machine
+		// is dropped rather than merged. Discovery asked THIS gateway a question; only its answer
+		// about itself is evidence.
+		const spawnPoints = (parsed.data.spawnPoints ?? []).filter((s) => s.gatewayId === dstGateway);
+		return { ok: true, teams: parsed.data.teams ?? [], spawnPoints };
 	}
 
 	/** The cross-Domain-presence backstop pull: query every one of `fromDomainId`'s gateways for its

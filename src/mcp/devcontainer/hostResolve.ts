@@ -157,18 +157,20 @@ export function buildLaunchCommand(
 		throw new Error("refusing to launch: session token is not the expected hex form");
 	}
 	const exportToken = opts.sessionToken ? `export SWITCHBOARD_SESSION_TOKEN=${opts.sessionToken}; ` : "";
-	const claude = `claude --model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
+	// Everything after argv[0]. The binary itself belongs to the spawn point: a Windows session runs
+	// `claude.exe`, since bare `claude` does not resolve from PowerShell.
+	const claudeArgs = `--model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
 		// Either quote would break out of the nesting, so a workdir bearing one is dropped.
 		const safeWorkdir = opts.workdir && !opts.workdir.includes("'") && !opts.workdir.includes('"');
 		return buildHostLaunch(target.name, {
 			composite,
-			claude,
+			claudeArgs,
 			exportToken,
 			workdir: safeWorkdir ? opts.workdir : undefined,
 		});
 	}
-	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec ${claude}'`;
+	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec claude ${claudeArgs}'`;
 }
 
 ////////////////////////////////

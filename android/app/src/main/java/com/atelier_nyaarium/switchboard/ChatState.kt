@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
+import com.atelier_nyaarium.switchboard.proto.GatewaySpawnPoints
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 
 ////////////////////////////////
@@ -10,6 +11,11 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 data class ChatState(
 	val provisioned: Boolean = false,
 	val teams: List<Team> = emptyList(),
+	/** What each Gateway's machine offers beyond the universal `host`, from DISCOVERY only. Held
+	 * across presence-plane pushes for the same reason discovery rows are: the plane speaks for the
+	 * route Gateway alone, so letting it clear this would drop every other machine's answer on each
+	 * local presence change. Empty means nothing has been advertised yet, never "no Windows". */
+	val gatewaySpawnPoints: List<GatewaySpawnPoints> = emptyList(),
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
 	/** Per-team read anchor, the single source of truth `unread` is derived from. */

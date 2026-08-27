@@ -157,6 +157,23 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * coverage (an older gateway) replaces wholesale, the pre-coverage behavior. */
 	suspend fun applyDiscovery(answer: TeamsAnswer) {
 		val keys = unreachableKeys(answer.coverage)
+		// Merged per Gateway rather than replaced wholesale, and only for the Gateways this answer
+		// actually spoke for. A null list is an older gateway saying nothing, which must not read as
+		// "no machine offers anything" and wipe what a previous answer established.
+		//
+		// A row for a gateway the answer names UNREACHABLE is DROPPED rather than held, which is the
+		// opposite of what happens to that gateway's session rows just below, and deliberately so. A
+		// held session row is worth keeping because it says what that machine WAS and the UI stamps it
+		// unreachable. A spawn point is not a status; it is an offer to launch something, and offering
+		// Windows on a machine that could not be reached this cycle is an invitation to a wake that
+		// cannot succeed. Absent means unknown here, and unknown correctly shows only `host`.
+		answer.spawnPoints?.let { fresh ->
+			val spoke = fresh.map { it.gatewayId }.toSet()
+			repo._state.update { s ->
+				val kept = s.gatewaySpawnPoints.filterNot { it.gatewayId in spoke || it.gatewayId in keys }
+				s.copy(gatewaySpawnPoints = kept + fresh)
+			}
+		}
 		val fresh = if (keys.isEmpty()) {
 			answer.teams
 		} else {

@@ -12,6 +12,7 @@ import {
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
+	isSpawnWorkdirPath,
 	isWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
@@ -176,12 +177,17 @@ export function createConsoleDispatcher({
 			case "list_teams": {
 				// Fan out across the mesh so the console sees every Gateway's sessions, each
 				// carrying its own `gatewayId` (the console keys threads by domain.gateway.spawn.session).
-				const { teams, coverage } = await routes.discoverFull();
+				const { teams, coverage, spawnPoints } = await routes.discoverFull();
 				// A console does not list other consoles as send targets, and excludes itself.
 				// teams() already drops the headless "host" daemon.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
 					coverage,
+					// Not filtered against `teams`: a Gateway with no sessions still offers spawn
+					// points, and the console draws a section for an admitted Gateway that contributed
+					// none. Dropping those rows would hide Windows on exactly the idle machine most
+					// likely to be woken.
+					spawnPoints,
 				};
 			}
 
@@ -617,8 +623,13 @@ export function createConsoleDispatcher({
 				// The directory picker's type-ahead read: host filesystem only, runs fresh (not in
 				// isMutatingOp), same boundary validation as create_session's workdir.
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				if (!isWorkdirPath(op.path)) throw new Error("invalid path: must be absolute or ~-rooted");
-				const r = await relayToHost({ kind: "listDirs", path: op.path });
+				// The rule depends on WHICH filesystem is being browsed: a windows spawn point also
+				// accepts a `C:/...` path, which is not absolute in the POSIX sense. One resolver, so
+				// this and the daemon's own re-guard cannot come to disagree.
+				if (!isSpawnWorkdirPath(op.spawn, op.path)) {
+					throw new Error("invalid path: must be absolute, ~-rooted, or a Windows drive path");
+				}
+				const r = await relayToHost({ kind: "listDirs", path: op.path, spawn: op.spawn });
 				if (!r.ok) throw new Error(r.error ?? "list failed");
 				const listed = r.result as HostListDirsResult;
 				return { entries: listed.entries, ...(listed.truncated ? { truncated: true } : {}) };
@@ -639,11 +650,15 @@ export function createConsoleDispatcher({
 				if (!op.sessionName && !op.displayLabel) {
 					throw new Error("create_session needs a sessionName or a displayLabel");
 				}
+				// Resolved here rather than below because the workdir rule DEPENDS on it: a windows
+				// spawn point's workdir is a `C:/...` path, which is not absolute in the POSIX sense.
+				// Still ahead of the mint, which is what its own placement was protecting.
+				const spawn = targets.localSpawn(op.target);
 				// A picked workdir must be a safe path shape before it can touch the record or the
 				// launch (fail fast; the store and daemon re-guard). Host sessions only - a
 				// devcontainer's workdir is fixed, so a picked one there is a caller bug.
-				if (op.workdir != null && !isWorkdirPath(op.workdir)) {
-					throw new Error("invalid workdir: must be an absolute or ~-rooted path");
+				if (op.workdir != null && !isSpawnWorkdirPath(spawn, op.workdir)) {
+					throw new Error("invalid workdir: must be an absolute, ~-rooted, or Windows drive path");
 				}
 				// Computed once, directly from the request's own displayLabel - never by comparing the
 				// eventual sessionLabel/id after the fact, which would race a concurrent rename landing on
@@ -651,9 +666,6 @@ export function createConsoleDispatcher({
 				// sent (the sessionName-adopted path's sessionLabel legitimately defaults to the id itself,
 				// unrelated to sanitization).
 				const labelSanitized = op.displayLabel != null && sanitizeLabel(op.displayLabel) === null;
-				// Resolved BEFORE the mint below: tmuxTarget rejects a foreign address too, but only
-				// after a local record has been minted under the foreign spawn name.
-				const spawn = targets.localSpawn(op.target);
 				const dedupKey = `${conversationId}:${opId}`;
 				let sessionId: string;
 				let label: string;

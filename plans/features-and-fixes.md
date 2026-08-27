@@ -83,7 +83,14 @@ its deferred painpoints moved to `plans/pain-points.md`). Both items deploy via 
 
 ---
 
-## Item 17 - Audit the remaining .ps1-launched scripts for Linux-only commands
+## Item 17 - Audit the remaining .ps1-launched scripts for Linux-only commands - DROPPED
+
+The `.ps1` scripts are deleted and there is no native Windows gateway to audit them for. A Windows
+machine runs its gateway in WSL like any other Linux host, and reaches its Windows side through the
+`windows` host spawn point (`plans/windows-spawn-point.md`) rather than through a second native
+install. The pending field confirmation below went with `plans/native-gateway.md`.
+
+Original text, kept for the reasoning:
 
 Leftover from the Windows-handoff plan (`plans/windows-handoff-and-enroll-trap.md`, deleted on
 ship - see git history; shipped as switchboard #142/#143/#144 + evie-bot #1415). `scripts/setup.ts`

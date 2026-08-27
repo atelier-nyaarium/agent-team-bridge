@@ -6,6 +6,7 @@ import { DomainStatusSchema } from "./schemasCore.js";
 import {
 	CrossDomainPeerEntrySchema,
 	CrossDomainPresenceEntrySchema,
+	GatewaySpawnPointsSchema,
 	LinkedPeersVersionSchema,
 	PresenceVersionSchema,
 	ReadAnchorsVersionSchema,
@@ -62,6 +63,10 @@ export const ConsoleListTeamsResultSchema = z
 		teams: z.array(TeamInfoSchema),
 		// Optional: absent from an older gateway, which claims nothing about completeness.
 		coverage: DiscoverCoverageSchema.optional(),
+		// What each Gateway's machine offers beyond `host`. Absent from an older gateway, and absent
+		// for a peer reached through an older ROUTE gateway, whose relay schema strips it. So absence
+		// means "not advertised", never "this machine has no Windows side".
+		spawnPoints: z.array(GatewaySpawnPointsSchema).max(64).optional(),
 	})
 	.meta({ id: "ConsoleListTeamsResult" });
 

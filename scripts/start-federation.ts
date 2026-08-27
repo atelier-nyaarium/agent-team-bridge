@@ -1,5 +1,5 @@
-// Start the federation Router without touching the gateway. Driven by start-federation.sh / .ps1,
-// thin launchers that exec this. Every .env key the Router reads is written here or by the setup
+// Start the federation Router without touching the gateway. Driven by start-federation.sh, a thin
+// launcher that execs this. Every .env key the Router reads is written here or by the setup
 // menu; the LAN bind is re-detected on every run so a DHCP move never strands the Router on an
 // address this machine no longer holds.
 

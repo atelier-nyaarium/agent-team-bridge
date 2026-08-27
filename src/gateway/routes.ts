@@ -4,6 +4,7 @@ import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
 import type { BoardEntry, DiscoverCoverage } from "../shared/console-protocol.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
+import type { HostSpawnState } from "../shared/host-spawn.js";
 import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import {
@@ -17,7 +18,14 @@ import {
 	SpawnPoint,
 	storeKey,
 } from "../shared/session-id.js";
-import type { ChannelFile, GatewayConfig, ResponsePayload, ResponsePushPayload, TeamInfo } from "../shared/types.js";
+import type {
+	ChannelFile,
+	GatewayConfig,
+	GatewaySpawnPoints,
+	ResponsePayload,
+	ResponsePushPayload,
+	TeamInfo,
+} from "../shared/types.js";
 import { createBlobFetcher } from "./blobFetch.js";
 import type { CascadeChange } from "./boardCascade.js";
 import {
@@ -78,6 +86,11 @@ export interface RoutesDeps {
 	// Optional so a harness testing routes with no presence wiring still gets an empty teams list
 	// rather than a throw.
 	presence?: { snapshot(): TeamInfo[] };
+	// The host spawn points this machine's daemon DETECTED, beyond the universal `host`. Read live
+	// rather than captured, since the daemon rewrites it on every catalog frame and clears it on
+	// disconnect. `known` is what keeps "no daemon has spoken" distinct from "the daemon offers
+	// nothing"; without it an older daemon reads as an affirmative empty answer.
+	hostSpawnPoints?: HostSpawnState;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -188,6 +201,7 @@ export function createRoutes({
 	tryWakeTeam,
 	sessionStore,
 	presence,
+	hostSpawnPoints,
 	mailboxStore,
 	config,
 	routerClient,
@@ -208,6 +222,26 @@ export function createRoutes({
 	carryOver = createRoutesCarryOver(),
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
+
+	/** What THIS machine offers, as the one-element list every consumer merges peers into.
+	 *
+	 * Always a row, even when the list is empty: an empty `hostSpawns` is an affirmative "nothing
+	 * beyond host", which is a different answer from a Gateway that said nothing at all, and only the
+	 * row makes that distinction expressible. */
+	function localSpawnPoints(): GatewaySpawnPoints[] {
+		// NO ROW until a daemon has actually answered. An empty `hostSpawns` is an affirmative
+		// "nothing beyond host", and emitting one for a daemon that never spoke - an older daemon that
+		// does not send the field, or a machine whose daemon is down - states a fact nobody established.
+		// Absent has to keep meaning UNKNOWN, or the optional field is optional in name only.
+		if (!hostSpawnPoints?.known) return [];
+		return [
+			{
+				...(localDomainId ? { domainId: localDomainId } : {}),
+				gatewayId: localGatewayId,
+				hostSpawns: [...hostSpawnPoints.ids],
+			},
+		];
+	}
 	/** Settled replies for the board route's mutating operations, keyed `from:operationId`.
 	 *
 	 * IN MEMORY, which is weaker than the console's durable equivalent and weaker than the rule
@@ -546,22 +580,27 @@ export function createRoutes({
 	/** Mesh discovery, WITH its own completeness. A partial answer must say so: a peer that could
 	 * not be asked is otherwise indistinguishable from one with nothing to say, and its sessions get
 	 * swept as absent. That ambiguity hid a total relay outage for a day. */
-	async function discoverFull(): Promise<{ teams: TeamInfo[]; coverage: DiscoverCoverage }> {
+	async function discoverFull(): Promise<{
+		teams: TeamInfo[];
+		coverage: DiscoverCoverage;
+		spawnPoints: GatewaySpawnPoints[];
+	}> {
 		const local = (await teams().json()) as TeamInfo[];
+		const spawnPoints: GatewaySpawnPoints[] = [...localSpawnPoints()];
 		const unreachable: string[] = [];
 		const unreachablePeers: string[] = [];
 		// isRegistered, not isConnected: a REFUSED registration leaves the socket open, and reading
 		// that as "no peers" reports a revoked Gateway as an empty mesh.
 		if (!routerClient?.isRegistered()) {
 			if (routerClient?.isConnected()) console.warn(`[discover] roster unknown: not registered with the Router`);
-			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 } };
+			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 }, spawnPoints };
 		}
 		const rosterCall = await routerClient.callTool("list_gateways", {});
 		// callTool never rejects; a timeout or refusal arrives as `error`. Without this read, a
 		// failed roster and an empty one are the same value.
 		if (rosterCall.error) {
 			console.warn(`[discover] roster unknown: ${rosterCall.error}`);
-			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 } };
+			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 }, spawnPoints };
 		}
 		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 		const sameDomain = await Promise.all(
@@ -570,8 +609,12 @@ export function createRoutes({
 				if (!r.ok) {
 					console.warn(`[discover] "${h.gatewayId}" contributed nothing: ${r.error}`);
 					unreachable.push(h.gatewayId);
+					return [];
 				}
-				return r.ok ? r.teams : [];
+				// Same-Domain leg only. A peer speaks for its own machine, and relayListTeams already
+				// dropped any row naming a different gateway.
+				spawnPoints.push(...r.spawnPoints);
+				return r.teams;
 			}),
 		);
 		// Cross-Domain leg: query each linked peer for its shared sessions. The returned
@@ -610,7 +653,7 @@ export function createRoutes({
 			...(unreachable.length ? { unreachable } : {}),
 			...(unreachablePeers.length ? { unreachablePeers } : {}),
 		};
-		return { teams: [...local, ...sameDomain.flat(), ...crossDomain.flat()], coverage };
+		return { teams: [...local, ...sameDomain.flat(), ...crossDomain.flat()], coverage, spawnPoints };
 	}
 
 	/** HTTP wrapper. The bare array is the legacy shape older plugins parse; `?coverage=1` opts into
@@ -619,7 +662,13 @@ export function createRoutes({
 	async function discover(url?: URL): Promise<Response> {
 		const full = await discoverFull();
 		if (url?.searchParams.get("coverage") === "1") {
-			return jsonResponse({ ...full, localGatewayId, localDomainId: localDomain });
+			// `spawnPoints` is destructured off and NOT served here. It is answered to a same-Domain
+			// relay caller and to the console op, both of which are authenticated as this owner; this
+			// route is a plain HTTP surface and spreading the whole object would carry it out of that
+			// boundary by accident. A machine's shells are a fact about the machine, not a session
+			// list.
+			const { spawnPoints: _spawnPoints, ...served } = full;
+			return jsonResponse({ ...served, localGatewayId, localDomainId: localDomain });
 		}
 		return jsonResponse(full.teams);
 	}
@@ -1539,6 +1588,7 @@ export function createRoutes({
 		teams,
 		discover,
 		discoverFull,
+		localSpawnPoints,
 		send,
 		respond,
 		poll,

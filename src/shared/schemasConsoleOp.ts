@@ -289,6 +289,11 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("list_dirs"),
 			path: z.string().min(1).max(512),
+			// WHICH host spawn point's filesystem to browse. Absent means the host's own, so a console
+			// that predates this keeps the behaviour it always had. A `windows` spawn point is browsed
+			// by Windows itself, and its paths are `C:/...` with forward slashes, since backslash stays
+			// in the forbidden set for every path on this wire.
+			spawn: z.string().min(1).max(64).optional(),
 		}),
 		// Blob transfer. Bytes move here, in bounded chunks keyed by their own digest, rather than
 		// as a base64 field on a message. `have` is the contiguous prefix the store holds, which is

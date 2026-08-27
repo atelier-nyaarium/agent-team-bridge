@@ -34,6 +34,7 @@ export function createWebSocketHandlers({
 	conversationRegistry,
 	knownTeamPaths,
 	offlineCatalog,
+	hostSpawnPoints,
 	wakeCoordinator,
 	hostOpCoordinator,
 	config,
@@ -381,6 +382,19 @@ export function createWebSocketHandlers({
 					}
 				}
 				console.log(`[ws] catalog received: ${offlineCatalog.size} projects`);
+				// Detected host spawn points ride the same frame. Rewritten whole on every catalog,
+				// like offlineCatalog: what the daemon last said IS the answer, and a daemon that
+				// stops offering one must stop advertising it. Absent (an older daemon) leaves the
+				// previous answer alone rather than clearing it, so an upgrade cannot look like a loss.
+				const spawns = msg.hostSpawns;
+				if (Array.isArray(spawns) && hostSpawnPoints) {
+					hostSpawnPoints.ids = spawns.filter((s): s is string => typeof s === "string" && s.length > 0);
+					// Only NOW is the answer known. An older daemon omits the field entirely and leaves
+					// this false, so discovery says nothing about that machine rather than claiming it
+					// offers nothing.
+					hostSpawnPoints.known = true;
+					console.log(`[ws] host spawn points: ${hostSpawnPoints.ids.join(", ") || "(none beyond host)"}`);
+				}
 				onCatalogChange?.();
 			}
 		}
@@ -420,6 +434,15 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
+					// Cleared with the catalog, for the same reason: a machine with no daemon cannot
+					// launch anything, so advertising a Windows spawn point would offer a target that
+					// is guaranteed to fail. Back to UNKNOWN rather than to an empty answer - nothing
+					// has been established about a machine whose daemon just left. The next catalog
+					// frame re-announces whatever it finds.
+					if (hostSpawnPoints) {
+						hostSpawnPoints.known = false;
+						hostSpawnPoints.ids = [];
+					}
 					// Fail in-flight terminal ops AND wakes so a console peek/send or a /send awaiting a
 					// wake returns at once instead of waiting out its full timeout across the host restart.
 					hostOpCoordinator?.failAll("host daemon disconnected");

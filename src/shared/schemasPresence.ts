@@ -9,6 +9,30 @@ import { ConnectionModeSchema, TeamKindSchema } from "./schemasCore.js";
 //  the wire word verbatim; `kind` separates wakeable devcontainer projects from
 //  ad-hoc loose sessions.
 
+/**
+ * Which host spawn points one Gateway's machine offers beyond the universal `host`.
+ *
+ * DISCOVERY metadata, deliberately not a presence row. A host spawn point is a shell on a machine,
+ * and `host` has never had a presence row: every kind `TeamInfo` permits is shareable to a linked
+ * friend Domain (`gatewayRelay`'s scope gate admits `devcontainer` and `loose`), so giving one a row
+ * would make a machine's shell shareable, which `host` is not. A new `TeamKind` variant is worse
+ * still - cross-Domain presence narrows kind to a strict two-value enum, so an older Gateway fails
+ * validation on a relayed list and can drop the whole discovery answer.
+ *
+ * Gateway-scoped rather than per-row, because a Gateway with no sessions still needs to say what it
+ * offers; the console renders a section for an admitted Gateway that has contributed no teams.
+ */
+export const GatewaySpawnPointsSchema = z
+	.object({
+		// Absent when the answering Gateway has not resolved a Domain yet, matching TeamInfo.
+		domainId: z.string().optional(),
+		gatewayId: z.string(),
+		// Detected points only. `host` is on every machine and is never announced, so an empty array
+		// is a complete and meaningful answer: "this machine offers nothing beyond the usual".
+		hostSpawns: z.array(z.string().min(1).max(64)).max(8),
+	})
+	.meta({ id: "GatewaySpawnPoints" });
+
 export const TeamInfoSchema = z
 	.object({
 		team: z.string(),

@@ -13,7 +13,7 @@ import {
 	isTmuxName,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
-import { isHostSpawn } from "../../shared/host-spawn.js";
+import { isHostSpawn, WINDOWS_SPAWN } from "../../shared/host-spawn.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { parseSessionName } from "../../shared/session-id.js";
 import { CodexDaemonService } from "./codexDaemonService.js";
@@ -47,6 +47,13 @@ import {
 	sendKey,
 	sendText,
 } from "./tmuxCore.js";
+import {
+	detectedHostSpawns,
+	listWindowsDirs,
+	probeWindowsSpawn,
+	resolveWindowsWorkdir,
+	type WindowsSpawnAvailability,
+} from "./windowsSpawn.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -60,6 +67,32 @@ let ws: WebSocket | null = null;
 let gatewayUrl = "ws://localhost:20000";
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
+
+/** Probed once per process. PowerShell startup is ~0.36s, which is fine at register and not fine on
+ * every wake, and a machine does not gain or lose a Windows side while the daemon runs. A restart is
+ * the invalidation, which is also what installing the CLI would prompt. */
+let windowsSpawn: WindowsSpawnAvailability | null = null;
+function windowsAvailability(): WindowsSpawnAvailability {
+	if (!windowsSpawn) {
+		windowsSpawn = probeWindowsSpawn();
+		const detail = windowsSpawn.available ? `home ${windowsSpawn.userProfile}` : windowsSpawn.reason;
+		console.error(`[host-daemon] windows spawn point: ${windowsSpawn.available ? "available" : "no"} (${detail})`);
+	}
+	return windowsSpawn;
+}
+
+/** The ONE place a host spawn point's working directory is resolved, so the wake path and the
+ * console's create_session cannot answer differently for the same hint. Returns an error rather than
+ * a fallback for a spawn point that cannot use the host's own paths: silently substituting a
+ * directory is how a session ends up working somewhere nobody asked for. */
+function resolveSpawnWorkdir(spawn: string, hint: string | undefined): { workdir: string } | { error: string } {
+	if (spawn !== WINDOWS_SPAWN) return { workdir: resolveHostWorkdir(hint) };
+	const probe = windowsAvailability();
+	if (!probe.available || !probe.userProfile) {
+		return { error: `this machine cannot run a windows session (${probe.reason ?? "unavailable"})` };
+	}
+	return resolveWindowsWorkdir(hint, probe.userProfile);
+}
 // Per process, not per socket.
 const daemonInstanceId = crypto.randomUUID();
 const codexTargets = new ExecutionTargetManager();
@@ -145,8 +178,15 @@ function connect(): void {
 		}
 
 		const projects = scanDevcontainerProjects();
-		ws!.send(JSON.stringify({ type: "catalog", projects }));
-		console.error(`[host-wake] sent catalog with ${projects.length} projects`);
+		// `hostSpawns` names the DETECTED spawn points only; `host` is on every machine and is not
+		// announced. An older gateway ignores the field, which is the whole point of announcing before
+		// anything consumes it: daemon first, gateway next, console last, each safe on its own.
+		const hostSpawns = detectedHostSpawns(windowsAvailability());
+		ws!.send(JSON.stringify({ type: "catalog", projects, hostSpawns }));
+		console.error(
+			`[host-wake] sent catalog with ${projects.length} projects` +
+				(hostSpawns.length ? ` and host spawn points: ${hostSpawns.join(", ")}` : ""),
+		);
 
 		// observe() fires on transitions, so a stale confirmation re-confirms forever.
 		presenceScheduler.clearAll();
@@ -256,9 +296,18 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			return;
 		}
 		const target: TmuxTarget = { kind: "host", name: project, sessionName: session };
+		// A spawn point whose shell does not share this filesystem needs its own resolution, and one
+		// that REFUSES rather than falling back: a Windows session handed a Linux path lands on a UNC
+		// cwd, which works well enough to look fine and then strands every subprocess it starts.
+		const resolved = resolveSpawnWorkdir(project, msg.workdirHint);
+		if ("error" in resolved) {
+			console.error(`[host-wake] refusing wake of "${msg.team}": ${resolved.error}`);
+			safeSend({ type: "wake_result", team: msg.team, success: false, error: resolved.error });
+			return;
+		}
 		const launch = buildLaunchCommand(target, {
 			resumeSessionId: msg.resumeSessionId,
-			workdir: resolveHostWorkdir(msg.workdirHint),
+			workdir: resolved.workdir,
 			sessionToken: msg.sessionToken,
 		});
 		console.error(`[host-wake] starting host session ${msg.team}`);
@@ -381,7 +430,14 @@ const hostOpRunner = createHostOpRunner({
 	sendText,
 	sendKey,
 	createSession: async (target, workdirHint, resumeSessionId, sessionToken) => {
-		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
+		let workdir: string | undefined;
+		if (target.kind === "host") {
+			const resolved = resolveSpawnWorkdir(target.name, workdirHint);
+			// Thrown rather than swallowed: the runner turns it into a failed op, and the console shows
+			// the reason. A silent fallback here would start the session in the wrong tree.
+			if ("error" in resolved) throw new Error(resolved.error);
+			workdir = resolved.workdir;
+		}
 		const { created } = await ensureSession(
 			target,
 			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
@@ -399,7 +455,9 @@ const hostOpRunner = createHostOpRunner({
 		spawnReloadPlugins(target);
 	},
 	killSession,
-	listDirs: async (p) => listHostDirs(p),
+	// A windows session browses WINDOWS, through PowerShell. Browsing /mnt from this side would offer
+	// Linux directories the launch then refuses, and would miss every network drive.
+	listDirs: async (p, spawn) => (spawn === WINDOWS_SPAWN ? listWindowsDirs(p) : listHostDirs(p)),
 });
 
 ////////////////////////////////

@@ -79,7 +79,55 @@ Three things in there are load-bearing:
 - **`-NoExit`** is the PowerShell twin of `exec bash`: the pane outlives the agent and stays
   peekable. A pane that dies with the agent breaks reattach and the terminal view.
 
-## What is NOT proven
+## Measured on mikan (WSL Ubuntu-24.04 on Windows, Windows PowerShell 5.1.26100)
+
+Everything below was executed, not reasoned. It replaces the assumption list that used to be here.
+
+**Confirmed working, no change needed:**
+
+- `WSLENV` carries the variable across. The probe pane printed `PN=[windows.probe]`, so the identity
+  mechanism holds and a launched agent can be told its own name.
+- `-EncodedCommand` (base64 of UTF-16LE) is accepted.
+- `-NoExit` leaves a live interactive prompt under the script's output, so the pane outlives the
+  agent and stays peekable, which is what reattach and the console terminal view need.
+- Speed is not a design constraint: ~0.36s to an interactive prompt, and `claude.exe --version`
+  returns in ~0.2s. A 2s grace in the wake path is generous.
+
+**Three findings that CHANGED the design:**
+
+1. **It is `claude.exe`, not `claude`.** `Get-Command claude,claude.cmd,claude.exe` returned only
+   `claude.exe` (at `C:\Users\<user>\.local\bin\claude.exe`); the bare name and the `.cmd` do not
+   resolve. So the binary name is per-spawn-point and cannot stay baked into the one `claude ...`
+   string `buildLaunchCommand` composes for bash. A detector probing for bare `claude` would also
+   have reported the feature impossible on a machine where it works.
+
+2. **No `pwsh.exe` here, and the obvious detection is a trap.** `command -v pwsh.exe powershell.exe`
+   exits **0** because *any* argument resolved, so a detector branching on the exit status concludes
+   pwsh exists and hands back a dead session - precisely the failure this detection exists to
+   prevent. The output must be parsed, never the status. Consequently the "prefer pwsh" branch is
+   DROPPED for now rather than shipped untested: there is no machine to exercise it on, and an
+   untested preference branch on the launch path is worse than not having one.
+
+3. **A WSL path translates to a UNC path, and a UNC cwd is not sound.** `wslpath -w ~` gives
+   `\\wsl.localhost\Ubuntu-24.04\home\nyaarium`, and the probe pane inherited WSL's cwd, landing
+   PowerShell on the `Microsoft.PowerShell.Core\FileSystem::` provider form rather than a real Win32
+   working directory. `claude.exe` tolerated it, so it is not fatal - but Windows PowerShell cannot
+   give a legacy console app a UNC cwd, so a subprocess can silently get `C:\Windows` instead, and
+   `cmd.exe` refuses UNC outright. Inheriting therefore works in a probe and produces a confusing
+   dead session later, which is the worst shape a bug can have.
+
+   So the Windows spawn point must `Set-Location` to a DRIVE path explicitly and never inherit. A
+   hint that translates to a `\\` UNC is on the Linux side and is a category error for a Windows
+   session: refuse it, naming `/mnt/c/...` as the shape that works. With no hint at all the default
+   must also be Windows-side, so detection should capture `$env:USERPROFILE` in the same probe that
+   looks for `claude.exe` rather than falling back to the WSL home.
+
+## Still not proven
+
+Whether a Windows-launched agent's MCP registers back to the Gateway across the WSL network
+boundary. That needs a real launch and is the one unknown the probe could not reach.
+
+## Superseded assumption list, kept for the record
 
 None of the Windows half has been executed. No Windows machine was reachable in the session that
 designed it: `mikan` (the WSL box) was asleep and the Windows Switchboard session was gone from the
@@ -103,7 +151,45 @@ tmux new-session -d -s wintest "bash -c 'export PROJECT_NAME=windows.probe; expo
 tmux capture-pane -e -J -p -t =wintest.0
 ```
 
-## The rest of the daemon-side half
+## Built (daemon and gateway halves)
+
+`windows` is registered, and a machine that cannot run one refuses a wake with a reason rather than
+producing a dead pane. `src/mcp/devcontainer/windowsSpawn.ts` owns the daemon side.
+
+- **Detection probes for the AGENT.** One `powershell.exe -NoProfile` call gets both `claude.exe` and
+  `$env:USERPROFILE`, cached per daemon process. `command -v pwsh.exe powershell.exe` is NOT how to
+  do this: it exits 0 when EITHER resolves, so a status check reports pwsh present on a machine with
+  none. The pwsh preference is dropped entirely rather than shipped untested.
+- **`resolveSpawnWorkdir` is the one resolver** the wake path and the console's `create_session` both
+  use, because they were two sites answering the same question.
+- **Browsing is NATIVE**, through `Get-ChildItem`. Browsing `/mnt/c` from the Linux side was the
+  cheap alternative and is wrong: the picker would offer `/home/you/...`, which the launch then
+  refuses, so it presents choices that cannot work, and it cannot see a network drive. The `list_dirs`
+  op carries an optional `spawn` naming which filesystem to browse; absent keeps the old behaviour.
+  Claiming this needed no wire change was wrong on its own terms - stopping the dead end requires the
+  op to know the target either way.
+- **Windows paths travel with FORWARD slashes.** Backslash is in `WORKDIR_PATH_FORBIDDEN` because of
+  shell nesting and stays there; PowerShell takes `C:/Users/me` everywhere it takes the backslash
+  form. `isSpawnWorkdirPath` picks the rule from the spawn point and is shared by the boundary and
+  the daemon's re-guard.
+- The daemon announces detected spawn points on its catalog frame. Nothing consumes that yet.
+
+Known limit: a drive WSL has not mounted is unreachable from the `/mnt` side, but native browsing
+does not care, so this only affects a caller that hand-writes a `/mnt` path.
+
+## Still to do
+
+**The wire.** The gateway stores the daemon's announced `hostSpawns` and serves them as discovery
+metadata on `list_teams`, per the section below. Until then a Windows session is reachable only by
+typing its address.
+
+**The console.** Show it, label `host` as "WSL" only when a `windows` spawn point exists on that
+Gateway, sort Windows first, and start the directory picker on the Windows side.
+
+**Unproven:** whether a Windows-launched agent's MCP registers back across the WSL network boundary.
+One real wake settles it.
+
+## Original notes on the daemon-side half
 
 - **Detection.** `powershell.exe` on PATH proves a shell, not a working agent. Probe Windows-side
   `claude` through the same boundary (`Get-Command claude`), since offering the spawn point without

@@ -157,7 +157,7 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
-		return TeamsAnswer(result.teams.map { teamInfoToTeam(it, localGatewayId) }, result.coverage)
+		return TeamsAnswer(result.teams.map { teamInfoToTeam(it, localGatewayId) }, result.coverage, result.spawnPoints)
 	}
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).

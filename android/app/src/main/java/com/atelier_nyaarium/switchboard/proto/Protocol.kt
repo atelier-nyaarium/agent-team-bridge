@@ -323,6 +323,7 @@ sealed class ConsoleOp {
 	@SerialName("list_dirs")
 	data class ListDirs(
 		val path: String,
+		val spawn: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -467,6 +468,7 @@ data class ConsoleRegisterResult(
 data class ConsoleListTeamsResult(
 	val teams: List<TeamInfo>,
 	val coverage: DiscoverCoverage? = null,
+	val spawnPoints: List<GatewaySpawnPoints>? = null,
 )
 
 @Serializable
@@ -1019,6 +1021,13 @@ data class DiscoverCoverage(
 	val answered: Long,
 	val unreachable: List<String>? = null,
 	val unreachablePeers: List<String>? = null,
+)
+
+@Serializable
+data class GatewaySpawnPoints(
+	val domainId: String? = null,
+	val gatewayId: String,
+	val hostSpawns: List<String>,
 )
 
 @Serializable

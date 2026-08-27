@@ -19,7 +19,7 @@ import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import type { PlaneRegistry } from "../../shared/plane-registry.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { SessionStore } from "../../shared/session-store.js";
-import type { TeamInfo } from "../../shared/types.js";
+import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { BoardDisposition, BoardStore } from "../boardStore.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
@@ -45,7 +45,13 @@ export interface ConsoleRoutes {
 	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
 	discover: (url?: URL) => Promise<Response>;
 	// Same rows plus completeness, so a partial answer cannot pass as a full one.
-	discoverFull: () => Promise<{ teams: TeamInfo[]; coverage: DiscoverCoverage }>;
+	discoverFull: () => Promise<{
+		teams: TeamInfo[];
+		coverage: DiscoverCoverage;
+		/** What each Gateway's machine offers beyond `host`, same-Domain only. Optional for the same
+		 * reason the wire field is: absent means "not advertised", never "this machine has none". */
+		spawnPoints?: GatewaySpawnPoints[];
+	}>;
 	// The owner-delivery funnel (consolePushOps.deliverToOwner): the ONE mailbox writer, appending
 	// locally and converging to every other same-Domain Gateway the console might actually poll.
 	deliverToOwner: DeliverToOwner;

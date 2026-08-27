@@ -126,6 +126,9 @@ code does not belong here; rationale lives in `git log`.
     - `hostResolve.ts` - the pure, independently-tested resolution logic hostDaemon.ts's WS
       orchestration delegates to: catalog scanning, host/devcontainer workdir and watch-target
       resolution, and the tmux launch command builder
+    - `windowsSpawn.ts` - the daemon's half of the `windows` spawn point: the PowerShell probe for
+      `claude.exe` and `$env:USERPROFILE`, `wslpath` translation that REFUSES a UNC rather than
+      handing one over, and the native `Get-ChildItem` directory listing (see Host spawn points)
     - `codexTargets.ts` - one supervised `codex app-server` per execution target. A working directory
       is NOT a target property: a thread carries its own, so every host session shares one child
     - `codexAppServer.ts` - the JSONL transport and fail-closed client. Every server-initiated request
@@ -183,6 +186,9 @@ code does not belong here; rationale lives in `git log`.
     otherwise have to open the bytes to learn); no receiver may re-derive that from content,
     filename, array position, or message direction
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
+  - `host-spawn.ts` - the SOLE owner of "which spawn segment is a shell on the host machine", and
+    each one's launch command. Replaced a `project === "host"` literal that lived in eight sites
+    (see Host spawn points below)
   - `crypto.ts` / `admission.ts` / `router-protocol.ts` / `federation-lifecycle.ts` (a barrel over the
     seven per-flow `federation-*` files) - the federation trust model and its wire vocabulary
   - `notice.ts` - the four notice tiers both reply tools and the console wire share; the one remaining
@@ -281,6 +287,49 @@ The gateway keys teams by bare local fields internally and qualifies to a full `
 wire edge. Domain id is the `local` sentinel until enrollment. A bare `project` is a spawn-point
 (catalog membership decides this, NOT the dot test, so `my.app` is still a project); a send to one
 fails fast.
+
+### Host spawn points
+
+A host spawn point is a named SHELL on the host machine. `host` is bash and every machine has one;
+`windows` is PowerShell over WSL interop, so a WSL box can run agents on its Windows side. Both are
+ordinary tmux sessions on the host, so peek, tmux_send, forget, SessionStore and the address grammar
+are unchanged. Design record: `plans/windows-spawn-point.md`.
+
+- **`isHostSpawn` is the one owner of the question**, and `host-spawn.ts` the one table. That rule was
+  a bare `project === "host"` literal in EIGHT sites that all had to agree - both agent-service
+  resolvers, both route cwd gates, the wake dispatcher, the reservation check and two target
+  resolvers - plus `tmuxCore.selfSessionTarget`, which held it as a VALUE while deriving its sibling
+  field from PROJECT_NAME. `host-spawn-residue.test.ts` fails the build on a new site.
+- **`kind` stays the tmux LOCATION** (bare tmux vs `docker exec`) and says nothing about the
+  interpreter; a Windows session's tmux still runs in WSL. The spawn NAME is the discriminator, so a
+  second field that had to agree with it forever does not exist.
+- **`windows` gets NO presence row**, mirroring `host`, which has never had one. Every kind
+  `TeamInfo` permits is admitted by `gatewayRelay`'s cross-Domain scope gate, so a row would make a
+  machine's shell shareable to a friend Domain; and a new `TeamKind` variant is worse, since
+  cross-Domain presence narrows kind to a strict two-value enum and an older Gateway would fail
+  validation on a relayed list. It travels as discovery metadata (`GatewaySpawnPoints`) on
+  `list_teams`, to same-Domain callers only, and is stripped from the `/discover` HTTP route.
+- **Absent means UNKNOWN, never "none".** `HostSpawnState` is `{known, ids}` so an older daemon and a
+  machine whose daemon is down do not read as an affirmative "nothing beyond host". The gateway emits
+  no row at all until a daemon has answered. The console DROPS (not holds) a row for a gateway
+  discovery could not reach, unlike a session row: a spawn point is an offer to launch, so holding
+  one invites a wake that cannot succeed.
+- **Everything about the Windows launch was measured, not reasoned.** `claude.exe` by full name (bare
+  `claude` does not resolve from PowerShell); `WSLENV` appended not assigned, or the agent registers
+  under a derived name; `-EncodedCommand` as base64 of UTF-16LE, which makes the four-parser quoting
+  hazard inexpressible rather than handled; `-NoExit` as the twin of `exec bash`; and `Set-Location`
+  ALWAYS, because the pane inherits WSL's cwd and a `\\wsl.localhost` UNC cwd works in a probe then
+  strands every subprocess it starts. `pwsh.exe` is deliberately NOT preferred - it was absent on the
+  only machine available to test on, and `command -v a b` exits 0 when EITHER resolves, so the
+  obvious detector reports it present on a box that has none.
+- **Windows paths travel with FORWARD slashes.** Backslash is in `WORKDIR_PATH_FORBIDDEN` for
+  shell-nesting reasons and stays there. `isSpawnWorkdirPath` picks the rule from the spawn point and
+  is used by the gateway boundary AND the daemon's re-guard.
+- **A hint is not necessarily a path.** `SessionStore.hostWorkdirHint` falls back to the session
+  LABEL, so a Windows session created without picking a directory arrives carrying its own name;
+  anything not path-shaped falls back to the Windows home rather than being fed to `wslpath`.
+- **Browsing is native** (`Get-ChildItem`), not `/mnt` from the Linux side: that would offer Linux
+  directories the launch then refuses, and cannot see a network drive.
 
 ### Sessions and wake
 

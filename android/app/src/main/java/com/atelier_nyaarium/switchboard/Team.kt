@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.DiscoverCoverage
+import com.atelier_nyaarium.switchboard.proto.GatewaySpawnPoints
 import com.atelier_nyaarium.switchboard.proto.LOCAL_DOMAIN_SENTINEL
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.TeamInfo
@@ -89,8 +90,22 @@ internal fun Team.withAuthority(a: Authority): Team = copy(presence = presence.w
 /** Attach this device's own outstanding request for this session, or clear it. */
 internal fun Team.withReceipt(r: ActionReceipt?): Team = copy(presence = presence.withReceipt(r))
 
-/** A list_teams answer with its own completeness. Null coverage (an older gateway) claims nothing. */
-internal data class TeamsAnswer(val teams: List<Team>, val coverage: DiscoverCoverage? = null)
+/** A list_teams answer with its own completeness. Null coverage (an older gateway) claims nothing.
+ *
+ * `spawnPoints` names what each Gateway's machine offers beyond the universal `host`. Null means NOT
+ * ADVERTISED, never "no Windows here": an older gateway omits it, and so does a peer reached through
+ * an older ROUTE gateway, whose relay schema strips the field. An empty `hostSpawns` on a row IS an
+ * affirmative "nothing beyond host", which is why the row is sent even when it carries nothing. */
+internal data class TeamsAnswer(
+	val teams: List<Team>,
+	val coverage: DiscoverCoverage? = null,
+	val spawnPoints: List<GatewaySpawnPoints>? = null,
+)
+
+/** The host spawn points one Gateway offers, keyed the way the console groups sessions. Domain is
+ * nullable upstream, so an absent one folds onto the admin Domain exactly as a Team row's does. */
+internal fun GatewaySpawnPoints.groupKey(adminDomainId: String): GatewayGroupKey =
+	GatewayGroupKey(domainId.orEmpty().ifEmpty { adminDomainId }, gatewayId)
 
 /** Merge a fresh presence answer over the prior rows, keeping prior rows the answer does not speak
  * for. Fresh wins on a name collision. Pure, so the two merge policies (plane push, discovery with
