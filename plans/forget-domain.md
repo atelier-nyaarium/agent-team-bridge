@@ -34,8 +34,9 @@ the wrong answer there would show the harmless warning over the only copy of the
 
 ## What
 
-**Settings > System > Danger > "Forget this Domain"**, unconditional: the screen exists only on a
-provisioned app. Revoke and Delete keeps its own gate beside it for app-only owners.
+**Settings > Domain & Trust > Danger > "Forget this Domain"**, unconditional: the screen exists only
+on a provisioned app. Revoke and Delete keeps its own gate beside it for app-only owners. Both moved
+here from System (`DomainDangerSection`), beside the Gateways, devices and Federation they act on.
 
 Subtitle: "Wipes this phone only. The Domain, your gateways and your other devices are untouched.
 Voice settings are kept."

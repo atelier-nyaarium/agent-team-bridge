@@ -114,11 +114,11 @@ fun SettingsScreen(
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
 				SettingsRoute.NETWORKS ->
-					NetworksSettings(onManage, onYourDevices, onFederation) { onRoute(SettingsRoute.FEDERATION) }
+					NetworksSettings(repo, onManage, onYourDevices, onFederation, onClear) { onRoute(SettingsRoute.FEDERATION) }
 				SettingsRoute.FEDERATION -> FederationSettings(repo)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
 				SettingsRoute.PLUGINS -> PluginsSettings(plugins, repo)
-				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
+				SettingsRoute.SYSTEM -> SystemSettings(repo)
 			}
 		}
 	}

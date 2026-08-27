@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { pinnedDial, realWebSocket } from "../src/gateway/router/pinnedSocket.js";
+import { BUN_FLOOR } from "../src/shared/bun-floor.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -112,11 +113,15 @@ async function main(): Promise<void> {
 		console.error(`[pinning] FAILED on ${runtime}`);
 		for (const failure of failures) console.error(`[pinning]   ${failure}`);
 		console.error(
-			`[pinning] the gateway cannot authenticate its Router on this runtime; bun 1.4+ or node is required`,
+			`[pinning] the gateway cannot authenticate its Router on this runtime; bun ${BUN_FLOOR}+ or node is required`,
 		);
 		process.exit(1);
 	}
-	console.log(`[pinning] ok on ${runtime}: match connects, mismatch refused before the bearer is sent`);
+	// This verdict is what BUN_FLOOR is grounded on: a runtime that passes here may hold the floor, one
+	// that fails here may not, whatever its changelog says.
+	console.log(
+		`[pinning] ok on ${runtime} (floor bun ${BUN_FLOOR}): match connects, mismatch refused before the bearer is sent`,
+	);
 }
 
 try {

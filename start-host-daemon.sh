@@ -28,7 +28,9 @@ HOST_WS_TOKEN="$(sed -n 's/^HOST_WS_TOKEN=//p' "${SCRIPT_DIR}/.env" 2>/dev/null 
 
 echo "Starting host daemon..."
 # run-host-daemon.sh is the supervisor: bounded-backoff restarts, then an inspectable shell after
-# repeated fast crashes. bun is on PATH via ~/.bashrc.
+# repeated fast crashes. It resolves bun ITSELF (~/.bashrc is still sourced for everything else, but
+# a non-interactive shell returns early from the stock one, so bun's PATH export below that guard
+# never runs - see run-host-daemon.sh).
 tmux new-session -d -s "$TMUX_SESSION" "bash -c 'cd ${SCRIPT_DIR} && source ~/.bashrc && export HOST_WS_TOKEN=${HOST_WS_TOKEN} && exec ./run-host-daemon.sh'"
 
 if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then

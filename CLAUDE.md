@@ -100,8 +100,9 @@ code does not belong here; rationale lives in `git log`.
   outside it: `RendererPoolBindings.kt` (the WebView pool and its callbacks), `AppOverlays.kt` (queue
   and viewer), `LinkMenu.kt` (a tapped link's menu and how a link opens)
   - Settings is four files: `SettingsScreen.kt` is the hub and its route dispatch, `SettingsSections.kt`
-    its small leaf screens (plugins, profile, networks, security), `SettingsSystem.kt` the system screen
-    with the update and battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
+    its small leaf screens (plugins, profile, networks, security) and the Domain danger block (both
+    wipes, at the bottom of Domain & Trust), `SettingsSystem.kt` the system screen with the update and
+    battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
   - The sessions tab is five files: `MainTabsScreen.kt` is the app shell hosting both tabs (it owns
     the top bar and pager, and takes each tab as an opaque slot), `SessionsScreen.kt` the list,
     `SessionsHeaders.kt` its section chrome and status vocabulary, `SessionCard.kt` the card with its
@@ -199,6 +200,28 @@ code does not belong here; rationale lives in `git log`.
   - `agent-screen.ts` / `pane-trim.ts` - the pure reads of a captured tmux pane: what state the REPL
     is in, and which trailing spaces are `-J` padding rather than content. Each has a hand-written
     Kotlin twin (`AgentScreen.kt`, `TerminalAnsi.kt`) held to a shared fixture corpus
+    - **A rule is a RUN, not a LINE, and `afterRuleRun` is the sole owner of that.** `-J` welds a
+      wrapped row onto its neighbour, and on a WINDOWS-hosted pane (a WSL tmux session running
+      `powershell.exe`) the composer's rules arrive welded to the rows beside them: the top rule to the
+      composer row ALWAYS, the bottom rule to the footer only after a resize - which `peekPane` performs
+      on every peek, so the wake path induces that one deliberately at the moment it judges the wake.
+      All four readers go through `footerRegion`, and `agent-screen-residue.test.ts` fails the build if
+      either language hand-rolls the search again: the corpus proves behaviour, that proves ownership.
+    - **Two rule notions, not interchangeable.** `TOOLBAR_RUN_RE` is U+2500 only, the composer's own
+      boundary; `ANY_RULE_RUN_RE` spans U+2500-U+259F for any divider, since the limit dialog's is
+      U+2594. One helper serving both was the first design and it was wrong.
+    - **`limitNotice` searches in TWO passes and the order is load-bearing.** Pass 1 is the historical
+      whole-line predicate, so any frame that used to resolve resolves identically; pass 2 admits a
+      welded rule only when pass 1 found nothing. Widening in place looked equivalent and was not - a
+      titled border is a text-bearing rule line, it would newly qualify, and since the search takes the
+      bottom-most match the divider could move DOWN past the real one and return a null headline where
+      one was found before. No fixture covers that, so the tests would have called it equivalent.
+    - **The composer glyph is a two-member class** (Linux U+276F, the Windows build U+003E, same binary
+      version), and whitespace is spelled out rather than `\s`: JS matches U+00A0 and the JVM's default
+      does not, and Windows emits one right after the glyph.
+    - **The last-two-lines fallback is uniform.** It lived in `isAgentWorking` alone, while `isLoggedOut`
+      did `slice(lastRule + 1)` with lastRule at -1 and so read the WHOLE screen - exactly what scoping
+      that region exists to prevent, live on every platform.
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
@@ -400,7 +423,13 @@ owns the check and `routerClient` holds no certificate logic of its own.
   ring holds. The fingerprint replaces both checks rather than supplementing them.
 - **bun 1.4+ is required**, and it is the runtime that decides, not the code. `oven/bun:1` is a
   floating tag, so both start paths build with `--pull`; without it two machines on the same commit
-  land on different bun majors.
+  land on different bun majors. The gateway now REFUSES to start below the floor (`assertBunFloor` in
+  `main-gateway.ts`, before anything can dial), because a native gateway runs whatever bun the host
+  has and the base image is no longer the only thing holding the line. `BUN_FLOOR` in
+  `shared/bun-floor.ts` is the one number, read by the guard and by `check-pinning-runtime.ts`; it is
+  an OBSERVED floor (where the outage was fixed, and what that script proves each CI run), not a bun
+  contract, so raise it only against the script's verdict. Under node the guard is a no-op: the real
+  `ws` is in play there.
 
 ### Federation and trust
 
@@ -1416,7 +1445,7 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    it: the Domain id is what its own retry needs, and it is what the local half removes. The id comes
    from `.env` OR the Router's own `isAdminDomain` mark (`findAdminDomainId`), since the old purges
    deleted `.env` and left exactly the state where the key is gone and the Domain is not.
-   - **The phone's half of option 0 is Settings > System > Forget this Domain** (`plans/forget-domain.md`):
+   - **The phone's half of option 0 is Settings > Domain & Trust > Forget this Domain** (`plans/forget-domain.md`):
      `clearAll` and nothing else, no wire op, for everyone provisioned. Revoke and Delete stays the
      app-only path, hidden from admins, because it ALSO purges the Domain server-side. The dialog
      branches on `holdsDomainOwnerKey`, read WITHOUT minting: the owner key is generated on the first
