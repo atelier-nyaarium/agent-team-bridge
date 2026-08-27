@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
+import { fileURLToPath } from "node:url";
 import type WebSocket from "ws";
 
 ////////////////////////////////
@@ -55,9 +56,25 @@ export function pinRefusal(verdict: PinVerdict): string {
  * ignores `createConnection`, so a pin written against the npm package silently does nothing there.
  * The package's exports map hides its internals from a subpath import, hence the resolved file path.
  */
+/**
+ * The directory a module URL sits in, as a real filesystem path.
+ *
+ * `new URL(url).pathname` is NOT one, and using it here cost a Windows gateway its Router link: it
+ * keeps the leading slash before a drive letter (`/B:/switchboard`), so every `path.join` off it
+ * builds `\B:\switchboard\...`, which opens nothing, and the walk below runs to the root and throws.
+ * It is not Windows-only either - `pathname` stays percent-encoded, so a repo checked out to a path
+ * containing a space resolves `my%20projects` and fails the same way on Linux.
+ *
+ * Exported so the derivation is testable on any platform; the RESOLUTION it feeds is only provable
+ * on the shipping runtime, which is what `scripts/check-pinning-runtime.ts` is for.
+ */
+export function moduleDir(moduleUrl: string): string {
+	return path.dirname(fileURLToPath(moduleUrl));
+}
+
 export function realWebSocket(): typeof WebSocket {
 	const require_ = createRequire(import.meta.url);
-	let dir = path.dirname(new URL(import.meta.url).pathname);
+	let dir = moduleDir(import.meta.url);
 	for (;;) {
 		const candidate = path.join(dir, "node_modules", "ws", "lib", "websocket.js");
 		try {
