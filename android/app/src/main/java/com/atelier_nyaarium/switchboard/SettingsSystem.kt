@@ -45,10 +45,11 @@ import kotlinx.coroutines.launch
 ////////////////////////////////
 //  Composables
 
-/** System settings; the danger action (Revoke and Delete Domain) sits at the bottom behind a
- * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. The
- * action purges this owner's whole Domain from the servers, so it is hidden for an admin (who
- * purges via setup.sh) and shown only to a confirmed app-only owner (see canDeleteOwnDomain). */
+/** System settings; the danger actions sit at the bottom behind a confirm, so a wipe is two levels
+ * deep (Settings -> System) plus an explicit confirmation. Two of them, deliberately distinct:
+ * Forget this Domain wipes THIS phone and sends nothing, for everyone; Revoke and Delete Domain also
+ * purges the owner's whole Domain from the servers, so it is hidden for an admin (who purges via
+ * setup.sh) and shown only to a confirmed app-only owner (see canDeleteOwnDomain). */
 @Composable
 internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 	val scope = rememberCoroutineScope()
@@ -57,6 +58,9 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 	var deleting by remember { mutableStateOf(false) }
 	var deleteError by remember { mutableStateOf<String?>(null) }
 	var wipedUnconfirmed by remember { mutableStateOf(false) }
+	var confirmForget by remember { mutableStateOf(false) }
+	var forgetting by remember { mutableStateOf(false) }
+	var forgetError by remember { mutableStateOf<String?>(null) }
 	var refreshText by remember { mutableStateOf((repo.sessions.terminalRefreshMs / 1000.0).toString()) }
 	BatteryExemptionRow()
 	HorizontalDivider()
@@ -83,11 +87,84 @@ internal fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
+	// This screen exists only on a provisioned app (an unprovisioned one shows onboarding instead), so
+	// the local wipe is offered unconditionally. It is the ONLY reset an admin's phone has: setup.sh
+	// option 0 deletes the Domain on the Router and then needs this to let the phone scan again.
+	HorizontalDivider()
+	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+	OutlinedButton(
+		onClick = hapticClick { forgetError = null; confirmForget = true },
+		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+	) {
+		Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+		Spacer(Modifier.width(4.dp))
+		Text("Forget this Domain")
+	}
+	Text(
+		"Wipes this phone only. The Domain, your gateways and your other devices are untouched. Voice settings are kept.",
+		style = MaterialTheme.typography.bodySmall,
+	)
+	if (confirmForget) {
+		// Read when the dialog opens, not at composition: it decodes the stored keys, and the answer
+		// only matters once the owner is about to act on it.
+		val holdsOwnerKey = remember { repo.ownerFacts.holdsOwnerKey() }
+		AlertDialog(
+			onDismissRequest = { if (!forgetting) confirmForget = false },
+			title = { Text("Forget this Domain?") },
+			text = {
+				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+					Text("This wipes the app on this phone: history, drafts, the board cache, downloaded files and the speech cache. Nothing is deleted from the Router: your Domain, gateways and other devices stay as they are.")
+					if (holdsOwnerKey) {
+						// The owner key is generated on the first phone and reaches another device only through
+						// a passphrase backup, so on this phone the warning is about the Domain itself.
+						Text(
+							"Your owner key lives on this phone, plus any backup you exported. Without a copy, nothing new can ever be owner-signed for this Domain: no admits, revokes, renames or links.",
+							style = MaterialTheme.typography.bodySmall,
+							color = MaterialTheme.colorScheme.error,
+						)
+						Text(
+							"Before forgetting, run Purge Federation on the Router machine, or export a backup under Settings > Domain & Trust > Federation > Owner key backup.",
+							style = MaterialTheme.typography.bodySmall,
+						)
+					} else {
+						Text(
+							"This phone does not hold the owner key, so nothing about the Domain changes. It stays listed under Your devices until removed there.",
+							style = MaterialTheme.typography.bodySmall,
+						)
+					}
+					forgetError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+				}
+			},
+			confirmButton = {
+				TextButton(
+					enabled = !forgetting,
+					onClick = hapticClick {
+						scope.launch {
+							if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
+							forgetting = true
+							forgetError = null
+							// runCatchingCancellable, not runCatching: a plain catch would turn this coroutine's
+							// cancellation into "Could not wipe", the same trap submitOwnerFact documents.
+							runCatchingCancellable { repo.domainAdmin.forgetDomain() }
+								.onSuccess {
+									forgetting = false
+									confirmForget = false
+									onClear()
+								}
+								.onFailure {
+									forgetting = false
+									forgetError = it.message ?: "Could not wipe this phone."
+								}
+						}
+					},
+				) { Text("Forget") }
+			},
+			dismissButton = { TextButton(enabled = !forgetting, onClick = hapticClick { confirmForget = false }) { Text("Cancel") } },
+		)
+	}
 	// Admins purge via setup.sh; an unconfirmed Domain (offline) hides it too, so an admin whose gateway
 	// is down can't read the unknown state as "not admin" and delete everything (see canDeleteOwnDomain).
 	if (repo.canDeleteOwnDomain()) {
-		HorizontalDivider()
-		Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
 		OutlinedButton(
 			onClick = hapticClick { deleteError = null; confirmDelete = true },
 			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),

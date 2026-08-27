@@ -1416,10 +1416,26 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    it: the Domain id is what its own retry needs, and it is what the local half removes. The id comes
    from `.env` OR the Router's own `isAdminDomain` mark (`findAdminDomainId`), since the old purges
    deleted `.env` and left exactly the state where the key is gone and the Domain is not.
-   - **An admin's phone has no in-app reset.** Revoke and Delete is the app-only path and is hidden
-     from admins on purpose, and `MainActivity` imports a setup code only while unprovisioned, so
-     after option 0 the phone must have its app storage cleared before it can scan again. Option 0
-     says so. An admin-facing "forget this Domain" in the app is the open follow-up.
+   - **The phone's half of option 0 is Settings > System > Forget this Domain** (`plans/forget-domain.md`):
+     `clearAll` and nothing else, no wire op, for everyone provisioned. Revoke and Delete stays the
+     app-only path, hidden from admins, because it ALSO purges the Domain server-side. The dialog
+     branches on `holdsDomainOwnerKey`, read WITHOUT minting: the owner key is generated on the first
+     phone and reaches another device only through a passphrase backup, so an admitted second console
+     holds none, and `ownerIdentity()` would seat a throwaway root on it. A stored key with NO stored
+     snapshot answers holder: that is the first phone before its first sync, where the wrong answer
+     shows the harmless warning over the only copy. On the holder it says the Domain can never be
+     owner-signed for again without a copy, and names Purge Federation or the backup export first; on
+     a non-holder it says nothing about the Domain changes. Option 0 names the button, with Clear
+     storage as the fallback for an older app.
+   - **A wipe empties the run and the shade.** `PlaybackOps` is a `ClearsOnReprovision` (the queue
+     names the old owner's messages and every transport surface draws it), and `onClear` cancels the
+     message and scheduled-send-failure notification ranges: the service stops itself on
+     `!provisioned` BEFORE its reconcile runs, so a wiped phone kept notifications that opened threads
+     it no longer had. Scoped by id range, never `cancelAll()`, which would take the foreground and
+     transport notifications with it. That scoping is only sound because BOTH of those ids sit below
+     the team range, pinned by `ServiceNotifications`' init check: the transport id used to be 4271,
+     inside it, and the existing reconcile sweep took the lockscreen transport down on every unread
+     change until the next playback event re-posted it.
    - **Purge Gateway tells the network nothing, on purpose, and says so.** An admission is an
      owner-signed fact mirrored on the Router, every Gateway and the phone, and each mirror retires
      one only on an owner-signed REVOCATION - which this host cannot sign, since the owner's SIGNING

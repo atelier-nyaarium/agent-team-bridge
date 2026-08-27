@@ -60,6 +60,14 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		}
 	}
 
+	/** Forget this Domain on THIS device only: the local wipe with no Router op, so an admin's phone
+	 * (whose purge path is setup.sh, and which [deleteDomain] is hidden from) can take a new setup code,
+	 * and a second device can leave a Domain without deleting it. Nothing is signed and nothing is sent:
+	 * this device's console admission stays in every keyring, inert, since its signing key dies here.
+	 * On IO like [deleteDomain], because [clearAll] joins the poll loop and that can wait out a slow
+	 * ingest POST. The biometric gate is at the call site, mirroring the rest. */
+	suspend fun forgetDomain() = withContext(Dispatchers.IO) { repo.clearAll() }
+
 	////////////////////////////////
 	//  Networks you host (guest tenants the admin pre-stages)
 

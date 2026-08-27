@@ -80,6 +80,7 @@ class ClearsOnReprovisionTest {
 			.filter { ClearsOnReprovision::class.java.isAssignableFrom(it.type) }
 			.map { it.name }
 			.toSet()
-		assertEquals(setOf("board", "presence", "trust", "drain"), declared)
+		// playback: the run names the previous owner's messages and every transport surface draws it.
+		assertEquals(setOf("board", "presence", "trust", "drain", "playback"), declared)
 	}
 }
