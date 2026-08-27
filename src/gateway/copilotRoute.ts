@@ -4,11 +4,11 @@ import {
 	CopilotAgentResultSchema,
 	type CopilotErrorCode,
 	CopilotGatewayRequestSchema,
-	CopilotListAgentsResultSchema,
 	type CopilotPersistedAgent,
 	CopilotRequestErrorSchema,
 	type CopilotStoredTurn,
 	copilotAgentIdForOperation,
+	projectCopilotListResult,
 	sanitizeCopilotErrorText,
 } from "../shared/copilot-agent.js";
 import type { SessionRecord } from "../shared/session-store.js";
@@ -279,19 +279,7 @@ export class CopilotRoute {
 
 	private list(owner: SessionRecord) {
 		this.deps.relay.reconcileStale(owner);
-		return CopilotListAgentsResultSchema.parse({
-			agents: this.deps.service.listOwnedAgents(owner).map((agent) => ({
-				agentId: agent.agentId,
-				agentState: agent.agentState,
-				...(agent.activeTurnId ? { activeTurnId: agent.activeTurnId } : {}),
-				turns: agent.turns.map((turn) => ({ id: turn.id, state: turn.state })),
-				operations: agent.operations.map((operation) => ({
-					kind: operation.kind,
-					state: operation.state,
-					...(operation.prompt ? { prompt: operation.prompt } : {}),
-				})),
-			})),
-		});
+		return projectCopilotListResult(this.deps.service.listOwnedAgents(owner));
 	}
 
 	private async settle(

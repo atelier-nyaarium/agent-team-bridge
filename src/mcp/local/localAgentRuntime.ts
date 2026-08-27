@@ -5,7 +5,7 @@
 
 import crypto from "node:crypto";
 import type { AgentBackendId } from "../../shared/agent-backend.js";
-import { agentIdForOperation } from "../../shared/agent-record.js";
+import { AGENT_ERROR_MAX_BYTES, agentIdForOperation, sanitizeAgentErrorText } from "../../shared/agent-record.js";
 import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./localAgentSession.js";
 
 ////////////////////////////////
@@ -118,7 +118,14 @@ interface LocalAgentRecord {
 	settled?: Promise<LocalTerminal>;
 }
 
-/** One agent's history, in the shape both list schemas declare. */
+/**
+ * One agent's history, in the shape CODEX's list schema declares.
+ *
+ * This said "the shape both list schemas declare" and that was never true: Copilot publishes
+ * `operations`, bare turns and no timestamps, so handing this record to its schema threw on every
+ * non-empty list. The host projects per backend now; this type stays Codex-shaped because the
+ * runtime records what Codex needs and Copilot's row is a strict subset of it.
+ */
 export interface LocalListAgent {
 	agentId: string;
 	agentState: LocalAgentState;
@@ -139,9 +146,15 @@ export interface LocalListAgent {
 ////////////////////////////////
 //  Functions & Helpers
 
+/**
+ * Child errors arrive as whatever the process wrote, which for a spawn failure is a multi-line stack
+ * trace. Both result schemas require `value === sanitize(value)` and cap the bytes, so trimming alone
+ * made an ordinary failure unreportable: the answer threw on its own way out and the caller learned
+ * nothing about what actually went wrong. Sanitizing here covers every `fail()` site at once.
+ */
 function errorText(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
-	return text.trim() || "agent command failed";
+	return sanitizeAgentErrorText(text, AGENT_ERROR_MAX_BYTES) || "agent command failed";
 }
 
 ////////////////////////////////
@@ -433,7 +446,9 @@ export class LocalAgentRuntime {
 		if (turn?.state !== "inProgress") return;
 		turn.state = terminal.status;
 		if (terminal.status === "completed") turn.finalResponse = terminal.finalResponse ?? "";
-		if (terminal.status === "failed") turn.error = terminal.error || "turn failed";
+		// The child wrote this, so it is normalized before it is stored rather than at each reader:
+		// it leaves here for `error.message`, which both backends bound and refuse unnormalized.
+		if (terminal.status === "failed") turn.error = errorText(terminal.error || "turn failed");
 		turn.updatedAt = this.now();
 		if (agent.activeTurnId === turnId) {
 			agent.activeTurnId = undefined;

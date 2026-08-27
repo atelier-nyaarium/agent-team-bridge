@@ -18,14 +18,15 @@ import {
 	COPILOT_ACTIVITY_MAX_ITEMS,
 	CopilotAgentResultSchema,
 	CopilotGatewayRequestSchema,
-	CopilotListAgentsResultSchema,
+	type CopilotListAgentSource,
 	CopilotRequestErrorSchema,
+	projectCopilotListResult,
 } from "../../shared/copilot-agent.js";
 import { ExecutionTargetManager, realLauncher, targetLogger } from "../devcontainer/codexTargets.js";
 import { copilotLauncher } from "../devcontainer/copilotTargets.js";
 import { CodexLocalSession } from "./codexLocalSession.js";
 import { CopilotLocalSession } from "./copilotLocalSession.js";
-import { LocalAgentRuntime, type LocalBackendSpec } from "./localAgentRuntime.js";
+import { LocalAgentRuntime, type LocalBackendSpec, type LocalListAgent } from "./localAgentRuntime.js";
 import type { LocalBackendSession } from "./localAgentSession.js";
 
 ////////////////////////////////
@@ -53,6 +54,26 @@ export function resolveLocalCwd(requested: string | undefined, base: string = pr
 
 function unavailable(errorClass: string, backend: AgentBackendDescriptor): Error {
 	return new Error(`${backend.displayName} is unavailable (${errorClass})`);
+}
+
+/**
+ * The one rename between the runtime's history and Copilot's published one.
+ *
+ * Declared as a typed function on purpose: the projector names the fields it needs, so a schema or
+ * runtime change lands here as a compile error instead of as a parse throw at the caller.
+ */
+export function toCopilotListSource(agent: LocalListAgent): CopilotListAgentSource {
+	return {
+		agentId: agent.agentId,
+		agentState: agent.agentState,
+		...(agent.activeTurnId ? { activeTurnId: agent.activeTurnId } : {}),
+		turns: agent.turns.map((turn) => ({ id: turn.id, state: turn.state })),
+		operations: agent.exchanges.map((exchange) => ({
+			kind: exchange.kind,
+			state: exchange.status,
+			prompt: exchange.prompt,
+		})),
+	};
 }
 
 /**
@@ -101,7 +122,16 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 	const requestSchema = isCodex ? CodexGatewayRequestSchema : CopilotGatewayRequestSchema;
 	const requestErrorSchema = isCodex ? CodexRequestErrorSchema : CopilotRequestErrorSchema;
 	const resultSchema = isCodex ? CodexAgentResultSchema : CopilotAgentResultSchema;
-	const listSchema = isCodex ? CodexListAgentsResultSchema : CopilotListAgentsResultSchema;
+
+	/**
+	 * The runtime speaks ONE history shape and the two backends publish two, so the answer has to be
+	 * built per backend rather than handed over raw. Codex's public row IS the runtime's row, which is
+	 * why passing it straight through worked there and hid that Copilot's never matched.
+	 */
+	const listAgents = (): unknown =>
+		isCodex
+			? CodexListAgentsResultSchema.parse({ agents: runtime.list() })
+			: projectCopilotListResult(runtime.list().map(toCopilotListSource));
 
 	/** The result envelope cannot carry this: it only permits an error when the AGENT is unwell. */
 	const refuse = (message: string): unknown =>
@@ -114,7 +144,7 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 			if (!parsed.success) return refuse(parsed.error.issues[0]?.message ?? "invalid request");
 
 			const request = parsed.data;
-			if (request.kind === "list") return listSchema.parse({ agents: runtime.list() });
+			if (request.kind === "list") return listAgents();
 			const answer = await runtime.handle({
 				kind: request.kind,
 				...("agentId" in request ? { agentId: request.agentId } : {}),
