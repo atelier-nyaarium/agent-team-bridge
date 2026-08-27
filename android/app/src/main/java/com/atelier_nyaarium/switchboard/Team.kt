@@ -107,6 +107,33 @@ internal data class TeamsAnswer(
 internal fun GatewaySpawnPoints.groupKey(adminDomainId: String): GatewayGroupKey =
 	GatewayGroupKey(domainId.orEmpty().ifEmpty { adminDomainId }, gatewayId)
 
+/**
+ * The (gateway, project) a spawn target names, for remembering what a Gateway was last spawned on.
+ *
+ * A BARE target is a project on the route Gateway - that is what bare means everywhere else in this
+ * app - so an empty gateway segment resolves to this device's own rather than to nothing. Reading it
+ * as nothing is not a small miss: `CreateDialogTarget.targetFor` returns bare for the local Gateway,
+ * which is the common case, so it silently disabled remembering entirely for the machine most likely
+ * to be spawned on.
+ *
+ * Null for a target that does not parse, and for a full session address, which names a session
+ * rather than a spawn point and is not something the create dialog produces.
+ */
+internal fun spawnTargetKey(target: String, localGatewayId: String): Pair<String, String>? {
+	if (localGatewayId.isEmpty()) return null
+	// Parsed WITH the local context, not blank context. `parseTarget` throws on a bare local field
+	// when it has no Domain and Gateway to qualify it against - which is the whole reason
+	// `localFieldOrSelf` exists - so parsing blank silently rejected every bare target, meaning every
+	// spawn on the route Gateway. The sentinel Domain is exactly the stand-in for "not confirmed
+	// yet"; only the gateway and spawn are read back out.
+	val parsed = runCatching { parseTarget(target, LOCAL_DOMAIN_SENTINEL, localGatewayId) }.getOrNull() ?: return null
+	// A SpawnPoint is what the create dialog builds. An Address names a SESSION, and a project whose
+	// own name contains a dot parses as one (arity decides, and nothing here knows the catalog), so
+	// such a project is simply not remembered. That degrades to no suggestion, never a wrong one.
+	if (parsed !is SpawnPoint || parsed.gateway.isEmpty() || parsed.spawn.isEmpty()) return null
+	return parsed.gateway to parsed.spawn
+}
+
 /** Merge a fresh presence answer over the prior rows, keeping prior rows the answer does not speak
  * for. Fresh wins on a name collision. Pure, so the two merge policies (plane push, discovery with
  * coverage) share one rule and stay testable. */

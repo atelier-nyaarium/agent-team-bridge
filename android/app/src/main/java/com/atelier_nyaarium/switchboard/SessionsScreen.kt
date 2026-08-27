@@ -101,6 +101,21 @@ internal fun groupByGateway(
  * deduped against these, and the gateway's catalog scan refuses such a directory anyway. */
 internal val HOST_SPAWN_IDS = setOf("host", "windows")
 
+/**
+ * Which project the create dialog opens on, or null for no selection.
+ *
+ * Null rather than a default, because `host` is not a neutral choice: it is one of several real
+ * targets, and preselecting it means a mis-tap spawns on the wrong one silently. Nothing selected
+ * cannot be submitted, so the dialog asks rather than assumes.
+ *
+ * A remembered project is only a SUGGESTION and is re-checked against what this Gateway offers right
+ * now. That is what makes it safe to persist: a project since renamed, removed, or belonging to a
+ * machine whose Windows side is no longer detected simply falls back to no selection instead of
+ * preselecting something that cannot be spawned.
+ */
+internal fun initialProject(remembered: String?, projects: List<String>): String? =
+	remembered?.takeIf { it in projects }
+
 /** How a host spawn point is labelled in the picker. `host` is only called "WSL" when a `windows`
  * peer is present on the SAME Gateway: on a Linux machine it is just the host, and renaming it there
  * would be a lie. The wire word never changes either way - `host` is an address segment keying
@@ -268,6 +283,7 @@ fun SessionsScreen(
 			// way the eventual spawn does. Browsing `host` and then spawning `windows` would let the
 			// picker offer directories the launch refuses.
 				onListDirs = { path, spawn -> onListDirs(path, opened.targetFor(spawn), spawn) },
+			rememberedProject = state.lastProjectByGateway[opened.gatewayId],
 			onSpawn = { target, session, workdir ->
 				onSpawn(target, session, workdir)
 				createDialogFor = null

@@ -16,6 +16,9 @@ data class ChatState(
 	 * route Gateway alone, so letting it clear this would drop every other machine's answer on each
 	 * local presence change. Empty means nothing has been advertised yet, never "no Windows". */
 	val gatewaySpawnPoints: List<GatewaySpawnPoints> = emptyList(),
+	/** Per Gateway, the project last spawned there. Only a SUGGESTION for the create dialog, which
+	 * re-checks it against what that Gateway offers now, so a stale entry preselects nothing. */
+	val lastProjectByGateway: Map<String, String> = emptyMap(),
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
 	/** Per-team read anchor, the single source of truth `unread` is derived from. */

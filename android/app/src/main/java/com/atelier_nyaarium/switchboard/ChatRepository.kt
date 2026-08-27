@@ -99,6 +99,7 @@ class ChatRepository(
 			localGatewayId = localGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
+			lastProjectByGateway = store.lastProjectByGateway,
 			scheduledSends = persistence.loadPersistedScheduledSends(),
 			goals = persistence.loadPersistedGoals(),
 			drafts = persistence.loadPersistedDrafts(),

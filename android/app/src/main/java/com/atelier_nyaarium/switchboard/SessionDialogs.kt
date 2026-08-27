@@ -218,10 +218,14 @@ fun CreateSessionDialog(
 	// (path, spawn point). The spawn names WHICH filesystem to browse: a windows session is listed by
 	// Windows itself, so the picker cannot offer a Linux directory its launch would then refuse.
 	onListDirs: suspend (String, String) -> DirListing,
+	// The project this Gateway was last spawned on, if it still offers it. Only a suggestion.
+	rememberedProject: String?,
 	onSpawn: (String, String, String?) -> Unit,
 	onDismiss: () -> Unit,
 ) {
-	var selectedProject by remember { mutableStateOf("host") }
+	// Null until picked. `host` is not a neutral default - it is one real target among several, so
+	// preselecting it lets a mis-tap spawn on the wrong machine's shell in silence.
+	var selectedProject by remember { mutableStateOf(initialProject(rememberedProject, projects)) }
 	var projectMenuOpen by remember { mutableStateOf(false) }
 	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
@@ -229,8 +233,8 @@ fun CreateSessionDialog(
 	val trimmed = name.trim()
 	val dirText = dir.text.trim()
 	// Blank is the default workdir; anything else must be rooted before Spawn will send it.
-	val dirOk = dirText.isEmpty() || isRootedFor(selectedProject, dirText)
-	val selectedTarget = targetOf(selectedProject)
+	val dirOk = dirText.isEmpty() || (selectedProject != null && isRootedFor(selectedProject!!, dirText))
+	val selectedTarget = selectedProject?.let(targetOf)
 	// Keyed on the TARGET, not the project: two machines each have a `host`, and the same label is in
 	// flight on only one of them.
 	val pendingLabels = pendingSpawns.filter { it.first == selectedTarget }.mapTo(HashSet()) { it.second }
@@ -246,10 +250,14 @@ fun CreateSessionDialog(
 					modifier = Modifier.fillMaxWidth(),
 				) {
 					OutlinedTextField(
-						value = selectedProject,
+						// The SAME label the menu rows use. These disagreed once: the field showed the
+						// wire word while the open menu showed the label, so one thing read as `host`
+						// and `WSL` at the same time depending on whether the menu was open.
+						value = selectedProject?.let { hostSpawnLabel(it, projects) } ?: "",
 						onValueChange = {},
 						readOnly = true,
 						label = { Text("Project") },
+						placeholder = { Text("Choose one") },
 						trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = projectMenuOpen) },
 						singleLine = true,
 						modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
@@ -282,13 +290,14 @@ fun CreateSessionDialog(
 					singleLine = true,
 					modifier = Modifier.fillMaxWidth(),
 				)
-				// Every host spawn point takes a picked directory; a devcontainer's is fixed.
-				if (selectedProject in HOST_SPAWN_IDS) {
+				// Every host spawn point takes a picked directory; a devcontainer's is fixed. Nothing
+				// picked shows no field at all: there is no filesystem to browse yet.
+				selectedProject?.takeIf { it in HOST_SPAWN_IDS }?.let { spawn ->
 					Spacer(Modifier.height(12.dp))
 					DirectoryField(
 						value = dir,
 						onValueChange = { dir = it },
-						spawn = selectedProject,
+						spawn = spawn,
 						onListDirs = onListDirs,
 						isError = !dirOk,
 					)
@@ -303,10 +312,13 @@ fun CreateSessionDialog(
 		},
 		confirmButton = {
 			TextButton(
-				enabled = trimmed.isNotEmpty() && !isPending && dirOk,
+				// A project is now part of the answer, not a default, so Spawn waits for one.
+				enabled = selectedTarget != null && trimmed.isNotEmpty() && !isPending && dirOk,
 				onClick = hapticClick {
-					val workdir = dirText.takeIf { selectedProject in HOST_SPAWN_IDS && it.isNotEmpty() }
-					onSpawn(selectedTarget, trimmed, workdir)
+					val project = selectedProject ?: return@hapticClick
+					val target = selectedTarget ?: return@hapticClick
+					val workdir = dirText.takeIf { project in HOST_SPAWN_IDS && it.isNotEmpty() }
+					onSpawn(target, trimmed, workdir)
 				},
 			) { Text("Spawn") }
 		},

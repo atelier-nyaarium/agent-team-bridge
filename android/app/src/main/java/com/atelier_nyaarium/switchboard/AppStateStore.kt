@@ -7,6 +7,7 @@ import androidx.security.crypto.MasterKey
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
 import java.io.File
+import org.json.JSONObject
 
 /**
  * The outcome of reading a persisted federation identity. Decode-to-null would conflate a MISSING
@@ -368,6 +369,30 @@ class AppStateStore(context: Context) :
 			prefs.edit().putString(KEY_PROFILE_NAME, value).apply()
 		}
 
+	/** The project last spawned on, per Gateway, so the create dialog can offer it again.
+	 *
+	 * Per GATEWAY rather than one global value: a project name means nothing on another machine, and
+	 * `windows` exists on exactly one of them. A remembered name is only ever a SUGGESTION - the
+	 * dialog re-checks it against that Gateway's current list and falls back to no selection, so a
+	 * renamed, removed or since-undetected project cannot preselect something unspawnable.
+	 *
+	 * Provisioning-scoped: it names gateways and projects belonging to one Domain, so it goes with
+	 * that Domain rather than lingering as suggestions that can never match again.
+	 */
+	var lastProjectByGateway: Map<String, String>
+		get() {
+			// Tolerant by design: this is a convenience, so a corrupt or absent value means "no
+			// suggestion" rather than anything a caller has to handle.
+			val raw = prefs.getString(KEY_LAST_PROJECT, null) ?: return emptyMap()
+			return runCatching {
+				val o = JSONObject(raw)
+				o.keys().asSequence().mapNotNull { k -> o.optString(k).takeIf { it.isNotEmpty() }?.let { k to it } }.toMap()
+			}.getOrDefault(emptyMap())
+		}
+		set(value) {
+			prefs.edit().putString(KEY_LAST_PROJECT, JSONObject(value as Map<*, *>).toString()).apply()
+		}
+
 	/** The guest tenants this owner has staged (the "Networks you host" list), a JSON array of
 	 * {domainId, displayName, nonce}. Persisted locally so the list and each row's invite QR survive
 	 * restarts: the Router holds the canonical pending/rooted state, but only the host remembers the label
@@ -431,6 +456,7 @@ class AppStateStore(context: Context) :
 		const val KEY_FIRST_ROOTED = "federation_first_rooted"
 		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
 		const val KEY_PROFILE_NAME = "federation_profile_name"
+		const val KEY_LAST_PROJECT = "create_last_project_by_gateway"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
 		const val KEY_PENDING_ENROLLS = "federation_pending_enrolls"
 		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
@@ -487,6 +513,7 @@ class AppStateStore(context: Context) :
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
+			KEY_LAST_PROJECT,
 		)
 	}
 }

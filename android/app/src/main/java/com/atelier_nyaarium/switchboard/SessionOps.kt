@@ -61,6 +61,18 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * so naming the machine in the target is the whole of remote spawn. It is also what the pending
 	 * and retry maps key on, rather than the bare project: the same project name exists on every
 	 * machine, so keying on it would make a create on one machine suppress a create on another. */
+	/** Record which project this Gateway was last spawned on, so the create dialog can suggest it.
+	 *
+	 * Both halves are read out of the TARGET rather than passed alongside it: a caller supplying them
+	 * separately could disagree with the target it actually sent. `spawnTargetKey` owns that reading,
+	 * including the rule that a bare target means the route Gateway; a target it cannot place is not
+	 * remembered at all, since a suggestion is never worth guessing at. */
+	private fun rememberProject(target: String) {
+		val (gateway, project) = spawnTargetKey(target, repo.localGatewayId) ?: return
+		repo.store.lastProjectByGateway = repo.store.lastProjectByGateway + (gateway to project)
+		repo._state.update { it.copy(lastProjectByGateway = repo.store.lastProjectByGateway) }
+	}
+
 	suspend fun spawnSession(target: String, label: String, workdir: String? = null) = coroutineScope {
 		val key = target to label
 		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
@@ -68,6 +80,11 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
 		// or bypasses the dialog entirely.
 		if (key in repo._state.value.pendingSpawns) return@coroutineScope
+		// Remembered here rather than in the dialog, because this is where a spawn is actually issued
+		// and the target already names both halves. Recorded on ATTEMPT, not on success: the owner
+		// meant this machine and this project either way, and a create that fails is the one they are
+		// most likely to repeat.
+		rememberProject(target)
 		val now = System.currentTimeMillis()
 		recentSpawnOpIds.entries.removeAll { now - it.value.second >= ChatRepository.SPAWN_RETRY_WINDOW_MS }
 		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
