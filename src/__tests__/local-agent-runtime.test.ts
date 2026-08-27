@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_IDLE_REAP_MS, LocalAgentRuntime, type LocalBackendSpec } from "../mcp/local/localAgentRuntime.js";
 import type { LocalBackendSession, LocalTerminal } from "../mcp/local/localAgentSession.js";
 import type { AgentBackendId } from "../shared/agent-backend.js";
+import { agentIdForOperation } from "../shared/agent-record.js";
 import { CodexListAgentsResultSchema } from "../shared/codexAgentCatalog.js";
 import { CODEX_ACTIVITY_MAX_ITEMS } from "../shared/codexAgentIdentity.js";
 import { CodexAgentResultSchema } from "../shared/codexAgentState.js";
@@ -138,6 +139,7 @@ function makeHarness(options: HarnessOptions = {}) {
 			return session;
 		},
 		defaultCwd: () => "/workspace/project",
+		replaysOperations: false,
 		waitBudgetMs: options.waitBudgetMs ?? 100,
 		followupDelivery: options.followupDelivery ?? (backendId === "copilot" ? "followup" : "started"),
 		maxActivities: options.maxActivities ?? CODEX_ACTIVITY_MAX_ITEMS,
@@ -172,6 +174,125 @@ const UNKNOWN_AGENT_ID = `codex_${"f".repeat(32)}`;
 
 ////////////////////////////////
 //  Journeys
+
+/**
+ * The caller's operation identity, which local mode validated and then threw away.
+ *
+ * The obvious fix - derive the agent id from it and stop there - is a bug, not a fix: a reused id
+ * would overwrite the first agent in the runtime's map, leaving its thread open, its activity
+ * unrecorded, no way to address it, and its ACTIVE turn invisible to the idle reaper, which walks
+ * only that map. So the id is honoured AND a reuse is refused.
+ */
+describe("local operation identity", () => {
+	const OP = "123e4567-e89b-42d3-a456-426614174000";
+
+	it("names the agent from the caller's operation id rather than a fresh one", async () => {
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+		expect(parseCodex(await pending).agentId).toBe(agentIdForOperation("codex", OP));
+	});
+
+	// The orphan the naive version creates. One agent, one thread, and the second call never reaches
+	// the child at all.
+	it("refuses a reuse instead of starting a second operation over the first", async () => {
+		const harness = makeHarness();
+		const first = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+		await first;
+
+		const again = await harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		expect(again).toMatchObject({ refused: expect.stringContaining("already used") });
+		expect(harness.runtime.list()).toHaveLength(1);
+		// The refusal happens before dispatch, so the child is never asked for a second thread. That
+		// thread is what would have been orphaned.
+		expect(harness.session.openThreadCalls).toHaveLength(1);
+	});
+
+	// The gateway's own wording for the same condition, so the two answers do not read as different
+	// problems. The gateway would REPLAY the matching case; this one cannot, and says so.
+	it("separates a reuse with different input from a plain repeat", async () => {
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+		await pending;
+
+		expect(await harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Something else" })).toEqual({
+			refused: "operation ID was reused with different input",
+		});
+	});
+
+	// A start's model is part of its identity on the gateway path, so it has to be here too or the
+	// same two calls are one operation on one path and two on the other.
+	it("counts a changed model as different input", async () => {
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect", model: "a" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+		await pending;
+
+		expect(await harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect", model: "b" })).toEqual(
+			{
+				refused: "operation ID was reused with different input",
+			},
+		);
+	});
+
+	// Reads claim nothing: awaiting or listing twice is not a second operation.
+	it("does not claim an identity for a read", async () => {
+		const harness = makeHarness({ waitBudgetMs: 5 });
+		const pending = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Long" });
+		await waitForTurns(harness.session, 1);
+		const started = parseCodex(await pending);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+
+		expect(await harness.runtime.handle({ kind: "await", agentId: started.agentId })).not.toHaveProperty("refused");
+		expect(await harness.runtime.handle({ kind: "await", agentId: started.agentId })).not.toHaveProperty("refused");
+	});
+
+	/**
+	 * An identity is spent by an operation that HAPPENED.
+	 *
+	 * Found by Luna after the first version shipped the opposite: the claim was taken before dispatch
+	 * and never released, so a child that could not be opened burned the id permanently and the retry
+	 * the caller was explicitly invited to make answered "already used". The gateway does not have
+	 * this problem because it returns before persisting anything.
+	 */
+	it("gives the identity back when nothing reached the child", async () => {
+		const harness = makeHarness({ openThreadError: new Error("child is not running") });
+		const failed = parseCodex(await harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" }));
+		expect(failed).toMatchObject({ observation: "unavailable", error: { retryable: true } });
+
+		// Same id, same input: a retry, not a reuse.
+		const retry = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		expect(await retry).not.toHaveProperty("refused");
+	});
+
+	// The other half of the same rule: a turn that ran and FAILED did happen, so its id stays spent.
+	it("keeps the identity when the operation ran and failed", async () => {
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "failed", error: "the tool exploded" });
+		await pending;
+
+		expect(await harness.runtime.handle({ kind: "start", operationId: OP, prompt: "Inspect" })).toMatchObject({
+			refused: expect.stringContaining("already used"),
+		});
+	});
+
+	// Nothing changes for a caller that names none; the runtime still mints its own.
+	it("still works when no identity is supplied", async () => {
+		const harness = makeHarness();
+		const pending = harness.runtime.handle({ kind: "start", prompt: "Inspect" });
+		await waitForTurns(harness.session, 1);
+		harness.session.resolveTurn("turn-1", { status: "completed", finalResponse: "done" });
+		expect(parseCodex(await pending).agentState).toBe("idle");
+	});
+});
 
 describe("LocalAgentRuntime", () => {
 	it("returns a completed start when the terminal beats the wait budget", async () => {

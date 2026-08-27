@@ -87,6 +87,7 @@ function makeRuntime(backendId: AgentBackendId) {
 		followupDelivery: backendId === "copilot" ? "followup" : "started",
 		maxActivities: CODEX_ACTIVITY_MAX_ITEMS,
 		threadsResumable: backendId === "codex",
+		replaysOperations: false,
 	};
 	return { runtime: new LocalAgentRuntime(spec, () => timestamp++), session };
 }

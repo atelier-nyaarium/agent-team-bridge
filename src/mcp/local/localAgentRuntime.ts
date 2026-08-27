@@ -5,7 +5,12 @@
 
 import crypto from "node:crypto";
 import type { AgentBackendId } from "../../shared/agent-backend.js";
-import { AGENT_ERROR_MAX_BYTES, agentIdForOperation, sanitizeAgentErrorText } from "../../shared/agent-record.js";
+import {
+	AGENT_ERROR_MAX_BYTES,
+	agentIdForOperation,
+	agentOperationFingerprintOf,
+	sanitizeAgentErrorText,
+} from "../../shared/agent-record.js";
 import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./localAgentSession.js";
 
 ////////////////////////////////
@@ -48,6 +53,16 @@ export interface LocalAgentAnswer {
 
 export interface LocalRequest {
 	kind: "start" | "message" | "await" | "stop" | "list";
+	/**
+	 * The caller's own operation identity, honoured rather than discarded.
+	 *
+	 * It was accepted, validated against the same schema the gateway route uses, and then thrown away
+	 * while a fresh one was minted - a field that survives validation and means nothing reads as
+	 * honoured, and the next caller to depend on operation identity would have believed both paths
+	 * supported it. It is what a start's agent id derives from, so an id is not merely SPELLED like a
+	 * coordinated one but IS one, and it is what makes reuse detectable.
+	 */
+	operationId?: string;
 	agentId?: string;
 	prompt?: string;
 	model?: string;
@@ -75,6 +90,17 @@ export interface LocalBackendSpec {
 	 * reap would silently destroy agents the caller may still message.
 	 */
 	threadsResumable: boolean;
+	/**
+	 * Whether presenting a known operation identity again returns that operation's original answer.
+	 *
+	 * Always false here, and declared rather than left as an absence. A gateway records each settled
+	 * reply and replays it, because an HTTP retry can re-present an identity behind the caller's back.
+	 * This backend is called in-process with the very body the tool would have posted, so no transport
+	 * can retry unseen, and its agents die with the MCP - it has nothing to replay FROM. The identity
+	 * is still honoured: it names the agent, and a reuse is refused rather than silently starting a
+	 * second operation under an id that already means something.
+	 */
+	replaysOperations: false;
 }
 
 /**
@@ -162,6 +188,20 @@ function errorText(error: unknown): string {
 
 export class LocalAgentRuntime {
 	private readonly agents = new Map<string, LocalAgentRecord>();
+	/**
+	 * Every operation identity this process has already acted on, against the input it named.
+	 *
+	 * Process-local and gone with the MCP, which is exactly why local mode REFUSES a reuse rather than
+	 * replaying one: it holds no durable ledger and its agents die with it, so it cannot answer for an
+	 * operation the way a gateway can. Refusing is the honest half of honouring the field.
+	 *
+	 * It is also what stops the obvious version of this change from being a bug. Deriving an agent id
+	 * from a caller-supplied operation id without this makes a reused id overwrite the first agent in
+	 * `agents`: its thread stays open, its activity stops being recorded, no later call can address
+	 * it, and the idle reaper walks only this map so an orphaned ACTIVE turn becomes invisible to the
+	 * one guard meant to protect it.
+	 */
+	private readonly operations = new Map<string, string>();
 	private session?: LocalBackendSession;
 	private opening?: Promise<LocalBackendSession>;
 	/** When the child last had work. Distinct from any agent's updatedAt: a reap is about the CHILD. */
@@ -208,22 +248,45 @@ export class LocalAgentRuntime {
 		// it - at every instant either this lease is held or an activeTurnId guards the child.
 		this.inFlight += 1;
 		try {
-			switch (request.kind) {
-				case "start":
-					return await this.start(request);
-				case "message":
-					return await this.message(request);
-				case "await":
-					return await this.awaitTurn(request);
-				case "stop":
-					return await this.stop(request);
-				default:
-					return { refused: `unsupported request: ${request.kind}` };
-			}
+			// Claimed BEFORE dispatch, so every mutating kind inherits it and a new one cannot be added
+			// that quietly does not - and so two concurrent calls naming one identity cannot both pass.
+			// `await` and `list` read, so they claim nothing.
+			const claim = this.claimOperation(request);
+			if (claim) return claim;
+			const answer = await this.dispatch(request);
+			// An identity is spent by an operation that HAPPENED. A child that could not be opened or a
+			// thread that could not be started leaves nothing behind and reports itself retryable, so
+			// holding the claim would answer the retry with "already used" and strand the caller on an
+			// id it was invited to reuse. The gateway does not have this problem because it returns
+			// before persisting anything; releasing here is what makes the two agree.
+			if (this.unstarted(answer)) this.releaseOperation(request);
+			return answer;
 		} finally {
 			this.inFlight -= 1;
 			this.markUsed();
 		}
+	}
+
+	private async dispatch(request: LocalRequest): Promise<LocalAgentAnswer | LocalRefusal> {
+		switch (request.kind) {
+			case "start":
+				return await this.start(request);
+			case "message":
+				return await this.message(request);
+			case "await":
+				return await this.awaitTurn(request);
+			case "stop":
+				return await this.stop(request);
+			default:
+				return { refused: `unsupported request: ${request.kind}` };
+		}
+	}
+
+	/** Nothing was recorded and the caller was told to try again. `fail(..., retryable)` is the sole
+	 * producer of this shape, so it is one question rather than a list of error codes to keep in step
+	 * with. A refusal never claimed anything, and a settled or failed TURN did happen. */
+	private unstarted(answer: LocalAgentAnswer | LocalRefusal): boolean {
+		return "refused" in answer ? false : answer.observation === "unavailable" && answer.error?.retryable === true;
 	}
 
 	/** Insertion order, which is start order: nothing here is reordered by later work. */
@@ -255,9 +318,49 @@ export class LocalAgentRuntime {
 		this.opening = undefined;
 	}
 
+	/**
+	 * Take the caller's operation identity, or refuse a reuse of one.
+	 *
+	 * Both refusals carry the gateway's own wording for the same conditions, so a caller reading an
+	 * answer cannot tell which backend served it apart from the one thing that genuinely differs: the
+	 * gateway REPLAYS a matching reuse and this cannot, having no ledger that survives the process.
+	 * That difference is declared on `LocalBackendSpec.replaysOperations`.
+	 */
+	private claimOperation(request: LocalRequest): LocalRefusal | undefined {
+		if (request.kind === "await" || request.kind === "list") return undefined;
+		const operationId = request.operationId;
+		if (!operationId) return undefined;
+		// The input this identity named, so a reuse with different input is separable from a plain
+		// retry. Same encoding the gateway fingerprints with, so the two cannot drift apart on what
+		// "different input" means.
+		const fingerprint = agentOperationFingerprintOf({
+			kind: request.kind,
+			agentId: request.agentId ?? agentIdForOperation(this.spec.backendId, operationId),
+			prompt: request.prompt,
+			...(request.kind === "start" && request.model !== undefined ? { model: request.model } : {}),
+		});
+		const held = this.operations.get(operationId);
+		if (held === undefined) {
+			this.operations.set(operationId, fingerprint);
+			return undefined;
+		}
+		if (held !== fingerprint) return { refused: "operation ID was reused with different input" };
+		return {
+			refused:
+				"operation ID was already used; this session runs its agents itself and keeps no record to replay from",
+		};
+	}
+
+	/** Give an identity back, for an operation that never reached the child. Paired with the claim in
+	 * `handle`, which is the only place either happens. */
+	private releaseOperation(request: LocalRequest): void {
+		if (request.operationId) this.operations.delete(request.operationId);
+	}
+
 	private async start(request: LocalRequest): Promise<LocalAgentAnswer> {
-		// Derived, so a local id is spelled like a coordinated one.
-		const operationId = crypto.randomUUID();
+		// The CALLER's identity when it supplied one, so an id is not merely spelled like a coordinated
+		// one but is the same one. Minted only when nobody named it.
+		const operationId = request.operationId ?? crypto.randomUUID();
 		const agentId = agentIdForOperation(this.spec.backendId, operationId);
 		const prompt = request.prompt ?? "";
 

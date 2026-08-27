@@ -101,6 +101,9 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 		// replacement. An ACP session lives inside the Copilot child and dies with it, so reaping one
 		// would destroy agents the caller may still message - see the spec field's own doc.
 		threadsResumable: isCodex,
+		// Never, on either backend, and stated rather than absent. See the spec field: there is no
+		// transport that can retry unseen and no record that survives the process to replay from.
+		replaysOperations: false,
 		...(isCodex
 			? {}
 			: { busyMessage: "Copilot is still working. Await the turn or stop it before sending another." }),
@@ -147,6 +150,10 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 			if (request.kind === "list") return listAgents();
 			const answer = await runtime.handle({
 				kind: request.kind,
+				// Forwarded rather than dropped. It was validated by the schema above and then discarded
+				// while the runtime minted its own, which made the field read as honoured on both paths
+				// when only one honoured it.
+				...("operationId" in request ? { operationId: request.operationId } : {}),
 				...("agentId" in request ? { agentId: request.agentId } : {}),
 				...("prompt" in request ? { prompt: request.prompt } : {}),
 				...("model" in request && request.model !== undefined ? { model: request.model } : {}),
