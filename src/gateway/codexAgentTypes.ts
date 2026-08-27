@@ -39,6 +39,10 @@ export interface CodexStartIntentInput extends CodexIntentInput {
 	/** Resolved by the route with any cwd applied, so the persisted record and the dispatched
 	 * command cannot name different targets. */
 	target: CodexExecutionTarget;
+	/** Here for the same reason `target` is: it is part of what was asked for, and the record and the
+	 * dispatched command must not name different ones. It reached the daemon without ever reaching
+	 * the persisted identity, so a retry that changed the model replayed the original silently. */
+	model?: string;
 }
 
 export interface CodexExistingAgentIntentInput extends CodexIntentInput {

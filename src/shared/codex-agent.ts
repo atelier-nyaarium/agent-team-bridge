@@ -23,6 +23,7 @@ export {
 	CodexPromptSchema,
 	codexAgentIdForOperation,
 	codexOperationFingerprint,
+	codexOperationIdentity,
 	sanitizeCodexErrorText,
 } from "./codexAgentIdentity.js";
 export * from "./codexAgentRecord.js";

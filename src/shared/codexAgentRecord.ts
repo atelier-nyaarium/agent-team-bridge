@@ -4,13 +4,13 @@
 // for both this private shape and the public projection in codexAgentCatalog.ts.
 
 import { z } from "zod";
-import { agentTurnHistoryIssues } from "./agent-record.js";
+import { agentFingerprintVerdict, agentTurnHistoryIssues } from "./agent-record.js";
 import { CodexStoredActivitiesSchema } from "./codexAgentActivities.js";
 import {
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
 	CodexPromptSchema,
-	codexOperationFingerprint,
+	codexOperationIdentity,
 	OpaqueIdSchema,
 	OperationIdSchema,
 } from "./codexAgentIdentity.js";
@@ -89,7 +89,21 @@ export const CodexListExchangeSchema = z
 export const CodexStoredExchangeSchema = CodexListExchangeSchema.safeExtend({
 	exchangeId: OperationIdSchema,
 	operationId: OperationIdSchema,
-}).strict();
+	/** Start only, and DURABLE-ONLY: added here rather than to `CodexExchangeFields` so it never
+	 * reaches the published list shape, which would be a wire change. It is here because the
+	 * operation's fingerprint folds it in, and a fingerprint the record cannot recompute is a check
+	 * that quietly stops happening. Optional so every pre-existing record still parses. */
+	model: z.string().min(1).max(128).optional(),
+})
+	.strict()
+	.superRefine((value, ctx) => {
+		// A message never carried a model and the fingerprint encoding ignores one, so a message
+		// exchange holding a model would parse AND validate while naming a thing nothing reads. Copilot
+		// refuses the same shape on its own operation; this is the half that was missing.
+		if (value.kind !== "start" && value.model !== undefined) {
+			ctx.addIssue({ code: "custom", message: "only a start exchange carries a model" });
+		}
+	});
 
 export const CodexStoredOperationSchema = z
 	.object({
@@ -400,7 +414,17 @@ export const CodexPersistedAgentSchema = z
 			) {
 				ctx.addIssue({ code: "custom", message: "started message requires a settled expected turn" });
 			}
-			if (operation.fingerprint !== codexOperationFingerprint(exchange.kind, value.agentId, exchange.prompt)) {
+			if (
+				agentFingerprintVerdict(
+					operation.fingerprint,
+					codexOperationIdentity({
+						kind: exchange.kind,
+						agentId: value.agentId,
+						prompt: exchange.prompt,
+						model: exchange.model,
+					}),
+				) === "mismatch"
+			) {
 				ctx.addIssue({ code: "custom", message: "stored prompt operation fingerprint does not match" });
 			}
 		}
@@ -458,7 +482,10 @@ export const CodexPersistedAgentSchema = z
 			}
 			if (
 				operation.kind === "stop" &&
-				operation.fingerprint !== codexOperationFingerprint("stop", value.agentId)
+				agentFingerprintVerdict(
+					operation.fingerprint,
+					codexOperationIdentity({ kind: "stop", agentId: value.agentId }),
+				) === "mismatch"
 			) {
 				ctx.addIssue({ code: "custom", message: "stored stop operation fingerprint does not match" });
 			}

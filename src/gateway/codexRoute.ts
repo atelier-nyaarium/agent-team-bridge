@@ -222,6 +222,9 @@ export class CodexRoute {
 			operationId: request.operationId,
 			prompt: request.prompt,
 			target,
+			// The model travelled straight to the daemon and never reached the persisted identity, so
+			// the record could not tell two starts apart that differed only by it.
+			model: request.model,
 			at: this.now(),
 		});
 		let dispatched = true;

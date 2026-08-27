@@ -9,6 +9,7 @@ import {
 	AGENT_ACTIVITY_MAX_ITEMS,
 	AGENT_ERROR_MAX_BYTES,
 	AGENT_PROMPT_MAX_BYTES,
+	type AgentOperationIdentity,
 	agentIdForOperation,
 	agentOperationFingerprint,
 	boundedUtf8,
@@ -93,6 +94,22 @@ export function codexOperationFingerprint(
 	prompt?: string,
 ): string {
 	return agentOperationFingerprint(kind, agentId, prompt);
+}
+
+/** What identifies a Codex operation.
+ *
+ * Codex needs NO legacy tolerance: it never wrote a model term, and the shared encoding reproduces
+ * that spelling exactly for a model-less start, so every record it has ever written still recomputes
+ * and a tampered one is still caught. The one case it cannot verify is a pre-migration start that
+ * named a model, which is a retry naming a model the record never stored - and that answers
+ * `mismatch`, which refuses a replay it cannot prove rather than dropping anything.
+ *
+ * Kept as a function rather than an inline object so the Copilot twin has something to be a twin OF,
+ * and so a Codex-only tolerance later has one place to go. */
+export function codexOperationIdentity(
+	fields: Omit<AgentOperationIdentity, "legacyModellessStart">,
+): AgentOperationIdentity {
+	return fields;
 }
 
 export type CodexAgentId = z.infer<typeof CodexAgentIdSchema>;

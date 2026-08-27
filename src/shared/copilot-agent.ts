@@ -10,7 +10,9 @@ import {
 	AGENT_ACTIVITY_MAX_ITEMS,
 	AGENT_ERROR_MAX_BYTES,
 	AGENT_PROMPT_MAX_BYTES,
+	type AgentOperationIdentity,
 	agentActivityIssues,
+	agentFingerprintVerdict,
 	agentIdForOperation,
 	agentOperationFingerprint,
 	agentTurnHistoryIssues,
@@ -57,6 +59,21 @@ export const CopilotErrorTextSchema = boundedUtf8(COPILOT_ERROR_MAX_BYTES, "erro
 
 export function copilotAgentIdForOperation(operationId: string): string {
 	return agentIdForOperation("copilot", operationId);
+}
+
+/** What identifies a Copilot operation, with this family's legacy start spelling stamped on.
+ *
+ * The SOLE place that fact is written for Copilot, for the same reason as its Codex twin: the
+ * service that mints a fingerprint and the schema that re-checks one must not hold different ideas
+ * of which legacy spelling is tolerable. */
+export function copilotOperationIdentity(
+	fields: Omit<AgentOperationIdentity, "legacyModellessStart">,
+): AgentOperationIdentity {
+	// Copilot always appended a separator and the model, so a pre-migration MODEL-LESS start reads
+	// `prompt + "\n"` where the shared encoding now writes `prompt`. That one recomputes exactly. A
+	// pre-migration start that NAMED a model wrote the same bytes the shared encoding writes today,
+	// so it verifies outright whenever the caller names the same model again.
+	return { ...fields, legacyModellessStart: "trailing-separator" };
 }
 
 export function copilotOperationFingerprint(
@@ -201,6 +218,11 @@ export const CopilotStoredOperationSchema = z
 		operationId: CopilotOperationIdSchema,
 		kind: z.enum(["start", "message", "stop"]),
 		prompt: CopilotPromptSchema.optional(),
+		/** Start only. Copilot has always folded the model INTO its fingerprint but never stored it,
+		 * so its records could not be re-checked at all; this is what makes the check below possible.
+		 * Optional, so every pre-existing record still parses and is treated as unverifiable rather
+		 * than dropped. */
+		model: z.string().min(1).max(128).optional(),
 		fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
 		state: z.enum(["requested", "accepted", "indeterminate"]),
 		turnId: CopilotOpaqueIdSchema.optional(),
@@ -212,6 +234,8 @@ export const CopilotStoredOperationSchema = z
 	.superRefine((value, ctx) => {
 		if (value.updatedAt < value.createdAt)
 			ctx.addIssue({ code: "custom", message: "operation update predates creation" });
+		if (value.kind !== "start" && value.model !== undefined)
+			ctx.addIssue({ code: "custom", message: "only a start operation carries a model" });
 		if (
 			(value.kind === "start" || value.kind === "message") &&
 			value.state === "accepted" &&
@@ -261,6 +285,23 @@ export const CopilotPersistedAgentSchema = z
 		for (const operation of value.operations) {
 			if (operation.createdAt < value.createdAt || operation.updatedAt > value.updatedAt) {
 				ctx.addIssue({ code: "custom", message: "stored operation timestamp is outside its agent lifetime" });
+			}
+			// The check Copilot never had. Codex's record has self-validated its fingerprints since it
+			// shipped, so each backend held half of one guarantee: Codex recomputed a fingerprint that
+			// was missing the model, Copilot computed one WITH the model and never recomputed it.
+			// `unverifiable` is not an issue - see agentFingerprintVerdict for which record that is.
+			if (
+				agentFingerprintVerdict(
+					operation.fingerprint,
+					copilotOperationIdentity({
+						kind: operation.kind,
+						agentId: value.agentId,
+						prompt: operation.prompt,
+						model: operation.model,
+					}),
+				) === "mismatch"
+			) {
+				ctx.addIssue({ code: "custom", message: "stored operation fingerprint does not match" });
 			}
 		}
 	});

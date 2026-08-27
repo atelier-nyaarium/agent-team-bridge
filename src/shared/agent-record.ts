@@ -113,6 +113,91 @@ export function agentOperationFingerprint(
 		.digest("hex");
 }
 
+/**
+ * Everything that identifies one operation, so no call site decides for itself what goes in.
+ *
+ * The model belongs here because a thread's model is fixed for its whole life and is verified
+ * against the backend's own offered list at the point of use, so it is part of WHAT WAS ASKED FOR
+ * rather than a detail of how the request was dispatched. Codex omitted it and Copilot included it,
+ * which meant the same retry with a changed model replayed silently on one backend and raised a
+ * conflict on the other.
+ */
+export interface AgentOperationIdentity {
+	kind: "start" | "message" | "stop";
+	agentId: string;
+	prompt?: string;
+	/** Start only; a model is fixed for a thread's life, so no other kind carries one. */
+	model?: string;
+	/**
+	 * How this record family spelled a MODEL-LESS start before the model was persisted. A fact about
+	 * what is already on disk, not a policy, which is why declaring it does not reintroduce the
+	 * divergence this exists to remove.
+	 *
+	 * Only Copilot needs one. It always appended a separator and the model, so a model-less start was
+	 * `prompt + "\n"` where the encoding below now writes `prompt`. Codex needs NO tolerance at all,
+	 * because it never wrote a model term and the encoding below reproduces its spelling exactly.
+	 *
+	 * That asymmetry is the whole reason the encoding is shaped this way. Folding the model in
+	 * unconditionally would have made every model-less start differ from its Codex legacy, forcing a
+	 * tolerance that PERMANENTLY accepted two spellings for the commonest record there is - which is
+	 * a tamper check quietly weakened forever rather than a migration that ends.
+	 */
+	legacyModellessStart?: "trailing-separator";
+}
+
+/** Whether a stored fingerprint can be recomputed, and whether it agreed.
+ *
+ * Three-valued because one legacy shape genuinely cannot be checked: a Copilot start written before
+ * the model was persisted folded the model INTO its fingerprint without storing it, so there is
+ * nothing left to recompute from. Reporting that as a mismatch would drop the agent; reporting it as
+ * a match would claim a check that did not happen. */
+export type AgentFingerprintVerdict = "match" | "mismatch" | "unverifiable";
+
+/**
+ * The one encoding. Message carries its prompt, stop carries neither, and start folds in the model
+ * ONLY when one was named.
+ *
+ * That condition is load-bearing rather than tidy. A model-less start is by far the commonest record,
+ * and this spelling is byte-identical to what Codex has always written, so those records need no
+ * tolerance and keep a tamper check at full strength forever. Appending an empty model term instead
+ * would have made every one of them differ from its own history, and the tolerance that bought back
+ * would have accepted two spellings for the commonest record permanently.
+ */
+export function agentOperationFingerprintOf(identity: AgentOperationIdentity): string {
+	if (identity.kind === "start") {
+		const input = identity.model === undefined ? identity.prompt : `${identity.prompt ?? ""}\n${identity.model}`;
+		return agentOperationFingerprint("start", identity.agentId, input);
+	}
+	if (identity.kind === "message") return agentOperationFingerprint("message", identity.agentId, identity.prompt);
+	return agentOperationFingerprint("stop", identity.agentId);
+}
+
+/**
+ * Check a stored fingerprint against what the record now says identifies it.
+ *
+ * The SOLE verifier, so a backend cannot hold the encoding without the check or the check without
+ * the encoding - which is exactly how these two shipped: Codex recomputed a fingerprint that was
+ * missing the model, Copilot computed one WITH the model and never recomputed it at all.
+ *
+ * Legacy tolerance rather than a schema version bump. A version bump with no migration drops every
+ * pre-existing agent individually on restore, and this record family is restored per entry, so that
+ * loss would be silent and permanent. The tolerance is self-limiting: it applies only where no model
+ * is persisted, which stops being true for everything written from here on.
+ */
+export function agentFingerprintVerdict(stored: string, identity: AgentOperationIdentity): AgentFingerprintVerdict {
+	if (stored === agentOperationFingerprintOf(identity)) return "match";
+	// Nothing below is about a start, and nothing below applies once a model is known: a caller that
+	// names one either matched above or is naming a different one.
+	if (identity.kind !== "start" || identity.model !== undefined) return "mismatch";
+	if (identity.legacyModellessStart !== "trailing-separator") return "mismatch";
+	// The family that always appended a separator. A model-less legacy record recomputes EXACTLY
+	// here, so a tampered one is still caught.
+	if (stored === agentOperationFingerprint("start", identity.agentId, `${identity.prompt ?? ""}\n`)) return "match";
+	// Neither spelling, and this family folded a model in without storing it, so a legacy start that
+	// named one left nothing to recompute from. Not a mismatch: that would drop the agent.
+	return "unverifiable";
+}
+
 /** The array-level truncation-marker invariant, plus itemId uniqueness for stored shapes. A
  * caller-visible activity carries no itemId, so the uniqueness rule is vacuous there. */
 export function agentActivityIssues(activities: ReadonlyArray<AgentActivityView>, maxItems: number): string[] {
@@ -189,7 +274,7 @@ export function agentOperationReplayable(operation: AgentReplayOperation, ensure
 export function resolveAgentReplay<Agent extends AgentReplayHolder<AgentReplayOperation>>(
 	agents: readonly Agent[],
 	operationId: string,
-	fingerprint: string,
+	identity: AgentOperationIdentity,
 	ensureDurable: () => boolean,
 ): AgentReplayOutcome<Agent, Agent["operations"][number]> {
 	const matches = agents.flatMap((agent) =>
@@ -198,7 +283,14 @@ export function resolveAgentReplay<Agent extends AgentReplayHolder<AgentReplayOp
 	if (matches.length === 0) return { kind: "none" };
 	if (matches.length > 1) return { kind: "conflict", reason: "operation ID was reused with different input" };
 	const { agent, operation } = matches[0]!;
-	if (operation.fingerprint !== fingerprint)
+	// Compared through the verdict rather than by `!==`, so a record written before the model joined
+	// the identity still replays instead of answering 400 to every retry of a pre-existing agent.
+	//
+	// `unverifiable` goes the OPPOSITE way here to the way it goes in a schema, and that is the point
+	// of it having three values. A schema asks "may I keep this record", so an unrecomputable
+	// fingerprint must not drop it. This asks "may I tell the caller their original operation
+	// stands", and an unrecomputable fingerprint cannot show the input was the same, so it must not.
+	if (agentFingerprintVerdict(operation.fingerprint, identity) !== "match")
 		return { kind: "conflict", reason: "operation ID was reused with different input" };
 	return { kind: "match", agent, operation, replayable: agentOperationReplayable(operation, ensureDurable) };
 }

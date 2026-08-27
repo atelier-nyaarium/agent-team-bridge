@@ -1,5 +1,9 @@
 import { classifyEventFence, fenceOf } from "../shared/agent-fence.js";
-import { resolveAgentReplay } from "../shared/agent-record.js";
+import {
+	type AgentOperationIdentity,
+	agentOperationFingerprintOf,
+	resolveAgentReplay,
+} from "../shared/agent-record.js";
 import {
 	type CodexAgentCatalog,
 	CodexAgentIdSchema,
@@ -16,7 +20,7 @@ import {
 	CodexReconciliationFenceSchema,
 	CodexResolvedTargetSchema,
 	type CodexStoredOperation,
-	codexOperationFingerprint,
+	codexOperationIdentity,
 } from "../shared/codex-agent.js";
 import { isHostSpawn } from "../shared/host-spawn.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
@@ -137,8 +141,9 @@ export class CodexAgentService {
 		// and a second resolve here would persist a different target than the one dispatched.
 		const target = CodexExecutionTargetSchema.parse(input.target);
 		const at = validateTimestamp(input.at);
-		const fingerprint = codexOperationFingerprint("start", agentId, prompt);
-		const replay = this.replay(owner, operationId, fingerprint);
+		const identity = codexOperationIdentity({ kind: "start", agentId, prompt, model: input.model });
+		const fingerprint = agentOperationFingerprintOf(identity);
+		const replay = this.replay(owner, operationId, identity);
 		if (replay) return replay;
 		const catalog = this.catalog(owner);
 		if (catalog.agents.some((agent) => agent.agentId === agentId)) {
@@ -155,6 +160,7 @@ export class CodexAgentService {
 					operationId,
 					kind: "start",
 					prompt,
+					...(input.model === undefined ? {} : { model: input.model }),
 					status: "requested",
 					createdAt: at,
 				},
@@ -183,8 +189,9 @@ export class CodexAgentService {
 		const operationId = CodexOperationIdSchema.parse(input.operationId);
 		const prompt = CodexPromptSchema.parse(input.prompt);
 		const at = validateTimestamp(input.at);
-		const fingerprint = codexOperationFingerprint("message", agentId, prompt);
-		const replay = this.replay(owner, operationId, fingerprint);
+		const identity = codexOperationIdentity({ kind: "message", agentId, prompt });
+		const fingerprint = agentOperationFingerprintOf(identity);
+		const replay = this.replay(owner, operationId, identity);
 		if (replay) return replay;
 		const catalog = this.catalog(owner);
 		const index = this.agentIndex(catalog, agentId);
@@ -245,8 +252,9 @@ export class CodexAgentService {
 		const agentId = CodexAgentIdSchema.parse(input.agentId);
 		const operationId = CodexOperationIdSchema.parse(input.operationId);
 		const at = validateTimestamp(input.at);
-		const fingerprint = codexOperationFingerprint("stop", agentId);
-		const replay = this.replay(owner, operationId, fingerprint);
+		const identity = codexOperationIdentity({ kind: "stop", agentId });
+		const fingerprint = agentOperationFingerprintOf(identity);
+		const replay = this.replay(owner, operationId, identity);
 		if (replay) return replay;
 		const catalog = this.catalog(owner);
 		const index = this.agentIndex(catalog, agentId);
@@ -759,9 +767,13 @@ export class CodexAgentService {
 		return { owner, agent, operation, disposition: "indeterminate", catalogRevision, unresolved };
 	}
 
-	private replay(owner: SessionRecord, operationId: string, fingerprint: string): CodexTransitionResult | null {
+	private replay(
+		owner: SessionRecord,
+		operationId: string,
+		identity: AgentOperationIdentity,
+	): CodexTransitionResult | null {
 		const catalog = this.catalog(owner);
-		const found = resolveAgentReplay(catalog.agents, operationId, fingerprint, () =>
+		const found = resolveAgentReplay(catalog.agents, operationId, identity, () =>
 			this.ensureCatalogDurable(owner, catalog.revision),
 		);
 		if (found.kind === "none") return null;
