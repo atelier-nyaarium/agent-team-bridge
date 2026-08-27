@@ -806,6 +806,20 @@ survives a Gatewayless setup. Installing the CLI is the whole opt-in on both pat
 - **A refused REQUEST is not an unwell AGENT here either.** Both result schemas reject a busy code
   under an `unavailable` observation, so the runtime returns `{refused}` and the host shapes it as the
   request-error the route uses. Collapsing the two makes the answer unparseable.
+- **ONE runtime, TWO published shapes, so the list is projected per backend.** `LocalListAgent` is
+  Codex-shaped, and Codex's published row IS that record, so handing it over raw worked there and hid
+  that Copilot's never matched (`operations`, bare turns, no timestamps, all strict). `copilotListAgents`
+  therefore threw on every non-EMPTY list, which is worse than a broken read: start times out client-side
+  while the agent really spawns, so list is the only route back to its id. `projectCopilotListAgent` in
+  `copilot-agent.ts` is the sole owner of that field set (mirroring `projectCodexListAgent`) and both the
+  gateway route and the local host go through it; `CopilotListAgentSource` is what makes handing over the
+  wrong record a COMPILE error rather than a parse throw. A test cannot be the guard here on its own -
+  the seam is a `.parse(unknown)`, and the empty list passes vacuously.
+- **Child text is normalized where it is STORED, not where it is read.** Both backends bound
+  `error.message` and refuse text that is not already `sanitizeAgentErrorText`'d, so trimming alone made
+  an ordinary multi-line spawn failure unreportable: the answer threw on its own way out and the caller
+  learned nothing about what actually broke. `errorText` covers every `fail()` site and `applyTerminal`
+  at once.
 - **What local deliberately lacks is what a wire needs.** No relay so nothing is fenced, no restart so
   nothing is durable, no HTTP so an operation cannot be retried behind the caller's back and needs no
   replay identity. Agents die with the MCP process, and the host target is the only one: a
