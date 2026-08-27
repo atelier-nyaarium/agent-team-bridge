@@ -10,7 +10,7 @@ import kotlinx.coroutines.sync.withLock
  * whole playback serialization boundary - the queue, its advance mutex, and every piece of state that
  * boundary protects. What a surface only READS is answered by [PlaybackReadModels], which takes no
  * lock because it mutates nothing; the queries below forward to it. */
-internal class PlaybackOps(private val repo: ChatRepository) {
+internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovision {
 	/** What autoplay still has to speak. This class owns it and advances it; [SttsPlayer] stays a
 	 * one-shot engine that knows nothing about what comes next. */
 	private val queue = PlaybackQueue()
@@ -271,6 +271,22 @@ internal class PlaybackOps(private val repo: ChatRepository) {
 		}
 		// A teardown changes what there is to show as surely as a terminal does. Without this, closing
 		// a thread mid-run left the lockscreen holding a transport for a run that no longer exists.
+		transportChanged()
+	}
+
+	/** A wipe empties the run. The queue names the previous owner's messages and every transport
+	 * surface draws it, and none of that is reachable through [dropQueuedFor], which is keyed by team.
+	 * The engine is silenced separately by `stts.purgeAll()` in the same wipe; a terminal it then
+	 * reports for a dropped entry is matched by generation and ignored, as a torn-down run's already is. */
+	override suspend fun clearInMemory() {
+		advanceMutex.withLock {
+			queue.clear()
+			clearMarkers()
+			// Or the next owner's entry with the same team, timestamp and tier reads as a resume and
+			// plays with no sentinel in front of it.
+			parkedAnnounced = null
+			pausedFlag = false
+		}
 		transportChanged()
 	}
 

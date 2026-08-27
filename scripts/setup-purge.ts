@@ -252,10 +252,10 @@ export async function purgeFederation(): Promise<void> {
 	} catch {}
 	report("setup code", "removed");
 	console.log(`\nDomain ${domain} is deleted and this gateway is purged.\n`);
-	// An admin's phone has no in-app reset (that button is the app-only Revoke and Delete, hidden from
-	// admins because THIS is their path), and the app imports a setup code only while unprovisioned.
-	// So the one thing that works today is named, however blunt.
-	console.log("Your phone still holds the old Domain and will not take a new setup code until it is cleared:");
-	console.log("  Android Settings > Apps > Switchboard > Storage > Clear storage");
+	// The app imports a setup code only while unprovisioned, so the phone has to forget first. The
+	// in-app button shipped in 8.3.28; the storage clear is the same wipe for an app older than that,
+	// since the script and the app update on separate triggers.
+	console.log("Your phone still holds the old Domain. In the app: Settings > System > Forget this Domain.");
+	console.log("On an app older than 8.3.28: Android Settings > Apps > Switchboard > Storage > Clear storage.");
 	console.log("Then run 2) Router Setup for a new setup code, scan it, and 1) Gateway Setup to enroll this machine.");
 }

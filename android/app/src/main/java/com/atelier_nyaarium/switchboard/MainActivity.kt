@@ -275,9 +275,11 @@ fun App(
 				// Users is the federation surface; the federation actions live in its top-bar menu.
 				onFederation = { openOverlay(Overlay.Users) },
 				onClear = {
-					// The Domain-delete transaction (DomainAdminOps.deleteDomain) owns the local wipe; drop
-					// plugin device state (e.g. the Designer index) alongside it, then navigate home.
+					// The wipe transaction (DomainAdminOps.deleteDomain / forgetDomain) owns the local wipe;
+					// drop plugin device state (e.g. the Designer index) alongside it, dismiss the notifications
+					// that named the old threads, then navigate home.
 					pluginManager.host.accountWipeHandlers.forEachCaught(onError = ::logPluginThrow) { it.onWipe(context) }
+					ServiceNotifications.cancelProvisioningNotifications(context)
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					overlays = emptyList()

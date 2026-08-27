@@ -87,6 +87,21 @@ class FederationManager(private val store: AppStateStore) {
 			OwnerKeysView(it.sign.pub, it.box.pub, Crypto.fingerprint(it.sign.pub))
 		}
 
+	/** Whether THIS device holds the private key that roots its Domain. Read WITHOUT minting: the
+	 * absent case is exactly an admitted second console, and [ownerIdentity] would seat a throwaway
+	 * root on it. A stored key that does not match the keyring's root (a throwaway already minted)
+	 * is not the holder either, so the comparison is against the Domain's own root, never a bare
+	 * "a key exists". What "Forget this Domain" decides its warning from.
+	 *
+	 * NO stored snapshot with a stored key answers HOLDER. That is the first phone before its first
+	 * keyring sync (a second console is handed its snapshot at approval, so it always has one), and
+	 * the wrong answer there shows the harmless warning over the only copy of the key. */
+	fun holdsDomainOwnerKey(): Boolean {
+		val held = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
+		val root = Keyring.parse(store.loadDomain())?.ownerSignPub ?: return true
+		return root == held
+	}
+
 	fun ownerSignPub(): String = ownerIdentity().sign.pub
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub

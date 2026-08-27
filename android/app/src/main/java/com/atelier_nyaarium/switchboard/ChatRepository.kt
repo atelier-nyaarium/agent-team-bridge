@@ -248,7 +248,7 @@ class ChatRepository(
 	/** [clearAll] wipes exactly this set. A delegate that gains a cache belongs here; one nobody
 	 * remembered to reach is how the board went on serving the previous owner's entries. */
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
-		get() = listOf(this, board, presence, trust, drain)
+		get() = listOf(this, board, presence, trust, drain, playback)
 
 	/** This class's own share: the connection, the ids and cursor learned from the blob, and the
 	 * invite secrets staged against the outgoing Domain. */

@@ -472,7 +472,11 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	}
 
 	companion object {
-		const val TRANSPORT_NOTIFICATION_ID = 4271
+		/** Below the team notification range, and pinned there by ServiceNotifications' own init check.
+		 * It was 4271, which sits INSIDE that range: reconcileTeamNotifications sweeps every id in the
+		 * range that names no live thread, so each unread change took the lockscreen transport down
+		 * until the next playback event re-posted it, and a wipe's range-scoped cancel would have too. */
+		const val TRANSPORT_NOTIFICATION_ID = 2
 
 		const val CHANNEL_STATUS = "status"
 		const val CHANNEL_SPEECH_FAILED = "speech_failed"

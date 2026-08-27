@@ -14,6 +14,7 @@ import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.CHANNEL_STA
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_MESSAGE_AT
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_OPEN_TEAM
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.STATUS_NOTIFICATION_ID
+import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.TRANSPORT_NOTIFICATION_ID
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.statusDismissed
 
 /**
@@ -262,6 +263,11 @@ internal class ServiceNotifications(private val context: Context) {
 			require(STATUS_NOTIFICATION_ID < TEAM_ID_RANGE_START) {
 				"STATUS_NOTIFICATION_ID must fall outside the team notification id range"
 			}
+			// The transport is the other notification that is NOT a thread's, and the range sweep in
+			// reconcileTeamNotifications (and the wipe's cancel) cannot tell it apart by anything but id.
+			require(TRANSPORT_NOTIFICATION_ID < TEAM_ID_RANGE_START) {
+				"TRANSPORT_NOTIFICATION_ID must fall outside the team notification id range"
+			}
 			require(SCHEDULED_SEND_FAILED_ID_RANGE_START >= TEAM_ID_RANGE_START + TEAM_ID_RANGE_SIZE) {
 				"SCHEDULED_SEND_FAILED_ID_RANGE must fall entirely outside the team notification id range"
 			}
@@ -279,6 +285,24 @@ internal class ServiceNotifications(private val context: Context) {
 		 * reconcileTeamNotifications/reconcile logic could otherwise use to notice and clean it up. */
 		fun cancelScheduledSendFailedNotification(context: Context, team: String) {
 			NotificationManagerCompat.from(context).cancel(scheduledSendFailedNotificationId(team))
+		}
+
+		/** Dismiss every message and scheduled-send-failure notification at once, for a wipe. The
+		 * service's own reconcile cannot: on `!provisioned` it stops itself BEFORE reconciling, and a
+		 * wipe with the service already dead has nothing reconciling at all, so a wiped phone kept
+		 * notifications that opened threads it no longer had. Scoped by id range, never `cancelAll()`:
+		 * the foreground status notification and the playback transport live outside both ranges (the
+		 * init check above is what keeps them there) and are the service's own to end. */
+		fun cancelProvisioningNotifications(context: Context) {
+			val manager = context.getSystemService(NotificationManager::class.java) ?: return
+			val nmc = NotificationManagerCompat.from(context)
+			for (shown in manager.activeNotifications) {
+				val id = shown.id
+				val message = id >= TEAM_ID_RANGE_START && id < TEAM_ID_RANGE_START + TEAM_ID_RANGE_SIZE
+				val failed = id >= SCHEDULED_SEND_FAILED_ID_RANGE_START &&
+					id < SCHEDULED_SEND_FAILED_ID_RANGE_START + SCHEDULED_SEND_FAILED_ID_RANGE_SIZE
+				if (message || failed) nmc.cancel(id)
+			}
 		}
 	}
 }

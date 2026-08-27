@@ -61,6 +61,10 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	 * card; an absent key still mints (the silent first-gen). */
 	fun ownerKeysForDisplay(): OwnerKeysView? = repo.federation.ownerKeysForDisplay()
 
+	/** Whether this device holds the Domain's owner key (see [FederationManager.holdsDomainOwnerKey]).
+	 * Non-minting, so a screen may ask it of an admitted second console safely. */
+	fun holdsOwnerKey(): Boolean = repo.federation.holdsDomainOwnerKey()
+
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
 	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
 	// coroutine) - the same posture as importOwnerBackup.
