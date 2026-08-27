@@ -200,6 +200,28 @@ code does not belong here; rationale lives in `git log`.
   - `agent-screen.ts` / `pane-trim.ts` - the pure reads of a captured tmux pane: what state the REPL
     is in, and which trailing spaces are `-J` padding rather than content. Each has a hand-written
     Kotlin twin (`AgentScreen.kt`, `TerminalAnsi.kt`) held to a shared fixture corpus
+    - **A rule is a RUN, not a LINE, and `afterRuleRun` is the sole owner of that.** `-J` welds a
+      wrapped row onto its neighbour, and on a WINDOWS-hosted pane (a WSL tmux session running
+      `powershell.exe`) the composer's rules arrive welded to the rows beside them: the top rule to the
+      composer row ALWAYS, the bottom rule to the footer only after a resize - which `peekPane` performs
+      on every peek, so the wake path induces that one deliberately at the moment it judges the wake.
+      All four readers go through `footerRegion`, and `agent-screen-residue.test.ts` fails the build if
+      either language hand-rolls the search again: the corpus proves behaviour, that proves ownership.
+    - **Two rule notions, not interchangeable.** `TOOLBAR_RUN_RE` is U+2500 only, the composer's own
+      boundary; `ANY_RULE_RUN_RE` spans U+2500-U+259F for any divider, since the limit dialog's is
+      U+2594. One helper serving both was the first design and it was wrong.
+    - **`limitNotice` searches in TWO passes and the order is load-bearing.** Pass 1 is the historical
+      whole-line predicate, so any frame that used to resolve resolves identically; pass 2 admits a
+      welded rule only when pass 1 found nothing. Widening in place looked equivalent and was not - a
+      titled border is a text-bearing rule line, it would newly qualify, and since the search takes the
+      bottom-most match the divider could move DOWN past the real one and return a null headline where
+      one was found before. No fixture covers that, so the tests would have called it equivalent.
+    - **The composer glyph is a two-member class** (Linux U+276F, the Windows build U+003E, same binary
+      version), and whitespace is spelled out rather than `\s`: JS matches U+00A0 and the JVM's default
+      does not, and Windows emits one right after the glyph.
+    - **The last-two-lines fallback is uniform.** It lived in `isAgentWorking` alone, while `isLoggedOut`
+      did `slice(lastRule + 1)` with lastRule at -1 and so read the WHOLE screen - exactly what scoping
+      that region exists to prevent, live on every platform.
   - `device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` /
     `process-guards.ts`
 - `android/` - the console app (Gradle/Kotlin). `proto/Protocol.kt` is generated, not hand-written
