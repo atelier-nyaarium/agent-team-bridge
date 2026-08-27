@@ -203,7 +203,27 @@ interface RawFederation {
 
 interface RawDomainSlice {
 	admissions?: Array<{ admission?: { kind?: string; gatewayId?: string } }>;
+	isAdminDomain?: boolean;
 	[k: string]: unknown;
+}
+
+/** Whether the Router's state holds a slice for this Domain at all, so a purge can tell "removed"
+ * from "was already gone" instead of reporting the first for both. */
+export function hasDomain(routerFedJson: string, domainId: string): boolean {
+	const fed = JSON.parse(routerFedJson) as RawFederation;
+	return fed.enrollment?.[domainId] !== undefined;
+}
+
+/** The admin Domain the Router itself marks (`isAdminDomain`, set when Router Setup stages it and
+ * carried forward by the Router's own store), or null when none is. This is how a purge finds the
+ * Domain when `.env` has lost `FEDERATION_DOMAIN_ID` - which the old purges did to it - since an
+ * absent key says nothing about what the Router still holds. */
+export function findAdminDomainId(routerFedJson: string): string | null {
+	const fed = JSON.parse(routerFedJson) as RawFederation;
+	for (const [domainId, slice] of Object.entries(fed.enrollment ?? {})) {
+		if (slice?.isAdminDomain === true) return domainId;
+	}
+	return null;
 }
 
 /** Drop a whole Domain from the Secret (purge federation), keeping the Router's identity and every other

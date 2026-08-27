@@ -86,7 +86,9 @@ async function topMenu(): Promise<void> {
 		);
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this machine's gateway and erase its data (the Router stays)");
-		console.log("  0) Purge Federation     - Delete your whole Domain and erase everything\n");
+		console.log(
+			"  0) Purge Federation     - Delete your Domain from the Router and purge this gateway (other tenants stay)\n",
+		);
 		console.log("  q) Quit\n");
 		const choice = ask(">").toLowerCase();
 		if (choice === "" || choice === "q") return;

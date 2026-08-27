@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { pendingAdminDomain, readAdminDomain, removeDomain } from "../../scripts/bootstrap-domain.js";
+import {
+	findAdminDomainId,
+	hasDomain,
+	pendingAdminDomain,
+	readAdminDomain,
+	removeDomain,
+} from "../../scripts/bootstrap-domain.js";
 import { buildProvisioningBlob } from "../../scripts/write-provisioning-blob.js";
 import { type Admission, type SignedAdmission, signAdmission } from "../shared/admission.js";
 import { b64Field, generateIdentity } from "../shared/crypto.js";
@@ -249,6 +255,24 @@ function purgeFixture() {
 		},
 	});
 }
+
+describe("hasDomain / findAdminDomainId (purge federation: what the Router still holds)", () => {
+	it("tells a present Domain from an absent one, so a no-op removal is not reported as a removal", () => {
+		const fixture = purgeFixture();
+		expect(hasDomain(fixture, TEST_DOMAIN_ID)).toBe(true);
+		expect(hasDomain(fixture, "work")).toBe(true);
+		expect(hasDomain(fixture, "no-such-domain")).toBe(false);
+		expect(hasDomain(removeDomain(fixture, TEST_DOMAIN_ID), TEST_DOMAIN_ID)).toBe(false);
+	});
+
+	it("finds the admin Domain by the Router's own mark, without the .env key", () => {
+		// The state the OLD purges left behind: .env deleted, Router still holding the Domain. The
+		// friend Domain carries no mark and must never be the answer.
+		expect(findAdminDomainId(purgeFixture())).toBe(TEST_DOMAIN_ID);
+		expect(findAdminDomainId(removeDomain(purgeFixture(), TEST_DOMAIN_ID))).toBeNull();
+		expect(findAdminDomainId(JSON.stringify({ schema: 2, enrollment: {} }))).toBeNull();
+	});
+});
 
 describe("removeDomain (purge federation: drop one Domain, keep the rest)", () => {
 	it("drops ONLY the admin Domain; the friend Domain and identity survive", () => {

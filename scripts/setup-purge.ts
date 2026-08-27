@@ -5,10 +5,10 @@
 import fs from "node:fs";
 import { $ } from "bun";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
-import { removeDomain } from "./bootstrap-domain.js";
+import { findAdminDomainId, hasDomain, removeDomain } from "./bootstrap-domain.js";
 import { requireDocker } from "./lib/docker-probe.js";
 import { confirm, dc, dcFederation, dirExists, envGet, envUnset } from "./lib/host.js";
-import { readRouterFed, writeRouterFed } from "./lib/routerState.js";
+import { readRouterFed, routerRunning, writeRouterFed } from "./lib/routerState.js";
 import { confirmBoardLoss } from "./setup-board-guard.js";
 import { BLOB_FILE, CONSOLE_JSON_FILE, GW_JSON_FILE, GW_QR_GIF, QR_GIF, SECRETS_DIR } from "./setup-constants.js";
 import { gatewayHostname } from "./setup-gateway.js";
@@ -47,21 +47,42 @@ async function wipeState(): Promise<void> {
 	}
 }
 
-/** Apply a purge mutation to the Router's federation state in place, best-effort. Stops the Router
- * (its store is single-writer, so a write under a live one is lost), runs `mutate` over the state
- * file, then brings it back. A no-op when no admin Domain id is set; failures are swallowed so the
- * local wipe always proceeds, since a purge must not stall on a Router that will not start. */
-async function federationDelete(mutate: (fedJson: string) => string): Promise<void> {
-	const domain = await envGet("FEDERATION_DOMAIN_ID");
-	if (!domain) return;
+/** Apply a mutation to the Router's federation state in place. Stops the Router (its store is
+ * single-writer, so a write under a live one is lost), runs `mutate` over the state file, then
+ * brings it back whatever happened. ANSWERS what it did rather than swallowing: a purge that reports
+ * success over a Domain it never removed cannot be retried, because its own next run reads the
+ * Domain id from .env and that is what the purge takes out. */
+async function federationDelete(
+	mutate: (fedJson: string) => string,
+	done: string,
+): Promise<{ ok: boolean; outcome: string }> {
+	let result: { ok: boolean; outcome: string };
 	try {
 		await dcFederation("stop").quiet().nothrow();
-		const fed = await readRouterFed();
-		if (fed) await writeRouterFed(mutate(fed));
-	} catch {
-	} finally {
-		await dcFederation("start").quiet().nothrow();
+		// The stop's own exit code says little (a Router that was never up "stops" fine), so ask the
+		// one question that matters before writing under it.
+		if (await routerRunning()) {
+			result = {
+				ok: false,
+				outcome: "could not stop the Router, so its state was not touched (nothing removed)",
+			};
+		} else {
+			const fed = await readRouterFed();
+			if (!fed) {
+				result = { ok: false, outcome: "could not read the Router's state file (nothing removed)" };
+			} else {
+				await writeRouterFed(mutate(fed));
+				result = { ok: true, outcome: done };
+			}
+		}
+	} catch (e) {
+		result = { ok: false, outcome: `${e instanceof Error ? e.message : String(e)} (nothing removed)` };
 	}
+	// Brought back whatever happened above, and a failure here is part of the answer: a Router left
+	// down takes every tenant with it, which the summary line must not read as a clean purge.
+	const start = await dcFederation("start").quiet().nothrow();
+	if (start.exitCode !== 0) result.outcome += "; the Router did NOT come back up, run ./start-federation.sh";
+	return result;
 }
 
 /** Stop the host daemon's tmux session. It exists only to serve this machine's gateway, and left
@@ -71,12 +92,16 @@ async function federationDelete(mutate: (fedJson: string) => string): Promise<vo
  * tmux is probed on its own first: Bun's shell answers a missing binary with the same exit 1 that
  * `has-session` answers "no such session" with, so without the probe a Windows machine, which has
  * no tmux, would be told the daemon "was not running" by a check that could not look. */
-async function stopHostDaemon(): Promise<string> {
-	if ((await $`tmux -V`.quiet().nothrow()).exitCode !== 0) return "no tmux on this machine, nothing to stop";
+async function stopHostDaemon(): Promise<{ ok: boolean; outcome: string }> {
+	if ((await $`tmux -V`.quiet().nothrow()).exitCode !== 0) {
+		return { ok: true, outcome: "no tmux on this machine, nothing to stop" };
+	}
 	const has = await $`tmux has-session -t ${`=${HOST_DAEMON_TMUX}`}`.quiet().nothrow();
-	if (has.exitCode !== 0) return "was not running";
+	if (has.exitCode !== 0) return { ok: true, outcome: "was not running" };
 	const kill = await $`tmux kill-session -t ${`=${HOST_DAEMON_TMUX}`}`.quiet().nothrow();
-	return kill.exitCode === 0 ? "stopped" : "could not be stopped (tmux kill-session failed)";
+	return kill.exitCode === 0
+		? { ok: true, outcome: "stopped" }
+		: { ok: false, outcome: "could not be stopped (tmux kill-session failed)" };
 }
 
 ////////////////////////////////
@@ -111,7 +136,13 @@ export async function purgeGateway(): Promise<void> {
 
 	const report = (step: string, outcome: string): void => console.log(`  ${step.padEnd(14)}${outcome}`);
 	console.log();
-	report("host daemon", await stopHostDaemon());
+	const daemon = await stopHostDaemon();
+	report("host daemon", daemon.outcome);
+	if (!daemon.ok) {
+		console.log("\nThe purge did NOT start: a daemon left running reconnects forever to a gateway that is gone.");
+		console.log("Stop it by hand (tmux kill-session -t =host-daemon) and run 9) again.");
+		return;
+	}
 	const down = await dc("down", "--remove-orphans").quiet().nothrow();
 	report(
 		"gateway",
@@ -138,23 +169,93 @@ export async function purgeGateway(): Promise<void> {
 	console.log(`enrolling this machine again, or the app lists "${gw}" twice.`);
 }
 
-/** Clean break: delete this owner's whole Domain from the Router, then erase the local state with
- * the same full wipe as Purge gateway so a re-provision starts fresh. A hosted friend tenant
- * survives. */
+/**
+ * Delete this owner's Domain from the Router and take this machine's gateway with it, so a
+ * re-provision starts from nothing. The Router itself, its tokens and every OTHER tenant stay:
+ * `CONSOLE_BRIDGE_TOKEN` and `FEDERATION_WS_TOKEN` are what a hosted friend's consoles and Gateways
+ * present, so deleting .env whole (which this did) locked them out at the Router's next start while
+ * claiming the friend survived. The Domain id goes, since the Domain it names no longer exists and
+ * Router Setup stages a fresh one only when the key is absent.
+ *
+ * The Router step runs FIRST and a failure stops the purge: the Domain id is the one thing a retry
+ * needs, and it is what the local half removes. The id itself comes from .env OR from the Router's
+ * own `isAdminDomain` mark, because the old purges deleted .env and left exactly the state where the
+ * key is gone and the Domain is not - refusing then would strand the Domain forever.
+ */
 export async function purgeFederation(): Promise<void> {
-	console.log("Wipes the network from the Router, plus .env + both gateway volumes + the host blob.");
-	if (!confirm("Purge everything?")) return;
+	await requireDocker();
+	// Read-only, so it needs no stop: the Router's file is what says whether there is anything here
+	// to delete, and .env is only a hint at which slice.
+	const fed = await readRouterFed();
+	const domain = (await envGet("FEDERATION_DOMAIN_ID")) || (fed ? findAdminDomainId(fed) : null);
+	if (!domain) {
+		console.log("This machine's Router holds no Domain of yours to delete, and .env names none.");
+		console.log("To remove its gateway, use 9) Purge Gateway.");
+		return;
+	}
+	const present = fed !== "" && hasDomain(fed, domain);
+	console.log(`Purge Federation (Domain ${domain})\n`);
+	console.log("Deletes your Domain and this machine's gateway, so a re-provision starts from nothing:");
+	console.log(
+		present
+			? `  - removes Domain ${domain} from the Router: its admissions, revocations and links`
+			: `  - Domain ${domain} is already gone from the Router; only the local half is left to do`,
+	);
+	console.log("  - restarts the Router to write that; other tenants' Gateways and phones reconnect on their own");
+	console.log("  - stops the host daemon and the gateway container, erases both gateway volumes");
+	console.log("  - drops the gateway keys and FEDERATION_DOMAIN_ID from .env, and the saved setup code");
+	console.log("The Router, its tokens and its public address stay, and so does every other tenant.\n");
+	if (!confirm(`Delete Domain ${domain} and purge this gateway?`)) return;
 	if (!(await confirmBoardLoss())) return;
 
-	const domain = await envGet("FEDERATION_DOMAIN_ID");
-	await federationDelete((fed) => removeDomain(fed, domain));
-	await dc("down", "--remove-orphans").quiet().nothrow();
-	await wipeState();
-	await $`rm -f .env ${BLOB_FILE} ${QR_GIF} ${CONSOLE_JSON_FILE} ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
+	const report = (step: string, outcome: string): void => console.log(`  ${step.padEnd(14)}${outcome}`);
+	console.log();
+	const router = present
+		? await federationDelete((json) => removeDomain(json, domain), `Domain ${domain} removed`)
+		: { ok: true, outcome: `Domain ${domain} was already gone` };
+	report("Router", router.outcome);
+	if (!router.ok) {
+		console.log("\nThe purge did NOT start. Fix the cause and run 0) again; nothing local was touched.");
+		return;
+	}
+	const daemon = await stopHostDaemon();
+	report("host daemon", daemon.outcome);
+	if (!daemon.ok) {
+		console.log("\nThe Domain is gone from the Router but this machine is NOT wiped: a daemon left running");
+		console.log(
+			"reconnects forever to a gateway that is gone. Stop it by hand (tmux kill-session -t =host-daemon)",
+		);
+		console.log("and run 9) Purge Gateway to finish; 9) does not need the Domain id.");
+		return;
+	}
+	const down = await dc("down", "--remove-orphans").quiet().nothrow();
+	report(
+		"gateway",
+		down.exitCode === 0 ? "stopped" : "compose down failed (continuing; the volumes are wiped below)",
+	);
+	try {
+		await wipeState();
+	} catch (e) {
+		report("volumes", `FAILED: ${e instanceof Error ? e.message : String(e)}`);
+		console.log("\nThe Domain is gone from the Router but this machine is NOT wiped. Fix the cause and run");
+		console.log("9) Purge Gateway to finish; the Domain id in .env is stale now and 9) does not need it.");
+		return;
+	}
+	report("volumes", "erased");
+	const remaining = await envUnset([...GATEWAY_ENV_KEYS, "FEDERATION_DOMAIN_ID"]);
+	report(".env", remaining === 0 ? "removed (nothing else was in it)" : "gateway keys and Domain id removed");
+	await $`rm -f ${BLOB_FILE} ${QR_GIF} ${CONSOLE_JSON_FILE} ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
 	// A non-recursive rmdir only succeeds on an empty dir, so this tidies the blob's home without
 	// touching other secrets; a non-empty dir throws and is ignored.
 	try {
 		fs.rmdirSync(SECRETS_DIR);
 	} catch {}
-	console.log("Purged.");
+	report("setup code", "removed");
+	console.log(`\nDomain ${domain} is deleted and this gateway is purged.\n`);
+	// An admin's phone has no in-app reset (that button is the app-only Revoke and Delete, hidden from
+	// admins because THIS is their path), and the app imports a setup code only while unprovisioned.
+	// So the one thing that works today is named, however blunt.
+	console.log("Your phone still holds the old Domain and will not take a new setup code until it is cleared:");
+	console.log("  Android Settings > Apps > Switchboard > Storage > Clear storage");
+	console.log("Then run 2) Router Setup for a new setup code, scan it, and 1) Gateway Setup to enroll this machine.");
 }

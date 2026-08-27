@@ -1410,8 +1410,16 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
      rather than leaving the admin to wait out the window for a delivery that cannot arrive.
 4. Per-user purges: `9) Purge Gateway` stops the daemon and the container, wipes both gateway
    volumes and takes ONLY the gateway's own keys out of `.env` (`GATEWAY_ENV_KEYS`); `0) Purge
-   Federation` drops only this owner's Domain slice from the Router's state file (other tenants
-   survive) then wipes local state and the host blob.
+   Federation` drops only this owner's Domain slice from the Router's state file (a Router bounce,
+   the store being single-writer; other tenants survive), then the same gateway teardown plus
+   `FEDERATION_DOMAIN_ID` and the saved setup code. Its Router step runs FIRST and a failure stops
+   it: the Domain id is what its own retry needs, and it is what the local half removes. The id comes
+   from `.env` OR the Router's own `isAdminDomain` mark (`findAdminDomainId`), since the old purges
+   deleted `.env` and left exactly the state where the key is gone and the Domain is not.
+   - **An admin's phone has no in-app reset.** Revoke and Delete is the app-only path and is hidden
+     from admins on purpose, and `MainActivity` imports a setup code only while unprovisioned, so
+     after option 0 the phone must have its app storage cleared before it can scan again. Option 0
+     says so. An admin-facing "forget this Domain" in the app is the open follow-up.
    - **Purge Gateway tells the network nothing, on purpose, and says so.** An admission is an
      owner-signed fact mirrored on the Router, every Gateway and the phone, and each mirror retires
      one only on an owner-signed REVOCATION - which this host cannot sign, since the owner's SIGNING
