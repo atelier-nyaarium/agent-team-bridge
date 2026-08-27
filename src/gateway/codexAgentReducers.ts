@@ -1,4 +1,5 @@
 import { advancesFence, sameFence } from "../shared/agent-fence.js";
+import { appendAgentActivity } from "../shared/agent-record.js";
 import {
 	CODEX_ACTIVITY_MAX_ITEMS,
 	type CodexDaemonEvent,
@@ -71,22 +72,14 @@ export function failed(reason: string): CodexApplication {
 	return { disposition: "failed", reason };
 }
 
-/**
- * The turn's activities with one more commentary item folded in, or null when it is already held.
- *
- * The retained window is the FIRST items rather than the most recent: a turn's opening commentary is
- * what explains what it decided to do, and a late item can always be read from the final response.
- */
+/** Codex's binding of the shared append rule. The window policy and the truncation marker live in
+ * `appendAgentActivity`; only the cap is Codex's to name. */
 export function appendActivity(
 	existing: readonly CodexStoredActivity[],
 	itemId: string,
 	text: string,
 ): CodexStoredActivity[] | null {
-	const commentary = existing.filter((activity) => activity.kind === "commentary");
-	if (commentary.some((activity) => activity.itemId === itemId)) return null;
-	if (commentary.length < CODEX_ACTIVITY_MAX_ITEMS) return [...commentary, { kind: "commentary", itemId, text }];
-	const omitted = existing.find((activity) => activity.kind === "truncated")?.omitted ?? 0;
-	return [...commentary, { kind: "truncated", omitted: omitted + 1 }];
+	return appendAgentActivity(existing, itemId, text, CODEX_ACTIVITY_MAX_ITEMS) as CodexStoredActivity[] | null;
 }
 
 /** Clear the recovery flag Phase 2 sets on a delivery whose acceptance was never fenced. A

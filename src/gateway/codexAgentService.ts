@@ -1,4 +1,5 @@
 import { classifyEventFence, fenceOf } from "../shared/agent-fence.js";
+import { resolveAgentReplay } from "../shared/agent-record.js";
 import {
 	type CodexAgentCatalog,
 	CodexAgentIdSchema,
@@ -760,28 +761,20 @@ export class CodexAgentService {
 
 	private replay(owner: SessionRecord, operationId: string, fingerprint: string): CodexTransitionResult | null {
 		const catalog = this.catalog(owner);
-		const matches = catalog.agents.flatMap((agent) =>
-			agent.operations.flatMap((operation) =>
-				operation.operationId === operationId ? [{ agent, operation }] : [],
-			),
+		const found = resolveAgentReplay(catalog.agents, operationId, fingerprint, () =>
+			this.ensureCatalogDurable(owner, catalog.revision),
 		);
-		if (matches.length === 0) return null;
-		if (matches.length !== 1 || matches[0]!.operation.fingerprint !== fingerprint) {
-			throw new CodexTransitionError("operation_conflict", "operation ID was reused with different input");
-		}
-		const replayable =
-			matches[0]!.operation.state === "accepted" &&
-			!matches[0]!.operation.acceptanceUnverified &&
-			this.ensureCatalogDurable(owner, catalog.revision);
+		if (found.kind === "none") return null;
+		if (found.kind === "conflict") throw new CodexTransitionError("operation_conflict", found.reason);
 		return {
 			owner,
-			agent: matches[0]!.agent,
-			operation: matches[0]!.operation,
-			disposition: replayable ? "replayed" : "indeterminate",
+			agent: found.agent,
+			operation: found.operation,
+			disposition: found.replayable ? "replayed" : "indeterminate",
 			catalogRevision: catalog.revision,
 			// Not a mismatch: the operation exists and matches, the gateway just cannot confirm it is
 			// durable or fenced. Reconciliation is what settles it.
-			unresolved: replayable ? undefined : true,
+			unresolved: found.replayable ? undefined : true,
 		};
 	}
 

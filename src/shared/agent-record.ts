@@ -31,6 +31,35 @@ export interface AgentTurnHistoryView {
 	updatedAt: number;
 }
 
+/** The stored narration shape both backends declare. Structurally identical on purpose: their zod
+ * objects stay their own (the byte caps and id grammars differ), but anything that REASONS about
+ * activities reasons about this. */
+export type AgentStoredActivity =
+	| { kind: "commentary"; itemId: string; text: string }
+	| { kind: "truncated"; omitted: number };
+
+/** One operation as replay identifies it. Every field a replay decision may read is here, so a
+ * backend cannot quietly omit a term the other one weighs. */
+export interface AgentReplayOperation {
+	operationId: string;
+	fingerprint: string;
+	state: string;
+	/** Codex's Phase 2 flag: accepted, but the acceptance was never fenced. Copilot has no such
+	 * concept and passes nothing, which DECLARES the difference where omitting the term hid it. */
+	acceptanceUnverified?: boolean;
+}
+
+export interface AgentReplayHolder<Operation extends AgentReplayOperation> {
+	operations: readonly Operation[];
+}
+
+/** What a replay lookup found. `conflict` carries its own reason so each backend can throw its own
+ * error type without restating the rule that produced it. */
+export type AgentReplayOutcome<Agent, Operation> =
+	| { kind: "none" }
+	| { kind: "conflict"; reason: string }
+	| { kind: "match"; agent: Agent; operation: Operation; replayable: boolean };
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -100,6 +129,78 @@ export function agentActivityIssues(activities: ReadonlyArray<AgentActivityView>
 		issues.push("truncation requires a full retained activity window");
 	}
 	return issues;
+}
+
+/**
+ * The turn's activities with one more commentary item folded in, or null when it is already held.
+ *
+ * The retained window is the FIRST items rather than the most recent: a turn's opening commentary is
+ * what explains what it decided to do, and a late item can always be read from the final response.
+ *
+ * The SOLE producer of a stored activity array. `agentActivityIssues` validates the shape this
+ * builds, and the two lived apart while each backend wrote its own builder - one of them against a
+ * hardcoded 32 rather than the shared bound, so raising the bound would have moved one and not the
+ * other. `agent-replay.test.ts` fails the build on a second builder.
+ */
+export function appendAgentActivity(
+	existing: readonly AgentStoredActivity[],
+	itemId: string,
+	text: string,
+	maxItems: number,
+): AgentStoredActivity[] | null {
+	const commentary = existing.filter((activity) => activity.kind === "commentary");
+	if (commentary.some((activity) => activity.itemId === itemId)) return null;
+	if (commentary.length < maxItems) return [...commentary, { kind: "commentary", itemId, text }];
+	const omitted = existing.find((activity) => activity.kind === "truncated")?.omitted ?? 0;
+	return [...commentary, { kind: "truncated", omitted: omitted + 1 }];
+}
+
+/**
+ * Whether an operation already on record may be reported as a completed replay.
+ *
+ * An HTTP retry must never re-dispatch, so the question is only ever "what do I tell the caller
+ * about the operation I already hold". Three terms, and dropping any one of them was a shipped
+ * divergence:
+ *
+ * - Only an ACCEPTED operation replays. One still `requested` was never confirmed by a daemon, and
+ *   one marked `indeterminate` is the gateway's own record of "I could not find out" - reporting
+ *   either as a completed replay tells the caller a thing the gateway does not know.
+ * - An acceptance that was never fenced does not replay (Codex only; see AgentReplayOperation).
+ * - The catalog must be confirmed durable, and `ensureDurable` is expected to REPAIR rather than
+ *   merely report: a retry is evidence the operation matters, so flushing an unconfirmed catalog
+ *   costs one fsync at exactly the moment it is worth paying. It runs last, so an operation that
+ *   was never replayable does not buy a write.
+ */
+export function agentOperationReplayable(operation: AgentReplayOperation, ensureDurable: () => boolean): boolean {
+	if (operation.state !== "accepted") return false;
+	if (operation.acceptanceUnverified) return false;
+	return ensureDurable();
+}
+
+/**
+ * Find the one operation a retried operation ID names, across every agent in a catalog.
+ *
+ * TWO claimants is a conflict rather than a first-match, and so is a fingerprint that does not
+ * match. Both mean the same thing to a caller - this operation ID was reused with different input -
+ * and neither may be resolved by picking one, since nothing distinguishes the copies. Reachable
+ * today only through a mutation bug or an injected catalog, which is exactly why one backend having
+ * the check and the other not went unnoticed.
+ */
+export function resolveAgentReplay<Agent extends AgentReplayHolder<AgentReplayOperation>>(
+	agents: readonly Agent[],
+	operationId: string,
+	fingerprint: string,
+	ensureDurable: () => boolean,
+): AgentReplayOutcome<Agent, Agent["operations"][number]> {
+	const matches = agents.flatMap((agent) =>
+		agent.operations.flatMap((operation) => (operation.operationId === operationId ? [{ agent, operation }] : [])),
+	);
+	if (matches.length === 0) return { kind: "none" };
+	if (matches.length > 1) return { kind: "conflict", reason: "operation ID was reused with different input" };
+	const { agent, operation } = matches[0]!;
+	if (operation.fingerprint !== fingerprint)
+		return { kind: "conflict", reason: "operation ID was reused with different input" };
+	return { kind: "match", agent, operation, replayable: agentOperationReplayable(operation, ensureDurable) };
 }
 
 /** The turn-level invariants both record families share. Backend-specific rules (exchanges, fences,

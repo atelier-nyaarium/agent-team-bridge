@@ -1,5 +1,7 @@
 import { classifyAcceptanceFence, fenceOf } from "../shared/agent-fence.js";
+import { appendAgentActivity, resolveAgentReplay } from "../shared/agent-record.js";
 import {
+	COPILOT_ACTIVITY_MAX_ITEMS,
 	type CopilotAgentCatalog,
 	CopilotAgentIdSchema,
 	type CopilotDaemonEvent,
@@ -112,18 +114,17 @@ function resolvedTargetMatchesRequest(
 	return resolved.targetId === `container:${requested.project}` && resolved.cwd === `/workspace/${requested.project}`;
 }
 
+/** Copilot's binding of the shared append rule. The cap was spelled `32` here while Codex read the
+ * shared bound, so raising that bound would have moved one backend and not the other. */
 function appendActivity(
 	activities: CopilotPersistedAgent["turns"][number]["activities"],
 	itemId: string,
 	text: string,
-) {
-	if (activities.some((activity) => activity.kind === "commentary" && activity.itemId === itemId)) return activities;
-	const commentary = activities.filter((activity) => activity.kind === "commentary");
-	if (commentary.length >= 32) {
-		const omitted = activities.find((activity) => activity.kind === "truncated")?.omitted ?? 0;
-		return [...commentary, { kind: "truncated" as const, omitted: omitted + 1 }];
-	}
-	return [...commentary, { kind: "commentary" as const, itemId, text }];
+): CopilotPersistedAgent["turns"][number]["activities"] {
+	const next = appendAgentActivity(activities, itemId, text, COPILOT_ACTIVITY_MAX_ITEMS);
+	// Codex's builder reports "already held" as null so its caller can skip a commit entirely; this
+	// call site has no such branch and wants the array unchanged.
+	return (next as CopilotPersistedAgent["turns"][number]["activities"] | null) ?? activities;
 }
 
 ////////////////////////////////
@@ -600,20 +601,30 @@ export class CopilotAgentService {
 
 	private replay(owner: SessionRecord, operationId: string, fingerprint: string): CopilotTransitionResult | null {
 		const catalog = this.catalog(owner);
-		for (const agent of catalog.agents) {
-			const operation = agent.operations.find((candidate) => candidate.operationId === operationId);
-			if (!operation) continue;
-			if (operation.fingerprint !== fingerprint)
-				throw new CopilotTransitionError("operation_conflict", "operation ID was reused with different input");
-			return {
-				disposition: operation.state === "requested" ? "indeterminate" : "replayed",
-				owner,
-				agent,
-				operation,
-				catalogRevision: catalog.revision,
-			};
+		const found = resolveAgentReplay(catalog.agents, operationId, fingerprint, () =>
+			this.ensureCatalogDurable(owner, catalog.revision),
+		);
+		if (found.kind === "none") return null;
+		if (found.kind === "conflict") throw new CopilotTransitionError("operation_conflict", found.reason);
+		return {
+			disposition: found.replayable ? "replayed" : "indeterminate",
+			owner,
+			agent: found.agent,
+			operation: found.operation,
+			catalogRevision: catalog.revision,
+		};
+	}
+
+	/** Confirm the catalog crossed the persistence barrier, repairing it when it has not. Copilot had
+	 * no equivalent and answered "replayed" over an unconfirmed catalog; the answer happened to be
+	 * harmless because no route branches on it, but the missing checkpoint was a real lost repair. */
+	private ensureCatalogDurable(owner: SessionRecord, revision: number): boolean {
+		if (this.deps.catalogWriter.isDurable(owner, revision)) return true;
+		try {
+			return this.deps.catalogWriter.checkpoint(owner, revision).confirmed;
+		} catch {
+			return false;
 		}
-		return null;
 	}
 
 	private requireOwner(req: Request): SessionRecord {
