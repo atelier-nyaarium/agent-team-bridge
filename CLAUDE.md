@@ -100,8 +100,9 @@ code does not belong here; rationale lives in `git log`.
   outside it: `RendererPoolBindings.kt` (the WebView pool and its callbacks), `AppOverlays.kt` (queue
   and viewer), `LinkMenu.kt` (a tapped link's menu and how a link opens)
   - Settings is four files: `SettingsScreen.kt` is the hub and its route dispatch, `SettingsSections.kt`
-    its small leaf screens (plugins, profile, networks, security), `SettingsSystem.kt` the system screen
-    with the update and battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
+    its small leaf screens (plugins, profile, networks, security) and the Domain danger block (both
+    wipes, at the bottom of Domain & Trust), `SettingsSystem.kt` the system screen with the update and
+    battery rows it owns, `SettingsVoice.kt` the STTS provider and playback screen
   - The sessions tab is five files: `MainTabsScreen.kt` is the app shell hosting both tabs (it owns
     the top bar and pager, and takes each tab as an opaque slot), `SessionsScreen.kt` the list,
     `SessionsHeaders.kt` its section chrome and status vocabulary, `SessionCard.kt` the card with its
@@ -1416,7 +1417,7 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    it: the Domain id is what its own retry needs, and it is what the local half removes. The id comes
    from `.env` OR the Router's own `isAdminDomain` mark (`findAdminDomainId`), since the old purges
    deleted `.env` and left exactly the state where the key is gone and the Domain is not.
-   - **The phone's half of option 0 is Settings > System > Forget this Domain** (`plans/forget-domain.md`):
+   - **The phone's half of option 0 is Settings > Domain & Trust > Forget this Domain** (`plans/forget-domain.md`):
      `clearAll` and nothing else, no wire op, for everyone provisioned. Revoke and Delete stays the
      app-only path, hidden from admins, because it ALSO purges the Domain server-side. The dialog
      branches on `holdsDomainOwnerKey`, read WITHOUT minting: the owner key is generated on the first

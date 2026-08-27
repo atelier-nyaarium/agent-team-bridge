@@ -1,15 +1,26 @@
 package com.atelier_nyaarium.switchboard
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -144,15 +155,19 @@ internal fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDevice
 
 @Composable
 internal fun NetworksSettings(
+	repo: ChatRepository,
 	onManage: () -> Unit,
 	onYourDevices: () -> Unit,
 	onUsers: () -> Unit,
+	onClear: () -> Unit,
 	onFederationScreen: () -> Unit,
 ) {
 	// Four distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
 	// your account (Your devices), linking with a friend's separate network (cross-Domain trust),
 	// and the server all of that rides on. Navigation only - the forms live on their own screens,
-	// since inline they read as settings of whatever section they happen to sit under.
+	// since inline they read as settings of whatever section they happen to sit under. The one
+	// exception is the Danger block at the bottom: the two Domain wipes are not settings of anything,
+	// and they belong beside the Gateways, devices and Federation they act on.
 	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = hapticClick(onManage), modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
@@ -164,6 +179,165 @@ internal fun NetworksSettings(
 	HorizontalDivider()
 	Text("Infrastructure", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = hapticClick(onFederationScreen), modifier = Modifier.fillMaxWidth()) { Text("Federation") }
+	HorizontalDivider()
+	DomainDangerSection(repo, onClear)
+}
+
+/** The two Domain wipes, behind a confirm each, so either is two levels deep (Settings -> Domain &
+ * Trust) plus an explicit confirmation. Deliberately distinct: Forget this Domain wipes THIS phone and
+ * sends nothing, for everyone; Revoke and Delete Domain also purges the owner's whole Domain from the
+ * servers, so it is hidden for an admin (who purges via setup.sh) and shown only to a confirmed
+ * app-only owner (see canDeleteOwnDomain). */
+@Composable
+internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
+	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
+	var confirmDelete by remember { mutableStateOf(false) }
+	var deleting by remember { mutableStateOf(false) }
+	var deleteError by remember { mutableStateOf<String?>(null) }
+	var wipedUnconfirmed by remember { mutableStateOf(false) }
+	var confirmForget by remember { mutableStateOf(false) }
+	var forgetting by remember { mutableStateOf(false) }
+	var forgetError by remember { mutableStateOf<String?>(null) }
+	// This screen exists only on a provisioned app (an unprovisioned one shows onboarding instead), so
+	// the local wipe is offered unconditionally. It is the ONLY reset an admin's phone has: setup.sh
+	// option 0 deletes the Domain on the Router and then needs this to let the phone scan again.
+	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+	OutlinedButton(
+		onClick = hapticClick { forgetError = null; confirmForget = true },
+		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+	) {
+		Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+		Spacer(Modifier.width(4.dp))
+		Text("Forget this Domain")
+	}
+	Text(
+		"Wipes this phone only. The Domain, your gateways and your other devices are untouched. Voice settings are kept.",
+		style = MaterialTheme.typography.bodySmall,
+	)
+	if (confirmForget) {
+		// Read when the dialog opens, not at composition: it decodes the stored keys, and the answer
+		// only matters once the owner is about to act on it.
+		val holdsOwnerKey = remember { repo.ownerFacts.holdsOwnerKey() }
+		AlertDialog(
+			onDismissRequest = { if (!forgetting) confirmForget = false },
+			title = { Text("Forget this Domain?") },
+			text = {
+				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+					Text("This wipes the app on this phone: history, drafts, the board cache, downloaded files and the speech cache. Nothing is deleted from the Router: your Domain, gateways and other devices stay as they are.")
+					if (holdsOwnerKey) {
+						// The owner key is generated on the first phone and reaches another device only through
+						// a passphrase backup, so on this phone the warning is about the Domain itself.
+						Text(
+							"Your owner key lives on this phone, plus any backup you exported. Without a copy, nothing new can ever be owner-signed for this Domain: no admits, revokes, renames or links.",
+							style = MaterialTheme.typography.bodySmall,
+							color = MaterialTheme.colorScheme.error,
+						)
+						Text(
+							"Before forgetting, run Purge Federation on the Router machine, or export a backup under Federation on this screen.",
+							style = MaterialTheme.typography.bodySmall,
+						)
+					} else {
+						Text(
+							"This phone does not hold the owner key, so nothing about the Domain changes. It stays listed under Your devices until removed there.",
+							style = MaterialTheme.typography.bodySmall,
+						)
+					}
+					forgetError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+				}
+			},
+			confirmButton = {
+				TextButton(
+					enabled = !forgetting,
+					onClick = hapticClick {
+						scope.launch {
+							if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
+							forgetting = true
+							forgetError = null
+							// runCatchingCancellable, not runCatching: a plain catch would turn this coroutine's
+							// cancellation into "Could not wipe", the same trap submitOwnerFact documents.
+							runCatchingCancellable { repo.domainAdmin.forgetDomain() }
+								.onSuccess {
+									forgetting = false
+									confirmForget = false
+									onClear()
+								}
+								.onFailure {
+									forgetting = false
+									forgetError = it.message ?: "Could not wipe this phone."
+								}
+						}
+					},
+				) { Text("Forget") }
+			},
+			dismissButton = { TextButton(enabled = !forgetting, onClick = hapticClick { confirmForget = false }) { Text("Cancel") } },
+		)
+	}
+	// Admins purge via setup.sh; an unconfirmed Domain (offline) hides it too, so an admin whose gateway
+	// is down can't read the unknown state as "not admin" and delete everything (see canDeleteOwnDomain).
+	if (repo.canDeleteOwnDomain()) {
+		OutlinedButton(
+			onClick = hapticClick { deleteError = null; confirmDelete = true },
+			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+		) {
+			Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+			Spacer(Modifier.width(4.dp))
+			Text("Revoke and Delete Domain")
+		}
+		Text(
+			"Purges your Domain from the servers and wipes this device. Voice settings are kept.",
+			style = MaterialTheme.typography.bodySmall,
+		)
+	}
+	if (confirmDelete) {
+		AlertDialog(
+			onDismissRequest = { if (!deleting) confirmDelete = false },
+			title = { Text("Delete your Domain?") },
+			text = {
+				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+					Text("This purges your Domain from the servers, not just this phone. It can't be undone.")
+					Text("- Your Domain is removed from the Router", style = MaterialTheme.typography.bodySmall)
+					Text("- Every gateway + device is revoked", style = MaterialTheme.typography.bodySmall)
+					deleteError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+				}
+			},
+			confirmButton = {
+				TextButton(
+					enabled = !deleting,
+					onClick = hapticClick {
+						scope.launch {
+							if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
+							deleting = true
+							deleteError = null
+							when (val outcome = repo.domainAdmin.deleteDomain()) {
+								DeleteDomainOutcome.Deleted -> {
+									confirmDelete = false
+									onClear()
+								}
+								DeleteDomainOutcome.WipedUnconfirmed -> {
+									confirmDelete = false
+									wipedUnconfirmed = true
+								}
+								is DeleteDomainOutcome.Rejected -> {
+									deleting = false
+									deleteError = outcome.error
+								}
+							}
+						}
+					},
+				) { Text("Delete Domain") }
+			},
+			dismissButton = { TextButton(enabled = !deleting, onClick = hapticClick { confirmDelete = false }) { Text("Cancel") } },
+		)
+	}
+	if (wipedUnconfirmed) {
+		AlertDialog(
+			onDismissRequest = { wipedUnconfirmed = false; onClear() },
+			title = { Text("Couldn't reach the servers") },
+			text = { Text("This device was wiped, but we couldn't confirm the purge. Ask the admin to purge it if it survived.") },
+			confirmButton = { TextButton(onClick = hapticClick { wipedUnconfirmed = false; onClear() }) { Text("OK") } },
+		)
+	}
 }
 
 /** Everything that is only meaningful because this console federates: which server it talks to,
