@@ -64,12 +64,31 @@ fun reachCandidates(reach: RouterReach, blobRouterUrl: String, routerPort: Int):
 	// https and the port. Matched on "://" rather than an http prefix because the Gateway twin's
 	// bootstrap can be ws:// or wss://.
 	fun url(host: String, port: Int): String = if (host.contains("://")) host.trimEnd('/') else "https://$host:$port"
+	// Every address goes through [usableHost] and every port through [usablePort], on all three
+	// candidates. This side and the TypeScript twin disagreed on exactly that, invisibly: TS leaned on
+	// truthiness, so a whitespace-only address built `https://   :20001` there and was dropped here,
+	// and a publicPort of 0 became the Router's own port there and was dialed as 0 here. Same
+	// advertised reach, two clients of one Router, two different sockets.
 	return buildList {
-		reach.lanAddresses.filter { it.isNotBlank() }.forEach { add(url(it, routerPort)) }
-		reach.publicHost?.takeIf { it.isNotBlank() }?.let { add(url(it, reach.publicPort ?: routerPort)) }
-		if (blobRouterUrl.isNotBlank()) add(url(blobRouterUrl, routerPort))
+		reach.lanAddresses.forEach { lan -> usableHost(lan)?.let { add(url(it, routerPort)) } }
+		usableHost(reach.publicHost)?.let { add(url(it, usablePort(reach.publicPort) ?: routerPort)) }
+		usableHost(blobRouterUrl)?.let { add(url(it, routerPort)) }
 	}.distinct()
 }
+
+/** An address worth dialing, trimmed, or null. Blank is dropped rather than trimmed to nothing and
+ * dialed: an address made only of whitespace names no host, and building a URL from it spends a
+ * whole connect timeout proving it. Padding is stripped rather than rejected, since a padded address
+ * is a producer's slip and the host inside it is real.
+ *
+ * `isNotBlank` alone was this side's old rule and was not enough: it KEEPS a padded address, so
+ * " 192.168.1.5 " became `https:// 192.168.1.5 :20001` here while the twin kept it too. */
+fun usableHost(host: String?): String? = host?.trim()?.takeIf { it.isNotEmpty() }
+
+/** A port worth dialing, or null for the caller's own default. Checked explicitly rather than by
+ * nullishness, which is what split the two runtimes on 0: `?:` here kept it and `||` there replaced
+ * it, and neither was right, since 0 is not a valid port. */
+fun usablePort(port: Int?): Int? = port?.takeIf { it in 1..65535 }
 
 /** A private address answers from the same subnet or not at all, so it gets seconds rather than the
  * full connect timeout. This is what makes "LAN first, always" cheap when away from home: the cost
@@ -90,4 +109,4 @@ fun isPrivateHost(host: String): Boolean =
 /** The port the blob's `routerUrl` names, else [default]. Used to keep a bootstrap rewrite on the
  * port the owner typed when the Router advertises none. */
 fun reachPort(blobRouterUrl: String, default: Int): Int =
-	runCatching { java.net.URI(blobRouterUrl).port }.getOrNull()?.takeIf { it > 0 } ?: default
+	usablePort(runCatching { java.net.URI(blobRouterUrl).port }.getOrNull()) ?: default

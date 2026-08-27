@@ -71,6 +71,88 @@
 			"reach": {},
 			"bootstrapUrl": "ws://127.0.0.1:41234",
 			"expected": ["ws://127.0.0.1:41234"]
+		},
+		{
+			"name": "ADVERSARIAL: a whitespace-only lan address is dropped, not dialed as a host of spaces",
+			"reach": { "lanAddresses": ["   ", "192.168.1.238"] },
+			"bootstrapUrl": "",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a whitespace-only public host is dropped",
+			"reach": { "publicHost": "  ", "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a whitespace-only bootstrap is dropped, the third candidate's own version of the same bug",
+			"reach": { "lanAddresses": ["192.168.1.238"] },
+			"bootstrapUrl": "\t ",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a padded address is trimmed rather than dialed with its padding",
+			"reach": { "publicHost": " switchboard.example.com ", "lanAddresses": [" 192.168.1.238 "] },
+			"bootstrapUrl": " https://federation-router:20001 ",
+			"expected": [
+				"https://192.168.1.238:20001",
+				"https://switchboard.example.com:20001",
+				"https://federation-router:20001"
+			]
+		},
+		{
+			"name": "ADVERSARIAL: publicPort 0 is not a port, and falls back rather than being dialed",
+			"reach": { "publicHost": "switchboard.example.com", "publicPort": 0, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": ["https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a negative publicPort falls back",
+			"reach": { "publicHost": "switchboard.example.com", "publicPort": -1, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": ["https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a publicPort past the top of the range falls back",
+			"reach": { "publicHost": "switchboard.example.com", "publicPort": 65536, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": ["https://switchboard.example.com:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: both ends of the valid port range are dialed as given",
+			"reach": { "publicHost": "a.example.com", "publicPort": 1, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": ["https://a.example.com:1"]
+		},
+		{
+			"name": "ADVERSARIAL: the top of the valid port range is dialed as given",
+			"reach": { "publicHost": "a.example.com", "publicPort": 65535, "lanAddresses": [] },
+			"bootstrapUrl": "",
+			"expected": ["https://a.example.com:65535"]
+		},
+		{
+			"name": "ADVERSARIAL: a duplicate lan address collapses rather than being dialed twice",
+			"reach": { "publicHost": null, "lanAddresses": ["192.168.1.238", "192.168.1.238"] },
+			"bootstrapUrl": "192.168.1.238",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: a padded duplicate still collapses, since trimming happens before dedup",
+			"reach": { "publicHost": null, "lanAddresses": ["192.168.1.238", " 192.168.1.238 "] },
+			"bootstrapUrl": "",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: several trailing slashes collapse to one candidate, not one per slash",
+			"reach": {},
+			"bootstrapUrl": "https://192.168.1.238:20001///",
+			"expected": ["https://192.168.1.238:20001"]
+		},
+		{
+			"name": "ADVERSARIAL: an all-blank reach with an all-blank bootstrap yields nothing at all",
+			"reach": { "publicHost": "   ", "lanAddresses": ["  ", ""] },
+			"bootstrapUrl": "  ",
+			"expected": []
 		}
 	],
 	"privateHosts": [

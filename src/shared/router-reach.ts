@@ -72,17 +72,43 @@ export function reachCandidates(reach: RouterReach, bootstrapUrl: string, router
 	const url = (host: string, port: number): string =>
 		host.includes("://") ? host.replace(/\/+$/, "") : `https://${host}:${port}`;
 	const out: string[] = [];
-	for (const lan of reach.lanAddresses ?? []) if (lan) out.push(url(lan, routerPort));
-	if (reach.publicHost) out.push(url(reach.publicHost, reach.publicPort || routerPort));
-	if (bootstrapUrl) out.push(url(bootstrapUrl, routerPort));
+	// Every address goes through `usableHost` and every port through `usablePort`, on all three
+	// candidates. The two runtimes disagreed on exactly this and the disagreement was invisible: the
+	// TypeScript side leaned on truthiness, so a whitespace-only address built `https://   :20001` and
+	// a `publicPort` of 0 silently became the Router's own, while Kotlin dropped the first and dialed
+	// the second. Same advertised reach, two clients, two different sockets.
+	for (const lan of reach.lanAddresses ?? []) {
+		const host = usableHost(lan);
+		if (host) out.push(url(host, routerPort));
+	}
+	const publicHost = usableHost(reach.publicHost);
+	if (publicHost) out.push(url(publicHost, usablePort(reach.publicPort) ?? routerPort));
+	const bootstrap = usableHost(bootstrapUrl);
+	if (bootstrap) out.push(url(bootstrap, routerPort));
 	return [...new Set(out)];
+}
+
+/** An address worth dialing, trimmed, or null. Blank is dropped rather than trimmed to nothing and
+ * dialed: an address made only of whitespace names no host, and building a URL from it spends a
+ * whole connect timeout proving it. Padding is stripped rather than rejected, since a padded address
+ * is a producer's slip and the host inside it is real. */
+export function usableHost(host: string | null | undefined): string | null {
+	if (typeof host !== "string") return null;
+	const trimmed = host.trim();
+	return trimmed === "" ? null : trimmed;
+}
+
+/** A port worth dialing, or null for the caller's own default. Checked explicitly rather than by
+ * falsiness or nullishness, which is what split the two runtimes on 0: neither language's operator
+ * was right, since 0 is not a valid port and must not resolve to one silently on either side. */
+export function usablePort(port: number | null | undefined): number | null {
+	return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
 }
 
 /** The port a base URL names, else `fallback`. */
 export function reachPort(baseUrl: string, fallback: number): number {
 	try {
-		const port = Number(new URL(baseUrl).port);
-		return Number.isInteger(port) && port > 0 ? port : fallback;
+		return usablePort(Number(new URL(baseUrl).port)) ?? fallback;
 	} catch {
 		return fallback;
 	}
