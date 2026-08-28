@@ -87,7 +87,7 @@ async function attach(body: string) {
 ////////////////////////////////
 //  Tests
 
-describe("only lexicon's absence degrades, and the reply says so", () => {
+describe("only lexicon being unable to answer degrades, and the reply says so", () => {
 	it("matches by text and notices when no lexicon is installed", async () => {
 		const { key, notices } = await attach("[add](ref://src/cart.ts:Cart:add)");
 

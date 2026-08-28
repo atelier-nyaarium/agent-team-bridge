@@ -67,7 +67,7 @@ name in document order. \`arguments\` names a parameter list and \`arguments:nam
 
 Use \`#text\` without a chain for symbol-less files, regions inside scopes, or outside paths. A chain
 outside the root is refused, and the refusal names the \`#text\` form to write instead. One hash-verified declaration is required for \`exact\`; missing or
-ambiguous names refuse with a paste fix. Only lexicon ABSENCE degrades, with a notice and \`fuzzy\` or
+ambiguous names refuse with a paste fix. Only lexicon being UNABLE TO ANSWER (not installed, incompatible, still warming, a daemon that failed, or an index that refuses the workspace or the file) degrades, with a notice and \`fuzzy\` or
 \`unresolved\` quality plus a reason.
 
 Examples: [render](ref://src/App.tsx:App:render), [second](ref://src/util.js:deepHandler[2]),

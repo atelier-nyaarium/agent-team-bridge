@@ -1,6 +1,6 @@
 import { REF_META_MAX_KEYS, REF_META_MAX_SEGMENTS, type RefFileMeta } from "../../shared/channel-file.js";
 import { safeName, uniqueName } from "./artifactNames.js";
-import type { Resolution } from "./refCoordinates.js";
+import { lineCount, type Resolution } from "./refCoordinates.js";
 import type { FoundRef } from "./refScanner.js";
 
 ////////////////////////////////
@@ -52,10 +52,6 @@ export const MAX_FILE_BYTES = 256 * 1024;
 export const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 
 const CONTEXT_LINES = 3;
-
-function lineCount(text: string): number {
-	return text.split("\n").length;
-}
 
 function bytes(text: string): number {
 	return Buffer.byteLength(text, "utf8");

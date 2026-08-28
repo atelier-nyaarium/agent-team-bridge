@@ -94,7 +94,7 @@ export function withNotices(result: ToolTextResult, notices: string[]): ToolText
 /**
  * The failure split, in one place. A file that cannot be snapshotted, a chain that names nothing
  * or several things, and a matcher that finds nothing are HARD errors the agent can still fix.
- * Only lexicon's absence degrades, shipping a text match with a banner and a notice.
+ * Only lexicon being unable to answer degrades, shipping a text match with a banner and a notice.
  */
 export async function appendRefArtifacts(body: string, attachments: ReplyFile[]): Promise<AttachResult> {
 	if (!enabled) return { ok: true, files: attachments, notices: [] };

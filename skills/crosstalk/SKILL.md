@@ -91,7 +91,7 @@ Use `#text` without a chain for a symbol-less file, a region inside a scope, or 
 project root. A chain outside the root is refused and names that form. Escape spaces and close
 parentheses, or wrap the destination in angle brackets. One hash-verified declaration is required for
 `exact`. Missing or ambiguous names refuse the send with a paste fix and complete candidate refs, or
-the declarations at the chain stop. Only lexicon ABSENCE degrades, with a notice and `fuzzy` or
+the declarations at the chain stop. Only lexicon being UNABLE TO ANSWER (not installed, incompatible, still warming, a daemon that failed, or an index that refuses the workspace or the file) degrades, with a notice and `fuzzy` or
 `unresolved` quality plus a reason.
 
 Examples: [App.tsx : render](ref://src/App.tsx:App:render),

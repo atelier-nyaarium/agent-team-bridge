@@ -9,7 +9,7 @@ import type { ResolvedRef } from "./artifactBuilder.js";
 import { lineCount, lineOf, linesOf, offsetsOf, type Resolution, type Span, spanAt, spanOf } from "./refCoordinates.js";
 import type { LoadResult } from "./refFile.js";
 import { canonicalKey, type Matcher, type Ref } from "./refGrammar.js";
-import { type DegradeCause, noticeFor, reasonFor } from "./refNotices.js";
+import { type DegradeCause, noticeFor, type Refusal, reasonFor, renderRefusal } from "./refNotices.js";
 import type { FoundRef } from "./refScanner.js";
 import { classifyPath, identityOf, type WorkspaceRoot } from "./refWorkspace.js";
 
@@ -32,7 +32,7 @@ export type ResolveOutcome = { ok: true; resolved: ResolvedRef[]; notices: strin
 
 type Notice = { cause: DegradeCause; text: string };
 
-type OneOutcome = { kind: "resolved"; ref: ResolvedRef; notice?: Notice } | { kind: "refused"; error: string };
+type OneOutcome = { kind: "resolved"; ref: ResolvedRef; notice?: Notice } | { kind: "refused"; refusal: Refusal };
 
 type MatcherOutcome = { ok: true; resolution: Partial<Resolution> } | { ok: false; error: string };
 
@@ -73,7 +73,7 @@ export async function resolveRefs(found: FoundRef[], deps: ResolveDeps): Promise
 	for (const entry of found) {
 		const one = await resolveOne(entry, deps, spelling);
 		if (one.kind === "refused") {
-			refusals.push(`${entry.raw}: ${one.error}`);
+			refusals.push(`${entry.raw}: ${renderRefusal(one.refusal)}`);
 			continue;
 		}
 		resolved.push(one.ref);
@@ -97,7 +97,7 @@ async function resolveOne(entry: FoundRef, deps: ResolveDeps, spelling: Spelling
 	const { ref } = entry;
 	const place = classifyPath(deps.workspace.root, ref.path);
 	const loaded = deps.load(place.absolute, ref.path);
-	if (!loaded.ok) return { kind: "refused", error: loaded.detail };
+	if (!loaded.ok) return { kind: "refused", refusal: { kind: "file", detail: loaded.detail } };
 	let text = loaded.file.text;
 	const refPath = spelling(place.absolute, ref.path);
 
@@ -112,13 +112,14 @@ async function resolveOne(entry: FoundRef, deps: ResolveDeps, spelling: Spelling
 		const whole: Resolution = { startLine: 1, endLine: lineCount(text), quality: "exact" };
 		if (ref.matcher === null) return done(whole);
 		const matched = applyMatcher(text, 0, text.length, ref.matcher);
-		return matched.ok ? done({ ...whole, ...matched.resolution }) : { kind: "refused", error: matched.error };
+		if (matched.ok) return done({ ...whole, ...matched.resolution });
+		return { kind: "refused", refusal: { kind: "matcher", detail: matched.error } };
 	}
 
 	if (place.kind === "outside") {
 		return {
 			kind: "refused",
-			error: `a scope chain needs a file inside the workspace root ${deps.workspace.root}; for this file write ${textForm(ref)}`,
+			refusal: { kind: "outsideChain", root: deps.workspace.root, textForm: textForm(ref) },
 		};
 	}
 	if (!deps.workspace.admitted) {
@@ -145,17 +146,14 @@ async function resolveOne(entry: FoundRef, deps: ResolveDeps, spelling: Spelling
 			} else if (answer.diskHash !== null && answer.diskHash !== snapshot && !reread) {
 				reread = true;
 				const again = deps.load(place.absolute, ref.path);
-				if (!again.ok) return { kind: "refused", error: again.detail };
+				if (!again.ok) return { kind: "refused", refusal: { kind: "file", detail: again.detail } };
 				text = again.file.text;
 				snapshot = hashContent(text);
 				answer = await chain();
 			} else break;
 		}
 		if (bearsContent(answer) && answer.kind !== "none" && answer.contentHash !== snapshot) {
-			return {
-				kind: "refused",
-				error: `the index and the file disagree about ${ref.path}; send again, or use ${textForm(ref)}`,
-			};
+			return { kind: "refused", refusal: { kind: "disagree", path: ref.path, textForm: textForm(ref) } };
 		}
 
 		if (answer.kind === "none") return noneOutcome(answer, ref, text, done);
@@ -195,7 +193,7 @@ function exactOutcome(
 	if (!matched.ok) {
 		return {
 			kind: "refused",
-			error: `${matched.error} inside ${chainOf(ref)} (lines ${lines.startLine}-${lines.endLine})`,
+			refusal: { kind: "matcher", detail: matched.error, scope: { chain: chainOf(ref), ...lines } },
 		};
 	}
 	const { span: _span, ...withoutSpan } = base;
@@ -214,10 +212,9 @@ async function ambiguousOutcome(
 		if (again.kind !== "exact") continue;
 		offers.push(canonicalKey({ path: ref.path, segments: candidate.segments, matcher: ref.matcher }));
 	}
-	const list = offers.length > 0 ? offers.join(", ") : textForm(ref);
 	return {
 		kind: "refused",
-		error: `${candidates.length} declarations match ${chainOf(ref)}; pick one: ${list}`,
+		refusal: { kind: "ambiguous", chain: chainOf(ref), count: candidates.length, offers, textForm: textForm(ref) },
 	};
 }
 
@@ -227,46 +224,40 @@ function noneOutcome(
 	text: string,
 	done: (resolution: Resolution, notice?: Notice) => OneOutcome,
 ): OneOutcome {
+	const refused = (refusal: Refusal): OneOutcome => ({ kind: "refused", refusal });
 	switch (answer.reason) {
 		case "missing":
-			return { kind: "refused", error: `${ref.path} disappeared while the reply was being prepared` };
+			return refused({ kind: "vanished", path: ref.path });
 		case "unclaimed":
-			return {
-				kind: "refused",
-				error: `no provider indexes ${ref.path}${answer.detail ? ` (${answer.detail})` : ""}; write ${textForm(ref)}`,
-			};
+			return refused({ kind: "unclaimed", path: ref.path, detail: answer.detail, textForm: textForm(ref) });
 		case "parseFailed":
-			return {
-				kind: "refused",
-				error: `the index could not parse ${ref.path}${answer.detail ? `: ${answer.detail}` : ""}; write ${textForm(ref)}`,
-			};
+			return refused({ kind: "parseFailed", path: ref.path, detail: answer.detail, textForm: textForm(ref) });
 		case "binary":
 		case "tooLarge":
 			return done(...degraded(text, ref, "indexRefused", answer.detail));
 		case "unread":
 			return done(...degraded(text, ref, "warming", answer.detail));
 		case "noMatch":
-			return { kind: "refused", error: noMatchSentence(answer, ref) };
+			return refused(noMatchRefusal(answer, ref));
 	}
 }
 
-/** How far the chain got, what is declared there, and the text form; the fix is in the sentence. */
-function noMatchSentence(answer: Extract<ChainAnswer, { kind: "none" }>, ref: Ref): string {
+/** How far the chain got and what is declared there, so the refusal carries the fix. */
+function noMatchRefusal(answer: Extract<ChainAnswer, { kind: "none" }>, ref: Ref): Refusal {
 	const failing = ref.segments[answer.matched.consumed] ?? ref.segments.at(-1) ?? "";
 	const where =
 		answer.matched.consumed === 0 || answer.matched.containerPaths.length === 0
 			? `in ${ref.path}`
 			: `under ${answer.matched.containerPaths.map((path) => path.join(":")).join(" or ")}`;
-	const count =
-		answer.matched.count > 0 ? ` (${answer.matched.count} named ${JSON.stringify(failing)} at other depths)` : "";
-	const unlisted = answer.availableTotal - answer.available.length;
-	const listed =
-		answer.available.length === 0
-			? answer.availableTotal === 0
-				? "nothing is declared there"
-				: `${answer.availableTotal} declarations there, none listed`
-			: `declared there: ${answer.available.join(", ")}${unlisted > 0 ? ` and ${unlisted} more` : ""}`;
-	return `no declaration named ${JSON.stringify(failing)} ${where}${count}; ${listed}; or write ${textForm(ref)}`;
+	return {
+		kind: "noMatch",
+		failing,
+		where,
+		count: answer.matched.count,
+		available: answer.available,
+		availableTotal: answer.availableTotal,
+		textForm: textForm(ref),
+	};
 }
 
 /** The text tier, only ever reached when lexicon could not answer: the last segment's first occurrence, else the whole file. */

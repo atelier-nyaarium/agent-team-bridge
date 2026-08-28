@@ -1,10 +1,11 @@
-// The one renderer of why a ref was not resolved on the index: the wire `reason` a snapshot
-// carries and the notice a reply prints, from one closed cause.
+// The one owner of what the agent reads about a ref that was not resolved on the index: the
+// refusal that stops a send, the wire `reason` a degraded snapshot carries, and the notice a reply
+// prints, each rendered from a closed value.
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** Only lexicon's absence degrades; everything an author can fix refuses instead. */
+/** Only lexicon being unable to answer degrades; everything an author can fix refuses instead. */
 export type DegradeCause =
 	| "notInstalled"
 	| "incompatible"
@@ -13,6 +14,26 @@ export type DegradeCause =
 	| "connectionLost"
 	| "noWorkspace"
 	| "indexRefused";
+
+/** Why a send stops, with what the author needs to fix it; `textForm` is always a ref that would go. */
+export type Refusal =
+	| { kind: "file"; detail: string }
+	| { kind: "matcher"; detail: string; scope?: { chain: string; startLine: number; endLine: number } }
+	| { kind: "outsideChain"; root: string; textForm: string }
+	| { kind: "vanished"; path: string }
+	| { kind: "unclaimed"; path: string; detail?: string; textForm: string }
+	| { kind: "parseFailed"; path: string; detail?: string; textForm: string }
+	| { kind: "disagree"; path: string; textForm: string }
+	| { kind: "ambiguous"; chain: string; count: number; offers: string[]; textForm: string }
+	| {
+			kind: "noMatch";
+			failing: string;
+			where: string;
+			count: number;
+			available: string[];
+			availableTotal: number;
+			textForm: string;
+	  };
 
 ////////////////////////////////
 //  Constants
@@ -48,4 +69,40 @@ export function reasonFor(cause: DegradeCause, detail: string | undefined, landi
 export function noticeFor(cause: DegradeCause, detail?: string): string {
 	const why = detail === undefined || detail === "" ? SENTENCES[cause] : `${SENTENCES[cause]}: ${detail}`;
 	return `refs: ${why}`;
+}
+
+/** The sentence a refusal shows the agent; the fix to paste is in it. */
+export function renderRefusal(refusal: Refusal): string {
+	switch (refusal.kind) {
+		case "file":
+			return refusal.detail;
+		case "matcher":
+			return refusal.scope === undefined
+				? refusal.detail
+				: `${refusal.detail} inside ${refusal.scope.chain} (lines ${refusal.scope.startLine}-${refusal.scope.endLine})`;
+		case "outsideChain":
+			return `a scope chain needs a file inside the workspace root ${refusal.root}; for this file write ${refusal.textForm}`;
+		case "vanished":
+			return `${refusal.path} disappeared while the reply was being prepared`;
+		case "unclaimed":
+			return `no provider indexes ${refusal.path}${refusal.detail ? ` (${refusal.detail})` : ""}; write ${refusal.textForm}`;
+		case "parseFailed":
+			return `the index could not parse ${refusal.path}${refusal.detail ? `: ${refusal.detail}` : ""}; write ${refusal.textForm}`;
+		case "disagree":
+			return `the index and the file disagree about ${refusal.path}; send again, or use ${refusal.textForm}`;
+		case "ambiguous":
+			return `${refusal.count} declarations match ${refusal.chain}; pick one: ${refusal.offers.length > 0 ? refusal.offers.join(", ") : refusal.textForm}`;
+		case "noMatch": {
+			const count =
+				refusal.count > 0 ? ` (${refusal.count} named ${JSON.stringify(refusal.failing)} at other depths)` : "";
+			const unlisted = refusal.availableTotal - refusal.available.length;
+			const listed =
+				refusal.available.length === 0
+					? refusal.availableTotal === 0
+						? "nothing is declared there"
+						: `${refusal.availableTotal} declarations there, none listed`
+					: `declared there: ${refusal.available.join(", ")}${unlisted > 0 ? ` and ${unlisted} more` : ""}`;
+			return `no declaration named ${JSON.stringify(refusal.failing)} ${refusal.where}${count}; ${listed}; or write ${refusal.textForm}`;
+		}
+	}
 }

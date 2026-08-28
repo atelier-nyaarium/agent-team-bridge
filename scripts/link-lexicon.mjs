@@ -1,8 +1,5 @@
-// Links the lexicon submodule's packages into node_modules/@nyaa-lexicon for tsc and vitest.
-//
-// Run by node from `postinstall`, so an npm install without bun survives it. The submodule stays
-// out of the package graph on purpose: a workspaces entry fails every consumer whose clone left it
-// empty, so the link is made here and only when the package is actually present.
+// Links the lexicon submodule's packages into node_modules/@nyaa-lexicon for tsc and vitest, only
+// when they are present: a workspaces entry would fail every consumer whose clone left it empty.
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import path from "node:path";
