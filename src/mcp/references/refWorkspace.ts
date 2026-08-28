@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { classifyWorkspaceRoot, currentHost } from "@nyaa-lexicon/client";
 import { normalizeModulePath } from "@nyaa-lexicon/protocol";
+import { pluginRoot } from "../../shared/plugin-root.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -111,10 +112,29 @@ function gitToplevel(cwd: string): string | null {
 	}
 }
 
-/** `REFERENCE_ROOT` as written; else the host's first root, else the cwd, each taken to its git toplevel. Judged once. */
+function within(parent: string, child: string): boolean {
+	const relative = path.relative(identityOf(parent), identityOf(child));
+	return (
+		relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+	);
+}
+
+/** The directory judged when the host names no root: the cwd, unless the host started this server inside its own plugin checkout, where the shell's `PWD` is where the host was launched. */
+export function startDirectory(cwd: string, pwd: string | undefined, plugin: string): string {
+	if (!within(plugin, cwd) || !pwd) return cwd;
+	const shell = path.resolve(pwd);
+	if (shell === cwd) return cwd;
+	try {
+		return fs.statSync(shell).isDirectory() ? shell : cwd;
+	} catch {
+		return cwd;
+	}
+}
+
+/** `REFERENCE_ROOT` as written; else the host's first root, else the start directory, each taken to its git toplevel. Judged once. */
 export function workspaceRoot(): WorkspaceRoot {
 	if (captured !== null) return captured;
-	const start = hostRoot() ?? process.cwd();
+	const start = hostRoot() ?? startDirectory(process.cwd(), process.env.PWD, pluginRoot());
 	const root = path.resolve(process.env.REFERENCE_ROOT || gitToplevel(start) || start);
 	const admission = classifyWorkspaceRoot(root, currentHost());
 	captured = admission.admitted ? { root, admitted: true } : { root, admitted: false, reason: admission.reason };

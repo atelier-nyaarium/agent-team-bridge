@@ -10,6 +10,7 @@ import {
 	hostRootsSettled,
 	resetWorkspaceRoot,
 	setHostRoots,
+	startDirectory,
 	workspaceRoot,
 } from "../mcp/references/refWorkspace.js";
 
@@ -99,6 +100,30 @@ describe("the host's roots", () => {
 		expectHostRoots();
 		resetWorkspaceRoot();
 		await hostRootsSettled();
+	});
+});
+
+describe("the start directory when the host names no root", () => {
+	it("reads the shell's PWD when the server was started inside its own plugin checkout", () => {
+		const plugin = path.join(root, "plugin");
+		const project = path.join(root, "project");
+		fs.mkdirSync(path.join(plugin, "dist"), { recursive: true });
+		fs.mkdirSync(project);
+		expect(startDirectory(plugin, project, plugin)).toBe(project);
+		expect(startDirectory(path.join(plugin, "dist"), project, plugin)).toBe(project);
+	});
+
+	it("keeps the cwd when it is a project, when PWD is unset, the same, or not a directory", () => {
+		const plugin = path.join(root, "plugin");
+		const project = path.join(root, "project");
+		fs.mkdirSync(plugin);
+		fs.mkdirSync(project);
+		fs.writeFileSync(path.join(root, "file.txt"), "x\n");
+		expect(startDirectory(project, plugin, plugin)).toBe(project);
+		expect(startDirectory(plugin, undefined, plugin)).toBe(plugin);
+		expect(startDirectory(plugin, plugin, plugin)).toBe(plugin);
+		expect(startDirectory(plugin, path.join(root, "file.txt"), plugin)).toBe(plugin);
+		expect(startDirectory(plugin, path.join(root, "missing"), plugin)).toBe(plugin);
 	});
 });
 

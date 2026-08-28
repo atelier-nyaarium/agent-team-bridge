@@ -606,9 +606,10 @@ nth same-named declaration in document order. `arguments` names a parameter list
 names one parameter.
 
 The project root is the host's first `roots/list` answer, else the server's cwd, taken to its git
-toplevel; `REFERENCE_ROOT` overrides both as written (`refWorkspace.ts`). Copilot starts plugin
-servers in the plugin directory, which is why cwd is the fallback and not the rule. A reply with
-refs waits for the host's answer, bounded by `HOST_ROOTS_TIMEOUT_MS`.
+toplevel; `REFERENCE_ROOT` overrides both as written (`refWorkspace.ts`). A cwd inside this plugin's
+own directory means the host did not start the server in a project (Copilot starts plugin servers
+there), and the shell's `PWD` stands in for it. A reply with refs waits for the host's answer,
+bounded by `HOST_ROOTS_TIMEOUT_MS`.
 
 Use `#text` without a chain for a symbol-less file, a region inside a scope, or a path outside the
 project root. A chain outside the root is refused and names that form. Escape spaces and close
