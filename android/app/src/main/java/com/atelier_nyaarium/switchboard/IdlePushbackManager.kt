@@ -118,11 +118,11 @@ class IdlePushbackManager(
 	 * `ChatRepository`'s own foreground flag, passed in rather than duplicated on this manager -
 	 * a separate manager-side field written by a second, non-atomic @Volatile store could
 	 * transiently disagree with it. */
-	fun decide(now: Long, visible: Boolean, lastPassFailed: Boolean): PollWait {
+	fun decide(now: Long, visible: Boolean, lastPassFailed: Boolean, watchedWorking: Boolean): PollWait {
 		// Snapshot the tier ONCE: silenceStartAt is @Volatile and can change mid-decide from the
 		// main thread (onBackground). Reading it twice risked the deep branch handing
 		// nextAlignedMark a tier its own first read never chose.
-		val tier = tierFor(visible, now - silenceStartAt)
+		val tier = tierFor(visible, now - silenceStartAt, watchedWorking)
 		val wait = when (tier) {
 			PollTier.FOREGROUND -> PollWait.Chain
 			PollTier.MINUTE -> PollWait.Delay(MINUTE_MS)
@@ -146,14 +146,42 @@ class IdlePushbackManager(
 	}
 }
 
-/** Which cadence tier applies right now. Pure, top-level, unit-tested without Android - the
- * `filterTombstoned` pattern. */
-internal fun tierFor(foreground: Boolean, silenceMs: Long): PollTier = when {
-	foreground -> PollTier.FOREGROUND
-	silenceMs < SILENCE_MINUTE_MAX_MS -> PollTier.MINUTE
-	silenceMs < SILENCE_HALF_HOUR_MAX_MS -> PollTier.HALF_HOUR
-	silenceMs < SILENCE_HOURLY_MAX_MS -> PollTier.HOURLY
-	else -> PollTier.TWELVE_HOUR
+/**
+ * How deep the ladder may go while a session the owner has a tab open for is working.
+ *
+ * The silence clock's only input is MAIL, and a working session produces none until it finishes -
+ * so the ladder keeps descending through exactly the stretch its owner most wants reported, and a
+ * chip can be half an hour behind on a session they are watching. An open tab is a declaration of
+ * interest; a working session under one is interest plus something happening.
+ *
+ * MINUTE holds the wakelock, so this is a real battery cost for as long as the work runs. It is
+ * bounded by the work itself: nothing here is sticky, the cap simply stops applying when the
+ * session stops working and the ladder resumes from wherever the silence clock had got to. Move it
+ * to HALF_HOUR if that cost is not worth it - that still releases the wakelock and still refuses
+ * the hourly and twice-daily tiers, at up to thirty minutes of staleness.
+ */
+private val WATCHED_WORKING_CAP = PollTier.MINUTE
+
+/**
+ * Which cadence tier applies right now. Pure, top-level, unit-tested without Android - the
+ * `filterTombstoned` pattern.
+ *
+ * `watchedWorking` is REQUIRED rather than defaulted. A default is the spellable mistake here: a new
+ * caller that forgets it gets the un-capped ladder silently, which is the behaviour this exists to
+ * stop, and nothing would fail.
+ */
+internal fun tierFor(foreground: Boolean, silenceMs: Long, watchedWorking: Boolean): PollTier {
+	val natural = when {
+		foreground -> PollTier.FOREGROUND
+		silenceMs < SILENCE_MINUTE_MAX_MS -> PollTier.MINUTE
+		silenceMs < SILENCE_HALF_HOUR_MAX_MS -> PollTier.HALF_HOUR
+		silenceMs < SILENCE_HOURLY_MAX_MS -> PollTier.HOURLY
+		else -> PollTier.TWELVE_HOUR
+	}
+	// A CAP, never an override: enum order is the ladder's own order, so this can only ever make the
+	// cadence faster. Foreground stays foreground, and a tier already at or above the cap is left
+	// alone rather than being dragged down to it.
+	return if (watchedWorking && natural > WATCHED_WORKING_CAP) WATCHED_WORKING_CAP else natural
 }
 
 /** The next strictly-future aligned wall-clock mark for a deep tier, in epoch millis

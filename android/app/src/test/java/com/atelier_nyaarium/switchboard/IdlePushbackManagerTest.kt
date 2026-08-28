@@ -18,17 +18,65 @@ class IdlePushbackManagerTest {
 
 	@Test
 	fun tierForBoundaries() {
-		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = 0))
-		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = Long.MAX_VALUE))
+		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = 0, watchedWorking = false))
+		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = Long.MAX_VALUE, watchedWorking = false))
 
-		assertEquals(PollTier.MINUTE, tierFor(foreground = false, silenceMs = 599_999))
-		assertEquals(PollTier.HALF_HOUR, tierFor(foreground = false, silenceMs = 600_000))
+		assertEquals(PollTier.MINUTE, tierFor(foreground = false, silenceMs = 599_999, watchedWorking = false))
+		assertEquals(PollTier.HALF_HOUR, tierFor(foreground = false, silenceMs = 600_000, watchedWorking = false))
 
-		assertEquals(PollTier.HALF_HOUR, tierFor(foreground = false, silenceMs = 35_999_999))
-		assertEquals(PollTier.HOURLY, tierFor(foreground = false, silenceMs = 36_000_000))
+		assertEquals(PollTier.HALF_HOUR, tierFor(foreground = false, silenceMs = 35_999_999, watchedWorking = false))
+		assertEquals(PollTier.HOURLY, tierFor(foreground = false, silenceMs = 36_000_000, watchedWorking = false))
 
-		assertEquals(PollTier.HOURLY, tierFor(foreground = false, silenceMs = 172_799_999))
-		assertEquals(PollTier.TWELVE_HOUR, tierFor(foreground = false, silenceMs = 172_800_000))
+		assertEquals(PollTier.HOURLY, tierFor(foreground = false, silenceMs = 172_799_999, watchedWorking = false))
+		assertEquals(PollTier.TWELVE_HOUR, tierFor(foreground = false, silenceMs = 172_800_000, watchedWorking = false))
+	}
+
+	// ---- the watched-working cap ----
+
+	/**
+	 * The silence clock measures MAIL, and a working session sends none until it finishes - so the
+	 * ladder would descend through exactly the stretch its owner most wants reported. An open tab is
+	 * a declaration of interest; a session working under one holds the cadence at the top of the
+	 * ladder for as long as the work runs.
+	 */
+	@Test
+	fun watchedWorkingCapsEveryDeepTier() {
+		for (silence in listOf(600_000L, 36_000_000L, 172_800_000L, Long.MAX_VALUE)) {
+			assertEquals(
+				"silence=$silence must cap at MINUTE while a watched session works",
+				PollTier.MINUTE,
+				tierFor(foreground = false, silenceMs = silence, watchedWorking = true),
+			)
+		}
+	}
+
+	// A CAP, never an override. It may only make the cadence faster, so the two tiers already at or
+	// above it are untouched - foreground especially, which must keep chaining long-polls.
+	@Test
+	fun theCapNeverSlowsATierDown() {
+		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = 0, watchedWorking = true))
+		assertEquals(PollTier.FOREGROUND, tierFor(foreground = true, silenceMs = Long.MAX_VALUE, watchedWorking = true))
+		assertEquals(PollTier.MINUTE, tierFor(foreground = false, silenceMs = 0, watchedWorking = true))
+	}
+
+	// Nothing sticky: the cap stops applying the moment the work does, and the ladder resumes from
+	// wherever the silence clock had already got to rather than restarting from the top.
+	@Test
+	fun theCapLiftsItselfWhenTheWorkStops() {
+		assertEquals(PollTier.MINUTE, tierFor(foreground = false, silenceMs = 172_800_000, watchedWorking = true))
+		assertEquals(PollTier.TWELVE_HOUR, tierFor(foreground = false, silenceMs = 172_800_000, watchedWorking = false))
+	}
+
+	// The whole point, at the level the poll loop actually asks: a deep-tier silence that would have
+	// parked on an alarm becomes a kickable one-minute wait instead, with the wakelock held.
+	@Test
+	fun aWatchedWorkingSessionKeepsTheLoopOutOfDeepSleep() {
+		val (mgr, _) = manager(hydrateNow = 0L)
+		val parked = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false, watchedWorking = false)
+		assertTrue("without the cap this silence parks on an alarm", parked is PollWait.Alarm)
+
+		val held = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false, watchedWorking = true)
+		assertEquals(PollWait.Delay(60_000L), held)
 	}
 
 	// ---- nextAlignedMark ----
@@ -172,7 +220,7 @@ class IdlePushbackManagerTest {
 	@Test
 	fun foregroundAlwaysChainsAndExitsDeepSleep() {
 		val (mgr, scheduler) = manager()
-		val wait = mgr.decide(now = 100_000L, visible = true, lastPassFailed = false)
+		val wait = mgr.decide(now = 100_000L, visible = true, lastPassFailed = false, watchedWorking = false)
 		assertEquals(PollWait.Chain, wait)
 		assertTrue(scheduler.exitedDeepSleep)
 	}
@@ -181,7 +229,7 @@ class IdlePushbackManagerTest {
 	fun freshlyBackgroundedIsMinute() {
 		val (mgr, scheduler) = manager()
 		mgr.onBackground(1_000L)
-		val wait = mgr.decide(now = 1_000L, visible = false, lastPassFailed = false)
+		val wait = mgr.decide(now = 1_000L, visible = false, lastPassFailed = false, watchedWorking = false)
 		assertEquals(PollWait.Delay(60_000L), wait)
 		assertTrue(scheduler.exitedDeepSleep)
 	}
@@ -190,7 +238,7 @@ class IdlePushbackManagerTest {
 	fun tenMinutesSilentSchedulesAnAlarm() {
 		val (mgr, scheduler) = manager()
 		mgr.onBackground(0L)
-		val wait = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false)
+		val wait = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false, watchedWorking = false)
 		assertTrue(wait is PollWait.Alarm)
 		assertEquals((wait as PollWait.Alarm).atMillis, scheduler.deepSleepAt)
 	}
@@ -199,7 +247,7 @@ class IdlePushbackManagerTest {
 	fun tenHoursSilentLandsOnATopOfHourMark() {
 		val (mgr, _) = manager()
 		mgr.onBackground(0L)
-		val wait = mgr.decide(now = 10 * 3_600_000L, visible = false, lastPassFailed = false) as PollWait.Alarm
+		val wait = mgr.decide(now = 10 * 3_600_000L, visible = false, lastPassFailed = false, watchedWorking = false) as PollWait.Alarm
 		val landed = Instant.ofEpochMilli(wait.atMillis).atZone(utc)
 		assertEquals("decide() must hand nextAlignedMark the HOURLY tier, not a HALF_HOUR guess", 0, landed.minute)
 	}
@@ -208,7 +256,7 @@ class IdlePushbackManagerTest {
 	fun fortyEightHoursSilentLandsOnAnEightOrTwentyMark() {
 		val (mgr, _) = manager()
 		mgr.onBackground(0L)
-		val wait = mgr.decide(now = 48 * 3_600_000L, visible = false, lastPassFailed = false) as PollWait.Alarm
+		val wait = mgr.decide(now = 48 * 3_600_000L, visible = false, lastPassFailed = false, watchedWorking = false) as PollWait.Alarm
 		val landed = Instant.ofEpochMilli(wait.atMillis).atZone(utc)
 		assertTrue("decide() must hand nextAlignedMark the TWELVE_HOUR tier", landed.hour == 8 || landed.hour == 20)
 	}
@@ -218,7 +266,7 @@ class IdlePushbackManagerTest {
 		val (mgr, scheduler) = manager()
 		mgr.onBackground(0L)
 
-		val first = mgr.decide(now = 600_000L, visible = false, lastPassFailed = true)
+		val first = mgr.decide(now = 600_000L, visible = false, lastPassFailed = true, watchedWorking = false)
 		assertEquals(PollWait.Delay(60_000L), first)
 		// Pins the DERIVATION, not a coincidental literal: this exact relationship (DEEP_RETRY_MS's
 		// wait consuming part of the held budget, PASS_GRACE_MS covering the rest) must hold, since
@@ -229,11 +277,11 @@ class IdlePushbackManagerTest {
 		assertTrue("the retry grace must cover the retry pass's own worst-case join", PASS_GRACE_MS >= BURST_JOIN_TIMEOUT_MS)
 		assertTrue("the initial pass-lock acquisition must itself cover at least one worst-case join", PASS_TIMEOUT_MS >= BURST_JOIN_TIMEOUT_MS)
 
-		val second = mgr.decide(now = 660_000L, visible = false, lastPassFailed = true)
+		val second = mgr.decide(now = 660_000L, visible = false, lastPassFailed = true, watchedWorking = false)
 		assertTrue("the budget is consumed: a second consecutive failure schedules the alarm, not another retry", second is PollWait.Alarm)
 
 		// A LATER mark's own failure must get its own fresh retry budget, not find it exhausted.
-		val third = mgr.decide(now = (second as PollWait.Alarm).atMillis, visible = false, lastPassFailed = true)
+		val third = mgr.decide(now = (second as PollWait.Alarm).atMillis, visible = false, lastPassFailed = true, watchedWorking = false)
 		assertEquals("the retry budget resets per mark, not just once", PollWait.Delay(60_000L), third)
 	}
 
@@ -242,7 +290,7 @@ class IdlePushbackManagerTest {
 		val (mgr, _) = manager()
 		mgr.onBackground(0L)
 		mgr.onCommsActivity(600_000L, visible = false)
-		val wait = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false)
+		val wait = mgr.decide(now = 600_000L, visible = false, lastPassFailed = false, watchedWorking = false)
 		assertEquals(PollWait.Delay(60_000L), wait)
 	}
 
@@ -256,7 +304,7 @@ class IdlePushbackManagerTest {
 		// without ever exercising the clamp - checking at now == hydrateNow could not tell the two
 		// apart at all.
 		val (mgr, _) = manager(store = FakeStore(initial = 10_000L), hydrateNow = 5_000L)
-		val wait = mgr.decide(now = 5_000L + 600_001L, visible = false, lastPassFailed = false)
+		val wait = mgr.decide(now = 5_000L + 600_001L, visible = false, lastPassFailed = false, watchedWorking = false)
 		assertTrue("the clamp must land this in a deep tier, not MINUTE", wait is PollWait.Alarm)
 	}
 
@@ -266,7 +314,7 @@ class IdlePushbackManagerTest {
 		// first background transition) must default to "just active", not "silent since the epoch".
 		val hydrateNow = 1_700_000_000_000L
 		val (mgr, _) = manager(store = FakeStore(initial = null), hydrateNow = hydrateNow)
-		val wait = mgr.decide(now = hydrateNow, visible = false, lastPassFailed = false)
+		val wait = mgr.decide(now = hydrateNow, visible = false, lastPassFailed = false, watchedWorking = false)
 		assertEquals(PollWait.Delay(60_000L), wait)
 	}
 }

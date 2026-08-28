@@ -566,7 +566,14 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				// The wait tier (and its alarm/wakelock side effects) comes from the silence ladder.
 				// A foreground kick interrupts any wait so the user never stares at stale state;
 				// visible long-polls chain back-to-back, failures and ignored holds back off to 5s.
-				when (val wait = repo.pushback.decide(System.currentTimeMillis(), repo.isVisible, failed)) {
+				//
+				// An open tab is a declaration of interest, and the ladder is otherwise blind to a
+				// session working under one: it measures MAIL, and a working session sends none until
+				// it finishes. Read through `working`, which is the same presence-first answer the
+				// session tiles and the thread chip use, so the cadence cannot disagree with what the
+				// owner is being shown.
+				val watchedWorking = repo._state.value.let { s -> s.openTabs.any { tab -> s.working(tab) } }
+				when (val wait = repo.pushback.decide(System.currentTimeMillis(), repo.isVisible, failed, watchedWorking)) {
 					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
 					// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below
