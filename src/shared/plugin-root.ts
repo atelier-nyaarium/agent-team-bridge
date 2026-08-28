@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 //  Functions & Helpers
 
 /**
- * The directory this project's committed runtime assets sit under: `grammars/` for the tree-sitter
- * wasms, `android/` for the console's vendored markdown parser.
+ * The directory this project's committed runtime assets sit under: `android/` for the console's
+ * vendored markdown parser.
  *
  * Searched rather than counted in `".."`, because the modules that need it run from two depths: their
  * own place under `src/`, and the bundled `dist/main-mcp.js`. A fixed count is right for exactly one.

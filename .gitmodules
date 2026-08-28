@@ -1,0 +1,3 @@
+[submodule "lexicon"]
+	path = lexicon
+	url = https://github.com/atelier-nyaarium/nyaa-lexicon.git

@@ -8,7 +8,7 @@ import {
 import { bridgeConversationId, confirmHandshakeRole } from "../bridge/helpers.js";
 import { postReply, readReplyAttachments, type ToolTextResult, toolError } from "../bridge/replyTool.js";
 import { type Capability, capabilityInstructions } from "../capabilities.js";
-import { appendRefArtifacts } from "../references/attachRefs.js";
+import { appendRefArtifacts, withNotices } from "../references/attachRefs.js";
 
 ////////////////////////////////
 //  Payload builders (pure - the wire mapping, testable without a network call)
@@ -54,7 +54,12 @@ export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTe
 	if (!withRefs.ok) return toolError(withRefs.error);
 	if (withRefs.files.length > 0) payload.files = withRefs.files;
 
-	return postReply(payload, { toolName: "channel_reply", logPrefix: "channel", responseFieldLabel: "full" });
+	const sent = await postReply(payload, {
+		toolName: "channel_reply",
+		logPrefix: "channel",
+		responseFieldLabel: "full",
+	});
+	return withNotices(sent, withRefs.notices);
 }
 
 export async function handleChannelReplyStructured(args: ChannelReplyStructuredArgs): Promise<ToolTextResult> {

@@ -117,7 +117,7 @@ code does not belong here; rationale lives in `git log`.
   - `bridge/` - `crosstalk_send` / `_discover` / `_wait`, plus shared reply helpers and the
     escaped-newline lint
   - `channel/` - `channel_reply`, `channel_reply_structured`, `notify_human`, channel push
-  - `references/` - `ref://` resolution: lexer, grammar, tree-sitter resolver, artifact builder
+  - `references/` - `ref://` resolution: lexer, grammar, lexicon resolver, artifact builder
   - `board/` - the `taskBoard*` tools, registered only when the console announced `taskboard`.
     `taskBoardFetchAttachments` is the two-hop read: names to blobIds on the route, then bytes
   - `designer/` / `connector/` - designer cards; game-client connector
@@ -235,7 +235,7 @@ code does not belong here; rationale lives in `git log`.
   its options live in `setup-gateway.ts` / `setup-provision.ts` / `setup-purge.ts` /
   `setup-enrollment-ui.ts`, and `setup-status.ts` is the state header it draws first),
   `start-federation.ts` (what `start-federation.sh` execs), `check-module-residue.ts`,
-  `import-stts-voices.ts`, `build-grammars.ts`
+  `import-stts-voices.ts`
   - `lib/routerStart.ts` - the ONE place that decides what `.env` holds for the Router: mints the
     tokens, detects and writes the LAN bind on every start, reads and writes the public reach, and
     brings the Router up. Both `start-federation.ts` and Admin Provision go through it
@@ -599,29 +599,28 @@ reusing `send` and the existing `tmux_send` op.
 
 ### Artifact references (`ref://`)
 
-An agent writes a markdown link to `ref://path:Scope:Name#matcher`; the MCP resolves it with
-tree-sitter and attaches one file snapshot per referenced file. Lives in `mcp/references/`.
+Only `full` on `channel_reply` and `notify_human` scans markdown links. Other fields, crosstalk, code
+fences, and inline code do not scan. Use a root-relative path with optional colon-separated scope and
+name segments. Bare is project-relative, `/x` is filesystem-root, and `~/x` is home. `[n]` selects the
+nth same-named declaration in document order. `arguments` names a parameter list and `arguments:name`
+names one parameter.
 
-- **A snapshot declares itself.** Each carries `role: "ref-snapshot"` plus a `ref` block naming its
-  source path, the canonical keys it backs, and (in snippet mode) its slicing as `(startLine,
-  lineCount)` pairs. There is no manifest file and no reserved filename: a receiver classifies from
-  the file entry it is already holding, so nothing has to be read, timed, or kept unclaimable.
-- **The snapshot's bytes ARE its segments joined by newline**, which is why line counts alone
-  partition it. `artifactBuilder`'s join and `RefPayload.payloadFor`'s slicing are inverses; break
-  one and the viewer renders the wrong lines under the right header.
-- **Grammars are COMMITTED wasm** under `grammars/`, built by `scripts/build-grammars.ts` from pinned
-  npm sources. Never harvest a package's own prebuilt wasm: the 0.26 runtime will not load one built
-  by an older CLI. Rerun the script and commit after changing a pin.
-- **The canonical key is the contract.** It splits on structural separators BEFORE percent-decoding,
-  and must be idempotent, since the MCP writes it and the console recomputes it from a tapped link.
-- **Detection borrows the console's own vendored markdown parser**, so both sides agree by identity
-  on what is a link. `linkify: false` is load-bearing.
-- **Paths are shell-style:** bare is project-relative, `/` is filesystem root, `~/` is home.
-- **The file tier fails loudly; RESOLUTION always degrades.** A moved line ships with a banner,
-  because refusing to send over a stale pointer is worse than opening roughly in the right place.
-- **Teaching lives in the plugin's own manifest** (`agent_instructions`), reached through
-  `switchboard_capabilities` rather than the always-on block, which names capabilities and carries no
-  guidance. `skills/crosstalk/SKILL.md` has the short version and points at the same tool.
+Use `#text` without a chain for a symbol-less file, a region inside a scope, or a path outside the
+project root. A chain outside the root is refused and names that form. Escape spaces and close
+parentheses, or wrap the destination in angle brackets. One hash-verified declaration is required for
+`exact`. Missing or ambiguous names refuse the send with a paste fix and complete candidate refs, or
+the declarations at the chain stop. Only lexicon ABSENCE degrades, with a notice and `fuzzy` or
+`unresolved` quality plus a reason.
+
+Examples: [App.tsx : render](ref://src/App.tsx:App:render),
+[util.js : second deepHandler](ref://src/util.js:deepHandler[2]),
+[Svc.cs : Compute](ref://src/Svc.cs:Acme.Services:Service:Compute),
+[engine.cpp : step](ref://src/engine.cpp:Physics::World::step),
+[cart.ts : qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty),
+[notes](ref://NOTES.md#Checkout),
+[cart.ts : region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
+[nginx.conf : text](ref:///etc/nginx/nginx.conf#server),
+[bashrc : text](ref://~/.bashrc#export%20PATH).
 
 ### Capability union
 
@@ -1429,7 +1428,7 @@ Never hand-edit a version field. `src/mcp/index.ts` and the APK `versionName` de
 
 The marketplace reads `plugin.json` to decide whether an update is available. A stale version there silently skips the update.
 
-`.mcp.json` runs `node ${CLAUDE_PLUGIN_ROOT}/dist/main-mcp.js`. Dependencies are bundled into that file and `web-tree-sitter.wasm` is copied beside it, so the plugin needs no install step and no bun on the machine running it. `dist/` is committed for that reason.
+`.mcp.json` runs `bun ${CLAUDE_PLUGIN_ROOT}/dist/main-mcp.js`. Bun 1.4.0 or newer is the one prerequisite. The lexicon client is inlined from the `lexicon/` submodule at build time, and nothing under `lexicon/` is read at runtime. `dist/` is committed for that reason.
 
 Only the MCP entrypoint is bundled. The gateway runs in Docker from `oven/bun:1` and the host daemon runs on the host under tmux, so both keep running from source under bun.
 

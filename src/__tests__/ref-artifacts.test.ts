@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildArtifacts, MAX_FILE_BYTES, type ResolvedRef } from "../mcp/references/artifactBuilder.js";
 import { safeName, uniqueName } from "../mcp/references/artifactNames.js";
-import type { Resolution } from "../mcp/references/refResolver.js";
+import type { Resolution } from "../mcp/references/refCoordinates.js";
 import { REF_META_MAX_KEYS } from "../shared/channel-file.js";
 
 ////////////////////////////////
@@ -65,12 +65,6 @@ describe("building the artifact set", () => {
 			quality: "fuzzy",
 			reason: "renamed",
 		});
-	});
-
-	it("carries the ambiguity count through, so the viewer can say 1 of N", () => {
-		const result = buildArtifacts([ref("a.ts", lines(10), { ambiguous: true, matchCount: 3 })], []);
-
-		expect(result.ok && result.artifacts[0].ref.keys[0]).toMatchObject({ ambiguous: true, matchCount: 3 });
 	});
 
 	it("keeps the last resolution when one canonical key repeats", () => {

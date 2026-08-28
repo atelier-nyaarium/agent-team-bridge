@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadRefFile } from "../mcp/references/refFile.js";
+import { absolutePathOf } from "../mcp/references/refWorkspace.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -24,8 +25,9 @@ afterEach(() => {
 	fs.rmSync(path.dirname(root), { recursive: true, force: true });
 });
 
+/** The written path goes through the workspace's shell rule first, as the pipeline does. */
 function load(refPath: string) {
-	return loadRefFile(root, refPath);
+	return loadRefFile(absolutePathOf(root, refPath), refPath);
 }
 
 ////////////////////////////////

@@ -12,6 +12,26 @@
 			"canonical": "ref://src/app.ts"
 		},
 		{
+			"id": "ordinal-segment",
+			"uri": "ref://src/app.ts:run[2]",
+			"parsed": {
+				"path": "src/app.ts",
+				"segments": ["run[2]"],
+				"matcher": null
+			},
+			"canonical": "ref://src/app.ts:run[2]"
+		},
+		{
+			"id": "ordinal-segment-encoded",
+			"uri": "ref://src/app.ts:run%5B2%5D",
+			"parsed": {
+				"path": "src/app.ts",
+				"segments": ["run[2]"],
+				"matcher": null
+			},
+			"canonical": "ref://src/app.ts:run[2]"
+		},
+		{
 			"id": "scope-chain",
 			"uri": "ref://src/app.ts:MyComponent:handleSubmit",
 			"parsed": {

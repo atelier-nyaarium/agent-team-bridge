@@ -101,9 +101,9 @@ class AttachmentDisplayTest {
 
 	@Test
 	fun dropsAHiddenAttachmentEntirelyRatherThanOrderingIt() {
-		val files = listOf(file("shot.png", "image/png"), file("switchboard-references.json", "application/json"))
+		val files = listOf(file("shot.png", "image/png"), file("refFile.ts", "text/plain"))
 		val shown = displayAttachments(files) { f ->
-			if (f.name.endsWith(".json")) ChipDecoration("refs", "ref", hidden = true) else null
+			if (f.name == "refFile.ts") ChipDecoration("refs", "ref", hidden = true) else null
 		}
 		assertEquals(listOf("shot.png"), shown.map { it.file.name })
 	}

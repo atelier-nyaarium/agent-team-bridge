@@ -168,4 +168,16 @@ describe("the clean-tree gate", () => {
 			"conflict.ts",
 		]);
 	});
+
+	it("allows only untracked content inside a clean submodule pin", () => {
+		expect(dirtyTrackedFiles(`${headers}1 .M S..U 160000 160000 160000 aaa bbb lexicon`)).toEqual([]);
+	});
+
+	it.each([
+		["unstaged pin move", "1 .M SC.. 160000 160000 160000 aaa bbb lexicon"],
+		["staged pin move", "1 M. S... 160000 160000 160000 aaa bbb lexicon"],
+		["modified submodule content", "1 .M S.M. 160000 160000 160000 aaa bbb lexicon"],
+	])("catches %s", (_label, record) => {
+		expect(dirtyTrackedFiles(`${headers}${record}`)).toEqual(["lexicon"]);
+	});
 });

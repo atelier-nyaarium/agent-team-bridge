@@ -14,11 +14,8 @@
  * `scripts/check-pinning-runtime.ts` proves on every CI run. Raise it only against that script's
  * verdict on the new runtime, never from a changelog.
  *
- * GATEWAY ONLY, on purpose. `assertBunFloor` is called from `main-gateway.ts` and nowhere else,
- * never from the `process-guards.ts` both entry points share: the host daemon pins nothing (it dials
- * the gateway over plain ws://localhost), so it has no floor to hold. A shared-module guard would
- * refuse a daemon on an older host bun for no reason, quietly, on the one component whose staleness
- * has no immediate symptom.
+ * The gateway and MCP entries hold this floor. MCP spawns the lexicon daemon on the bun it runs on.
+ * The host daemon pins nothing because it dials the gateway over plain ws://localhost.
  */
 export const BUN_FLOOR = "1.4.0";
 

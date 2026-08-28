@@ -6,7 +6,7 @@ import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "../bridge/replyTool.js";
 import { type Capability, capabilityInstructions } from "../capabilities.js";
-import { appendRefArtifacts } from "../references/attachRefs.js";
+import { appendRefArtifacts, withNotices } from "../references/attachRefs.js";
 
 ////////////////////////////////
 //  Schemas
@@ -90,14 +90,17 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 					fullSpoken,
 					...(files ? { files } : {}),
 				})) as { delivered?: boolean };
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: result.delivered ? "Notice delivered." : "Notice not delivered.",
-						},
-					],
-				};
+				return withNotices(
+					{
+						content: [
+							{
+								type: "text" as const,
+								text: result.delivered ? "Notice delivered." : "Notice not delivered.",
+							},
+						],
+					},
+					withRefs.notices,
+				);
 			} catch (err) {
 				return {
 					content: [{ type: "text" as const, text: `Notify failed: ${(err as Error).message}` }],

@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 /** What may be OPENED. artifactBuilder's cap bounds what is sent. */
 const MAX_REF_SOURCE_BYTES = 8_000_000;
@@ -8,7 +6,7 @@ const MAX_REF_SOURCE_BYTES = 8_000_000;
 ////////////////////////////////
 //  Interfaces & Types
 
-/** All hard tool errors: the resolution tier degrades, the file tier does not. */
+/** All hard tool errors: the file tier never degrades. */
 export type FileFailure = "missing" | "unreadable" | "binary";
 
 export interface LoadedFile {
@@ -24,17 +22,6 @@ export type LoadResult = { ok: true; file: LoadedFile } | { ok: false; failure: 
 
 ////////////////////////////////
 //  Functions & Helpers
-
-/**
- * Shell-style: `/x` from root, `~/x` from home, anything else from the project root.
- *
- * `~user/x` is NOT expanded: half-supporting a shell-ism resolving to another account's home is
- * worse than treating it as the literal directory name it also legally is.
- */
-function resolveRefPath(projectRoot: string, refPath: string): string {
-	if (refPath === "~" || refPath.startsWith("~/")) return path.join(os.homedir(), refPath.slice(1));
-	return path.resolve(projectRoot, refPath);
-}
 
 /** A UTF-16 BOM is checked FIRST: those files are full of NULs, which a UTF-8 sniff calls binary. */
 function decodeText(buffer: Buffer): string | null {
@@ -53,22 +40,13 @@ function decodeText(buffer: Buffer): string | null {
 }
 
 /**
- * The project root is a base, not a fence: a snapshot only rides a reply to the OWNER's own console,
- * and an author meaning to disclose a file can paste it regardless.
- *
- * Refusals are loud, since a skipped ref would leave the author believing it went out.
+ * Reads the file `refWorkspace` classified, following the name as written. The root is a base, not
+ * a fence: a snapshot only rides a reply to the OWNER's own console, and an author meaning to
+ * disclose a file can paste it regardless. Refusals are loud, since a skipped ref would leave the
+ * author believing it went out.
  */
-export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
+export function loadRefFile(absolute: string, refPath: string): LoadResult {
 	if (refPath === "") return { ok: false, failure: "missing", detail: "a ref needs a path" };
-
-	const root = fs.realpathSync(projectRoot);
-
-	let absolute: string;
-	try {
-		absolute = fs.realpathSync(resolveRefPath(root, refPath));
-	} catch {
-		return { ok: false, failure: "missing", detail: `${refPath} does not exist` };
-	}
 
 	let buffer: Buffer;
 	try {
@@ -84,6 +62,10 @@ export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
 		}
 		buffer = fs.readFileSync(absolute);
 	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			return { ok: false, failure: "missing", detail: `${refPath} does not exist` };
+		}
 		return { ok: false, failure: "unreadable", detail: `${refPath}: ${(err as Error).message}` };
 	}
 

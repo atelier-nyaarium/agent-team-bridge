@@ -81,25 +81,28 @@ client timeout may need to be increased in `.mcp.json` or the client's settings.
 
 ## Referencing code (ref:// links)
 
-When you are talking about a specific piece of code, link it instead of pasting it. Write a markdown
-link whose destination is `ref://src/cart.ts:Cart:add`, and the file is snapshotted at send time and
-attached, so the reader taps through to the real code as it was when you wrote about it.
+Only `full` on `channel_reply` and `notify_human` scans markdown links. Other fields, crosstalk, code
+fences, and inline code do not scan. Use a root-relative path with optional colon-separated scope and
+name segments. Bare is project-relative, `/x` is filesystem-root, and `~/x` is home. `[n]` selects the
+nth same-named declaration in document order. `arguments` names a parameter list and `arguments:name`
+names one parameter.
 
-- **Only the `full` field of `channel_reply` and `notify_human` is scanned.** A ref in `summary`,
-  `title`, `fullSpoken`, or a `crosstalk_send` body arrives as a link that cannot open.
-- **Paths resolve the way a shell reads them.** Bare is project-relative, a leading `/` is the
-  filesystem root, `~/` is the owner's home.
-- **Wrap the destination in angle brackets** when the matcher contains a space or a close paren:
-  `[label](<ref://src/cart.ts:Cart:add#items.push(item);>)`. Without that, a link destination ends at
-  the first space or unbalanced `)`, and the ref is silently truncated rather than reported.
-- **A file-tier problem fails the send loudly** (missing, not text, a refused secret). A
-  RESOLUTION miss does not: the ref still sends and opens on a text match or the whole file with a
-  banner. No error does not mean the ref landed where you meant.
-- **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
+Use `#text` without a chain for a symbol-less file, a region inside a scope, or a path outside the
+project root. A chain outside the root is refused and names that form. Escape spaces and close
+parentheses, or wrap the destination in angle brackets. One hash-verified declaration is required for
+`exact`. Missing or ambiguous names refuse the send with a paste fix and complete candidate refs, or
+the declarations at the chain stop. Only lexicon ABSENCE degrades, with a notice and `fuzzy` or
+`unresolved` quality plus a reason.
 
-The full format, including the `#matcher` forms and worked examples, comes from the
-`switchboard_capabilities` tool. Your session's instructions name which capabilities are on but carry
-none of their guidance, so call that tool before writing a ref.
+Examples: [App.tsx : render](ref://src/App.tsx:App:render),
+[util.js : second deepHandler](ref://src/util.js:deepHandler[2]),
+[Svc.cs : Compute](ref://src/Svc.cs:Acme.Services:Service:Compute),
+[engine.cpp : step](ref://src/engine.cpp:Physics::World::step),
+[cart.ts : qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty),
+[notes](ref://NOTES.md#Checkout),
+[cart.ts : region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
+[nginx.conf : text](ref:///etc/nginx/nginx.conf#server),
+[bashrc : text](ref://~/.bashrc#export%20PATH).
 
 ## The owner's task board
 

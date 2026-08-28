@@ -1,6 +1,6 @@
 import { REF_META_MAX_KEYS, REF_META_MAX_SEGMENTS, type RefFileMeta } from "../../shared/channel-file.js";
 import { safeName, uniqueName } from "./artifactNames.js";
-import type { Resolution } from "./refResolver.js";
+import type { Resolution } from "./refCoordinates.js";
 import type { FoundRef } from "./refScanner.js";
 
 ////////////////////////////////
@@ -193,7 +193,6 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 					...(r.resolution.span ? { span: r.resolution.span } : {}),
 					quality: r.resolution.quality,
 					...(r.resolution.reason ? { reason: r.resolution.reason } : {}),
-					...(r.resolution.ambiguous ? { ambiguous: true, matchCount: r.resolution.matchCount } : {}),
 				})),
 			},
 		});

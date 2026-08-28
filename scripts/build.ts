@@ -3,8 +3,8 @@
 //   bun run build patch|minor|major       # bump, build, commit
 //   bun run build --build-only            # bundle at the current version; no bump, no commit
 //
-// dist/ is committed because the plugin's MCP server runs it directly (node dist/main-mcp.js), so a
-// consumer needs neither bun nor an install step. That only holds while the committed bundle matches
+// dist/ is committed because the plugin's MCP server runs it directly, so the bundle is part of the
+// plugin artifact. That only holds while the committed bundle matches
 // the committed version, which is why bumping and building are one command rather than two: a dist/
 // built at a version the manifests do not claim looks correct and is not.
 //
@@ -21,7 +21,7 @@
 // silently shipping a stale version to the marketplace or the board's version chip.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 ////////////////////////////////
@@ -41,10 +41,6 @@ const PLUGIN_MANIFEST_DIR = path.join("android", "app", "src", "main", "assets",
 
 const ENTRYPOINT = path.join("src", "main-mcp.ts");
 const DIST_DIR = "dist";
-
-/** web-tree-sitter resolves this inside its own package, which a bundle does not carry. The build
- * copies it beside the bundle and `treeSitterWasmPath()` prefers that copy. */
-const RUNTIME_WASM = path.join("node_modules", "web-tree-sitter", "web-tree-sitter.wasm");
 
 /** A site that recomputes the version from package.json at build time, named by a string that must
  * still appear in it. The point is not to parse the file, it is to fail the moment somebody
@@ -121,6 +117,7 @@ export function checkDerivedSites(root: string): void {
 
 /** Space-separated fields ahead of the path, per porcelain v2 record type. */
 const PATH_FIELD_OFFSET: Record<string, number> = { "1": 8, "2": 9, u: 10 };
+const LEXICON_DIR = "lexicon";
 
 function isDistPath(file: string): boolean {
 	return file.split("/").includes(DIST_DIR);
@@ -153,6 +150,13 @@ export function dirtyTrackedFiles(porcelainV2: string): string[] {
 		}
 		if (cut === -1) continue;
 		const file = (line.slice(cut).split("\t")[0] ?? "").trim();
+		const fields = line.split(" ", 4);
+		const submoduleState = fields[2] ?? "";
+		if (submoduleState.startsWith("S")) {
+			if (`${fields[1] ?? ""} ${submoduleState}` === ".M S..U") continue;
+			dirty.push(file);
+			continue;
+		}
 		if (file && !isDistPath(file)) dirty.push(file);
 	}
 	return dirty;
@@ -160,6 +164,51 @@ export function dirtyTrackedFiles(porcelainV2: string): string[] {
 
 function git(args: string[], root: string): string {
 	return execFileSync("git", args, { cwd: root, encoding: "utf8" });
+}
+
+function assertLexiconInputs(root: string): void {
+	const status = git(["submodule", "status", "--", LEXICON_DIR], root).trimEnd();
+	const record = status.split("\n").find((line) => line.trim().split(/\s+/)[1] === LEXICON_DIR);
+	if (!record) throw new Error("lexicon submodule is empty or uninitialized");
+	if (record.startsWith("-")) throw new Error("lexicon submodule is uninitialized");
+
+	const subject = git(["-C", LEXICON_DIR, "log", "-1", "--format=%s"], root).trim();
+	if (!/^Build \d+\.\d+\.\d+$/.test(subject)) {
+		throw new Error(`lexicon submodule must be pinned to a Build x.y.z commit, got: ${subject || "(empty)"}`);
+	}
+	console.log(`lexicon: ${subject}`);
+
+	const rootManifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as {
+		dependencies?: Record<string, string>;
+	};
+	const protocol = JSON.parse(readFileSync(path.join(root, LEXICON_DIR, "protocol", "package.json"), "utf8")) as {
+		dependencies?: Record<string, string>;
+	};
+	for (const [name, version] of Object.entries(protocol.dependencies ?? {})) {
+		if (rootManifest.dependencies?.[name] !== version) {
+			throw new Error(`root package.json must pin ${name} to ${version}`);
+		}
+	}
+
+	const client = JSON.parse(readFileSync(path.join(root, LEXICON_DIR, "client", "package.json"), "utf8")) as {
+		dependencies?: Record<string, string>;
+	};
+	const clientDependencies = Object.entries(client.dependencies ?? {});
+	if (
+		clientDependencies.length !== 1 ||
+		clientDependencies[0]?.[0] !== "@nyaa-lexicon/protocol" ||
+		clientDependencies[0]?.[1] !== "workspace:*"
+	) {
+		throw new Error("lexicon/client/package.json may depend only on @nyaa-lexicon/protocol");
+	}
+
+	for (const entry of readdirSync(path.join(root, LEXICON_DIR), { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const nested = path.join(root, LEXICON_DIR, entry.name, "node_modules");
+		if (existsSync(nested)) {
+			throw new Error(`Remove ${nested} before building; nested lexicon installs shadow root pins`);
+		}
+	}
 }
 
 ////////////////////////////////
@@ -174,6 +223,8 @@ function main(argv: string[]): void {
 		console.error("       bun run build --build-only");
 		process.exit(2);
 	}
+
+	assertLexiconInputs(ROOT);
 
 	// Before writing anything: a broken derivation means the bump would be incomplete, and half a
 	// bump is worse than none (the marketplace updates, the running server reports the old version).
@@ -215,8 +266,6 @@ function main(argv: string[]): void {
 			["build", ENTRYPOINT, "--outdir", DIST_DIR, "--target", "node", "--minify", "--format", "esm"],
 			{ cwd: ROOT, stdio: "inherit" },
 		);
-		copyFileSync(path.join(ROOT, RUNTIME_WASM), path.join(ROOT, DIST_DIR, path.basename(RUNTIME_WASM)));
-		console.log(`copied ${path.basename(RUNTIME_WASM)} into ${DIST_DIR}/`);
 	} catch {
 		// bun already printed the compiler error; a stack trace from this script would only bury it.
 		if (!buildOnly) {

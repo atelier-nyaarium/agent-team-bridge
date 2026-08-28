@@ -190,14 +190,16 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		keys = listOf(
 			RefKeyMeta(
 				key = "ref://src/mcp/references/refFile.ts:isJoinable",
-				startLine = 1,
-				endLine = 12,
+				startLine = 33,
+				endLine = 36,
+				span = RefSpanMeta(startLine = 33, startColumn = 9, endLine = 33, endColumn = 19),
 				quality = "exact",
 			),
 			RefKeyMeta(
 				key = "ref://src/mcp/references/refFile.ts:LoaderV1:isJoinable",
-				startLine = 1,
-				endLine = 12,
+				startLine = 33,
+				endLine = 33,
+				span = RefSpanMeta(startLine = 33, startColumn = 9, endLine = 33, endColumn = 19),
 				quality = "fuzzy",
 				reason = "LoaderV1 no longer exists in this file",
 			),

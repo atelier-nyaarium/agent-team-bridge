@@ -57,6 +57,26 @@ export const GATED_CAPABILITY_IDS = [
 
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
 
+export const REFERENCE_GUIDANCE = `
+
+## Artifact refs
+
+Only \`full\` scans markdown links. Use a root-relative path with optional scope and name segments.
+Bare is project-relative, \`/x\` is filesystem-root, and \`~/x\` is home. \`[n]\` selects a repeated
+name in document order. \`arguments\` names a parameter list and \`arguments:name\` names one parameter.
+
+Use \`#text\` without a chain for symbol-less files, regions inside scopes, or outside paths. A chain
+outside the root is refused, and the refusal names the \`#text\` form to write instead. One hash-verified declaration is required for \`exact\`; missing or
+ambiguous names refuse with a paste fix. Only lexicon ABSENCE degrades, with a notice and \`fuzzy\` or
+\`unresolved\` quality plus a reason.
+
+Examples: [render](ref://src/App.tsx:App:render), [second](ref://src/util.js:deepHandler[2]),
+[compute](ref://src/Svc.cs:Acme.Services:Service:Compute), [step](ref://src/engine.cpp:Physics::World::step),
+[qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty), [notes](ref://NOTES.md#Checkout),
+[region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
+[outside](ref:///etc/nginx/nginx.conf#server), [home](ref://~/.bashrc#export%20PATH).
+`.trim();
+
 function cacheFile(): string {
 	return path.join(os.homedir(), ".config", "switchboard", "capabilities-cache.json");
 }
@@ -129,11 +149,12 @@ export function hasCapability(capabilities: Capability[], id: CapabilityId): boo
 export function capabilityInstructions(capabilities: Capability[]): string {
 	if (capabilities.length === 0) return "";
 	const names = capabilities.map((c) => `\`${c.id}\``).join(", ");
+	const refs = capabilities.some((c) => c.id === "references") ? `\n\n${REFERENCE_GUIDANCE}` : "";
 	return `
 	
 ## Capabilities
 
 Enabled: ${names}.
 
-Call \`switchboard_capabilities\` after receiving a channel message or compacting.`;
+Call \`switchboard_capabilities\` after receiving a channel message or compacting.${refs}`;
 }

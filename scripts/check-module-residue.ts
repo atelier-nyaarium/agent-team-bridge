@@ -10,8 +10,8 @@
 //
 //   bun scripts/check-module-residue.ts [repo-root]
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -59,27 +59,53 @@ function lockKeys(root: string): Set<string> {
 	return keys;
 }
 
+export function lexiconScopeResidue(root: string): string[] {
+	const scope = join(root, "node_modules", "@nyaa-lexicon");
+	if (!existsSync(scope)) return [];
+	const lexiconRoot = realpathSync(join(root, "lexicon"));
+	const offenders: string[] = [];
+	for (const entry of readdirSync(scope, { withFileTypes: true })) {
+		const name = `@nyaa-lexicon/${entry.name}`;
+		if (!entry.isSymbolicLink()) {
+			offenders.push(name);
+			continue;
+		}
+		let target: string;
+		try {
+			target = realpathSync(join(scope, entry.name));
+		} catch {
+			offenders.push(name);
+			continue;
+		}
+		const escaped = relative(lexiconRoot, target);
+		if (isAbsolute(escaped) || escaped === ".." || escaped.startsWith("../")) offenders.push(name);
+	}
+	return offenders;
+}
+
 ////////////////////////////////
 //  Main
 
-const root = resolve(process.argv[2] ?? ".");
-if (!existsSync(join(root, "bun.lock"))) {
-	console.error(`No bun.lock at ${root}`);
-	process.exit(2);
-}
-
-const keys = lockKeys(root);
-const offenders = collectNestedChains(root).filter((chain) => !keys.has(chain));
-
-if (offenders.length > 0) {
-	console.error(`Unsanctioned nested node_modules residue (no matching bun.lock key):`);
-	for (const chain of offenders) {
-		console.error(`  ${chain}`);
+function main(): void {
+	const root = resolve(process.argv[2] ?? ".");
+	if (!existsSync(join(root, "bun.lock"))) {
+		console.error(`No bun.lock at ${root}`);
+		process.exit(2);
 	}
-	console.error(
-		`\nFix: rm -rf node_modules && bun install --frozen-lockfile (as the LAST step after manifest changes).`,
-	);
-	process.exit(1);
+
+	const keys = lockKeys(root);
+	const offenders = [...lexiconScopeResidue(root), ...collectNestedChains(root).filter((chain) => !keys.has(chain))];
+
+	if (offenders.length > 0) {
+		console.error(`Unsanctioned nested node_modules residue (no matching bun.lock key):`);
+		for (const chain of offenders) console.error(`  ${chain}`);
+		console.error(
+			`\nFix: rm -rf node_modules && bun install --frozen-lockfile (as the LAST step after manifest changes).`,
+		);
+		process.exit(1);
+	}
+
+	console.log(`node_modules residue check: clean (${keys.size} lock keys, no unsanctioned nesting).`);
 }
 
-console.log(`node_modules residue check: clean (${keys.size} lock keys, no unsanctioned nesting).`);
+if (basename(process.argv[1] ?? "") === "check-module-residue.ts") main();

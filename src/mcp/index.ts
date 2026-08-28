@@ -31,7 +31,7 @@ import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
 import type { LocalAgentBackend } from "./local/localAgentHost.js";
 import { createLocalAgentBackend } from "./local/localAgentHost.js";
-import { setReferencesEnabled } from "./references/attachRefs.js";
+import { closeReferenceSession, setReferencesEnabled } from "./references/attachRefs.js";
 import { resolveSessionNaming } from "./team-name.js";
 
 ////////////////////////////////
@@ -184,6 +184,8 @@ export async function startMcp(): Promise<void> {
 		console.error(`[mcp] stdin closed, shutting down`);
 		closeRouter();
 		stopListener();
+		// The daemon is shared and stays; only this process's socket goes.
+		void closeReferenceSession();
 		// The only thing that ever reaps a local child: no daemon supervises it.
 		for (const local of localBackends) local.shutdown();
 		process.exit(0);

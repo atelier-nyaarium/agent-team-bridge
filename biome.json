@@ -9,6 +9,7 @@
 			"!**/coverage",
 			"!**/data/stts-voices",
 			"!**/dist",
+			"!**/lexicon",
 			"!**/plans",
 			"!**/tests/fixtures/ref-project",
 			"!**/node_modules",
@@ -18,6 +19,7 @@
 			"!**/*.mdc",
 			"!**/*.yml",
 			"!**/vite.config.*",
+			"!**/vitest.config.ts",
 			"!**/tsconfig.json"
 		]
 	},
