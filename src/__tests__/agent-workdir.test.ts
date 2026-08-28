@@ -8,7 +8,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { classifyWorkdir, resolveWorkdir, type WorkdirContext, workdirOrFallback } from "../shared/agent-workdir.js";
+import {
+	classifyWorkdir,
+	resolveWorkdir,
+	WORKDIR_MAX_LEN,
+	type WorkdirContext,
+	workdirOrFallback,
+} from "../shared/agent-workdir.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -121,6 +127,45 @@ describe("what a hint is", () => {
 	it("treats an absent or whitespace-only hint as naming nothing", () => {
 		expect(classifyWorkdir(undefined, "agentCwd", HOME)).toEqual({ kind: "blank" });
 		expect(classifyWorkdir("   ", "agentCwd", HOME)).toEqual({ kind: "blank" });
+	});
+
+	// Its own reason, not folded into the character one, which would report a clean but overlong path
+	// as holding a forbidden character. Counted in code POINTS, matching the console's own validator:
+	// `value.length` is UTF-16 units, so a path of astral characters would be refused here at half the
+	// length `isWorkdirPath` accepts it at.
+	it("refuses an overlong path as too long, counting the way the console counts", () => {
+		expect(classifyWorkdir(`/${"a".repeat(WORKDIR_MAX_LEN)}`, "agentCwd", HOME)).toMatchObject({
+			kind: "unsafe",
+			reason: "too-long",
+		});
+		const astral = `/${"𝕏".repeat(WORKDIR_MAX_LEN - 1)}`;
+		expect([...astral].length).toBeLessThanOrEqual(WORKDIR_MAX_LEN);
+		expect(classifyWorkdir(astral, "agentCwd", HOME)).toMatchObject({ kind: "path" });
+	});
+});
+
+/**
+ * The guard belongs on the RESOLVED path, which is the hole the daemon's own resolver had.
+ *
+ * It checked the picked-path branch and let the label branch return whatever joining produced, so a
+ * clean label under an unclean root yielded an unclean path and handed it to the launcher. The
+ * launcher receives the resolved path, so the resolved path is what has to be safe. Found by Luna,
+ * which reported it as a regression in the other direction; the hint-level check alone was both too
+ * strict on labels and too loose on what they resolve to.
+ */
+describe("the resolved path is what must be safe", () => {
+	it("refuses a clean label that resolves under an unclean root", () => {
+		const context: WorkdirContext = { roots: ["/home/me/pro$jects"], home: HOME, isDirectory: () => true };
+		expect(resolve("thing", context)).toMatchObject({ kind: "unresolved", reason: "forbidden-characters" });
+	});
+
+	it("refuses a clean home-rooted path whose home is unclean", () => {
+		const context: WorkdirContext = { roots: [], home: "/home/me$name", isDirectory: () => true };
+		expect(resolve("~/work", context)).toMatchObject({ kind: "unresolved", reason: "forbidden-characters" });
+	});
+
+	it("still resolves a label whose whole path is clean", () => {
+		expect(resolve("recipe-app", world(`${ROOT}/recipe-app`))).toMatchObject({ kind: "resolved" });
 	});
 });
 

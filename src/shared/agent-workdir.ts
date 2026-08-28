@@ -46,6 +46,9 @@ export type WorkdirShape =
 export type WorkdirRefusal =
 	/** Nothing was named. */
 	| "blank"
+	/** Longer than any path this system carries. Its own reason rather than folded into the character
+	 * one, which would report a clean but overlong path as holding a forbidden character. */
+	| "too-long"
 	/** Characters that break out of the shell nesting a launch command is composed through. */
 	| "forbidden-characters"
 	/** A relative path, which names a different directory depending on where the resolver stands -
@@ -99,7 +102,9 @@ export const WORKDIR_MAX_LEN = 512;
 export function classifyWorkdir(hint: string | undefined, source: WorkdirSource, home: string): WorkdirShape {
 	const value = (hint ?? "").trim();
 	if (value === "") return { kind: "blank" };
-	if (value.length > WORKDIR_MAX_LEN) return { kind: "unsafe", value, reason: "forbidden-characters" };
+	// Code POINTS, matching `isWorkdirPath`'s own count. `value.length` is UTF-16 code units, so a
+	// path of astral characters would be refused here at half the length the console accepts it at.
+	if ([...value].length > WORKDIR_MAX_LEN) return { kind: "unsafe", value, reason: "too-long" };
 	if (FORBIDDEN.test(value)) return { kind: "unsafe", value, reason: "forbidden-characters" };
 	if (value === "~") return { kind: "path", value: home };
 	if (value.startsWith("~/")) return { kind: "path", value: path.join(home, value.slice(2)) };
@@ -118,9 +123,15 @@ export function classifyWorkdir(hint: string | undefined, source: WorkdirSource,
 /**
  * Resolve a hint against one machine's roots, or say why it could not be.
  *
- * The fallback is always HOME, on every path. It used to be HOME on the daemon and the session's own
- * project directory in-process, so an agent handed an unusable hint started work in a different tree
- * depending on which backend served it.
+ * A hint that names nothing usable falls back to HOME, on every path. It used to be HOME on the
+ * daemon and the session's own directory in-process, so an agent handed an unusable hint started
+ * work in a different tree depending on which backend served it.
+ *
+ * That is about a hint that was GIVEN and could not be used. A caller who names no directory at all
+ * never reaches here: both paths default that to the session's own directory, the gateway through
+ * `hostWorkdirHint` and the daemonless side through `defaultCwd`. Those already agree, and the
+ * distinction is worth keeping - "work where this session works" is a better default than home, and
+ * a different question from "the place you named does not exist".
  */
 export function resolveWorkdir(
 	hint: string | undefined,
@@ -148,12 +159,22 @@ export function resolveWorkdir(
 		case "unsafe":
 			return unresolved(shape.reason);
 		case "path":
+			// Checked again after expansion: a clean `~/work` becomes an unclean path when HOME itself
+			// holds one of these characters, and the hint-level check cannot see that.
+			if (FORBIDDEN.test(shape.value)) return unresolved("forbidden-characters");
 			return isDirectory(shape.value) ? { kind: "resolved", path: shape.value } : unresolved("no-such-directory");
 		case "label": {
 			for (const root of context.roots) {
 				const base = path.isAbsolute(root) ? root : path.join(context.home, root);
 				const candidate = path.join(base, shape.value);
-				if (isDirectory(candidate)) return { kind: "resolved", path: candidate };
+				if (!isDirectory(candidate)) continue;
+				// A clean label under an unclean ROOT still yields an unclean path, and that is the hole
+				// the daemon's own resolver had: it guarded the picked-path branch and let the label
+				// branch return whatever joining produced. The launcher receives the RESOLVED path, so
+				// the resolved path is what has to be safe.
+				return FORBIDDEN.test(candidate)
+					? unresolved("forbidden-characters")
+					: { kind: "resolved", path: candidate };
 			}
 			return unresolved("no-such-project");
 		}
