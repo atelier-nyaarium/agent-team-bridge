@@ -6,38 +6,18 @@
 # repeatedly is hard-down (a deterministic startup crash), not transient: after a few rapid failures
 # stop and drop to an interactive shell so the tmux session stays inspectable instead of hot-looping
 # forever. A healthy run (>= HEALTHY_SECS uptime) resets the backoff. HOST_WS_TOKEN is inherited
-# from the environment start-host-daemon.sh exports before launching this; bun is resolved below
-# rather than inherited, for the reason given there.
+# from the environment start-host-daemon.sh exports before launching this. bun is looked up rather
+# than inherited, see scripts/resolve-bun.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-# bun is resolved HERE, never trusted from the login shell.
-#
-# start-host-daemon.sh used to `source ~/.bashrc` and rely on that for PATH, which is a convention and
-# not a guarantee: the stock Debian/Ubuntu .bashrc returns early for a NON-interactive shell, and
-# bun's own installer appends its PATH export to the END of that file - below the guard. Observed on
-# a WSL machine whose .bashrc had the guard at line 35, ~/.local/bin exported above it and bun below:
-# `claude` resolved non-interactively and `bun` did not. The daemon fast-failed five times, stayed
-# down as designed, and nobody read the pane for 13 hours, while its gateway stayed up and REGISTERED.
-# That is the failure mode with no immediate symptom, so the launcher must not depend on a login
-# file's shape.
-resolve_bun() {
-	command -v bun 2>/dev/null && return 0
-	for candidate in "${BUN_INSTALL:-$HOME/.bun}/bin/bun" "$HOME/.bun/bin/bun"; do
-		if [ -x "$candidate" ]; then
-			printf '%s\n' "$candidate"
-			return 0
-		fi
-	done
-	return 1
-}
+. "$SCRIPT_DIR/scripts/resolve-bun.sh"
 
-# Not the retry loop: five identical "command not found" failures teach nothing and bury the cause.
-# An absent runtime is hard-down on the first try, so say which places were searched and hold the
-# session open for inspection, the same way MAX_FAST_FAILS does.
+# No retry loop here. A missing runtime won't fix itself, so stop on the first try and leave the
+# pane open to read, the way MAX_FAST_FAILS does.
 if ! BUN="$(resolve_bun)"; then
-	echo "[host-daemon] bun not found. Searched: PATH, \$BUN_INSTALL/bin, ~/.bun/bin."
+	echo "[host-daemon] bun not found. Searched: $BUN_SEARCHED."
 	echo "[host-daemon] Install bun (https://bun.sh) or export BUN_INSTALL, then: ./start-host-daemon.sh"
 	exec bash
 fi

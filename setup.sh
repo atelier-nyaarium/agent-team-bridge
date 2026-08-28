@@ -6,4 +6,11 @@
 
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
-exec bun run scripts/setup.ts "$@"
+
+. scripts/resolve-bun.sh
+if ! BUN="$(resolve_bun)"; then
+	echo "bun not found. Searched: $BUN_SEARCHED." >&2
+	echo "Install bun (https://bun.sh) or export BUN_INSTALL, then: ./setup.sh" >&2
+	exit 1
+fi
+exec "$BUN" run scripts/setup.ts "$@"
