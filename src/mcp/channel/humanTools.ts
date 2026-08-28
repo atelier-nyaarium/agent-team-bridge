@@ -34,10 +34,10 @@ Push a notification to every registered console.
 
 ## Required fields
 
-- \`title\` - notification-bar line
-- \`summary\` - short text for console features
-- \`full\` - message body under this team's name
-- \`fullSpoken\` - spoken replacement for \`full\`
+- \`title\`: notification-bar line.
+- \`summary\`: short text for console features.
+- \`full\`: message body under this team's name.
+- \`fullSpoken\`: spoken replacement for \`full\`.
 
 Use for milestones and critical blockers. Use \`channel_reply\` for conversational replies.
 `.trim();

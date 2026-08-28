@@ -80,13 +80,13 @@ function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescrip
 const localBackends: LocalAgentBackend[] = [];
 
 const CHANNEL_INSTRUCTIONS = `
-Cross-team messages arrive as <channel source="..." ...> tags. All metadata rides as tag attributes: session_id, from, and reply_schema when the request specifies one. The tag body is the message. Read the request and do the work.
+Cross-team messages arrive as <channel source="..." ...> tags. Metadata arrives as tag attributes: session_id, from, and reply_schema when specified. The tag body is the message. Read the request and do the work.
 
-Reply with the channel_reply tool, and keep your usual stout response a terse 1-liner as a receipt.
+Reply with channel_reply. Keep the usual response as a terse 1-liner receipt.
 When the inbound tag carries a reply_schema, use channel_reply_structured instead.
 The conversation stays open. Reply as many times as you need; there is no finality.
 
-💠 If this was your first received message, call \`switchboard_capabilities\` to understand the channel features. If you recently compacted, call it again immediately.
+💠 If this was your first received message, call \`switchboard_capabilities\` to learn the channel features. If you recently compacted, call it again immediately.
 `.trim();
 
 export async function startMcp(): Promise<void> {

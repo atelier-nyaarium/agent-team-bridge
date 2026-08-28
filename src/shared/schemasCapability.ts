@@ -15,7 +15,7 @@ export const EnabledPluginSchema = z
 			.min(1)
 			.max(129)
 			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
-			.describe("The plugin's globally unique id, as its manifest declares it."),
+			.describe(`The plugin's globally unique id, as its manifest declares it.`),
 		// A plugin's guidance is a whole section of an agent's instructions, not a sentence, so the cap
 		// must stay generous: a limit that is too tight is refused by the wire and discarded by the
 		// store, and the capability vanishes with no error anywhere.
@@ -23,7 +23,7 @@ export const EnabledPluginSchema = z
 			.string()
 			.max(16_000)
 			.optional()
-			.describe("Agent-facing usage guidance for this capability, surfaced to the session."),
+			.describe(`Agent-facing usage guidance for this capability, surfaced to the session.`),
 	})
 	.meta({ id: "EnabledPlugin" });
 

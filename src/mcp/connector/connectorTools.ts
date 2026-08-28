@@ -108,7 +108,7 @@ export function registerConnectorTools(
 		"mcpConnectorServe",
 		{
 			title: "Start Connector",
-			description: `Start serving project tools on the connector port.`,
+			description: `Serve project tools on the connector port.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -131,7 +131,7 @@ export function registerConnectorTools(
 		"mcpConnectorUnserve",
 		{
 			title: "Stop Connector",
-			description: `Stop serving project tools and disconnect clients.`,
+			description: `Stop serving project tools. Disconnect clients.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -201,7 +201,7 @@ Disconnects connected clients.
 		"mcpConnectorClose",
 		{
 			title: "Close MCP Connector",
-			description: `Restore localhost-only HTTP and disconnect remote clients.`,
+			description: `Restore localhost-only HTTP. Disconnect remote clients.`,
 			inputSchema: {},
 		},
 		async () => {
@@ -309,7 +309,7 @@ Disconnects connected clients.
 		"mcpConnectorDisconnect",
 		{
 			title: "Disconnect Game Client",
-			description: `Disconnect \`clientId\`, ending its pending tool invocations.`,
+			description: `Disconnect \`clientId\` and end pending tool invocations.`,
 			inputSchema: disconnectObj,
 		},
 		async ({ clientId }: { clientId: string }) => {

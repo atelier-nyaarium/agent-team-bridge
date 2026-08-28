@@ -61,21 +61,21 @@ export const REFERENCE_GUIDANCE = `
 
 ## Artifact refs
 
-Only \`full\` scans markdown links. Other fields, code fences and inline code do not.
+Scanned in \`full\` only. Not other fields, code fences, inline code.
 
-**Path:** bare is the host's workspace root, \`/x\` the filesystem root, \`~/x\` home.
+**Path:** bare is the host's workspace root. \`/x\` filesystem root. \`~/x\` home.
 
-**Chain:** colon-separated scope and name segments. \`[n]\` takes the nth same-named declaration. \`arguments\` is the parameter list, \`arguments:name\` one parameter.
+**Chain:** colon-separated scope and name segments. \`[n]\` picks the nth same-named one. \`arguments\` the parameter list, \`arguments:name\` one parameter.
 
-**Text:** \`#\` searches the chain's declaration, or the whole file with no chain, the form for symbol-less files and outside paths.
+**Text:** \`#\` searches the chain's declaration. No chain searches the file, the form for symbol-less files and outside paths.
 
 - \`#text\` first occurrence
 - \`#from..to\` line range
-- \`#text@before:anchor\` or \`#text@after:anchor\` occurrence nearest that anchor
+- \`#text@before:anchor\`, \`#text@after:anchor\` nearest that anchor
 
-**Refused, naming the fix:** a chain outside the root, a missing or ambiguous name, a matcher that finds nothing. \`exact\` requires one hash-verified declaration.
+**Refuses, naming the fix:** chain outside the root. Missing or ambiguous name. Matcher finding nothing. \`exact\` needs one hash-verified declaration.
 
-**Degraded to \`fuzzy\` or \`unresolved\` with a notice:** only lexicon UNABLE TO ANSWER, meaning absent, incompatible, warming, a dead daemon, or an index refusing the workspace or file.
+**Degrades to \`fuzzy\` or \`unresolved\`, with a notice:** only lexicon unable to answer. Absent, incompatible, warming, dead daemon, or an index refusing the workspace or file.
 
 Examples:
 

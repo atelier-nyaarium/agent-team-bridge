@@ -19,15 +19,15 @@ const ListInputSchema = {
 		.optional()
 		.describe(
 			`
-\`unclaimed\` - backlog only
-\`session\` - this session's task board
-\`all\` - both (default)
+\`unclaimed\`: backlog only.
+\`session\`: this session's task board.
+\`all\`: both (default).
 `.trim(),
 		),
 };
 
 const ClaimInputSchema = {
-	id: ID.describe(`Entry to take, along with its whole subtree.`),
+	id: ID.describe(`Entry and whole subtree to claim.`),
 };
 
 const ReleaseInputSchema = {
@@ -41,11 +41,11 @@ Use only for work you will not do.
 };
 
 const CreateInputSchema = {
-	title: z.string().min(1).max(500).describe(`One line naming the work.`),
+	title: z.string().min(1).max(500).describe(`One-line work title.`),
 	assignTo: z.enum(["self", "backlog"]).describe(
 		`
-\`self\` - assign to this session
-\`backlog\` - leave unassigned
+\`self\`: assign to this session.
+\`backlog\`: leave unassigned.
 `.trim(),
 	),
 	body: z.string().max(BOARD_BODY_MAX).optional().describe(`Optional details for the owner.`),
@@ -59,9 +59,9 @@ Omit for top level. No depth limit. Keep trees four levels deep or fewer.
 };
 
 const UpdateInputSchema = {
-	id: ID.describe(`Entry to change. Must be one you hold.`),
-	title: z.string().min(1).max(500).optional().describe(`Replaces the title.`),
-	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replaces the body. \`null\` clears it.`),
+	id: ID.describe(`Held entry to change.`),
+	title: z.string().min(1).max(500).optional().describe(`Replacement title.`),
+	body: z.string().max(BOARD_BODY_MAX).nullable().optional().describe(`Replacement body. \`null\` clears it.`),
 	state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]).optional().describe(`Work state.`),
 	// null moves to top level, absent leaves it alone. Legal here: never reaches Kotlin codegen.
 	parent: ID.nullable()
@@ -82,7 +82,7 @@ const FetchAttachmentsInputSchema = {
 	filenames: z
 		.array(z.string().min(1).max(255))
 		.optional()
-		.describe(`Attachment filenames from \`taskBoardList\`. Omit for all attachments.`),
+		.describe(`Filenames from \`taskBoardList\`. Omit for all attachments.`),
 };
 
 ////////////////////////////////
@@ -125,8 +125,8 @@ Create a task board entry.
 
 Set \`assignTo\` explicitly:
 
-- \`self\` - work for this session
-- \`backlog\` - unassigned work
+- \`self\`: work for this session.
+- \`backlog\`: unassigned work.
 
 Use \`self\` for every step of your own work, including unstarted steps.
 `.trim();

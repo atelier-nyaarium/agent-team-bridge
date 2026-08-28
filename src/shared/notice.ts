@@ -49,12 +49,12 @@ export const NoticeFullSpoken = z
 	.min(1)
 	.describe(
 		`
-The verbatim text of full, in spoken form: the same words, in the same order, in the same sentences. Change nothing except what TTS cannot read aloud. Do not rephrase, reorder, split, or merge sentences, and do not summarize.
+Verbatim spoken form of full. Same words, order, and sentences. Change only what TTS cannot read aloud. No rephrasing, reordering, splitting, merging, or summarizing.
 
 The only allowed changes:
-- Unspeakable tokens (code, symbols, raw identifiers, markdown markup, URLs) become how you would say them (say "Hypothesis 1", not HYP-01).
-- A code block or long snippet becomes a short spoken mention of it.
-- All-caps excitement takes normal casing (say "Yay!", not "YAY!").
+- Unspeakable tokens (code, symbols, raw identifiers, markdown markup, URLs) become spoken forms (say "Hypothesis 1", not HYP-01).
+- A code block or long snippet becomes a short spoken mention.
+- All-caps excitement uses normal casing (say "Yay!", not "YAY!").
 `.trim(),
 	);
 

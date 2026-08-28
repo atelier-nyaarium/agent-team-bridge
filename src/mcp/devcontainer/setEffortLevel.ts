@@ -12,11 +12,11 @@ const SetEffortLevelSchema = z.object({
 		`
 Effort level to set on the local Claude Code session.
 
-- \`low\` - quick and straightforward, minimal overhead
-- \`medium\` - balanced, standard implementation and testing
-- \`high\` - comprehensive, extensive testing and documentation
-- \`xhigh\` - deeper reasoning than high, just below maximum
-- \`max\` - maximum capability, deepest reasoning
+- \`low\`: quick, straightforward, minimal overhead.
+- \`medium\`: balanced implementation and testing.
+- \`high\`: comprehensive implementation, testing, and documentation.
+- \`xhigh\`: deeper reasoning than high, just below maximum.
+- \`max\`: maximum capability, deepest reasoning.
 `.trim(),
 	),
 });
