@@ -58,6 +58,10 @@ const BUILDS_A_TRUNCATION = /omitted:\s*\w+\s*\+\s*1/;
  * that legitimately define these wrappers are exempted by name at the call site below. */
 const MINTS_A_FINGERPRINT = /\bagentOperationFingerprint\(|\b(?:codex|copilot)OperationFingerprint\(/;
 
+/** Rebuilding the stored-to-published activity projection by hand, i.e. rewriting a commentary item
+ * to drop its itemId. Both routes spelled this identically before it had an owner. */
+const PROJECTS_ACTIVITIES = /kind === "commentary"\s*\?\s*\{\s*kind/;
+
 const ID: AgentOperationIdentity = { kind: "message", agentId: "a-1", prompt: "p" };
 const FP = agentOperationFingerprintOf(ID);
 
@@ -395,6 +399,15 @@ describe("residue", () => {
 		expect(offenders).toEqual([]);
 	});
 
+	// The same class as issue #271, which shipped: a published projection drifting from its sibling
+	// while every test kept passing. Both routes wrote this out identically before it had an owner.
+	it("nothing outside agent-record.ts projects a stored activity for publication", () => {
+		const offenders = sourceFiles(SRC)
+			.map((file) => path.relative(SRC, file))
+			.filter((rel) => rel !== OWNER && PROJECTS_ACTIVITIES.test(fs.readFileSync(path.join(SRC, rel), "utf8")));
+		expect(offenders).toEqual([]);
+	});
+
 	it("nothing outside agent-record.ts builds a truncation marker", () => {
 		const offenders = sourceFiles(SRC)
 			.map((file) => path.relative(SRC, file))
@@ -413,5 +426,11 @@ describe("residue", () => {
 		expect(MINTS_A_FINGERPRINT.test('codexOperationFingerprint("start", agentId, prompt)')).toBe(true);
 		expect(MINTS_A_FINGERPRINT.test("agentOperationFingerprint(kind, agentId, prompt)")).toBe(true);
 		expect(MINTS_A_FINGERPRINT.test("agentOperationFingerprintOf(identity)")).toBe(false);
+		expect(
+			PROJECTS_ACTIVITIES.test(
+				'activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : a',
+			),
+		).toBe(true);
+		expect(PROJECTS_ACTIVITIES.test("publishedActivities(turn?.activities)")).toBe(false);
 	});
 });

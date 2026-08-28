@@ -1,3 +1,4 @@
+import { publishedActivities } from "../shared/agent-record.js";
 import {
 	COPILOT_WAIT_BUDGET_MS,
 	type CopilotAgentResult,
@@ -55,9 +56,7 @@ function describeAgent(
 			(options.includeLastSettled
 				? agent.turns.findLast((candidate) => candidate.state !== "inProgress")
 				: undefined));
-	const activities = (turn?.activities ?? []).map((activity) =>
-		activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : activity,
-	);
+	const activities = publishedActivities(turn?.activities);
 	const result: CopilotAgentResult = {
 		agentId: agent.agentId,
 		agentState: agent.agentState,

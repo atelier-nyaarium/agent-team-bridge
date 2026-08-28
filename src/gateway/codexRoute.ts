@@ -1,3 +1,4 @@
+import { publishedActivities } from "../shared/agent-record.js";
 import {
 	CODEX_WAIT_BUDGET_MS,
 	type CodexAgentResult,
@@ -80,9 +81,7 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 		});
 	}
 	const turn = turnOf(agent, waitedTurnId);
-	const activities = (turn?.activities ?? []).map((activity) =>
-		activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : activity,
-	);
+	const activities = publishedActivities(turn?.activities);
 	if (!turn) {
 		// A `creating` agent has no turn by construction, so this is the branch an await on one always
 		// takes - which the tool descriptions actively send callers to after a start times out. It is

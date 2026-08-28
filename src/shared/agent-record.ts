@@ -241,6 +241,24 @@ export function appendAgentActivity(
 }
 
 /**
+ * A turn's stored activities in the shape a CALLER sees: the same items with `itemId` dropped.
+ *
+ * That id is the daemon's dedup key and means nothing outside the gateway, so publishing it would
+ * leak an internal handle into an answer. Both routes wrote this projection out by hand, identically,
+ * which is the shape issue #271 already shipped once: a published projection drifting from its
+ * sibling while every test kept passing.
+ *
+ * Takes the array rather than a turn, because the two backends' turn types differ in everything else.
+ */
+export function publishedActivities(
+	stored: readonly AgentStoredActivity[] | undefined,
+): Array<{ kind: "commentary"; text: string } | { kind: "truncated"; omitted: number }> {
+	return (stored ?? []).map((activity) =>
+		activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : activity,
+	);
+}
+
+/**
  * Whether an operation already on record may be reported as a completed replay.
  *
  * An HTTP retry must never re-dispatch, so the question is only ever "what do I tell the caller

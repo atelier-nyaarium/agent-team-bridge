@@ -3,7 +3,7 @@
 // needs), and building the projection from a private CodexPersistedAgent.
 
 import { z } from "zod";
-import { restoreAgentCatalog } from "./agent-record.js";
+import { publishedActivities, restoreAgentCatalog } from "./agent-record.js";
 import { CodexActivitiesSchema } from "./codexAgentActivities.js";
 import { CodexAgentIdSchema, CodexErrorTextSchema, OpaqueIdSchema } from "./codexAgentIdentity.js";
 import type { CodexPersistedAgent } from "./codexAgentRecord.js";
@@ -208,11 +208,7 @@ export function projectCodexListAgent(agent: CodexPersistedAgent): CodexListAgen
 		const base = {
 			id: turn.id,
 			state: turn.state,
-			activities: turn.activities.map((activity) =>
-				activity.kind === "commentary"
-					? { kind: activity.kind, text: activity.text }
-					: { kind: activity.kind, omitted: activity.omitted },
-			),
+			activities: publishedActivities(turn.activities),
 			updatedAt: turn.updatedAt,
 		};
 		switch (turn.state) {
