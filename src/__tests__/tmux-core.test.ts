@@ -476,11 +476,45 @@ describe("tmuxCore isAgentWorking", () => {
 		);
 	});
 
-	it("also counts a task-bullet marker (◯) in the footer, same as the esc hint", () => {
+	/**
+	 * The circle marker is GONE, and this test used to pin it.
+	 *
+	 * It read "◯" anywhere in the footer as a turn in flight. A live idle pane disproved it: the CLI
+	 * renders a sub-agent list below the toolbar whose rows begin with that glyph, so an idle session
+	 * reported as working. No corpus vector ever used the marker, so only a real capture could catch
+	 * it - and the test that pinned it kept it alive in the meantime.
+	 */
+	it("does not read a sub-agent list below the toolbar as this session working", () => {
 		const rule = "─".repeat(40);
-		expect(isAgentWorking(`❯ \n${rule}\n  ◯ idle-pushback`)).toBe(true);
-		// Above the rule is transcript/history (e.g. a completed todo list), not the live footer.
+		expect(isAgentWorking(`❯ \n${rule}\n  ◯ idle-pushback`)).toBe(false);
 		expect(isAgentWorking(`  ◯ idle-pushback\n${rule}\n❯ `)).toBe(false);
+		// The rows carry a duration and token run of their own. Unparenthesised, which is exactly what
+		// keeps the status-line rule off them.
+		expect(isAgentWorking(`❯ \n${rule}\n  ◯ phase2-chain  Repo… 8m 18s · ↓ 244.9k tokens`)).toBe(false);
+	});
+
+	/**
+	 * The status line a running turn draws ABOVE the composer, which is where the CLI puts it now.
+	 *
+	 * The footer alone cannot answer this: the toolbar elides "esc to interrupt" to an ellipsis when
+	 * the pane is too narrow, and the mode label counts toward that width, so a session in bypass mode
+	 * loses the only marker the footer ever carried.
+	 */
+	it("reads the status line above the composer, where the footer hint has been elided away", () => {
+		const rule = "─".repeat(40);
+		const toolbar = "  ⏵⏵ bypass permissions on (shift+tab to cycle) · …";
+		const working = `✶ Composing… (46m 51s · ↓ 154.1k tokens)\n${rule}\n❯ \n${rule}\n${toolbar}`;
+		expect(isAgentWorking(working)).toBe(true);
+		const idle = `● Done.\n${rule}\n❯ \n${rule}\n${toolbar}`;
+		expect(isAgentWorking(idle)).toBe(false);
+	});
+
+	// Bounded on purpose. Far enough above the composer is transcript, and a transcript can quote
+	// anything, including a pane.
+	it("does not read a status line from arbitrarily far up the transcript", () => {
+		const rule = "─".repeat(40);
+		const far = ["✶ Composing… (1m 2s · ↓ 9k tokens)", "", "", "", "", "", "", `${rule}`, "❯ "].join("\n");
+		expect(isAgentWorking(far)).toBe(false);
 	});
 });
 

@@ -33,11 +33,39 @@ const COMPOSER_RE = new RegExp(`^${COMPOSER_GLYPH}`, "u");
 // real frame, silently, in the one direction no fixture currently covers. Spelled out, both languages
 // read the same set.
 const SPACE = "[ \\t\\u00a0]";
-// The "esc to interrupt" hint in the bottom status line, always preceded by a middle-dot separator.
+// The "esc to interrupt" hint in the bottom toolbar, always preceded by a middle-dot separator.
+//
+// Necessary and NOT sufficient, which is the whole reason for the status-line rule below. The
+// toolbar elides its own tail to "· …" when the pane is too narrow for it, and the mode label is
+// part of that width: "bypass permissions on" is long enough to push this off a pane where "auto
+// mode on" left it visible. Every working fixture in the corpus was captured in auto mode, so the
+// corpus cannot see that at all.
 const WORKING_HINT = "· esc";
-// A queued/in-progress task or plan item also renders in the footer while a turn is in flight,
-// e.g. "◯ idle-pushback" - same signal as the esc hint, checked in the same bounded region.
-const WORKING_CIRCLE_HINT = "◯";
+
+/**
+ * The status line a running turn draws immediately ABOVE the composer: a spinner, a verb, and a
+ * parenthesised elapsed time with a token count, e.g. "✶ Composing… (46m 51s · ↓ 154.1k tokens)".
+ *
+ * Matched on the PARENTHESISED run, never on the verb or the spinner. The verb cycles through a set
+ * the CLI owns and renames freely, and the spinner animates, so an enumeration of either fails
+ * silently the first time one changes - the same reasoning already written into LIMIT_HEADLINE_RE.
+ *
+ * The closing "tokens)" is load-bearing, not decoration. A sub-agent list renders rows carrying the
+ * same duration-and-token run WITHOUT the parentheses, and those rows sit in the footer where a
+ * looser rule would read them as this session working.
+ */
+const WORKING_STATUS_RE = /\(\d+[hms][^()]*tokens\)/u;
+
+/**
+ * How far above the composer's top rule the status line may sit.
+ *
+ * It is drawn immediately above the rule with at most a blank row between, so 3 covers what has been
+ * observed; 5 is the owner's call, two rows of slack against a layout that shifts again. The bound
+ * matters more than its exact value - unbounded means reading the transcript, which is precisely what
+ * scoping regions in this module exists to prevent, and `WORKING_STATUS_RE` is specific enough that
+ * a transcript line would have to quote a running status verbatim to trip it.
+ */
+const STATUS_LOOKBACK = 5;
 // The auth status renders in the bottom toolbar, below the composer's lower rule line. Scoping the
 // logged-out check to the region after the last rule keeps "/login" typed into the composer, or
 // printed in the transcript above, from tripping it.
@@ -165,8 +193,37 @@ export function isAgentReady(screen: string): boolean {
  * matching a stray "esc" sitting in scrollback/transcript text above. The Kotlin twin lives in
  * AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
-	const footer = footerRegion(stripAnsi(screen).split("\n"));
-	return footer.some((line) => line.includes(WORKING_HINT) || line.includes(WORKING_CIRCLE_HINT));
+	const lines = stripAnsi(screen).split("\n");
+	if (footerRegion(lines).some((line) => line.includes(WORKING_HINT))) return true;
+	return statusRegion(lines).some((line) => WORKING_STATUS_RE.test(line));
+}
+
+/**
+ * The bounded rows just above the composer's TOP rule, where a running turn draws its status line.
+ *
+ * A different region from `footerRegion`, and it has to be: that one starts at the LAST rule run and
+ * reads downward, so it covers the toolbar and everything under it and can never see a line above
+ * the composer. Two live panes proved both halves of that, on one machine, minutes apart:
+ *
+ * - a working session read as NOT working, because its status line sits above the composer and its
+ *   toolbar had elided "esc to interrupt" to "…" for want of width;
+ * - an idle session read as WORKING, because a sub-agent list below the toolbar drew "◯" rows and
+ *   the old circle marker matched one. No fixture ever used that marker, so nothing caught it.
+ *
+ * The top rule is found by scanning DOWN for the first toolbar run: the composer's own top border is
+ * the first rule on a settled pane, and starting from the bottom would find the lower border instead
+ * and put the region inside the composer box.
+ */
+function statusRegion(lines: string[]): string[] {
+	for (let i = 0; i < lines.length; i++) {
+		if (afterRuleRun(lines[i]!, TOOLBAR_RUN_RE) !== null) {
+			return lines.slice(Math.max(0, i - STATUS_LOOKBACK), i);
+		}
+	}
+	// No rule at all: a startup or partial frame. The same last-two-lines fallback the footer uses,
+	// so a pane with no composer yet is read the same way by both regions rather than one of them
+	// silently reading the whole screen.
+	return lines.slice(-2);
 }
 
 /** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /

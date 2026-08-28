@@ -47,6 +47,22 @@
 			"screen": "  877\n  878\n  879\n  880\n  881\n  882\n  883\n  884\n  885\n  886\n  887\n  888\n  889\n  890\n  891\n  892\n  893\n  894\n  895\n  896\n  897\n  898\n  899\n  900\n\n\u001b[38;2;153;153;153m✻ Crunched for 14s · done 11:44 PM\n\n\u001b[38;2;80;80;80m\u001b[48;2;55;55;55m> \u001b[38;2;255;255;255mWrite out the numbers from 1 to 900, one per line, \u001b[39m  \u001b[38;2;255;255;255mnothing else. Do not use any tools.                \n\n\u001b[38;2;215;119;87m\u001b[49m✻ Shenaniga\u001b[38;2;235;159;127mnin\u001b[38;2;215;119;87mg… \u001b[38;2;153;153;153m(5s · ↓ 208 tokens)\n  ⎿  Tip: Double-tap esc to rewind the code and/or   \n\u001b[39m     \u001b[38;2;153;153;153mconversation to a previous point in time        \n\n\u001b[38;2;136;136;136m─────────────────────────────────────────────────────\u001b[38;2;153;153;153m> \n\u001b[38;2;136;136;136m─────────────────────────────────────────────────────\u001b[39m  \u001b[38;2;255;193;7m⏵⏵ auto mode on \u001b[38;2;153;153;153m(shift+tab to cycle) · esc to in…  \n",
 			"expectReady": true,
 			"expectWorking": true
+		},
+		{
+			"name": "lin-working-status-above-composer",
+			"platform": "linux",
+			"shape": "CAPTURED LIVE, and the reason the status-line region exists. A running turn draws its spinner, verb, elapsed time and token count on its own row ABOVE the composer's top rule, and the toolbar has elided 'esc to interrupt' to a bare ellipsis because 'bypass permissions on' is wider than the 'auto mode on' every earlier fixture was captured in. So the footer holds NO working marker at all, and every vector above this one would have said idle.",
+			"screen": "\u001b[38;5;114m●\u001b[39m Traced the chain end to end and the answer is short.\n  \u001b[38;5;246m⎿  Tip: Use /clear to start fresh when switching\n\u001b[39m     \u001b[38;5;246mtopics and free up context\u001b[39m\n\n\u001b[38;5;174m✶\u001b[39m \u001b[38;5;174mComposing…\u001b[39m \u001b[38;5;246m(46m 51s · ↓\u001b[39m \u001b[38;5;246m154.1k tokens)\u001b[39m\n  \u001b[38;5;114m✔ Update installed · Restart…\u001b[38;5;153m◍ /goal active (46m)\n\u001b[38;5;244m────────────────────────────────────────────────\n\u001b[38;5;246m❯ \u001b[39m\n\u001b[38;5;244m────────────────────────────────────────────────\n\u001b[39m  \u001b[38;5;211m⏵⏵ bypass permissions on\u001b[38;5;246m (shift+tab to cycle) · …\u001b[39m",
+			"expectReady": true,
+			"expectWorking": true
+		},
+		{
+			"name": "lin-idle-with-subagent-list",
+			"platform": "linux",
+			"shape": "CAPTURED LIVE, and the other half of the same bug. An IDLE session renders a sub-agent list below the toolbar whose rows carry a circle glyph and a bare 'Nm Ns · ↓ Nk tokens' run. The retired circle marker matched those rows and reported this pane as working; no fixture ever used that marker, so nothing caught it. The duration run here is NOT parenthesised, which is what keeps WORKING_STATUS_RE off it.",
+			"screen": "\u001b[38;5;114m●\u001b[39m Fixed and relayed. The helpers and docs agents are\n  the only open items; nothing else can proceed until\n  they report.\n  \u001b[38;5;114m✔ Update installed · Restart…\u001b[38;5;153m◎ /goal active (48m)\n\u001b[38;5;244m────────────────────────────────────────────────\n\u001b[38;5;246m❯ \u001b[39m\n\u001b[38;5;244m────────────────────────────────────────────────\n\u001b[39m  \u001b[38;5;211m⏵⏵ bypass permissions on\u001b[38;5;246m (shift+tab to cycle) · …\u001b[39m\n\n  \u001b[38;5;114m●\u001b[39m main\n  \u001b[38;5;246m◯ phase2-statedir  Repo…                     idle\u001b[39m\n  \u001b[38;5;246m◯ phase2-connect   Repo…                     idle\u001b[39m\n  \u001b[38;5;246m◯ phase2-chain     Repo… 8m 18s · ↓ 244.9k tokens\u001b[39m\n  \u001b[38;5;246m◯ phase2-docs      Repo… 5m 50s · ↓ 235.1k tokens\u001b[39m",
+			"expectReady": true,
+			"expectWorking": false
 		}
 	]
 }

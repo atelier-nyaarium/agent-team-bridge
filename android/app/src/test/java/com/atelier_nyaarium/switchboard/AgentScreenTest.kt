@@ -52,12 +52,44 @@ class AgentScreenTest {
 		)
 	}
 
+	/**
+	 * The circle marker is GONE, and this test used to pin it.
+	 *
+	 * It read the glyph anywhere in the footer as a turn in flight. A live idle pane disproved that:
+	 * the CLI renders a sub-agent list below the toolbar whose rows begin with it, so an idle session
+	 * reported as working. No corpus vector ever used the marker, so only a real capture could catch
+	 * it - and the test that pinned it kept it alive in the meantime.
+	 */
 	@Test
-	fun workingCircleBulletCountsSameAsTheEscHint() {
+	fun subAgentListBelowTheToolbarIsNotThisSessionWorking() {
 		val rule = "─".repeat(40)
-		assertEquals(true, AgentScreen.isWorking("❯ \n$rule\n  ◯ idle-pushback"))
-		// Above the rule is transcript/history (e.g. a completed todo list), not the live footer.
+		assertEquals(false, AgentScreen.isWorking("❯ \n$rule\n  ◯ idle-pushback"))
 		assertEquals(false, AgentScreen.isWorking("  ◯ idle-pushback\n$rule\n❯ "))
+		// Those rows carry their own duration and token run. Unparenthesised, which is what keeps the
+		// status-line rule off them.
+		assertEquals(false, AgentScreen.isWorking("❯ \n$rule\n  ◯ phase2-chain  Repo… 8m 18s · ↓ 244.9k tokens"))
+	}
+
+	/**
+	 * The status line a running turn draws ABOVE the composer, which is where the CLI puts it now. The
+	 * footer alone cannot answer it: the toolbar elides the esc hint when the pane is too narrow, and
+	 * the mode label counts toward that width.
+	 */
+	@Test
+	fun statusLineAboveTheComposerCountsWhenTheFooterHintIsElided() {
+		val rule = "─".repeat(40)
+		val toolbar = "  ⏵⏵ bypass permissions on (shift+tab to cycle) · …"
+		assertEquals(true, AgentScreen.isWorking("✶ Composing… (46m 51s · ↓ 154.1k tokens)\n$rule\n❯ \n$rule\n$toolbar"))
+		assertEquals(false, AgentScreen.isWorking("● Done.\n$rule\n❯ \n$rule\n$toolbar"))
+	}
+
+	// Bounded on purpose. Far enough above the composer is transcript, and a transcript can quote
+	// anything, including a pane.
+	@Test
+	fun aStatusLineFarUpTheTranscriptIsNotRead() {
+		val rule = "─".repeat(40)
+		val far = "✶ Composing… (1m 2s · ↓ 9k tokens)\n\n\n\n\n\n\n$rule\n❯ "
+		assertEquals(false, AgentScreen.isWorking(far))
 	}
 
 	@Test

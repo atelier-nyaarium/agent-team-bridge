@@ -20,10 +20,23 @@ object AgentScreen {
 	// on the same machine renders both, so this is the build's own difference, not version drift.
 	private const val COMPOSER_GLYPH = "[\\u276F>]"
 	private val composerRe = Regex("^$COMPOSER_GLYPH")
+	// The "esc to interrupt" hint in the bottom toolbar. Necessary and NOT sufficient: the toolbar
+	// elides its own tail to "· …" when the pane is too narrow, and the mode label is part of that
+	// width, so "bypass permissions on" pushes this off a pane where "auto mode on" left it visible.
 	private const val WORKING_HINT = "· esc"
-	// A queued/in-progress task or plan item also renders in the footer while a turn is in flight,
-	// e.g. "◯ idle-pushback" - same signal as the esc hint, checked in the same bounded region.
-	private const val WORKING_CIRCLE_HINT = "◯"
+
+	// The status line a running turn draws immediately ABOVE the composer, e.g.
+	// "✶ Composing… (46m 51s · ↓ 154.1k tokens)". Matched on the PARENTHESISED run, never the verb or
+	// the spinner: the verb cycles through a set the CLI renames freely and the spinner animates, so an
+	// enumeration of either fails silently the first time one changes. The closing "tokens)" is
+	// load-bearing - a sub-agent list draws rows with the same duration-and-token run WITHOUT the
+	// parentheses, below the toolbar, and a looser rule reads those as this session working.
+	private val workingStatusRe = Regex("""\(\d+[hms][^()]*tokens\)""")
+
+	// How far above the composer's top rule that status line may sit. Observed immediately above it;
+	// the extra slack is deliberate, against a layout that shifts again. Bounded because unbounded
+	// means reading the transcript, which is what scoping regions here exists to prevent.
+	private const val STATUS_LOOKBACK = 5
 	// Whitespace spelled OUT, never \s. JS's \s matches U+00A0 and the JVM's default does not, and the
 	// Windows build emits U+00A0 right after the glyph - so a shorthand here would make this twin
 	// disagree with agent-screen.ts on a real frame, silently.
@@ -112,8 +125,36 @@ object AgentScreen {
 			composerRe.containsMatchIn(line) || afterRuleRun(line, toolbarRunRe)?.let { composerRe.containsMatchIn(it) } == true
 		}
 
-	fun isWorking(screen: String): Boolean =
-		footerRegion(strip(screen).split("\n")).any { it.contains(WORKING_HINT) || it.contains(WORKING_CIRCLE_HINT) }
+	fun isWorking(screen: String): Boolean {
+		val lines = strip(screen).split("\n")
+		if (footerRegion(lines).any { it.contains(WORKING_HINT) }) return true
+		return statusRegion(lines).any { workingStatusRe.containsMatchIn(it) }
+	}
+
+	/**
+	 * The bounded rows just above the composer's TOP rule, where a running turn draws its status line.
+	 *
+	 * A different region from [footerRegion], and it has to be: that one starts at the LAST rule run and
+	 * reads downward, so it covers the toolbar and everything under it and can never see a line above
+	 * the composer. Two live panes proved both halves of that, on one machine, minutes apart: a working
+	 * session read as NOT working, because its status line sits above the composer and its toolbar had
+	 * elided the esc hint for want of width; and an idle session read as WORKING, because a sub-agent
+	 * list below the toolbar drew circle rows that the retired circle marker matched.
+	 *
+	 * Scans DOWN for the FIRST toolbar run: the composer's top border is the first rule on a settled
+	 * pane, and starting from the bottom finds the lower border and puts the region inside the box.
+	 * Twin of statusRegion in agent-screen.ts.
+	 */
+	private fun statusRegion(lines: List<String>): List<String> {
+		for (i in lines.indices) {
+			if (afterRuleRun(lines[i], toolbarRunRe) != null) {
+				return lines.subList(maxOf(0, i - STATUS_LOOKBACK), i)
+			}
+		}
+		// No rule at all: a startup or partial frame. The same fallback the footer uses, so a pane with
+		// no composer yet is read the same way by both regions rather than one reading the whole screen.
+		return lines.takeLast(2)
+	}
 
 	fun isLoggedOut(screen: String): Boolean {
 		val footer = footerRegion(strip(screen).split("\n")).joinToString("\n")
