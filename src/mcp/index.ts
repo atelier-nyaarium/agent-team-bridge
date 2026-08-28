@@ -160,14 +160,11 @@ export async function startMcp(): Promise<void> {
 				mcpServer,
 				"projectMcpConnectorStatus",
 				`Project MCP connector is disabled. Call this tool for details.`,
-				() =>
-					[
-						`Project MCP connector is disabled.`,
-						"",
-						`Requirements:`,
-						`  - PROJECT_NAME env var must be set in the container`,
-						`  - MCP_CONNECTOR_PORT (default 20002) must be exposed via compose.yml`,
-					].join("\n"),
+				() => `Project MCP connector is disabled.
+
+Requirements:
+  - PROJECT_NAME env var must be set in the container
+  - MCP_CONNECTOR_PORT (default 20002) must be exposed via compose.yml`,
 			);
 		}
 	}
