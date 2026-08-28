@@ -119,22 +119,40 @@ function within(parent: string, child: string): boolean {
 	);
 }
 
-/** The directory judged when the host names no root: the cwd, unless the host started this server inside its own plugin checkout, where the shell's `PWD` is where the host was launched. */
-export function startDirectory(cwd: string, pwd: string | undefined, plugin: string): string {
-	if (!within(plugin, cwd) || !pwd) return cwd;
-	const shell = path.resolve(pwd);
-	if (shell === cwd) return cwd;
+function isDirectory(candidate: string): boolean {
 	try {
-		return fs.statSync(shell).isDirectory() ? shell : cwd;
+		return fs.statSync(candidate).isDirectory();
 	} catch {
-		return cwd;
+		return false;
 	}
+}
+
+/** Null when the directory the server was started in no longer exists, as after a plugin update replaced it. */
+function currentDirectory(): string | null {
+	try {
+		return process.cwd();
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The directory judged when the host names no root: the cwd, unless the host started this server
+ * inside its own plugin checkout, where the shell's `PWD` is where the host was launched. A cwd that
+ * is gone reads the same way; home is the last resort, which the daemon refuses and the reply says so.
+ */
+export function startDirectory(cwd: string | null, pwd: string | undefined, plugin: string): string {
+	const shell = pwd ? path.resolve(pwd) : null;
+	const shellDir = shell !== null && isDirectory(shell) ? shell : null;
+	if (cwd === null) return shellDir ?? os.homedir();
+	if (!within(plugin, cwd) || shellDir === null || shellDir === cwd) return cwd;
+	return shellDir;
 }
 
 /** `REFERENCE_ROOT` as written; else the host's first root, else the start directory, each taken to its git toplevel. Judged once. */
 export function workspaceRoot(): WorkspaceRoot {
 	if (captured !== null) return captured;
-	const start = hostRoot() ?? startDirectory(process.cwd(), process.env.PWD, pluginRoot());
+	const start = hostRoot() ?? startDirectory(currentDirectory(), process.env.PWD, pluginRoot());
 	const root = path.resolve(process.env.REFERENCE_ROOT || gitToplevel(start) || start);
 	const admission = classifyWorkspaceRoot(root, currentHost());
 	captured = admission.admitted ? { root, admitted: true } : { root, admitted: false, reason: admission.reason };

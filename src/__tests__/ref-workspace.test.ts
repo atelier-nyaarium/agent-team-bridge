@@ -111,6 +111,18 @@ describe("the start directory when the host names no root", () => {
 		fs.mkdirSync(project);
 		expect(startDirectory(plugin, project, plugin)).toBe(project);
 		expect(startDirectory(path.join(plugin, "dist"), project, plugin)).toBe(project);
+
+		const link = path.join(root, "plugin-link");
+		fs.symlinkSync(plugin, link);
+		expect(startDirectory(path.join(plugin, "dist"), project, link)).toBe(project);
+	});
+
+	it("reads PWD, else home, when the directory the server started in is gone", () => {
+		const project = path.join(root, "project");
+		fs.mkdirSync(project);
+		expect(startDirectory(null, project, path.join(root, "plugin"))).toBe(project);
+		expect(startDirectory(null, path.join(root, "missing"), path.join(root, "plugin"))).toBe(os.homedir());
+		expect(startDirectory(null, undefined, path.join(root, "plugin"))).toBe(os.homedir());
 	});
 
 	it("keeps the cwd when it is a project, when PWD is unset, the same, or not a directory", () => {
