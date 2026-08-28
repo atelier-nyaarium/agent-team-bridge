@@ -61,20 +61,33 @@ export const REFERENCE_GUIDANCE = `
 
 ## Artifact refs
 
-Only \`full\` scans markdown links. Use a root-relative path with optional scope and name segments.
-Bare is project-relative, \`/x\` is filesystem-root, and \`~/x\` is home. \`[n]\` selects a repeated
-name in document order. \`arguments\` names a parameter list and \`arguments:name\` names one parameter.
+Only \`full\` scans markdown links. Other fields, code fences and inline code do not.
 
-Use \`#text\` without a chain for symbol-less files, regions inside scopes, or outside paths. A chain
-outside the root is refused, and the refusal names the \`#text\` form to write instead. One hash-verified declaration is required for \`exact\`; missing or
-ambiguous names refuse with a paste fix. Only lexicon being UNABLE TO ANSWER (not installed, incompatible, still warming, a daemon that failed, or an index that refuses the workspace or the file) degrades, with a notice and \`fuzzy\` or
-\`unresolved\` quality plus a reason.
+**Path:** bare is the host's workspace root, \`/x\` the filesystem root, \`~/x\` home.
 
-Examples: [render](ref://src/App.tsx:App:render), [second](ref://src/util.js:deepHandler[2]),
-[compute](ref://src/Svc.cs:Acme.Services:Service:Compute), [step](ref://src/engine.cpp:Physics::World::step),
-[qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty), [notes](ref://NOTES.md#Checkout),
-[region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
-[outside](ref:///etc/nginx/nginx.conf#server), [home](ref://~/.bashrc#export%20PATH).
+**Chain:** colon-separated scope and name segments. \`[n]\` takes the nth same-named declaration. \`arguments\` is the parameter list, \`arguments:name\` one parameter.
+
+**Text:** \`#\` searches the chain's declaration, or the whole file with no chain, the form for symbol-less files and outside paths.
+
+- \`#text\` first occurrence
+- \`#from..to\` line range
+- \`#text@before:anchor\` or \`#text@after:anchor\` occurrence nearest that anchor
+
+**Refused, naming the fix:** a chain outside the root, a missing or ambiguous name, a matcher that finds nothing. \`exact\` requires one hash-verified declaration.
+
+**Degraded to \`fuzzy\` or \`unresolved\` with a notice:** only lexicon UNABLE TO ANSWER, meaning absent, incompatible, warming, a dead daemon, or an index refusing the workspace or file.
+
+Examples:
+
+[render](ref://src/App.tsx:App:render)
+[second](ref://src/util.js:deepHandler[2])
+[step](ref://src/engine.cpp:Physics::World::step)
+[qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty)
+[region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>)
+[range](ref://src/cart.ts:Shop:Cart:add#this.items..reset)
+[anchor](ref://src/cart.ts:Shop:Cart:add#this.count@after:reset)
+[outside](ref:///etc/nginx/nginx.conf#server)
+[home](ref://~/.bashrc#export%20PATH)
 `.trim();
 
 function cacheFile(): string {

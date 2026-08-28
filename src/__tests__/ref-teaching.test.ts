@@ -5,12 +5,30 @@ import { tryParseRef } from "../mcp/references/refGrammar.js";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const fixtureRoot = path.join(root, "tests/fixtures/ref-project");
-const texts = [
-	fs.readFileSync(path.join(root, "android/app/src/main/assets/plugins/references/manifest.json"), "utf8"),
-	fs.readFileSync(path.join(root, "skills/crosstalk/SKILL.md"), "utf8"),
-	fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8"),
-	fs.readFileSync(path.join(root, "src/mcp/capabilities.ts"), "utf8"),
-];
+const SURFACES = [
+	"android/app/src/main/assets/plugins/references/manifest.json",
+	"skills/crosstalk/SKILL.md",
+	"CLAUDE.md",
+	"src/mcp/capabilities.ts",
+] as const;
+// Unescaped, so a template literal's \` reads as the backtick an agent is shown.
+const texts = SURFACES.map((surface) => fs.readFileSync(path.join(root, surface), "utf8").replaceAll("\\`", "`"));
+
+/** How each matcher the grammar accepts is spelled where refs are taught. */
+const SPELLINGS: Record<string, string> = {
+	text: "`#text`",
+	before: "@before:",
+	after: "@after:",
+	range: "`#from..to`",
+};
+
+/** The kinds of `Matcher`, read from the union so a new one arrives here untaught. */
+function matcherKinds(): string[] {
+	const source = fs.readFileSync(path.join(root, "src/mcp/references/refGrammar.ts"), "utf8");
+	const union = /export type Matcher =([\s\S]*?)\};/.exec(source);
+	if (union === null) throw new Error("the Matcher union moved");
+	return [...union[1].matchAll(/kind: "(\w+)"/g)].map((match) => match[1]);
+}
 
 function refsIn(text: string): string[] {
 	const refs = new Set<string>();
@@ -36,5 +54,18 @@ describe("ref teaching", () => {
 			.filter((refPath) => !refPath.startsWith("/") && !refPath.startsWith("~/"));
 		expect(paths.length).toBeGreaterThan(0);
 		for (const refPath of paths) expect(fs.existsSync(path.join(fixtureRoot, refPath)), refPath).toBe(true);
+	});
+
+	test("teaches every matcher the grammar accepts, on every surface", () => {
+		const kinds = matcherKinds();
+		expect(kinds).toContain("text");
+		expect(kinds.length).toBeGreaterThan(3);
+		for (const kind of kinds) {
+			const spelling = SPELLINGS[kind];
+			expect(spelling, `no documented spelling for matcher ${kind}`).toBeDefined();
+			for (const [index, surface] of SURFACES.entries()) {
+				expect(texts[index].includes(spelling), `${surface} does not teach ${kind}`).toBe(true);
+			}
+		}
 	});
 });

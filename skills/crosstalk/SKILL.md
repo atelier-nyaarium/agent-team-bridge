@@ -82,17 +82,28 @@ client timeout may need to be increased in `.mcp.json` or the client's settings.
 ## Referencing code (ref:// links)
 
 Only `full` on `channel_reply` and `notify_human` scans markdown links. Other fields, crosstalk, code
-fences, and inline code do not scan. Use a root-relative path with optional colon-separated scope and
-name segments. Bare is project-relative, `/x` is filesystem-root, and `~/x` is home. `[n]` selects the
-nth same-named declaration in document order. `arguments` names a parameter list and `arguments:name`
-names one parameter.
+fences, and inline code do not scan.
 
-Use `#text` without a chain for a symbol-less file, a region inside a scope, or a path outside the
-project root. A chain outside the root is refused and names that form. Escape spaces and close
-parentheses, or wrap the destination in angle brackets. One hash-verified declaration is required for
-`exact`. Missing or ambiguous names refuse the send with a paste fix and complete candidate refs, or
-the declarations at the chain stop. Only lexicon being UNABLE TO ANSWER (not installed, incompatible, still warming, a daemon that failed, or an index that refuses the workspace or the file) degrades, with a notice and `fuzzy` or
-`unresolved` quality plus a reason.
+**Path:** bare is the host's workspace root, `/x` the filesystem root, `~/x` home.
+
+**Chain:** colon-separated scope and name segments. `[n]` takes the nth same-named declaration in
+document order. `arguments` names a parameter list, `arguments:name` one parameter.
+
+**Text:** `#` searches the chain's declaration, or the whole file with no chain, the form for a
+symbol-less file or a path outside the root.
+
+- `#text` first occurrence
+- `#from..to` line range
+- `#text@before:anchor` or `#text@after:anchor` occurrence nearest that anchor
+
+Escape spaces and close parentheses, or wrap the destination in angle brackets.
+
+**Refused, naming the fix:** a chain outside the root, a missing or ambiguous name, a matcher that
+finds nothing. The refusal lists complete candidate refs, or the declarations at the chain stop.
+`exact` requires one hash-verified declaration.
+
+**Degraded to `fuzzy` or `unresolved` with a notice:** only lexicon UNABLE TO ANSWER, meaning absent,
+incompatible, warming, a dead daemon, or an index refusing the workspace or file.
 
 Examples: [App.tsx : render](ref://src/App.tsx:App:render),
 [util.js : second deepHandler](ref://src/util.js:deepHandler[2]),
@@ -101,6 +112,8 @@ Examples: [App.tsx : render](ref://src/App.tsx:App:render),
 [cart.ts : qty](ref://src/cart.ts:Shop:Cart:add:arguments:qty),
 [notes](ref://NOTES.md#Checkout),
 [cart.ts : region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
+[cart.ts : range](ref://src/cart.ts:Shop:Cart:add#this.items..reset),
+[cart.ts : anchor](ref://src/cart.ts:Shop:Cart:add#this.count@after:reset),
 [nginx.conf : text](ref:///etc/nginx/nginx.conf#server),
 [bashrc : text](ref://~/.bashrc#export%20PATH).
 

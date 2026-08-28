@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it } from "vitest";
-import { capabilityInstructions } from "../mcp/capabilities.js";
+import { capabilityInstructions, GATED_CAPABILITY_IDS } from "../mcp/capabilities.js";
 import { renderCapabilities } from "../mcp/capabilitiesTool.js";
+import { registerChannelReply } from "../mcp/channel/channelReply.js";
+import { registerHumanTools } from "../mcp/channel/humanTools.js";
 import { scanRefs } from "../mcp/references/refScanner.js";
+import type { Capability } from "../shared/capabilities.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -100,5 +104,35 @@ describe("the path from a scanned tool to the ref grammar", () => {
 
 		expect(problems).toEqual([]);
 		expect(refs.length).toBeGreaterThan(5);
+	});
+});
+
+describe("what a tool description costs", () => {
+	// Every request carries these, and the guidance is appended to them, so growth on either side is
+	// paid on every turn.
+	const BUDGET = 2048;
+
+	function described(register: (server: McpServer, capabilities: Capability[]) => void): string[] {
+		const seen: string[] = [];
+		const collector = {
+			registerTool: (_name: string, config: { description?: string }) => {
+				seen.push(config.description ?? "");
+			},
+		};
+		register(collector as unknown as McpServer, GATED_CAPABILITY_IDS.map((id) => ({ id })) as Capability[]);
+		return seen;
+	}
+
+	it.each([
+		["channel_reply", registerChannelReply],
+		["notify_human", registerHumanTools],
+	])("keeps %s under the budget with every capability on", (_name, register) => {
+		const descriptions = described(register as (server: McpServer, capabilities: Capability[]) => void);
+
+		expect(descriptions.length).toBeGreaterThan(0);
+		for (const description of descriptions) {
+			expect(description).toContain("Artifact refs");
+			expect(description.length).toBeLessThanOrEqual(BUDGET);
+		}
 	});
 });
