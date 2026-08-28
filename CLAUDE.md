@@ -1430,6 +1430,15 @@ The marketplace reads `plugin.json` to decide whether an update is available. A 
 
 `.mcp.json` runs `bun ${CLAUDE_PLUGIN_ROOT}/dist/main-mcp.js`. Bun 1.4.0 or newer is the one prerequisite. The lexicon client is inlined from the `lexicon/` submodule at build time, and nothing under `lexicon/` is read at runtime. `dist/` is committed for that reason.
 
+### The lexicon submodule
+
+`lexicon/` is a git submodule pinned at a lexicon release commit (subject `Build x.y.z`). It supplies the client's source and types to the bundle, `tsc` and vitest, and its committed `dist/daemon.js` to the daemon-backed ref tests. It is deliberately outside bun's package graph: `bun install` runs `scripts/link-lexicon.mjs` as `postinstall`, which links `lexicon/protocol` and `lexicon/client` into `node_modules/@nyaa-lexicon/` when they are present and exits silently when the clone left the submodule empty, so a marketplace install never needs it.
+
+- Fresh clone: `git submodule update --init` before `bun install`, or the daemon-backed suite skips and `tsc` cannot see the client.
+- Moving the pin: `git -C lexicon checkout <Build commit>`, commit the pin on its own, then release. The build refuses a pin move that is unstaged or staged but uncommitted, a modified submodule, and a submodule left empty.
+- Never install inside `lexicon/`. A `lexicon/*/node_modules` shadows the root's `zod` and `vscode-jsonrpc` pins through the link and the bundle ends up with two copies; the build refuses while one exists. The root pins every dependency `lexicon/protocol/package.json` declares, to the same string, and the build asserts that.
+- `scripts/check-module-residue.ts` requires the `@nyaa-lexicon` scope to be links into `lexicon/`; a real directory there is an install that went wrong.
+
 Only the MCP entrypoint is bundled. The gateway runs in Docker from `oven/bun:1` and the host daemon runs on the host under tmux, so both keep running from source under bun.
 
 ### Installing
