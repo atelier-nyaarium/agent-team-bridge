@@ -8,7 +8,7 @@ import { buildArtifacts } from "./artifactBuilder.js";
 import { loadRefFile } from "./refFile.js";
 import { resolveRefs } from "./refResolve.js";
 import { scanRefs } from "./refScanner.js";
-import { workspaceRoot } from "./refWorkspace.js";
+import { hostRootsSettled, workspaceRoot } from "./refWorkspace.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -43,6 +43,7 @@ export function setLexiconRoot(root: string | undefined): void {
 }
 
 let sessionPromise: Promise<Session> | null = null;
+let sessionRoot: string | null = null;
 let sessionFactory: (() => Promise<Session>) | null = null;
 
 /** Test seam: a fake session in place of a daemon. Null restores the real one. */
@@ -52,9 +53,12 @@ export function setSessionFactory(factory: (() => Promise<Session>) | null): voi
 }
 
 /** One socket per process, opened on the first chain ref inside the root and shared by replies in flight. */
-function sessionFor(): Promise<Session> {
+function sessionFor(root: string): Promise<Session> {
+	// A host that moved its workspace gets a socket to the daemon serving the new root.
+	if (sessionPromise !== null && sessionRoot !== root) void closeReferenceSession();
 	if (sessionPromise === null) {
-		const open = sessionFactory ?? (() => connect({ workspaceRoot: workspaceRoot().root, ...connectOptions() }));
+		const open = sessionFactory ?? (() => connect({ workspaceRoot: root, ...connectOptions() }));
+		sessionRoot = root;
 		// Cleared on failure: an install can appear mid-session, and a stale daemon heals on its own.
 		sessionPromise = open().catch((error: unknown) => {
 			sessionPromise = null;
@@ -107,14 +111,16 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 	}
 	if (found.length === 0) return { ok: true, files: attachments, notices: [] };
 
+	await hostRootsSettled();
 	const workspace = workspaceRoot();
 	if (!fs.existsSync(workspace.root)) {
 		return { ok: false, error: `the workspace root ${workspace.root} does not exist, so refs cannot be resolved` };
 	}
 
+	// One root per reply: a host that moves its workspace mid-reply changes the next reply, not this one.
 	const outcome = await resolveRefs(found, {
 		workspace,
-		session: sessionFor,
+		session: () => sessionFor(workspace.root),
 		load: loadRefFile,
 		deadline: Date.now() + REPLY_PATIENCE_MS,
 	});

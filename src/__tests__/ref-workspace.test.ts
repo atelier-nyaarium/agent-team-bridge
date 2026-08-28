@@ -1,8 +1,17 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { classifyPath, resetWorkspaceRoot, workspaceRoot } from "../mcp/references/refWorkspace.js";
+import {
+	classifyPath,
+	expectHostRoots,
+	hostRootsSettled,
+	resetWorkspaceRoot,
+	setHostRoots,
+	workspaceRoot,
+} from "../mcp/references/refWorkspace.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -43,6 +52,53 @@ describe("the workspace root", () => {
 		const judged = workspaceRoot();
 		expect(judged.admitted).toBe(false);
 		expect(!judged.admitted && judged.reason).toContain("filesystem root");
+	});
+});
+
+describe("the host's roots", () => {
+	it("takes the host's first file root over the cwd, up to its git toplevel", () => {
+		delete process.env.REFERENCE_ROOT;
+		execFileSync("git", ["init", "-q", root]);
+		setHostRoots([pathToFileURL(path.join(root, "src")).href]);
+		expect(workspaceRoot().root).toBe(fs.realpathSync.native(root));
+	});
+
+	it("stays on the host's root when it is not a git tree, and decodes the URI", () => {
+		delete process.env.REFERENCE_ROOT;
+		const spaced = path.join(root, "my ws");
+		fs.mkdirSync(spaced);
+		setHostRoots([pathToFileURL(spaced).href, pathToFileURL(root).href]);
+		expect(workspaceRoot().root).toBe(spaced);
+	});
+
+	it("ignores roots that are not file URIs and reads the cwd when none is left", () => {
+		delete process.env.REFERENCE_ROOT;
+		const fromCwd = workspaceRoot().root;
+		setHostRoots(["https://example.test/repo", "not a uri"]);
+		expect(workspaceRoot().root).toBe(fromCwd);
+	});
+
+	it("yields to REFERENCE_ROOT", () => {
+		process.env.REFERENCE_ROOT = path.join(root, "src");
+		setHostRoots([pathToFileURL(root).href]);
+		expect(workspaceRoot().root).toBe(path.join(root, "src"));
+	});
+
+	it("holds a reply until the host has answered, and a reset releases it", async () => {
+		let answered = false;
+		expectHostRoots();
+		const waited = hostRootsSettled().then(() => {
+			answered = true;
+		});
+		await Promise.resolve();
+		expect(answered).toBe(false);
+		setHostRoots([pathToFileURL(root).href]);
+		await waited;
+		expect(workspaceRoot().root).toBe(root);
+
+		expectHostRoots();
+		resetWorkspaceRoot();
+		await hostRootsSettled();
 	});
 });
 

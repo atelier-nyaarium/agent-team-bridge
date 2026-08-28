@@ -605,6 +605,11 @@ name segments. Bare is project-relative, `/x` is filesystem-root, and `~/x` is h
 nth same-named declaration in document order. `arguments` names a parameter list and `arguments:name`
 names one parameter.
 
+The project root is the host's first `roots/list` answer, else the server's cwd, taken to its git
+toplevel; `REFERENCE_ROOT` overrides both as written (`refWorkspace.ts`). Copilot starts plugin
+servers in the plugin directory, which is why cwd is the fallback and not the rule. A reply with
+refs waits for the host's answer, bounded by `HOST_ROOTS_TIMEOUT_MS`.
+
 Use `#text` without a chain for a symbol-less file, a region inside a scope, or a path outside the
 project root. A chain outside the root is refused and names that form. Escape spaces and close
 parentheses, or wrap the destination in angle brackets. One hash-verified declaration is required for

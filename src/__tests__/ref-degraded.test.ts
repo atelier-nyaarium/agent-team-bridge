@@ -10,7 +10,7 @@ import {
 	setReferencesEnabled,
 	setSessionFactory,
 } from "../mcp/references/attachRefs.js";
-import { resetWorkspaceRoot } from "../mcp/references/refWorkspace.js";
+import { expectHostRoots, resetWorkspaceRoot, setHostRoots } from "../mcp/references/refWorkspace.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
 ////////////////////////////////
@@ -149,5 +149,20 @@ describe("only lexicon being unable to answer degrades, and the reply says so", 
 		const result = await appendRefArtifacts("[a](ref://src/cart.ts:Cart:add) and [b](ref://src/cart.ts:Cart)", []);
 
 		expect(result.ok && result.notices).toHaveLength(1);
+	});
+
+	it("holds a reply with refs until the host has said where its workspace is", async () => {
+		expectHostRoots();
+		let settled = false;
+		const reply = appendRefArtifacts("[cart](ref://src/cart.ts)", []).then((result) => {
+			settled = true;
+			return result;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(settled).toBe(false);
+
+		setHostRoots(null);
+		const result = await reply;
+		expect(result.ok && result.files[0]?.ref?.keys[0]).toMatchObject({ quality: "exact", startLine: 1 });
 	});
 });

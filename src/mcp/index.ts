@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import packageJson from "../../package.json";
 import {
 	AGENT_BACKENDS,
@@ -32,6 +33,7 @@ import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
 import type { LocalAgentBackend } from "./local/localAgentHost.js";
 import { createLocalAgentBackend } from "./local/localAgentHost.js";
 import { closeReferenceSession, setReferencesEnabled } from "./references/attachRefs.js";
+import { adoptHostRoots, expectHostRoots } from "./references/refWorkspace.js";
 import { resolveSessionNaming } from "./team-name.js";
 
 ////////////////////////////////
@@ -173,8 +175,14 @@ export async function startMcp(): Promise<void> {
 	const transport = new StdioServerTransport();
 	// See INITIAL_ROUTER_CONNECT_GRACE_MS.
 	mcpServer.server.oninitialized = () => {
+		void adoptHostRoots(mcpServer.server);
 		setTimeout(connectToRouter, INITIAL_ROUTER_CONNECT_GRACE_MS);
 	};
+	mcpServer.server.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
+		await adoptHostRoots(mcpServer.server);
+	});
+	// Before connect: a reply racing the handshake waits for the host's roots instead of reading cwd.
+	expectHostRoots();
 	await mcpServer.connect(transport);
 
 	const mode = inContainer ? "crosstalk + connector" : "crosstalk + channel";
