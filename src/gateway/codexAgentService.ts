@@ -782,11 +782,12 @@ export class CodexAgentService {
 			owner,
 			agent: found.agent,
 			operation: found.operation,
+			// Not a mismatch either way: the operation exists and matches, the gateway just cannot
+			// always confirm it is durable or fenced. No `unresolved` here - this path never had a
+			// reader for one, and carrying it only made a dead field look like the live one the
+			// acceptance path owns. See CodexAcceptanceResult.
 			disposition: found.replayable ? "replayed" : "indeterminate",
 			catalogRevision: catalog.revision,
-			// Not a mismatch: the operation exists and matches, the gateway just cannot confirm it is
-			// durable or fenced. Reconciliation is what settles it.
-			unresolved: found.replayable ? undefined : true,
 		};
 	}
 

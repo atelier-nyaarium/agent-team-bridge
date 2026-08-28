@@ -70,25 +70,35 @@ export interface CodexDaemonDeliveryAcceptance extends CodexDeliveryAcceptance {
 	ownerKey: string;
 }
 
+/**
+ * What a caller's own intent did: the answer to `beginStart` / `beginMessage` / `beginStop`.
+ *
+ * Carries NO `unresolved`. It used to, by being the first member of the acceptance union below, and
+ * that field was dead here: `replay()` computed it and no route or test ever read it. One name
+ * meaning two things across a union is how the acceptance path's live flag and this path's dead one
+ * stayed welded together long enough for nobody to notice the second had stopped meaning anything.
+ */
 export interface CodexTransitionResult extends OwnedCodexOperation {
 	/** Only `committed` authorizes first dispatch. `indeterminate` is an existing unaccepted intent. */
 	disposition: "committed" | "replayed" | "indeterminate";
 	catalogRevision: number;
-	/** The gateway could not place or persist this, as opposed to deciding it does not belong. Only an
-	 * unresolved outcome may withhold a daemon acknowledgement. */
-	unresolved?: true;
 }
 
-export type CodexAcceptanceResult =
-	| CodexTransitionResult
-	| (OwnedCodexOperation & {
-			disposition: "indeterminate";
-			catalogRevision: number;
-			/** The gateway could not place this receipt, as opposed to deciding it does not belong. Set
-			 * when reconciliation could still resolve it, which is what keeps it out of the daemon's
-			 * acknowledgement. */
-			unresolved?: true;
-	  });
+/**
+ * What a DAEMON's receipt did, which is a different question with a different consequence.
+ *
+ * Its own type rather than a union over the one above. The fields coincide today; the meanings do
+ * not, and `unresolved` here is load-bearing in a way it never was there - it is what decides
+ * whether the daemon may retire its only copy of a delivery.
+ */
+export interface CodexAcceptanceResult extends OwnedCodexOperation {
+	disposition: "committed" | "replayed" | "indeterminate";
+	catalogRevision: number;
+	/** The gateway could not place or persist this receipt, as opposed to deciding it does not belong.
+	 * Set when reconciliation could still resolve it, which is what keeps it out of the daemon's
+	 * acknowledgement. Read at `applyReceipt`. */
+	unresolved?: true;
+}
 
 /**
  * What the gateway did with one daemon-sourced event or receipt, and therefore what it owes back.
