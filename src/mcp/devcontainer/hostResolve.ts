@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveWorkdir, type WorkdirContext, workdirOrFallback } from "../../shared/agent-workdir.js";
 import { isReservedHostSession, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { buildHostLaunch, isHostSpawn } from "../../shared/host-spawn.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
@@ -70,35 +71,22 @@ function expandWorkdirPath(value: string, home: string): string | null {
 	return value.startsWith("/") ? value : null;
 }
 
-/** A picked path or a label hint, told apart by shape: a label holds no separator. The quote guard
- * mirrors buildLaunchCommand's. Anything unresolvable lands in home. */
+/** This machine's roots and home, for anything asking the shared resolver a question about it. */
+export function hostWorkdirContext(dirs: string[] = projectDirs, home: string = HOME): WorkdirContext {
+	return { roots: dirs, home };
+}
+
+/** The daemon's binding of the shared rule. It contributes the one thing that legitimately differs
+ * per machine - which roots a bare label is looked up under - and nothing else: the grammar and the
+ * fallback belong to `agent-workdir.ts`, so the daemonless path cannot read the same string
+ * differently. Still answers a bare directory, since reporting a refusal instead is a change to a
+ * contract `codexTools` documents to callers and ships separately. */
 export function resolveHostWorkdir(
 	hint: string | undefined,
 	dirs: string[] = projectDirs,
 	home: string = HOME,
 ): string {
-	if (!hint) return home;
-	const picked = expandWorkdirPath(hint, home);
-	if (picked != null) {
-		if (/['"`$\\]/.test(picked)) return home;
-		try {
-			if (fs.statSync(picked).isDirectory()) return picked;
-		} catch {
-			// deleted or unreadable since it was picked
-		}
-		return home;
-	}
-	if (hint === "." || hint === ".." || hint.includes("/") || hint.includes("\\")) return home;
-	for (const dir of dirs) {
-		const resolved = path.isAbsolute(dir) ? dir : path.join(home, dir);
-		const candidate = path.join(resolved, hint);
-		try {
-			if (fs.statSync(candidate).isDirectory()) return candidate;
-		} catch {
-			// missing or not a dir, try the next base
-		}
-	}
-	return home;
+	return workdirOrFallback(resolveWorkdir(hint, "sessionWorkdirHint", hostWorkdirContext(dirs, home)));
 }
 
 // A wire bound, not a UX cap.

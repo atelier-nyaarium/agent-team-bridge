@@ -3,10 +3,11 @@
 // Parsed through the very schema the gateway path answers with, so a shaping mistake fails loudly
 // rather than reaching Claude as a plausible wrong answer.
 
-import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { type AgentBackendDescriptor, agentEnvPrefix } from "../../shared/agent-backend.js";
 import { AGENT_HOST_TARGET_ID, type AgentResolvedTarget } from "../../shared/agent-execution-target.js";
+import { resolveWorkdir, workdirOrFallback } from "../../shared/agent-workdir.js";
 import {
 	CODEX_ACTIVITY_MAX_ITEMS,
 	CodexAgentResultSchema,
@@ -41,15 +42,20 @@ export interface LocalAgentBackend {
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Must name a real directory, or the child's writes land somewhere nobody named. */
-export function resolveLocalCwd(requested: string | undefined, base: string = process.cwd()): string {
-	if (!requested) return base;
-	const resolved = path.resolve(base, requested);
-	try {
-		return fs.statSync(resolved).isDirectory() ? resolved : base;
-	} catch {
-		return base;
-	}
+/**
+ * The daemonless binding of the shared working-directory rule.
+ *
+ * It used to read a bare hint as a RELATIVE PATH from the session's own directory and fall back
+ * there too, while the daemon read the same string as a project LABEL and fell back to home. Which
+ * of those a caller got was decided by whether a daemon happened to be serving this backend, which
+ * is not something the caller can see or chose. Same roots, same grammar, same fallback now; see
+ * `shared/agent-workdir.ts` for why the roots are the only part that may differ per machine.
+ *
+ * Roots default to this machine's own, NOT to `process.cwd()`: a daemon on this same box would look
+ * a label up there, and the answer must not turn on which one is running.
+ */
+export function resolveLocalCwd(requested: string | undefined, home: string = os.homedir()): string {
+	return workdirOrFallback(resolveWorkdir(requested, "agentCwd", { roots: [path.join(home, "projects")], home }));
 }
 
 function unavailable(errorClass: string, backend: AgentBackendDescriptor): Error {
