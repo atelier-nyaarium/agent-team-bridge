@@ -85,7 +85,7 @@ export function registerChannelReply(mcpServer: McpServer, capabilities: Capabil
 	mcpServer.registerTool(
 		"channel_reply",
 		{
-			title: "Channel Reply",
+			title: `Channel Reply`,
 			description: `
 # Channel Reply
 
@@ -106,7 +106,7 @@ export function registerChannelReplyStructured(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"channel_reply_structured",
 		{
-			title: "Channel Reply (Structured)",
+			title: `Channel Reply (Structured)`,
 			description: `
 # Channel Reply (Structured)
 

@@ -80,13 +80,13 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		};
 		mcpServer.registerTool(
 			"designer_push_card",
-			{ title: "Designer Push Card", description: `Disabled. Set \`PROJECT_NAME\` to enable.`, inputSchema: {} },
+			{ title: `Designer Push Card`, description: `Disabled. Set \`PROJECT_NAME\` to enable.`, inputSchema: {} },
 			async () => configError,
 		);
 		mcpServer.registerTool(
 			"designer_delete_card",
 			{
-				title: "Designer Delete Card",
+				title: `Designer Delete Card`,
 				description: `Disabled. Set \`PROJECT_NAME\` to enable.`,
 				inputSchema: {},
 			},
@@ -99,7 +99,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 	const pushSchema: any = PushCardSchema;
 	mcpServer.registerTool(
 		"designer_push_card",
-		{ title: "Designer Push Card", description: PUSH_DESCRIPTION, inputSchema: pushSchema },
+		{ title: `Designer Push Card`, description: PUSH_DESCRIPTION, inputSchema: pushSchema },
 		async (args: PushCardArgs) => {
 			const { session_id, name, html, message } = args;
 			const bytes = Buffer.from(html, "utf-8");
@@ -131,7 +131,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 	const deleteSchema: any = DeleteCardSchema;
 	mcpServer.registerTool(
 		"designer_delete_card",
-		{ title: "Designer Delete Card", description: DELETE_DESCRIPTION, inputSchema: deleteSchema },
+		{ title: `Designer Delete Card`, description: DELETE_DESCRIPTION, inputSchema: deleteSchema },
 		async (args: DeleteCardArgs) => {
 			try {
 				// Self-scoped to this process's own identity, so it can only touch our own conversation.

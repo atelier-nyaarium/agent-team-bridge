@@ -96,7 +96,7 @@ function run(argv: string[], timeoutMs = EXEC_TIMEOUT_MS, opts: { mergeStderr?: 
 		const errChunks: Buffer[] = [];
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
-			reject(new Error("tmux command timed out"));
+			reject(new Error(`tmux command timed out`));
 		}, timeoutMs);
 		child.stdout.on("data", (d: Buffer) => {
 			// Still drain past the cap.
@@ -177,7 +177,7 @@ export async function peekPane(target: TmuxTarget, resize = true): Promise<TmuxP
 
 /** A bounded `docker logs` tail, shown while a pane does not exist yet. */
 async function captureContainerLogs(target: TmuxTarget): Promise<{ text: string; hash: string }> {
-	if (target.kind === "host") throw new Error("no such container");
+	if (target.kind === "host") throw new Error(`no such container`);
 	assertTmuxName(target.name);
 	const text = await run(
 		["docker", "logs", "--tail", String(CONTAINER_LOGS_TAIL), containerName(target.name)],
@@ -282,7 +282,7 @@ export function classifyPaneProcesses(commLines: string[]): PaneAgentState {
 	const comms = commLines.map((line) => line.trim()).filter(Boolean);
 	// A pane always carries at least its own shell, so nothing at all means the probe failed to
 	// look rather than that the pane is empty.
-	if (comms.length === 0) return "unknown";
+	if (comms.length === 0) return `unknown`;
 	return comms.every((comm) => SHELL_COMMS.has(comm)) ? "gone" : "alive";
 }
 

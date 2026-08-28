@@ -37,7 +37,7 @@ export function describeDrift(startup: Capability[], current: Capability[] | nul
 }
 
 // Silence must not read as "checked, unchanged".
-const UNVERIFIED = "Could not confirm with the gateway whether this is still current.";
+const UNVERIFIED = `Could not confirm with the gateway whether this is still current.`;
 
 export function renderCapabilities(startup: Capability[], current: Capability[] | null): string {
 	const note = current === null ? UNVERIFIED : describeDrift(startup, current);
@@ -65,7 +65,7 @@ export function renderCapabilities(startup: Capability[], current: Capability[] 
 export function registerCapabilitiesTool(mcpServer: McpServer, capabilities: Capability[]): void {
 	mcpServer.registerTool(
 		"switchboard_capabilities",
-		{ title: "Switchboard Capabilities", description, inputSchema: capabilitiesSchema },
+		{ title: `Switchboard Capabilities`, description, inputSchema: capabilitiesSchema },
 		async () => {
 			const routerUrl = process.env.BRIDGE_ROUTER_URL;
 			const bundle = routerUrl ? await readCapabilities(routerUrl) : null;

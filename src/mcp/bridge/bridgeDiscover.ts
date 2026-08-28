@@ -125,7 +125,7 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"crosstalk_discover",
 		{
-			title: "Crosstalk Discover",
+			title: `Crosstalk Discover`,
 			description: DESCRIPTION,
 			inputSchema: {},
 		},

@@ -251,9 +251,9 @@ async function fetchAttachments(args: { id: string; filenames?: string[] }): Pro
 type CascadeLine = { id?: unknown; title?: unknown; from?: unknown; to?: unknown; reason?: unknown };
 
 const CASCADE_CAUSE: Record<string, string> = {
-	children_finished: "everything under it is finished",
-	parent_finished: "the entry above it was finished",
-	child_reopened: "work under it went back to unfinished",
+	children_finished: `everything under it is finished`,
+	parent_finished: `the entry above it was finished`,
+	child_reopened: `work under it went back to unfinished`,
 };
 
 /** As prose, so it does not read as something the caller must act on; the change is already saved.
@@ -267,12 +267,12 @@ export function cascadeProse(raw: unknown): string {
 		lines.push(`- "${row.title}" is now ${row.to}${cause ? `, because ${cause}` : ""}.`);
 	}
 	if (lines.length === 0) return "";
-	const count = lines.length === 1 ? "one other entry" : `${lines.length} other entries`;
+	const count = lines.length === 1 ? `one other entry` : `${lines.length} other entries`;
 	return [
 		"",
 		`The board also moved ${count} to keep the tree consistent:`,
 		...lines,
-		"This is already saved and needs no follow-up write. Say so if the owner would want to know.",
+		`This is already saved and needs no follow-up write. Say so if the owner would want to know.`,
 	].join("\n");
 }
 
@@ -297,46 +297,46 @@ async function post(
 export function registerBoardTools(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"taskBoardList",
-		{ title: "Task Board List", description: LIST_DESCRIPTION, inputSchema: ListInputSchema },
+		{ title: `Task Board List`, description: LIST_DESCRIPTION, inputSchema: ListInputSchema },
 		async (args: { scope?: string }) => post(boardRequestBody("list", args)),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardClaim",
-		{ title: "Task Board Claim", description: CLAIM_DESCRIPTION, inputSchema: ClaimInputSchema },
+		{ title: `Task Board Claim`, description: CLAIM_DESCRIPTION, inputSchema: ClaimInputSchema },
 		async (args: { id: string }) => post(boardRequestBody("claim", args)),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardRelease",
-		{ title: "Task Board Release", description: RELEASE_DESCRIPTION, inputSchema: ReleaseInputSchema },
+		{ title: `Task Board Release`, description: RELEASE_DESCRIPTION, inputSchema: ReleaseInputSchema },
 		async (args: { id: string }) => post(boardRequestBody("release", args)),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardCreate",
-		{ title: "Task Board Create", description: CREATE_DESCRIPTION, inputSchema: CreateInputSchema },
+		{ title: `Task Board Create`, description: CREATE_DESCRIPTION, inputSchema: CreateInputSchema },
 		async (args: { title: string; assignTo: string; body?: string; parent?: string }) =>
 			post(boardRequestBody("create", args)),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardUpdate",
-		{ title: "Task Board Update", description: UPDATE_DESCRIPTION, inputSchema: UpdateInputSchema },
+		{ title: `Task Board Update`, description: UPDATE_DESCRIPTION, inputSchema: UpdateInputSchema },
 		async (args: { id: string; title?: string; body?: string | null; state?: string; parent?: string | null }) =>
 			post(boardRequestBody("update", args)),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardClear",
-		{ title: "Task Board Clear", description: CLEAR_DESCRIPTION, inputSchema: ClearInputSchema },
+		{ title: `Task Board Clear`, description: CLEAR_DESCRIPTION, inputSchema: ClearInputSchema },
 		async () => post(boardRequestBody("clear")),
 	);
 
 	mcpServer.registerTool(
 		"taskBoardFetchAttachments",
 		{
-			title: "Task Board Fetch Attachments",
+			title: `Task Board Fetch Attachments`,
 			description: FETCH_ATTACHMENTS_DESCRIPTION,
 			inputSchema: FetchAttachmentsInputSchema,
 		},

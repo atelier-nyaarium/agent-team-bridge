@@ -28,7 +28,7 @@ export function outcomeFromRead(result: unknown, threadId: string, turnId: strin
 	if (turn.status === "inProgress") return { known: "running" };
 	if (turn.status === "interrupted") return { known: "settled", outcome: { status: "interrupted" } };
 	// A read carries no error text, so a failure recovered this way says only that it failed.
-	if (turn.status === "failed") return { known: "settled", outcome: { status: "failed", error: "turn failed" } };
+	if (turn.status === "failed") return { known: "settled", outcome: { status: "failed", error: `turn failed` } };
 	const messages = turn.items.filter(
 		(item): item is { type: "agentMessage"; id: string; text: string; phase?: unknown } =>
 			item.type === "agentMessage",
@@ -50,7 +50,7 @@ export function terminalOf(outcome: TurnOutcome): TerminalOutcome {
 		case "completed":
 			return { status: "completed", finalResponse: outcome.finalResponse };
 		case "failed":
-			return { status: "failed", error: outcome.error ?? "turn failed" };
+			return { status: "failed", error: outcome.error ?? `turn failed` };
 		default:
 			return { status: "interrupted" };
 	}

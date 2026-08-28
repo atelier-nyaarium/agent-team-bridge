@@ -38,7 +38,7 @@ export class CodexLocalSession implements LocalBackendSession {
 			if (outcome) session.settle(outcome.turnId, terminalOf(outcome));
 		});
 		child.onExit(() => {
-			session.settleAll("codex app-server exited");
+			session.settleAll(`codex app-server exited`);
 			session.closedListener?.();
 		});
 		return session;
@@ -80,7 +80,7 @@ export class CodexLocalSession implements LocalBackendSession {
 	}
 
 	close(): void {
-		this.settleAll("codex app-server closed");
+		this.settleAll(`codex app-server closed`);
 		this.client.close();
 	}
 

@@ -74,7 +74,7 @@ export class CopilotLocalSession implements LocalBackendSession {
 			.catch((error): LocalTerminal => {
 				this.retire(sessionId, turn);
 				const text = error instanceof Error ? error.message : String(error);
-				return { status: "failed", error: text.trim() || "copilot turn failed" };
+				return { status: "failed", error: text.trim() || `copilot turn failed` };
 			});
 
 		return { turnId, settled };
@@ -126,7 +126,7 @@ export class CopilotLocalSession implements LocalBackendSession {
 					? update.title
 					: typeof update.status === "string"
 						? update.status
-						: "Copilot used a tool";
+						: `Copilot used a tool`;
 			this.activityListener?.(turn.turnId, label);
 		}
 	}

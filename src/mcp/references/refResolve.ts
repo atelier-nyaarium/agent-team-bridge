@@ -285,7 +285,7 @@ function degraded(text: string, ref: Ref, cause: DegradeCause, detail?: string):
 			startLine: 1,
 			endLine: lineCount(text),
 			quality: "unresolved",
-			reason: reasonFor(cause, detail, "no segment matched by text"),
+			reason: reasonFor(cause, detail, `no segment matched by text`),
 		},
 		notice,
 	];
@@ -294,7 +294,7 @@ function degraded(text: string, ref: Ref, cause: DegradeCause, detail?: string):
 /** The closed causes lexicon's own errors map to; anything else is not lexicon's absence and propagates. */
 function causeOf(error: unknown): { cause: DegradeCause; detail?: string } | null {
 	if (error instanceof BudgetSpent) {
-		return { cause: "warming", detail: "the reply's budget ran out before the index answered" };
+		return { cause: "warming", detail: `the reply's budget ran out before the index answered` };
 	}
 	if (error instanceof NotInstalled) return { cause: "notInstalled", detail: error.message };
 	if (error instanceof Incompatible) return { cause: "incompatible", detail: error.message };

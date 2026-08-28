@@ -180,7 +180,7 @@ export interface LocalListAgent {
  */
 function errorText(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
-	return sanitizeAgentErrorText(text, AGENT_ERROR_MAX_BYTES) || "agent command failed";
+	return sanitizeAgentErrorText(text, AGENT_ERROR_MAX_BYTES) || `agent command failed`;
 }
 
 ////////////////////////////////
@@ -301,7 +301,7 @@ export class LocalAgentRuntime {
 				state: turn.state,
 				activities: this.activitiesOf(turn),
 				...(turn.state === "completed" ? { finalResponse: turn.finalResponse ?? "" } : {}),
-				...(turn.state === "failed" ? { error: turn.error ?? "turn failed" } : {}),
+				...(turn.state === "failed" ? { error: turn.error ?? `turn failed` } : {}),
 				updatedAt: turn.updatedAt,
 			})),
 			createdAt: agent.createdAt,
@@ -344,10 +344,9 @@ export class LocalAgentRuntime {
 			this.operations.set(operationId, fingerprint);
 			return undefined;
 		}
-		if (held !== fingerprint) return { refused: "operation ID was reused with different input" };
+		if (held !== fingerprint) return { refused: `operation ID was reused with different input` };
 		return {
-			refused:
-				"operation ID was already used; this session runs its agents itself and keeps no record to replay from",
+			refused: `operation ID was already used; this session runs its agents itself and keeps no record to replay from`,
 		};
 	}
 
@@ -407,7 +406,7 @@ export class LocalAgentRuntime {
 		const active = this.activeTurn(agent);
 		if (active) {
 			// Refusing the REQUEST keeps the running turn untouched, instead of racing a second one.
-			if (!session.steerTurn) return { refused: this.spec.busyMessage ?? "agent is still working" };
+			if (!session.steerTurn) return { refused: this.spec.busyMessage ?? `agent is still working` };
 			try {
 				await session.steerTurn(agent.threadId, active.id, prompt);
 			} catch (error) {
@@ -551,7 +550,7 @@ export class LocalAgentRuntime {
 		if (terminal.status === "completed") turn.finalResponse = terminal.finalResponse ?? "";
 		// The child wrote this, so it is normalized before it is stored rather than at each reader:
 		// it leaves here for `error.message`, which both backends bound and refuse unnormalized.
-		if (terminal.status === "failed") turn.error = errorText(terminal.error || "turn failed");
+		if (terminal.status === "failed") turn.error = errorText(terminal.error || `turn failed`);
 		turn.updatedAt = this.now();
 		if (agent.activeTurnId === turnId) {
 			agent.activeTurnId = undefined;
@@ -601,7 +600,7 @@ export class LocalAgentRuntime {
 		if (turn.state === "failed") {
 			return {
 				...base,
-				error: { code: "turn_failed", message: turn.error || "turn failed", retryable: false },
+				error: { code: "turn_failed", message: turn.error || `turn failed`, retryable: false },
 			};
 		}
 		return base;
@@ -619,7 +618,7 @@ export class LocalAgentRuntime {
 	}
 
 	private notFound(agentId: string): LocalAgentAnswer {
-		return this.fail(agentId, "not_found", "agent is not known to this session", false);
+		return this.fail(agentId, "not_found", `agent is not known to this session`, false);
 	}
 
 	private fail(agentId: string, code: LocalErrorCode, message: string, retryable: boolean): LocalAgentAnswer {

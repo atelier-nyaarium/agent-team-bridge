@@ -55,7 +55,7 @@ export function registerConnectorTools(
 	mcpServer.registerTool(
 		"mcpConnectorStatus",
 		{
-			title: "MCP Connector Status",
+			title: `MCP Connector Status`,
 			description: `Show connector status and connected clients.`,
 			inputSchema: {},
 		},
@@ -107,7 +107,7 @@ export function registerConnectorTools(
 	mcpServer.registerTool(
 		"mcpConnectorServe",
 		{
-			title: "Start Connector",
+			title: `Start Connector`,
 			description: `Serve project tools on the connector port.`,
 			inputSchema: {},
 		},
@@ -130,7 +130,7 @@ export function registerConnectorTools(
 	mcpServer.registerTool(
 		"mcpConnectorUnserve",
 		{
-			title: "Stop Connector",
+			title: `Stop Connector`,
 			description: `Stop serving project tools. Disconnect clients.`,
 			inputSchema: {},
 		},
@@ -148,7 +148,7 @@ export function registerConnectorTools(
 	mcpServer.registerTool(
 		"mcpConnectorOpen",
 		{
-			title: "Open MCP Connector",
+			title: `Open MCP Connector`,
 			description: `
 # Open MCP Connector
 
@@ -200,7 +200,7 @@ Disconnects connected clients.
 	mcpServer.registerTool(
 		"mcpConnectorClose",
 		{
-			title: "Close MCP Connector",
+			title: `Close MCP Connector`,
 			description: `Restore localhost-only HTTP. Disconnect remote clients.`,
 			inputSchema: {},
 		},
@@ -232,7 +232,7 @@ Disconnects connected clients.
 	mcpServer.registerTool(
 		"mcpConnectorGenerateCert",
 		{
-			title: "Generate TLS Certificate",
+			title: `Generate TLS Certificate`,
 			description: `Generate self-signed certificates in \`.claude/connector/\` for \`mcpConnectorOpen\`.`,
 			inputSchema: generateCertObj,
 		},
@@ -274,7 +274,7 @@ Disconnects connected clients.
 	mcpServer.registerTool(
 		"mcpConnectorGenerateToken",
 		{
-			title: "Generate Auth Token",
+			title: `Generate Auth Token`,
 			description: `Generate and persist a bearer token for \`mcpConnectorOpen\`.`,
 			inputSchema: {},
 		},
@@ -308,7 +308,7 @@ Disconnects connected clients.
 	mcpServer.registerTool(
 		"mcpConnectorDisconnect",
 		{
-			title: "Disconnect Game Client",
+			title: `Disconnect Game Client`,
 			description: `Disconnect \`clientId\` and end pending tool invocations.`,
 			inputSchema: disconnectObj,
 		},
@@ -328,7 +328,7 @@ Disconnects connected clients.
 	mcpServer.registerTool(
 		"mcpConnectorClientBundle",
 		{
-			title: "Get Client Connection Bundle",
+			title: `Get Client Connection Bundle`,
 			description: `Generate \`connect.json\` and \`ca.crt\` for a game's \`mcp-connector/\` folder.`,
 			inputSchema: {},
 		},
@@ -371,7 +371,7 @@ Disconnects connected clients.
 		mcpServer.registerTool(
 			"mcpConnectorCreateSchema",
 			{
-				title: "Create MCP Schema",
+				title: `Create MCP Schema`,
 				description: `Create an example \`.claude/connector/mcp-schema.js\` tool schema.`,
 				inputSchema: {},
 			},

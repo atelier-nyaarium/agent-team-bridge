@@ -9,7 +9,7 @@ export const copilotLauncher: ExecutionTargetLauncher = {
 			case "devcontainer": {
 				const parsed = parseAgentTargetId(target.targetId);
 				if (parsed?.kind !== "devcontainer")
-					throw Object.assign(new Error("target is not a container id"), { code: "badTarget" });
+					throw Object.assign(new Error(`target is not a container id`), { code: "badTarget" });
 				return spawnCopilot([
 					"docker",
 					"exec",
@@ -27,11 +27,11 @@ export const copilotLauncher: ExecutionTargetLauncher = {
 			}
 			case "host":
 				if (parseAgentTargetId(target.targetId)?.kind !== "host") {
-					throw Object.assign(new Error("target is not a host id"), { code: "badTarget" });
+					throw Object.assign(new Error(`target is not a host id`), { code: "badTarget" });
 				}
 				return spawnCopilot(["copilot", "--acp", "--stdio"], env);
 			default:
-				throw Object.assign(new Error("unknown execution target kind"), { code: "badTarget" });
+				throw Object.assign(new Error(`unknown execution target kind`), { code: "badTarget" });
 		}
 	},
 };

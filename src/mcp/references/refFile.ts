@@ -46,7 +46,7 @@ function decodeText(buffer: Buffer): string | null {
  * author believing it went out.
  */
 export function loadRefFile(absolute: string, refPath: string): LoadResult {
-	if (refPath === "") return { ok: false, failure: "missing", detail: "a ref needs a path" };
+	if (refPath === "") return { ok: false, failure: "missing", detail: `a ref needs a path` };
 
 	let buffer: Buffer;
 	try {

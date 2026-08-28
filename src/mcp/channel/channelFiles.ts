@@ -122,8 +122,8 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	const failed = files.some((f) => !f.path && f.fetchFailed);
 	const missing = files.some((f) => !f.path && !f.fetchFailed);
 	const notes = [
-		failed ? "Entries marked (fetch failed) were sent but could not be retrieved; ask for a re-send." : null,
-		missing ? "Entries without a path carried no bytes." : null,
+		failed ? `Entries marked (fetch failed) were sent but could not be retrieved; ask for a re-send.` : null,
+		missing ? `Entries without a path carried no bytes.` : null,
 	].filter(Boolean);
 	const instruction = `*Files with \`-> /path\` are on disk; Read them.${notes.length ? ` ${notes.join(" ")}` : ""}*`;
 	const lines = files.map((f, i) => {

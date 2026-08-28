@@ -50,7 +50,7 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 	mcpServer.registerTool(
 		"notify_human",
 		{
-			title: "Notify Human",
+			title: `Notify Human`,
 			description: `${NOTIFY_DESCRIPTION}${capabilityInstructions(capabilities)}`.trim(),
 			inputSchema: notifySchema,
 		},

@@ -32,7 +32,7 @@ export type { CodexDaemonEvent, CodexDaemonReceipt };
 
 function describe(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
-	return sanitizeCodexErrorText(text) || "codex command failed";
+	return sanitizeCodexErrorText(text) || `codex command failed`;
 }
 
 ////////////////////////////////
@@ -101,14 +101,14 @@ export class CodexDaemonService {
 				return this.runReconcile(command);
 			default:
 				// An unmodelled kind must not reach a branch that starts work.
-				return this.reject(command as CodexDaemonCommand, "unsupported command");
+				return this.reject(command as CodexDaemonCommand, `unsupported command`);
 		}
 	}
 
 	private async runStart(command: Extract<CodexDaemonCommand, { kind: "start" }>): Promise<void> {
 		const resolved = resolveAgentTarget(command.target, this.deps.resolveHostCwd);
 		const session = await this.session(resolved);
-		if (!session) return this.reject(command, "execution target is unavailable");
+		if (!session) return this.reject(command, `execution target is unavailable`);
 
 		// startThread checks the model against the server's own list.
 		const threadId = await session.client.startThread({ cwd: resolved.cwd, model: command.model });
@@ -117,7 +117,7 @@ export class CodexDaemonService {
 		const turnId = await this.beginTurn(session, binding, command.prompt);
 		// A refusal marks the agent unavailable with nothing to reconcile, so it is only reached after
 		// asking App Server whether a turn exists.
-		if (!turnId) return this.reject(command, "codex thread produced no turn");
+		if (!turnId) return this.reject(command, `codex thread produced no turn`);
 		this.emitReceipt(session, {
 			kind: "accepted",
 			requestId: command.requestId,
@@ -170,7 +170,7 @@ export class CodexDaemonService {
 
 	private async runMessage(command: Extract<CodexDaemonCommand, { kind: "message" }>): Promise<void> {
 		const session = await this.session(command.target);
-		if (!session) return this.reject(command, "execution target is unavailable");
+		if (!session) return this.reject(command, `execution target is unavailable`);
 
 		const binding: TurnBinding = {
 			ownerKey: command.ownerKey,
@@ -206,7 +206,7 @@ export class CodexDaemonService {
 
 		await session.client.resumeThread(command.threadId);
 		const turnId = await this.beginTurn(session, binding, command.prompt);
-		if (!turnId) return this.reject(command, "codex thread produced no turn");
+		if (!turnId) return this.reject(command, `codex thread produced no turn`);
 		this.emitReceipt(session, {
 			kind: "accepted",
 			requestId: command.requestId,
@@ -222,7 +222,7 @@ export class CodexDaemonService {
 
 	private async runInterrupt(command: Extract<CodexDaemonCommand, { kind: "interrupt" }>): Promise<void> {
 		const session = await this.session(command.target);
-		if (!session) return this.reject(command, "execution target is unavailable");
+		if (!session) return this.reject(command, `execution target is unavailable`);
 		const shared = {
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
@@ -243,7 +243,7 @@ export class CodexDaemonService {
 
 	private async runReconcile(command: Extract<CodexDaemonCommand, { kind: "reconcile" }>): Promise<void> {
 		const session = await this.session(command.target);
-		if (!session) return this.reject(command, "execution target is unavailable");
+		if (!session) return this.reject(command, `execution target is unavailable`);
 		const binding: TurnBinding = {
 			ownerKey: command.ownerKey,
 			agentId: command.agentId,
@@ -410,7 +410,7 @@ export class CodexDaemonService {
 			eventId: this.core.rejectionId(),
 			agentId: command.agentId,
 			operationId: command.kind === "reconcile" ? undefined : command.operationId,
-			error: sanitizeCodexErrorText(error) || "codex command failed",
+			error: sanitizeCodexErrorText(error) || `codex command failed`,
 		};
 		// Logged too: without it, an unavailable agent has no local trace of why.
 		console.error(`[codex-daemon] refused ${command.kind} for ${command.agentId}: ${message.error}`);

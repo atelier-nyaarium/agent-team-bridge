@@ -149,7 +149,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"reload_plugins",
 		{
-			title: "Reload Plugins",
+			title: `Reload Plugins`,
 			description,
 			inputSchema: reloadSchema,
 		},
@@ -165,7 +165,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 
 				if (inContainer) {
 					tmuxPrefix = "tmux";
-					targetLabel = "self (container)";
+					targetLabel = `self (container)`;
 					sessionName = selfSessionTarget().sessionName;
 				} else if (args.team) {
 					// Shell-interpolated into the docker exec prefix.
@@ -176,7 +176,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 					sessionName = DEFAULT_SESSION;
 				} else {
 					tmuxPrefix = "tmux";
-					targetLabel = "self (host)";
+					targetLabel = `self (host)`;
 					sessionName = selfSessionTarget().sessionName;
 				}
 
@@ -193,7 +193,7 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 									initiated: true,
 									target: targetLabel,
 									scriptPath,
-									note: "Background script starts ~3s after this tool call completes. Full sequence takes about 40 seconds.",
+									note: `Background script starts ~3s after this tool call completes. Full sequence takes about 40 seconds.`,
 								},
 								null,
 								2,

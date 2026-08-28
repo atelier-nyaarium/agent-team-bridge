@@ -34,10 +34,10 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	// wire string would turn a question into an announcement nobody answers.
 	const instructions =
 		payload.no_ack === true
-			? "Awareness only. Nobody is waiting on a reply, so do not send one."
+			? `Awareness only. Nobody is waiting on a reply, so do not send one.`
 			: payload.replyJsonSchema
-				? "Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema."
-				: "Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.";
+				? `Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema.`
+				: `Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.`;
 
 	await server.notification({
 		method: "notifications/claude/channel",

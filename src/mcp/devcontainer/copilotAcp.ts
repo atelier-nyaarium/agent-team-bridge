@@ -68,7 +68,7 @@ export function createAcpTransport(child: AgentChild): AcpTransport {
 			pending.delete(String(id));
 			if (record.error && typeof record.error === "object") {
 				const error = record.error as { message?: unknown };
-				waiter.reject(new Error(typeof error.message === "string" ? error.message : "ACP request failed"));
+				waiter.reject(new Error(typeof error.message === "string" ? error.message : `ACP request failed`));
 			} else {
 				waiter.resolve(record.result);
 			}
@@ -103,13 +103,13 @@ export function createAcpTransport(child: AgentChild): AcpTransport {
 	child.stdin.on("error", () => {});
 	child.onExit((info) => {
 		closed = true;
-		const error = new Error(info.reason === "authFailed" ? "Copilot login required" : "Copilot ACP exited");
+		const error = new Error(info.reason === "authFailed" ? `Copilot login required` : `Copilot ACP exited`);
 		rejectPending(error);
 	});
 
 	return {
 		request(method, params, timeoutMs = method === "session/prompt" ? PROMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS) {
-			if (closed) return Promise.reject(new Error("Copilot ACP exited"));
+			if (closed) return Promise.reject(new Error(`Copilot ACP exited`));
 			const id = nextId++;
 			return new Promise((resolve, reject) => {
 				const timer = setTimeout(() => {
@@ -138,7 +138,7 @@ export function createAcpTransport(child: AgentChild): AcpTransport {
 		close() {
 			if (closed) return;
 			closed = true;
-			rejectPending(new Error("Copilot ACP closed"));
+			rejectPending(new Error(`Copilot ACP closed`));
 			child.kill();
 		},
 	};
@@ -172,7 +172,7 @@ export class CopilotAcpClient {
 			clientCapabilities: {},
 			clientInfo: { name: "switchboard", version: "1" },
 		})) as { protocolVersion?: number };
-		if (result.protocolVersion !== 1) throw new Error("unsupported ACP protocol version");
+		if (result.protocolVersion !== 1) throw new Error(`unsupported ACP protocol version`);
 		transport.notify("initialized", {});
 		return new CopilotAcpClient(transport);
 	}
@@ -187,12 +187,12 @@ export class CopilotAcpClient {
 			configOptions?: AcpConfigOption[];
 		};
 		if (typeof result.sessionId !== "string" || result.sessionId.length === 0)
-			throw new Error("ACP returned no session ID");
+			throw new Error(`ACP returned no session ID`);
 		let modelOutcome: CopilotAcpSessionInfo["model"];
 		if (model === undefined) {
 			modelOutcome = { state: "default" };
 		} else if (!supportsConfigOption(result.configOptions, "model")) {
-			modelOutcome = { state: "notApplied", requested: model, reason: "model option is not offered" };
+			modelOutcome = { state: "notApplied", requested: model, reason: `model option is not offered` };
 		} else {
 			await this.setModel(result.sessionId, model);
 			modelOutcome = { state: "applied", model };

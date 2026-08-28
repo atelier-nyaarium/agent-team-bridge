@@ -60,9 +60,9 @@ export function probeWindowsSpawn(): WindowsSpawnAvailability {
 		"-Command",
 		'$c = Get-Command claude.exe -ErrorAction SilentlyContinue; if ($c) { Write-Output "claude=$($c.Source)" }; Write-Output "profile=$env:USERPROFILE"',
 	]);
-	if (out == null) return { available: false, reason: "powershell.exe did not run" };
+	if (out == null) return { available: false, reason: `powershell.exe did not run` };
 	const claude = /^claude=(.+)$/m.exec(out)?.[1]?.trim();
-	if (!claude) return { available: false, reason: "claude.exe is not on the Windows PATH" };
+	if (!claude) return { available: false, reason: `claude.exe is not on the Windows PATH` };
 	const userProfile = /^profile=(.+)$/m.exec(out)?.[1]?.trim();
 	if (!userProfile || isUncPath(userProfile)) {
 		return { available: false, reason: `unusable Windows home ${userProfile ?? "(none)"}` };

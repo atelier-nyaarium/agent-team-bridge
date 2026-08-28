@@ -112,7 +112,7 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 		replaysOperations: false,
 		...(isCodex
 			? {}
-			: { busyMessage: "Copilot is still working. Await the turn or stop it before sending another." }),
+			: { busyMessage: `Copilot is still working. Await the turn or stop it before sending another.` }),
 		openSession: async (): Promise<LocalBackendSession> => {
 			const target: AgentResolvedTarget = {
 				kind: "host",
@@ -150,7 +150,7 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 		async handle(body) {
 			// The gateway route's own schema, so a malformed call is refused identically on both paths.
 			const parsed = requestSchema.safeParse(body);
-			if (!parsed.success) return refuse(parsed.error.issues[0]?.message ?? "invalid request");
+			if (!parsed.success) return refuse(parsed.error.issues[0]?.message ?? `invalid request`);
 
 			const request = parsed.data;
 			if (request.kind === "list") return listAgents();

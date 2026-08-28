@@ -16,7 +16,7 @@ export function registerBridgeWait(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"crosstalk_wait",
 		{
-			title: "Crosstalk Wait",
+			title: `Crosstalk Wait`,
 			description: `Wait before retrying when another team asks.`,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeWaitSchema as any,

@@ -44,7 +44,7 @@ export function registerSetEffortLevel(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"set_effort_level",
 		{
-			title: "Set Effort Level",
+			title: `Set Effort Level`,
 			description,
 			inputSchema: setEffortSchema,
 		},

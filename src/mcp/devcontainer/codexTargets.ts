@@ -102,7 +102,7 @@ export function containerEnvArgs(source: Record<string, string | undefined>, env
 function containerProject(targetId: string): string {
 	const parsed = parseAgentTargetId(targetId);
 	if (parsed?.kind !== "devcontainer") {
-		throw Object.assign(new Error("target is not a container id"), { code: "badTarget" });
+		throw Object.assign(new Error(`target is not a container id`), { code: "badTarget" });
 	}
 	return parsed.project;
 }
@@ -174,13 +174,13 @@ export const realLauncher: ExecutionTargetLauncher = {
 			case "host": {
 				// A container-shaped id with kind "host" would run under the daemon's own user.
 				if (parseAgentTargetId(target.targetId)?.kind !== "host") {
-					throw Object.assign(new Error("target is not a host id"), { code: "badTarget" });
+					throw Object.assign(new Error(`target is not a host id`), { code: "badTarget" });
 				}
 				return adoptProcess(spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "pipe"] }));
 			}
 			default:
 				// Never fall through to the unsandboxed host spawn.
-				throw Object.assign(new Error("unknown execution target kind"), { code: "badTarget" });
+				throw Object.assign(new Error(`unknown execution target kind`), { code: "badTarget" });
 		}
 	},
 };

@@ -120,7 +120,7 @@ async function formatResult(
 		parts.push(result.message || `Still running.`);
 		parts.push(`\nTo check again, call this tool with just session_id (no body).`);
 	} else if (result.status === "error") {
-		parts.push(`Error: ${result.reason ?? result.message ?? "Unknown error"}`);
+		parts.push(`Error: ${result.reason ?? result.message ?? `Unknown error`}`);
 	} else if (result.status === "timeout") {
 		parts.push(result.message || `No response in time.`);
 	} else {
@@ -147,7 +147,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"crosstalk_send",
 		{
-			title: "Crosstalk Send",
+			title: `Crosstalk Send`,
 			description,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeSendSchema as any,

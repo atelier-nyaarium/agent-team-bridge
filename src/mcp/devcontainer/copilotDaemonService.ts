@@ -57,7 +57,7 @@ interface TargetSession {
 
 function describe(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
-	return sanitizeCopilotErrorText(text) || "Copilot command failed";
+	return sanitizeCopilotErrorText(text) || `Copilot command failed`;
 }
 
 function failureCode(error: string): CopilotDaemonFailureCode {
@@ -131,7 +131,7 @@ export class CopilotDaemonService {
 		const target = resolveAgentTarget(command.target, this.deps.resolveHostCwd);
 		const session = await this.session(target);
 		if (!session)
-			return this.reject(command, this.openErrors.get(target.targetId) ?? "execution target is unavailable");
+			return this.reject(command, this.openErrors.get(target.targetId) ?? `execution target is unavailable`);
 		const requested = command.model;
 		const info = await session.client.newSession(target.cwd, requested ?? COPILOT_DEFAULT_MODEL);
 		if (requested !== undefined && info.model.state === "notApplied")
@@ -158,10 +158,10 @@ export class CopilotDaemonService {
 		if (!session)
 			return this.reject(
 				command,
-				this.openErrors.get(command.target.targetId) ?? "execution target is unavailable",
+				this.openErrors.get(command.target.targetId) ?? `execution target is unavailable`,
 			);
 		const binding: Binding = { ownerKey: command.ownerKey, agentId: command.agentId, sessionId: command.sessionId };
-		if (session.active.has(command.sessionId)) return this.reject(command, "Copilot agent is still working");
+		if (session.active.has(command.sessionId)) return this.reject(command, `Copilot agent is still working`);
 		if (!session.sessions.has(command.sessionId)) {
 			try {
 				await session.client.loadSession(command.sessionId, command.target.cwd);
@@ -222,11 +222,11 @@ export class CopilotDaemonService {
 		if (!session)
 			return this.reject(
 				command,
-				this.openErrors.get(command.target.targetId) ?? "execution target is unavailable",
+				this.openErrors.get(command.target.targetId) ?? `execution target is unavailable`,
 			);
 		const active = session.active.get(command.sessionId);
 		if (!active || active.turnId !== command.turnId)
-			return this.reject(command, "Copilot turn is no longer active");
+			return this.reject(command, `Copilot turn is no longer active`);
 		active.cancelled = true;
 		session.client.cancel(command.sessionId);
 		this.emitReceipt(session, {
@@ -246,7 +246,7 @@ export class CopilotDaemonService {
 		if (!session)
 			return this.reject(
 				command,
-				this.openErrors.get(command.target.targetId) ?? "execution target is unavailable",
+				this.openErrors.get(command.target.targetId) ?? `execution target is unavailable`,
 			);
 		const active = session.active.get(command.sessionId);
 		if (!active) {
@@ -337,7 +337,7 @@ export class CopilotDaemonService {
 					? update.title
 					: typeof update.status === "string"
 						? update.status
-						: "Copilot used a tool";
+						: `Copilot used a tool`;
 			this.emitEvent(session, {
 				kind: "activity",
 				ownerKey: active.binding.ownerKey,
@@ -370,7 +370,7 @@ export class CopilotDaemonService {
 	}
 
 	private reject(command: CopilotDaemonCommand, error: string): void {
-		const normalized = sanitizeCopilotErrorText(error) || "Copilot command failed";
+		const normalized = sanitizeCopilotErrorText(error) || `Copilot command failed`;
 		const message = {
 			type: "copilot_receipt",
 			kind: "rejected",

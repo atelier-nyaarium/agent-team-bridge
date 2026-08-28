@@ -12,7 +12,7 @@ const CompactSessionSchema = z.object({
 		// One argv element, so it is capped below ARG_MAX and a NUL would truncate the line.
 		.max(16384)
 		.refine((v) => !/[\r\n]/.test(v) && !v.includes("\u0000"), {
-			message: "instructions must be a single line (no newlines or null bytes)",
+			message: `instructions must be a single line (no newlines or null bytes)`,
 		})
 		.describe(
 			`
@@ -60,7 +60,7 @@ export function registerCompactSession(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"compact_session",
 		{
-			title: "Compact Session",
+			title: `Compact Session`,
 			description,
 			inputSchema: compactSchema,
 		},

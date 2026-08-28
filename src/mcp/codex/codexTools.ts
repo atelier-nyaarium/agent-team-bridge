@@ -138,33 +138,33 @@ export function registerCodexTools(mcpServer: McpServer, dispatch: AgentDispatch
 
 	mcpServer.registerTool(
 		"codexStartAgent",
-		{ title: "Codex Start Agent", description: START_DESCRIPTION, inputSchema: startSchema },
+		{ title: `Codex Start Agent`, description: START_DESCRIPTION, inputSchema: startSchema },
 		async (args: { prompt: string; model?: string; cwd?: string }) =>
 			post(dispatch, codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexMessageAgent",
-		{ title: "Codex Message Agent", description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
+		{ title: `Codex Message Agent`, description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
 		async (args: { agentId: string; prompt: string }) => post(dispatch, codexRequestBody("message", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexAwaitAgent",
-		{ title: "Codex Await Agent", description: AWAIT_DESCRIPTION, inputSchema: awaitSchema },
+		{ title: `Codex Await Agent`, description: AWAIT_DESCRIPTION, inputSchema: awaitSchema },
 		async (args: { agentId: string }) => post(dispatch, codexRequestBody("await", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexStopAgent",
-		{ title: "Codex Stop Agent", description: STOP_DESCRIPTION, inputSchema: stopSchema },
+		{ title: `Codex Stop Agent`, description: STOP_DESCRIPTION, inputSchema: stopSchema },
 		async (args: { agentId: string }) => post(dispatch, codexRequestBody("stop", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexListAgents",
 		// Strict, not a bare `{}`: a literal registers in strip mode and silently drops unknown fields.
-		{ title: "Codex List Agents", description: LIST_DESCRIPTION, inputSchema: listSchema },
+		{ title: `Codex List Agents`, description: LIST_DESCRIPTION, inputSchema: listSchema },
 		async () => post(dispatch, codexRequestBody("list")),
 	);
 }

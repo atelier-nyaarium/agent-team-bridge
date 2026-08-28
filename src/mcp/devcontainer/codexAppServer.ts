@@ -103,7 +103,7 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 		if (typeof frame.id === "number" && pending.has(frame.id)) {
 			const waiter = pending.get(frame.id);
 			pending.delete(frame.id);
-			waiter?.reject(new Error("unreadable response"));
+			waiter?.reject(new Error(`unreadable response`));
 			return;
 		}
 
@@ -134,13 +134,13 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 
 	child.onExit(() => {
 		closed = true;
-		for (const waiter of pending.values()) waiter.reject(new Error("app server exited"));
+		for (const waiter of pending.values()) waiter.reject(new Error(`app server exited`));
 		pending.clear();
 	});
 
 	return {
 		request(method, params) {
-			if (closed) return Promise.reject(new Error("app server exited"));
+			if (closed) return Promise.reject(new Error(`app server exited`));
 			const id = nextId++;
 			return new Promise((resolve, reject) => {
 				const timer = setTimeout(() => {

@@ -84,7 +84,7 @@ type MatcherResult = ParseResult | { kind: "matcher"; matcher: Matcher };
  * needs no encoding and the form never depends on branch order. */
 function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
 	if (tokens.length === 0) {
-		return error("empty-fragment", "a `#` with nothing after it selects nothing", hashOffset);
+		return error("empty-fragment", `a \`#\` with nothing after it selects nothing`, hashOffset);
 	}
 
 	const anchor = findAnchor(tokens);
@@ -94,7 +94,7 @@ function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
 		const text = tokensToText(tokens.slice(0, anchor.at));
 		const anchorText = tokensToText(tokens.slice(anchor.after));
 		if (text === "") {
-			return error("empty-match-text", "nothing to search for before the anchor", tokens[0].offset);
+			return error("empty-match-text", `nothing to search for before the anchor`, tokens[0].offset);
 		}
 		if (anchorText === "") {
 			return error(
@@ -110,7 +110,7 @@ function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
 		const from = tokensToText(tokens.slice(0, rangeAt));
 		const to = tokensToText(tokens.slice(rangeAt + 1));
 		if (from === "" || to === "") {
-			return error("empty-range-bound", "a range needs text on both sides of `..`", tokens[rangeAt].offset);
+			return error("empty-range-bound", `a range needs text on both sides of \`..\``, tokens[rangeAt].offset);
 		}
 		return { kind: "matcher", matcher: { kind: "range", from, to } };
 	}
@@ -136,7 +136,7 @@ export function tryParseRef(uri: string): ParseResult {
 	const firstSep = scope.findIndex((t) => t.kind === "sep");
 	const pathTokens = firstSep === -1 ? scope : scope.slice(0, firstSep);
 	if (pathTokens.length === 0) {
-		return error("path-required", "a ref needs a file path before any `:`", 0);
+		return error("path-required", `a ref needs a file path before any \`:\``, 0);
 	}
 
 	// segment := char*, so an empty one merges. That IS the `::` collapse.

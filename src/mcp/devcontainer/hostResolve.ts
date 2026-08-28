@@ -142,7 +142,7 @@ export function buildLaunchCommand(
 			: "";
 	// Refused, not dropped: a session that cannot claim its name is harder to diagnose.
 	if (opts.sessionToken && !/^[0-9a-f]{16,}$/.test(opts.sessionToken)) {
-		throw new Error("refusing to launch: session token is not the expected hex form");
+		throw new Error(`refusing to launch: session token is not the expected hex form`);
 	}
 	const exportToken = opts.sessionToken ? `export SWITCHBOARD_SESSION_TOKEN=${opts.sessionToken}; ` : "";
 	// Everything after argv[0]. The binary itself belongs to the spawn point: a Windows session runs
@@ -164,7 +164,7 @@ export function buildLaunchCommand(
 ////////////////////////////////
 //  First-launch greeting
 
-export const FIRST_LAUNCH_GREETING = "welcome, see your switchboard capabilities";
+export const FIRST_LAUNCH_GREETING = `welcome, see your switchboard capabilities`;
 
 // Wake reports created too.
 export function shouldGreetLaunch(opts: { created: boolean; resumeSessionId?: string; ready: boolean }): boolean {

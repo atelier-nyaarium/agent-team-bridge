@@ -136,7 +136,7 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 			return runDeduped(op.dedupKey, () => ops.reloadPlugins(op.target), { initiated: true });
 		if (op.kind === "killSession")
 			return runDeduped(op.dedupKey, () => ops.killSession(op.target), { killed: true });
-		throw new Error("unknown host op");
+		throw new Error(`unknown host op`);
 	}
 
 	// `peek` is exported so derive-only callers share this pipeline.

@@ -60,7 +60,7 @@ export function registerCopilotTools(mcpServer: McpServer, dispatch: AgentDispat
 	mcpServer.registerTool(
 		"copilotStartAgent",
 		{
-			title: "Copilot Start Agent",
+			title: `Copilot Start Agent`,
 			description: `Start a Copilot Agent for a self-contained task.`,
 			inputSchema: startSchema,
 		},
@@ -70,7 +70,7 @@ export function registerCopilotTools(mcpServer: McpServer, dispatch: AgentDispat
 	mcpServer.registerTool(
 		"copilotMessageAgent",
 		{
-			title: "Copilot Message Agent",
+			title: `Copilot Message Agent`,
 			description: `Send a follow-up to an idle Copilot Agent.`,
 			inputSchema: messageSchema,
 		},
@@ -79,7 +79,7 @@ export function registerCopilotTools(mcpServer: McpServer, dispatch: AgentDispat
 	mcpServer.registerTool(
 		"copilotAwaitAgent",
 		{
-			title: "Copilot Await Agent",
+			title: `Copilot Await Agent`,
 			description: `Wait for a Copilot Agent turn to finish.`,
 			inputSchema: awaitSchema,
 		},
@@ -87,12 +87,12 @@ export function registerCopilotTools(mcpServer: McpServer, dispatch: AgentDispat
 	);
 	mcpServer.registerTool(
 		"copilotStopAgent",
-		{ title: "Copilot Stop Agent", description: `Stop the current Copilot Agent turn.`, inputSchema: stopSchema },
+		{ title: `Copilot Stop Agent`, description: `Stop the current Copilot Agent turn.`, inputSchema: stopSchema },
 		async (args: { agentId: string }) => post(dispatch, copilotRequestBody("stop", args)),
 	);
 	mcpServer.registerTool(
 		"copilotListAgents",
-		{ title: "Copilot List Agents", description: `List Copilot Agents and their turns.`, inputSchema: listSchema },
+		{ title: `Copilot List Agents`, description: `List Copilot Agents and their turns.`, inputSchema: listSchema },
 		async () => post(dispatch, copilotRequestBody("list")),
 	);
 }
