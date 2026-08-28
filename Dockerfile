@@ -53,6 +53,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | g
 
 WORKDIR /app
 COPY package.json bun.lock ./
+# Install runs the postinstall, which links nothing without lexicon/ in the image.
+COPY scripts/link-lexicon.mjs scripts/
 RUN bun install --frozen-lockfile
 COPY src/ src/
 COPY tsconfig.json ./
