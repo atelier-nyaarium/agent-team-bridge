@@ -42,14 +42,13 @@ export type Refusal =
 export const WIRE_REASON_MAX = 256;
 
 const SENTENCES: Record<DegradeCause, string> = {
-	notInstalled: "lexicon is not installed, so refs were matched by text; install the lexicon plugin for exact refs",
-	incompatible: "the installed lexicon cannot serve this client, so refs were matched by text",
-	warming:
-		"the index was still warming when the reply went out, so refs were matched by text; send again for exact refs",
-	daemonError: "the lexicon daemon could not answer, so refs were matched by text",
-	connectionLost: "the connection to the lexicon daemon was lost, so refs were matched by text",
-	noWorkspace: "this workspace root is one the index will not serve, so refs were matched by text",
-	indexRefused: "the index refused this file, so the ref was matched by text",
+	notInstalled: `lexicon is not installed, so refs were matched by text; install the lexicon plugin for exact refs`,
+	incompatible: `the installed lexicon cannot serve this client, so refs were matched by text`,
+	warming: `the index was still warming when the reply went out, so refs were matched by text; send again for exact refs`,
+	daemonError: `the lexicon daemon could not answer, so refs were matched by text`,
+	connectionLost: `the connection to the lexicon daemon was lost, so refs were matched by text`,
+	noWorkspace: `this workspace root is one the index will not serve, so refs were matched by text`,
+	indexRefused: `the index refused this file, so the ref was matched by text`,
 };
 
 ////////////////////////////////
@@ -99,7 +98,7 @@ export function renderRefusal(refusal: Refusal): string {
 			const listed =
 				refusal.available.length === 0
 					? refusal.availableTotal === 0
-						? "nothing is declared there"
+						? `nothing is declared there`
 						: `${refusal.availableTotal} declarations there, none listed`
 					: `declared there: ${refusal.available.join(", ")}${unlisted > 0 ? ` and ${unlisted} more` : ""}`;
 			return `no declaration named ${JSON.stringify(refusal.failing)} ${refusal.where}${count}; ${listed}; or write ${refusal.textForm}`;

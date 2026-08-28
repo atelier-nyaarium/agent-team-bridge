@@ -73,7 +73,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 			content: [
 				{
 					type: "text" as const,
-					text: "Designer tools are not configured. The PROJECT_NAME environment variable is missing from this container's devcontainer config.",
+					text: `Designer tools are not configured. The PROJECT_NAME environment variable is missing from this container's devcontainer config.`,
 				},
 			],
 			isError: true,
@@ -140,7 +140,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 					content: [
 						{
 							type: "text" as const,
-							text: result.delivered ? "Delete requested." : "Delete not delivered.",
+							text: result.delivered ? `Delete requested.` : `Delete not delivered.`,
 						},
 					],
 				};

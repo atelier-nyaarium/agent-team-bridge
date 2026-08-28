@@ -42,20 +42,23 @@ const UNVERIFIED = "Could not confirm with the gateway whether this is still cur
 export function renderCapabilities(startup: Capability[], current: Capability[] | null): string {
 	const note = current === null ? UNVERIFIED : describeDrift(startup, current);
 	if (startup.length === 0) {
-		return ["No Switchboard capabilities are enabled.", ...(note ? ["", note] : [])].join("\n");
+		const lines = [`No Switchboard capabilities are enabled.`];
+		if (note) lines.push("", note);
+		return lines.join("\n");
 	}
 
-	const sections = startup.map((c) =>
-		[`## ${c.id}`, "", c.instructions ?? "This capability carries no guidance of its own."].join("\n"),
-	);
-	return [
-		`Switchboard capabilities enabled at session start: ${startup.map((c) => c.id).join(", ")}`,
-		...(note ? ["", note] : []),
-		"",
-		...sections.flatMap((s) => [s, ""]),
-	]
-		.join("\n")
-		.trimEnd();
+	const lines = [`Switchboard capabilities enabled at session start: ${startup.map((c) => c.id).join(", ")}`];
+	if (note) lines.push("", note);
+	lines.push("");
+	for (const capability of startup) {
+		lines.push(
+			`## ${capability.id}`,
+			"",
+			capability.instructions ?? `This capability carries no guidance of its own.`,
+			"",
+		);
+	}
+	return lines.join("\n").trimEnd();
 }
 
 // The startup snapshot answers, since it is what the tool set was gated on.

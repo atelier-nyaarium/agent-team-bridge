@@ -95,7 +95,7 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 						content: [
 							{
 								type: "text" as const,
-								text: result.delivered ? "Notice delivered." : "Notice not delivered.",
+								text: result.delivered ? `Notice delivered.` : `Notice not delivered.`,
 							},
 						],
 					},

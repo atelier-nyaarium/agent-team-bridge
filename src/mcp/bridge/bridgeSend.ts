@@ -117,7 +117,7 @@ async function formatResult(
 		if (result.what_to_decide) parts.push(`Decision needed: ${result.what_to_decide}`);
 		parts.push(`\nThe other team needs their human. Inform yours.`);
 	} else if (result.status === "running") {
-		parts.push(result.message || "Still running.");
+		parts.push(result.message || `Still running.`);
 		parts.push(`\nTo check again, call this tool with just session_id (no body).`);
 	} else if (result.status === "error") {
 		parts.push(`Error: ${result.reason ?? result.message ?? "Unknown error"}`);

@@ -191,7 +191,7 @@ export async function postReply(
 		const staged = await files?.();
 		await routerPost("/respond", staged?.length ? { ...payload, files: staged } : payload);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
-		return { content: [{ type: "text" as const, text: "Reply sent." }] };
+		return { content: [{ type: "text" as const, text: `Reply sent.` }] };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		return toolError(`Failed to send reply: ${message}${handshakeHint(message)}`);

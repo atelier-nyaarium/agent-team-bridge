@@ -53,7 +53,7 @@ function displayHeader(domainId: string | undefined, gatewayId: string | undefin
 /** A coarse "5m ago" / "2h ago" recency label for an asleep session's last-seen timestamp. */
 export function relativeAge(lastActiveMs: number, nowMs: number = Date.now()): string {
 	const s = Math.max(0, Math.floor((nowMs - lastActiveMs) / 1000));
-	if (s < 60) return "just now";
+	if (s < 60) return `just now`;
 	const m = Math.floor(s / 60);
 	if (m < 60) return `${m}m ago`;
 	const h = Math.floor(m / 60);
