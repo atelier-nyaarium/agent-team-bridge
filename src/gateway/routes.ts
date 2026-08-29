@@ -461,6 +461,7 @@ export function createRoutes({
 		// there mints an opaque id instead of adopting the typed segment - the SAME rule a local send
 		// applies, just carried across the relay since the destination decides its own id space.
 		displayLabel?: string;
+		disposition?: "asking" | "informing" | "closing";
 	}): Promise<Response> {
 		const {
 			targetGateway,
@@ -472,6 +473,7 @@ export function createRoutes({
 			body,
 			files,
 			displayLabel,
+			disposition,
 		} = args;
 		if (!routerClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
@@ -496,6 +498,7 @@ export function createRoutes({
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
 			...(displayLabel ? { displayLabel } : {}),
+			...(disposition ? { disposition } : {}),
 			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
 		};
 		const relay = await relayToGateway(targetGateway, op, targetDomain);
@@ -783,6 +786,7 @@ export function createRoutes({
 			files: rawSendFiles,
 			channelOnly,
 			displayLabel,
+			disposition,
 		} = parsed.data;
 		// Same rule as respond: only a local agent's own upload gets this Gateway's stamp.
 		const files =
@@ -860,6 +864,7 @@ export function createRoutes({
 				body: msgBody,
 				files,
 				displayLabel,
+				disposition,
 			});
 		}
 
@@ -1000,6 +1005,7 @@ export function createRoutes({
 				}
 				const riding = awareness?.takeFor(localName);
 				if (riding) channelPayload.awareness = riding;
+				if (disposition) channelPayload.disposition = disposition;
 				const payload = JSON.stringify(channelPayload);
 
 				for (const ws of activeWs) {

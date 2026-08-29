@@ -88,7 +88,50 @@ describe("what a channel push asks the agent to do", () => {
 
 	it("keeps asking for a reply on an ordinary push", async () => {
 		const meta = await metaFor({});
-		expect(meta.instructions).toContain("channel_reply");
+		expect(meta.instructions).toBe(
+			"They are waiting on a reply. Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.",
+		);
+	});
+
+	it("renders informing disposition", async () => {
+		// Informing messages should not trigger acknowledgements.
+		expect((await metaFor({ disposition: "informing" })).instructions).toBe(
+			"No reply needed. Do not acknowledge. Reply only if this affects you in a way they would want to know now.",
+		);
+	});
+
+	it("renders closing disposition", async () => {
+		// Closing messages make silence the normal result.
+		expect((await metaFor({ disposition: "closing" })).instructions).toBe(
+			"Thread closed, no reply expected. Do not acknowledge; silence is correct here. Reply only if this breaks something on your side.",
+		);
+	});
+
+	it("lets informing disposition override a reply schema", async () => {
+		// A schema is meaningful only when the sender is asking.
+		expect((await metaFor({ disposition: "informing", replyJsonSchema: "{}" })).instructions).toContain(
+			"No reply needed",
+		);
+	});
+
+	it("treats a disposition it does not know as asking, so a stray wire value cannot silence a question", async () => {
+		const stray = "maybe" as unknown as "asking";
+		expect((await metaFor({ disposition: stray })).instructions).toContain("They are waiting on a reply.");
+		expect((await metaFor({ disposition: stray, replyJsonSchema: "{}" })).instructions).toContain(
+			"channel_reply_structured",
+		);
+	});
+
+	it("passes the disposition to meta as a string, and only when one was sent", async () => {
+		expect((await metaFor({ disposition: "informing" })).disposition).toBe("informing");
+		expect((await metaFor({})).disposition).toBeUndefined();
+	});
+
+	it("lets no_ack override disposition", async () => {
+		// Gateway awareness pushes always win over sender conventions.
+		expect((await metaFor({ no_ack: true, disposition: "asking" })).instructions).toBe(
+			"Awareness only. Nobody is waiting on a reply, so do not send one.",
+		);
 	});
 
 	it("routes a structured push to the structured tool", async () => {

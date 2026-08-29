@@ -38,6 +38,10 @@ export interface RidingAwareness {
 	act: ActAxis;
 }
 
+// The sender states whether it expects an answer, needs only a signal, or has closed the thread.
+// It is optional so older senders and human console messages still ask by default.
+export type ReplyDisposition = "asking" | "informing" | "closing";
+
 ////////////////////////////////
 //  Reply payloads. Fields are optional because a channel reply (channel_reply) is a
 //  stream message that may carry only a partial update (status, a chunk, or the final).
@@ -58,6 +62,7 @@ export interface ChannelPushPayload {
 	act?: ActAxis;
 	// Notices for the recipient that hitched a ride on this message. Rendered under the body.
 	awareness?: RidingAwareness;
+	disposition?: ReplyDisposition;
 }
 
 // Extends the spoken-tier trio (notice.ts NoticeTierWire): title (notification-bar line +

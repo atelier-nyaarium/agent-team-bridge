@@ -47,9 +47,13 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 			? "Act on this before continuing what you were doing. Nobody is waiting on a reply, so do not send one."
 			: payload.no_ack === true
 				? `Awareness only. Nobody is waiting on a reply, so do not send one.`
-				: payload.replyJsonSchema
-					? `Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema.`
-					: `Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.`;
+				: payload.disposition === "informing"
+					? "No reply needed. Do not acknowledge. Reply only if this affects you in a way they would want to know now."
+					: payload.disposition === "closing"
+						? "Thread closed, no reply expected. Do not acknowledge; silence is correct here. Reply only if this breaks something on your side."
+						: payload.replyJsonSchema
+							? `Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema.`
+							: `They are waiting on a reply. Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.`;
 
 	await server.notification({
 		method: "notifications/claude/channel",
@@ -63,6 +67,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				// the harness drops a key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/ without a word.
 				...(payload.no_ack === true ? { no_ack: "true" } : {}),
 				...(payload.awareness ? { awareness_act: payload.awareness.act } : {}),
+				...(payload.disposition ? { disposition: payload.disposition } : {}),
 				...(payload.no_ack === true && payload.act === "act_now" ? { act: "act_now" } : {}),
 				instructions,
 			},

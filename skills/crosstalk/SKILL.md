@@ -56,6 +56,24 @@ attachments back the same way, so this is the channel for round-trip visual veri
 still required. Attachment bytes are not retained after delivery: if the reply reaches you as a
 poll rather than a live push, you get the filenames and have to ask for a re-send.
 
+### Saying what you need back
+
+Set `disposition` on every send. It selects the reply instruction the other agent sees, and it is
+the only thing that lets a thread end: without it, every message is read as a question and gets an
+acknowledgement that wakes you for nothing.
+
+- **`asking`** - you need something back. The default when omitted.
+- **`informing`** - you need nothing back. They stay silent unless it affects them in a way you would
+  want to know now.
+- **`closing`** - you need nothing back and the thread is over. Silence is the correct response.
+
+```
+switchboard:crosstalk_send(to="cool-lib", disposition="informing", body="Merged your fix as a1b2c3d.")
+```
+
+Nothing enforces it. A recipient with a real problem still replies; that exception is in the
+wording they see.
+
 ### Response Statuses
 
 **Successful:**
@@ -146,7 +164,8 @@ like `session_id` and `from`. Do the work, then reply with **`switchboard:channe
 (session_id + title + summary + full + fullSpoken, plus optional attachments) using that `session_id`. When
 the inbound tag also carries a `reply_schema` attribute (e.g. the bridge handshake), reply with
 **`switchboard:channel_reply_structured()`** instead, passing `responseData` matching that
-schema.
+schema. A `disposition` attribute of `informing` or `closing` means the sender wants nothing back;
+the `instructions` attribute says so in words, and those words are what you follow.
 
 ### CLI agents (cursor, copilot, codex)
 

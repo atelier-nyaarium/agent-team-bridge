@@ -82,6 +82,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		// opaque id under the addressed spawn rather than adopting the typed segment, mirroring the
 		// same-Gateway rule. Ignored when the target already exists there.
 		displayLabel: z.string().min(1).max(64).optional(),
+		disposition: z.enum(["asking", "informing", "closing"]).optional(),
 		returnRoute: ReturnRouteSchema,
 	}),
 	// Discovery fan-out: the asking Gateway queries each online peer for its teams.

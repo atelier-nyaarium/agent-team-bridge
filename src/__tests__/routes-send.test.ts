@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAwarenessBank } from "../gateway/awarenessBank.js";
+import { SendRequestSchema } from "../gateway/routeSchemas.js";
 import { createRoutes } from "../gateway/routes.js";
 import { SessionStore } from "../shared/session-store.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
 
 describe("routes", () => {
+	it("rejects an unknown reply disposition", async () => {
+		// The wire accepts only the three agreed conventions, and the route answers 400, not 500.
+		expect(SendRequestSchema.safeParse({ from: "a", to: "b", disposition: "later" }).success).toBe(false);
+		const { send } = createRoutes(makeCtx());
+		const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+			from: "a",
+			to: "b.dev",
+			body: "hi",
+			disposition: "later",
+		});
+		expect(res.status).toBe(400);
+	});
+
 	describe("/send", () => {
 		it("returns 404 when target not in registry", async () => {
 			const ctx = makeCtx();
@@ -87,6 +101,29 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 			expect(pushed[0].type).toBe("channel_push");
 			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
+		});
+
+		it("carries disposition on a channel push and omits it when absent", async () => {
+			const pushed: Record<string, unknown>[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel" },
+				send: (data: string) => pushed.push(JSON.parse(data)),
+			};
+			const { send } = createRoutes(makeCtx({ registry: makeRegistry({ "proj-a.dev": fakeWs }) }));
+			const request = (body: Record<string, unknown>) =>
+				send(new Request("http://localhost/send", { method: "POST" }), {
+					from: "pixel",
+					fromConversationId: "conv-1",
+					to: "proj-a.dev",
+					body: "hi",
+					channelOnly: true,
+					...body,
+				});
+			await request({ disposition: "closing" });
+			await request({});
+			expect(pushed[0].disposition).toBe("closing");
+			expect(pushed[1].disposition).toBeUndefined();
 		});
 
 		it("rides banked awareness on the next channel send, and the send empties the bank", async () => {

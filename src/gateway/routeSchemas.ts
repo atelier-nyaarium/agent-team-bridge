@@ -37,6 +37,8 @@ export const SendRequestSchema = z.object({
 	// addressed spawn and stamps this as its sessionLabel, rather than silently adopting the typed
 	// session segment as the id. Ignored when the target already exists.
 	displayLabel: z.string().min(1).max(64).optional(),
+	// Agent sends declare the expected reply convention.
+	disposition: z.enum(["asking", "informing", "closing"]).optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	files: ChannelFilesSchema.optional(),

@@ -39,6 +39,18 @@ Human-readable label for a new session, e.g. \`Bug Investigation\`. Never a slug
 Required to create a target that does not yet exist. Ignored when the target already exists.
 `.trim(),
 			),
+		disposition: z
+			.enum(["asking", "informing", "closing"])
+			.optional()
+			.describe(
+				`
+What you need back. Set it on every send; omitted means \`asking\`.
+
+- \`asking\`: you are waiting on a reply.
+- \`informing\`: no reply needed. They stay silent unless it affects them in a way you would want to know now.
+- \`closing\`: the thread is over. Silence is the correct response.
+`.trim(),
+			),
 		session_id: z
 			.string()
 			.optional()
@@ -87,6 +99,14 @@ Provide \`session_id\` only, with no \`body\`, to peek at the latest stored resu
 ## Replies
 
 Channel-mode replies arrive as \`<channel>\` notifications. A team may send multiple progress updates without closing the conversation.
+
+## Disposition
+
+Set \`disposition\` on every send. It is the only thing that lets a thread end; without it every message reads as a question and earns an acknowledgement that wakes you for nothing.
+
+- \`asking\`: you need something back.
+- \`informing\`: you need nothing back. They reply only if it affects them in a way you would want to know now.
+- \`closing\`: the thread is over. Silence is correct.
 
 ## Attachments
 
@@ -152,7 +172,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeSendSchema as any,
 		},
-		async ({ to, body, session_id, displayLabel, attachments }: BridgeSendArgs) => {
+		async ({ to, body, session_id, displayLabel, disposition, attachments }: BridgeSendArgs) => {
 			try {
 				// Attachments exclude poll mode too, or a files-only send would discard them.
 				if (session_id && !body && !attachments?.length) {
@@ -196,6 +216,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					to,
 					body,
 					...(displayLabel ? { displayLabel } : {}),
+					...(disposition ? { disposition } : {}),
 					...(files.length > 0 ? { files } : {}),
 				})) as SendResult;
 

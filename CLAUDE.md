@@ -817,8 +817,10 @@ record: `plans/awareness-subscribers.md`.
   the subscriber classifies once on that pair, so a run of edits and moves is one fact and an edit
   then a trash then an untrash is nothing. "Later notice wins" was the rule before and would have
   called that an arrival.
-- **Two axes, both rendered into the instruction line.** Reply: expected / `no_ack`. Act: `no_act`
-  rides and never pushes alone; `act_now` arms `ACT_NOW_HOLD_MS` from the FIRST such observation
+- **Two axes, both rendered into the instruction line.** Reply: `asking` / `informing` / `closing`
+  on an agent-to-agent send (`disposition` on `crosstalk_send`, absent means asking so a human's
+  message is untouched), and `no_ack` on a gateway push, which wins over any disposition. Act:
+  `no_act` rides and never pushes alone; `act_now` arms `ACT_NOW_HOLD_MS` from the FIRST such observation
   (never extended by later ones, or a stream of take-aways holds the push off forever) and pushes on
   its own past it. The push's act is read from the NET pairs, not the arming observation. Board:
   changed, arrived and backlog are `no_act`; gone (trashed, removed, reassigned) is `act_now`, the one

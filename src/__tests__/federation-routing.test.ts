@@ -120,6 +120,7 @@ describe("federation routing (E2E sealed)", () => {
 				from: "alice.hosta.recipe-app.dev",
 				to: "api.dev",
 				body: "status?",
+				disposition: "closing",
 				returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
 			},
 			"hosta",
@@ -130,6 +131,7 @@ describe("federation routing (E2E sealed)", () => {
 			type: "channel_push",
 			from: "alice.hosta.recipe-app.dev",
 			session_id: srcSession,
+			disposition: "closing",
 		});
 
 		const respondRes = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
