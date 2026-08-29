@@ -132,7 +132,7 @@ export function tryParseRef(uri: string): ParseResult {
 	const hashAt = tokens.findIndex((t) => t.kind === "hash");
 	const scope = hashAt === -1 ? tokens : tokens.slice(0, hashAt);
 
-	// path := char+, required, or `ref://:Foo` promotes its first segment into the path slot.
+	// path := char+, required. `ref://:Foo` is refused rather than promoting `Foo` into the path.
 	const firstSep = scope.findIndex((t) => t.kind === "sep");
 	const pathTokens = firstSep === -1 ? scope : scope.slice(0, firstSep);
 	if (pathTokens.length === 0) {

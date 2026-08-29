@@ -22,6 +22,16 @@ const SPELLINGS: Record<string, string> = {
 	range: "`#from..to`",
 };
 
+/** The matcher kinds the surfaces' worked examples actually parse to. */
+function taughtByExample(text: string): Set<string> {
+	const kinds = new Set<string>();
+	for (const example of refsIn(text)) {
+		const parsed = tryParseRef(example);
+		if (parsed.kind === "ok" && parsed.ref.matcher !== null) kinds.add(parsed.ref.matcher.kind);
+	}
+	return kinds;
+}
+
 /** The kinds of `Matcher`, read from the union so a new one arrives here untaught. */
 function matcherKinds(): string[] {
 	const source = fs.readFileSync(path.join(root, "src/mcp/references/refGrammar.ts"), "utf8");
@@ -65,6 +75,18 @@ describe("ref teaching", () => {
 			expect(spelling, `no documented spelling for matcher ${kind}`).toBeDefined();
 			for (const [index, surface] of SURFACES.entries()) {
 				expect(texts[index].includes(spelling), `${surface} does not teach ${kind}`).toBe(true);
+			}
+		}
+	});
+
+	// Naming a form is not showing it. A surface could name every matcher and give a copyable example
+	// of none, or of one that no longer parses to the kind it illustrates.
+	test("shows a working example of every matcher, on every surface", () => {
+		const kinds = matcherKinds();
+		for (const [index, surface] of SURFACES.entries()) {
+			const shown = taughtByExample(texts[index]);
+			for (const kind of kinds) {
+				expect(shown.has(kind), `${surface} has no example that parses as ${kind}`).toBe(true);
 			}
 		}
 	});

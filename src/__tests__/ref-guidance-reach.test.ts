@@ -107,16 +107,23 @@ describe("the path from a scanned tool to the ref grammar", () => {
 	});
 });
 
-describe("what a tool description costs", () => {
+describe("what a tool definition costs", () => {
 	// Every request carries these, and the guidance is appended to them, so growth on either side is
-	// paid on every turn.
+	// paid on every turn. A field's own guidance rides along, so it is budgeted too.
 	const BUDGET = 2048;
 
-	function described(register: (server: McpServer, capabilities: Capability[]) => void): string[] {
-		const seen: string[] = [];
+	/** Every string the SDK sends for a tool: its description, and each field's. */
+	function guidance(config: { description?: string; inputSchema?: unknown }): string[] {
+		const shape = (config.inputSchema as { shape?: Record<string, { description?: string }> } | undefined)?.shape;
+		const fields = Object.values(shape ?? {}).map((field) => field.description ?? "");
+		return [config.description ?? "", ...fields].filter((text) => text !== "");
+	}
+
+	function described(register: (server: McpServer, capabilities: Capability[]) => void): string[][] {
+		const seen: string[][] = [];
 		const collector = {
-			registerTool: (_name: string, config: { description?: string }) => {
-				seen.push(config.description ?? "");
+			registerTool: (_name: string, config: { description?: string; inputSchema?: unknown }) => {
+				seen.push(guidance(config));
 			},
 		};
 		register(collector as unknown as McpServer, GATED_CAPABILITY_IDS.map((id) => ({ id })) as Capability[]);
@@ -126,13 +133,13 @@ describe("what a tool description costs", () => {
 	it.each([
 		["channel_reply", registerChannelReply],
 		["notify_human", registerHumanTools],
-	])("keeps %s under the budget with every capability on", (_name, register) => {
-		const descriptions = described(register as (server: McpServer, capabilities: Capability[]) => void);
+	])("keeps every string %s sends under the budget, with every capability on", (_name, register) => {
+		const tools = described(register as (server: McpServer, capabilities: Capability[]) => void);
 
-		expect(descriptions.length).toBeGreaterThan(0);
-		for (const description of descriptions) {
-			expect(description).toContain("Artifact refs");
-			expect(description.length).toBeLessThanOrEqual(BUDGET);
+		expect(tools.length).toBeGreaterThan(0);
+		for (const strings of tools) {
+			expect(strings[0]).toContain("Artifact refs");
+			for (const text of strings) expect(text.length).toBeLessThanOrEqual(BUDGET);
 		}
 	});
 });

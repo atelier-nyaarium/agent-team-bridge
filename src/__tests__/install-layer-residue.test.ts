@@ -24,11 +24,26 @@ function scriptFiles(manifest: { scripts?: Record<string, string> }): string[] {
 /** Where a COPY lands relative to the working directory, for a file source or a directory source. */
 type Landing = { source: string; destination: string };
 
+/** Logical instructions: docker joins a line ending in a backslash with the one after it. */
+function instructions(dockerfile: string): string[] {
+	const joined: string[] = [];
+	let carried = "";
+	for (const line of dockerfile.split("\n")) {
+		const continues = /\\\s*$/.test(line);
+		carried += continues ? `${line.replace(/\\\s*$/, "")} ` : line;
+		if (continues) continue;
+		joined.push(carried);
+		carried = "";
+	}
+	if (carried !== "") joined.push(carried);
+	return joined;
+}
+
 /** The COPYs of the stage holding the first `RUN bun install`, with destinations relative to its WORKDIR. */
 function copiedBeforeInstall(dockerfile: string): Landing[] {
 	let landings: Landing[] = [];
 	let workdir = "/";
-	for (const line of dockerfile.split("\n")) {
+	for (const line of instructions(dockerfile)) {
 		if (/^\s*RUN\s+bun\s+install\b/.test(line)) return landings;
 		// A new stage starts with nothing; what an earlier stage copied is not in this one.
 		if (/^\s*FROM\b/.test(line)) {
@@ -114,6 +129,13 @@ describe("what the image copies before it installs", () => {
 	it("fires when an earlier stage copied the file and the installing stage did not", () => {
 		const staged = "FROM a AS one\nCOPY scripts/ scripts/\nFROM b\nCOPY package.json ./\nRUN bun install\n";
 		expect(uncopied(staged, hook)).toEqual(hook);
+	});
+
+	it("reads a copy split across lines as the one instruction docker runs", () => {
+		const wrapped = "WORKDIR /app\nCOPY scripts/link-lexicon.mjs \\\n     scripts/\nRUN bun install\n";
+		expect(uncopied(wrapped, hook)).toEqual([]);
+		const wrappedInstall = "COPY package.json ./\nRUN bun \\\n    install\nCOPY scripts/ scripts/\n";
+		expect(uncopied(wrappedInstall, hook)).toEqual(hook);
 	});
 
 	it("copies every file a lifecycle script runs before bun install", () => {

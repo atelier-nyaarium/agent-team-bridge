@@ -114,7 +114,8 @@ symbol-less file or a path outside the root.
 - `#from..to` line range
 - `#text@before:anchor` or `#text@after:anchor` occurrence nearest that anchor
 
-Escape spaces and close parentheses, or wrap the destination in angle brackets.
+Escape spaces and close parentheses, or wrap the destination in angle brackets. To match a literal
+`..` or `@after:`, percent-encode it: `%2E%2E`, `%40`.
 
 **Refused, naming the fix:** a chain outside the root, a missing or ambiguous name, a matcher that
 finds nothing. The refusal lists complete candidate refs, or the declarations at the chain stop.
@@ -131,7 +132,8 @@ Examples: [App.tsx : render](ref://src/App.tsx:App:render),
 [notes](ref://NOTES.md#Checkout),
 [cart.ts : region](<ref://src/cart.ts:Shop:Cart:add#this.items.push(item);>),
 [cart.ts : range](ref://src/cart.ts:Shop:Cart:add#this.items..reset),
-[cart.ts : anchor](ref://src/cart.ts:Shop:Cart:add#this.count@after:reset),
+[cart.ts : after](ref://src/cart.ts:Shop:Cart:add#this.count@after:reset),
+[cart.ts : before](ref://src/cart.ts:Shop:Cart:add#this.count@before:reset),
 [nginx.conf : text](ref:///etc/nginx/nginx.conf#server),
 [bashrc : text](ref://~/.bashrc#export%20PATH).
 
