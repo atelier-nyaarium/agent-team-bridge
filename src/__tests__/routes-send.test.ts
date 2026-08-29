@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createAwarenessBank } from "../gateway/awarenessBank.js";
 import { createRoutes } from "../gateway/routes.js";
 import { SessionStore } from "../shared/session-store.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
@@ -86,6 +87,39 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 			expect(pushed[0].type).toBe("channel_push");
 			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
+		});
+
+		it("rides banked awareness on the next channel send, and the send empties the bank", async () => {
+			// A real bank, keyed the way the board keys it: by the target's bare local name.
+			const pushed: Record<string, unknown>[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel" },
+				send(data: string) {
+					pushed.push(JSON.parse(data));
+				},
+			};
+			const bank = createAwarenessBank({ liveness: () => "live", deliver: () => true });
+			const observe = bank.register<string>({
+				source: "task-board",
+				act: () => "no_act",
+				render: () => "The owner edited a.",
+			});
+			observe([{ sessionKey: "proj-a.dev", identity: "a", pre: "x", post: "y" }]);
+			const ctx = makeCtx({ registry: makeRegistry({ "proj-a.dev": fakeWs }), awareness: bank });
+			const { send } = createRoutes(ctx);
+			for (const body of ["hi", "again"]) {
+				await send(new Request("http://localhost/send", { method: "POST" }), {
+					from: "pixel",
+					fromConversationId: "conv-1",
+					to: "proj-a.dev",
+					body,
+					channelOnly: true,
+				});
+			}
+			expect(pushed[0].awareness).toEqual({ from: "task-board", body: "The owner edited a.", act: "no_act" });
+			expect(pushed[1].awareness).toBeUndefined();
+			expect(bank.takeFor("proj-a.dev")).toBeNull();
 		});
 
 		it("delivers to a live but unconfirmed (still verifying) socket - send() carries no handshake gate", async () => {

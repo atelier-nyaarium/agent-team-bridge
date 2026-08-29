@@ -25,19 +25,31 @@ async function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[]
 /** Arrives as a `<channel source="bridge" ...>body</channel>` tag. */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
 	const filesBlock = await filesBlockFor(payload.message_id, payload.files);
+	// Notices that rode this message. Labeled with their source and closed with what to do about
+	// them, since the instructions line below belongs to the message itself.
+	const awarenessBlock = payload.awareness
+		? `[AWARENESS from ${payload.awareness.from}]\n${payload.awareness.body}\n${
+				payload.awareness.act === "act_now"
+					? "Act on this before continuing."
+					: "For awareness only. It needs no action and no reply."
+			}`
+		: "";
 
 	// Prose ONLY. Every structured field rides in `meta`, which the harness renders as attributes.
-	const content = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
+	const blocks = [payload.body, filesBlock, awarenessBlock].filter(Boolean);
+	const content = blocks.join("\n\n");
 
 	// Repeated per message: the MCP `instructions` sit at the top of the context and lose salience to
 	// fresher injections, which has produced real missed replies. Exactly true, not truthy: a stray
 	// wire string would turn a question into an announcement nobody answers.
 	const instructions =
-		payload.no_ack === true
-			? `Awareness only. Nobody is waiting on a reply, so do not send one.`
-			: payload.replyJsonSchema
-				? `Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema.`
-				: `Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.`;
+		payload.no_ack === true && payload.act === "act_now"
+			? "Act on this before continuing what you were doing. Nobody is waiting on a reply, so do not send one."
+			: payload.no_ack === true
+				? `Awareness only. Nobody is waiting on a reply, so do not send one.`
+				: payload.replyJsonSchema
+					? `Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema.`
+					: `Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.`;
 
 	await server.notification({
 		method: "notifications/claude/channel",
@@ -50,6 +62,8 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				// A STRING: a boolean took the whole notification down silently. Snake_case too, since
 				// the harness drops a key failing /^[a-zA-Z_][a-zA-Z0-9_]*$/ without a word.
 				...(payload.no_ack === true ? { no_ack: "true" } : {}),
+				...(payload.awareness ? { awareness_act: payload.awareness.act } : {}),
+				...(payload.no_ack === true && payload.act === "act_now" ? { act: "act_now" } : {}),
 				instructions,
 			},
 		},

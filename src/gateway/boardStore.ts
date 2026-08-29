@@ -5,6 +5,7 @@ import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js"
 import { type DurableStore, DurableStoreInstalledError } from "../shared/durable-store.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BoardEntrySchema } from "../shared/schemas.js";
+import type { AwarenessObservation } from "./awarenessBank.js";
 import {
 	type BoardActor,
 	type BoardDisposition,
@@ -13,12 +14,11 @@ import {
 	mayWrite,
 	OWNER_ACTOR,
 } from "./boardAuthority.js";
+import { observationsFor } from "./boardAwareness.js";
 import { applyCascade } from "./boardCascade.js";
-import { type BoardNotice, noticesFor } from "./boardNotices.js";
 
 export type { BoardActor, BoardDisposition, BoardRefusal, BoardResult } from "./boardAuthority.js";
 export { BOARD_REFUSED_PREFIX, mayWrite, OWNER_ACTOR, refusalError, visibleTo } from "./boardAuthority.js";
-export type { BoardNotice } from "./boardNotices.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -190,20 +190,20 @@ export class BoardStore {
 	private readonly durable: DurableStore;
 	private readonly planeRegistry: PlaneRegistry;
 	private readonly restoredPlanes: Record<string, PlanePersistedState> | undefined;
-	private readonly onNotices: ((notices: readonly BoardNotice[]) => void) | undefined;
+	private readonly onObservations: ((observations: readonly AwarenessObservation<BoardEntry>[]) => void) | undefined;
 	private readonly attachmentSink: BoardAttachmentSink | undefined;
 
 	constructor(
 		durable: DurableStore,
 		planeRegistry: PlaneRegistry,
 		restoredPlanes: Record<string, PlanePersistedState> | undefined,
-		onNotices?: (notices: readonly BoardNotice[]) => void,
+		onObservations?: (observations: readonly AwarenessObservation<BoardEntry>[]) => void,
 		attachmentSink?: BoardAttachmentSink,
 	) {
 		this.durable = durable;
 		this.planeRegistry = planeRegistry;
 		this.restoredPlanes = restoredPlanes;
-		this.onNotices = onNotices;
+		this.onObservations = onObservations;
 		this.attachmentSink = attachmentSink;
 		this.restore(durable.load());
 	}
@@ -364,7 +364,7 @@ export class BoardStore {
 	 * and removing are one op: whatever list arrives is the list stored.
 	 *
 	 * Sorted by blobId before it lands. `stableStringify` maps arrays POSITIONALLY, and that one hash
-	 * is the plane identity, `upsert`'s did-it-change gate and `noticesFor`'s changed test all at
+	 * is the plane identity, `upsert`'s did-it-change gate and the awareness subscriber's changed test all at
 	 * once, so an unordered rebuild would ship the whole board, report a false "applied", and push a
 	 * spurious awareness notice, together, every time.
 	 *
@@ -797,25 +797,25 @@ export class BoardStore {
 		const outcome = fn(copy, (entryId) => touched.add(entryId));
 		if (outcome === "unchanged") return { applied: true };
 		if (outcome) return { applied: false, refused: outcome };
-		// Before noticesFor, so a holder hears about an entry the board moved for them, not just the
+		// Before awareness classification, so a holder hears about an entry the board moved for them, not just the
 		// one the writer named.
 		const cascaded = cascade
 			? applyCascade(copy.entries, [...touched], orphanedParents(current, copy, touched))
 			: [];
 		for (const change of cascaded) touched.add(change.id);
-		const notices = noticesFor(current, copy, touched, writer);
+		const observations = observationsFor(current, copy, touched, writer);
 		this.commit(ownerId, copy);
-		if (notices.length > 0) this.announce(notices);
+		if (observations.length > 0) this.announce(observations);
 		return cascaded.length > 0 ? { applied: true, cascaded } : { applied: true };
 	}
 
 	/** The write already committed, so a throwing sink is logged rather than propagated. */
-	private announce(notices: readonly BoardNotice[]): void {
+	private announce(observations: readonly AwarenessObservation<BoardEntry>[]): void {
 		try {
 			console.error(
-				`[task-board] ${notices.length} notice(s): ${notices.map((n) => `${n.kind}/${n.entryId}`).join(" ")}`,
+				`[task-board] ${observations.length} awareness observation(s): ${observations.map((o) => o.identity).join(" ")}`,
 			);
-			this.onNotices?.(notices);
+			this.onObservations?.(observations);
 		} catch (err) {
 			console.error("[task-board] notice sink failed:", err);
 		}

@@ -6,6 +6,7 @@ import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { agentHttpPath } from "../shared/agent-backend.js";
 import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
+import type { BoardEntry } from "../shared/console-protocol.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
@@ -19,7 +20,10 @@ import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
 import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
+import type { AwarenessObservation } from "./awarenessBank.js";
+import { type AwarenessBank, createAwarenessBank } from "./awarenessBank.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
+import { boardAwarenessSubscriber } from "./boardAwareness.js";
 import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import {
 	armingOf,
@@ -35,7 +39,6 @@ import { CodexRoute } from "./codexRoute.js";
 import { CopilotAgentService } from "./copilotAgentService.js";
 import { CopilotRelay } from "./copilotRelay.js";
 import { CopilotRoute } from "./copilotRoute.js";
-import { createNoAckPush, type NoAckPush } from "./noAckPush.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -341,12 +344,13 @@ export async function startGateway(): Promise<void> {
 	// The owner's task board, in its OWN durable file with synchronous checked writes - a trash op
 	// the owner watched succeed must survive a crash, unlike readAnchors' low-stakes tick cadence.
 	// Built further down, once wake tracking exists; until then a board write announces nothing.
-	let noAckPush: NoAckPush | null = null;
+	let awareness: AwarenessBank | null = null;
+	let boardObserve: ((observations: readonly AwarenessObservation<BoardEntry>[]) => void) | undefined;
 	const boardStore = openDurable(
 		DATA_DIR,
 		"task-board",
 		(d) =>
-			new BoardStore(d, planeRegistry, restoredPlanes, (notices) => noAckPush?.bank(notices), {
+			new BoardStore(d, planeRegistry, restoredPlanes, (observations) => boardObserve?.(observations), {
 				released: (ownerId, entryId, blobIds) => {
 					for (const blobId of blobIds) boardAttachments.remove(ownerId, entryId, blobId);
 				},
@@ -360,7 +364,7 @@ export async function startGateway(): Promise<void> {
 		try {
 			const count = boardStore.sessionEnded(team, disposition);
 			// After the store, so a throw leaves the bank naming work the session provably still holds.
-			noAckPush?.dropFor(team);
+			awareness?.dropFor(team);
 			return count;
 		} catch (err) {
 			console.error(`[task-board] session-ended hook failed for ${team}:`, err);
@@ -551,7 +555,7 @@ export async function startGateway(): Promise<void> {
 
 	// Liveness is composed here rather than inside the push, which then needs no registry.
 	// resolveLiveIncarnation is two-valued, so the wake signal is what separates waking from gone.
-	noAckPush = createNoAckPush({
+	awareness = createAwarenessBank({
 		liveness: (sessionKey) => {
 			const live = resolveLiveIncarnation(registry, sessionStore, sessionKey);
 			if (live?.data.handshakeConfirmed) return "live";
@@ -565,15 +569,16 @@ export async function startGateway(): Promise<void> {
 			return true;
 		},
 	});
+	boardObserve = awareness.register(boardAwarenessSubscriber);
 	// Own catch: an uncaught throw in a timer exits the gateway, and no board notice is worth that.
-	const noAckTimer = setInterval(() => {
+	const awarenessTimer = setInterval(() => {
 		try {
-			noAckPush?.tick();
+			awareness?.tick();
 		} catch (err) {
-			console.error("[task-board] awareness push tick failed:", err);
+			console.error("[awareness] tick failed:", err);
 		}
 	}, 1_000);
-	noAckTimer.unref?.();
+	awarenessTimer.unref?.();
 
 	// A Domain is "trusted/linked" iff this Gateway holds a cross-Domain peer for it (the owner linked
 	// it). The single predicate the share gate uses to resolve an everyone-trusted share + to bound a
@@ -1025,6 +1030,7 @@ export async function startGateway(): Promise<void> {
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: f ? () => (f.allowlist.ownerSignPub ? ownerKeyId(f.allowlist.ownerSignPub) : null) : null,
 			boardStore,
+			awareness: awareness ?? undefined,
 		});
 	}
 

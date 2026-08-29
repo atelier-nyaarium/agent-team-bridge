@@ -123,6 +123,12 @@ internal suspend fun ChatRepository.deliver(
 		setMessageStatus(team, echoId, "error")
 	}
 	try {
+		// Ship queued board edits first, so the gateway can attach their notice to this message.
+		try {
+			boardOps.drainBoard()
+		} catch (e: Exception) {
+			e.rethrowIfCancellation()
+		}
 		// A cross-Domain target carries the friend Domain id from its discovery entry, so the
 		// gateway resolves the seal target by the full (domainId, gatewayId) pair; a local /
 		// same-Domain session resolves to null and keeps the existing routing. A cold scheduled-

@@ -23,6 +23,50 @@ async function metaFor(over: Partial<ChannelPushPayload>): Promise<Record<string
 }
 
 describe("what a channel push asks the agent to do", () => {
+	it("renders riding awareness with its act label and closing line", async () => {
+		let content = "";
+		const server = {
+			notification: async (n: { params: { content: string } }) => {
+				content = n.params.content;
+			},
+		} as unknown as Server;
+		await emitChannelNotification(server, {
+			type: "channel_push",
+			from: "sender",
+			body: "message",
+			session_id: "job",
+			awareness: { from: "task-board", body: "The owner edited a.", act: "no_act" },
+		});
+		expect(content).toContain("[AWARENESS from task-board]");
+		expect(content).toContain("For awareness only. It needs no action and no reply.");
+		const meta = await metaFor({ awareness: { from: "task-board", body: "body", act: "no_act" } });
+		expect(meta.awareness_act).toBe("no_act");
+		expect(typeof meta.awareness_act).toBe("string");
+	});
+
+	it("renders the act_now awareness closing line", async () => {
+		let content = "";
+		const server = {
+			notification: async (n: { params: { content: string } }) => {
+				content = n.params.content;
+			},
+		} as unknown as Server;
+		await emitChannelNotification(server, {
+			type: "channel_push",
+			from: "sender",
+			body: "message",
+			session_id: "job",
+			awareness: { from: "task-board", body: "The owner trashed a.", act: "act_now" },
+		});
+		expect(content).toContain("Act on this before continuing.");
+	});
+
+	it("uses the act_now instruction for a standalone push", async () => {
+		const meta = await metaFor({ no_ack: true, act: "act_now" });
+		expect(meta.act).toBe("act_now");
+		expect(meta.instructions).toContain("Act on this before continuing what you were doing.");
+	});
+
 	it("tells an awareness push to stay silent without telling it to disregard the content", async () => {
 		// One of these carries a work handoff, so "do not treat this as a task" would arrive attached
 		// to the assignment it is describing.

@@ -25,11 +25,13 @@ code does not belong here; rationale lives in `git log`.
     plane (see Task board below)
   - `boardAuthority.ts` - board write authority (`BoardActor`, `mayWrite`) plus the enumerated
     refusals every board op resolves to and the `refused: ` marker's sole producer
-  - `boardNotices.ts` - the pre/post notice classifier the awareness pushes are built from
+  - `boardAwareness.ts` - the board as an awareness subscriber: who a write addresses, and what a
+    net pre/post pair means to them (see Awareness below)
   - `boardCascade.ts` - the pure both-directions state rule the store runs after a write, so a
     finished parent and its finished children cannot disagree (see Task board below)
-  - `noAckPush.ts` - the reply-less awareness push: the bank, its window, and the three-valued
-    liveness read at the send edge (see Awareness pushes below)
+  - `awarenessBank.ts` - the subscriber bank: first pre and last post per identity, drained into the
+    next message to that session, with the act_now deadline and the three-valued liveness read (see
+    Awareness below)
   - `daemonCapabilities.ts` - the daemon's half of the capability answer, stored beside the console's
     and served as its own section
   - `codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - the session-owned Codex catalog, the
@@ -798,36 +800,54 @@ coldest object, so eviction there is silent permanent loss.
   destroy the only copy for every console still sending the old pair. A leaked directory per move is
   the accepted trade. See `plans/board-attachments.md` for the full reasoning and what closing it needs.
 
-### Awareness pushes
+### Awareness
 
-A gateway-authored `channel_push` carrying `no_ack: true` tells a session something and asks for
-nothing back. The envelope is general; its one producer is the board (`gateway/noAckPush.ts`).
+The owner changes something a session holds and the session keeps acting on old knowledge until
+told. `gateway/awarenessBank.ts` is one bank for N subscribers; a subscriber owns identity, diff and
+render, and the bank and delivery never look inside a change. The board is subscriber one
+(`boardAwareness.ts`); the IDE extension is the planned second, for files, because an editor knows
+whose save it was and a filesystem watcher would echo the agent's own edits back at it. Design
+record: `plans/awareness-subscribers.md`.
 
-- **`no_ack` is a plain field on `ChannelPushPayload`**, not zod, so it costs no codegen and opens no
-  deploy window. `channelNotify` branches `instructions` on exactly `true` and passes the key through
-  to `meta`, where the harness renders it as a tag attribute. Snake_case is load-bearing: a meta key
-  failing `/^[a-zA-Z_][a-zA-Z0-9_]*$/` is dropped silently.
-- **Nothing can ENFORCE no-reply.** The id carries its own `na-` prefix and names no job, so
-  `respond()` absorbs a reply to it rather than letting one reach the agent as a 404 for doing nothing
-  wrong. Gated on the store holding NO job for that id: a federated peer picks its own return-route
-  key, so the prefix alone would let it park a real job and have the intercept eat the answer.
-- **The instruction says do not reply, never "this is not a task".** One of the four kinds hands the
-  session work, and the envelope flag cannot see which kinds a body carries.
-- **BOTH holders of a touched entry are addressees.** Reading only the pre-state leaves a session
-  silent about work it just gained, and strands a take-away when the owner immediately undoes one -
-  the arrival supersedes it on the same bank key, which is why the bank keys on entry id.
-- **Classified per entry from pre/post against `mayWrite` and `visibleTo`**, never from which method
-  ran, so a method gaining a caller cannot change what is announced. An edit carries the id alone
-  since a re-read resolves it; everything else carries the title, which the id no longer will.
+- **It rides the next message.** The send route drains the session's bank into every outbound
+  `channel_push` as a sibling `awareness` field, and the plugin renders it as a labeled block under
+  the body. A standalone push exists only as the `act_now` fallback. The earlier design pushed on a
+  3s window and woke the session on every owner tap.
+- **Diff at flush, not at write.** The bank keeps the FIRST pre and the LAST post per identity and
+  the subscriber classifies once on that pair, so a run of edits and moves is one fact and an edit
+  then a trash then an untrash is nothing. "Later notice wins" was the rule before and would have
+  called that an arrival.
+- **Two axes, both rendered into the instruction line.** Reply: expected / `no_ack`. Act: `no_act`
+  rides and never pushes alone; `act_now` arms `ACT_NOW_HOLD_MS` from the FIRST such observation
+  (never extended by later ones, or a stream of take-aways holds the push off forever) and pushes on
+  its own past it. The push's act is read from the NET pairs, not the arming observation. Board:
+  changed, arrived and backlog are `no_act`; gone (trashed, removed, reassigned) is `act_now`, the one
+  case where continuing is wrong. There is no separate urgency knob.
+- **The route drains only once it knows it can deliver**, after the no-active-connections check.
+  Draining earlier lost the content on a failed send.
+- **`no_ack`, `act` and `awareness` are plain fields on `ChannelPushPayload`**, not zod, so they cost
+  no codegen and open no deploy window. `channelNotify` branches on exactly `true` and every meta
+  value is a STRING; a boolean took the whole notification down. Snake_case is load-bearing: a meta
+  key failing `/^[a-zA-Z_][a-zA-Z0-9_]*$/` is dropped silently.
+- **Nothing can ENFORCE no-reply.** The fallback push's id carries its own `na-` prefix and names no
+  job, so `respond()` absorbs a reply to it rather than letting one reach the agent as a 404. Gated on
+  the store holding NO job for that id: a federated peer picks its own return-route key, so the
+  prefix alone would let it park a real job and have the intercept eat the answer.
+- **BOTH holders of a touched entry are addressees**, classified from pre/post against `holds` and
+  `visibleTo`, never from which method ran. An edit carries the id alone since a re-read resolves
+  it; everything else carries the title, which the id no longer will. A session's own route write is
+  a self-echo and is skipped.
 - **`mutate` stages ids for ONE invocation and releases after `commit` returns.** Four exits never
   commit, and a store-level buffer would ship what they left behind on the owner's next write.
   `sessionEnded` and `sweepTrash` announce nothing; a rank-only reorder announces nothing.
-- **The body is bounded and the liveness read is three-valued.** One console tap walks a whole subtree,
-  and an uncapped body lands megabytes in a session that asked for nothing. Waking and gone are
-  separate answers, or a session that never left is reported as dead, and the hold matches
+- **The body is bounded and the liveness read is three-valued.** One console tap walks a whole
+  subtree, and an uncapped body lands megabytes in a session that asked for nothing. Waking and gone
+  are separate answers, or a session that never left is reported as dead, and the hold matches
   `WAKE_TIMEOUT_MS` rather than guessing lower.
-- **The window is the only trigger.** An early flush on the session's own board call was tried and
-  removed: it fired on the agent's own re-read of a notice, so every owner tap became its own push.
+- **The phone ships an edit at once, and ahead of a send.** Every board enqueue kicks the poll loop,
+  since a visible app holds each poll for up to 40s and an edit used to wait that out on the phone;
+  `deliver` drains the board queue before the wire send, or the notice rides the message AFTER the one
+  the owner expects.
 
 ### Codex delegation
 

@@ -24,8 +24,10 @@ import type {
 	GatewaySpawnPoints,
 	ResponsePayload,
 	ResponsePushPayload,
+	RidingAwareness,
 	TeamInfo,
 } from "../shared/types.js";
+import { isNoAckSessionId } from "./awarenessBank.js";
 import { createBlobFetcher } from "./blobFetch.js";
 import type { CascadeChange } from "./boardCascade.js";
 import {
@@ -38,7 +40,6 @@ import {
 } from "./boardStore.js";
 import { createConsolePushOps } from "./consolePushOps.js";
 import { sealTargetFor } from "./federation/sealTarget.js";
-import { isNoAckSessionId } from "./noAckPush.js";
 import { createPresenceExchange } from "./presenceExchange.js";
 import {
 	type AgentBoardEntry,
@@ -153,6 +154,7 @@ export interface RoutesDeps {
 	// State that must survive a rebuild (see RoutesCarryOver). Absent in test harnesses, which build
 	// the route table once and never rebuild it.
 	carryOver?: RoutesCarryOver;
+	awareness?: { takeFor(sessionKey: string): RidingAwareness | null };
 }
 
 /**
@@ -219,6 +221,7 @@ export function createRoutes({
 	repushHandshake,
 	ownerId,
 	boardStore,
+	awareness,
 	carryOver = createRoutesCarryOver(),
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
@@ -991,12 +994,13 @@ export function createRoutes({
 					channelPayload.message_id = messageId;
 					channelPayload.files = files;
 				}
-				const payload = JSON.stringify(channelPayload);
-
 				const activeWs = getAllActiveWs(subs);
 				if (activeWs.length === 0) {
 					throw new Error(`Team "${qualifiedTo}" has no active connections`);
 				}
+				const riding = awareness?.takeFor(localName);
+				if (riding) channelPayload.awareness = riding;
+				const payload = JSON.stringify(channelPayload);
 
 				for (const ws of activeWs) {
 					// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the

@@ -20,6 +20,24 @@ import kotlinx.coroutines.launch
  * `board` itself (the BoardManager instance) stays on ChatRepository - this class is the repository's
  * OWN state (attachment transfer tracking) plus the ops that reach it. */
 internal class BoardOps(private val repo: ChatRepository) {
+	private fun enqueue(op: ConsoleOp, gatewayId: String, sources: Map<String, String> = emptyMap()): String {
+		val opId = repo.board.enqueue(op, gatewayId, sources = sources)
+		// Poll promptly so board edits can ride the next message.
+		repo.drain.kickPoll()
+		return opId
+	}
+
+	private fun enqueueMove(
+		subtree: List<BoardEntry>,
+		fromGateway: String,
+		toGateway: String,
+		sourceFor: (entryId: String, blobId: String) -> String,
+	) {
+		repo.board.enqueueMove(subtree, fromGateway, toGateway, sourceFor)
+		// Poll promptly so moved edits can ride the next message.
+		repo.drain.kickPoll()
+	}
+
 	/** board_read every NON-route Gateway the presence roster names (the route Gateway's half rides
 	 * the plane). Fired on board-tab open, pull-refresh, and entering a non-route session's thread;
 	 * a down Gateway just leaves its column stale. Same-Domain only: a linked friend's Gateway is
@@ -142,20 +160,20 @@ internal class BoardOps(private val repo: ChatRepository) {
 			state = "open",
 			rank = com.atelier_nyaarium.switchboard.board.BoardRank.between(last, null),
 		)
-		repo.board.enqueue(ConsoleOp.BoardUpsert(listOf(entry)), gw)
+		enqueue(ConsoleOp.BoardUpsert(listOf(entry)), gw)
 	}
 
 	fun boardSetState(gatewayId: String, id: String, state: String) =
-		repo.board.enqueue(ConsoleOp.BoardSetState(id, state), gatewayId)
+		enqueue(ConsoleOp.BoardSetState(id, state), gatewayId)
 
 	fun boardSetTitle(gatewayId: String, id: String, title: String) =
-		repo.board.enqueue(ConsoleOp.BoardSetTitle(id, title), gatewayId)
+		enqueue(ConsoleOp.BoardSetTitle(id, title), gatewayId)
 
 	fun boardSetBody(gatewayId: String, id: String, body: String?) =
-		repo.board.enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
+		enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
 
 	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
-		repo.board.enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
+		enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
 
 	/**
 	 * Set an entry's attachments to exactly this list, staging any newly picked file first.
@@ -231,7 +249,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 		// `supplied` is a claim about THIS device's disk, nothing more: these are the members whose
 		// bytes are here and going up. A member outside it that the Gateway also cannot find exists on
 		// no machine, and the Gateway drops it instead of failing the write forever.
-		repo.board.enqueue(
+		enqueue(
 			ConsoleOp.BoardSetAttachments(id, keep + added, supplied = sources.keys.toList()),
 			gatewayId,
 			sources = sources,
@@ -421,7 +439,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 		// optimistic row has to group the same way the gateway will store it.
 		val sessionId = team?.let { repo.board.sessionKeyOf(it) }
 		if (sessionId == null || target == fromGateway) {
-			repo.board.enqueue(ConsoleOp.BoardSetSession(id, sessionId), fromGateway)
+			enqueue(ConsoleOp.BoardSetSession(id, sessionId), fromGateway)
 			return
 		}
 		val entries = repo.board.mergedEntries(fromGateway)
@@ -443,7 +461,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 		subtree[0] = subtree[0].copy(parent = null)
 		// A moved picture lands under the SAME name in the destination's bucket, since the bucket is
 		// keyed by entry and the entry keeps its id across a move.
-		repo.board.enqueueMove(subtree, fromGateway, target) { entryId, blobId ->
+		enqueueMove(subtree, fromGateway, target) { entryId, blobId ->
 			Attachments.boardFile(repo.filesDir, entryId, blobId).absolutePath
 		}
 		// Pull anything this device never opened. The queued write retries until the bytes are here,

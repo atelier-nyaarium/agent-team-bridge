@@ -27,6 +27,17 @@ export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 export type ConnectionMode = z.infer<typeof ConnectionModeSchema>;
 export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 
+/** What the recipient does with a notice. `no_act` rides the next message and asks nothing. `act_now`
+ * is worth interrupting for, and the gateway pushes it on its own if no message comes in time. */
+export type ActAxis = "no_act" | "act_now";
+
+/** Banked notices riding a message that was going to the session anyway. `from` names the source. */
+export interface RidingAwareness {
+	from: string;
+	body: string;
+	act: ActAxis;
+}
+
 ////////////////////////////////
 //  Reply payloads. Fields are optional because a channel reply (channel_reply) is a
 //  stream message that may carry only a partial update (status, a chunk, or the final).
@@ -43,6 +54,10 @@ export interface ChannelPushPayload {
 	// ENFORCE no-reply, so this only changes the instructions the harness renders; the gateway still
 	// has to absorb a reply that comes anyway.
 	no_ack?: boolean;
+	// The act axis of a standalone awareness push. Only ever set beside no_ack.
+	act?: ActAxis;
+	// Notices for the recipient that hitched a ride on this message. Rendered under the body.
+	awareness?: RidingAwareness;
 }
 
 // Extends the spoken-tier trio (notice.ts NoticeTierWire): title (notification-bar line +
