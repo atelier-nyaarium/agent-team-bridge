@@ -6,15 +6,11 @@
 			"!**/.claude",
 			"!**/.cursor",
 			"!**/android",
-			"!**/coverage",
 			"!**/data/stts-voices",
 			"!**/dist",
 			"!**/lexicon",
 			"!**/plans",
 			"!**/tests/fixtures/ref-project",
-			"!**/node_modules",
-			"!**/temp",
-			"!**/volumes",
 			"!**/*.md",
 			"!**/*.mdc",
 			"!**/*.yml",
@@ -22,6 +18,11 @@
 			"!**/vitest.config.ts",
 			"!**/tsconfig.json"
 		]
+	},
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
 	},
 	"formatter": {
 		"enabled": true,

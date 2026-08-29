@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, renameSync, statSync, utimesSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync, utimesSync } from "node:fs";
 import { extname, join } from "node:path";
+import { writeFileAtomic } from "../../shared/atomic-write.js";
 import { cleanupTmpDir } from "../../shared/tmp-files.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { downloadBlob } from "../blobTransfer.js";
@@ -84,9 +85,12 @@ export async function materializeFiles({
 				const source = await downloadBlob(file.blobId, file.blobGateway);
 				mkdirSync(bucket, { recursive: true });
 				const targetPath = resolveCollisionFreePath(bucket, file.filename, claimedLeaves);
-				landAtomic(targetPath, (tmpPath) => copyFileSync(source, tmpPath));
+				landAtomic(
+					targetPath,
+					(tmpPath) => copyFileSync(source, tmpPath),
+					(filePath) => restoreModifiedAt(filePath, file.modifiedAt),
+				);
 				meta.path = targetPath;
-				restoreModifiedAt(targetPath, file.modifiedAt);
 			} catch (err) {
 				// Collapsing this with metadata-only would abandon a recoverable transfer.
 				meta.fetchFailed = true;
@@ -175,8 +179,6 @@ function resolveCollisionFreePath(bucket: string, requestedLeaf: string, claimed
 }
 
 /** Rename is atomic on POSIX, so concurrent processes converge on identical bytes; last one wins. */
-function landAtomic(targetPath: string, fill: (tmpPath: string) => void): void {
-	const tmpPath = `${targetPath}.tmp.${process.pid}`;
-	fill(tmpPath);
-	renameSync(tmpPath, targetPath);
+function landAtomic(targetPath: string, fill: (tmpPath: string) => void, afterRename: (file: string) => void): void {
+	writeFileAtomic(targetPath, fill, { afterRename });
 }

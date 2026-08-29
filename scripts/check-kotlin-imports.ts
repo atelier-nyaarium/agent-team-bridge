@@ -141,6 +141,10 @@ export function deadImports(files: string[]): DeadImport[] {
 
 if (import.meta.main) {
 	const files = kotlinFiles(ANDROID_SRC);
+	if (files.length === 0) {
+		console.error(`kotlin import check: expected Kotlin files under ${ANDROID_SRC}, but scanned none.`);
+		process.exit(1);
+	}
 	const dead = deadImports(files);
 	if (dead.length === 0) {
 		console.log(`kotlin import check: clean (${files.length} files).`);

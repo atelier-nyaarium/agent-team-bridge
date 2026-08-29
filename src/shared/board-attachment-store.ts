@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "./atomic-write.js";
 import { isBlobId } from "./blob-store.js";
 
 ////////////////////////////////
@@ -50,9 +51,7 @@ export class BoardAttachmentStore {
 		const file = this.filePath(ownerId, entryId, blobId);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		if (fs.existsSync(file)) return;
-		const tmp = `${file}.adopting`;
-		fs.copyFileSync(source, tmp);
-		fs.renameSync(tmp, file);
+		writeFileAtomic(file, (tmp) => fs.copyFileSync(source, tmp));
 	}
 
 	/** Whether any entry holds these bytes, without reading them. */

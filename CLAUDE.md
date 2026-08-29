@@ -195,6 +195,10 @@ code does not belong here; rationale lives in `git log`.
     seven per-flow `federation-*` files) - the federation trust model and its wire vocabulary
   - `notice.ts` - the four notice tiers both reply tools and the console wire share; the one remaining
     synced leaf (see Synced leaves below)
+  - `atomic-write.ts` - the ONE owner of write-then-rename and of the temp suffix a crash leaves
+    behind, so the startup sweep and every writer agree on its spelling. `blob-store.ts`'s
+    `.partial` files are deliberately not this: a partial download is resumable state, not a temp
+    of one write. `atomic-write-residue.test.ts` fails the build on a new hand-rolled site
   - `durable-store.ts` - atomic JSON snapshots, plus the per-file restore boundaries that quarantine
     a poisoned file instead of letting it take down every other consumer's state
   - `session-store.ts` - the gateway's authoritative session records, keyed by `spawn.id`
@@ -1207,7 +1211,10 @@ permissions for the supervised target.
 
 ### Commands
 
-- `bun run lint` - Biome CI + tsc
+- `bun run lint` - Biome CI + tsc, BOTH run and both reported (`scripts/lint.ts`); a formatting nit
+  no longer hides a type error. `ci.yml` follows the same rule: every check step runs once install
+  succeeded, so one red step cannot skip the rest. A stale sync-hash stamp once hid lint and tests
+  for four pushes that way
 - `bun run test` - vitest
 - `bun run build patch|minor|major` - the release ritual; see Deploying > Plugin
 - `bun run build --build-only` - bundle `dist/` without bumping or committing

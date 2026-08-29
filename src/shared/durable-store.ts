@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sweepAtomicTemps, writeFileAtomic } from "./atomic-write.js";
 
 /** A checked snapshot reached its final pathname, but the directory sync could not be confirmed. */
 export class DurableStoreInstalledError extends Error {
@@ -34,6 +35,7 @@ export class DurableStore {
 	/** The persisted snapshot, or null if absent/unreadable (first boot, corrupt file). */
 	load(): unknown | null {
 		if (this.quarantined) return null;
+		sweepAtomicTemps(path.dirname(this.file));
 		try {
 			return JSON.parse(fs.readFileSync(this.file, "utf8"));
 		} catch {
@@ -78,39 +80,16 @@ export class DurableStore {
 	private writeAtomic(state: unknown, durable: boolean): void {
 		const serialized = JSON.stringify(state);
 		if (serialized === undefined) throw new TypeError("durable state must be JSON serializable");
-		const directory = path.dirname(this.file);
-		fs.mkdirSync(directory, { recursive: true });
-		const tmp = `${this.file}.tmp.${process.pid}`;
-		let renamed = false;
-		try {
-			const descriptor = fs.openSync(tmp, "w");
-			try {
-				fs.writeFileSync(descriptor, serialized);
-				if (durable) fs.fsyncSync(descriptor);
-			} finally {
-				fs.closeSync(descriptor);
-			}
-			fs.renameSync(tmp, this.file);
-			renamed = true;
-			if (durable && process.platform !== "win32") {
-				const directoryDescriptor = fs.openSync(directory, "r");
-				try {
-					fs.fsyncSync(directoryDescriptor);
-				} finally {
-					fs.closeSync(directoryDescriptor);
-				}
-			}
-			this.lastError = null;
-		} catch (error) {
-			if (!renamed) {
-				try {
-					fs.unlinkSync(tmp);
-				} catch {}
-				throw error;
-			}
-			if (durable) throw new DurableStoreInstalledError(error);
-			throw error;
-		}
+		writeFileAtomic(this.file, serialized, {
+			fsyncFile: durable,
+			fsyncDirectory: durable,
+			// The snapshot is already at its final name by then, which the caller treats differently
+			// from a write that never landed.
+			onDirectorySyncError: (error) => {
+				throw new DurableStoreInstalledError(error);
+			},
+		});
+		this.lastError = null;
 	}
 }
 

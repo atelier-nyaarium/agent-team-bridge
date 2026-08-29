@@ -49,6 +49,17 @@ function collectNestedChains(root: string): string[] {
 	return chains;
 }
 
+function nodeModulesDirectoryCount(root: string): number {
+	let count = 0;
+	const walk = (directory: string) => {
+		if (!existsSync(directory)) return;
+		count++;
+		for (const pkg of packageDirs(directory)) walk(join(directory, pkg, "node_modules"));
+	};
+	walk(join(root, "node_modules"));
+	return count;
+}
+
 /** Resolution keys from bun.lock's packages section ("name" and "parent/child" composites). */
 function lockKeys(root: string): Set<string> {
 	const lock = readFileSync(join(root, "bun.lock"), "utf8");
@@ -94,7 +105,19 @@ function main(): void {
 	}
 
 	const keys = lockKeys(root);
-	const offenders = [...lexiconScopeResidue(root), ...collectNestedChains(root).filter((chain) => !keys.has(chain))];
+	if (keys.size === 0) {
+		console.error(`node_modules residue check: expected lock keys in ${join(root, "bun.lock")}, but found none.`);
+		process.exit(1);
+	}
+	const nodeModulesDirs = collectNestedChains(root);
+	const nodeModulesDirectories = nodeModulesDirectoryCount(root);
+	if (nodeModulesDirectories === 0) {
+		console.error(
+			`node_modules residue check: expected to walk node_modules directories under ${root}, but found none.`,
+		);
+		process.exit(1);
+	}
+	const offenders = [...lexiconScopeResidue(root), ...nodeModulesDirs.filter((chain) => !keys.has(chain))];
 
 	if (offenders.length > 0) {
 		console.error(`Unsanctioned nested node_modules residue (no matching bun.lock key):`);

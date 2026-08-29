@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sweepAtomicTemps, writeFileAtomic } from "../shared/atomic-write.js";
 import { generateIdentity, type Identity } from "../shared/crypto.js";
 import { type CasBase, type CasMutation, MAX_WRITE_RETRIES, type WriteOutcome } from "./casEngine.js";
 import { DELETE_SLICE, type DomainMutation, type SecretMutation } from "./casMutation.js";
@@ -22,41 +23,14 @@ function versionOf(value: string): string {
 }
 
 function writeAtomic(file: string, value: string): void {
-	const directory = path.dirname(file);
-	fs.mkdirSync(directory, { recursive: true });
-	const temp = `${file}.tmp.${process.pid}`;
-	let renamed = false;
-	try {
-		const descriptor = fs.openSync(temp, "w");
-		try {
-			fs.writeFileSync(descriptor, value);
-			fs.fsyncSync(descriptor);
-		} finally {
-			fs.closeSync(descriptor);
-		}
-		fs.renameSync(temp, file);
-		renamed = true;
-		if (process.platform !== "win32") {
-			const directoryDescriptor = fs.openSync(directory, "r");
-			try {
-				fs.fsyncSync(directoryDescriptor);
-			} finally {
-				fs.closeSync(directoryDescriptor);
-			}
-		}
-	} finally {
-		if (!renamed) {
-			try {
-				fs.unlinkSync(temp);
-			} catch {}
-		}
-	}
+	writeFileAtomic(file, value, { mode: 0o600, fsyncFile: true, fsyncDirectory: true });
 }
 
 class FileSecretIO implements SecretIO {
 	public constructor(private readonly file: string) {}
 
 	public async read(): Promise<{ value: FederationSecret; resourceVersion: string | null } | null> {
+		sweepAtomicTemps(path.dirname(this.file));
 		let serialized: string;
 		try {
 			serialized = fs.readFileSync(this.file, "utf8");
