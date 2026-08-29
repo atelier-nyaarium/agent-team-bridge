@@ -1,4 +1,4 @@
-// SYNC-HASH: 01ada126428087efc3f1c53ee627b8cd
+// SYNC-HASH: 5f7a1c4ef4b9296a586112003e1c91e7
 // SYNCED MODULE - source of truth: switchboard/src/shared/notice.ts
 // Copied verbatim into: nyaaskills/src/shared/notice.ts
 // MUST re-copy on change: cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
