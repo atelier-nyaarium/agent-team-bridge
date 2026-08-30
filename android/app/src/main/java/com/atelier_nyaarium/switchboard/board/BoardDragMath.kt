@@ -88,21 +88,39 @@ private fun isDescendantOf(candidate: String, ancestor: String, byId: Map<String
 	return false
 }
 
-/** How far each row shifts while a drag is in flight: rows between the dragged row's origin and
- * the pointer move by the dragged row's own height, so the gap opens where it will land. Variable
- * row heights are handled by shifting by the DRAGGED row's span, the one thing that is constant. */
-fun boardRowShift(draggedId: String, pointerY: Int, visible: List<RowSpan>): Map<String, Int> {
+/**
+ * How far each row shifts while a drag is in flight: rows between the dragged subtree's origin and
+ * the pointer move by the whole subtree's height, so the gap that opens is the size of what is
+ * actually being carried.
+ *
+ * `moving` is the dragged row and its descendants. They travel together and are never shifted
+ * against each other, so the caller offsets them as one block.
+ */
+fun boardRowShift(
+	draggedId: String,
+	pointerY: Int,
+	visible: List<RowSpan>,
+	moving: Set<String> = setOf(draggedId),
+): Map<String, Int> {
 	val dragged = visible.firstOrNull { it.id == draggedId } ?: return emptyMap()
+	val carried = visible.filter { it.id in moving }
+	val blockHeight = carried.sumOf { it.height }.takeIf { it > 0 } ?: dragged.height
 	val out = mutableMapOf<String, Int>()
 	for (row in visible) {
-		if (row.id == draggedId) continue
+		if (row.id in moving) continue
 		val movingUp = pointerY < dragged.center
 		val inRange = if (movingUp) {
 			row.center in pointerY until dragged.center
 		} else {
 			row.center in (dragged.center + 1)..pointerY
 		}
-		if (inRange) out[row.id] = if (movingUp) dragged.height else -dragged.height
+		if (inRange) out[row.id] = if (movingUp) blockHeight else -blockHeight
 	}
 	return out
+}
+
+/** The dragged row plus everything under it, which a move carries along. */
+fun boardSubtreeIds(draggedId: String, rows: List<BoardRow>): Set<String> {
+	val byId = rows.associateBy { it.entry.id }
+	return rows.filter { isDescendantOf(it.entry.id, draggedId, byId) }.mapTo(mutableSetOf()) { it.entry.id }
 }

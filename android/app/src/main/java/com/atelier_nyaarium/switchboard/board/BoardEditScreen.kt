@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.board
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -227,7 +228,13 @@ private fun BoardEntryEditor(
 			)
 
 			FieldLabel("State")
-			Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+			// Wraps: five chips do not fit one row in a dialog, and a plain Row squeezes the last one
+			// into a column of letters and pushes the fifth off the edge entirely.
+			FlowRow(
+				horizontalArrangement = Arrangement.spacedBy(7.dp),
+				verticalArrangement = Arrangement.spacedBy(7.dp),
+				modifier = Modifier.fillMaxWidth(),
+			) {
 				for (s in STATES) {
 					AssistChip(
 						onClick = { repo.boardOps.boardSetState(gatewayId, entryId, s) },

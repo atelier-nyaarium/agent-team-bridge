@@ -94,7 +94,9 @@ fun BoardStrip(
 	val drop = draggingId?.let {
 		boardDropTarget(it, dragY.roundToInt(), ordered, group.rows, (dragX / indentPx).roundToInt())
 	}
-	val shifts = draggingId?.let { boardRowShift(it, dragY.roundToInt(), ordered) } ?: emptyMap()
+	// The dragged row and everything under it travel as one block.
+	val carried = draggingId?.let { boardSubtreeIds(it, group.rows) } ?: emptySet()
+	val shifts = draggingId?.let { boardRowShift(it, dragY.roundToInt(), ordered, carried) } ?: emptyMap()
 	// Only the grabber writes the stored height. A drag expands the strip so a row can reach the far
 	// end of a long board, and it settles back untouched.
 	val bodyHeight by animateDpAsState(
@@ -142,15 +144,20 @@ fun BoardStrip(
 						.verticalScroll(rememberScrollState(), enabled = draggingId == null)
 						.padding(bottom = 8.dp),
 				) {
+					// One offset for the whole carried block, measured from the row under the finger.
+					val blockOffset = draggingId?.let { dragY - (spans[it]?.center?.toFloat() ?: dragY) } ?: 0f
+					val draggedDepth = group.rows.firstOrNull { it.entry.id == draggingId }?.depth ?: 0
+					val depthShift = if (drop != null) drop.depth - draggedDepth else 0
 					for (row in group.rows) {
+						val inBlock = row.entry.id in carried
 						StripRow(
 							row = row,
-							dragging = draggingId == row.entry.id,
+							dragging = inBlock,
 							anyDragging = draggingId != null,
-							// The lifted row shows its target indent, so the depth a horizontal drag chose is
-							// visible before the drop rather than only after it.
-							depth = if (draggingId == row.entry.id) drop?.depth ?: row.depth else row.depth,
-							offsetY = if (draggingId == row.entry.id) dragY - (spans[row.entry.id]?.center?.toFloat() ?: dragY) else (shifts[row.entry.id] ?: 0).toFloat(),
+							// The whole block shows the indent it will land at, so a child keeps its own
+							// relative depth rather than collapsing onto its parent's.
+							depth = if (inBlock) (row.depth + depthShift).coerceAtLeast(0) else row.depth,
+							offsetY = if (inBlock) blockOffset else (shifts[row.entry.id] ?: 0).toFloat(),
 							menuOpen = menuFor == row.entry.id,
 							onSpan = { spans[row.entry.id] = it },
 							onMarkTap = { menuFor = row.entry.id },

@@ -103,6 +103,23 @@ class BoardDragMathTest {
 	}
 
 	@Test
+	fun aDraggedRowCarriesItsChildren() {
+		assertEquals(setOf("b", "b1"), boardSubtreeIds("b", rows))
+		assertEquals(setOf("a"), boardSubtreeIds("a", rows))
+	}
+
+	@Test
+	fun theGapOpenedIsTheWholeSubtreesHeight() {
+		// Dragging b (100px) with its child b1 (100px) upward must open 200px, or the rows it passes
+		// slide back under the block being carried.
+		val shifts = boardRowShift("b", pointerY = 20, visible = visible, moving = setOf("b", "b1"))
+		assertEquals(200, shifts["a"])
+		// Nothing in the block shifts against itself.
+		assertNull(shifts["b"])
+		assertNull(shifts["b1"])
+	}
+
+	@Test
 	fun anUnknownOrOffscreenDragResolvesToNothingRatherThanGuessing() {
 		assertNull(boardDropTarget("ghost", pointerY = 100, visible = visible, rows = rows))
 		assertNull(boardDropTarget("a", pointerY = 100, visible = emptyList(), rows = rows))

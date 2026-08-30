@@ -24,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
+import com.atelier_nyaarium.switchboard.board.BoardEntryDialog
 import com.atelier_nyaarium.switchboard.board.BoardScreen
 import com.atelier_nyaarium.switchboard.board.BoardSource
 import com.atelier_nyaarium.switchboard.board.GroupKey
@@ -123,6 +124,7 @@ fun App(
 	var openNonce by remember { mutableStateOf(0) }
 	// Mirrored in composition so the drag is smooth; the store is the durable copy.
 	var boardStripHeight by remember { mutableStateOf(repo.store.boardStripHeight) }
+	var boardModal by remember { mutableStateOf<Pair<String, String>?>(null) }
 	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
 	// so re-opening the same thread later does not silently re-scroll to an old message.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
@@ -379,7 +381,7 @@ fun App(
 				boardLiveLine = boardLiveLineFor,
 				boardStripHeight = boardStripHeight,
 				onBoardStripHeight = { boardStripHeight = it; repo.store.boardStripHeight = it },
-				onOpenBoardEntry = { openOverlay(Overlay.BoardEntryModal(it.gatewayId, it.entry.id)) },
+				onOpenBoardEntry = { boardModal = it.gatewayId to it.entry.id },
 				onSetBoardState = { row, s -> repo.boardOps.boardSetState(row.gatewayId, row.entry.id, s) },
 				onMoveBoardEntry = { row, drop ->
 					repo.boardOps.boardSetParent(row.gatewayId, row.entry.id, drop.parent, drop.rank)
@@ -602,6 +604,11 @@ fun App(
 	QueueOverlay(repo, openQueueRequest, locked, revealAtState, openTeamRequest)
 	AttachmentViewerOverlay(viewerState, rendererPool)
 	LinkMenuDialog(linkMenuState, linkMenuNoteState)
+	// Here rather than in the overlay stack: that one REPLACES the screen it is called from, so a
+	// dialog hosted there dims an empty window instead of the conversation.
+	boardModal?.let { (gatewayId, entryId) ->
+		BoardEntryDialog(repo, gatewayId, entryId) { boardModal = null }
+	}
 }
 
 /** Registry onError sink shared by every plugin-registry consultation site: a claim that threw
