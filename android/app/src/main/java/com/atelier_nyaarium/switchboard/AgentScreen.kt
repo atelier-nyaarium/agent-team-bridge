@@ -23,7 +23,8 @@ object AgentScreen {
 	// The "esc to interrupt" hint in the bottom toolbar. Necessary and NOT sufficient: the toolbar
 	// elides its own tail to "· …" when the pane is too narrow, and the mode label is part of that
 	// width, so "bypass permissions on" pushes this off a pane where "auto mode on" left it visible.
-	private const val WORKING_HINT = "· esc"
+	// Toolbar only. Prose-shaped, so a transcript tail in the status rows would trip it.
+	private val workingHintRe = Regex("· esc")
 
 	// The status line a running turn draws immediately ABOVE the composer, e.g.
 	// "✶ Composing… (46m 51s · ↓ 154.1k tokens)". Matched on the PARENTHESISED run, never the verb or
@@ -58,6 +59,12 @@ object AgentScreen {
 	private val menuCursorRe = Regex("^$SPACE+$COMPOSER_GLYPH$SPACE*\\d+\\.", RegexOption.MULTILINE)
 	// The usage-limit dialog's own cancel choice. It collapses to a bare "Stop" on usage-based
 	// billing, which is too generic to match, so that case is not detected.
+	// The auth notice renders in both slices and needs a different rule in each. Unanchored in the
+	// toolbar, where it shares the mode label's line; anchored above the composer, where it is a row of
+	// its own and the slice holds the transcript tail. Twins in agent-screen.ts.
+	private val loggedOutToolbarRe = Regex("Not logged in|Run /login")
+	private val loggedOutStatusRe = Regex("^$SPACE*(?:Not logged in|Run /login)\\b", RegexOption.MULTILINE)
+
 	private const val LIMIT_MENU_HINT = "wait for limit to reset"
 	private const val MIDDLE_DOT = '·'
 	// Deliberately names no model, plan, seat kind, or billing period: those churn, and an enumeration
@@ -117,6 +124,16 @@ object AgentScreen {
 		return lines.takeLast(2)
 	}
 
+	/** Where a marker may appear. No value spans both, so a "/login" typed in the composer stays inert. */
+	private enum class PaneRegion { TOOLBAR, STATUS }
+
+	/** The one place a pane is sliced. A marker names its region and never slices its own. */
+	private fun paneHas(screen: String, marker: Regex, where: PaneRegion): Boolean {
+		val lines = strip(screen).split("\n")
+		val region = if (where == PaneRegion.TOOLBAR) footerRegion(lines) else statusRegion(lines)
+		return marker.containsMatchIn(region.joinToString("\n"))
+	}
+
 	fun isReady(screen: String): Boolean =
 		strip(screen).split("\n").any { line ->
 			// Column 0, the unjoined shape; or welded to the rule above it, which is EVERY Windows frame.
@@ -126,9 +143,9 @@ object AgentScreen {
 		}
 
 	fun isWorking(screen: String): Boolean {
-		val lines = strip(screen).split("\n")
-		if (footerRegion(lines).any { it.contains(WORKING_HINT) }) return true
-		return statusRegion(lines).any { workingStatusRe.containsMatchIn(it) }
+		// Not one alternation over both slices: each marker is only safe in its own.
+		return paneHas(screen, workingHintRe, PaneRegion.TOOLBAR) ||
+			paneHas(screen, workingStatusRe, PaneRegion.STATUS)
 	}
 
 	/**
@@ -156,10 +173,9 @@ object AgentScreen {
 		return lines.takeLast(2)
 	}
 
-	fun isLoggedOut(screen: String): Boolean {
-		val footer = footerRegion(strip(screen).split("\n")).joinToString("\n")
-		return footer.contains("Not logged in") || footer.contains("Run /login")
-	}
+	fun isLoggedOut(screen: String): Boolean =
+		paneHas(screen, loggedOutToolbarRe, PaneRegion.TOOLBAR) ||
+			paneHas(screen, loggedOutStatusRe, PaneRegion.STATUS)
 
 	/** The headline of a usage-limit dialog plus the text after its middle dot, e.g. "resets 5pm". */
 	/** `headline` is null when it has already scrolled off the pane, which is common. The dialog itself

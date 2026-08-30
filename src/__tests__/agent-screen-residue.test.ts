@@ -49,7 +49,18 @@ describe("agent-screen: the rule boundary has one owner per language", () => {
 		expect(ts).toMatch(/function afterRuleRun\(/);
 		expect(ts).toMatch(/function footerRegion\(/);
 		// Positive control: a sweep that matched nothing would pass vacuously.
-		expect((ts.match(/footerRegion\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+		expect((ts.match(/afterRuleRun\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("TypeScript: a marker names its region and never slices one", () => {
+		// Two occurrences each: the definition, and the one call inside paneHas. A reader slicing for
+		// itself makes three, so this pins the number rather than a floor.
+		const ts = code(TS_MODULE);
+		expect(ts).toMatch(/function paneHas\(/);
+		expect((ts.match(/footerRegion\(/g) ?? []).length, "footerRegion has one caller").toBe(2);
+		expect((ts.match(/statusRegion\(/g) ?? []).length, "statusRegion has one caller").toBe(2);
+		// And the markers do reach it: a paneHas nobody called would satisfy the counts above.
+		expect((ts.match(/paneHas\(/g) ?? []).length, "markers go through paneHas").toBeGreaterThanOrEqual(4);
 	});
 
 	it("TypeScript: nobody hand-rolls the old lastRule search", () => {
@@ -65,9 +76,29 @@ describe("agent-screen: the rule boundary has one owner per language", () => {
 		const kt = code(KT_MODULE);
 		expect(kt).toMatch(/fun afterRuleRun\(/);
 		expect(kt).toMatch(/fun footerRegion\(/);
-		expect((kt.match(/footerRegion\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+		expect((kt.match(/afterRuleRun\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
 		expect(kt).not.toMatch(/indexOfLast/);
 		expect(kt).not.toMatch(/lastRule/);
+	});
+
+	it("Kotlin: the twin routes markers through the same one owner", () => {
+		const kt = code(KT_MODULE);
+		expect(kt).toMatch(/fun paneHas\(/);
+		expect((kt.match(/footerRegion\(/g) ?? []).length, "footerRegion has one caller").toBe(2);
+		expect((kt.match(/statusRegion\(/g) ?? []).length, "statusRegion has one caller").toBe(2);
+		expect((kt.match(/paneHas\(/g) ?? []).length, "markers go through paneHas").toBeGreaterThanOrEqual(4);
+	});
+
+	it("both languages scope the auth notice the same way", () => {
+		// One marker per slice, anchored only in the status one. Dropping either half stops detecting
+		// one of the two layouts the notice renders in.
+		for (const [name, src] of [
+			["TypeScript", code(TS_MODULE)],
+			["Kotlin", code(KT_MODULE)],
+		] as const) {
+			expect(src, `${name} keeps the unanchored toolbar rule`).toMatch(/Not logged in\|Run \/login/);
+			expect(src, `${name} anchors the status rule`).toMatch(/\^\$?\{?SPACE\}?\*\(\?:Not logged in/);
+		}
 	});
 
 	it("neither language matches whitespace with a shorthand class", () => {

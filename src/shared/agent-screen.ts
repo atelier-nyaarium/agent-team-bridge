@@ -40,7 +40,8 @@ const SPACE = "[ \\t\\u00a0]";
 // part of that width: "bypass permissions on" is long enough to push this off a pane where "auto
 // mode on" left it visible. Every working fixture in the corpus was captured in auto mode, so the
 // corpus cannot see that at all.
-const WORKING_HINT = "· esc";
+// Toolbar only. Prose-shaped, so a transcript tail in the status rows would trip it.
+const WORKING_HINT_RE = /· esc/u;
 
 /**
  * The status line a running turn draws immediately ABOVE the composer: a spinner, a verb, and a
@@ -66,10 +67,12 @@ const WORKING_STATUS_RE = /\(\d+[hms][^()]*tokens\)/u;
  * a transcript line would have to quote a running status verbatim to trip it.
  */
 const STATUS_LOOKBACK = 5;
-// The auth status renders in the bottom toolbar, below the composer's lower rule line. Scoping the
-// logged-out check to the region after the last rule keeps "/login" typed into the composer, or
-// printed in the transcript above, from tripping it.
-const LOGGED_OUT_RE = /Not logged in|Run \/login/;
+// The auth notice renders in both slices and needs a different rule in each.
+// Unanchored: in the toolbar it shares the mode label's line.
+const LOGGED_OUT_TOOLBAR_RE = /Not logged in|Run \/login/;
+// Anchored: above the composer it is a row of its own, and that slice holds the transcript tail,
+// where prose about logging in would otherwise match. SPACE, never `\s`: the JVM excludes U+00A0.
+const LOGGED_OUT_STATUS_RE = new RegExp(`^${SPACE}*(?:Not logged in|Run /login)\\b`, "mu");
 
 // A rule RUN, not a rule LINE, and the reason this module has a primitive at all.
 //
@@ -193,9 +196,8 @@ export function isAgentReady(screen: string): boolean {
  * matching a stray "esc" sitting in scrollback/transcript text above. The Kotlin twin lives in
  * AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
-	const lines = stripAnsi(screen).split("\n");
-	if (footerRegion(lines).some((line) => line.includes(WORKING_HINT))) return true;
-	return statusRegion(lines).some((line) => WORKING_STATUS_RE.test(line));
+	// Not one alternation over both slices: each marker is only safe in its own.
+	return paneHas(screen, WORKING_HINT_RE, "toolbar") || paneHas(screen, WORKING_STATUS_RE, "status");
 }
 
 /**
@@ -226,12 +228,22 @@ function statusRegion(lines: string[]): string[] {
 	return lines.slice(-2);
 }
 
-/** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /
- * "Run /login". Independent of ready/working - a logged-out session still renders the composer, so a
- * caller must check this separately. Detectable at any peek (the footer persists), including a token
+/** Where a marker may appear. No value spans both, so a "/login" typed in the composer stays inert. */
+type PaneRegion = "toolbar" | "status";
+
+/** The one place a pane is sliced. A marker names its region and never slices its own. */
+function paneHas(screen: string, marker: RegExp, where: PaneRegion): boolean {
+	const lines = stripAnsi(screen).split("\n");
+	const region = where === "toolbar" ? footerRegion(lines) : statusRegion(lines);
+	return marker.test(region.join("\n"));
+}
+
+/** Whether the captured pane shows claude logged out: it prints "Not logged in" / "Run /login" in its
+ * own chrome. Independent of ready/working - a logged-out session still renders the composer, so a
+ * caller must check this separately. Detectable at any peek (the notice persists), including a token
  * that expires mid-session. The Kotlin twin lives in AgentScreen.kt. */
 export function isLoggedOut(screen: string): boolean {
-	return LOGGED_OUT_RE.test(footerRegion(stripAnsi(screen).split("\n")).join("\n"));
+	return paneHas(screen, LOGGED_OUT_TOOLBAR_RE, "toolbar") || paneHas(screen, LOGGED_OUT_STATUS_RE, "status");
 }
 
 /** The usage-limit dialog, i.e. the agent has stopped and cannot progress until the choice is answered.
