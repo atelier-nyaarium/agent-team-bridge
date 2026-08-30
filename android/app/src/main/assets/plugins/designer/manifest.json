@@ -1,6 +1,6 @@
 {
 	"content_id": "designer",
-	"version": "8.4.6",
+	"version": "8.4.7",
 	"display_name": "Designer",
 	"description": "Design canvases render in a dock under the chat.",
 	"agent_instructions": "Design canvases render in a dock under the chat. Default to mockups. Ask first about Claude Designer. A card is a whole HTML document: the `<!-- @dsCard group width height -->` marker on line one, then a `<title>` naming the card and a `<meta name=\"viewport\">` whose width matches the declared width. Without that meta, the console uses its 980px default and zooms to fit. A narrower mockup renders as a small island in its own background colour. Fill the page instead of using a surround. A zoom mismatch then becomes a scaled view instead of a blank field.",
