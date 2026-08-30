@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard.board
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -152,12 +151,19 @@ fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, o
 		repo.boardOps.boardEntriesOn(gatewayId).filter { it.parent == entryId && it.trashedAt == null }.sortedBy { it.rank }
 	}
 
-	Dialog(onDismissRequest = onClose, properties = DialogProperties(dismissOnClickOutside = false)) {
-		Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
+	Dialog(
+		onDismissRequest = onClose,
+		// The platform default is a narrow dialog width, which turns every field into a tall stack.
+		properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = false),
+	) {
+		Surface(
+			shape = RoundedCornerShape(28.dp),
+			tonalElevation = 6.dp,
+			modifier = Modifier.fillMaxWidth(0.95f),
+		) {
 			// Only the fields scroll. Save and Cancel sit outside it, or a tall entry pushes them past
 			// the dialog's own height cap and the owner cannot commit without discovering the scroll.
 			Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-				Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
 				Column(
 					Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
 					verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -221,13 +227,18 @@ private fun BoardEntryEditor(
 				)
 			}
 
-			FieldLabel("Title")
-			OutlinedTextField(value = title, onValueChange = onTitle, modifier = Modifier.fillMaxWidth())
-
-			FieldLabel("Body")
+			// Floating labels rather than a caption row above each field: the caption doubled the
+			// vertical cost of every field, which is most of why this stack ran off the bottom.
+			OutlinedTextField(
+				value = title,
+				onValueChange = onTitle,
+				label = { Text("Title") },
+				modifier = Modifier.fillMaxWidth(),
+			)
 			OutlinedTextField(
 				value = body,
 				onValueChange = onBody,
+				label = { Text("Body") },
 				modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
 			)
 
@@ -292,18 +303,17 @@ private fun BoardEntryEditor(
 				}
 			}
 
-			Card(Modifier.fillMaxWidth()) {
+			// A text button, not a filled card. Destructive and rarely wanted, so it should not be the
+			// most prominent control in the editor.
+			TextButton(
+				onClick = {
+					repo.boardOps.boardSetTrashed(gatewayId, entryId, entry.trashedAt == null)
+					onClose()
+				},
+			) {
 				Text(
 					if (entry.trashedAt != null) "Restore from trash" else "Move to trash",
-					style = MaterialTheme.typography.bodyMedium,
 					color = MaterialTheme.colorScheme.error,
-					modifier = Modifier
-						.fillMaxWidth()
-						.clickable {
-							repo.boardOps.boardSetTrashed(gatewayId, entryId, entry.trashedAt == null)
-							onClose()
-						}
-						.padding(horizontal = 14.dp, vertical = 13.dp),
 				)
 			}
 		}
