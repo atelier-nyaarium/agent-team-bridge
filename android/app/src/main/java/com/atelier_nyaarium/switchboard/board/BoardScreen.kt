@@ -1,11 +1,9 @@
 package com.atelier_nyaarium.switchboard.board
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,11 +15,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.Timelapse
+import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -40,7 +42,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -376,27 +377,24 @@ private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, onLongPress: () ->
 	}
 }
 
-/** The task's own state, never the session's - session presence stays on the session card. Public
- * because the session card's live rung and the thread strip draw the same mark. */
+/**
+ * The task's own state, never the session's - session presence stays on the session card. Public
+ * because the session card's live rung and the thread strip draw the same mark.
+ *
+ * Shape carries the meaning and colour only reinforces it. Every state is a distinct glyph on the
+ * same circular footprint, so the marks line up in a list and are still told apart in greyscale.
+ * The description is what a screen reader says, and is the only form of this the mark ever had.
+ */
 @Composable
 fun StateMark(state: String) {
-	val color = when (state) {
-		"in_progress" -> MaterialTheme.colorScheme.tertiary
-		"done" -> MaterialTheme.colorScheme.primary
-		"paused", "cancelled" -> MaterialTheme.colorScheme.outline
-		else -> MaterialTheme.colorScheme.outline
+	val (icon, tint, label) = when (state) {
+		"in_progress" -> Triple(Icons.Filled.Timelapse, MaterialTheme.colorScheme.tertiary, "In progress")
+		"done" -> Triple(Icons.Filled.CheckCircle, MaterialTheme.colorScheme.primary, "Done")
+		"paused" -> Triple(Icons.Filled.PauseCircle, MaterialTheme.colorScheme.secondary, "Paused")
+		"cancelled" -> Triple(Icons.Filled.Cancel, MaterialTheme.colorScheme.outline, "Cancelled")
+		else -> Triple(Icons.Outlined.Circle, MaterialTheme.colorScheme.outline, "Open")
 	}
-	Box(
-		Modifier
-			.size(14.dp)
-			.clip(CircleShape)
-			.background(if (state == "done" || state == "in_progress") color else MaterialTheme.colorScheme.surface)
-			.padding(1.dp),
-	) {
-		if (state != "done" && state != "in_progress") {
-			Box(Modifier.fillMaxSize().clip(CircleShape).background(MaterialTheme.colorScheme.surface))
-		}
-	}
+	Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(STATE_MARK_SIZE))
 }
 
 @Composable
@@ -508,6 +506,9 @@ private fun stateLabel(state: String): String = when (state) {
 	"in_progress" -> "in progress"
 	else -> state
 }
+
+/** Matches the row's text line, so a mark never sets the row height. */
+private val STATE_MARK_SIZE = 16.dp
 
 /** A non-route column older than this reads as stale; below it the cadence is working as intended. */
 private const val STALE_AFTER_MS = 5 * 60 * 1000L

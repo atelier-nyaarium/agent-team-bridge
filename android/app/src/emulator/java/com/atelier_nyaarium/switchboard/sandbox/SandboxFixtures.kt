@@ -16,6 +16,8 @@ import com.atelier_nyaarium.switchboard.Message
 import com.atelier_nyaarium.switchboard.MessageFile
 import com.atelier_nyaarium.switchboard.OutgoingFile
 import com.atelier_nyaarium.switchboard.PendingGoal
+import com.atelier_nyaarium.switchboard.Authority
+import com.atelier_nyaarium.switchboard.Presence
 import com.atelier_nyaarium.switchboard.Team
 import com.atelier_nyaarium.switchboard.board.BoardBlob
 import com.atelier_nyaarium.switchboard.board.GatewayBoard
@@ -24,6 +26,7 @@ import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.RefFileMeta
 import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
+import com.atelier_nyaarium.switchboard.proto.RefSpanMeta
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.serialization.json.Json
@@ -53,23 +56,24 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 	fun teams(): List<Team> = listOf(
 		Team(
 			name = SESSION,
-			status = "online",
-			mode = "channel",
-			queueDepth = 0,
+			presence = sandboxPresence(),
 			kind = "loose",
 			sessionLabel = "Sandbox",
 			domainId = DOMAIN,
 		),
 		Team(
 			name = SESSION_2,
-			status = "online",
-			mode = "channel",
-			queueDepth = 0,
+			presence = sandboxPresence(),
 			kind = "loose",
 			sessionLabel = "Second",
 			domainId = DOMAIN,
 		),
 	)
+
+	/** LIVE, because a seeded session stands in for one the route Gateway just pushed. Anything less
+	 * authoritative makes the surfaces that gate on evidence, like the terminal's peek, sit idle. */
+	private fun sandboxPresence(): Presence =
+		Presence.reported(status = Presence.ONLINE, authority = Authority.LIVE, mode = "channel")
 
 	/** Three admitted machines for two with sessions, so the board's idle-Gateway section is reachable. */
 	fun admittedGateways(): List<String> = listOf(GATEWAY, "parsing", "idle-box")
@@ -425,15 +429,17 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			sessionId = localFieldOrSelf(SESSION),
 			attachments = listOf(present, huge, missing),
 		)
-		// A second root with children in all four states, ranked so its in-progress CHILD is the
+		// A second root with a child in every state, ranked so its in-progress CHILD is the
 		// session's current entry. That is what makes the card's branch walk visible: it has to climb to
-		// this root and skip the attachments entry above it.
+		// this root and skip the attachments entry above it. Every state appears once, so a screenshot
+		// of this row shows the whole state vocabulary at once.
 		val branch = listOf(
 			BoardEntry(id = "c".repeat(32), title = "Half-finished example", state = "in_progress", rank = "zm", sessionId = localFieldOrSelf(SESSION)),
 			BoardEntry(id = "d".repeat(32), title = "Child 1 - finished", state = "done", rank = "a", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 			BoardEntry(id = "e".repeat(32), title = "Child 2 - being worked on", state = "in_progress", rank = "b", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 			BoardEntry(id = "f".repeat(32), title = "Child 3 - dropped", state = "cancelled", rank = "c", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 			BoardEntry(id = "1".repeat(32), title = "Child 4 - not started", state = "open", rank = "d", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
+			BoardEntry(id = "2".repeat(32), title = "Child 5 - set aside", state = "paused", rank = "e", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 		)
 		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch)))
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
