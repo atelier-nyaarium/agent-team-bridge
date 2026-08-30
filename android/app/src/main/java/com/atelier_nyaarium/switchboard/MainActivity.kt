@@ -382,7 +382,6 @@ fun App(
 				boardStripHeight = boardStripHeight,
 				onBoardStripHeight = { boardStripHeight = it; repo.store.boardStripHeight = it },
 				onOpenBoardEntry = { boardModal = it.gatewayId to it.entry.id },
-				onSetBoardState = { row, s -> repo.boardOps.boardSetState(row.gatewayId, row.entry.id, s) },
 				onMoveBoardEntry = { row, drop ->
 					repo.boardOps.boardSetParent(row.gatewayId, row.entry.id, drop.parent, drop.rank)
 				},

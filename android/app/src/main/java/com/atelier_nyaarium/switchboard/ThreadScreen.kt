@@ -109,7 +109,6 @@ fun ThreadScreen(
 	boardStripHeight: Int = AppStateStore.BOARD_STRIP_DEFAULT_DP,
 	onBoardStripHeight: (Int) -> Unit = {},
 	onOpenBoardEntry: (BoardRow) -> Unit = {},
-	onSetBoardState: (BoardRow, String) -> Unit = { _, _ -> },
 	onMoveBoardEntry: (BoardRow, BoardDrop) -> Unit = { _, _ -> },
 	// (team, at) a queue tile asked to land on, or null. Passed straight through to ThreadWebView.
 	revealAt: Pair<String, Long>?,
@@ -399,7 +398,6 @@ fun ThreadScreen(
 					heightDp = boardStripHeight,
 					onHeightDp = onBoardStripHeight,
 					onOpenEntry = onOpenBoardEntry,
-					onSetState = onSetBoardState,
 					onMove = onMoveBoardEntry,
 				)
 			}

@@ -21,8 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -64,8 +62,6 @@ private val INDENT = 16.dp
  */
 private val DEPTH_STEP = 56.dp
 
-private val STATES = listOf("open", "in_progress", "paused", "done", "cancelled")
-
 /**
  * The in-thread board strip, pinned under the top bar: this session's tree.
  *
@@ -79,7 +75,6 @@ fun BoardStrip(
 	heightDp: Int = AppStateStore.BOARD_STRIP_DEFAULT_DP,
 	onHeightDp: (Int) -> Unit = {},
 	onOpenEntry: (BoardRow) -> Unit = {},
-	onSetState: (BoardRow, String) -> Unit = { _, _ -> },
 	onMove: (BoardRow, BoardDrop) -> Unit = { _, _ -> },
 ) {
 	if (group == null || group.rows.isEmpty()) return
@@ -88,7 +83,6 @@ fun BoardStrip(
 	var draggingId by remember { mutableStateOf<String?>(null) }
 	var dragY by remember { mutableFloatStateOf(0f) }
 	var dragX by remember { mutableFloatStateOf(0f) }
-	var menuFor by remember { mutableStateOf<String?>(null) }
 	val spans = remember { mutableStateMapOf<String, RowSpan>() }
 	// The gesture reads the stored height once at drag start, so a slow resize is not fighting its own
 	// writes frame by frame.
@@ -165,12 +159,8 @@ fun BoardStrip(
 							anyDragging = draggingId != null,
 							depth = row.depth,
 							insertionDepth = if (drop != null && drop.afterId == row.entry.id) drop.depth else null,
-							menuOpen = menuFor == row.entry.id,
 							onSpan = { spans[row.entry.id] = it },
-							onMarkTap = { menuFor = row.entry.id },
-							onMenuDismiss = { menuFor = null },
-							onPickState = { menuFor = null; onSetState(row, it) },
-							onLabelTap = { onOpenEntry(row) },
+							onOpen = { onOpenEntry(row) },
 							onDragStart = {
 								draggingId = row.entry.id
 								dragY = (spans[row.entry.id]?.center ?: 0).toFloat()
@@ -222,12 +212,8 @@ private fun StripRow(
 	depth: Int,
 	/** Draw the landing indicator under this row, indented to that depth. Null for no indicator. */
 	insertionDepth: Int?,
-	menuOpen: Boolean,
 	onSpan: (RowSpan) -> Unit,
-	onMarkTap: () -> Unit,
-	onMenuDismiss: () -> Unit,
-	onPickState: (String) -> Unit,
-	onLabelTap: () -> Unit,
+	onOpen: () -> Unit,
 	onDragStart: () -> Unit,
 	onDrag: (Float, Float) -> Unit,
 	onDragEnd: (BoardDrop?) -> Unit,
@@ -256,22 +242,14 @@ private fun StripRow(
 					onDragCancel = { onDragEnd(null) },
 				)
 			}
+			// The whole row, not the label alone: with no second target on the row there is no reason to
+			// make the owner hit the text.
+			.clickable(onClick = onOpen)
 			.padding(start = (14 + depth * 16).dp, end = 14.dp, top = 3.dp, bottom = 3.dp),
 		horizontalArrangement = Arrangement.spacedBy(9.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Box {
-			Box(Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onMarkTap)) { StateMark(entry.state) }
-			DropdownMenu(expanded = menuOpen, onDismissRequest = onMenuDismiss) {
-				for (s in STATES) {
-					DropdownMenuItem(
-						text = { Text(stateLabel(s)) },
-						leadingIcon = { StateMark(s) },
-						onClick = { onPickState(s) },
-					)
-				}
-			}
-		}
+		StateMark(entry.state)
 		Text(
 			// Collapsed because this row cannot show a second line. The board tab renders the same title
 			// at maxLines = 2 and leaves it alone, since there it has somewhere to go.
@@ -280,7 +258,7 @@ private fun StripRow(
 			textDecoration = if (entry.state == "cancelled") TextDecoration.LineThrough else null,
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f).clickable(onClick = onLabelTap),
+			modifier = Modifier.weight(1f),
 		)
 	}
 	// Where it lands, drawn at the target depth. This is the only feedback for the sideways axis, so
