@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -140,7 +141,9 @@ fun BoardStrip(
 			if (expanded) {
 				Column(
 					Modifier
-						.height(bodyHeight)
+						// A cap, not a fixed height: a short board should not reserve empty space above the
+						// transcript just because the grabber was dragged low once.
+						.heightIn(max = bodyHeight)
 						.verticalScroll(rememberScrollState(), enabled = draggingId == null)
 						.padding(bottom = 8.dp),
 				) {

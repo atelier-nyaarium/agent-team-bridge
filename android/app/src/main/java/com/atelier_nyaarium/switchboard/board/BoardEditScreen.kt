@@ -154,12 +154,15 @@ fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, o
 
 	Dialog(onDismissRequest = onClose, properties = DialogProperties(dismissOnClickOutside = false)) {
 		Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
-			Column(
-				Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(20.dp),
-				verticalArrangement = Arrangement.spacedBy(14.dp),
-			) {
+			// Only the fields scroll. Save and Cancel sit outside it, or a tall entry pushes them past
+			// the dialog's own height cap and the owner cannot commit without discovering the scroll.
+			Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
 				Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-				BoardEntryEditor(
+				Column(
+					Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+					verticalArrangement = Arrangement.spacedBy(14.dp),
+				) {
+					BoardEntryEditor(
 					repo = repo,
 					gatewayId = gatewayId,
 					entry = entry,
@@ -171,7 +174,8 @@ fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, o
 					children = children,
 					onOpenAttachment = { viewer = it },
 					onClose = onClose,
-				)
+					)
+				}
 				Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
 					TextButton(onClick = onClose) { Text("Cancel") }
 					Button(
