@@ -35,12 +35,39 @@ class BoardDragMathTest {
 	}
 
 	@Test
-	fun droppingOverANestedRowAdoptsThatRowsParentNotTheVisibleNeighbour() {
-		// b1 is a child of b. Dropping "a" over b1 must make it a child of b, not a root - the
-		// visible neighbour above (b) is at a different depth.
+	fun withNoSidewaysDragTheRowKeepsItsOwnDepth() {
+		// Dropped after b1, which is a child of b. Depth is chosen, not inherited from the row it
+		// landed next to, so a root stays a root.
 		val drop = boardDropTarget("a", pointerY = 260, visible = visible, rows = rows)!!
-		assertEquals("b", drop.parent)
+		assertEquals(null, drop.parent)
+		assertEquals(0, drop.depth)
 		assertTrue(BoardRank.isValid(drop.rank))
+	}
+
+	@Test
+	fun draggingRightIndentsUnderTheRowAbove() {
+		val drop = boardDropTarget("a", pointerY = 260, visible = visible, rows = rows, depthDelta = 1)!!
+		assertEquals("b", drop.parent)
+		assertEquals(1, drop.depth)
+	}
+
+	@Test
+	fun depthIsClampedToWhatTheSlotAllows() {
+		// One below the row above is the ceiling, however far the drag goes.
+		val deep = boardDropTarget("a", pointerY = 260, visible = visible, rows = rows, depthDelta = 9)!!
+		assertEquals(2, deep.depth)
+		assertEquals("b1", deep.parent)
+
+		// And top level is the floor.
+		val shallow = boardDropTarget("a", pointerY = 260, visible = visible, rows = rows, depthDelta = -9)!!
+		assertEquals(0, shallow.depth)
+		assertEquals(null, shallow.parent)
+	}
+
+	@Test
+	fun aRowCannotBeDroppedInsideItsOwnSubtree() {
+		// Dragging b onto its own child resolves to nothing rather than making b its own ancestor.
+		assertNull(boardDropTarget("b", pointerY = 260, visible = visible, rows = rows, depthDelta = 1))
 	}
 
 	@Test

@@ -121,6 +121,8 @@ fun App(
 	// effect in ThreadWebView so it re-snaps to the first unread row on each such open, even when
 	// `openTeam` itself is unchanged (re-tapping a notification for the thread already on screen).
 	var openNonce by remember { mutableStateOf(0) }
+	// Mirrored in composition so the drag is smooth; the store is the durable copy.
+	var boardStripHeight by remember { mutableStateOf(repo.store.boardStripHeight) }
 	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
 	// so re-opening the same thread later does not silently re-scroll to an old message.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
@@ -375,6 +377,13 @@ fun App(
 				openNonce = openNonce,
 				boardStrip = boardStripFor,
 				boardLiveLine = boardLiveLineFor,
+				boardStripHeight = boardStripHeight,
+				onBoardStripHeight = { boardStripHeight = it; repo.store.boardStripHeight = it },
+				onOpenBoardEntry = { openOverlay(Overlay.BoardEntryModal(it.gatewayId, it.entry.id)) },
+				onSetBoardState = { row, s -> repo.boardOps.boardSetState(row.gatewayId, row.entry.id, s) },
+				onMoveBoardEntry = { row, drop ->
+					repo.boardOps.boardSetParent(row.gatewayId, row.entry.id, drop.parent, drop.rank)
+				},
 				revealAt = revealAt,
 				onRevealed = { revealAt = null },
 				unreadBoundary = repo::unreadBoundary,

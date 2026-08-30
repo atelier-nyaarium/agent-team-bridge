@@ -59,8 +59,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import com.atelier_nyaarium.switchboard.board.BoardDrop
 import com.atelier_nyaarium.switchboard.board.BoardGroup
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
+import com.atelier_nyaarium.switchboard.board.BoardRow
 import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import kotlinx.coroutines.launch
@@ -104,6 +106,11 @@ fun ThreadScreen(
 	// Null hides the strip entirely (plugin off, or no board entries for this session).
 	boardStrip: BoardGroup? = null,
 	boardLiveLine: BoardLiveLine? = null,
+	boardStripHeight: Int = AppStateStore.BOARD_STRIP_DEFAULT_DP,
+	onBoardStripHeight: (Int) -> Unit = {},
+	onOpenBoardEntry: (BoardRow) -> Unit = {},
+	onSetBoardState: (BoardRow, String) -> Unit = { _, _ -> },
+	onMoveBoardEntry: (BoardRow, BoardDrop) -> Unit = { _, _ -> },
 	// (team, at) a queue tile asked to land on, or null. Passed straight through to ThreadWebView.
 	revealAt: Pair<String, Long>?,
 	// Cleared once the reveal has been handed to the renderer. Without it the request stays set and
@@ -386,7 +393,15 @@ fun ThreadScreen(
 			// Below the tab row, not above it. The strip is the open tab's own entries and its height
 			// changes as they do, which walked the tab row up and down the screen under it.
 			if (boardStrip != null && !terminalMode) {
-				com.atelier_nyaarium.switchboard.board.BoardStrip(group = boardStrip, liveLine = boardLiveLine)
+				com.atelier_nyaarium.switchboard.board.BoardStrip(
+					group = boardStrip,
+					liveLine = boardLiveLine,
+					heightDp = boardStripHeight,
+					onHeightDp = onBoardStripHeight,
+					onOpenEntry = onOpenBoardEntry,
+					onSetState = onSetBoardState,
+					onMove = onMoveBoardEntry,
+				)
 			}
 			if (terminalMode) {
 				TerminalView(

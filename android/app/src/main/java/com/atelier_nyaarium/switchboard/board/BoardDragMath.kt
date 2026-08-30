@@ -7,55 +7,73 @@ data class RowSpan(val id: String, val top: Int, val height: Int) {
 	val center: Int get() = top + height / 2
 }
 
-/** Where a drag would land: the new parent (null = top level) and the rank to mint between the
- * resolved siblings. Null when the drop is a no-op or the target cannot be resolved. */
-data class BoardDrop(val id: String, val parent: String?, val rank: String)
+/** Where a drag would land: the new parent (null = top level), the rank to mint between the resolved
+ * siblings, and the depth it lands at, which the caller draws its insertion line at. Null when the
+ * drop is a no-op or the target cannot be resolved. */
+data class BoardDrop(val id: String, val parent: String?, val rank: String, val depth: Int)
 
 /**
- * The drop target for a row dragged to `pointerY`, resolved against the FLATTENED rows (each of
- * which knows its parent and depth) rather than a flat index - a visible neighbour may sit at a
- * different depth, or be a folded branch hiding real siblings, so "between my two visible
- * neighbours" is not the same as "between two siblings".
+ * The drop target for a row dragged to `pointerY`, `depthDelta` levels sideways.
  *
- * The rule: find the row the pointer is over, take ITS parent as the destination, and mint between
- * that parent's actual children on either side of the drop.
+ * Resolved against the FLATTENED rows rather than a flat index: a visible neighbour may sit at a
+ * different depth, so "between my two visible neighbours" is not the same as "between two siblings".
+ *
+ * Depth is CHOSEN, not inherited from whatever row the pointer happens to be over. The caller turns
+ * horizontal drag into whole levels; this clamps them to what the slot allows and resolves the
+ * parent from the row above. Pixels stay a caller concern, tree legality stays here.
  */
 fun boardDropTarget(
 	draggedId: String,
 	pointerY: Int,
 	visible: List<RowSpan>,
 	rows: List<BoardRow>,
+	depthDelta: Int = 0,
 ): BoardDrop? {
 	if (visible.isEmpty()) return null
 	val byId = rows.associateBy { it.entry.id }
 	val dragged = byId[draggedId] ?: return null
 
+	// A row carries its subtree, so neither it nor a descendant is a legal neighbour. Landing inside
+	// itself would make it its own ancestor, which every later walk would have to survive.
+	val moving = rows.filter { isDescendantOf(it.entry.id, draggedId, byId) }.mapTo(mutableSetOf()) { it.entry.id }
+	val candidates = rows.filter { it.entry.id !in moving && it.entry.trashedAt == null }
+	if (candidates.isEmpty()) return null
+
 	// The row whose span contains the pointer, else the nearest edge row.
 	val over = visible.firstOrNull { pointerY >= it.top && pointerY < it.top + it.height }
 		?: if (pointerY < visible.first().top) visible.first() else visible.last()
-	if (over.id == draggedId) return null
-	val overRow = byId[over.id] ?: return null
-
-	val parent = overRow.entry.parent
-	// A row cannot land inside its own subtree: that makes it its own ancestor, which every walk
-	// over the tree then has to survive rather than prevent.
-	if (parent != null && isDescendantOf(parent, draggedId, byId)) return null
-	// Siblings in rank order, the dragged row excluded - it is being repositioned among them.
-	val siblings = rows
-		.filter { it.entry.parent == parent && it.entry.id != draggedId && it.entry.trashedAt == null }
-		.sortedBy { it.entry.rank }
-	val insertAbove = pointerY < over.center
-	val overIndex = siblings.indexOfFirst { it.entry.id == over.id }
+	if (over.id in moving) return null
+	val overIndex = candidates.indexOfFirst { it.entry.id == over.id }
 	if (overIndex < 0) return null
+	val insertAt = if (pointerY < over.center) overIndex else overIndex + 1
 
-	val (before, after) = if (insertAbove) {
-		siblings.getOrNull(overIndex - 1)?.entry?.rank to siblings[overIndex].entry.rank
-	} else {
-		siblings[overIndex].entry.rank to siblings.getOrNull(overIndex + 1)?.entry?.rank
+	val above = candidates.getOrNull(insertAt - 1)
+	val below = candidates.getOrNull(insertAt)
+	// No deeper than one below the row above, and no shallower than the row below, which would
+	// otherwise be left without its parent.
+	val maxDepth = (above?.depth ?: -1) + 1
+	val minDepth = (below?.depth ?: 0).coerceAtMost(maxDepth)
+	val depth = (dragged.depth + depthDelta).coerceIn(minDepth, maxDepth)
+
+	var ancestor = above
+	while (ancestor != null && ancestor.depth > depth - 1) ancestor = byId[ancestor.entry.parent]
+	val parent = if (depth == 0) null else ancestor?.entry?.id ?: return null
+
+	val position = candidates.withIndex().associate { (i, r) -> r.entry.id to i }
+	val siblings = candidates.filter { it.entry.parent == parent }
+	val prev = siblings.filter { (position[it.entry.id] ?: -1) < insertAt }.maxByOrNull { position[it.entry.id] ?: -1 }
+	val next = siblings
+		.filter { (position[it.entry.id] ?: Int.MAX_VALUE) >= insertAt }
+		.minByOrNull { position[it.entry.id] ?: Int.MAX_VALUE }
+
+	// Already sitting between these two, at this depth.
+	if (parent == dragged.entry.parent &&
+		(prev == null || dragged.entry.rank > prev.entry.rank) &&
+		(next == null || dragged.entry.rank < next.entry.rank)
+	) {
+		return null
 	}
-	// Dropping exactly where it already sits changes nothing.
-	if (dragged.entry.parent == parent && before == dragged.entry.rank) return null
-	return BoardDrop(draggedId, parent, BoardRank.between(before, after))
+	return BoardDrop(draggedId, parent, BoardRank.between(prev?.entry?.rank, next?.entry?.rank), depth)
 }
 
 /** Whether `candidate` sits at or below `ancestor` in the tree. Walks with a visited set so bad

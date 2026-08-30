@@ -172,6 +172,10 @@ internal class BoardOps(private val repo: ChatRepository) {
 	fun boardSetBody(gatewayId: String, id: String, body: String?) =
 		enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
 
+	/** Re-parent and re-rank in one op, which is what a drag resolves to. */
+	fun boardSetParent(gatewayId: String, id: String, parent: String?, rank: String) =
+		enqueue(ConsoleOp.BoardSetParent(id, parent, rank), gatewayId)
+
 	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
 		enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
 

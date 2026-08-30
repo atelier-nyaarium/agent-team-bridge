@@ -51,6 +51,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+
+/** Every dialog here holds a half-finished intent: a typed goal, a picked time, a draft edit. A tap
+ * beside the dialog is usually a mis-hit, so it must not discard one. Back still dismisses. */
+private val NO_TAP_AWAY = DialogProperties(dismissOnClickOutside = false)
 
 ////////////////////////////////
 //  Composables
@@ -104,6 +109,7 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 	if (!pickingTime) {
 		DatePickerDialog(
 			onDismissRequest = onDismiss,
+			properties = NO_TAP_AWAY,
 			confirmButton = {
 				TextButton(enabled = dateState.selectedDateMillis != null, onClick = hapticClick { pickingTime = true }) {
 					Text("Next")
@@ -114,7 +120,7 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 			DatePicker(state = dateState)
 		}
 	} else {
-		Dialog(onDismissRequest = onDismiss) {
+		Dialog(onDismissRequest = onDismiss, properties = NO_TAP_AWAY) {
 			Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
 				Column(
 					Modifier.padding(24.dp),
@@ -176,6 +182,7 @@ fun GoalDialog(submitting: Boolean, onConfirm: (String) -> Unit, onDismiss: () -
 	var goal by remember { mutableStateOf("") }
 	AlertDialog(
 		onDismissRequest = onDismiss,
+		properties = NO_TAP_AWAY,
 		title = { Text("Set a goal") },
 		text = {
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

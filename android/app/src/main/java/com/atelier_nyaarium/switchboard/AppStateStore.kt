@@ -146,6 +146,14 @@ class AppStateStore(context: Context) :
 			prefs.edit().putInt(KEY_STTS_VOLUME, value.coerceIn(0, 200)).apply()
 		}
 
+	/** Resting height of a thread's board strip, in dp. Coerced on READ as well as write, so a height
+	 * set on a larger screen shrinks to fit this one instead of burying the transcript. */
+	var boardStripHeight: Int
+		get() = prefs.getInt(KEY_BOARD_STRIP_HEIGHT, BOARD_STRIP_DEFAULT_DP).coerceIn(BOARD_STRIP_MIN_DP, BOARD_STRIP_MAX_DP)
+		set(value) {
+			prefs.edit().putInt(KEY_BOARD_STRIP_HEIGHT, value.coerceIn(BOARD_STRIP_MIN_DP, BOARD_STRIP_MAX_DP)).apply()
+		}
+
 	/** The run-start chime's own volume, same 0-200 scale. Separate from [sttsVolume] because the two
 	 * are balanced against different things: speech against whatever else is playing, and the chime
 	 * against the speech that follows it. A bundled tone at the level that suits a voice is usually
@@ -475,6 +483,12 @@ class AppStateStore(context: Context) :
 		const val KEY_SAVE_TREE_URI = "save_tree_uri"
 		const val KEY_STTS_VOLUME = "stts_volume"
 		const val KEY_STTS_CHIME_VOLUME = "stts_chime_volume"
+		const val KEY_BOARD_STRIP_HEIGHT = "board_strip_height"
+		// Floor is about two rows, so the header never sits alone. Ceiling keeps the transcript usable
+		// on a small screen; the strip scrolls rather than growing past it.
+		const val BOARD_STRIP_MIN_DP = 72
+		const val BOARD_STRIP_MAX_DP = 420
+		const val BOARD_STRIP_DEFAULT_DP = 260
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
 		const val KEY_IDLE_SILENCE_START = "idle_silence_start"

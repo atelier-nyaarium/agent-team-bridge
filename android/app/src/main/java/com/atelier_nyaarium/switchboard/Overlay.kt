@@ -23,6 +23,10 @@ sealed interface Overlay {
 
 	data class BoardEdit(val gatewayId: String, val entryId: String) : Overlay
 
+	/** The same entry as a modal rather than a route, for the thread's board strip: the conversation
+	 * stays behind it instead of being replaced to rename a task. */
+	data class BoardEntryModal(val gatewayId: String, val entryId: String) : Overlay
+
 	data object Users : Overlay
 
 	data object LinkWizard : Overlay

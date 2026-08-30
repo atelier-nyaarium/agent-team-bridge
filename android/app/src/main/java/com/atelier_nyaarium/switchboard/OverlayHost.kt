@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import androidx.compose.runtime.Composable
 import com.atelier_nyaarium.switchboard.board.BoardEditScreen
+import com.atelier_nyaarium.switchboard.board.BoardEntryDialog
 
 /** Paints the overlay on top of the stack. Every variant closes by popping and opens by pushing,
  * so a screen can only dismiss itself and always keeps the way back. */
@@ -88,7 +89,14 @@ fun OverlayHost(
 
 		is Overlay.BoardEdit ->
 			BoardEditScreen(
-				state = state,
+				repo = repo,
+				gatewayId = overlay.gatewayId,
+				entryId = overlay.entryId,
+				onClose = close,
+			)
+
+		is Overlay.BoardEntryModal ->
+			BoardEntryDialog(
 				repo = repo,
 				gatewayId = overlay.gatewayId,
 				entryId = overlay.entryId,
