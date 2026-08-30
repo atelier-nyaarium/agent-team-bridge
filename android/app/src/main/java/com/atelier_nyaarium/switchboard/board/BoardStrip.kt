@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,14 +40,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.oneLine
@@ -57,6 +54,15 @@ import kotlin.math.roundToInt
 /** One indent level, shared by the row padding and the drag's pixels-to-levels conversion so a row
  * lands where its indent says it will. */
 private val INDENT = 16.dp
+
+/**
+ * How far sideways one level costs. Deliberately NOT [INDENT].
+ *
+ * Tying the gesture to the visual indent meant half an indent, about 8dp, flipped a level, so an
+ * ordinary vertical drag re-parented on thumb drift alone. A level should take a movement the owner
+ * meant to make.
+ */
+private val DEPTH_STEP = 56.dp
 
 private val STATES = listOf("open", "in_progress", "paused", "done", "cancelled")
 
@@ -90,14 +96,15 @@ fun BoardStrip(
 	var resizeAcc by remember { mutableFloatStateOf(0f) }
 	val latestHeight by rememberUpdatedState(heightDp)
 
-	val indentPx = with(LocalDensity.current) { INDENT.toPx() }
+	val density = LocalDensity.current
+	val indentPx = with(density) { INDENT.toPx() }
+	val depthStepPx = with(density) { DEPTH_STEP.toPx() }
 	val ordered = remember(spans.size, spans.values.toList()) { spans.values.sortedBy { it.top } }
 	val drop = draggingId?.let {
-		boardDropTarget(it, dragY.roundToInt(), ordered, group.rows, (dragX / indentPx).roundToInt())
+		boardDropTarget(it, dragY.roundToInt(), ordered, group.rows, (dragX / depthStepPx).roundToInt())
 	}
 	// The dragged row and everything under it travel as one block.
 	val carried = draggingId?.let { boardSubtreeIds(it, group.rows) } ?: emptySet()
-	val shifts = draggingId?.let { boardRowShift(it, dragY.roundToInt(), ordered, carried) } ?: emptyMap()
 	// Only the grabber writes the stored height. A drag expands the strip so a row can reach the far
 	// end of a long board, and it settles back untouched.
 	val bodyHeight by animateDpAsState(
@@ -147,20 +154,17 @@ fun BoardStrip(
 						.verticalScroll(rememberScrollState(), enabled = draggingId == null)
 						.padding(bottom = 8.dp),
 				) {
-					// One offset for the whole carried block, measured from the row under the finger.
-					val blockOffset = draggingId?.let { dragY - (spans[it]?.center?.toFloat() ?: dragY) } ?: 0f
-					val draggedDepth = group.rows.firstOrNull { it.entry.id == draggingId }?.depth ?: 0
-					val depthShift = if (drop != null) drop.depth - draggedDepth else 0
+					// Nothing moves during a drag, neither the carried rows nor the ones it passes. Moving the
+					// row under the finger made it overlap its neighbours, since the list does not open a gap
+					// for it; the insertion line is the feedback instead, and it can show depth too.
 					for (row in group.rows) {
 						val inBlock = row.entry.id in carried
 						StripRow(
 							row = row,
 							dragging = inBlock,
 							anyDragging = draggingId != null,
-							// The whole block shows the indent it will land at, so a child keeps its own
-							// relative depth rather than collapsing onto its parent's.
-							depth = if (inBlock) (row.depth + depthShift).coerceAtLeast(0) else row.depth,
-							offsetY = if (inBlock) blockOffset else (shifts[row.entry.id] ?: 0).toFloat(),
+							depth = row.depth,
+							insertionDepth = if (drop != null && drop.afterId == row.entry.id) drop.depth else null,
 							menuOpen = menuFor == row.entry.id,
 							onSpan = { spans[row.entry.id] = it },
 							onMarkTap = { menuFor = row.entry.id },
@@ -216,7 +220,8 @@ private fun StripRow(
 	dragging: Boolean,
 	anyDragging: Boolean,
 	depth: Int,
-	offsetY: Float,
+	/** Draw the landing indicator under this row, indented to that depth. Null for no indicator. */
+	insertionDepth: Int?,
 	menuOpen: Boolean,
 	onSpan: (RowSpan) -> Unit,
 	onMarkTap: () -> Unit,
@@ -232,12 +237,12 @@ private fun StripRow(
 	// The drop is recomputed every frame, so the gesture must read the latest rather than the one
 	// captured when its pointerInput was installed.
 	val latestDrop by rememberUpdatedState(drop)
+	Column {
 	Row(
 		Modifier
 			.fillMaxWidth()
-			.offset { IntOffset(0, offsetY.roundToInt()) }
-			.then(if (dragging) Modifier.shadow(6.dp, RoundedCornerShape(9.dp)) else Modifier)
-			.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.surfaceVariant) else Modifier)
+			// Marks what is being carried. No elevation: it has not left the list.
+			.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
 			// Only while nothing is in flight. Every row carries a drag offset once one starts, so
 			// recording then would feed each row's own displacement back in as its resting position.
 			.onGloballyPositioned {
@@ -277,6 +282,19 @@ private fun StripRow(
 			overflow = TextOverflow.Ellipsis,
 			modifier = Modifier.weight(1f).clickable(onClick = onLabelTap),
 		)
+	}
+	// Where it lands, drawn at the target depth. This is the only feedback for the sideways axis, so
+	// it is indented rather than a plain full-width rule.
+	insertionDepth?.let { d ->
+		Box(
+			Modifier
+				.padding(start = (14 + d * 16).dp, end = 14.dp)
+				.fillMaxWidth()
+				.height(2.dp)
+				.clip(RoundedCornerShape(1.dp))
+				.background(MaterialTheme.colorScheme.primary),
+		)
+	}
 	}
 }
 

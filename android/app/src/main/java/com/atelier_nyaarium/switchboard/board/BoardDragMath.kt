@@ -10,7 +10,15 @@ data class RowSpan(val id: String, val top: Int, val height: Int) {
 /** Where a drag would land: the new parent (null = top level), the rank to mint between the resolved
  * siblings, and the depth it lands at, which the caller draws its insertion line at. Null when the
  * drop is a no-op or the target cannot be resolved. */
-data class BoardDrop(val id: String, val parent: String?, val rank: String, val depth: Int)
+data class BoardDrop(
+	val id: String,
+	val parent: String?,
+	val rank: String,
+	val depth: Int,
+	/** The visible row the insertion sits directly below, or null for the very top. The caller draws
+	 * its indicator from this rather than re-deriving the slot from pointer coordinates. */
+	val afterId: String?,
+)
 
 /**
  * The drop target for a row dragged to `pointerY`, `depthDelta` levels sideways.
@@ -73,7 +81,13 @@ fun boardDropTarget(
 	) {
 		return null
 	}
-	return BoardDrop(draggedId, parent, BoardRank.between(prev?.entry?.rank, next?.entry?.rank), depth)
+	return BoardDrop(
+		draggedId,
+		parent,
+		BoardRank.between(prev?.entry?.rank, next?.entry?.rank),
+		depth,
+		above?.entry?.id,
+	)
 }
 
 /** Whether `candidate` sits at or below `ancestor` in the tree. Walks with a visited set so bad
