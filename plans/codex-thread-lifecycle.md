@@ -475,6 +475,25 @@ evict while active, first-turn, parking and unknown threads stay visible.
   A whole audit angle went on cataloguing where the copy diverges, and the answer each time was that
   the lifecycle's own tests cover the rule against the real client. The doubles are honest today
   because someone read both; there is no mechanism keeping them that way.
+- An ordering guarantee argued in prose is not one. Three architecture angles converged on queueing
+  the drain behind `startTurn` so a caller registers first, and every word of the reasoning is right
+  except the conclusion: a caller resumes an unknowable number of microtasks later, and the client's
+  own `async` wrapper adds two. It took a test, not a reader, to see that. Anything phrased as "then
+  the caller gets there first" is a claim about a scheduler and has to be run.
+- `CodexLocalSession` shipped with no tests of its own. Every local test drove `FakeBackendSession`,
+  which stands in for the whole class, so the adapter between the runtime and the App Server client
+  was exercised by nothing. A double placed at the top of a layer leaves everything under it dark,
+  and the gap is invisible from a green suite: the tests that exist all pass, and they are testing
+  the double.
+- An optional parameter is not a contract. `onStarted` began optional, which reads as courteous and
+  means a consumer that omits it silently gets the losing race the callback exists to remove.
+  TypeScript does not close it either, since a double with fewer parameters still satisfies the port.
+  It took a required signature AND a residue test holding every double to calling it.
+- A cited finding deserves reading the line it cites. An auditor reported a test asserting
+  `not.toContain("startTurn2")`, a call the double never records, so the assertion could not fail. It
+  was rejected here on the grounds that it was invented, after checking a DIFFERENT test that happens
+  to assert something similar and does bite. The finding was correct and the pre-existing test was
+  dead. Rejecting an audit finding is a claim, and it needs the same evidence as accepting one.
 - An audit round costs roughly half a million tokens and some of it is spent rebutting findings that
   quote code accurately and describe it wrongly. Five sources of that were found and fixed as
   misalignments this lap: a comment claiming retirement stops replay, one claiming a shape is unified
