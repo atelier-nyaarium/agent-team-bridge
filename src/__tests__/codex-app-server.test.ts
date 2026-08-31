@@ -569,7 +569,6 @@ describe("the client's own guarantees", () => {
 		await client.startThread({ cwd: "/tmp" });
 		await client.resumeThread("t");
 		await client.readThread("t");
-		await client.unsubscribeThread("t");
 		await client.startTurn("t", "hi");
 		await client.steerTurn("t", "u", "more");
 		await client.interruptTurn("t", "u");
@@ -581,7 +580,6 @@ describe("the client's own guarantees", () => {
 			"thread/start",
 			"thread/resume",
 			"thread/read",
-			"thread/unsubscribe",
 			"turn/start",
 			"turn/steer",
 			"turn/interrupt",

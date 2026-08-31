@@ -12,6 +12,7 @@ import type { CodexChild } from "./codexTargets.js";
 type OfferedModels = Map<string, string | undefined>;
 
 export interface AppServerTransport {
+	/** Rejects only with an `AppServerFailure`; a double rejecting with anything else is not a transport. */
 	request(method: string, params: unknown): Promise<unknown>;
 	notify(method: string, params: unknown): void;
 	onEvent(listener: (message: { method: string; params?: unknown }) => void): void;
@@ -89,7 +90,8 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 	let nextId = 1;
 	let buffered = "";
 	let closed = false;
-	const pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
+	// Typed to the minted failure, so an ending that rejects with a bare Error does not compile.
+	const pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: AppServerFailure) => void }>();
 	const eventListeners: Array<(message: { method: string; params?: unknown }) => void> = [];
 
 	function fail(kind: AppServerFailureKind, message: string): void {
@@ -304,11 +306,6 @@ export class CodexAppServerClient {
 	 * empty `turns` array, and reconciliation reports a completed turn as unrecoverable. */
 	async readThread(threadId: string): Promise<unknown> {
 		return this.transport.request("thread/read", { threadId, includeTurns: true });
-	}
-
-	/** Only once the terminal is durably acknowledged, or a later follow-up has nothing to resume. */
-	async unsubscribeThread(threadId: string): Promise<void> {
-		await this.transport.request("thread/unsubscribe", { threadId });
 	}
 
 	async startTurn(threadId: string, text: string): Promise<string> {

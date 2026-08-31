@@ -29,39 +29,43 @@ What the app server does, measured:
 
 ## Step 1 - Structured transport failures
 
-`createJsonlTransport` in `src/mcp/devcontainer/codexAppServer.ts` turns every JSON-RPC error into
-`new Error(error.message)`, a timeout into `timed out: <method>`, a malformed reply into
-`unreadable response`, and a dead child into `app server exited`. The numeric code and any `data` are
-discarded, so a caller can tell a refusal from a timeout from a closed transport only by reading
-prose, and the lifecycle in Step 2 branches on exactly that distinction.
+Shipped. `createJsonlTransport` in `src/mcp/devcontainer/codexAppServer.ts` rejects every failed
+request with an `AppServerFailure`: an `Error` carrying `kind: "refused" | "timeout" | "unreadable" |
+"closed"`, and for `refused` the JSON-RPC `code` and `data`. The messages are the ones the transport
+always sent, so `describe`, `errorText` and every existing catch keep their words. A reply arriving
+after its timeout is dropped by id. The lifecycle in Step 2 branches on `kind` and on nothing else:
+every lifecycle refusal the App Server sends carries code -32600, so the code discriminates nothing.
 
-The transport becomes the one minter of `AppServerFailure`, an `Error` subclass carrying
-`kind: "refused" | "timeout" | "unreadable" | "closed"`, and for `refused` the JSON-RPC `code` and
-`data`. The message stays what it was, so `describe`, `errorText` and every existing catch keep
-their words. A reply arriving after its timeout is dropped by id rather than settling a later
-request. Nothing outside the transport constructs one, and nothing anywhere matches on the sentence.
+The class is module-private, exported as a type only, minted with a symbol the constructor requires,
+and recognised by `isAppServerFailure` over a `WeakSet` of minted instances, so constructing one
+elsewhere is a compile error, a constructor reached through an instance throws, and a borrowed
+prototype does not pass. The pending waiter's `reject` is typed to the minted failure, so an ending
+that rejects with a bare `Error` does not compile. `AppServerTransport.request` states the contract
+for every double. `codex-failure-residue.test.ts` forbids the transport's three sentences and the two
+fragments only the App Server's lifecycle refusals carry, held to refusals recorded from
+codex-cli 0.147.0, across production source outside the two transports.
 
-Tests: `src/__tests__/codex-app-server.test.ts` through `fakeChild()`, fed a coded error with data,
-a malformed reply, a reply that lands after the timeout, and a close with requests outstanding;
-each asserts the kind and, for a refusal, the code.
+The transport ends three ways, child exit, a write the pipe refuses, and `close()`, and every ending
+runs one `fail()` that settles every waiter as `closed` and clears its timer; a refused write also
+kills the child so the supervisor's exit path drops the lease, and `close()` is idempotent.
+`unsubscribeThread` is gone: nothing called it, and `thread/unsubscribe` unloads nothing.
 
-The class is module-private with a type export and an `isAppServerFailure` guard over a `WeakSet` of
-minted instances, so construction elsewhere is a compile error and a borrowed prototype does not
-pass; the residue test therefore sweeps only for the sentences. Every lifecycle refusal the App
-Server sends carries code -32600, so the code discriminates nothing and Step 2 never branches on it.
+Tests: `src/__tests__/codex-app-server.test.ts` through `fakeChild()`, which can refuse writes and
+counts kills: a refusal with code and data, a malformed reply, a reply landing after its timeout,
+the child dying, a refused write, and `close()` twice and after an exit, each asserting the kind,
+and the three endings asserting that no timer remains; the guard refusing an ordinary error, a
+borrowed prototype and a reached constructor.
 
 ### Bug Classes
 
-- Three ways for the transport to end (child exit, a write the pipe refuses, `close()`), each
-  responsible for failing its waiters, and two forgot: the write throw rejected with a bare error and
-  `close()` left them to the timeout. One `fail()` every ending calls, and a test per ending asserting
-  the kind and that no timer remains.
+- Three endings of the transport each responsible for failing their waiters, and two forgot, one
+  rejecting with a bare error and one leaving them to the timeout. Closed by one `fail()` every
+  ending calls and a reject type that admits only the minted failure.
 
 ## Step 2 - The thread lifecycle owner in the Codex client
 
-`CodexAppServerClient` speaks `thread/start`, `thread/resume`, `thread/read`, `thread/unsubscribe`
-(which nothing calls), `turn/start`, `turn/steer` and `turn/interrupt`. It holds no state per
-thread. Both drivers resume a thread they did not just create before starting a turn, which is the
+`CodexAppServerClient` speaks `thread/start`, `thread/resume`, `thread/read`, `turn/start`,
+`turn/steer` and `turn/interrupt`. It holds no state per thread. Both drivers resume a thread they did not just create before starting a turn, which is the
 half of the lifecycle that exists; nothing ever unloads one.
 
 The client gains a per-thread lifecycle record and becomes its only owner. States: `starting`,
