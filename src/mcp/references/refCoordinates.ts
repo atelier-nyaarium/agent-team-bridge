@@ -78,6 +78,9 @@ export function lineOf(text: string, index: number): number {
 
 /** 0-based. */
 export function columnOf(text: string, index: number): number {
+	// lastIndexOf clamps a negative fromIndex to 0, so at index 0 it would find a leading newline
+	// and report column -1. Nothing precedes index 0.
+	if (index <= 0) return 0;
 	const start = text.lastIndexOf("\n", index - 1);
 	return index - start - 1;
 }

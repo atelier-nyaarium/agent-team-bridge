@@ -357,7 +357,9 @@ deferred follow-ups its audits surfaced, verbatim at migration time.
   and trusts the caller validated `project` (documented via JSDoc, gated in index.ts). There is no
   systematic outbound-target validator (contrast the sealed-frame pumps' schema-then-semantic
   validation). An `outbound-validators` module with a guard per outbound class would make SSRF
-  prevention systematic rather than per-call.
+  prevention systematic rather than per-call. WILL NOT DO: this call site IS gated, the project is
+  checked against `offlineCatalog` before it is dialled. What remains is a framework for guards that
+  today have no second instance.
 
 ### Graceful-shutdown reconnector cleanup
 
@@ -388,7 +390,8 @@ paths still leak a pending reconnect timer. Cosmetic on a process that is exitin
   `set_effort_level` / `compact_session` route through `tmuxCore.sendText` + the shared
   `selfSessionTarget()`. Migrating reloadPlugins to a structured op through tmuxCore would unify all
   three in-process drivers and drop the shell-script generation. Intertwined with the Phase 5 TUI
-  fragility (features-and-fixes.md Item 16).
+  fragility (features-and-fixes.md Item 16). WILL NOT DO: a consistency refactor of a working
+  driver, not a defect.
 - [low] `src/shared/host-op.ts : classifyPeekError : PEEK_ABSENT_PATTERNS` - inherent to classifying
   tmux/docker stderr: a future tmux/docker that renames a "session absent" message would fall
   through to `failure`. Acceptable (the list is in ONE place); validate the patterns on a major
@@ -819,12 +822,14 @@ lines. The plan is deleted; what follows is what it left behind.
 - **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
   segment. `searchAreas` supplies the sibling run for navigation, but the RANGE is still the node's
   own extent.
-- **Aliased spellings of one file ship duplicate snapshots** (`src/x.ts`, `./src/x.ts`, and a
-  symlinked `lib/x.ts` produced three), because the builder keys on the written path rather than the
-  resolved absolute one, so a large file double-counts against the aggregate budget.
-- **`coversWholeFile` disagrees with `wholeFile()` by one line** on any file ending in a newline, so a
-  matcher-miss on an oversized file gets the wrong error message. Nothing is smuggled past the cap.
-- **`columnOf` returns -1** for a match at index 0 when the file begins with a newline.
+- ~~**Aliased spellings of one file ship duplicate snapshots.**~~ RESOLVED: `resolveRefs` canonicalizes
+  through `identityOf` (`fs.realpathSync.native`), so every spelling of one file, symlinks included,
+  collapses onto the first written one before the builder groups.
+- ~~**`coversWholeFile` disagrees with `wholeFile()` by one line.**~~ STALE: `wholeFile()` no longer
+  exists, and the surviving pair agrees. A whole-file span covers `lineCount` for text with and
+  without a trailing newline.
+- ~~**`columnOf` returns -1** for a match at index 0 when the file begins with a newline.~~ FIXED:
+  `lastIndexOf` clamps a negative `fromIndex` to 0, so index 0 now short-circuits.
 - **`AttachmentChipDecorator` has no message coordinate,** so the References hide verdict scans every
   summary the team ever recorded rather than the one row's. See the seam lesson below.
 

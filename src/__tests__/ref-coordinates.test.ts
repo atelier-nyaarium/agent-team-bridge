@@ -46,4 +46,10 @@ describe("positions to offsets in the decoded text", () => {
 		expect(spanAt("ab\ncd", 0, 2)).toEqual({ startLine: 1, startColumn: 0, endLine: 1, endColumn: 2 });
 		expect(spanAt("ab\ncd", 3, 2)).toEqual({ startLine: 2, startColumn: 0, endLine: 2, endColumn: 2 });
 	});
+
+	it("reports column 0 at index 0 even when the file opens with a newline", () => {
+		// lastIndexOf clamps a negative fromIndex to 0, so the leading newline used to be found as
+		// though it preceded index 0, reporting column -1.
+		expect(spanAt("\nab", 0, 1)).toEqual({ startLine: 1, startColumn: 0, endLine: 2, endColumn: 0 });
+	});
 });
