@@ -138,7 +138,8 @@ code does not belong here; rationale lives in `git log`.
       a failed request rejects with the `AppServerFailure` only this module mints, classified by
       `kind` (see Codex delegation below)
     - `codexThreadLifecycle.ts` - a thread's life after the App Server loads it: a queue per thread,
-      and a settled turn published then archived so its MCP servers die (see Codex delegation below)
+      a settled turn published then archived so its MCP servers die, and a bounded retirement map that
+      forgets settled records oldest first (see Codex delegation below)
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
     - `codexLiveTurns.ts` - which turns a generation holds and whether each is moving: one record per
@@ -946,6 +947,22 @@ once, then its generation is retired. The reaper refuses on any lease, any turn 
 terminal on its deadline, or any thread the owner calls `active` or `parking`; waiting for `parked`
 alone never fires, because nothing parks a thread that never ran a turn. Its quiet period is stamped
 by commands ending, never by the sweep, which would reset the clock it is about to read.
+
+**Bookkeeping that outlives its subject is bounded, and every write to it is keyed by the RECORD.**
+`ThreadLifecycle` holds one record per thread reached and the daemon one binding per thread named,
+and both grew for a generation's whole life. Retirements now live in an ordered map, one entry per
+thread, where retiring MOVES the thread to the back, so a record cannot hold two entries and be
+forgotten on an older park's clock. Keying any of it by thread id instead shipped the same defect
+twice, because `mutate` tests identity only BEFORE its request: an operation awaiting a reply resumes
+holding a record `started` has replaced, so `retire` refuses to write for a record the map no longer
+holds, and `load` and `poison` drop only their own entry. Eviction passes over a record with an
+operation queued or a phase other than `parked`/`disposed`, and LEAVES the entry, since consuming one
+that declined to evict keeps that record for the lifecycle's life. `bindThread` bounds the daemon's
+bindings the same way, draining to the bound rather than one per bind, and never evicting the binding
+it was called to install: a bind moves its thread to the end, so the newest entry is the last one an
+oldest-first scan reaches. Both bounds are exceeded on purpose when everything in them is live work.
+The cost, which stays: a terminal redelivered after its record ages out publishes again, so the wire
+promise is once per turn WITHIN the window, and the gateway drops the duplicate at persistence.
 
 **A turn's clock and warning live in the same record as its binding** (`CodexLiveTurns`). Keeping
 identity in one map and liveness in another, both keyed by turn id, is half an identity and shipped
