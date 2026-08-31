@@ -107,6 +107,10 @@ export class CapabilityStore {
 		if (record) this.markSeen(record, this.now());
 	}
 
+	forget(conversationId: string): void {
+		if (this.devices.delete(conversationId)) this.persist();
+	}
+
 	/**
 	 * The union across every device still within its TTL. On conflicting instruction text for one
 	 * capability id, the most recently REPORTED wins - `lastSeen` deliberately does not count, or a

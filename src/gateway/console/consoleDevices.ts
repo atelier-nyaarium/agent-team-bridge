@@ -5,6 +5,7 @@ import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
+import type { CapabilityStore } from "./capabilityStore.js";
 import { ConsolePeer } from "./consolePeer.js";
 import type { TrustedCatalogProject } from "./consoleTypes.js";
 
@@ -21,6 +22,7 @@ export interface ConsoleDevicesDeps {
 	isTrustedCatalogProject?: TrustedCatalogProject;
 	// See ConsolePeer's own param doc; identity when absent (tests).
 	qualifyFrom?: (from: string) => string;
+	capabilityStore?: Pick<CapabilityStore, "forget">;
 }
 
 export type ConsoleDevices = ReturnType<typeof createConsoleDevices>;
@@ -37,6 +39,7 @@ export function createConsoleDevices({
 	deliver,
 	isTrustedCatalogProject,
 	qualifyFrom,
+	capabilityStore,
 }: ConsoleDevicesDeps) {
 	// The per-install conversationId is the device identity: it keys the registry sub, the
 	// signing-key binding, the idempotency cache, and the device-name binding. The mailbox is
@@ -230,6 +233,7 @@ export function createConsoleDevices({
 
 	function removePeer(conversationId: string): void {
 		const ownerId = deviceOwner.get(conversationId);
+		capabilityStore?.forget(conversationId);
 		teardownDevice(conversationId);
 		if (ownerId) {
 			// Release this device's watermark from the shared inbox, and delete the inbox only

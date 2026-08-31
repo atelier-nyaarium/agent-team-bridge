@@ -313,7 +313,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		console.error(`[host-wake] starting host session ${msg.team}`);
 		try {
 			const { created } = await ensureSession(target, launch);
-			let res = await awaitReady(target);
+			let res = created ? await awaitReady(target) : undefined;
 			// `exec bash` outlives claude, so a reattach can land on a dead shell. The SCREEN cannot
 			// see that: the frame the agent painted before it died still carries its own composer at
 			// column 0, so isAgentReady answers yes for a pane holding nothing but a prompt, and this
@@ -321,14 +321,16 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			// answer alone is enough to relaunch. A limit dialog is alive, not dead: relaunching would
 			// discard it and hit the same limit again.
 			const processGone = !created && (await paneAgentState(target)) === "gone";
-			const screenDead = !created && !res.ready && !isAgentWorking(res.screen);
+			if (!created && !processGone) res = await awaitReady(target);
+			if (!res) throw new Error("session readiness unavailable");
+			const screenDead = !created && !res?.ready && !isAgentWorking(res?.screen ?? "");
 			if (!created && !res.limit && (processGone || screenDead)) {
 				// A proven-gone process needs no second look - the recheck reads the same lying frame.
 				const recheck = processGone
 					? ""
 					: await peekPane(target)
 							.then((p) => p.ansi)
-							.catch(() => res.screen);
+							.catch(() => res?.screen ?? "");
 				const ready = isAgentReady(recheck);
 				if (!processGone && (ready || isAgentWorking(recheck))) {
 					// The frame was a sub-second transition after all.
@@ -391,6 +393,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			lastScreen = res.screen;
 			launchAlive = res.alive;
 			limit = res.limit;
+			if (res.ready) spawnReloadPlugins(target);
 			greetFreshLaunch(target, { created, resumeSessionId: msg.resumeSessionId, ready: res.ready });
 			if (limit)
 				console.error(
@@ -442,17 +445,18 @@ const hostOpRunner = createHostOpRunner({
 			target,
 			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
 		);
-		// Backgrounded: the op must beat the gateway's 20s timeout.
 		if (created) {
-			void awaitReady(target)
-				.then((res) => greetFreshLaunch(target, { created, resumeSessionId, ready: res.ready }))
-				.catch(() => {
-					// Self-heals on the next launch.
-				});
+			const ready = await awaitReady(target);
+			greetFreshLaunch(target, { created, resumeSessionId, ready: ready.ready });
+			return { created, ready: ready.ready, alive: ready.alive };
 		}
+		return { created };
 	},
 	reloadPlugins: async (target) => {
+		const pane = await peekPane(target);
+		if (!isAgentReady(pane.ansi) || isAgentWorking(pane.ansi)) throw new Error("session is busy");
 		spawnReloadPlugins(target);
+		return { initiated: true };
 	},
 	killSession,
 	// A windows session browses WINDOWS, through PowerShell. Browsing /mnt from this side would offer

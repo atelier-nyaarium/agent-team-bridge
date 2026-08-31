@@ -267,18 +267,6 @@ html, body {
 .body a.link-handled .ref-sep { opacity: 0.42; }
 .body a.link-handled .ref-sym { font-weight: 600; }
 
-/* A ref whose target moved still opens, so it is flagged rather than disabled. Same geometry, so a
-   drifted chip never reflows the sentence it sits in. */
-.body a.link-handled.link-fuzzy {
-	color: var(--running);
-	border-color: var(--running);
-}
-
-.body a.link-handled.link-fuzzy .ref-sym {
-	text-decoration: underline dotted;
-	text-underline-offset: 2px;
-}
-
 .body blockquote {
 	border-left: 3px solid var(--border);
 	padding: 0 10px;

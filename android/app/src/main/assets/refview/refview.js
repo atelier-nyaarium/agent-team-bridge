@@ -12,6 +12,21 @@
 	const bannerText = document.getElementById("banner-text");
 	const codeEl = document.getElementById("code");
 
+	if (window.hljs && !window.hljs.getLanguage("gdscript") && window.hljs.registerLanguage) {
+		window.hljs.registerLanguage("gdscript", function (hljs) {
+			return {
+				name: "GDScript",
+				aliases: ["gd"],
+				keywords: {
+					keyword: "and as assert await break class_name const continue elif else extends for func if in is match namespace not or pass preload return self signal static var while yield",
+					literal: "false null true",
+					type: "bool float int String Vector2 Vector3",
+				},
+				contains: [hljs.HASH_COMMENT_MODE, hljs.QUOTE_STRING_MODE, hljs.C_NUMBER_MODE],
+			};
+		});
+	}
+
 	document.getElementById("banner-dismiss").addEventListener("click", () => {
 		banner.hidden = true;
 	});

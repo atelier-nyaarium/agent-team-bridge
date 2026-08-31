@@ -154,6 +154,15 @@ describe("going quiet", () => {
 		expect(store.sweep()).toBe(true);
 		expect(store.sweep()).toBe(false);
 	});
+
+	it("forgets a revoked device immediately", () => {
+		const store = new CapabilityStore(fakeDurable());
+		store.report("revoked", [{ id: "designer" }]);
+
+		store.forget("revoked");
+
+		expect(store.snapshot()).toEqual({ known: false, capabilities: [], clientVersions: [] });
+	});
 });
 
 describe("surviving a restart", () => {

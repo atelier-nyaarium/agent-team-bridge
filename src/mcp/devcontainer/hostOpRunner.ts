@@ -13,8 +13,8 @@ export interface TmuxOps {
 		workdirHint?: string,
 		resumeSessionId?: string,
 		sessionToken?: string,
-	) => Promise<void>;
-	reloadPlugins: (target: TmuxTarget) => Promise<void>;
+	) => Promise<unknown>;
+	reloadPlugins: (target: TmuxTarget) => Promise<unknown>;
 	killSession: (target: TmuxTarget) => Promise<void>;
 	// A local readdir, so it needs none of the peek machinery.
 	listDirs: (path: string, spawn?: string) => Promise<HostListDirsResult>;
@@ -93,22 +93,22 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	// Without a dedupKey the op runs every time.
 	async function runDeduped(
 		dedupKey: string | undefined,
-		exec: () => Promise<void>,
+		exec: () => Promise<unknown>,
 		result: unknown,
 	): Promise<unknown> {
 		if (!dedupKey) {
-			await exec();
-			return result;
+			return (await exec()) ?? result;
 		}
 		const at = now();
 		const prior = sentCache.get(dedupKey);
 		if (prior && at - prior.at < SEND_DEDUP_TTL_MS) return prior.result;
 		let inflight = inflightSends.get(dedupKey);
 		if (!inflight) {
-			inflight = exec().then(() => {
-				sentCache.set(dedupKey, { at: now(), result });
+			inflight = exec().then((value) => {
+				const settled = value ?? result;
+				sentCache.set(dedupKey, { at: now(), result: settled });
 				for (const [k, v] of sentCache) if (now() - v.at >= SEND_DEDUP_TTL_MS) sentCache.delete(k);
-				return result;
+				return settled;
 			});
 			inflightSends.set(dedupKey, inflight);
 			void inflight.catch(() => {}).finally(() => inflightSends.delete(dedupKey));

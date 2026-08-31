@@ -108,6 +108,18 @@ export function createGatewayRelayHandler({
 		return teams.find((t) => t.team === bareName)?.kind;
 	}
 
+	function verifiedSender(from: string, srcDomainId: string, srcGateway: string): string {
+		const parts = from.split(".");
+		if (parts.length === 4) {
+			try {
+				return Address.remote(srcDomainId, srcGateway, parts[2], parts[3]).canonical;
+			} catch {
+				// Invalid sender falls back.
+			}
+		}
+		return `${srcDomainId}.${srcGateway}`;
+	}
+
 	/** The destination-side scope gate, enforced INSIDE the relay handler (never in
 	 * discovery, since a trusted friend can craft op.to). A cross-Domain op may only reach a
 	 * session that is of kind devcontainer or loose (gateway/host/console kinds are agents-only)
@@ -151,6 +163,7 @@ export function createGatewayRelayHandler({
 	async function handleOp(op: FederatedOp, srcGateway: string, srcDomainId: string | null): Promise<unknown> {
 		switch (op.kind) {
 			case "send": {
+				const sender = srcDomainId !== null ? verifiedSender(op.from, srcDomainId, srcGateway) : op.from;
 				// A cross-Domain send must pass the destination scope gate before it can land.
 				if (srcDomainId !== null) {
 					await gateCrossDomainTarget(op.to, srcDomainId);
@@ -163,7 +176,7 @@ export function createGatewayRelayHandler({
 				const res = await routes.send(
 					FAKE_REQ,
 					{
-						from: op.from,
+						from: sender,
 						to: op.to,
 						body: op.body,
 						files: op.files,

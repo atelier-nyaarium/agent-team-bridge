@@ -114,16 +114,14 @@ export const PollRequestSchema = z.object({
 // is deliberately OPTIONAL here despite being required on the tool schema - the
 // strict gateway would otherwise 400 every notice from a not-yet-reloaded plugin
 // during a deploy window, where the lenient RespondBodySchema degrades gracefully.
-export const HumanNotifySchema = z
-	.object({
-		from: z.string().min(1).max(128),
-		title: NoticeTitle,
-		summary: NoticeSummary,
-		full: NoticeFull,
-		fullSpoken: NoticeFullSpoken.optional(),
-		files: ChannelFilesSchema.optional(),
-	})
-	.strict();
+export const HumanNotifySchema = z.object({
+	from: z.string().min(1).max(128),
+	title: NoticeTitle,
+	summary: NoticeSummary,
+	full: NoticeFull,
+	fullSpoken: NoticeFullSpoken.optional(),
+	files: ChannelFilesSchema.optional(),
+});
 
 // The one board route's request: `action` dispatches, `from` is the caller's own session (hardcoded
 // MCP-side, same trust story as PluginActionRequestSchema below) and is the ONLY scoping key -

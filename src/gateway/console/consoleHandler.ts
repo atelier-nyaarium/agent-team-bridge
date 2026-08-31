@@ -113,6 +113,7 @@ export function createConsoleDispatcher({
 				return from;
 			}
 		},
+		capabilityStore,
 	});
 
 	function requireBoard(): BoardStore {

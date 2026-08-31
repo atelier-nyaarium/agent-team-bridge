@@ -89,7 +89,7 @@ export interface ConsoleHandlerDeps {
 	 * an available asleep session. */
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
 	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
-	capabilityStore?: Pick<CapabilityStore, "report" | "touch">;
+	capabilityStore?: Pick<CapabilityStore, "report" | "touch" | "forget">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
 	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
 	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
