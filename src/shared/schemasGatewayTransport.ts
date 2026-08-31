@@ -18,7 +18,6 @@ export const GatewayTransportSchema = z
 		routerUrl: z.string().min(1).optional(),
 		routerCertFp: z.string().min(1).optional(),
 		bearer: z.string().min(1).optional(),
-		appToken: z.string().min(1).optional(),
 	})
 	// `.meta()` goes LAST: refine returns a new instance, and the codegen looks the id up by it.
 	.refine(
@@ -29,5 +28,3 @@ export const GatewayTransportSchema = z
 		{ message: "gateway transport is missing the fields its transport requires" },
 	)
 	.meta({ id: "GatewayTransport" });
-
-export type GatewayTransport = z.infer<typeof GatewayTransportSchema>;

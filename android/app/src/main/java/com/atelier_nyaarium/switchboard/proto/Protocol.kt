@@ -750,7 +750,6 @@ data class GatewayTransport(
 	val routerUrl: String? = null,
 	val routerCertFp: String? = null,
 	val bearer: String? = null,
-	val appToken: String? = null,
 )
 
 @Serializable
