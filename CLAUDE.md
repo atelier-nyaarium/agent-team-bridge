@@ -705,7 +705,7 @@ no TTL. A starting MCP reads both before the McpServer exists.
 
 The owner's task list, homed on the Gateway (`gateway/boardStore.ts`), edited by console ops and the
 `/task-board` route, shipped to the phone on the `task-board:${ownerId}` plane. Entries are FLAT
-(parent pointer + fractional `rank`); receivers rebuild the tree. Design record: `plans/task-board.md`.
+(parent pointer + fractional `rank`); receivers rebuild the tree.
 
 - **The store is the sole validator.** Every write path resolves to one of the enumerated refusals
   (`BoardRefusal`, declared in `boardAuthority.ts`), and a refusal is an ok=false INSIDE the sealed
@@ -910,7 +910,7 @@ runs a read and either adopts the running turn it names or, after two quiet read
 empty, deletes it; anything else is budgeted and retried, and exhausting the budget poisons the
 generation. So does a request whose fate is unknown, a timeout or an unreadable reply, since it may
 still land after a later activation and no local epoch can recall it: the consumer retires that
-generation rather than reusing it. Design record: `plans/codex-thread-lifecycle.md`.
+generation rather than reusing it.
 
 **A retired generation publishes nothing new, and `AgentDaemonCore` owns that answer.** `live` is
 registry membership and `retire` drops the session, so giving a generation up and being replaced are
@@ -948,24 +948,20 @@ terminal on its deadline, or any thread the owner calls `active` or `parking`; w
 alone never fires, because nothing parks a thread that never ran a turn. Its quiet period is stamped
 by commands ending, never by the sweep, which would reset the clock it is about to read.
 
-**Bookkeeping that outlives its subject is bounded, and every write to it is keyed by the RECORD.**
-`ThreadLifecycle` holds one record per thread reached and the daemon one binding per thread named,
-and both grew for a generation's whole life. Retirements now live in an ordered map, one entry per
-thread, where retiring MOVES the thread to the back, so a record cannot hold two entries and be
-forgotten on an older park's clock. Keying any of it by thread id instead shipped the same defect
-twice, because `mutate` tests identity only BEFORE its request: an operation awaiting a reply resumes
-holding a record `started` has replaced, so `retire` refuses to write for a record the map no longer
-holds, and `load` and `poison` drop only their own entry. Eviction passes over a record with an
-operation queued or a phase other than `parked`/`disposed`, and LEAVES the entry there for the next
-pass to reconsider. Removing it instead would strand that record: parking is what enqueues an entry,
-and an already-parked thread never parks again, so a record that declined one eviction would never be
-offered another. `bindThread` bounds the daemon's bindings the same way, draining to the bound rather
-than one per bind, and never evicting the binding it was called to install: a bind moves its thread
-to the end, so the newest entry is the last one an oldest-first scan reaches. Neither is a hard
-ceiling, and that is deliberate: a map holding nothing but live work evicts nothing and stays over.
-The cost, which stays: a terminal redelivered after its record ages out publishes again, so the wire
-promise is once per turn WITHIN the window. `CodexAgentService.applyEvent` then ignores it, since the
-turn is no longer `inProgress`, so the duplicate reaches the wire but never the durable catalog.
+**Bookkeeping that outlives its subject is bounded, and every write to it names the RECORD, never the
+id.** `mutate` tests identity only BEFORE its request, so any operation awaiting a reply can resume
+holding a record `started` has replaced. `retire` refuses to write for a record the map no longer
+holds; `load` and `poison` drop only their own entry. Retirements are an ordered map, one entry per
+thread, and retiring MOVES the thread to the back, so a record cannot hold two entries and be
+forgotten on an older park's clock. Eviction passes over a record with an operation queued or a phase
+other than `parked`/`disposed`, and LEAVES the entry for the next pass: parking is what enqueues one,
+and an already-parked thread never parks again, so a removed entry strands its record. `bindThread`
+bounds the daemon's bindings the same way, draining to the bound and never evicting the binding it
+just made, which a bind moves to the end and an oldest-first scan reaches last. Neither is a hard
+ceiling: a map holding nothing but live work evicts nothing and stays over. The cost: a terminal
+redelivered after its record ages out publishes again, so the wire promise is once per turn WITHIN
+the window. `CodexAgentService.applyEvent` ignores it, the turn no longer being `inProgress`, so the
+duplicate reaches the wire and never the durable catalog.
 
 **A turn's clock and warning live in the same record as its binding** (`CodexLiveTurns`). Keeping
 identity in one map and liveness in another, both keyed by turn id, is half an identity and shipped

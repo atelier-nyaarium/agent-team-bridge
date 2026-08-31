@@ -44,7 +44,7 @@ const SWEEP_MS = 30_000;
 /** Quiet time before an idle target is released, past the 240s wait budget and 300s reconcile guard. */
 const REAP_QUIET_MS = 600_000;
 
-/** Bindings kept past the ones in use, so a terminal for a recent thread still finds its agent. */
+/** Bindings kept past the live ones. */
 const THREAD_MEMORY = 256;
 
 ////////////////////////////////
@@ -635,17 +635,12 @@ export class CodexDaemonService {
 		});
 	}
 
-	/**
-	 * Bind a thread to its agent, forgetting the oldest binding the owner is done with.
-	 *
-	 * An `active` or `parking` thread is never evicted, so a map of only those exceeds the bound; a
-	 * forgotten binding costs a terminal its fallback, which the gateway answers by reconciling.
-	 */
+	/** Binds a thread, evicting oldest settled bindings past the bound. */
 	private bindThread(session: TargetSession, threadId: string, binding: TurnBinding): void {
 		session.threads.delete(threadId);
 		session.threads.set(threadId, binding);
 		if (session.threads.size <= THREAD_MEMORY) return;
-		// Oldest first, never the binding just made, and down to the bound rather than one per bind.
+		// Never the binding just made.
 		for (const oldest of [...session.threads.keys()]) {
 			if (session.threads.size <= THREAD_MEMORY) return;
 			if (oldest === threadId) continue;

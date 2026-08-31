@@ -52,7 +52,7 @@ interface ThreadRecord {
 	published: Set<string>;
 	/** Archive refusals since the last activation; exhausted, the generation is poisoned. */
 	parkAttempts: number;
-	/** Operations queued or running on this record; it is not forgotten while any remain. */
+	/** Operations queued or running. */
 	pending: number;
 	retry?: ReturnType<typeof setTimeout>;
 }
@@ -69,7 +69,7 @@ export const DISPOSE_QUIET_MS = 250;
 /** Before a park is retried after a refusal that was neither a no-rollout nor an adoption. */
 export const PARK_RETRY_MS = 1_000;
 
-/** Retirements remembered, so a late frame for a recently settled thread still finds what it published. */
+/** Retirements remembered before the oldest is forgotten. */
 export const RETIRED_MEMORY = 256;
 
 ////////////////////////////////
@@ -105,7 +105,7 @@ export class ThreadLifecycle {
 	started(threadId: string): void {
 		const previous = this.threads.get(threadId);
 		if (previous) this.cancelRetry(previous);
-		// The replaced thread's retirement is not this one's, or it would forget the record just made.
+		// Not this thread's retirement.
 		this.retired.delete(threadId);
 		this.threads.set(threadId, { ...this.fresh(), state: { phase: "idle" } });
 	}
@@ -300,7 +300,7 @@ export class ThreadLifecycle {
 		if (record.state.phase !== "parking") await this.resume(threadId, record);
 		record.epoch += 1;
 		record.state = { phase: "idle" };
-		// Loaded again, so its retirement is spent; a resume that threw leaves the old one standing.
+		// Retirement spent on load. A resume that threw leaves it standing.
 		if (this.retired.get(threadId) === record) this.retired.delete(threadId);
 	}
 
@@ -444,27 +444,22 @@ export class ThreadLifecycle {
 		if (record.state.phase === "poisoned") return;
 		this.cancelRetry(record);
 		record.state = { phase: "poisoned", reason };
-		// Poison is terminal, so this record can never become evictable and its entry only crowds the map.
+		// Poisoned records never become evictable.
 		if (this.retired.get(threadId) === record) this.retired.delete(threadId);
 		this.deps.onPoisoned(threadId, reason);
 	}
 
-	/**
-	 * Records a thread settling, forgetting the oldest settled record once the queue is full.
-	 *
-	 * The phase is rechecked at eviction, so a thread activated since keeps its record and the turn
-	 * ids it published; only forgetting the record bounds that set.
-	 */
+	/** Records a settling, forgetting the oldest settled record past the bound. */
 	private retire(threadId: string, record: ThreadRecord): void {
-		// A record replaced while its archive was in flight is not this thread's, nor is its retirement.
+		// Replaced records retire nothing.
 		if (this.threads.get(threadId) !== record) return;
-		// Moved, not appended: one entry per thread, so a later retirement restarts its window.
+		// Moved, not appended.
 		this.retired.delete(threadId);
 		this.retired.set(threadId, record);
 		if (this.retired.size <= RETIRED_MEMORY) return;
 		for (const [oldest, held] of [...this.retired]) {
 			if (this.retired.size <= RETIRED_MEMORY) return;
-			// Passed over, never consumed, so a record busy or loaded now is reconsidered next time.
+			// Passed over, never consumed.
 			if (held.pending > 0) continue;
 			const phase = held.state.phase;
 			if (phase !== "parked" && phase !== "disposed") continue;

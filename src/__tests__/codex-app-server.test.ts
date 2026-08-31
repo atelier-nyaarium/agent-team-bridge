@@ -692,7 +692,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const published: string[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (_thread, turnId) => published.push(turnId) });
-			// A thread reached only by name parks on its terminal, so one archive retires each.
+			// Reached by name, so one archive each.
 			const retire = async (threadId: string, nth: number) => {
 				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
 				await answer(f, "thread/archive", {}, nth);
@@ -705,13 +705,13 @@ describe("the thread lifecycle", () => {
 			await answer(f, "thread/resume", {});
 			await reviving;
 
-			// Enough to shift both ids off the queue, which is the only way a record is forgotten.
+			// Enough to shift both off.
 			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`, index + 2);
 
 			expect(client.stateOf("aged")).toBeUndefined();
 			expect(client.stateOf("revived")).toMatchObject({ phase: "idle" });
 
-			// The kept record still carries what it published, so its terminal does not report twice.
+			// The kept record does not republish.
 			await retire("revived", RETIRED_MEMORY + 2);
 			expect(published.filter((turnId) => turnId === "revived-turn")).toHaveLength(1);
 		} finally {
@@ -732,12 +732,12 @@ describe("the thread lifecycle", () => {
 			};
 
 			await retire("reused");
-			// The server handing back an id this client knew is a new thread, and it replaces the record.
+			// A reused id replaces the record.
 			const restarting = client.startThread({ cwd: "/tmp" });
 			await answer(f, "thread/start", { thread: { id: "reused" } }, 1);
 			await restarting;
 
-			// Past the bound, so the retirement of the thread whose id this one took comes up for eviction.
+			// Past the bound, so the old retirement evicts.
 			for (let index = 0; index < RETIRED_MEMORY + 1; index += 1) await retire(`spare-${index}`);
 
 			expect(client.stateOf("reused")).toMatchObject({ phase: "idle" });
@@ -761,7 +761,7 @@ describe("the thread lifecycle", () => {
 			};
 
 			await retire("busy", "busy-1");
-			// Retired between its two parks, so the second park has to MOVE it past them to survive.
+			// The second park must move it past these.
 			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1)
 				await retire(`spare-${index}`, `spare-${index}`);
 
@@ -773,7 +773,7 @@ describe("the thread lifecycle", () => {
 
 			expect(client.stateOf("busy")).toMatchObject({ phase: "parked" });
 			expect(client.stateOf("spare-0")).toBeUndefined();
-			// The record still holds its first turn, so a late duplicate does not report again.
+			// A late duplicate does not report again.
 			await client.settleTurn("busy", "busy-1", DONE);
 			expect(published.filter((turnId) => turnId === "busy-1")).toHaveLength(1);
 		} finally {
@@ -794,7 +794,7 @@ describe("the thread lifecycle", () => {
 			};
 
 			await retire("held");
-			// Unanswered, so the record still has work outstanding when its entry is shifted off.
+			// Work outstanding when its entry shifts.
 			const reading = client.readThread("held");
 			await requested(f, "thread/read");
 
@@ -825,13 +825,13 @@ describe("the thread lifecycle", () => {
 			const reading = client.readThread("held");
 			await requested(f, "thread/read");
 
-			// Passed over here, since its read is still out.
+			// Passed over, its read still out.
 			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`);
 			expect(client.stateOf("held")).toMatchObject({ phase: "parked" });
 
 			await answer(f, "thread/read", readOf("held", []));
 			await reading;
-			// Its turn comes round again, which a retirement consumed rather than passed over never would.
+			// Its turn comes round again.
 			await retire("last");
 
 			expect(client.stateOf("held")).toBeUndefined();
@@ -865,7 +865,7 @@ describe("the thread lifecycle", () => {
 			await retire("victim");
 			for (let index = 0; index < RETIRED_MEMORY - LOADED; index += 1) await retire(`spare-${index}`);
 
-			// Only retirements that still stand should count against the window this thread sits in.
+			// Only standing retirements count.
 			expect(client.stateOf("victim")).toMatchObject({ phase: "parked" });
 		} finally {
 			vi.useRealTimers();
@@ -882,7 +882,7 @@ describe("the thread lifecycle", () => {
 
 			const settling = client.settleTurn(THREAD, TURN, DONE);
 			await requested(f, "thread/archive");
-			// The server hands the id back for a new thread before the old one's archive lands.
+			// Id reused before the archive lands.
 			const restarting = client.startThread({ cwd: "/tmp" });
 			await answer(f, "thread/start", { thread: { id: THREAD } }, 1);
 			await restarting;
@@ -897,7 +897,7 @@ describe("the thread lifecycle", () => {
 				await spare;
 			}
 
-			// The replacement is what this id names now, and the old thread's park cannot forget it.
+			// The old park cannot forget the replacement.
 			expect(client.stateOf(THREAD)).toMatchObject({ phase: "idle" });
 		} finally {
 			vi.useRealTimers();
@@ -917,7 +917,7 @@ describe("the thread lifecycle", () => {
 			};
 
 			await retire("reused");
-			// Resuming the parked thread, then the server hands its id to a new one before that lands.
+			// Id reused before the resume lands.
 			const reviving = client.resumeThread("reused");
 			await requested(f, "thread/resume");
 			const restarting = client.startThread({ cwd: "/tmp" });
@@ -929,7 +929,7 @@ describe("the thread lifecycle", () => {
 
 			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`);
 
-			// The replacement kept a retirement of its own, so its turn to be forgotten still comes.
+			// The replacement keeps its own retirement.
 			expect(client.stateOf("reused")).toBeUndefined();
 		} finally {
 			vi.useRealTimers();
@@ -955,7 +955,7 @@ describe("the thread lifecycle", () => {
 				const reviving = client.resumeThread(`bad-${index}`);
 				const request = await requested(f, "thread/resume", resumes);
 				resumes += 1;
-				// Neither an answer nor a refusal: the outcome is unknowable, which poisons the record.
+				// Unknowable outcome poisons the record.
 				f.feed({ jsonrpc: "2.0", id: request.id, result: { unreadable: true }, error: {} });
 				await tick();
 				await reviving.catch(() => undefined);
@@ -964,7 +964,7 @@ describe("the thread lifecycle", () => {
 			await retire("victim");
 			for (let index = 0; index < RETIRED_MEMORY - POISONED; index += 1) await retire(`spare-${index}`);
 
-			// A retirement no eviction can ever act on must not sit in the window ahead of one that can.
+			// Unspendable retirements must not crowd.
 			expect(client.stateOf("victim")).toMatchObject({ phase: "parked" });
 		} finally {
 			vi.useRealTimers();

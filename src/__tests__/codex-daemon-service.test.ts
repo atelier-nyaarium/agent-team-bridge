@@ -51,7 +51,7 @@ class FakeSession implements AppServerSession {
 		return this.phases.get(threadId);
 	}
 
-	/** Stages a phase the daemon would otherwise have to drive a whole turn to reach. */
+	/** Stages a phase directly. */
 	setPhase(threadId: string, phase: ThreadPhase): void {
 		this.phases.set(threadId, phase);
 	}
@@ -1111,7 +1111,7 @@ describe("Codex watchdog and reaping", () => {
 });
 
 describe("Codex bookkeeping under churn", () => {
-	/** Binds a thread without starting a turn, so churn costs one command each. */
+	/** Binds without starting a turn. */
 	function reconcileOn(threadId: string, agentId: string) {
 		return {
 			type: "codex_command",
@@ -1155,7 +1155,7 @@ describe("Codex bookkeeping under churn", () => {
 		}
 		context.sent.length = 0;
 
-		// Bound out long ago, and the turn was never bound either, so nothing can answer for it.
+		// Bound out, and the turn never bound.
 		context.session.hooks.onTerminal?.("spare-0", "turn-77", { status: "completed", finalResponse: "late" });
 		await settle();
 
@@ -1167,7 +1167,7 @@ describe("Codex bookkeeping under churn", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 
-		// Every older binding is mid-operation, so the newest is the only one a scan could reach.
+		// Only the newest is evictable.
 		for (let index = 0; index < 300; index += 1) {
 			context.session.setPhase(`busy-${index}`, { phase: "active", turnId: `t-${index}`, epoch: 1 });
 			context.service.handleCommand(reconcileOn(`busy-${index}`, AGENT_ID));
@@ -1193,7 +1193,7 @@ describe("Codex bookkeeping under churn", () => {
 			context.service.handleCommand(reconcileOn(`busy-${index}`, AGENT_ID));
 			await settle();
 		}
-		// They settle together, so one bind now has a backlog to clear, not a single entry.
+		// A backlog to clear, not one entry.
 		for (let index = 0; index < 300; index += 1) {
 			context.session.setPhase(`busy-${index}`, { phase: "parked", epoch: 1 });
 		}
@@ -1201,7 +1201,7 @@ describe("Codex bookkeeping under churn", () => {
 		await settle();
 		context.sent.length = 0;
 
-		// The second oldest goes only if the bind drained; one eviction per bind would leave it bound.
+		// Goes only if the bind drained.
 		context.session.hooks.onTerminal?.("busy-1", "turn-56", { status: "completed", finalResponse: "late" });
 		await settle();
 
