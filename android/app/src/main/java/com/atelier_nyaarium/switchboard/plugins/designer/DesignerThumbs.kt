@@ -105,6 +105,14 @@ internal object DesignerThumbs {
 					)
 				}
 			}
+			// The WebView is a reused singleton, so an abandoned load must be stopped: left running, its
+			// onPageFinished lands in the NEXT card's client and caches this card's frame under that key.
+			cont.invokeOnCancellation {
+				wv.post {
+					wv.stopLoading()
+					wv.loadUrl("about:blank")
+				}
+			}
 			wv.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
 		}
 		if (!wv.isAttachedToWindow || wv.width == 0 || wv.height == 0) return@withContext null

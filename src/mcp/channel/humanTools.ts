@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
+import { pickTiers, SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import { GuidedNoticeTiers } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
@@ -84,10 +84,9 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 				// routerPost throws with the server's own message on any non-ok response.
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
-					title,
-					summary,
+					// Spread, never hand-listed: a new spoken tier must not need an edit here to survive.
+					...pickTiers(args),
 					full,
-					fullSpoken,
 					...(files ? { files } : {}),
 				})) as { delivered?: boolean };
 				return withNotices(

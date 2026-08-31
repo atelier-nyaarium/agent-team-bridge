@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { pickTiers } from "../../shared/notice.js";
 import {
 	type ChannelReplyArgs,
 	ChannelReplySchema,
@@ -16,10 +17,9 @@ import { appendRefArtifacts, withNotices } from "../references/attachRefs.js";
 export function buildChannelReplyPayload(args: ChannelReplyArgs): Record<string, unknown> {
 	return {
 		session_id: args.session_id,
-		title: args.title,
-		summary: args.summary,
+		// Spread, never hand-listed: a new spoken tier must not need an edit here to survive the hop.
+		...pickTiers(args),
 		response: args.full,
-		fullSpoken: args.fullSpoken,
 		conversationId: bridgeConversationId(),
 	};
 }

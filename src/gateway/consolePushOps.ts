@@ -142,16 +142,21 @@ export function createConsolePushOps({
 	): void {
 		const owner = ownerId?.();
 		if (!owner || !mailboxStore) return;
-		const entry: ConsolePushEntry = {
-			kind: "peer",
-			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
-			from,
-			to,
-			...payload,
-		};
-		// Never load-bearing: the outcome is ignored, so a failed mirror cannot turn an
-		// already-delivered primary operation into a spurious failure for the caller.
-		deliverToOwner({ entry, dedupeKey, provenance: "peer", origin: "local", label: "mirror" });
+		// Never load-bearing, and that has to hold for a THROW as well as an outcome: every caller
+		// mirrors AFTER its primary delivery, so escaping here reports a spurious failure and earns a
+		// retry that duplicates an already-delivered message.
+		try {
+			const entry: ConsolePushEntry = {
+				kind: "peer",
+				session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
+				from,
+				to,
+				...payload,
+			};
+			deliverToOwner({ entry, dedupeKey, provenance: "peer", origin: "local", label: "mirror" });
+		} catch (err) {
+			console.warn(`[mirror] dropped: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
