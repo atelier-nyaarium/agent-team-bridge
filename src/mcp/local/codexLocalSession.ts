@@ -20,10 +20,6 @@ import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./loca
 export class CodexLocalSession implements LocalBackendSession {
 	/** Keyed by turn, holding its thread, so a terminal cannot resolve a turn from another one. */
 	private readonly pending = new Map<string, { threadId: string; resolve: (terminal: LocalTerminal) => void }>();
-	/** A terminal the owner drained before `turn/start` returned its id, so nothing could park it yet. */
-	private readonly early = new Map<string, { threadId: string; terminal: LocalTerminal }>();
-	/** Starts in flight per thread, which is the only window `early` may fill in. */
-	private readonly starting = new Map<string, number>();
 	private activityListener?: (turnId: string, text: string) => void;
 	private closedListener?: () => void;
 	/** Events already in the pipe outlive the close that emptied it; none of them speak for it. */
@@ -75,13 +71,12 @@ export class CodexLocalSession implements LocalBackendSession {
 
 	/** The owner loads a parked or inherited thread; one it just started is already loaded. */
 	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
-		this.starting.set(threadId, (this.starting.get(threadId) ?? 0) + 1);
-		try {
-			const turnId = await this.client.startTurn(threadId, prompt);
-			return { turnId, settled: this.park(threadId, turnId) };
-		} finally {
-			this.endStart(threadId);
-		}
+		let settled: Promise<LocalTerminal> | undefined;
+		// Parked from inside the start, which is where the owner guarantees nothing has published yet.
+		const turnId = await this.client.startTurn(threadId, prompt, (id) => {
+			settled = this.park(threadId, id);
+		});
+		return { turnId, settled: settled ?? this.park(threadId, turnId) };
 	}
 
 	/** A steer keeps the running turn's id, so the caller's existing handle still describes it. */
@@ -106,25 +101,7 @@ export class CodexLocalSession implements LocalBackendSession {
 		this.closedListener?.();
 	}
 
-	/** The last start on this thread is over, so any terminal it left unclaimed belongs to nobody. */
-	private endStart(threadId: string): void {
-		const left = (this.starting.get(threadId) ?? 1) - 1;
-		if (left > 0) {
-			this.starting.set(threadId, left);
-			return;
-		}
-		this.starting.delete(threadId);
-		for (const [turnId, held] of [...this.early]) {
-			if (held.threadId === threadId) this.early.delete(turnId);
-		}
-	}
-
 	private park(threadId: string, turnId: string): Promise<LocalTerminal> {
-		const beat = this.early.get(turnId);
-		if (beat?.threadId === threadId) {
-			this.early.delete(turnId);
-			return Promise.resolve(beat.terminal);
-		}
 		return new Promise<LocalTerminal>((resolve) => {
 			this.pending.set(turnId, { threadId, resolve });
 		});
@@ -132,17 +109,12 @@ export class CodexLocalSession implements LocalBackendSession {
 
 	private settle(threadId: string, turnId: string, terminal: LocalTerminal): void {
 		const parked = this.pending.get(turnId);
-		if (!parked) {
-			if (this.starting.has(threadId)) this.early.set(turnId, { threadId, terminal });
-			return;
-		}
-		if (parked.threadId !== threadId) return;
+		if (parked?.threadId !== threadId) return;
 		this.pending.delete(turnId);
 		parked.resolve(terminal);
 	}
 
 	private settleAll(error: string): void {
-		this.early.clear();
 		for (const [turnId, parked] of [...this.pending]) {
 			this.pending.delete(turnId);
 			parked.resolve({ status: "failed", error });

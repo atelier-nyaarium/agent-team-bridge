@@ -71,12 +71,14 @@ class FakeSession implements AppServerSession {
 		this.calls.push("readThread");
 		return this.threadReadResult;
 	}
-	async startTurn(threadId: string) {
+	/** The owner hands the id back before publishing anything for it, so the double must too. */
+	async startTurn(threadId: string, _text: string, onStarted?: (turnId: string) => void) {
 		this.calls.push("startTurn");
 		if (this.startTurnFails) throw this.startTurnFails;
 		this.turnCounter += 1;
 		const turnId = `turn-${this.turnCounter}`;
 		this.active.set(threadId, turnId);
+		onStarted?.(turnId);
 		return turnId;
 	}
 	async steerTurn() {
@@ -1132,6 +1134,7 @@ describe("Codex daemon commands", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
+		context.session.calls.length = 0;
 		context.session.steerFails = new Error("thread is busy");
 		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
@@ -1154,7 +1157,7 @@ describe("Codex daemon commands", () => {
 		// The turn is still running, so this was not the completed-during-delivery race. Starting a
 		// second turn here would run the prompt twice.
 		expect(context.sent).toMatchObject([{ kind: "rejected" }]);
-		expect(context.session.calls).not.toContain("startTurn2");
+		expect(context.session.calls).not.toContain("startTurn");
 	});
 
 	it("starts one new turn when the steered turn finished during delivery", async () => {

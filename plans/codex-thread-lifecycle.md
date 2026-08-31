@@ -308,14 +308,20 @@ so at the point of use. `onPoisoned` retires the session, which is closing it AN
 leave a dead child cached until the idle reaper ran, sending every call in between into a closed pipe.
 It costs one relaunch and a resume.
 
-A terminal can be published BEFORE its own turn is parked, and this is the one race the local path
-had to grow machinery for. The owner drains a terminal buffered under a pending `turn/start` inside
-that same call, so `onTerminal` can fire before `startTurn` has returned the id the caller parks
-under. Such a terminal is held in `early` and consumed by the `park` that follows it. The hold is
-bounded by the start itself: only a thread with a start in flight may fill it, and the last start to
-finish on that thread drops whatever it left. Without that, a turn whose whole life beat its own
-start reply resolved for nobody and the caller waited its entire budget, which is the same hang this
-plan opened to remove, one layer down.
+A terminal could be published BEFORE its own turn was parked, and the fix for it is the one place
+this step changed the owner. `ThreadLifecycle` buffers a terminal that beats its `turn/start` reply,
+because until that reply lands the turn has no id to file it under, and it drains inside the same
+call. So `onTerminal` fired before `startTurn` returned the id its caller parks under, and a turn
+whose whole life beat its own start reply resolved for nobody: the caller waited its entire budget,
+which is the hang this plan opened to remove, one layer down.
+
+`startTurn` now takes an `onStarted` callback and hands the id to it BEFORE draining. Registration is
+ordered ahead of publication by construction, so neither consumer needs machinery of its own: the
+local session parks there, the daemon binds there, and the caller-side hold each would otherwise
+carry does not exist. Ordering it by SCHEDULING was tried first and is why the callback exists.
+Queueing the drain behind the start reads as sufficient and is not: a caller resumes an unknowable
+number of microtasks after `startTurn` resolves, since the client's own `async` wrapper adds two, so
+the drain still beat it. A guarantee that depends on counting microtask hops is not a guarantee.
 
 Child exit, `close` and `retire` settle parked turns directly rather than through the owner. There is
 no owner to ask when the child is gone: the terminals become `failed`, and nothing is parked.

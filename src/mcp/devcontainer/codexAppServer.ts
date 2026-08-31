@@ -332,11 +332,8 @@ export class CodexAppServerClient {
 		return this.lifecycle.read(threadId, { threadId, includeTurns: true });
 	}
 
-	async startTurn(threadId: string, text: string): Promise<string> {
-		return this.lifecycle.startTurn(threadId, {
-			threadId,
-			input: [{ type: "text", text }],
-		});
+	async startTurn(threadId: string, text: string, onStarted?: (turnId: string) => void): Promise<string> {
+		return this.lifecycle.startTurn(threadId, { threadId, input: [{ type: "text", text }] }, onStarted);
 	}
 
 	/** The wire field is `expectedTurnId`; `turn/interrupt` names the same value `turnId`. */

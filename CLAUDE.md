@@ -924,6 +924,13 @@ rule, so a slow open condemning itself could reap the lease another agent had ju
 already serving nor replaces it, and its caller is handed that live session, since refusing a command
 whose target is healthy is the wrong answer to losing a race.
 
+**`startTurn` hands the turn id to `onStarted` before it drains.** A terminal that beats its own
+`turn/start` reply is buffered by the lifecycle, which then publishes it inside that same call, so a
+consumer registering after `startTurn` resolves would miss it and leave its caller waiting a whole
+budget. The callback orders registration ahead of publication by construction; the local session
+parks there and the daemon binds there. Ordering it by scheduling does NOT work: a caller resumes an
+unknowable number of microtasks later, the client's `async` wrapper alone adding two.
+
 **A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
 request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,
 `unreadable`, `closed`), minted by that module alone: the class is module-private, symbol-minted and

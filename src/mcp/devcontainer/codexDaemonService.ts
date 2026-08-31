@@ -170,9 +170,10 @@ export class CodexDaemonService {
 	 */
 	private async beginTurn(session: TargetSession, binding: TurnBinding, prompt: string): Promise<string | undefined> {
 		try {
-			const turnId = await session.client.startTurn(binding.threadId, prompt);
-			session.turns.set(turnId, binding);
-			return turnId;
+			// Bound from inside the start, before a terminal buffered for this turn can be published.
+			return await session.client.startTurn(binding.threadId, prompt, (turnId) => {
+				session.turns.set(turnId, binding);
+			});
 		} catch {
 			const running = await this.runningTurn(session, binding.threadId);
 			if (running.known !== "running") return undefined;

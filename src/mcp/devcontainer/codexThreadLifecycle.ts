@@ -115,8 +115,15 @@ export class ThreadLifecycle {
 		});
 	}
 
-	/** Start a turn, loading the thread first; a buffered terminal for the new turn settles at once. */
-	startTurn(threadId: string, params: unknown): Promise<string> {
+	/**
+	 * Start a turn, loading the thread first.
+	 *
+	 * `onStarted` is handed the id before any terminal buffered for it is published, which is the only
+	 * point at which a caller can register for a turn whose id it has just been given. Ordering that
+	 * by scheduling instead was tried: the caller resumes an unknowable number of microtasks after
+	 * this resolves, so a drain queued behind the start still beat it.
+	 */
+	startTurn(threadId: string, params: unknown, onStarted?: (turnId: string) => void): Promise<string> {
 		this.track(threadId);
 		return this.run(threadId, async (record) => {
 			this.refuseEnded(threadId, record);
@@ -141,6 +148,7 @@ export class ThreadLifecycle {
 			record.epoch += 1;
 			record.state = { phase: "active", turnId, epoch: record.epoch };
 			record.parkAttempts = 0;
+			onStarted?.(turnId);
 			await this.drain(threadId, record);
 			return turnId;
 		});
