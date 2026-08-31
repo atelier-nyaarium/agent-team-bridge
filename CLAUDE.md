@@ -220,13 +220,6 @@ Poll-based, keyed by per-install `conversationId`. Device Name is display-only. 
 - Plugin actions use one generic `kind: "plugin_action"` entry. `threadAddr` comes only from the request's `from`.
 - `consolePushOps.deliverToOwner` is the sole mailbox writer, enforced by a residue test. `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain only and deduplicated by `dedupeKey`.
 
-**Do not sanitize invisible characters in display strings.** `oneLine` collapses ASCII whitespace and
-that is all that is wanted. A hand-listed strip drew four audit findings in one round, in both
-directions at once, and the owner ruled the class out: an agent titling something with only
-zero-width characters is not a real case, nor is one spaced with U+2028 or U+00A0. Do not
-reintroduce a category strip, a bidi rule, or a Unicode whitespace set on the strength of an audit
-finding.
-
 ### Console terminal view
 
 Terminal operations reach the host through correlated `host_op` RPCs. `hostOpRunner.ts` owns peek single-flight, cadence and concurrency limits, and mutating-op deduplication.
@@ -458,13 +451,6 @@ A session can delegate a self-contained task to a logged-in Copilot CLI through 
 `gitPull` after every push. A non-empty `git log main..origin/main` is a hard stop. Scripted edits
 must assert their match before writing.
 
-### A `Bun.serve` server cannot be behavior-tested
-
-Vitest workers run under node, production runs under bun, so starting one in a test dies on
-`ReferenceError: Bun is not defined`. The Gateway is `Bun.serve` and its suites never start it; the
-Router is `node:https` + `ws` for exactly this reason. A new server that needs tests around its
-socket takes the Router's stack.
-
 ### Verify locally before pushing, especially Android
 
 CI does not compile Kotlin before merge. Run:
@@ -473,8 +459,7 @@ CI does not compile Kotlin before merge. Run:
 ./scripts/kotlin-gate.sh
 ```
 
-It resolves the repo root and sources the SDK env itself, so it runs from any directory. Half this
-gate's runs once failed on `cd: android: No such file or directory` from a shell left elsewhere.
+Resolves the repo root and sources the SDK env itself, so it runs from any directory.
 
 `testDebugUnitTest` is un-minified. Both debug and release are R8-minified, so verify reflective
 Android and JavaScript bridge entry points with `assembleRelease` or on-device. The
@@ -541,15 +526,12 @@ docker logs switchboard-federation --since 15m 2>&1 | grep '\[console-ingest\]'
 
 ### Restart ritual, and starting a host session by hand
 
-`./down.sh` stops the host daemon as well as the Gateway, and `./start-gateway.sh` owns only the
-Gateway, so `./start-all.sh` is the counterpart that brings all three back in order:
+`./start-all.sh` is `./down.sh`'s counterpart, starting all three in order. Each component script
+stays independently usable; a Gateway-only machine runs `./start-gateway.sh` alone.
 
 ```bash
 ./start-all.sh
 ```
-
-The component scripts stay independently usable; a Gateway-only machine still runs
-`./start-gateway.sh` alone.
 
 `start-federation.sh` does not rebuild the Router. Use `--build` for new Router code.
 `start-host-daemon.sh` restarts the daemon. Declining a restart leaves the old build serving.
