@@ -77,7 +77,10 @@ export class CodexLocalSession implements LocalBackendSession {
 		const turnId = await this.client.startTurn(threadId, prompt, (id) => {
 			handle = { turnId: id, settled: this.park(threadId, id) };
 		});
-		return handle ?? { turnId, settled: this.park(threadId, turnId) };
+		// Parking after the fact would race the drain, so a client that skipped the callback is refused
+		// rather than handed a promise its terminal may already have passed.
+		if (!handle) throw new Error(`codex app-server started turn ${turnId} without registering it`);
+		return handle;
 	}
 
 	/** A steer keeps the running turn's id, so the caller's existing handle still describes it. */

@@ -661,8 +661,14 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const terminals: unknown[] = [];
-			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go", noteTurn);
+			const order: string[] = [];
+			const { f, client } = await openLifecycle({
+				onTerminal: (...args) => {
+					order.push("published");
+					terminals.push(args);
+				},
+			});
+			const turn = client.startTurn(THREAD, "go", () => order.push("registered"));
 			await requested(f, "turn/start");
 			await client.settleTurn(THREAD, TURN, DONE);
 			expect(terminals).toEqual([]);
@@ -671,6 +677,8 @@ describe("the thread lifecycle", () => {
 			await answer(f, "thread/archive", {});
 
 			expect(await turn).toBe(TURN);
+			// The whole reason the callback exists: a consumer registers before this terminal is its to miss.
+			expect(order).toEqual(["registered", "published"]);
 			expect(terminals).toEqual([[THREAD, TURN, DONE]]);
 			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
 			expect((await requested(f, "thread/archive")).params).toEqual({ threadId: THREAD });

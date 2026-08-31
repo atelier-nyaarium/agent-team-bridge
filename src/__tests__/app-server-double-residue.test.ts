@@ -19,8 +19,14 @@ const REGISTERS = /onStarted\s*\(/;
 ////////////////////////////////
 //  Functions & Helpers
 
+/** Comments and string bodies removed, so a call named in either is not counted as one. */
 function strip(source: string): string {
-	return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+	return source
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/(^|[^:])\/\/.*$/gm, "$1")
+		.replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+		.replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+		.replace(/`(?:[^`\\]|\\.)*`/g, "``");
 }
 
 function doubles(): Array<{ file: string; source: string }> {
@@ -72,7 +78,8 @@ describe("a double of AppServerSession models the registration callback", () => 
 				source: `class F implements AppServerSession { startTurn(t, x, onStarted) { return id; } }`,
 			},
 			{ file: "commented.ts", source: `class F implements AppServerSession {} // onStarted(id)` },
+			{ file: "quoted.ts", source: `class F implements AppServerSession { note = "onStarted(" }` },
 		].map((p) => ({ ...p, source: strip(p.source) }));
-		expect(offenders(planted)).toEqual(["bad.ts", "took.ts", "commented.ts"]);
+		expect(offenders(planted)).toEqual(["bad.ts", "took.ts", "commented.ts", "quoted.ts"]);
 	});
 });
