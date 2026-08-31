@@ -292,13 +292,6 @@ Shipped as PRs #115/#116 (7.7.0). Collected by the close-out crust sweep; alread
 (the consolePeer dead branch, the routes.ts extraction + conservation-harness deferral) stayed in
 their existing entries.
 
-- [low] `src/mcp/designer/designerTools.ts : PushCardSchema : message` (also
-  `src/mcp/bridge/bridgeSend.ts : displayLabel`) - **framework-first** - the escaped-newline
-  guard's halves drifted in the direction the lint-conformance suite cannot see: both fields are
-  ENFORCED but their describes carry no REAL_NEWLINES_GUIDANCE, so an agent gets a hard reject on
-  a field whose schema never warned it. The conformance test derives its list FROM
-  guidance-marked describes, so enforcement-without-guidance is invisible to it. Fix: append the
-  guidance to both describes; optionally pin the reverse direction too.
 - [medium] `nyaaskills/src/cycle/lib/notify.ts : relayInstruction + NotifyHumanSchema /
   buildNotifyHuman` (+ `cycleCheckpoint.ts : schema`, + `cycle.test.ts` payload pins) -
   **bug-class, rides nyaaskills' next deploy** - the checkpoint relay instruction misleads on BOTH

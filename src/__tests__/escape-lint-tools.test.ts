@@ -263,4 +263,21 @@ describe("lint conformance (every guidance-marked schema field is lint-enforced)
 			expect(mockRouterPost).not.toHaveBeenCalled();
 		}
 	});
+
+	it("the enforced fields outside the derived loops still promise the guard in their describe", async () => {
+		// The reverse direction, and the one that actually drifted. Both fields below are enforced by
+		// their own handlers rather than a guidance-derived loop, so nothing above would notice their
+		// describe losing the guidance - which is how an agent got a hard reject with no warning.
+		const { PushCardSchema } = await import("../mcp/designer/designerTools.js");
+		const { BridgeSendSchema } = await import("../mcp/bridge/bridgeSend.js");
+
+		for (const [label, description] of [
+			["designer_push_card.message", PushCardSchema.shape.message.description],
+			["crosstalk_send.displayLabel", BridgeSendSchema.shape.displayLabel.description],
+		] as const) {
+			expect(description, `${label} is lint-enforced but its describe does not say so`).toContain(
+				REAL_NEWLINES_GUIDANCE,
+			);
+		}
+	});
 });

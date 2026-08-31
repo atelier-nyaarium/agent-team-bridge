@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBytes } from "../blobTransfer.js";
 import { bridgeProjectName, postPluginAction } from "../bridge/helpers.js";
@@ -9,7 +10,7 @@ import { parseDsCard } from "./dsCard.js";
 ////////////////////////////////
 //  Schemas
 
-const PushCardSchema = z
+export const PushCardSchema = z
 	.object({
 		session_id: z.string().min(1).describe(`Channel \`session_id\` from the inbound \`<channel>\` tag.`),
 		name: z
@@ -32,7 +33,7 @@ Self-contained \`HTML\` with inline \`CSS\` and \`SVG\`. No external assets.
 The first line must be \`<!-- @dsCard group="..." width="..." height="..." -->\`.
 `.trim(),
 			),
-		message: z.string().optional().describe(`Optional message displayed beside the card.`),
+		message: z.string().optional().describe(`Optional message displayed beside the card.${REAL_NEWLINES_GUIDANCE}`),
 	})
 	.strict();
 type PushCardArgs = z.infer<typeof PushCardSchema>;

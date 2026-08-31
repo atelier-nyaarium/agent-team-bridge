@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
 import type { ChannelFile, ResponsePayload } from "../../shared/types.js";
 import { dropReferenceArtifacts } from "../channel/channelFiles.js";
 import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.js";
@@ -8,7 +9,7 @@ import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolErr
 ////////////////////////////////
 //  Schemas
 
-const BridgeSendSchema = z
+export const BridgeSendSchema = z
 	.object({
 		to: z
 			.string()
@@ -37,7 +38,7 @@ The created session may have a different name. Use the resolved address from the
 Human-readable label for a new session, e.g. \`Bug Investigation\`. Never a slug, \`id\`, or generated string.
 
 Required to create a target that does not yet exist. Ignored when the target already exists.
-`.trim(),
+`.trim() + REAL_NEWLINES_GUIDANCE,
 			),
 		disposition: z
 			.enum(["asking", "informing", "closing"])
