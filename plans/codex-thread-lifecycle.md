@@ -483,16 +483,77 @@ have reset the clock it was about to read and never reaped once. Only a command 
 
 ## Step 6 - Bounded bookkeeping
 
-`TargetSession.threads` never deletes an entry, and `turns` deletes only the turn a terminal or an
-adopted steer retired; `CodexTurnTracker` bounds settled turns at `SETTLED_MEMORY`.
+✅ Shipped. Two maps grew for a generation's whole life: `ThreadLifecycle.threads`, one record per
+thread ever reached, and `TargetSession.threads`, one binding per thread the gateway ever named.
+`CodexLiveTurns` was never among them, since a turn leaves on its terminal and a turn that stops
+reporting takes its generation with it.
 
-Only acknowledged `parked` and `disposed` lifecycle entries age out, bounded the way the tracker's
-settled set is. `firstTurn`, `active`, `parking` and `poisoned` entries stay registered until they
-reach a terminal state or force retirement, so the reaper never mistakes an evicted record for an
-all-parked target.
+A thread record ages out only from `parked` or `disposed`, oldest retirement first, bounded at
+`RETIRED_MEMORY`, and the phase is rechecked AT eviction so a thread activated again since keeps its
+record. Every other phase stays: an evicted `active` record would read to the reaper as a thread it
+has no reason to wait for.
 
-Tests: `src/__tests__/codex-daemon-service.test.ts` churned past `SETTLED_MEMORY`: settled entries
-evict while active, first-turn, parking and unknown threads stay visible.
+A retirement names the RECORD it retired and which of that record's retirements it was, never the
+thread id alone. An id is not an identity here: the server may hand back an id this client already
+knew, and `started` replaces the record when it does. Keyed by id alone, the first thread's
+retirement reaches forward and deletes its replacement. Keyed by record alone, a thread that parked,
+reactivated and parked again holds two entries for one record, and the older one spends the window
+the newer one had just restarted; at a `RETIRED_MEMORY` of 1 it forgets the record immediately. Only
+a record's latest retirement may forget it, and a record with an operation still queued is passed
+over entirely, since deleting it under its own queue makes the next operation fail as `was replaced`
+when nothing replaced it.
+
+What the bound costs is real and stays: a terminal redelivered after its record has aged out
+republishes, because the record's published ids ARE the once-per-turn dedup and forgetting one
+forgets them. It takes `RETIRED_MEMORY` retirements plus the tracker's own settled window to reach,
+and the gateway drops the duplicate at persistence, where the turn is no longer `inProgress`. So the
+wire promise is once per turn within the window, not for all time.
+
+Forgetting the record is also what bounds the turn ids it published, and that ordering is the whole
+point. Capping `published` directly was tried in an earlier step and reverted: the ids are what make
+publication once-per-turn, and the record outlives them, so the cap traded a promise for nothing. The
+record's own lifetime is the bound that costs nothing, because a parked thread has no turn left to
+publish twice.
+
+The daemon's thread bindings are bounded the same way, at `THREAD_MEMORY`, evicting the oldest
+binding the owner is not mid-operation on, and draining to the bound rather than evicting one per
+bind. One per bind ratchets: a peak of live threads carries the map above the bound, and once they
+settle every later bind adds one and removes one, so the map never comes back down. The scan also
+passes over the binding the call just made. A bind moves its thread to the end of the insertion
+order, so the newest entry is the last one a scan reaches, and a map of threads the owner is working
+made `bindThread` delete the binding it was called to install. Both bounds are soft in the same
+direction: a map holding only `active` or `parking` threads evicts nothing and exceeds its bound,
+which is the right answer, since those are live work and bounded by real concurrency rather than by
+history. A forgotten binding costs a terminal the fallback it would have used when its turn is
+unbound, which the gateway answers by reconciling the thread.
+
+Note that `parked` is not the end of a thread: `resumeThread` unarchives one and returns it to
+`idle`, and only `disposed` and `poisoned` are refused. That is precisely why the phase is rechecked
+at eviction rather than trusted from the moment of retirement.
+
+Two phases of the original text did not survive contact. There is no `firstTurn` phase; a thread
+reached only by name is `unloaded`, and eviction protects it along with every phase but `parked` and
+`disposed`. Nor is eviction gated on acknowledgment: a record is retired when its archive or delete
+lands, since acknowledgment is the ledger's concern and never reaches the lifecycle.
+
+Tests: `src/__tests__/codex-daemon-service.test.ts` churns 400 threads past both bounds and asserts
+what survives AND what does not: a terminal for an unbound turn on the thread the owner is still
+working reaches its agent, one on a bound-out thread reaches nobody, and a thread churned out is
+answered again once the gateway reconciles it. `src/__tests__/codex-app-server.test.ts` drives the
+lifecycle's own retention over the real client: a settled record is forgotten while one resumed since
+keeps its record and does not republish its turn, and a thread whose id was reused outlives the
+retirement of the thread it replaced, a reactivated thread's window starts over instead of running
+from its first park, and a record with a read in flight is passed over. Two more pin the eviction
+rule itself: a bind with nothing else evictable keeps its own binding, and threads settling together
+are drained in one bind rather than one per bind. Each was written by removing the guard it names and
+watching it fail.
+
+What this step did NOT bound, found by red-teaming it and left deliberately: a record for a thread
+that never settles, since only `parked` and `disposed` retire, so reading threads that answer unknown
+grows the map with a generation's history; `CodexTurnTracker.turns` for a turn that emits items and
+no terminal; `record.buffered` while a `turn/start` is unanswered; and `record.published` for stray
+terminals naming turns a thread never ran. The first is the one worth taking next, and the rest need
+a workload no gateway produces.
 
 ### Bug Classes
 
@@ -505,6 +566,18 @@ evict while active, first-turn, parking and unknown threads stay visible.
   have read the sentence. Step 1 makes the sentence unreachable as a discriminator.
 - A retry that cannot end. "Retry until acknowledged" with no budget is the same infinite lifetime
   in a new form; every retry here has a budget whose exhaustion is itself a transition.
+- A name standing in for an identity. A thread id is reusable, so a bookkeeping entry keyed by id
+  acts on whatever holds that name when it is read, not on the thing it was written for. Entries here
+  carry the record, and a mismatch is skipped rather than resolved.
+- An eviction decided from a snapshot the subject has moved past. `ThreadLifecycle.retire` writes a
+  queue entry now and acts on it much later, and its predicate was patched four times in one lap:
+  a phase recheck, then record identity for a reused id, then a retirement sequence for a record that
+  parked twice, then an in-flight count for a record with work still queued. Each round added another
+  way to ask whether the entry had gone stale, which is the mechanism asking to be inverted rather
+  than four separate defects. A retirement should MOVE a record to the back of an ordered map, the way
+  `bindThread` already does with bindings, so one entry per record exists and is current by
+  construction; identity and sequence then have nothing to check. Deferred here on purpose, and the
+  patches that stand are the ones the tests pin. Raised to `architecture-fan-out`.
 
 ## Verification
 
@@ -540,6 +613,10 @@ evict while active, first-turn, parking and unknown threads stay visible.
   every edit to the real one. Filed against nyaaskills.
 - An auditor generalized "avoid lazy dash-joins" into a no-semicolons rule and filed four findings
   under it. A finding that cites a rule is vetted against the rule's own text before it is applied.
+- A relay agent twice returned its own status sentence instead of the report it was asked to relay
+  verbatim, once as a whole audit pass. An empty relay reads exactly like a clean audit, so a pass
+  with no findings is checked for a report before it is believed. Both times the missing angle held
+  a real gap that a direct check then found.
 - Four readers now interpret a turn: `CodexTurnTracker` from the event stream, `outcomeFromRead` from
   a read keyed by a turn id, `inspectRead` from a read with none, and `CodexDaemonService.runningTurn`
   from a read again. They agree on the settled, running and unknown vocabulary and duplicate the

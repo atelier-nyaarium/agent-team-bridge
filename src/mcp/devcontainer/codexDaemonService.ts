@@ -44,6 +44,9 @@ const SWEEP_MS = 30_000;
 /** Quiet time before an idle target is released, past the 240s wait budget and 300s reconcile guard. */
 const REAP_QUIET_MS = 600_000;
 
+/** Bindings kept past the ones in use, so a terminal for a recent thread still finds its agent. */
+const THREAD_MEMORY = 256;
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -208,7 +211,7 @@ export class CodexDaemonService {
 		// startThread checks the model against the server's own list.
 		const threadId = await session.client.startThread({ cwd: resolved.cwd, model: command.model });
 		const binding: TurnBinding = { ownerKey: command.ownerKey, agentId: command.agentId, threadId };
-		session.threads.set(threadId, binding);
+		this.bindThread(session, threadId, binding);
 		const turnId = await this.beginTurn(session, binding, command.prompt);
 		// A refusal marks the agent unavailable with nothing to reconcile, so it is only reached after
 		// asking App Server whether a turn exists.
@@ -277,7 +280,7 @@ export class CodexDaemonService {
 			agentId: command.agentId,
 			threadId: command.threadId,
 		};
-		session.threads.set(command.threadId, binding);
+		this.bindThread(session, command.threadId, binding);
 		// A turn this session no longer holds has settled, which is the one case that becomes a new turn.
 		const expectedTurnId = command.expectedTurnId;
 		if (expectedTurnId !== undefined && session.turns.has(expectedTurnId)) {
@@ -362,7 +365,7 @@ export class CodexDaemonService {
 			agentId: command.agentId,
 			threadId: command.threadId,
 		};
-		session.threads.set(command.threadId, binding);
+		this.bindThread(session, command.threadId, binding);
 
 		// Silence is reported as silence: no turn state on the receipt, so the record stays askable.
 		let observed: ReadOutcome = { known: "unknown" };
@@ -630,6 +633,26 @@ export class CodexDaemonService {
 		void this.lease(() => session.client.settleTurn(threadId, turnId, terminal)).catch((error) => {
 			console.error(`[codex-daemon] settling ${turnId} on ${threadId}: ${describe(error)}`);
 		});
+	}
+
+	/**
+	 * Bind a thread to its agent, forgetting the oldest binding the owner is done with.
+	 *
+	 * An `active` or `parking` thread is never evicted, so a map of only those exceeds the bound; a
+	 * forgotten binding costs a terminal its fallback, which the gateway answers by reconciling.
+	 */
+	private bindThread(session: TargetSession, threadId: string, binding: TurnBinding): void {
+		session.threads.delete(threadId);
+		session.threads.set(threadId, binding);
+		if (session.threads.size <= THREAD_MEMORY) return;
+		// Oldest first, never the binding just made, and down to the bound rather than one per bind.
+		for (const oldest of [...session.threads.keys()]) {
+			if (session.threads.size <= THREAD_MEMORY) return;
+			if (oldest === threadId) continue;
+			const phase = session.client.stateOf(oldest)?.phase;
+			if (phase === "active" || phase === "parking") continue;
+			session.threads.delete(oldest);
+		}
 	}
 
 	/**

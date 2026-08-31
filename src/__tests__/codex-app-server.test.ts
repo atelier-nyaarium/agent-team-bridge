@@ -9,7 +9,7 @@ import {
 	strongestEffort,
 } from "../mcp/devcontainer/codexAppServer.js";
 import type { CodexChild } from "../mcp/devcontainer/codexTargets.js";
-import { DISPOSE_QUIET_MS, PARK_RETRY_MS } from "../mcp/devcontainer/codexThreadLifecycle.js";
+import { DISPOSE_QUIET_MS, PARK_RETRY_MS, RETIRED_MEMORY } from "../mcp/devcontainer/codexThreadLifecycle.js";
 import type { TerminalOutcome } from "../mcp/devcontainer/codexTurnOutcome.js";
 import { CodexTurnTracker } from "../mcp/devcontainer/codexTurnTracker.js";
 
@@ -682,6 +682,126 @@ describe("the thread lifecycle", () => {
 			expect(terminals).toEqual([[THREAD, TURN, DONE]]);
 			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
 			expect((await requested(f, "thread/archive")).params).toEqual({ threadId: THREAD });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("forgets a settled record once enough retire behind it, keeping one activated since", async () => {
+		vi.useFakeTimers();
+		try {
+			const published: string[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (_thread, turnId) => published.push(turnId) });
+			// A thread reached only by name parks on its terminal, so one archive retires each.
+			const retire = async (threadId: string, nth: number) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, nth);
+				await settling;
+			};
+
+			await retire("aged", 0);
+			await retire("revived", 1);
+			const reviving = client.resumeThread("revived");
+			await answer(f, "thread/resume", {});
+			await reviving;
+
+			// Enough to shift both ids off the queue, which is the only way a record is forgotten.
+			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`, index + 2);
+
+			expect(client.stateOf("aged")).toBeUndefined();
+			expect(client.stateOf("revived")).toMatchObject({ phase: "idle" });
+
+			// The kept record still carries what it published, so its terminal does not report twice.
+			await retire("revived", RETIRED_MEMORY + 2);
+			expect(published.filter((turnId) => turnId === "revived-turn")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retires a replacement thread on its own clock, not on the one whose id it reused", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			let archives = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			await retire("reused");
+			// The server handing back an id this client knew is a new thread, and it replaces the record.
+			const restarting = client.startThread({ cwd: "/tmp" });
+			await answer(f, "thread/start", { thread: { id: "reused" } }, 1);
+			await restarting;
+			await retire("reused");
+
+			// Enough to shift the first thread's retirement off the queue, but not the replacement's.
+			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1) await retire(`spare-${index}`);
+
+			expect(client.stateOf("reused")).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("starts a reactivated thread's retention over rather than running it from the first park", async () => {
+		vi.useFakeTimers();
+		try {
+			const published: string[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (_thread, turnId) => published.push(turnId) });
+			let archives = 0;
+			const retire = async (threadId: string, turnId: string) => {
+				const settling = client.settleTurn(threadId, turnId, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			await retire("busy", "busy-1");
+			const reviving = client.resumeThread("busy");
+			await answer(f, "thread/resume", {}, 0);
+			await reviving;
+			await retire("busy", "busy-2");
+
+			// Enough to shift the FIRST park's entry, which must not spend the record's second window.
+			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1)
+				await retire(`spare-${index}`, `spare-${index}`);
+
+			expect(client.stateOf("busy")).toMatchObject({ phase: "parked" });
+			// The record still holds its first turn, so a late duplicate does not report again.
+			await client.settleTurn("busy", "busy-1", DONE);
+			expect(published.filter((turnId) => turnId === "busy-1")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a record whose work is still in flight when its retirement comes up", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			let archives = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			await retire("held");
+			// Unanswered, so the record still has work outstanding when its entry is shifted off.
+			const reading = client.readThread("held");
+			await requested(f, "thread/read");
+
+			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`);
+
+			expect(client.stateOf("held")).toMatchObject({ phase: "parked" });
+
+			await answer(f, "thread/read", readOf("held", []));
+			await reading;
 		} finally {
 			vi.useRealTimers();
 		}

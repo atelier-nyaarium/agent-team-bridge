@@ -51,6 +51,11 @@ class FakeSession implements AppServerSession {
 		return this.phases.get(threadId);
 	}
 
+	/** Stages a phase the daemon would otherwise have to drive a whole turn to reach. */
+	setPhase(threadId: string, phase: ThreadPhase): void {
+		this.phases.set(threadId, phase);
+	}
+
 	onEvent(listener: (message: { method: string; params?: unknown }) => void) {
 		this.listener = listener;
 	}
@@ -1102,6 +1107,127 @@ describe("Codex watchdog and reaping", () => {
 
 		read();
 		await settle();
+	});
+});
+
+describe("Codex bookkeeping under churn", () => {
+	/** Binds a thread without starting a turn, so churn costs one command each. */
+	function reconcileOn(threadId: string, agentId: string) {
+		return {
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId,
+			target: RESOLVED_TARGET,
+			threadId,
+		};
+	}
+
+	it("keeps the agent of a thread the owner is still working, however many follow it", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+
+		// Far past any bound, on threads the owner never loaded.
+		for (let index = 0; index < 400; index += 1) {
+			context.service.handleCommand(reconcileOn(`spare-${index}`, AGENT_ID));
+			await settle();
+		}
+		context.sent.length = 0;
+
+		// A turn this daemon never bound, so only the thread's own binding can answer for it.
+		context.session.hooks.onTerminal?.("thread-1", "turn-99", { status: "completed", finalResponse: "done" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ agentId: AGENT_ID, threadId: "thread-1" }]);
+	});
+
+	it("forgets the binding of a settled thread once enough follow it", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		for (let index = 0; index < 400; index += 1) {
+			context.service.handleCommand(reconcileOn(`spare-${index}`, AGENT_ID));
+			await settle();
+		}
+		context.sent.length = 0;
+
+		// Bound out long ago, and the turn was never bound either, so nothing can answer for it.
+		context.session.hooks.onTerminal?.("spare-0", "turn-77", { status: "completed", finalResponse: "late" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toEqual([]);
+	});
+
+	it("keeps the binding it just made, even with nothing else evictable", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		// Every older binding is mid-operation, so the newest is the only one a scan could reach.
+		for (let index = 0; index < 300; index += 1) {
+			context.session.setPhase(`busy-${index}`, { phase: "active", turnId: `t-${index}`, epoch: 1 });
+			context.service.handleCommand(reconcileOn(`busy-${index}`, AGENT_ID));
+			await settle();
+		}
+		context.service.handleCommand(reconcileOn("fresh", AGENT_ID));
+		await settle();
+		context.sent.length = 0;
+
+		context.session.hooks.onTerminal?.("fresh", "turn-55", { status: "completed", finalResponse: "done" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ agentId: AGENT_ID, threadId: "fresh" }]);
+	});
+
+	it("drains to the bound when threads the owner was working settle together", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		for (let index = 0; index < 300; index += 1) {
+			context.session.setPhase(`busy-${index}`, { phase: "active", turnId: `t-${index}`, epoch: 1 });
+			context.service.handleCommand(reconcileOn(`busy-${index}`, AGENT_ID));
+			await settle();
+		}
+		// They settle together, so one bind now has a backlog to clear, not a single entry.
+		for (let index = 0; index < 300; index += 1) {
+			context.session.setPhase(`busy-${index}`, { phase: "parked", epoch: 1 });
+		}
+		context.service.handleCommand(reconcileOn("last", AGENT_ID));
+		await settle();
+		context.sent.length = 0;
+
+		// The second oldest goes only if the bind drained; one eviction per bind would leave it bound.
+		context.session.hooks.onTerminal?.("busy-1", "turn-56", { status: "completed", finalResponse: "late" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toEqual([]);
+	});
+
+	it("answers a turn on a churned-out thread from the gateway's own reconcile", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		for (let index = 0; index < 400; index += 1) {
+			context.service.handleCommand(reconcileOn(`spare-${index}`, AGENT_ID));
+			await settle();
+		}
+		context.sent.length = 0;
+
+		// Its binding is gone, so the gateway asking again is what restores it.
+		context.service.handleCommand(reconcileOn("thread-1", AGENT_ID));
+		await settle();
+		context.session.hooks.onTerminal?.("thread-1", "turn-9", { status: "completed", finalResponse: "late" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ agentId: AGENT_ID, threadId: "thread-1" }]);
 	});
 });
 

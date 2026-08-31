@@ -52,6 +52,10 @@ interface ThreadRecord {
 	published: Set<string>;
 	/** Archive refusals since the last activation; exhausted, the generation is poisoned. */
 	parkAttempts: number;
+	/** Retirements of THIS record, so only its latest one may forget it. */
+	retirements: number;
+	/** Operations queued or running on this record; it is not forgotten while any remain. */
+	pending: number;
 	retry?: ReturnType<typeof setTimeout>;
 }
 
@@ -67,11 +71,16 @@ export const DISPOSE_QUIET_MS = 250;
 /** Before a park is retried after a refusal that was neither a no-rollout nor an adoption. */
 export const PARK_RETRY_MS = 1_000;
 
+/** Retirements remembered, so a late frame for a recently settled thread still finds what it published. */
+export const RETIRED_MEMORY = 256;
+
 ////////////////////////////////
 //  Class
 
 export class ThreadLifecycle {
 	private readonly threads = new Map<string, ThreadRecord>();
+	/** Retirements in order, oldest first, each naming the record and which of its retirements it was. */
+	private readonly retired: { threadId: string; record: ThreadRecord; seq: number }[] = [];
 	/** Each quiet-interval timer with the continuation it holds, released on close rather than left hanging. */
 	private readonly pauses = new Map<ReturnType<typeof setTimeout>, () => void>();
 	private closed = false;
@@ -220,6 +229,7 @@ export class ThreadLifecycle {
 			if (second.known !== "empty") return second;
 			await this.mutate(threadId, record, "thread/delete", { threadId }, () => undefined);
 			record.state = { phase: "disposed" };
+			this.retire(threadId, record);
 			return second;
 		});
 	}
@@ -232,6 +242,7 @@ export class ThreadLifecycle {
 			release();
 		}
 		this.pauses.clear();
+		this.retired.length = 0;
 		for (const record of this.threads.values()) this.cancelRetry(record);
 	}
 
@@ -244,6 +255,8 @@ export class ThreadLifecycle {
 			buffered: new Map(),
 			published: new Set(),
 			parkAttempts: 0,
+			retirements: 0,
+			pending: 0,
 		};
 	}
 
@@ -251,8 +264,12 @@ export class ThreadLifecycle {
 	private run<T>(threadId: string, operation: (record: ThreadRecord) => Promise<T>): Promise<T> {
 		const record = this.threads.get(threadId) ?? this.fresh();
 		this.threads.set(threadId, record);
+		record.pending += 1;
+		const settle = () => {
+			record.pending -= 1;
+		};
 		const next = record.queue.then(() => operation(record));
-		record.queue = next.catch(() => undefined);
+		record.queue = next.then(settle, settle);
 		return next;
 	}
 
@@ -334,6 +351,7 @@ export class ThreadLifecycle {
 			await this.mutate(threadId, record, "thread/archive", { threadId }, () => undefined);
 			record.state = { phase: "parked", epoch };
 			record.parkAttempts = 0;
+			this.retire(threadId, record);
 			return;
 		} catch (error) {
 			// Poisoned by the request itself: the caller learns it the way it would from any request.
@@ -356,6 +374,7 @@ export class ThreadLifecycle {
 				try {
 					await this.mutate(threadId, record, "thread/delete", { threadId }, () => undefined);
 					record.state = { phase: "disposed" };
+					this.retire(threadId, record);
 					return;
 				} catch (error) {
 					// A refused delete is another way this park did not happen, and is budgeted like one.
@@ -425,6 +444,28 @@ export class ThreadLifecycle {
 		this.cancelRetry(record);
 		record.state = { phase: "poisoned", reason };
 		this.deps.onPoisoned(threadId, reason);
+	}
+
+	/**
+	 * Records a thread settling, forgetting the oldest settled record once the queue is full.
+	 *
+	 * The phase is rechecked at eviction, so a thread activated since keeps its record and the turn
+	 * ids it published; only forgetting the record bounds that set.
+	 */
+	private retire(threadId: string, record: ThreadRecord): void {
+		record.retirements += 1;
+		this.retired.push({ threadId, record, seq: record.retirements });
+		while (this.retired.length > RETIRED_MEMORY) {
+			const oldest = this.retired.shift();
+			if (oldest === undefined) break;
+			// The record, never the id: a replaced one is a different thread wearing the same name.
+			if (this.threads.get(oldest.threadId) !== oldest.record) continue;
+			// A record retired again since starts its window over, so only its latest entry forgets it.
+			if (oldest.record.retirements !== oldest.seq) continue;
+			if (oldest.record.pending > 0) continue;
+			const phase = oldest.record.state.phase;
+			if (phase === "parked" || phase === "disposed") this.threads.delete(oldest.threadId);
+		}
 	}
 
 	private pause(ms: number): Promise<void> {
