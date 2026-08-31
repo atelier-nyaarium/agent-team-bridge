@@ -292,19 +292,3 @@ Purge Gateway removes only gateway state and gateway-owned `.env` keys. Purge Fe
 
 `scripts/lib/routerState.ts` keeps Bun `$` templates on one line. Bun treats a backslash-newline as an argument split, not continuation.
 
-### Cutting over to the self-hosted Router
-
-**Rollback becomes unsafe after the Router accepts a federation mutation.** The cluster copy is then stale and can resurrect revoked members.
-
-1. Stop the Router and run `./backup-federation.sh` after migration.
-2. With the Router stopped, run `bun run export:federation`. It must import the existing identity and preserve `CONSOLE_BRIDGE_TOKEN`.
-3. Run `./start-federation.sh`, then `./setup.sh` option 2 if a public host is needed.
-4. Point the gateway at the direct Router transport and confirm both health endpoints and Router registration.
-5. Point the phone at the Router LAN address. This changes transport only.
-6. Verify send, poll, board, peek, wake, and add-a-device.
-
-### Retiring the k8s path
-
-The server path is direct-only. `scripts/federation-export.ts` remains the one-time cluster migration until the owner deletes the cluster objects.
-
-Keep the k8s transport readable until every console has a direct blob. Remove the console proxy branch, `PROXY_CEILING_MS`, and k8s provisioning fields in a console release; remove the shared k8s schema halves last. `setup.sh --gateway-transport` is gone.
