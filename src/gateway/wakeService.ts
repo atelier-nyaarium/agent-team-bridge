@@ -136,6 +136,13 @@ export class WakeService {
 				console.log(`[wake] ${team} has no record and no displayLabel; refusing to adopt the typed name`);
 				return { ok: false, error: decision.error };
 			}
+			// A send never creates a session on the host MACHINE. `/send` accepts an unbound sender, so
+			// minting here would let any caller name `<hostSpawn>.<anything>` and have the daemon launch
+			// it. The console's authenticated create_session is the only door to a host record.
+			if (decision.kind === "mint" && isHostSpawn(project)) {
+				console.log(`[wake] refusing to mint host session "${team}" - create_session owns that door`);
+				return { ok: false, error: `no session named "${team}"; create it from the console first` };
+			}
 			if (decision.kind === "mint") pendingMintLabel = decision.sessionLabel;
 		}
 

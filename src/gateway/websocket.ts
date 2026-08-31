@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { agentInboundFrameTypes } from "../shared/agent-backend.js";
+import { isHostSpawnSession } from "../shared/host-spawn.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode } from "../shared/types.js";
@@ -197,6 +198,17 @@ export function createWebSocketHandlers({
 			// message claims to be FROM is what gets stamped on it.
 			if (auth && !auth.satisfies(auth.toClaim(team), presentedHere)) {
 				console.log(`[ws] rejected register for bound team "${team}" - binding not presented`);
+				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
+				ws.data.isStale = true;
+				ws.close();
+				return;
+			}
+			// A session on a host SHELL must prove the daemon launched it, because that name is what
+			// routes a later wake at the real machine rather than a container. Checked against the
+			// record directly: its token is presented on the FIRST registration, before activation,
+			// so the claim gate above cannot see it and would pass an unclaimed name to anyone.
+			if (auth && isHostSpawnSession(team) && !auth.presentsOwnLaunchToken(team, presentedHere)) {
+				console.log(`[ws] rejected register for host session "${team}" - no daemon launch token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
 				ws.data.isStale = true;
 				ws.close();

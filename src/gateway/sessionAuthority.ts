@@ -55,6 +55,17 @@ export interface SessionAuthority {
 	toClaim(teamKey: string): SessionBinding;
 
 	/**
+	 * Whether a presented credential IS this exact team's launch token, answered without consulting
+	 * whether the binding has been activated yet.
+	 *
+	 * Deliberately not `toClaim`: that hides an inert binding as UNBOUND so a reattached pane is not
+	 * stranded, which makes "no record at all" and "record whose token has never been presented"
+	 * indistinguishable. A daemon-launched session presents its token on its FIRST registration,
+	 * before activation, so a gate built on `toClaim` would refuse every real host session.
+	 */
+	presentsOwnLaunchToken(teamKey: string, got: Presented): boolean;
+
+	/**
 	 * SOCKET-keyed: who may answer for the session on this socket.
 	 *
 	 * Deliberately not derived from the record. A `claude --resume` incarnation legitimately serves
@@ -162,6 +173,13 @@ export function createSessionAuthority(deps: SessionAuthorityDeps): SessionAutho
 		return binding(record.bindToken);
 	}
 
+	function presentsOwnLaunchToken(teamKey: string, got: Presented): boolean {
+		if (!got.token) return false;
+		const record = sessionStore?.recordByBindToken(got.token);
+		if (!record || !sessionStore) return false;
+		return sessionStore.teamOf(record) === teamKey;
+	}
+
 	function toAnswerFor(ws: { data: WsData } | undefined): SessionBinding {
 		return binding(ws?.data?.boundToken);
 	}
@@ -217,6 +235,7 @@ export function createSessionAuthority(deps: SessionAuthorityDeps): SessionAutho
 
 	return {
 		toClaim,
+		presentsOwnLaunchToken,
 		toAnswerFor,
 		toActFor,
 		localTeamKey,

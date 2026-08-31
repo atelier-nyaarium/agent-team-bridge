@@ -53,7 +53,7 @@ describe("handshake-established session records", () => {
 	it("register alone writes no record (recording is deferred to the confirm)", () => {
 		const { handlers, sessionStore } = setup();
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
 		expect(sessionStore.size).toBe(0);
 	});
 
@@ -74,7 +74,7 @@ describe("handshake-established session records", () => {
 		intervals.push(handlers.heartbeatInterval);
 		const ws = createMockWs();
 		expect(announcePresenceDirty).not.toHaveBeenCalled();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
 		// The row is already live in the raw registry at this point (resolveLiveIncarnation reads it
 		// directly) - a caller polling right now must see the plane recompute, not wait for the
 		// eventual handshake confirm (which may be seconds away) or the periodic tripwire.
@@ -84,16 +84,16 @@ describe("handshake-established session records", () => {
 	it("a lead confirm on a free segment adopts it, labels by cwd, and stamps the record live", () => {
 		const { handlers, sessionStore } = setup();
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
 
-		const record = sessionStore.getByTeam("host.abc123");
+		const record = sessionStore.getByTeam("proj.abc123");
 		expect(record).toMatchObject({
 			id: "abc123",
-			spawn: "host",
+			spawn: "proj",
 			sessionLabel: "switchboard",
 			claudeSessionId: "tx-1",
-			liveTeam: { team: "host.abc123", subId: "s1" },
+			liveTeam: { team: "proj.abc123", subId: "s1" },
 		});
 		expect(record?.confirmedAt).toBeGreaterThan(0);
 		expect(ws.data.handshakeConfirmed).toBe(true);
@@ -102,11 +102,11 @@ describe("handshake-established session records", () => {
 	it("a worker reply records nothing and fully removes the socket from the registry", () => {
 		const { handlers, registry, conversationRegistry, sessionStore } = setup();
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", conversationId: "conv-w", claudeSessionId: "tx-1" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", conversationId: "conv-w", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: false });
 
 		expect(sessionStore.size).toBe(0);
-		expect(registry.get("host.abc123")?.has("s1")).toBeFalsy();
+		expect(registry.get("proj.abc123")?.has("s1")).toBeFalsy();
 		expect(conversationRegistry.has("conv-w")).toBe(false);
 		expect(ws.close).toHaveBeenCalled();
 		expect((ws.send as ReturnType<typeof vi.fn>).mock.calls.flat().join()).toContain("handshake_reject");
@@ -115,7 +115,7 @@ describe("handshake-established session records", () => {
 	it("a confirm arriving after the socket went un-open is ignored (no record)", () => {
 		const { handlers, sessionStore } = setup();
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1" });
 		const hsId = handshakeIdFrom(ws);
 		(ws as { readyState: number }).readyState = 3;
 		expect(handlers.resolveHandshake(hsId, { isMainOrLead: true })).toBe(true);
@@ -126,11 +126,11 @@ describe("handshake-established session records", () => {
 	it("disconnect clears the live pointer but keeps the record (asleep, resumable)", () => {
 		const { handlers, sessionStore } = setup();
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
 		handlers.close(ws);
 
-		const record = sessionStore.getByTeam("host.abc123");
+		const record = sessionStore.getByTeam("proj.abc123");
 		expect(record).toBeDefined();
 		expect(record?.liveTeam).toBeUndefined();
 		expect(record?.claudeSessionId).toBe("tx-1");
@@ -140,41 +140,41 @@ describe("handshake-established session records", () => {
 		const { handlers, sessionStore } = setup();
 		const ws1 = createMockWs();
 		register(handlers, ws1, {
-			team: "host.abc123",
+			team: "proj.abc123",
 			subId: "s1",
 			conversationId: "conv-x",
 			claudeSessionId: "tx-1",
 		});
 		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
-		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toEqual({ team: "host.abc123", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.abc123")?.liveTeam).toEqual({ team: "proj.abc123", subId: "s1" });
 
 		// The same process reconnects: a fresh subId under the stable conversationId evicts ws1.
 		const ws2 = createMockWs();
-		register(handlers, ws2, { team: "host.abc123", subId: "s2", conversationId: "conv-x" });
+		register(handlers, ws2, { team: "proj.abc123", subId: "s2", conversationId: "conv-x" });
 		expect(ws1.close).toHaveBeenCalled();
-		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toBeUndefined();
+		expect(sessionStore.getByTeam("proj.abc123")?.liveTeam).toBeUndefined();
 	});
 
 	it("a DIFFERENT team presenting a known conversationId is refused - it can neither evict nor steal that slot", () => {
 		const { handlers, sessionStore, conversationRegistry } = setup();
 		const victim = createMockWs();
 		register(handlers, victim, {
-			team: "host.victim-team",
+			team: "proj.victim-team",
 			subId: "s1",
 			conversationId: "conv-shared",
 			claudeSessionId: "tx-1",
 		});
 		handlers.resolveHandshake(handshakeIdFrom(victim), { isMainOrLead: true });
-		expect(sessionStore.getByTeam("host.victim-team")?.liveTeam).toEqual({ team: "host.victim-team", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.victim-team")?.liveTeam).toEqual({ team: "proj.victim-team", subId: "s1" });
 
 		// conversationId rides verbatim in every session_id a caller has seen, so it is not a secret
 		// - a connection that merely learned it, under an unrelated team, must not be able to evict
 		// the real holder's live socket or steal its conversationRegistry slot.
 		const attacker = createMockWs();
-		register(handlers, attacker, { team: "host.attacker-team", subId: "s1", conversationId: "conv-shared" });
+		register(handlers, attacker, { team: "proj.attacker-team", subId: "s1", conversationId: "conv-shared" });
 
 		expect(victim.close).not.toHaveBeenCalled();
-		expect(sessionStore.getByTeam("host.victim-team")?.liveTeam).toEqual({ team: "host.victim-team", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.victim-team")?.liveTeam).toEqual({ team: "proj.victim-team", subId: "s1" });
 		expect(conversationRegistry.get("conv-shared")).toBe(victim);
 	});
 
@@ -182,7 +182,7 @@ describe("handshake-established session records", () => {
 		const { handlers, sessionStore } = setup();
 		const lead = createMockWs();
 		register(handlers, lead, {
-			team: "host.abc123",
+			team: "proj.abc123",
 			subId: "s1",
 			conversationId: "conv-a",
 			claudeSessionId: "tx-1",
@@ -191,58 +191,58 @@ describe("handshake-established session records", () => {
 
 		// A separate sub-session under the same team answers as worker and is evicted.
 		const worker = createMockWs();
-		register(handlers, worker, { team: "host.abc123", subId: "s2", conversationId: "conv-b" });
+		register(handlers, worker, { team: "proj.abc123", subId: "s2", conversationId: "conv-b" });
 		handlers.resolveHandshake(handshakeIdFrom(worker), { isMainOrLead: false });
 
 		expect(worker.close).toHaveBeenCalled();
-		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toEqual({ team: "host.abc123", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.abc123")?.liveTeam).toEqual({ team: "proj.abc123", subId: "s1" });
 	});
 
 	it("first-binding-holds: a second live incarnation of the same transcript is refused a record", () => {
 		const { handlers, sessionStore } = setup();
 		const ws1 = createMockWs();
-		register(handlers, ws1, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		register(handlers, ws1, { team: "proj.abc", subId: "s1", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
-		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toEqual({ team: "host.abc", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.abc")?.liveTeam).toEqual({ team: "proj.abc", subId: "s1" });
 
 		// A second live socket under a DIFFERENT segment claims the same transcript while ws1 is live.
 		const ws2 = createMockWs();
-		register(handlers, ws2, { team: "host.def", subId: "s2", claudeSessionId: "tx-1" });
+		register(handlers, ws2, { team: "proj.def", subId: "s2", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
 
 		expect(ws2.close).toHaveBeenCalled();
 		expect(ws2.data.handshakeConfirmed).toBe(false);
-		expect(sessionStore.getByTeam("host.def")).toBeUndefined();
-		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toEqual({ team: "host.abc", subId: "s1" });
+		expect(sessionStore.getByTeam("proj.def")).toBeUndefined();
+		expect(sessionStore.getByTeam("proj.abc")?.liveTeam).toEqual({ team: "proj.abc", subId: "s1" });
 		expect(sessionStore.size).toBe(1);
 	});
 
 	it("hands over a transcript when its prior socket is gone", () => {
 		const { handlers, sessionStore } = setup();
 		const ws1 = createMockWs();
-		register(handlers, ws1, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		register(handlers, ws1, { team: "proj.abc", subId: "s1", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
 		handlers.close(ws1);
 
 		const ws2 = createMockWs();
-		register(handlers, ws2, { team: "host.def", subId: "s2", claudeSessionId: "tx-1" });
+		register(handlers, ws2, { team: "proj.def", subId: "s2", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
 
 		expect(ws2.close).not.toHaveBeenCalled();
 		expect(ws2.data.handshakeConfirmed).toBe(true);
-		expect(sessionStore.getByTeam("host.def")?.liveTeam).toEqual({ team: "host.def", subId: "s2" });
-		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toBeUndefined();
+		expect(sessionStore.getByTeam("proj.def")?.liveTeam).toEqual({ team: "proj.def", subId: "s2" });
+		expect(sessionStore.getByTeam("proj.abc")?.liveTeam).toBeUndefined();
 		expect(sessionStore.size).toBe(1);
 	});
 
 	it("re-registering a subId prunes the evicted socket's pending handshake", () => {
 		const { handlers } = setup();
 		const ws1 = createMockWs();
-		register(handlers, ws1, { team: "host.abc123", subId: "s1" });
+		register(handlers, ws1, { team: "proj.abc123", subId: "s1" });
 		const staleHsId = handshakeIdFrom(ws1);
 
 		const ws2 = createMockWs();
-		register(handlers, ws2, { team: "host.abc123", subId: "s1" });
+		register(handlers, ws2, { team: "proj.abc123", subId: "s1" });
 		expect(ws1.close).toHaveBeenCalled();
 
 		expect(handlers.resolveHandshake(staleHsId, { isMainOrLead: true })).toBe(false);
@@ -288,7 +288,7 @@ describe("handshake-established session records", () => {
 		const sessionStore = new SessionStore({ now: () => clock });
 		const { handlers } = setup(sessionStore);
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		register(handlers, ws, { team: "proj.abc", subId: "s1", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
 		clock = 100;
 		handlers.pong(ws);
@@ -299,7 +299,7 @@ describe("handshake-established session records", () => {
 	it("does not evict a valid client when recording is disabled", () => {
 		const { handlers } = setup(undefined, undefined, true);
 		const ws = createMockWs();
-		register(handlers, ws, { team: "host.abc123", subId: "s1" });
+		register(handlers, ws, { team: "proj.abc123", subId: "s1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
 
 		expect(ws.close).not.toHaveBeenCalled();

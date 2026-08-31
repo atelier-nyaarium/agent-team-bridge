@@ -301,6 +301,13 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			safeSend({ type: "wake_result", team: msg.team, success: false, error: "reserved host session" });
 			return;
 		}
+		// Defence in depth behind the gateway's own rule: a host launch the gateway cannot name a
+		// record for carries no token, and nothing on this machine should start a shell for it.
+		if (!msg.sessionToken) {
+			console.error(`[host-wake] refusing wake of "${msg.team}": no session token`);
+			safeSend({ type: "wake_result", team: msg.team, success: false, error: "no session token" });
+			return;
+		}
 		const target: TmuxTarget = { kind: "host", name: project, sessionName: session };
 		// A spawn point whose shell does not share this filesystem needs its own resolution, and one
 		// that REFUSES rather than falling back: a Windows session handed a Linux path lands on a UNC

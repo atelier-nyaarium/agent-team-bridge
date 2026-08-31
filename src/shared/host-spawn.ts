@@ -156,6 +156,15 @@ export function isHostSpawn(id: string): boolean {
 	return REGISTRY.some((p) => p.id === id);
 }
 
+/** Whether a team name is a SESSION on a host shell, i.e. `<hostSpawn>.<session>`. Answered from the
+ * spawn registry rather than a `host.` prefix, so `windows.*` is never missed. A bare spawn name is
+ * not a session and answers false. */
+export function isHostSpawnSession(team: string): boolean {
+	const dot = team.indexOf(".");
+	if (dot <= 0 || dot === team.length - 1) return false;
+	return isHostSpawn(team.slice(0, dot));
+}
+
 export function hostSpawnPoint(id: string): HostSpawnPoint | undefined {
 	return REGISTRY.find((p) => p.id === id);
 }

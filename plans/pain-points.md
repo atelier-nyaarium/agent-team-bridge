@@ -417,13 +417,21 @@ not lost.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
-WILL NOT DO without an owner decision, and these are LIVE DEFECTS rather than closed ones. Every
-item below is the same gap: a name with no active binding stays claimable by anyone, and
-`handshakeConfirmed` is not an authentication signal (a squatter answers its own handshake with no
-credential). Closing them needs a way to tell a legitimate hand-launched `host.*` session from a
-squatter, which nothing today provides, and reserving the prefix would lock out the hand-launch the
-owner requires. Verified still present: the gate matches the bare string `host`, and
-`RESERVED_TEAM_NAMES` holds only `"host"`.
+CLOSED. The owner lifted the constraint ("I don't mind hand rolled sessions disappearing off the
+network anymore"), so a session on a host SHELL now has to prove the daemon launched it.
+
+Two gates, because either alone leaves the capability open. Registration refuses a
+`<hostSpawn>.<session>` name that does not present its own record's launch token, checked against
+the record rather than through `toClaim` (a fresh launch presents its token BEFORE the binding
+activates, so a claim-based rule would refuse every real host session). And `doWakeTeam` refuses to
+MINT under any host spawn, which is the one that actually mattered: `/send` accepts an unbound
+sender, so naming a nonexistent host session was minting the record and launching the shell without
+any registration at all. Only the console's authenticated `create_session` opens a host record now.
+Classified via `isHostSpawnSession`, so `windows.*` is covered and not just the `host.` spelling.
+
+Accepted cost: a reattached pane and a purged `DATA_DIR` both lose their proof and must be
+relaunched. An "empty store trusts everyone" exception was considered and refused, since a fresh
+install, a purge, and a stranger inventing the first name are indistinguishable.
 
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
   match the bare `host` exactly, so a composite `host.foo` bypasses both.

@@ -7,8 +7,9 @@ import { authFor, createMockWs, handshakeIdFrom } from "./helpers/websocket.js";
 
 // The session binding is what stops a compromised container from speaking as a sibling: the token
 // reaches a session only through the daemon's launch command, so presenting the one bound to a name
-// is what proves ownership of it. These pin the gate AND the two paths that must stay open, since a
-// gate that locks out hand-launched sessions or a purged gateway would be worked around instead.
+// is what proves ownership of it. These pin the gate AND the two paths that must stay open for a
+// DEVCONTAINER session, since a gate that locks out a hand-launched one or a purged gateway would be
+// worked around instead. A session on a host shell is the deliberate exception, below.
 describe("session binding on register", () => {
 	let intervals: ReturnType<typeof setInterval>[] = [];
 	afterEach(() => {
@@ -269,5 +270,89 @@ describe("inert bindings stay out of the way", () => {
 		expect(squatter.close).toHaveBeenCalled();
 		expect(registry.get(team)?.has("s1")).toBe(false);
 		expect(registry.get(team)?.has("s2")).toBe(true);
+	});
+});
+
+// A session on a host SHELL is the one name that routes a wake at the real machine rather than a
+// container, so it alone must prove the daemon launched it. An unclaimed name is otherwise claimable
+// by anyone, which is what let a stranger have Claude started on the host.
+describe("host-shell sessions must present a daemon launch token", () => {
+	let intervals: ReturnType<typeof setInterval>[] = [];
+	afterEach(() => {
+		for (const id of intervals) clearInterval(id);
+		intervals = [];
+	});
+
+	function setup(sessionStore: SessionStore) {
+		const registry: TeamRegistry = new Map();
+		const handlers = createWebSocketHandlers({
+			registry,
+			conversationRegistry: new Map() as ConversationRegistry,
+			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
+			knownTeamPaths: new Map(),
+			offlineCatalog: new Map(),
+			wakeCoordinator: new WakeCoordinator(),
+			sessionStore,
+			auth: authFor(registry, sessionStore),
+		});
+		intervals.push(handlers.heartbeatInterval);
+		return { handlers, registry };
+	}
+
+	function tryRegister(store: SessionStore, team: string, sessionToken?: string) {
+		const { handlers, registry } = setup(store);
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(
+			ws,
+			JSON.stringify({
+				type: "register",
+				mode: "channel",
+				team,
+				subId: "s1",
+				...(sessionToken ? { sessionToken } : {}),
+			}),
+		);
+		return { ws, admitted: registry.get(team)?.has("s1") === true };
+	}
+
+	for (const spawn of ["host", "windows"]) {
+		it(`refuses an unclaimed ${spawn}.* name, which no daemon ever launched`, () => {
+			const { ws, admitted } = tryRegister(new SessionStore(), `${spawn}.squatter`);
+
+			expect(admitted).toBe(false);
+			expect(ws.close).toHaveBeenCalled();
+		});
+	}
+
+	it("admits a host session presenting its own token on its FIRST register, before the binding arms", () => {
+		// The regression this gate invites: a fresh daemon launch HAS a record and a token, but its
+		// binding is inert until this very register activates it. A rule reading the binding instead of
+		// the token would refuse every real host session on connect.
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "host" });
+		const token = store.ensureBindToken(record);
+		expect(store.isBindingActive(record)).toBe(false);
+
+		const { admitted } = tryRegister(store, store.teamOf(record), token);
+
+		expect(admitted).toBe(true);
+	});
+
+	it("refuses a host name presented with another session's token", () => {
+		const store = new SessionStore();
+		const mine = store.mint({ spawn: "host" });
+		const theirs = store.mint({ spawn: "host" });
+		const borrowed = store.ensureBindToken(theirs);
+
+		const { admitted } = tryRegister(store, store.teamOf(mine), borrowed);
+
+		expect(admitted).toBe(false);
+	});
+
+	it("leaves an unclaimed devcontainer name claimable, so only host shells tightened", () => {
+		const { admitted } = tryRegister(new SessionStore(), "recipe-app.abc123");
+
+		expect(admitted).toBe(true);
 	});
 });

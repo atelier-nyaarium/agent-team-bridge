@@ -56,8 +56,11 @@ describe("wake security boundary", () => {
 		return ws;
 	}
 
-	function wakeService(s: ReturnType<typeof setup>, hostWs: ServerWebSocket<WsData>) {
-		const sessionStore = new SessionStore();
+	function wakeService(
+		s: ReturnType<typeof setup>,
+		hostWs: ServerWebSocket<WsData>,
+		sessionStore: SessionStore = new SessionStore(),
+	) {
 		return new WakeService({
 			registry: s.registry,
 			sessionStore,
@@ -116,5 +119,39 @@ describe("wake security boundary", () => {
 
 		await expect(wake).resolves.toMatchObject({ ok: true });
 		expect(message.projectPath).toBe("/trusted/path");
+	});
+
+	// The registration gate alone closes nothing: `/send` accepts an unbound sender, so naming a
+	// host session that does not exist would otherwise MINT it here and have the daemon launch a
+	// shell on the real machine. create_session is the only door to a host record.
+	for (const spawn of ["host", "windows"]) {
+		it(`refuses to mint a ${spawn} session from a send, however the caller labels it`, async () => {
+			const s = setup();
+			const store = new SessionStore();
+			const hostWs = createMockWs();
+			const service = wakeService(s, hostWs, store);
+
+			const wake = await service.tryWakeTeam(`${spawn}.invented`, { displayLabel: "Looks Legitimate" });
+
+			expect(wake).toMatchObject({ ok: false });
+			expect(hostWs.send).not.toHaveBeenCalled();
+			expect(store.getByTeam(`${spawn}.invented`)).toBeUndefined();
+		});
+	}
+
+	it("still wakes a host session that already has a record, so the console's own create keeps working", async () => {
+		const s = setup();
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "host", sessionLabel: "real" });
+		const sent: string[] = [];
+		const hostWs = { readyState: 1, send: (value: string) => sent.push(value) } as ServerWebSocket<WsData>;
+		const service = wakeService(s, hostWs, store);
+
+		const wake = service.tryWakeTeam(store.teamOf(record));
+		s.wakeCoordinator.notify(JSON.parse(sent[0]!).team);
+
+		await expect(wake).resolves.toMatchObject({ ok: true });
+		// The launch token rides along, which is what the register gate then demands back.
+		expect(JSON.parse(sent[0]!).sessionToken).toBeTruthy();
 	});
 });
