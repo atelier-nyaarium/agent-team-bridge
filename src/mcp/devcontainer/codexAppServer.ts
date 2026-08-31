@@ -30,6 +30,38 @@ export interface ThreadSettings {
 const METHOD_NOT_FOUND = -32601;
 const REQUEST_TIMEOUT_MS = 60_000;
 
+export type AppServerFailureKind = "refused" | "timeout" | "unreadable" | "closed";
+
+/** Every failure this module minted; an error wearing the prototype is not one. */
+const minted = new WeakSet<AppServerFailure>();
+
+/** Required by the constructor and never exported, so a constructor reached through an instance mints nothing. */
+const MINT = Symbol("AppServerFailure");
+
+/** How a request failed. Module-private, so only this transport mints one; a caller branches on `kind`. */
+class AppServerFailure extends Error {
+	readonly kind: AppServerFailureKind;
+	/** The JSON-RPC code and data; refusals only. */
+	readonly code: number | undefined;
+	readonly data: unknown;
+
+	constructor(mint: symbol, kind: AppServerFailureKind, message: string, refusal?: { code: number; data?: unknown }) {
+		super(message);
+		if (mint !== MINT) throw new Error(`AppServerFailure is minted by the transport`);
+		this.name = "AppServerFailure";
+		this.kind = kind;
+		this.code = refusal?.code;
+		this.data = refusal?.data;
+		minted.add(this);
+	}
+}
+
+export type { AppServerFailure };
+
+export function isAppServerFailure(error: unknown): error is AppServerFailure {
+	return error instanceof AppServerFailure && minted.has(error);
+}
+
 /**
  * Every server-initiated request, and the refusal it always gets.
  *
@@ -60,9 +92,22 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 	const pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
 	const eventListeners: Array<(message: { method: string; params?: unknown }) => void> = [];
 
+	function fail(kind: AppServerFailureKind, message: string): void {
+		for (const waiter of pending.values()) waiter.reject(new AppServerFailure(MINT, kind, message));
+		pending.clear();
+	}
+
 	function write(message: unknown): void {
 		if (closed) return;
-		child.stdin.write(frame(message));
+		try {
+			child.stdin.write(frame(message));
+		} catch {
+			// A pipe refusing a write is a dead child, whether or not its exit has been seen yet. The
+			// kill makes the exit path run, which is what drops the supervisor's lease.
+			closed = true;
+			fail("closed", `app server exited`);
+			child.kill();
+		}
 	}
 
 	function answerServerRequest(id: string | number, method: string | undefined): void {
@@ -94,8 +139,10 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			const waiter = typeof parsed.data.id === "number" ? pending.get(parsed.data.id) : undefined;
 			if (!waiter) return;
 			pending.delete(parsed.data.id as number);
-			if (parsed.data.error) waiter.reject(new Error(parsed.data.error.message));
-			else waiter.resolve(parsed.data.result);
+			if (parsed.data.error) {
+				const { code, message, data } = parsed.data.error;
+				waiter.reject(new AppServerFailure(MINT, "refused", message, { code, data }));
+			} else waiter.resolve(parsed.data.result);
 			return;
 		}
 
@@ -103,7 +150,7 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 		if (typeof frame.id === "number" && pending.has(frame.id)) {
 			const waiter = pending.get(frame.id);
 			pending.delete(frame.id);
-			waiter?.reject(new Error(`unreadable response`));
+			waiter?.reject(new AppServerFailure(MINT, "unreadable", `unreadable response`));
 			return;
 		}
 
@@ -134,18 +181,17 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 
 	child.onExit(() => {
 		closed = true;
-		for (const waiter of pending.values()) waiter.reject(new Error(`app server exited`));
-		pending.clear();
+		fail("closed", `app server exited`);
 	});
 
 	return {
 		request(method, params) {
-			if (closed) return Promise.reject(new Error(`app server exited`));
+			if (closed) return Promise.reject(new AppServerFailure(MINT, "closed", `app server exited`));
 			const id = nextId++;
 			return new Promise((resolve, reject) => {
 				const timer = setTimeout(() => {
 					pending.delete(id);
-					reject(new Error(`timed out: ${method}`));
+					reject(new AppServerFailure(MINT, "timeout", `timed out: ${method}`));
 				}, REQUEST_TIMEOUT_MS);
 				pending.set(id, {
 					resolve: (value) => {
@@ -167,7 +213,10 @@ export function createJsonlTransport(child: CodexChild): AppServerTransport {
 			eventListeners.push(listener);
 		},
 		close() {
+			// Already ended by an exit, a refused write or an earlier close: nothing left to fail or kill.
+			if (closed) return;
 			closed = true;
+			fail("closed", `app server exited`);
 			child.kill();
 		},
 	};

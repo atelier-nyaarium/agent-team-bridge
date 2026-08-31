@@ -4,6 +4,7 @@ import {
 	type AppServerTransport,
 	CodexAppServerClient,
 	createJsonlTransport,
+	isAppServerFailure,
 	strongestEffort,
 } from "../mcp/devcontainer/codexAppServer.js";
 import type { CodexChild } from "../mcp/devcontainer/codexTargets.js";
@@ -50,14 +51,22 @@ function turnCompleted(
 }
 
 /** A fake child whose written lines are captured, and whose stdout can be fed a frame. */
-function fakeChild() {
+function fakeChild(options: { writeThrows?: Error } = {}) {
 	const stdout = new PassThrough();
 	const written: string[] = [];
+	let kills = 0;
 	let onExit: (info: { code: number | null; signal: string | null }) => void = () => {};
 	const child: CodexChild = {
-		stdin: { write: (line: string) => written.push(line) } as unknown as CodexChild["stdin"],
+		stdin: {
+			write: (line: string) => {
+				if (options.writeThrows) throw options.writeThrows;
+				written.push(line);
+			},
+		} as unknown as CodexChild["stdin"],
 		stdout: stdout as unknown as CodexChild["stdout"],
-		kill: () => {},
+		kill: () => {
+			kills += 1;
+		},
 		onExit: (listener) => {
 			onExit = listener;
 		},
@@ -68,6 +77,7 @@ function fakeChild() {
 		sent: () => written.map((w) => JSON.parse(w)),
 		feed: (message: unknown) => stdout.write(`${JSON.stringify(message)}\n`),
 		exit: () => onExit({ code: 1, signal: null }),
+		kills: () => kills,
 	};
 }
 
@@ -337,6 +347,7 @@ describe("the transport's request plumbing", () => {
 		f.feed({ jsonrpc: "2.0", id, result: { userAgent: "codex" }, error: null });
 
 		await expect(pending).rejects.toThrow("unreadable response");
+		await expect(pending).rejects.toMatchObject({ kind: "unreadable" });
 		expect(f.sent().filter((m) => m.error?.code === -32601)).toHaveLength(0);
 	});
 
@@ -348,15 +359,23 @@ describe("the transport's request plumbing", () => {
 		f.feed({ jsonrpc: "2.0", id: f.sent()[0]?.id, error: { code: -1, message: "no such turn" } });
 
 		await expect(pending).rejects.toThrow("no such turn");
+		await expect(pending).rejects.toMatchObject({ kind: "refused", code: -1 });
 	});
 
-	it("fails everything in flight when the child dies rather than hanging", async () => {
-		const f = fakeChild();
-		const transport = createJsonlTransport(f.child);
-		const pending = transport.request("turn/start", {});
-		f.exit();
+	it("fails everything in flight when the child dies rather than hanging, and drops their timers", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fakeChild();
+			const transport = createJsonlTransport(f.child);
+			const pending = transport.request("turn/start", {});
+			f.exit();
 
-		await expect(pending).rejects.toThrow("app server exited");
+			await expect(pending).rejects.toThrow("app server exited");
+			await expect(pending).rejects.toMatchObject({ kind: "closed" });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("reassembles a frame split across chunks", async () => {
@@ -369,6 +388,110 @@ describe("the transport's request plumbing", () => {
 		await new Promise((r) => setImmediate(r));
 
 		expect(seen).toHaveBeenCalledWith(expect.objectContaining({ method: "turn/started" }));
+	});
+});
+
+describe("how a request fails", () => {
+	it("carries a refusal's code and data beside its kind, so nothing reads the sentence", async () => {
+		const f = fakeChild();
+		const transport = createJsonlTransport(f.child);
+		const pending = transport.request("thread/archive", { threadId: THREAD });
+		await new Promise((r) => setImmediate(r));
+		f.feed({
+			jsonrpc: "2.0",
+			id: f.sent()[0]?.id,
+			error: { code: -32600, message: "no rollout found", data: { threadId: THREAD } },
+		});
+
+		const failure = await pending.catch((error) => error);
+		// Still an Error: `describe` and `errorText` read the message through `instanceof Error`.
+		expect(failure).toBeInstanceOf(Error);
+		expect(isAppServerFailure(failure)).toBe(true);
+		expect(failure).toMatchObject({
+			name: "AppServerFailure",
+			kind: "refused",
+			code: -32600,
+			data: { threadId: THREAD },
+			message: "no rollout found",
+		});
+		// Only what the transport minted passes: not an ordinary Error, not one wearing the prototype, and
+		// not one built through the constructor an instance hands out.
+		expect(isAppServerFailure(new Error("ordinary"))).toBe(false);
+		expect(isAppServerFailure(Object.setPrototypeOf(new Error("forged"), Object.getPrototypeOf(failure)))).toBe(
+			false,
+		);
+		const Reached = (failure as { constructor: new (...args: unknown[]) => unknown }).constructor;
+		expect(() => new Reached(Symbol("guess"), "refused", "forged")).toThrow();
+	});
+
+	it("settles what is in flight as closed when the transport is closed, rather than waiting out the timeout", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fakeChild();
+			const transport = createJsonlTransport(f.child);
+			const failure = transport.request("thread/read", { threadId: THREAD }).catch((error) => error);
+			transport.close();
+			transport.close();
+
+			expect(await failure).toMatchObject({ kind: "closed" });
+			expect(vi.getTimerCount()).toBe(0);
+			// A second close, and a close after the child already exited, kill nothing again.
+			expect(f.kills()).toBe(1);
+			f.exit();
+			transport.close();
+			expect(f.kills()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("times out as its own kind, and a reply landing afterwards settles nothing", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fakeChild();
+			const transport = createJsonlTransport(f.child);
+			const failure = transport.request("thread/read", { threadId: THREAD }).catch((error) => error);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(await failure).toMatchObject({ kind: "timeout", message: "timed out: thread/read" });
+
+			// The late frame carries the id the transport already gave up on; it must neither answer as a
+			// request nor settle the request issued after it.
+			const second = transport.request("thread/read", { threadId: THREAD });
+			const [lateId, secondId] = f.sent().map((m) => m.id);
+			f.feed({ jsonrpc: "2.0", id: lateId, result: { late: true } });
+			f.feed({ jsonrpc: "2.0", id: secondId, result: { second: true } });
+
+			expect(await second).toEqual({ second: true });
+			expect(f.sent().filter((m) => m.error?.code === -32601)).toHaveLength(0);
+			// A settled request leaves no timer behind.
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses a request after the child died, as closed, writing nothing to the pipe", async () => {
+		const f = fakeChild();
+		const transport = createJsonlTransport(f.child);
+		f.exit();
+
+		const failure = await transport.request("thread/read", { threadId: THREAD }).catch((error) => error);
+		expect(failure).toMatchObject({ kind: "closed" });
+		expect(f.sent()).toHaveLength(0);
+	});
+
+	it("treats a pipe that refuses a write as a dead child, failing that request and every later one as closed", async () => {
+		// EPIPE surfaces as a synchronous throw from stdin.write, before any exit event.
+		const f = fakeChild({ writeThrows: new Error("EPIPE") });
+		const transport = createJsonlTransport(f.child);
+
+		const first = await transport.request("thread/read", { threadId: THREAD }).catch((error) => error);
+		const second = await transport.request("thread/read", { threadId: THREAD }).catch((error) => error);
+		expect(isAppServerFailure(first)).toBe(true);
+		expect(first).toMatchObject({ kind: "closed", message: "app server exited" });
+		expect(second).toMatchObject({ kind: "closed" });
+		// The kill is what makes the exit path run, so the supervisor drops the lease.
+		expect(f.kills()).toBe(1);
 	});
 });
 

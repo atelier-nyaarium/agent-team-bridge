@@ -15,6 +15,7 @@ export const CodexAppServerResponseSchema = z
 			.looseObject({
 				code: z.number(),
 				message: z.string(),
+				data: z.unknown().optional(),
 			})
 			.optional(),
 	})
