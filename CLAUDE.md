@@ -533,6 +533,24 @@ owner-signed `kind:console` admission before dispatch. Only a pre-seal failure r
 the console can prompt enrollment. Still open on this track: retiring `CONSOLE_BRIDGE_TOKEN`, which
 is the one shared app-token the whole console op surface still sits behind.
 
+**A cross-machine answer states its own completeness.** A partial result is not a plain success, and
+an unreadable roster is not "no peers": `discover()` returns asked, answered, unreachable gateway ids
+and `rosterKnown` beside the rows, and `list_teams` carries them as an optional field so an older
+gateway simply claims nothing. `routerClient.isRegistered()` is true only after a `gateway_register`
+the Router accepted, since a refused registration leaves the socket open and `isConnected()` true,
+which is how a revoked gateway reads as alone. The console holds rows for a gateway named
+unreachable rather than sweeping them (`unreachableKeys`, `rowOnUnreachable`, `mergePresence`):
+wholesale replacement drops a machine's sessions with no error state anywhere, because nothing else
+on the wire says how many peers were asked.
+
+**Every hold names its release event AND a bound, and expiry lives in the read, not a sweeper's
+cadence.** The class is a hold whose release may never arrive. One shared Hold or Lease primitive
+does not fit: persisted results, read-time expiry, fan-out wakeups and external `failAll` differ too
+much, so the rule is per-site. A repo-wide Map or Set scanner enforces the wrong thing, most holds
+being instance fields it cannot see. The console opCache is deliberately unbounded per entry: its
+bound is the op's, and evicting a mutating op mid-flight reopens the double execution the cache
+exists to stop.
+
 ### Versioned state planes
 
 The console's poll response piggybacks versioned server-state snapshots instead of the console
