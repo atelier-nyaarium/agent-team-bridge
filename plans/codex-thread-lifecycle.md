@@ -488,14 +488,9 @@ thread ever reached, and `TargetSession.threads`, one binding per thread the gat
 `CodexLiveTurns` was never among them, since a turn leaves on its terminal and a turn that stops
 reporting takes its generation with it.
 
-A thread record ages out only from `parked` or `disposed`, oldest retirement first, bounded at
-`RETIRED_MEMORY`, and the phase is rechecked AT eviction so a thread activated again since keeps its
-record. Every other phase stays: an evicted `active` record would read to the reaper as a thread it
-has no reason to wait for.
-
-Retirements live in an ordered map of one entry per thread, and retiring MOVES a thread to the back
-rather than appending. That is the whole mechanism: a record cannot hold two entries, so it cannot be
-forgotten on an older park's clock.
+Retirements live in an ordered map of one entry per thread, bounded at `RETIRED_MEMORY`, and retiring
+MOVES a thread to the back rather than appending. That is the whole mechanism: a record cannot hold
+two entries, so it cannot be forgotten on an older park's clock.
 
 The entry always names the record the map holds, and every write to the map is keyed by the RECORD,
 never by the id alone. That rule is the whole defence, because `mutate` tests identity only BEFORE
@@ -517,13 +512,10 @@ What the bound costs is real and stays: a terminal redelivered after its record 
 republishes, because the record's published ids ARE the once-per-turn dedup and forgetting one
 forgets them. It takes `RETIRED_MEMORY` retirements plus the tracker's own settled window to reach,
 and the gateway drops the duplicate at persistence, where the turn is no longer `inProgress`. So the
-wire promise is once per turn within the window, not for all time.
-
-Forgetting the record is also what bounds the turn ids it published, and that ordering is the whole
-point. Capping `published` directly was tried in an earlier step and reverted: the ids are what make
-publication once-per-turn, and the record outlives them, so the cap traded a promise for nothing. The
-record's own lifetime is the bound that costs nothing, because a parked thread has no turn left to
-publish twice.
+wire promise is once per turn within the window, not for all time. Capping `published` directly was
+tried in an earlier step and reverted for the same reason read the other way: the ids are what make
+publication once-per-turn and the record outlives them, so the cap traded the promise for nothing,
+while forgetting the record costs nothing because a parked thread has no turn left to publish twice.
 
 The daemon's thread bindings are bounded the same way, at `THREAD_MEMORY`, evicting the oldest
 binding the owner is not mid-operation on, and draining to the bound rather than evicting one per
@@ -538,8 +530,9 @@ history. A forgotten binding costs a terminal the fallback it would have used wh
 unbound, which the gateway answers by reconciling the thread.
 
 Note that `parked` is not the end of a thread: `resumeThread` unarchives one and returns it to
-`idle`, and only `disposed` and `poisoned` are refused. That is precisely why the phase is rechecked
-at eviction rather than trusted from the moment of retirement.
+`idle`, and only `disposed` and `poisoned` are refused. A retirement is therefore a claim about a
+moment, not a verdict, which is why `load` withdraws it and why eviction rechecks the phase instead
+of trusting the entry that survived.
 
 Two phases of the original text did not survive contact. There is no `firstTurn` phase; a thread
 reached only by name is `unloaded`, and eviction protects it along with every phase but `parked` and
