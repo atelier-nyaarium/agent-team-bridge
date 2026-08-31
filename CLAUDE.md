@@ -250,9 +250,18 @@ Only `full` on `channel_reply` and `notify_human` scans markdown links. Other fi
 
 The project root comes from `REFERENCE_ROOT`, the host's first `roots/list` answer, or the server start directory, each resolved to its git toplevel. A plugin-directory cwd falls back to shell `PWD`. Root discovery is bounded by `HOST_ROOTS_TIMEOUT_MS`.
 
-**Text:** `#` searches the chain's declaration, or the whole file without a chain. `#from..to` selects a range. `#text@before:anchor` and `#text@after:anchor` select the nearest occurrence.
+**Text:** `#text` searches the chain's declaration, or the whole file without a chain. `#from..to`
+selects a range. `#text@before:anchor` and `#text@after:anchor` select the nearest occurrence.
 
 Escape spaces and closing parentheses, or use angle brackets. Percent-encode literal `..` and `@after:`.
+
+One worked example per matcher, since the grammar is not guessable and a test pins these:
+
+    [chain](ref://src/App.tsx:App:render)
+    [text](ref://src/cart.ts:Shop:Cart:add#this.count)
+    [range](ref://src/cart.ts:Shop:Cart:add#this.items..reset)
+    [before](ref://src/cart.ts:Shop:Cart:add#this.count@before:reset)
+    [after](ref://src/cart.ts:Shop:Cart:add#this.count@after:reset)
 
 **Refused, naming the fix:** outside-root chain, missing or ambiguous name, or no matcher result. `exact` requires one hash-verified declaration.
 

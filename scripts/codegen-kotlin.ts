@@ -349,7 +349,7 @@ for (const schema of ROOTS) {
 	const guardedSet = (name: string, body: Json) => {
 		const existing = defs.get(name);
 		if (existing && JSON.stringify(existing) !== JSON.stringify(body)) {
-			throw new Error(`.meta id collision: "${name}" maps to two different shapes`);
+			throw new Error(`conversion-root versus inline-object conflict: "${name}" maps to two different shapes`);
 		}
 		defs.set(name, body);
 	};

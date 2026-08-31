@@ -11,6 +11,8 @@ export interface MailboxSnapshot {
 	epoch: number;
 }
 
+export type MailboxProvenance = "peer" | "message";
+
 /** Epoch is preserved on reload, so the console's cursor still matches. */
 export interface MailboxSnapshotState {
 	epoch: number;
@@ -18,6 +20,7 @@ export interface MailboxSnapshotState {
 	dropped: number;
 	lastActivity: number;
 	entries: MailboxEntry[];
+	provenance?: MailboxProvenance[];
 	// dedupeKey -> seq, so a relay retry does not re-append.
 	seenKeys?: Array<[string, number]>;
 	// deviceId -> acked seq, surviving a deploy.
@@ -39,10 +42,8 @@ const DEFAULT_MAX_SEEN_KEYS = 4096;
 const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
 /** Avoids re-serializing the whole entry per append. */
-function entryBytes(input: MailboxInput): number {
-	let n = (input.body?.length ?? 0) + (input.fullSpoken?.length ?? 0);
-	if (input.files) for (const f of input.files) n += f.filename.length + (f.blobId?.length ?? 0);
-	return n;
+export function entryBytes(input: MailboxInput | MailboxEntry): number {
+	return Buffer.byteLength(JSON.stringify(input), "utf8");
 }
 
 /** NOT the ingest schema: reusing it would retroactively delete delivered history. */
@@ -73,6 +74,7 @@ function mintEpoch(): number {
 export class DeviceMailbox {
 	private entries: MailboxEntry[] = [];
 	private entryBytes: number[] = [];
+	private entryProvenance: MailboxProvenance[] = [];
 	private bytesUsed = 0;
 	private nextSeq = 1;
 	private dropped = 0;
@@ -108,7 +110,7 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 	}
 
-	append(input: MailboxInput, dedupeKey?: string): MailboxEntry {
+	append(input: MailboxInput, dedupeKey?: string, provenance: MailboxProvenance = "message"): MailboxEntry {
 		if (dedupeKey !== undefined) {
 			const seenSeq = this.seenKeys.get(dedupeKey);
 			if (seenSeq !== undefined) {
@@ -119,7 +121,8 @@ export class DeviceMailbox {
 		}
 		const entry: MailboxEntry = { ...input, seq: this.nextSeq++, at: Date.now() };
 		this.entries.push(entry);
-		this.entryBytes.push(entryBytes(input));
+		this.entryBytes.push(entryBytes(entry));
+		this.entryProvenance.push(provenance);
 		this.bytesUsed += this.entryBytes[this.entryBytes.length - 1];
 		if (dedupeKey !== undefined) this.recordSeen(dedupeKey, entry.seq);
 		// The just-appended entry is always kept, even alone over the byte cap.
@@ -145,7 +148,7 @@ export class DeviceMailbox {
 		const lastIdx = this.entries.length - 1;
 		let idx = -1;
 		for (let i = 0; i < lastIdx; i++) {
-			if (this.entries[i].kind === "peer") {
+			if (this.entryProvenance[i] === "peer") {
 				idx = i;
 				break;
 			}
@@ -153,6 +156,7 @@ export class DeviceMailbox {
 		if (idx === -1) idx = lastIdx > 0 ? 0 : lastIdx;
 		this.bytesUsed -= this.entryBytes[idx] ?? 0;
 		this.entryBytes.splice(idx, 1);
+		this.entryProvenance.splice(idx, 1);
 		this.entries.splice(idx, 1);
 		this.dropped += 1;
 	}
@@ -231,6 +235,7 @@ export class DeviceMailbox {
 		while (i < this.entries.length && this.entries[i].seq <= min) i++;
 		if (i > 0) {
 			for (const b of this.entryBytes.splice(0, i)) this.bytesUsed -= b;
+			this.entryProvenance.splice(0, i);
 			this.entries.splice(0, i);
 		}
 	}
@@ -269,6 +274,7 @@ export class DeviceMailbox {
 		while (i < this.entries.length && this.entries[i].seq <= cursor) i++;
 		if (i > 0) {
 			for (const b of this.entryBytes.splice(0, i)) this.bytesUsed -= b;
+			this.entryProvenance.splice(0, i);
 			this.entries.splice(0, i);
 		}
 	}
@@ -285,6 +291,7 @@ export class DeviceMailbox {
 			dropped: this.dropped,
 			lastActivity: this.lastActivity,
 			entries: [...this.entries],
+			provenance: [...this.entryProvenance],
 			seenKeys: [...this.seenKeys],
 			consumerCursors: [...this.consumerCursors],
 			consumerLastSeen: [...this.consumerLastSeen],
@@ -304,7 +311,7 @@ export class DeviceMailbox {
 		box.dropped = s.dropped;
 		box.lastActivity = s.lastActivity;
 		const droppedSeqs = new Set<number>();
-		for (const e of s.entries) {
+		for (const [sourceIndex, e] of s.entries.entries()) {
 			if (!servable(e)) {
 				// The count is the ONLY signal the console has.
 				box.dropped++;
@@ -314,6 +321,9 @@ export class DeviceMailbox {
 			box.entries.push(e);
 			const b = entryBytes(e);
 			box.entryBytes.push(b);
+			// Remove after 2026-11-30. Snapshots predating recorded provenance carry only the wire
+			// `kind`, and those entries were already admitted under it.
+			box.entryProvenance.push(s.provenance?.[sourceIndex] ?? (e.kind === "peer" ? "peer" : "message"));
 			box.bytesUsed += b;
 		}
 		if (droppedSeqs.size > 0) {

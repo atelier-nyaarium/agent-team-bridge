@@ -19,7 +19,7 @@ and can be reached through these tools.
 - **`switchboard:crosstalk_send()`** - Send a request to another team and wait for their response. Blocks until they respond.
 - **`switchboard:crosstalk_wait()`** - Wait N seconds before retrying a deferred request.
 
-> **The human is not a crosstalk team.** `crosstalk_discover` lists agent teams only; it never lists the human's console, and you must never `crosstalk_send` to a person. Reach the human by replying on the request you received (`channel_reply` in channel mode, `crosstalk_reply` for CLI agents), or push a proactive notice to their console with `switchboard:notify_human()` (carries title/summary/full/fullSpoken).
+> **The human is not a crosstalk team.** `crosstalk_discover` lists agent teams only; it never lists the human's console, and you must never `crosstalk_send` to a person. Reach the human by replying on the request you received with `channel_reply`, or push a proactive notice to their console with `switchboard:notify_human()` (carries title/summary/full/fullSpoken).
 
 > **Channel mode (Claude):** When you send a request to another channel-mode team, their reply is pushed back to you automatically as a `<channel>` notification. You will receive it without polling.
 
@@ -172,4 +172,4 @@ the `instructions` attribute says so in words, and those words are what you foll
 ### CLI agents (cursor, copilot, codex)
 
 Requests are injected into your session as a prompt containing a `session_id` in the header.
-Do the work, then call **`switchboard:crosstalk_reply()`** with that `session_id`.
+Do the work, then reply with the supported `channel_reply` tool using that `session_id`.

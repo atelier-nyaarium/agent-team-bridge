@@ -7,8 +7,15 @@ set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 
 # Default: pull and start the gateway.
-git fetch --prune || true
-git pull || true
+if ! git fetch --prune; then
+	echo "ERROR: git fetch failed; gateway startup aborted" >&2
+	exit 1
+fi
+if ! git pull; then
+	echo "ERROR: git pull failed; gateway startup aborted" >&2
+	exit 1
+fi
+echo "Deploying commit $(git rev-parse HEAD)"
 
 # Default GATEWAY_ID to this machine's hostname when .env sets none, so two machines never both
 # silently fall back to "switchboard". docker compose reads .env on its own; this export only fills

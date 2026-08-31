@@ -1303,6 +1303,7 @@ export function createRoutes({
 						files: files && files.length > 0 ? files : undefined,
 					},
 					dedupeKey: crypto.randomUUID(),
+					provenance: "message",
 					origin: "local",
 					resolveMailbox: () => mailbox,
 					label: "respond",

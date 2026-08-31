@@ -1,12 +1,40 @@
 import { describe, expect, it } from "vitest";
 import type { MailboxInput } from "../shared/console-protocol.js";
-import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { DeviceMailbox, DeviceMailboxStore, entryBytes } from "../shared/device-mailbox.js";
 
 function message(session_id: string, body: string): MailboxInput {
 	return { kind: "message", session_id, from: "team-a", body };
 }
 
 describe("DeviceMailbox", () => {
+	it("counts every serialized field in UTF-8 bytes", () => {
+		const input: MailboxInput = {
+			kind: "notice",
+			session_id: "s",
+			from: "frøm",
+			to: "tø",
+			dedupeKey: "dedupe",
+			opId: "op",
+			title: "títle",
+			summary: "summary",
+			body: "bødÿ",
+			fullSpoken: "spoken",
+			status: "done",
+			files: [
+				{
+					filename: "nämé",
+					mime: "text/plain",
+					size: 1,
+					descriptiveKey: "d",
+					role: "attachment",
+					blobId: "bløb",
+				},
+			],
+		};
+		expect(entryBytes(input)).toBe(Buffer.byteLength(JSON.stringify(input), "utf8"));
+		expect(entryBytes(input)).toBeGreaterThan(JSON.stringify(input).length);
+	});
+
 	it("append assigns monotonic seq and advances highWater", () => {
 		const box = new DeviceMailbox(1);
 		expect(box.highWater).toBe(0);
@@ -58,7 +86,7 @@ describe("DeviceMailbox", () => {
 	it("cap eviction prefers the oldest peer entry over older entries of other kinds", () => {
 		const box = new DeviceMailbox(1, 3);
 		box.append(message("s1", "m0"));
-		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" });
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" }, undefined, "peer");
 		box.append(message("s1", "m1"));
 		// Appending past the cap would normally evict "m0" (oldest overall); instead the
 		// "peer" entry is evicted first even though it is newer, so real mail survives longer.
@@ -66,6 +94,15 @@ describe("DeviceMailbox", () => {
 		const snap = box.drain(0);
 		expect(snap.entries.map((e) => e.body)).toEqual(["m0", "m1", "m2"]);
 		expect(snap.dropped).toBe(1);
+	});
+
+	it("does not trust a wire kind for eviction priority", () => {
+		const box = new DeviceMailbox(1, 3);
+		box.append(message("s1", "m0"));
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "spoof" });
+		box.append(message("s1", "m1"));
+		box.append(message("s1", "m2"));
+		expect(box.drain(0).entries.map((e) => e.body)).toEqual(["spoof", "m1", "m2"]);
 	});
 
 	it("a peer entry that itself tips the cap does not evict itself", () => {
@@ -76,7 +113,7 @@ describe("DeviceMailbox", () => {
 		// The backlog is entirely non-peer; this fresh "peer" append is the only "peer"
 		// entry in the array. It must not be its own eviction candidate - "m0" (the oldest
 		// non-peer entry) should go instead, or the mirror silently blinds itself on arrival.
-		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" });
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" }, undefined, "peer");
 		const snap = box.drain(0);
 		expect(snap.entries.map((e) => e.body)).toEqual(["m1", "m2", "chatter"]);
 		expect(snap.dropped).toBe(1);
@@ -124,7 +161,7 @@ describe("DeviceMailbox", () => {
 	}
 
 	it("byte cap evicts oldest entries and counts them in dropped", () => {
-		const box = new DeviceMailbox(1, 100, 100);
+		const box = new DeviceMailbox(1, 100, 250);
 		box.append(heavyMessage("s1", 40));
 		box.append(heavyMessage("s1", 40));
 		box.append(heavyMessage("s1", 40)); // now 120 bytes > 100, oldest evicted
@@ -145,7 +182,7 @@ describe("DeviceMailbox", () => {
 		// holding a 4 KB note, so a few large attachments can never evict real unread mail. A 1 KB
 		// cap against ten 4 GB files is only survivable because the accounting counts the name and
 		// the digest; under the old base64 accounting the first entry alone would have evicted.
-		const box = new DeviceMailbox(10, 100, 1_000);
+		const box = new DeviceMailbox(10, 100, 5_000);
 		const withFile = (size: number): MailboxInput => ({
 			kind: "reply",
 			session_id: "s1",
@@ -167,7 +204,7 @@ describe("DeviceMailbox", () => {
 	});
 
 	it("ack keeps the byte accounting in sync so later appends do not over-evict", () => {
-		const box = new DeviceMailbox(1, 100, 100);
+		const box = new DeviceMailbox(1, 100, 250);
 		box.append(heavyMessage("s1", 40));
 		box.append(heavyMessage("s1", 40));
 		box.drain(2, 1); // ack both, freeing their bytes
@@ -367,6 +404,19 @@ describe("DeviceMailbox idempotent dedupeKey upsert", () => {
 		}));
 
 		expect(DeviceMailbox.fromSnapshot(snap).size).toBe(1);
+	});
+
+	it("restores legacy peer priority from its stored kind", () => {
+		const box = new DeviceMailbox(7, 2);
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" });
+		box.append(message("s1", "mail"));
+		const snap = box.snapshot();
+		delete snap.provenance;
+
+		const restored = DeviceMailbox.fromSnapshot(snap, 2);
+		restored.append(message("s1", "new mail"));
+
+		expect(restored.drain(0).entries.map((e) => e.body)).toEqual(["mail", "new mail"]);
 	});
 
 	it("lets a redelivery heal a dropped entry instead of deduping it away", () => {

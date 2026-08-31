@@ -21,6 +21,43 @@ interface RouterPostOptions {
 	retryDelayMs?: number;
 }
 
+const MAX_ROUTER_ERROR_BODY = 4096;
+
+class RouterHttpError extends Error {
+	constructor(
+		readonly status: number,
+		body: string,
+	) {
+		super(`HTTP ${status}: ${body.slice(0, MAX_ROUTER_ERROR_BODY)}`);
+	}
+}
+
+async function readResponseBody(res: Response, maxBytes: number): Promise<string> {
+	if (!res.body) return "";
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let bytesRead = 0;
+	try {
+		while (bytesRead < maxBytes) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			const chunk = value.subarray(0, maxBytes - bytesRead);
+			chunks.push(chunk);
+			bytesRead += chunk.byteLength;
+			if (chunk.byteLength < value.byteLength) await reader.cancel();
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const body = new Uint8Array(bytesRead);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(body);
+}
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -122,33 +159,50 @@ export async function routerPost(
 	body: unknown,
 	{ retries = 4, retryDelayMs = 1500 }: RouterPostOptions = {},
 ): Promise<unknown> {
+	return routerRequest(
+		`${ROUTER_URL}${path}`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json", ...sessionTokenHeader() },
+			body: JSON.stringify(body),
+		},
+		retries,
+		retryDelayMs,
+		"routerPost",
+	);
+}
+
+async function routerRequest(
+	url: string,
+	init: RequestInit,
+	retries: number,
+	retryDelayMs: number,
+	label: string,
+): Promise<unknown> {
 	let lastErr: Error | undefined;
 	for (let attempt = 0; attempt <= retries; attempt++) {
-		let res: Response;
 		try {
-			res = await fetch(`${ROUTER_URL}${path}`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json", ...sessionTokenHeader() },
-				body: JSON.stringify(body),
-			});
+			const res = await fetch(url, init);
+			const body = res.ok ? await res.text() : await readResponseBody(res, MAX_ROUTER_ERROR_BODY);
+			let json: unknown;
+			try {
+				json = JSON.parse(body) as unknown;
+			} catch {
+				throw new RouterHttpError(res.status, body);
+			}
+			if (!res.ok) throw new RouterHttpError(res.status, routerErrorText(json) ?? body);
+			return json;
 		} catch (err) {
 			lastErr = err instanceof Error ? err : new Error(String(err));
+			if (err instanceof RouterHttpError) throw err;
 			if (attempt < retries) {
 				const delay = retryDelayMs * 2 ** attempt;
 				console.error(
-					`[bridge] routerPost ${path} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms: ${lastErr.message}`,
+					`[bridge] ${label} ${url} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms: ${lastErr.message}`,
 				);
 				await new Promise((r) => setTimeout(r, delay));
 			}
-			continue;
 		}
-		// KNOWN GAP (plans/pain-points.md): outside the try, so a non-JSON error body skips the retry
-		// loop and its status never reaches the caller.
-		const json = (await res.json()) as Record<string, unknown>;
-		if (!res.ok) {
-			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
-		}
-		return json;
 	}
 	throw lastErr!;
 }
@@ -178,28 +232,7 @@ export async function routerGet(
 	path: string,
 	{ retries = 2, retryDelayMs = 1000 }: RouterPostOptions = {},
 ): Promise<unknown> {
-	let lastErr: Error | undefined;
-	for (let attempt = 0; attempt <= retries; attempt++) {
-		let res: Response;
-		try {
-			res = await fetch(`${ROUTER_URL}${path}`, { headers: sessionTokenHeader() });
-		} catch (err) {
-			lastErr = err instanceof Error ? err : new Error(String(err));
-			if (attempt < retries) {
-				const delay = retryDelayMs * 2 ** attempt;
-				await new Promise((r) => setTimeout(r, delay));
-			}
-			continue;
-		}
-		// KNOWN GAP (plans/pain-points.md): outside the try, so a non-JSON error body skips the retry
-		// loop and its status never reaches the caller.
-		const json = (await res.json()) as Record<string, unknown>;
-		if (!res.ok) {
-			throw new Error(routerErrorText(json?.error) || `HTTP ${res.status}`);
-		}
-		return json;
-	}
-	throw lastErr!;
+	return routerRequest(`${ROUTER_URL}${path}`, { headers: sessionTokenHeader() }, retries, retryDelayMs, "routerGet");
 }
 
 /** Rebuilt on every reconnect. The gateway records nothing until the handshake confirms, so a

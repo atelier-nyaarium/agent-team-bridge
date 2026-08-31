@@ -336,12 +336,6 @@ their existing entries.
   gateway hop but silently drops here, and every downstream conservation test then "conserves" a
   tier that never arrived. Cheap fix: `{session_id, ...pickTiers(args), response: args.full}`
   style plus a field-list-driven pin on the builders.
-- [medium] `src/shared/device-mailbox.ts : entryBytes` - **bug-class** - counts body + fullSpoken +
-  attachments but skips title/summary/status on the "small tiers" premise that nothing below the
-  tool boundary enforces (NoticeSummary has no max anywhere; RespondBodySchema's trio is uncapped).
-  An arbitrarily large summary accrues zero against the 2GB OOM backstop, exactly where a dark
-  device's unacked backlog piles up, and the durable snapshot serializes it every persist tick.
-  Fix: count them (they are in memory already) or cap the trio at the wire.
 - [low] `src/shared/federation-protocol.ts : console_push entry.title override` - **bug-class** -
   the relay hop tightens title to NoticeTitle (max 200) while the intake that feeds it
   (RespondBodySchema -> mirrorPeer) is uncapped, so a >200-char title from a raw /respond caller
@@ -385,10 +379,6 @@ their existing entries.
   silently" escape gives a confused agent a sanctioned path to drop the report. Fix set: name all
   four tiers, use `full`, delegate fullSpoken authoring to the relaying agent explicitly, stop
   passing urgent, update the schema mirror-claim comment and the test pins in the same commit.
-- [low] `skills/crosstalk/SKILL.md : CLI agents section` - **dead-code** - still instructs the
-  retired `crosstalk_reply` for CLI agents in two places (the tool and the CLI dispatch mode were
-  removed with the host split); the addressed audience can no longer connect, so the only harm is
-  misleading a channel agent about the system's shape.
 - [medium] `src/mcp/devcontainer/reloadPlugins.ts : spawnReloadPlugins` (+ `routes.ts : health`) -
   **framework-first** - the load-bearing rollout order (gateway rebuild BEFORE the version-bump
   push) is enforced by nothing mechanical; reload_plugins has no gateway pre-flight and /health
@@ -403,12 +393,6 @@ their existing entries.
   gateway rebuild, then bump push), but that is prose-only discipline the NEXT wire field must
   remember. Framework direction: a lenient-at-the-gateway-edge convention for notice/tier fields
   (the RespondBodySchema precedent) or the version handshake above.
-- [medium] `start-gateway.sh : git pull / docker compose up --build` - **bug-class** - both git
-  ops are `|| true`d with no dirty-tree or HEAD-vs-origin check and the health loop prints ready
-  regardless, so a silently-failed pull deploys STALE code while reporting success - and "rebuild
-  the gateway" is exactly the step the rollout order depends on. Uncommitted local edits also
-  ride into the production image (routine on this machine, the live dev tree). Minimal fix: warn
-  or require a flag when dirty / HEAD != origin/main, surface a pull failure.
 
 ## Announce chip (`plans/announce-chip.md`, deleted, shipped - 2026-07-11)
 
@@ -524,10 +508,6 @@ paths still leak a pending reconnect timer. Cosmetic on a process that is exitin
 - [low] `src/gateway/index.ts : startGateway` - the SIGTERM handler calls `routerClient.stop()`
   but SIGINT does not, so a Ctrl-C leaks routerClient's reconnector + heartbeat timers. Consolidate
   SIGTERM/SIGINT into one shutdown handler.
-- [low] `src/gateway/router/routerClient.ts : connect : ws.on("close")` - pre-existing: a stale socket's
-  close handler unconditionally `ws = null` + `onDisconnect`; if it fired after a new socket
-  connected it could null the new one. Guard the handlers on socket identity. Low risk in practice
-  (the reconnect delay outlasts the close event).
 
 ### Coordinator / timeout pattern consolidation (large-defer)
 
@@ -777,14 +757,6 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   message to any arbitrary string up to 320 chars in the receiving owner's own console mailbox and
   live agent. Misattribution within an otherwise-legitimate delivery, not a routing bypass. Needs a
   dedicated look at `send`'s sender-identity model.
-- [high] `src/shared/device-mailbox.ts : DeviceMailbox.evictOneForCapacity` (vs
-  `console_push.entry.kind`) - **bug-class** - the OOM backstop's peer-priority eviction trusts a
-  wire-supplied `kind` that a `console_push` sender now controls. A same-Domain sibling Gateway
-  (compromised or buggy) can flood `console_push` entries stamped `kind: "notice"` (never a
-  peer-priority eviction candidate) to trip the 10,000-entry cap, and once genuine `"peer"` entries
-  are exhausted the fallback evicts the oldest entry of ANY kind - a real reply the owner is waiting
-  on, or a real notice. Defeats the eviction priority's documented purpose using nothing but a
-  same-Domain flood; needs a provenance concept `DeviceMailbox` doesn't have today.
 
 **Medium:**
 - [medium] `src/gateway/routes.ts : teams()` - pre-existing - `commonFields`'s `domainIdField` omits
@@ -1247,12 +1219,6 @@ live there or in residue tests. What follows is what stayed open.
   route's own durable file: `DurableOpStore` is typed to `ConsoleOpResult` and keyed by conversation,
   so it cannot be borrowed. The comment on `boardOperationReplies` says so rather than claiming
   safety.
-- [medium] **`routerPost` cannot report a 500 usefully.** `await res.json()` sits outside the try
-  that guards the fetch, so a non-JSON error body rejects OUTSIDE the retry loop: no retry, and the
-  status never reaches the caller. A gateway throw becomes exactly that, since `Bun.serve` is
-  declared with no `error` handler. Every MCP tool inherits it, so a disk failure reads to an agent
-  like a bad request - the opposite of what `BoardStore.commit` preserves when it rethrows. Now
-  marked KNOWN GAP at the line itself.
 
 ## Task board holes the awareness push surfaced (2026-08-07)
 

@@ -952,7 +952,8 @@ describe("the thread lifecycle", () => {
 
 			for (let index = 0; index < POISONED; index += 1) {
 				await retire(`bad-${index}`);
-				const reviving = client.resumeThread(`bad-${index}`);
+				// Caught at creation: the rejection lands during the tick below, before a later catch attaches.
+				const reviving = client.resumeThread(`bad-${index}`).catch(() => undefined);
 				const request = await requested(f, "thread/resume", resumes);
 				resumes += 1;
 				// Unknowable outcome poisons the record.

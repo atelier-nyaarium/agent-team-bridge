@@ -296,7 +296,9 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			missedPongs = 0;
 		});
 
+		const socket = ws;
 		ws.on("close", () => {
+			if (ws !== socket) return;
 			ws = null;
 			clearTimeout(connectTimer);
 			stopHeartbeat();

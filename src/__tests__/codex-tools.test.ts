@@ -111,6 +111,20 @@ describe("what a caller reads back from the gateway", () => {
 		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).rejects.toThrow("not found");
 	});
 
+	it("does not retry HTTP failures, including 5xx responses", async () => {
+		reply = { status: 503, body: { error: "unavailable" } };
+		const before = received.length;
+		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 2, retryDelayMs: 0 })).rejects.toThrow(
+			"unavailable",
+		);
+		expect(received).toHaveLength(before + 1);
+	});
+
+	it("preserves the HTTP status for a JSON null error body", async () => {
+		reply = { status: 502, body: null };
+		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).rejects.toThrow("HTTP 502");
+	});
+
 	it("returns the gateway's result unchanged on success", async () => {
 		reply = { status: 200, body: { agentId: "codex_0123456789abcdef0123456789abcdef", observation: "terminal" } };
 		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).resolves.toMatchObject({

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { MailboxProvenance } from "../shared/device-mailbox.js";
 import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
 import { type Address, storeKey } from "../shared/session-id.js";
@@ -23,6 +24,7 @@ export interface DeliverToOwnerOptions {
 	/** Caller-chosen; the funnel never mints one, so an omission is a compile error, not a
 	 * silently non-idempotent relay. */
 	dedupeKey: string;
+	provenance: MailboxProvenance;
 	/** "relay" is the ONLY non-fanning append: the gossip-loop guard as API, not discipline. */
 	origin: "local" | "relay";
 	/** Device-scoped producers pass their own liveness accessor (undefined = torn down, deliver
@@ -80,6 +82,7 @@ export function createConsolePushOps({
 	function deliverToOwner({
 		entry,
 		dedupeKey,
+		provenance,
 		origin,
 		resolveMailbox,
 		label = "deliver",
@@ -106,7 +109,7 @@ export function createConsolePushOps({
 		}
 		if (!mailbox) return false;
 		try {
-			mailbox.append({ ...entry, dedupeKey }, dedupeKey);
+			mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
 		} catch (err) {
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
@@ -148,7 +151,7 @@ export function createConsolePushOps({
 		};
 		// Never load-bearing: the outcome is ignored, so a failed mirror cannot turn an
 		// already-delivered primary operation into a spurious failure for the caller.
-		deliverToOwner({ entry, dedupeKey, origin: "local", label: "mirror" });
+		deliverToOwner({ entry, dedupeKey, provenance: "peer", origin: "local", label: "mirror" });
 	}
 
 	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
@@ -163,7 +166,15 @@ export function createConsolePushOps({
 	 * plugin_action payload exceeds its own byte cap, or if the append itself fails - mirroring
 	 * mirrorPeer's own "purely additive, never load-bearing" posture. */
 	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
-		return { delivered: deliverToOwner({ entry, dedupeKey, origin: "relay", label: "console_push" }) };
+		return {
+			delivered: deliverToOwner({
+				entry,
+				dedupeKey,
+				provenance: "message",
+				origin: "relay",
+				label: "console_push",
+			}),
+		};
 	}
 
 	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
@@ -254,7 +265,7 @@ export function createConsolePushOps({
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		if (!deliverToOwner({ entry, dedupeKey, origin: "local", label: "notify" })) {
+		if (!deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "notify" })) {
 			return jsonResponse({ error: "failed to store notice" }, 500);
 		}
 		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
@@ -297,7 +308,7 @@ export function createConsolePushOps({
 			actionType,
 			...(payload ? { payload } : {}),
 		};
-		if (!deliverToOwner({ entry, dedupeKey, origin: "local", label: "plugin_action" })) {
+		if (!deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "plugin_action" })) {
 			return jsonResponse({ error: "failed to store plugin action" }, 500);
 		}
 		console.log(`[plugin_action] ${pluginId}:${actionType} from ${from} delivered to owner ${owner}`);

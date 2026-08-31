@@ -102,10 +102,10 @@ export function makeDeliverToOwner(
 	owner: string = OWNER,
 	fanOut?: (entry: Record<string, unknown>, dedupeKey: string) => unknown,
 ): DeliverToOwner {
-	return ({ entry, dedupeKey, origin, resolveMailbox }) => {
+	return ({ entry, dedupeKey, origin, provenance, resolveMailbox }) => {
 		const mailbox = resolveMailbox ? resolveMailbox() : mailboxStore.ensure(owner);
 		if (!mailbox) return false;
-		mailbox.append({ ...entry, dedupeKey }, dedupeKey);
+		mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
 		if (origin === "local" && entry.session_id) void fanOut?.(entry as Record<string, unknown>, dedupeKey);
 		return true;
 	};

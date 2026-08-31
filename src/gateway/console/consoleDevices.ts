@@ -79,6 +79,7 @@ export function createConsoleDevices({
 			// The funnel never mints a key, so the no-key callers (the late send-failure reply)
 			// get their per-delivery identity here.
 			dedupeKey: dedupeKey ?? crypto.randomUUID(),
+			provenance: "message",
 			origin: "local",
 			resolveMailbox: () => mailboxStore.get(ownerId),
 			label: "console-device",
@@ -169,6 +170,7 @@ export function createConsoleDevices({
 				deliver({
 					entry,
 					dedupeKey,
+					provenance: "message",
 					origin: "local",
 					// While the device is live, re-create an evicted box so deliveries survive a store
 					// sweep; once torn down, return undefined so a late push cannot resurrect an owner
