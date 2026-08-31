@@ -628,6 +628,23 @@ a workload no gateway produces.
   every edit to the real one. Filed against nyaaskills.
 - An auditor generalized "avoid lazy dash-joins" into a no-semicolons rule and filed four findings
   under it. A finding that cites a rule is vetted against the rule's own text before it is applied.
+- Nothing about a `ThreadRecord` parameter says whether it is still the thread's. `mutate` tests
+  identity before its request and never after, so every `await` inside `ThreadLifecycle` resumes
+  holding a record that may have been replaced, and the function signature looks identical either
+  way. Two critical bugs this lap were the same oversight at two write sites, and the second was
+  written while fixing the first. A type that distinguished a record you have re-checked from one you
+  have merely carried would have made both unwriteable.
+- `stateOf` answers `undefined` for three different situations: a thread never tracked, one whose
+  record was evicted, and one this client never loaded. `reapIdle` and `bindThread` both branch on it.
+  Deciding whether an audit finding about the reaper was real meant working out which of the three a
+  caller was actually seeing, and the type cannot tell them apart.
+- Every retention test hand-derives how many filler retirements cross `RETIRED_MEMORY`, and the
+  arithmetic depends on the data structure rather than on the property under test. There is no helper
+  for "fill the retirement map to its bound", so each test recomputes it and two of them silently
+  stopped crossing the bound at all when the structure changed.
+- Planting a violation is a manual edit, run, revert, done about a dozen times this lap. It is the
+  only way to know a guard is pinned, and every round of it is a chance to leave the mutation in the
+  tree. Nothing here automates it, and nothing would catch a forgotten one but the next full run.
 - A retention test calibrated to one data structure goes inert when the structure changes, and looks
   identical to a passing test. Two here counted fillers against the retirement queue's duplicate
   entries; as a map the counts no longer crossed the bound, so no eviction ran and both passed while
