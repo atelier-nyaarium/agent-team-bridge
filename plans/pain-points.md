@@ -1,9 +1,17 @@
 # Pain points
 
-## Manual host session start is broken in two silent ways (2026-08-07)
+Every defect recorded here has been fixed or verified already fixed. What remains is marked
+WILL NOT DO with the reason: refactors, test-coverage debt, optimizations, infrastructure, unmade
+product decisions, another repository's bug, and the LAN-facing auth gate, which is an owner
+decision rather than a defect. Standing prohibitions are kept because losing one invites the
+mistake back.
+
+## A hand-launched host session is deaf and misnamed (2026-08-07)
 
 Found live, when the owner could not restart the primary session and a hand launch produced a deaf
-stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host session by hand".
+stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host session by hand". The
+second failure recorded here, `down.sh` stopping the host daemon while `start-gateway.sh` never
+restarted it, is closed by `./start-all.sh`.
 
 - [high] **A bare `claude --resume` on the host is deaf and misnamed.** Without the daemon's
   `--dangerously-load-development-channels` flag the harness silently skips every channel push
