@@ -147,6 +147,7 @@ class SttsPlayer(private val root: File) {
 		/** Stand down rather than interrupt, if something else has taken the sound by the time this is
 		 * ready. Autoplay sets it; a request the user made never does. */
 		yielding: Boolean = false,
+		rowKey: String = at.toString(),
 	): Boolean {
 		// Toggle on what the user can see. A tap while this is still synthesizing is NOT a cancel: the
 		// row shows nothing yet, so cancelling would read as a dead button, and single-flight already
@@ -157,7 +158,7 @@ class SttsPlayer(private val root: File) {
 		if (text.isBlank()) return false
 		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
 		// difference from "declined, silently", which is a terminal that never arrives.
-		val audio = cache.cacheFile(team, at, tier, provider, voice, text)
+		val audio = cache.cacheFile(team, at, tier, provider, voice, text, rowKey)
 		return null != synthesizeAndPlay(team, at, tier, audio, volumePct, yielding) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
@@ -551,7 +552,7 @@ class SttsPlayer(private val root: File) {
 		 * links to their labels. Deliberately nothing more - an author-written spoken tier is
 		 * the real fix for speakability, so this only removes the structures no voice can read. */
 		fun stripUnspeakable(s: String): String = s
-			.replace(Regex("```[\\s\\S]*?(```|$)"), " Code block omitted. ")
+			.replace(Regex("(?m)^```[^\\r\\n]*(?:\\r?\\n|$)[\\s\\S]*?(?:^```[ \\t]*\\r?$|\\z)"), " Code block omitted. ")
 			.replace(Regex("\\[FILES[^\\]]*\\][\\s\\S]*?(?=\\n\\n|$)"), " Attachments omitted. ")
 			.replace(Regex("\\[([^\\]]+)\\]\\([^)]*\\)"), "$1")
 			.trim()

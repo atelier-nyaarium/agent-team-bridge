@@ -65,7 +65,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		val text = ttsTextFramed(repo._state.value, msg, tier, attributed)
 		if (text.isBlank()) return "nothing to read aloud"
 		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		val taken = repo.stts.play(client, provider, voice, team, at, tier, text, repo.sttsVolume, yielding)
+		val taken = repo.stts.play(client, provider, voice, team, at, tier, text, repo.sttsVolume, yielding, "${msg.epoch}-${msg.seq}")
 		return if (taken) null else "already speaking"
 	}
 
@@ -347,7 +347,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			// The words the RUN will speak, not the attributed form a hand-play uses - the cache is keyed
 			// on the text, so warming the other one would fill the cache and still synthesize live.
 			val text = ttsTextFramed(state, msg, tier, attributed = false)
-			if (text.isNotBlank()) repo.stts.cache.warm(client, provider, voice, entry.team, entry.at, tier, text)
+			if (text.isNotBlank()) repo.stts.cache.warm(client, provider, voice, entry.team, entry.at, tier, text, "${msg.epoch}-${msg.seq}")
 		}
 	}
 
@@ -561,6 +561,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.TITLE),
 			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.SUMMARY),
 			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.FULL),
+			rowKey = "${msg.epoch}-${msg.seq}",
 		)
 	}
 

@@ -68,6 +68,10 @@ class ThreadRendererPool(private val context: Context) {
 
 	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
+		set(value) {
+			field = value
+			renderers.values.forEach { it.playEnabled = value }
+		}
 
 	/** Set by the owner; maps a message's `from` canonical address to a human label. Forwarded to
 	 * every renderer, read at render time, so setting it after renderers exist still takes effect. */

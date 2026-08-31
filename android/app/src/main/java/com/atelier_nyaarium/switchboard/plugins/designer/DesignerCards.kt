@@ -62,7 +62,7 @@ internal fun looksHtml(mime: String, name: String): Boolean =
 	mime.startsWith("text/html") || name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
 
 /** The attachment-relative path (`<bucket>/<name>`) inside an appassets card src. */
-internal fun relOf(src: String): String = src.substringAfter("/${Attachments.DIR}/", "")
+internal fun relOf(src: String): String = Attachments.relOf(src).orEmpty()
 
 /** The landed rel for a stored card, from the live thread rows, newest first. Content-keyed: the
  * row file naming the card's own bytes is the one whose src counts, so an older revision under the

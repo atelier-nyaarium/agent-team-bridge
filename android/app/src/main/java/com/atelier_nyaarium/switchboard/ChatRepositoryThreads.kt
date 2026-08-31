@@ -1,12 +1,15 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.Target
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+
+internal fun Target.isCloseTabTarget(): Boolean = this is Address
 
 ////////////////////////////////
 //  Threads, tabs and labels
@@ -91,11 +94,7 @@ fun ChatRepository.readUpTo(team: String, rowId: Long, at: Long) {
 	if (changed) persistence.persistReadAnchors(next.readAnchors)
 }
 
-/** Close a tab: drop it locally AND, for a local addressable session, kill its tmux on the gateway
- * while KEEPING its resume record (so it stays listed as available for a re-wake). The record
- * surviving is what distinguishes Close from Forget. Best-effort; a gateway rejection (e.g. mid-
- * wake, or a user-launched session) surfaces as a transient message rather than blocking the local
- * tab close. */
+/** Close a tab and its addressable session, keeping the resume record. */
 fun ChatRepository.closeTab(team: String) {
 	// Canonicalize before touching openTabs/closedTeams (matching openThread's own key), so a
 	// non-canonical spelling of an already-open team can't silently miss the removal and mute
@@ -108,7 +107,7 @@ fun ChatRepository.closeTab(team: String) {
 	// the audio was already paid for. Only `forget` deletes.
 	repoScope.launch { playback.dropQueuedFor(key) }
 	val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-	if (t is Address && t.gateway == _state.value.localGatewayId) {
+	if (t?.isCloseTabTarget() == true) {
 		drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable { client().closeSession(team) }
 				.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
@@ -132,9 +131,10 @@ fun ChatRepository.setLabel(team: String, name: String) {
  * the local label only, unconditionally - like closeTab's own local-only mutation, clearing never
  * needs the network or an ownership check. On an unreachable/older gateway the optimistic local
  * label stays - the gateway is presumed to apply it eventually. The optimistic non-blank write is
- * withheld for a target that does not resolve to THIS Gateway's own Domain (closeTab/wakeSession's
- * "is this mine" check compares gateway alone; a federated peer's session can coincidentally share
- * this Gateway's id, so this matches the gateway's own rename_session guard, which checks both) -
+ * withheld for a target that does not resolve to THIS Gateway's own Domain (closeTab permits
+ * qualified remote closes; wakeSession routes to the target Gateway).
+ * A federated peer's session can coincidentally share this Gateway's id, so this matches the
+ * gateway's own rename_session guard, which checks both) -
  * a federated peer's session can otherwise pass the board's own, more permissive Rename-menu gates
  * and flash a label that was never actually applied anywhere; the round trip is still attempted
  * regardless (a second, reactive line of defense - the server's own rejection is the backstop even
@@ -154,7 +154,7 @@ suspend fun ChatRepository.rename(team: String, name: String) {
 		return
 	}
 	val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-	val isLocal = t is Address && t.domain == localDomain() && t.gateway == _state.value.localGatewayId
+	val isLocal = t is Address && t.isLocalTo(localDomain(), setOf(_state.value.localGatewayId))
 	val previous = _state.value.labels[team]
 	if (isLocal) setLabel(team, trimmed)
 	val result = withContext(Dispatchers.IO) {

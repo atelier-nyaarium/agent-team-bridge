@@ -350,7 +350,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// Best-effort, the gateway no-ops an absent session.
 		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
 		val reachable = (otherKeyringGateways(repo.localGatewayId) + repo.localGatewayId).toSet()
-		if (t is Address && t.domain == repo.localDomain() && t.gateway in reachable) {
+		if (t is Address && t.isLocalTo(repo.localDomain(), reachable)) {
 			repo.drain.scope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { repo.client().forget(team, boardDisposition) }
 					// The record drop already bumps the presence plane server-side, which wakes this

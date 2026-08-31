@@ -21,6 +21,27 @@ class SttsCache(
 	private val requests: PlaybackRequests,
 	private val warmExec: Executor,
 ) {
+	init {
+		purgeLegacyCacheOnce()
+	}
+
+	private fun purgeLegacyCacheOnce() {
+		synchronized(cacheVersionLock) {
+			val cacheRoot = File(root, "stts")
+			val marker = File(cacheRoot, CACHE_VERSION_MARKER)
+			if (marker.isFile) return
+			cacheRoot.listFiles()?.forEach { it.deleteRecursively() }
+			if (cacheRoot.walkTopDown().any { it.isFile && it.extension == "audio" }) return
+			cacheRoot.mkdirs()
+			marker.createNewFile()
+		}
+	}
+
+	private companion object {
+		const val CACHE_VERSION_MARKER = ".cache-version-2"
+		val cacheVersionLock = Any()
+	}
+
 	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
 	 * cache hit. Blocking - call off the main thread. Dedups tiers that speak the same text:
 	 * synthesize once and copy. Never throws; a failed tier just synthesizes on demand at Play. */
@@ -33,6 +54,7 @@ class SttsCache(
 		titleText: String,
 		summaryText: String,
 		fullText: String,
+		rowKey: String = at.toString(),
 	) {
 		// Captured ONCE, before the first claim. This producer re-claims per tier, and a horizon read
 		// per claim always sits after the purge it was meant to notice - including in the gaps between
@@ -40,7 +62,7 @@ class SttsCache(
 		val horizon = requests.purgeStamp()
 		val done = mutableMapOf<String, File>()
 		for ((tier, text) in listOf(Tier.SUMMARY to summaryText, Tier.FULL to fullText, Tier.TITLE to titleText)) {
-			val dest = cacheFile(team, at, tier, provider, voice, text)
+			val dest = cacheFile(team, at, tier, provider, voice, text, rowKey)
 			val twin = done[text]
 			if (twin != null) {
 				if (!dest.exists() || dest.length() == 0L) runCatching { twin.copyTo(dest, overwrite = true) }
@@ -85,13 +107,14 @@ class SttsCache(
 		at: Long,
 		tier: Tier,
 		text: String,
+		rowKey: String = at.toString(),
 	) {
 		val entry = QueueEntry(team, at, tier)
 		if (warmedMs.containsKey(entry) || !warming.add(entry)) return
 		warmExec.execute {
 			try {
 				val horizon = requests.purgeStamp()
-				val dest = cacheFile(team, at, tier, provider, voice, text)
+				val dest = cacheFile(team, at, tier, provider, voice, text, rowKey)
 				if (!dest.isFile || dest.length() == 0L) {
 					if (!synthToCache(client, provider, voice, text, dest)) return@execute
 					if (requests.purgedSince(team, horizon)) return@execute discardPreload(dest)
@@ -165,9 +188,10 @@ class SttsCache(
 		provider: SttsProvider,
 		voice: String?,
 		text: String,
+		rowKey: String = at.toString(),
 	): File = File(
 		File(root, "stts/$team"),
-		"$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}-${text.hashCode()}.audio",
+		"${safeVoice(rowKey)}-${tier.suffix}-${provider.path}-${safeVoice(voice)}-${text.hashCode()}.audio",
 	)
 
 	/** The sample entry's `at`. The preview is not a message, so this stands in for one, derived from

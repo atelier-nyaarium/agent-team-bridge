@@ -63,6 +63,23 @@ class AttachmentsTest {
 	}
 
 	@Test
+	fun outgoingCommitKeepsFinalFileWhenCopyFailsMidWrite() {
+		val destination = File(Attachments.root(filesDir), "1-1/photo.jpg").apply { parentFile!!.mkdirs(); writeText("complete") }
+		val source = File(filesDir, "photo.jpg").apply { writeText("new") }
+
+		val failed = runCatching {
+			Attachments.writeOutgoingAtomically(source, destination) { _, tmp ->
+				tmp.outputStream().use { it.write("partial".toByteArray()) }
+				throw IllegalStateException("simulated crash")
+			}
+		}.isFailure
+
+		assertTrue(failed)
+		assertEquals("complete", destination.readText())
+		assertEquals(1, destination.parentFile!!.listFiles()!!.size)
+	}
+
+	@Test
 	fun land_reportsNothingWhenTheCommitFails() {
 		// A src for a file that did not land would mark the row fetched, and a fetched row is never
 		// retried, so a failed commit has to stay reportable as a failure rather than becoming a

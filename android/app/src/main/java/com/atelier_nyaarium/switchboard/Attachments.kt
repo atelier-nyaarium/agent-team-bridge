@@ -153,13 +153,21 @@ object Attachments {
 			runCatching {
 				dir.mkdirs()
 				val out = File(dir, name)
-				// Copied stream-wise rather than through a ByteArray: an admitted file still has no
-				// reason to exist whole in memory just to be filed.
-				if (out.canonicalFile != f.source.canonicalFile) {
-					f.source.inputStream().use { input -> out.outputStream().use(input::copyTo) }
-				}
+				if (out.canonicalFile != f.source.canonicalFile) writeOutgoingAtomically(f.source, out)
 				f to MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size, role = "attachment")
 			}.getOrNull()
+		}
+	}
+
+	internal fun writeOutgoingAtomically(source: File, destination: File, copy: (File, File) -> Unit = { from, to ->
+		from.inputStream().use { input -> to.outputStream().use(input::copyTo) }
+	}) {
+		val tmp = File(destination.parentFile, "${destination.name}.tmp.${java.util.UUID.randomUUID()}")
+		try {
+		copy(source, tmp)
+			check(tmp.renameTo(destination)) { "attachment commit failed" }
+		} finally {
+			tmp.delete()
 		}
 	}
 

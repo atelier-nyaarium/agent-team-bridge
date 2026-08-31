@@ -62,7 +62,7 @@ class FederationManager(private val store: AppStateStore) {
 	 * orphan one. Mints ONLY on an absent key; a corrupt stored key throws rather than minting
 	 * over it, so a transient decode fault never silently re-roots the device. */
 	@Synchronized
-	fun ownerIdentity(): Crypto.Identity =
+	private fun ownerIdentity(): Crypto.Identity =
 		when (val load = store.loadOwnerIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
 			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveOwnerIdentity(it) }
@@ -132,6 +132,19 @@ class FederationManager(private val store: AppStateStore) {
 	}
 
 	private fun nonce(): String = Base64.getEncoder().encodeToString(ByteArray(18).also { rnd.nextBytes(it) })
+
+	private enum class RequestSigner { CONSOLE, OWNER }
+
+	private fun <T> signRequest(
+		signer: RequestSigner,
+		nowMs: Long,
+		proof: (String, Long, String, String) -> String,
+		build: (String, Long, String, String) -> T,
+	): T {
+		val identity = if (signer == RequestSigner.CONSOLE) consoleIdentity() else ownerIdentity()
+		val n = nonce()
+		return build(identity.sign.pub, nowMs, n, proof(identity.sign.pub, nowMs, n, identity.sign.priv))
+	}
 
 	/** This Console's own owner-signed kind:console admission, to submit to the Router so a
 	 * Gateway will trust its sealed ops. */
@@ -242,42 +255,27 @@ class FederationManager(private val store: AppStateStore) {
 	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
 	 * signing key so the Router can scope the roster to this owner's network. */
 	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
-		val console = consoleIdentity()
-		val n = nonce()
-		return com.atelier_nyaarium.switchboard.proto.RosterRequest(
-			signerSignPub = console.sign.pub,
-			proofAt = nowMs,
-			nonce = n,
-			proof = ProvisionOpsCrypto.signRosterRequest(console.sign.pub, nowMs, n, console.sign.priv),
-		)
+		return signRequest(RequestSigner.CONSOLE, nowMs, ProvisionOpsCrypto::signRosterRequest) { pub, at, n, signature ->
+			com.atelier_nyaarium.switchboard.proto.RosterRequest(pub, at, n, signature)
+		}
 	}
 
 	/** Build a signed gateway-bridge transport request. The owner key (not the console key) signs
 	 * the TRANSPORT_REQUEST proof, because the Router resolves the signer to a rooted owner and returns
 	 * that network's transport after verifying and scoping to this owner. */
 	fun signTransportRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TransportRequest {
-		val owner = ownerIdentity()
-		val n = nonce()
-		return com.atelier_nyaarium.switchboard.proto.TransportRequest(
-			signerSignPub = owner.sign.pub,
-			proofAt = nowMs,
-			nonce = n,
-			proof = ProvisionOpsCrypto.signTransportRequest(owner.sign.pub, nowMs, n, owner.sign.priv),
-		)
+		return signRequest(RequestSigner.OWNER, nowMs, ProvisionOpsCrypto::signTransportRequest) { pub, at, n, signature ->
+			com.atelier_nyaarium.switchboard.proto.TransportRequest(pub, at, n, signature)
+		}
 	}
 
 	/** Build a signed "who armed trust toward me?" query. The arms are indexed by owner key, so the
 	 * owner key (not the console key) signs the TRUST_PENDING proof; the Router verifies and scopes to
 	 * this owner before listing the arms. */
 	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
-		val owner = ownerIdentity()
-		val n = nonce()
-		return com.atelier_nyaarium.switchboard.proto.TrustPendingRequest(
-			signerSignPub = owner.sign.pub,
-			proofAt = nowMs,
-			nonce = n,
-			proof = ProvisionOpsCrypto.signTrustPendingRequest(owner.sign.pub, nowMs, n, owner.sign.priv),
-		)
+		return signRequest(RequestSigner.OWNER, nowMs, ProvisionOpsCrypto::signTrustPendingRequest) { pub, at, n, signature ->
+			com.atelier_nyaarium.switchboard.proto.TrustPendingRequest(pub, at, n, signature)
+		}
 	}
 
 	/** A fresh rendezvous id for a trust arm (also the SAS pin both sides bind). Unguessable so a

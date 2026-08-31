@@ -391,16 +391,22 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
-									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) {
+									try {
+										if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) {
+											busy = false
+											status = ""
+											return@launch
+										}
+										val result = repo.gatewayEnroll.enrollGateway(s)
 										busy = false
-										status = ""
-										return@launch
+										status = result.message
+										pasteBundle = result.pasteBundle
+										if (result.admitted && result.pasteBundle == null) onDone()
+									} catch (e: Exception) {
+										e.rethrowIfCancellation()
+										busy = false
+										status = e.message ?: "Gateway approval failed"
 									}
-									val result = repo.gatewayEnroll.enrollGateway(s)
-									busy = false
-									status = result.message
-									pasteBundle = result.pasteBundle
-									if (result.admitted && result.pasteBundle == null) onDone()
 								}
 							},
 						) { Text("Approve") }
