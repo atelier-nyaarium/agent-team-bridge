@@ -27,15 +27,6 @@ SEPARATE triggers" subsection and is closed. What follows is what stayed open.
 A coverage pass mapped the plan's own checklist to named tests: 41 requirements are covered, these
 are not.
 
-- [high] `src/mcp/devcontainer/codexTurnTracker.ts : settlePending` - **bug-class** - never called in
-  production, and that is a HANG. It exists, it is exported, and only its own unit test invokes it.
-  So a turn whose `turn/completed` arrives with `status: "completed"` but whose final-answer item
-  never arrives is held forever: the tracker waits for an item that is not coming, no terminal is
-  emitted, and the record stays `working`. `codexAwaitAgent` cannot rescue it, because reconciliation
-  deliberately skips a record with an active turn. The caller's only escape is guessing to call
-  `codexStopAgent`. The fix is a bounded timer in the daemon that settles a held terminal with
-  whatever it actually holds, which is exactly what `settlePending` was written for. It needs an
-  injectable clock and an `onHeld` callback to stay testable.
 - [medium] No large-history test. Exchanges, operations and turns are uncapped and unpaginated by
   design. Nothing builds an agent with hundreds of entries and checks that persistence, restore and
   the list projection still behave. A cost that only appears at scale would land on a long-lived
@@ -59,11 +50,6 @@ are not.
 - [medium] The Codex contract and persistence tests repeat several valid histories, receipts, and
   restored-service setups. Canonical creating / working / settled / receipt builders would collapse
   them.
-- [medium] `src/mcp/channel/channelReply.ts` + `humanTools.ts` - the same `ref://` prose is
-  duplicated into the `channel_reply` and `notify_human` tool DESCRIPTIONS, and both are truncated at
-  their own harness limit the same way the server instructions were. Moving guidance behind
-  `switchboard_capabilities` is the same repair for all three surfaces; only the instructions block
-  got it.
 
 ### Lessons that cost real rounds
 
@@ -289,15 +275,6 @@ Shipped as PRs #115/#116 (7.7.0). Collected by the close-out crust sweep; alread
 (the consolePeer dead branch, the routes.ts extraction + conservation-harness deferral) stayed in
 their existing entries.
 
-- [medium] `src/mcp/channel/channelReply.ts : buildChannelReplyPayload` (also
-  `src/mcp/channel/humanTools.ts : notify_human handler's POST body`) - **dormant-fragility** -
-  the tier-conservation doctrine has a hole at hop zero, the tool-to-gateway POST: both MCP
-  builders hand-list the tiers instead of spreading `pickTiers(args)`, with no compiler error
-  (Record<string, unknown>) and no SPOKEN_TIER_FIELDS-driven test pin (reply-tool.test.ts pins a
-  hand-listed toEqual). A future tier added to the shared shapes auto-propagates through every
-  gateway hop but silently drops here, and every downstream conservation test then "conserves" a
-  tier that never arrived. Cheap fix: `{session_id, ...pickTiers(args), response: args.full}`
-  style plus a field-list-driven pin on the builders.
 - [low] `src/shared/federation-protocol.ts : console_push entry.title override` - **bug-class** -
   the relay hop tightens title to NoticeTitle (max 200) while the intake that feeds it
   (RespondBodySchema -> mirrorPeer) is uncapped, so a >200-char title from a raw /respond caller
@@ -312,13 +289,6 @@ their existing entries.
   a field whose schema never warned it. The conformance test derives its list FROM
   guidance-marked describes, so enforcement-without-guidance is invisible to it. Fix: append the
   guidance to both describes; optionally pin the reverse direction too.
-- [medium] `android/.../ChatRepository.kt : startPolling (drain tier mapping) +
-  loadPersistedThreads` - **framework-first** - the tier-field invariant (null or non-blank) is
-  applied at the two Message construction boundaries but neither APPLICATION is test-pinned:
-  deleting `.tierOrNull()` from either site compiles and leaves the Android suite green while
-  re-opening the blank-tier-plays-silence hole (worst at load: every absent tier on every legacy
-  row becomes ""). Precedent for the fix is in the same file: extract a pure entry-to-Message
-  tier projection the way `resolveMessageAttribution` was extracted and pinned.
 - [medium] `nyaaskills/src/cycle/lib/notify.ts : relayInstruction + NotifyHumanSchema /
   buildNotifyHuman` (+ `cycleCheckpoint.ts : schema`, + `cycle.test.ts` payload pins) -
   **bug-class, rides nyaaskills' next deploy** - the checkpoint relay instruction misleads on BOTH
@@ -343,23 +313,6 @@ the Designer's rel-keyed card-title decorator; architecture in CLAUDE.md "Androi
 framework"). Collected by its close-out crust sweep over the surfaces touched since the prior
 sweep, including the fast-tracked `DesignerThumbs` thumbnails work that had skipped a full cycle.
 
-- [medium] `android/.../plugins/designer/DesignerThumbs.kt : renderOn` - **bug-class** - a timed-
-  out render never `stopLoading()`s and registers no `invokeOnCancellation`; a straggling
-  `onPageFinished` from the abandoned load can fire against the NEXT render's client and resolve
-  its visual-state gate early, capturing a stale/partial frame that is cached permanently under
-  the new card's rel (cache hits never retry). Narrow window (a 4s-blowing card immediately
-  followed by another render). Fix: per-render generation check in the client + `stopLoading()`
-  on cancel.
-- [medium] `android/.../plugins/designer/DesignerThumbs.kt : cache` - **bug-class,
-  privacy-relevant** - the 6MB bitmap LruCache is never evicted on thread forget or account wipe;
-  `designer:forget`/`designer:wipe` clear `DesignStore` but a forgotten conversation's decoded
-  thumbnails stay in process memory until LRU pressure or process death. Never re-surfaces in the
-  UI, but inconsistent with the lifecycle-handler contract the store honors. Fix: team-aware
-  eviction at the forget/wipe handlers.
-- [medium] `android/.../plugins/Plugins.kt : build (inboundMessages bridge)` - **dup-logic** -
-  hand-rolls the loop + `runCatching` + log idiom `PluginRegistry.forEachCaught` now owns;
-  migrating also upgrades the log to the registry's claim-identifying message. (The
-  `pluginActions` bridge stays: single-key `get()` dispatch has no matching registry primitive.)
 - [low] `android/.../plugins/designer/DesignerThumbs.kt : attach/detach` - **dormant fragility** -
   the single-`var` WebView pool assumes exactly one `DesignerThumbHost` composed at a time (holds
   today: one `ThreadScreen` call site, plain conditional). A future dual-pane layout or animated
@@ -375,12 +328,6 @@ is in CLAUDE.md's "Console Bridge (Android channel)" section. Pruned to concrete
 from the plan's own Phase 3 crust sweep - dead code with no behavioral consequence and pure dup-logic
 were cut per this file's own convention.
 
-- [medium] `src/mcp/bridge/helpers.ts : setIsMainOrLeadAgent` - **bug-class** - unreferenced anywhere,
-  and it is the ONLY writer of the module-level `isMainOrLeadAgent` flag that `connectToRouter`'s
-  handshake handler branches on. Since nothing ever calls the setter, `isMainOrLeadAgent` is
-  permanently `null` at runtime, so the auto-reply branch (answer a lead/worker handshake
-  automatically) never fires in practice - every handshake falls through to "let the LLM decide"
-  instead. Either wire a real caller or delete the dead branch.
 Residual painpoints from shipped work, collected by crust scouts (record only, not fixed). Pruned to
 concrete, reachable issues - dup-logic, naming nits, dead code with no consequence, and anything
 gated behind a disclaimed precondition ("only reachable via a corrupted file", "negligible at this
@@ -538,22 +485,6 @@ both user testing and direct log inspection). Pruned to concrete, reachable find
 audit passes across all 6 phases; already-fixed and purely informational items dropped.
 
 **High:**
-- [high] `android/.../ChatRepository.kt : forget / startPolling` - **bug-class** - `forget()` runs
-  synchronously on the main thread with no mutual exclusion against the poll loop's
-  `appendInbound`/`bumpUnread`/`mailboxSync.commit()` sequence on `Dispatchers.IO`. Whichever side's
-  `_state` update lands last wins: a just-forgotten thread can resurrect as a ghost session, or a
-  freshly-arrived message can be silently and permanently wiped (the mailbox cursor has already
-  advanced past it) - contradicting the app's own at-least-once mailbox guarantee. Needs a shared
-  Mutex (precedent: `freshTeamsMutex`) serializing `forget()` against the poll loop's per-team
-  sequence.
-- [high] `src/gateway/routes.ts : respond / mirrorPeer` - **bug-class** - `respond()` has no try/catch
-  around any of its 3 `mirrorPeer` calls; an uncaught throw from the cross-gateway mirror call is
-  reported to the origin as a relay failure, so `relayWithRetry` retries up to 5 times (2s-16s
-  backoff) and each retry re-runs the full `respond()` body - re-appending to the console mailbox
-  with no dedupeKey and re-pushing over the live WS, duplicating an already-delivered reply 2-5x over
-  a purely cosmetic downstream failure. Root cause: `mirrorPeer`'s own try/catch doesn't cover
-  `ownerId?.()`, which runs before the try block, contradicting its doc comment's "never surfaces to
-  the caller" guarantee. Untested.
 
 **Medium:**
 - [medium] `src/gateway/routes.ts : teams()` - pre-existing - `commonFields`'s `domainIdField` omits
@@ -576,14 +507,6 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   missing type). The same problem has already escaped into `ChatRepository.drafts` and
   `SttsPlayer`'s cache. Proposed fix: a `SessionUiState(closed, unread, working, needsLogin)` value
   type collapsing the 4-map cluster into one `sessionUi: Map<String, SessionUiState>`.
-- [medium] `src/gateway/routes.ts : consolePush` - **bug-class** - `entry.session_id`/`from`/`to` are
-  free strings with zero correlation check against any real pending job, session-store record, or
-  registry entry. Same-Domain gateways are already fully trusted, but this is sharper: a compromised
-  sibling Gateway can set `entry.session_id` to collide with an EXISTING trusted thread and craft
-  `from`/`to`/`body` to look like a fabricated continuation of that conversation, with no UI cue
-  distinguishing it from a genuine relay. Bounded by the already-accepted same-Domain trust model; a
-  real fix (message-level signing so a recipient can verify authorship across a relay) is materially
-  bigger than a patch.
 - [medium] `src/gateway/routes.ts : fanOutConsolePush` - no caching/coalescing of the `list_gateways`
   roster fetch and no fan-out concurrency cap: a hot loop of local `send`/`respond` traffic or
   repeated `notify_human` calls each independently re-fetches the roster and re-fires the full
@@ -596,12 +519,6 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   attempt landed but its ack was lost, and eviction lands between that silent success and the retry's
   redelivery - produces a genuine user-visible duplicate with no coordination anywhere to prevent it.
   Same class as the `ChatRepository.forget` race above; cosmetic-only consequence.
-- [medium] `src/shared/device-mailbox.ts : DeviceMailbox.append`'s dedupeKey/seenKeys - only ever saw
-  a locally-minted key before `console_push`; now a same-Domain peer chooses the key and it's trusted
-  verbatim (requires an already-highly-trusted peer to misbehave to matter). Separately, the
-  pre-existing gap where an outer HTTP-level retry of `send()`/`respond()` re-runs `mirrorPeer` with
-  a fresh dedupeKey now has a wider blast radius: a retry-produced duplicate previously showed up
-  twice on one gateway; now it can appear mesh-wide, on any gateway the console might be polling.
 - [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is ~1400 lines
   (refreshed 2026-07-11 by the fullSpoken framework audit; the original ~1290 figure went stale in
   two days), the largest file in `src/gateway/`. The console mailbox delivery concern is now FIVE
@@ -1048,12 +965,6 @@ the strength of an audit finding.
   keyed differently from both. All three exist because the same fact is true of all three, and each
   was built separately after somebody noticed. A gateway-wide "settled reply for an operation id"
   primitive would have made this phase's record two lines instead of a judgement call.
-- [medium] **`MainActivity.kt` is past 3000 lines and its composables are indistinguishable while
-  editing.** I added a state variable to `ProvisionScreen` while intending `App`; only the compiler
-  caught it. The overlay flags compound it: ~15 booleans across four lists (the `BackHandler`
-  predicate, the back `when`, the render `when`, the notification-tap clear list) that must agree by
-  hand, with one recorded bug already from missing the third. An ordered overlay declaration list is
-  the shape; it wants its own PR on a surface with no tests.
 - [medium] **The Kotlin gate is local-only and bites every lap.** `ci.yml` never compiles Kotlin, so
   a green TS suite reads as done. It cost time twice more this run despite being documented. A CI job
   that merely COMPILES Kotlin on a PR closes the whole class; it does not need the unit tests.
