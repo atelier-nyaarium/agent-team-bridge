@@ -373,19 +373,103 @@ The daemon path has no reaper: `ExecutionTargetManager.release` runs on shutdown
 open. `LocalAgentRuntime.reapIfIdle` shows the shape, with `inFlight` held across a whole request so
 the reaper cannot fire between a turn starting and its record being written.
 
-A watchdog in `CodexDaemonService` reads only overdue active turns: a read proving settlement feeds
-`settleTurn`; a read whose state changed refreshes the turn's clock; a read unchanged or unknown past
-a bounded interval interrupts the turn, and a second such interval retires the generation. Progress
-is an event or a changed read, never another identical `inProgress`. A lease counter is taken for
-every command and every lifecycle callback, atomically against reaping; the reaper releases the
-target only with zero leases and every thread `parked` or `disposed`, after a configurable quiet
-period whose default clears the 240s wait budget and the 300s reconcile guard. A follow-up after a
-reap activates directly through Step 2 with no reconciliation. Both use the injected clock.
+One sweep serves both, on the daemon's injected clock. It walks overdue turns first, since settling
+one is what makes its target reapable, and reaps afterwards.
 
-Tests: `src/__tests__/codex-targets.test.ts` for lease and reap atomicity and a poisoned generation
-replaced under a live sibling session; `src/__tests__/codex-daemon-service.test.ts` for the watchdog's
-settled, changed, unchanged and unknown reads, no-progress retirement, park budget exhaustion and the
-other agent's recovery; `src/__tests__/local-agent-runtime.test.ts` for a follow-up after a reap.
+The watchdog asks App Server about a turn that has gone quiet and acts on the answer rather than on
+the silence. Progress is ANY frame naming the turn, read structurally rather than through a schema:
+a turn that spends its life running commands emits no agent message, so counting only the frames the
+tracker parses would interrupt work that is progressing perfectly. A read that says `inProgress`
+again is not progress either, since a hung turn reports that forever, which is the case this exists
+to end. A read proving settlement goes through `settle` like any other terminal. A read still
+running, or one that could not be had, interrupts the turn once; a second sweep in the same state
+retires the generation.
+
+A turn's clock is bound with the turn itself, in one `bindTurn`, and only its OWN thread's frames
+refresh it. Falling back to the session's own `usedAt` for a turn with no entry reads as harmless and
+is not: any frame on any other turn refreshes that stamp, so one hung turn beside one chatty turn is
+never overdue and never watched. Matching the turn id alone has the same shape, since a frame from
+another thread carrying that id says nothing about this turn. Rebinding keeps the strikes a turn has
+already earned: a reconcile is the gateway asking, not the turn working, so one arriving every
+interval would otherwise buy a hung turn an unlimited number of second chances.
+
+The first interrupt lands around 120s, inside the 240s caller wait budget, which is deliberate.
+Retirement is nominally 240s but the sweep cadence can carry it to roughly 270s, so it is NOT
+guaranteed before that budget expires; the caller sees its own timeout first and the generation goes
+shortly after. `REAP_QUIET_MS` clears both that budget and the 300s reconcile guard.
+
+The reaper releases a target nobody is using, which is the only thing that ends a codex child's life
+on this path. Every condition is checked at the instant of the reap: no lease anywhere, no turn this
+daemon still holds, no terminal on its deadline, and no thread the owner calls `active` or `parking`.
+Refusing anything but `parked` and `disposed` reads as safer and is not: nothing parks a thread that
+never ran a turn, so one left `idle` by a reconcile would block the reap for the daemon's life. The
+question is whether the owner is mid-operation, not whether it tidied up. `REAP_QUIET_MS` is ten
+minutes, past the 240s wait budget and the 300s reconcile guard. A follow-up after a reap resumes the
+thread on the fresh child with no reconciliation.
+
+The lease is counted for the DAEMON, not per session, and held across every asynchronous stretch that
+touches one: a whole command, the held-terminal read, the settle behind a terminal, and the
+watchdog's own read and interrupt. A sweep still running when the next interval fires is skipped
+rather than run twice.
+
+The quiet period the reaper measures runs from a command ENDING, not from its acquire, or a command
+outlasting the period leaves its target reapable the instant it finishes. Only commands stamp it. Any
+leased work stamping it looks more thorough and cannot work at all: the sweep leases its own reads,
+so it would reset the clock it is about to read and never reap once.
+
+Per-session is the obvious shape and is wrong, because a lease taken after the session
+resolves leaves the acquire itself unguarded, which is the gap `LocalAgentRuntime` already records a
+reaper firing in. Asking the owner what it believes about a thread put `stateOf` on `AppServerSession`,
+which is what makes reapability a question with an answer rather than a guess about idleness.
+
+Two readers interpret a `thread/read`, and that is the right number: `outcomeFromRead` reconstructs
+ONE turn, and `inspectRead` reads the thread as a whole and delegates to it for the settled case.
+Both have several callers, which is reuse rather than duplication. The plan's earlier count of four
+was wrong twice over: it counted `inspectRead` as independent when it already delegated, and counted
+`CodexTurnTracker`, which reads live events and never a read at all. `runningTurn` was the one place
+re-deriving a reader's work by hand, and it projects `inspectRead` now; the watchdog reuses
+`readOutcome` rather than adding a third.
+
+Tests: `src/__tests__/codex-daemon-service.test.ts` drives the sweep by hand against a clock the test
+moves: a turn the watchdog finds already finished, one that only ever reports itself in progress being
+interrupted and then retiring its generation, a turn whose own frames count as the progress being
+looked for, a frame the tracker does not parse counting all the same, a frame from another thread
+counting for nothing, strikes surviving a reconcile, a quiet period starting when a long command ends,
+a target reaped once its threads
+are parked and quiet, a follow-up after that reap served from a fresh generation by a resume rather
+than a reconcile, and two refusals to reap, one while the owner calls a thread active and one while a
+command is held inside its own read. Both refusals are written so the guard under test is the ONLY
+thing that can refuse: the first lets the daemon's turn go so the phase decides, the second uses a
+reconcile that starts no turn so the lease decides. Written the obvious way, neither could fail: the
+first was refused by the turn it still held, and the second blocked the open that installs the sweep,
+so no sweep ran at all. The harness now throws rather than passing when no sweep is installed, since
+a test that sweeps nothing asserts nothing.
+
+### Bug Classes
+
+**Mechanism:** the watchdog's answer to "has THIS turn made progress", which decides whether a live
+turn is interrupted and its generation retired.
+
+**Class:** the question was answered by a proxy that was cheaper than the turn's own identity, and
+each round found another thing the proxy let through.
+
+Three patches in one lap. First, progress was a frame the tracker PARSES, which is agent messages and
+terminals; a turn running commands emits neither, so the watchdog would have interrupted work that was
+progressing perfectly. Second, a turn with no clock of its own fell back to the SESSION's last-used
+stamp, which any other turn's frames refresh, so a hung turn beside a chatty one was never overdue.
+Third, a frame was matched to a turn by TURN ID alone, so another thread's frame carrying that id
+counted as this turn working. A fourth of the same shape sat next to them: rebinding reset the strike
+count, so a reconcile arriving each interval bought a hung turn unlimited second chances.
+
+Every one of these is the same trade: a cheaper key than the full identity of the thing being
+measured. The turn's identity is its thread AND its id, its clock belongs to the turn and not to
+anything above it, and the strikes belong to the turn rather than to the last thing that touched it.
+The fix that finally held was to say so once, in `bindTurn` and in the one place a frame refreshes a
+clock, rather than to widen the proxy again.
+
+The same trade showed up once more in the reaper's quiet clock and was caught before it shipped:
+stamping it from ANY leased work reads as thorough, and the sweep leases its own reads, so it would
+have reset the clock it was about to read and never reaped once. Only a command stamps it.
 
 ## Step 6 - Bounded bookkeeping
 

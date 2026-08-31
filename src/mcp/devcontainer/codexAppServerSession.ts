@@ -1,5 +1,6 @@
 import { CodexAppServerClient, createJsonlTransport, type LifecycleHooks } from "./codexAppServer.js";
 import type { CodexChild } from "./codexTargets.js";
+import type { ThreadPhase } from "./codexThreadLifecycle.js";
 import type { TerminalOutcome } from "./codexTurnOutcome.js";
 
 ////////////////////////////////
@@ -22,6 +23,8 @@ export interface AppServerSession {
 	interruptTurn(threadId: string, turnId: string): Promise<void>;
 	/** The one entry for a terminal, whichever observer saw it; the thread parks behind it. */
 	settleTurn(threadId: string, turnId: string, terminal: TerminalOutcome): Promise<void>;
+	/** What the owner believes about a thread, which is what says whether a child is reapable. */
+	stateOf(threadId: string): ThreadPhase | undefined;
 	close(): void;
 }
 

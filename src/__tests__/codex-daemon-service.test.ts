@@ -3,7 +3,7 @@ import type { LifecycleHooks } from "../mcp/devcontainer/codexAppServer.js";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
 import { CodexDaemonService, resolveAgentTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
-import type { PoisonReason } from "../mcp/devcontainer/codexThreadLifecycle.js";
+import type { PoisonReason, ThreadPhase } from "../mcp/devcontainer/codexThreadLifecycle.js";
 import type { TerminalOutcome } from "../mcp/devcontainer/codexTurnOutcome.js";
 import type { CodexResolvedTarget } from "../shared/codex-agent.js";
 
@@ -13,6 +13,8 @@ const REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
 const OPERATION_ID_TWO = "123e4567-e89b-42d3-a456-426614174009";
 const TARGET_ID = "container:recipe-app";
+/** Past the daemon's own reap quiet period, whatever it is set to. */
+const REAP_QUIET = 900_000;
 const RESOLVED_TARGET: CodexResolvedTarget = {
 	kind: "devcontainer",
 	targetId: TARGET_ID,
@@ -31,6 +33,8 @@ class FakeSession implements AppServerSession {
 	archiveGate?: Promise<void>;
 	/** Held open to land a turn's terminal while its steer is still in flight. */
 	steerGate?: Promise<void>;
+	/** Held open to keep a command in flight without it starting a turn. */
+	readGate?: Promise<void>;
 	/** Runs where the owner drains a buffered terminal: after the caller registered, before the return. */
 	afterStarted?: (threadId: string, turnId: string) => void;
 	/** The snapshot `thread/read` answers with. Tests reassign it per scenario. */
@@ -40,6 +44,12 @@ class FakeSession implements AppServerSession {
 
 	private readonly published = new Set<string>();
 	private readonly active = new Map<string, string>();
+	private readonly phases = new Map<string, ThreadPhase>();
+
+	/** What the owner would say: idle when started, active under a turn, parked once archived. */
+	stateOf(threadId: string): ThreadPhase | undefined {
+		return this.phases.get(threadId);
+	}
 
 	onEvent(listener: (message: { method: string; params?: unknown }) => void) {
 		this.listener = listener;
@@ -56,6 +66,7 @@ class FakeSession implements AppServerSession {
 		this.active.delete(threadId);
 		if (this.archiveGate) await this.archiveGate;
 		if (this.settleFails) throw this.settleFails;
+		this.phases.set(threadId, { phase: "parked", epoch: 1 });
 		this.calls.push("archive");
 	}
 	/** A request whose fate the lifecycle could not learn. */
@@ -64,6 +75,7 @@ class FakeSession implements AppServerSession {
 	}
 	async startThread() {
 		this.calls.push("startThread");
+		this.phases.set("thread-1", { phase: "idle" });
 		return "thread-1";
 	}
 	async resumeThread() {
@@ -71,6 +83,7 @@ class FakeSession implements AppServerSession {
 	}
 	async readThread() {
 		this.calls.push("readThread");
+		if (this.readGate) await this.readGate;
 		return this.threadReadResult;
 	}
 	/** The owner hands the id back before publishing anything for it, so the double must too. */
@@ -80,6 +93,7 @@ class FakeSession implements AppServerSession {
 		this.turnCounter += 1;
 		const turnId = `turn-${this.turnCounter}`;
 		this.active.set(threadId, turnId);
+		this.phases.set(threadId, { phase: "active", turnId, epoch: 1 });
 		onStarted(turnId);
 		this.afterStarted?.(threadId, turnId);
 		return turnId;
@@ -134,6 +148,9 @@ function setup(
 	const sent: Record<string, unknown>[] = [];
 	/** Deadlines the test fires by hand, so a held terminal needs no clock. */
 	const timers: Array<{ run: () => void; ms: number; cleared: boolean }> = [];
+	/** The watchdog and reaper sweep, fired by hand against a clock the test moves. */
+	const sweeps: Array<() => void> = [];
+	let clock = 1_000_000;
 	const service = new CodexDaemonService({
 		targets,
 		daemonInstanceId: "daemon-1",
@@ -146,6 +163,7 @@ function setup(
 			return session;
 		},
 		resolveHostCwd: () => "/home/agent",
+		now: () => clock,
 		setTimer: (run, ms) => {
 			const timer = { run, ms, cleared: false };
 			timers.push(timer);
@@ -155,6 +173,13 @@ function setup(
 			const timer = timers[handle as unknown as number];
 			if (timer) timer.cleared = true;
 		},
+		setSweep: (run) => {
+			sweeps.push(run);
+			return sweeps.length as unknown as ReturnType<typeof setInterval>;
+		},
+		clearSweep: () => {
+			sweeps.length = 0;
+		},
 	});
 	const fireDeadlines = async () => {
 		for (const timer of timers.filter((candidate) => !candidate.cleared)) {
@@ -163,14 +188,34 @@ function setup(
 		}
 		await settle();
 	};
-	return { service, session, sent, released, timers, fireDeadlines };
+	/** Advance the clock and run the sweeps, refusing to pass for want of one to run. */
+	const sweep = async (byMs = 0) => {
+		clock += byMs;
+		if (sweeps.length === 0) throw new Error(`no sweep was installed, so nothing was swept`);
+		for (const run of [...sweeps]) run();
+		await settle();
+	};
+	return {
+		service,
+		session,
+		sent,
+		released,
+		timers,
+		fireDeadlines,
+		sweep,
+		advance: (ms: number) => {
+			clock += ms;
+		},
+	};
 }
 
-/** Let the service's own promise chain drain. Commands are serialized, so a handful of ticks covers
- * every await one command performs. */
+/** Let the service's own promise chain drain. Commands are serialized, so a bounded run of ticks
+ * covers every await one performs, including the lease and the session acquire around it. */
 async function settle() {
-	for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+	for (let tick = 0; tick < 40; tick += 1) await Promise.resolve();
 }
+
+const terminalsOf = (sent: Record<string, unknown>[]) => sent.filter((message) => message.kind === "terminal");
 
 function startCommand() {
 	return {
@@ -280,8 +325,6 @@ describe("Codex answer selection", () => {
 });
 
 describe("Codex terminals through the thread lifecycle", () => {
-	const terminalsOf = (sent: Record<string, unknown>[]) => sent.filter((message) => message.kind === "terminal");
-
 	it("settles an event terminal through the lifecycle, publishing before the thread is archived", async () => {
 		const context = setup();
 		context.service.handleCommand(startCommand());
@@ -806,6 +849,259 @@ describe("Codex terminals through the thread lifecycle", () => {
 		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "done" }]);
 		// Retiring the generation is the lifecycle's call, not this catch's.
 		expect(context.released).toEqual([]);
+	});
+});
+
+describe("Codex watchdog and reaping", () => {
+	it("settles a turn the watchdog finds already finished", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.threadReadResult = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{
+						id: "turn-1",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "quietly done", phase: "final_answer" }],
+					},
+				],
+			},
+		};
+
+		await context.sweep(200_000);
+
+		// The turn ended without an event this daemon ever saw, which is the silence being answered.
+		expect(terminalsOf(context.sent)).toMatchObject([{ finalResponse: "quietly done" }]);
+	});
+
+	it("interrupts a turn that only ever reports itself in progress, then retires the generation", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.threadReadResult = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+		context.session.calls.length = 0;
+
+		await context.sweep(200_000);
+		expect(context.session.calls).toContain("interruptTurn");
+		expect(context.released).toEqual([]);
+
+		await context.sweep(200_000);
+
+		// Another identical inProgress is not progress, which is the whole point of asking twice.
+		expect(context.released).toEqual([TARGET_ID]);
+	});
+
+	it("counts a frame the tracker does not parse as progress all the same", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.threadReadResult = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+		context.session.calls.length = 0;
+
+		context.advance(200_000);
+		// A turn that only ever runs commands emits no agent message, and is working the whole time.
+		context.session.listener({
+			method: "item/started",
+			params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "cmd-1" } },
+		});
+		await context.sweep();
+
+		expect(context.session.calls).not.toContain("interruptTurn");
+	});
+
+	it("counts a turn's own frames as the progress the watchdog is looking for", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.threadReadResult = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+		context.session.calls.length = 0;
+
+		context.advance(200_000);
+		context.session.listener({
+			method: "item/completed",
+			params: {
+				threadId: "thread-1",
+				turnId: "turn-1",
+				item: { type: "agentMessage", id: "item-1", text: "still working", phase: "commentary" },
+			},
+		});
+		await context.sweep();
+
+		expect(context.session.calls).not.toContain("interruptTurn");
+	});
+
+	it("takes no frame from another thread as this turn's progress", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.threadReadResult = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+		context.session.calls.length = 0;
+
+		context.advance(200_000);
+		// The same turn id on a thread this turn does not belong to says nothing about this turn.
+		context.session.listener({
+			method: "item/started",
+			params: { threadId: "thread-9", turnId: "turn-1", item: { type: "commandExecution", id: "cmd-1" } },
+		});
+		await context.sweep();
+
+		expect(context.session.calls).toContain("interruptTurn");
+	});
+
+	it("keeps a turn's strikes when the gateway reconciles it again", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.threadReadResult = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+
+		await context.sweep(200_000);
+		expect(context.released).toEqual([]);
+
+		// A reconcile is the gateway asking, not the turn working, so it buys no second chance.
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+		await context.sweep(200_000);
+
+		expect(context.released).toEqual([TARGET_ID]);
+	});
+
+	it("starts the quiet period when a long command ends, not when it began", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		let read = () => {};
+		context.session.readGate = new Promise<void>((resolve) => {
+			read = resolve;
+		});
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+
+		// The command outlives the quiet period, and finishing it must not make the target instantly stale.
+		context.advance(REAP_QUIET);
+		read();
+		await settle();
+		await context.sweep();
+
+		expect(context.released).toEqual([]);
+	});
+
+	it("reaps a target whose threads are all parked and quiet", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		await context.sweep(REAP_QUIET);
+
+		expect(context.released).toEqual([TARGET_ID]);
+	});
+
+	it("serves a follow-up after a reap from a fresh generation, without reconciling", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+		await context.sweep(REAP_QUIET);
+		expect(context.released).toEqual([TARGET_ID]);
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "message",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID_TWO,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			prompt: "carry on",
+		});
+		await settle();
+
+		// The reaped thread is resumed on the new child rather than reconciled back into existence.
+		expect(context.session.calls).toEqual(["resumeThread", "startTurn"]);
+		expect(context.sent.at(-1)).toMatchObject({ kind: "accepted", delivery: "started", generation: 4 });
+	});
+
+	it("reaps nothing while the owner still calls a thread active", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		// The daemon lets the turn go, so only the owner's own phase can refuse the reap.
+		context.session.hooks.onTerminal?.("thread-1", "turn-1", { status: "completed", finalResponse: "done" });
+		await settle();
+
+		await context.sweep(REAP_QUIET);
+
+		expect(context.released).toEqual([]);
+	});
+
+	it("reaps nothing while a command is in flight", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		// A reconcile held inside its read: no turn of its own, so only the lease can refuse the reap.
+		let read = () => {};
+		context.session.readGate = new Promise<void>((resolve) => {
+			read = resolve;
+		});
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+
+		await context.sweep(REAP_QUIET);
+		expect(context.released).toEqual([]);
+
+		read();
+		await settle();
 	});
 });
 
