@@ -480,7 +480,7 @@ describe("createWebSocketHandlers", () => {
 		expect(offlineCatalog.size).toBe(0);
 	});
 
-	it("catalog populates knownTeamPaths only for new teams", () => {
+	it("catalog replaces a registered path for the same team", () => {
 		const knownTeamPaths = new Map<string, string>();
 		knownTeamPaths.set("proj-a", "/existing/path");
 		const { handlers } = setup({ knownTeamPaths });
@@ -497,7 +497,7 @@ describe("createWebSocketHandlers", () => {
 				],
 			}),
 		);
-		expect(knownTeamPaths.get("proj-a")).toBe("/existing/path");
+		expect(knownTeamPaths.get("proj-a")).toBe("/catalog/proj-a");
 		expect(knownTeamPaths.get("proj-b")).toBe("/catalog/proj-b");
 	});
 

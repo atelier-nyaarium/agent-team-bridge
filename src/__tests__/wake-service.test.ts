@@ -42,7 +42,7 @@ describe("WakeService", () => {
 			sessionStore,
 			presence,
 			wakeCoordinator,
-			isCatalogProject: (n) => n === "recipe-app",
+			isAvailableProject: (n) => n === "recipe-app",
 			knownTeamPaths: new Map([["recipe-app", "/proj/recipe-app"]]),
 			offlineCatalog: new Map(),
 			liveHostSocket: () => hostWs,

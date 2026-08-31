@@ -57,6 +57,8 @@ export interface ConsoleRoutes {
 	deliverToOwner: DeliverToOwner;
 }
 
+export type TrustedCatalogProject = (name: string) => boolean;
+
 /** The JSON body shape returned by routes.send, shared by the in-time and backgrounded
  * read sites so they cannot drift. A channelOnly send never produces an inline response
  * body: success is always the deterministic channel session, the answer arrives via
@@ -79,10 +81,10 @@ export interface ConsoleHandlerDeps {
 	localDomainId: string;
 	sendBoundMs?: number;
 	createSessionBoundMs?: number;
-	/** True when the name belongs to a devcontainer project. A device must not take such a
+	/** True when the name belongs to a trusted devcontainer project. A device must not take such a
 	 * name: while the project sleeps, the console's virtual peer would squat the registry slot,
 	 * absorb sends meant for the project, and suppress its wake. */
-	isProjectName?: (name: string) => boolean;
+	isTrustedCatalogProject?: TrustedCatalogProject;
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;

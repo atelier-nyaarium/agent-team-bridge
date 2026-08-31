@@ -13,7 +13,6 @@ import {
 	type HostOpResult,
 	type HostPeekResult,
 	isSpawnWorkdirPath,
-	isWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -56,7 +55,7 @@ export function createConsoleDispatcher({
 	localDomainId,
 	sendBoundMs = SEND_BOUND_MS,
 	createSessionBoundMs = CREATE_SESSION_BOUND_MS,
-	isProjectName,
+	isTrustedCatalogProject,
 	dropSessionResume,
 	sessionStore,
 	capabilityStore,
@@ -84,7 +83,7 @@ export function createConsoleDispatcher({
 	durableOpStore,
 }: ConsoleHandlerDeps) {
 	// The one owner of target resolution and the foreign-Gateway refusal (see consoleTargets.ts).
-	const targets = createConsoleTargets({ localDomainId, localGatewayId, isProjectName });
+	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
 
 	/** Reject a terminal-DRIVE op (peek/tmux_send/reload) against a record whose live incarnation is
 	 * an alias (a user-launched `claude --resume` under a different name): there is no daemon pane at
@@ -105,7 +104,7 @@ export function createConsoleDispatcher({
 		// The owner-delivery funnel: appends AND converges, so a conversation held HERE still
 		// reaches the Gateway the console polls (see ConsolePeer's doc).
 		deliver: routes.deliverToOwner,
-		isProjectName,
+		isTrustedCatalogProject,
 		// Qualified in stays itself, a bare local team gains this Gateway, a Device Name stays raw.
 		qualifyFrom: (from) => {
 			try {

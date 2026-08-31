@@ -51,6 +51,7 @@ import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } f
 import { CapabilityStore } from "./console/capabilityStore.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { createConsoleSealer } from "./console/consoleSealer.js";
+import type { TrustedCatalogProject } from "./console/consoleTypes.js";
 import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
@@ -97,6 +98,17 @@ import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./
 
 ////////////////////////////////
 //  Functions & Helpers
+
+export function createProjectPredicates(
+	offlineCatalog: ReadonlyMap<string, string>,
+	knownTeamPaths: ReadonlyMap<string, string>,
+) {
+	const isTrustedCatalogProject: TrustedCatalogProject = (name) => offlineCatalog.has(name);
+	return {
+		isTrustedCatalogProject,
+		isAvailableProject: (name: string) => isTrustedCatalogProject(name) || knownTeamPaths.has(name),
+	};
+}
 
 export async function startGateway(): Promise<void> {
 	const PORT = parseInt(process.env.PORT || "20000", 10);
@@ -180,10 +192,7 @@ export async function startGateway(): Promise<void> {
 	// a daemon has answered, this machine has said nothing about what it offers, and saying "nothing"
 	// on its behalf is a different and wrong claim.
 	const hostSpawnPoints: HostSpawnState = { known: false, ids: [] };
-	// A name is a spawn-point project iff it is in the catalog (the dir scan or a bare register).
-	// Composites are never added (the register write-guard), so membership alone is the signal -
-	// even for a dotted dir name that the mechanical isComposite test would misread as a session.
-	const isCatalogProject = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
+	const { isTrustedCatalogProject, isAvailableProject } = createProjectPredicates(offlineCatalog, knownTeamPaths);
 	const wakeCoordinator = new WakeCoordinator();
 	const hostOpCoordinator = new HostOpCoordinator();
 
@@ -213,7 +222,7 @@ export async function startGateway(): Promise<void> {
 	let codexCatalogWriter: CodexCatalogWriter | undefined;
 	let copilotCatalogWriter: CopilotCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
-		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
+		clash: (id) => isTrustedCatalogProject(id) || isReservedHostSession(id),
 		codexCatalogPersistence: {
 			persistChecked: () => {
 				if (!persistAgentCatalogChecked) throw new Error("Agent persistence is not initialized");
@@ -476,7 +485,7 @@ export async function startGateway(): Promise<void> {
 		sessionStore,
 		presence,
 		wakeCoordinator,
-		isCatalogProject,
+		isAvailableProject,
 		knownTeamPaths,
 		offlineCatalog,
 		liveHostSocket,
@@ -1091,7 +1100,7 @@ export async function startGateway(): Promise<void> {
 			routes,
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
-			isProjectName: isCatalogProject,
+			isTrustedCatalogProject,
 			// Forget drops the session's durable resume record so it stops listing as available. The
 			// board hook rides HERE - the deliberate forget - and on the TTL sweep, never inside
 			// SessionStore.forget itself, whose failed-wake/failed-create rollback callers would
@@ -1405,7 +1414,7 @@ export async function startGateway(): Promise<void> {
 				const project = proxyMatch[1];
 				// SSRF guard: `project` is dialed as ws://<project>:20002/ws, so only a project from the
 				// host daemon's trusted catalog (offlineCatalog, written only under the HOST_WS_TOKEN gate)
-				// may be proxied. Deliberately NOT isCatalogProject: that also trusts knownTeamPaths, which
+				// may be proxied. Deliberately NOT the broader availability predicate: it also trusts knownTeamPaths, which
 				// an unauthenticated /bridge register can poison with a hostile name (e.g. "localhost").
 				// Requires the host daemon connected; the broader unauth-/bridge surface is a known,
 				// deliberately postponed gap.

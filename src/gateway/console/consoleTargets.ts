@@ -10,6 +10,7 @@ import {
 	SpawnPoint,
 } from "../../shared/session-id.js";
 import { refusalError } from "../boardStore.js";
+import type { TrustedCatalogProject } from "./consoleTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -17,7 +18,7 @@ import { refusalError } from "../boardStore.js";
 export interface ConsoleTargetsDeps {
 	localDomainId: string | null;
 	localGatewayId: string;
-	isProjectName?: (name: string) => boolean;
+	isTrustedCatalogProject?: TrustedCatalogProject;
 }
 
 /** A composite local target: the ops that act on ONE session record resolve to this. */
@@ -42,7 +43,7 @@ export type ConsoleTargets = ReturnType<typeof createConsoleTargets>;
  * lives here alone: a session on another Gateway is refused, never folded onto a same-named local
  * one. The residue test pins parseTarget to this module within console/.
  */
-export function createConsoleTargets({ localDomainId, localGatewayId, isProjectName }: ConsoleTargetsDeps) {
+export function createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject }: ConsoleTargetsDeps) {
 	// The local Domain segment for every canonical address minted here. Null (arming mode) maps to
 	// the sentinel, so a key still forms.
 	const localDomain = localDomainId || LOCAL_DOMAIN_SENTINEL;
@@ -130,7 +131,7 @@ export function createConsoleTargets({ localDomainId, localGatewayId, isProjectN
 		if (isHostSpawn(project)) {
 			if (isReservedHostSession(sessionName)) throw new Error(`"${sessionName}" is a reserved host session`);
 			target = { kind: "host", name: project, sessionName };
-		} else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
+		} else if (isTrustedCatalogProject?.(project)) target = { kind: "devcontainer", name: project, sessionName };
 		else throw new Error(`terminal view is not available for "${project}" (only the host and devcontainers)`);
 		// Both name and session reach the host's shell launch command; the grammar makes both strict
 		// dotless slugs, so assert it at the boundary regardless (defense in depth).

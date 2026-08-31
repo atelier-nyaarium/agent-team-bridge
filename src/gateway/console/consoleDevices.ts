@@ -6,6 +6,7 @@ import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
+import type { TrustedCatalogProject } from "./consoleTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -17,7 +18,7 @@ export interface ConsoleDevicesDeps {
 	// The owner-delivery funnel (consolePushOps.deliverToOwner): the ONE mailbox writer, so a
 	// device append cannot exist without the convergence relay riding along.
 	deliver: DeliverToOwner;
-	isProjectName?: (name: string) => boolean;
+	isTrustedCatalogProject?: TrustedCatalogProject;
 	// See ConsolePeer's own param doc; identity when absent (tests).
 	qualifyFrom?: (from: string) => string;
 }
@@ -34,7 +35,7 @@ export function createConsoleDevices({
 	conversationRegistry,
 	mailboxStore,
 	deliver,
-	isProjectName,
+	isTrustedCatalogProject,
 	qualifyFrom,
 }: ConsoleDevicesDeps) {
 	// The per-install conversationId is the device identity: it keys the registry sub, the
@@ -90,7 +91,7 @@ export function createConsoleDevices({
 		if (RESERVED_TEAM_NAMES.has(device)) {
 			throw new Error(`"${device}" is a reserved name; pick another device name`);
 		}
-		if (isProjectName?.(device)) {
+		if (isTrustedCatalogProject?.(device)) {
 			throw new Error(`"${device}" is a project on the bridge; pick another device name`);
 		}
 		const bound = bindings.get(conversationId);

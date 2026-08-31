@@ -376,9 +376,7 @@ export function createWebSocketHandlers({
 				for (const p of projects) {
 					if (typeof p.team === "string" && typeof p.projectPath === "string") {
 						offlineCatalog.set(p.team, p.projectPath);
-						if (!knownTeamPaths.has(p.team)) {
-							knownTeamPaths.set(p.team, p.projectPath);
-						}
+						knownTeamPaths.set(p.team, p.projectPath);
 					}
 				}
 				console.log(`[ws] catalog received: ${offlineCatalog.size} projects`);

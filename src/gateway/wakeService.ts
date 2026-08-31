@@ -15,7 +15,7 @@ export interface WakeServiceDeps {
 	sessionStore: SessionStore;
 	presence: Pick<PresenceFacade, "wakeStart" | "wakeEnd" | "createStart" | "createEnd" | "mintOrReattach" | "forget">;
 	wakeCoordinator: WakeCoordinator;
-	isCatalogProject: (name: string) => boolean;
+	isAvailableProject: (name: string) => boolean;
 	knownTeamPaths: Map<string, string>;
 	offlineCatalog: Map<string, string>;
 	liveHostSocket: () => ServerWebSocket<WsData> | undefined;
@@ -84,12 +84,13 @@ export class WakeService {
 		team: string,
 		createOpts: { displayLabel?: string; mintedFrom?: string } = {},
 	): Promise<WakeResult> {
+		const { project, session } = parseSessionName(team);
 		// Clean break: a catalog project is a non-chat spawn-point, not a session. A send to it has no
 		// destination (the daemon would launch project.<default> under a name the waiter never sees),
 		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Catalog membership is the signal (a
 		// dotted dir name "my.app" is still a project); named sessions are never in the catalog. A
 		// definitive "no" - there is no ambiguity to wait out, so no errorKind.
-		if (this.deps.isCatalogProject(team)) {
+		if (this.deps.isAvailableProject(project) && (!isComposite(team) || !this.deps.offlineCatalog.has(project))) {
 			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
 			return { ok: false };
 		}
@@ -104,7 +105,6 @@ export class WakeService {
 
 		// A composite `project.session` resolves its container/path by the PROJECT segment (composites
 		// are never in knownTeamPaths); a mapped Claude id lets the daemon `--resume` the session.
-		const { project, session } = parseSessionName(team);
 		// Never dispatch a wake that would relaunch over the host-daemon's own supervisor pane (the
 		// daemon refuses it too; this stops the wake message at the source).
 		if (isHostSpawn(project) && isReservedHostSession(session)) {
@@ -159,7 +159,7 @@ export class WakeService {
 			wakeTeam = this.deps.sessionStore.teamOf(minted.record);
 		}
 
-		const projectPath = this.deps.knownTeamPaths.get(project) ?? this.deps.offlineCatalog.get(project);
+		const projectPath = this.deps.offlineCatalog.get(project) ?? this.deps.knownTeamPaths.get(project);
 		const record = this.deps.sessionStore.getByTeam(wakeTeam);
 		const resumeSessionId = record?.claudeSessionId;
 		// The host workdir hint: the record's hint (workdirHint ?? sessionLabel, owned by the store).

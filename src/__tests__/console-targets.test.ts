@@ -12,7 +12,7 @@ import { DEFAULT_SESSION } from "../shared/session-id.js";
 const targets = createConsoleTargets({
 	localDomainId: "home",
 	localGatewayId: "gw",
-	isProjectName: (name) => name === "recipe-app",
+	isTrustedCatalogProject: (name) => name === "recipe-app",
 });
 const FOREIGN = "other.gw.app.dev";
 
@@ -57,5 +57,18 @@ describe("createConsoleTargets", () => {
 			sessionName: "dev",
 		});
 		expect(() => targets.tmuxTarget("stranger.dev")).toThrow("only the host and devcontainers");
+	});
+
+	it("does not classify a name known only through discovery", () => {
+		const knownTeamPaths = new Map([["untrusted", "/tmp/untrusted"]]);
+		const offlineCatalog = new Map<string, string>();
+		const trustedTargets = createConsoleTargets({
+			localDomainId: "home",
+			localGatewayId: "gw",
+			isTrustedCatalogProject: (name) => offlineCatalog.has(name),
+		});
+
+		expect(knownTeamPaths.has("untrusted")).toBe(true);
+		expect(() => trustedTargets.tmuxTarget("untrusted.dev")).toThrow("only the host and devcontainers");
 	});
 });

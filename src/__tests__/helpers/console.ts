@@ -194,7 +194,7 @@ export function makeHarness(
 /** Shared by the terminal-ops (peek/tmux_send/list_dirs/reload_plugins), create_session, and
  * close/forget/rename split files - each exercises this same relayToHost-backed dispatcher. */
 export function makeTerminalHarness(
-	isProjectName: (n: string) => boolean = (n) => n === "recipe-app",
+	isTrustedCatalogProject: (n: string) => boolean = (n) => n === "recipe-app",
 	relayPeek?: () => { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
 	opts: {
 		sessionStore?: SessionStore;
@@ -225,7 +225,7 @@ export function makeTerminalHarness(
 		localGatewayId: "test-host",
 		localDomainId: "test-domain",
 		routes,
-		isProjectName,
+		isTrustedCatalogProject,
 		sessionStore: opts.sessionStore,
 		tryWakeTeam: opts.tryWakeTeam,
 		isWakeInFlight: opts.isWakeInFlight,

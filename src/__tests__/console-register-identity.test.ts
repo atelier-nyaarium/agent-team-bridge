@@ -142,12 +142,41 @@ describe("createConsoleDispatcher: register + identity", () => {
 				discover: async () => jsonRes([]),
 				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
 			},
-			isProjectName: (name) => name === "recipe-app",
+			isTrustedCatalogProject: (name) => name === "recipe-app",
 		});
 
 		const reply = await handler.handleFrame(frame({ kind: "register" }, "op1", "recipe-app", "conv-x"));
 		expect(reply.ok).toBe(false);
 		expect(registry.get("recipe-app")).toBeUndefined();
+	});
+
+	it("does not reserve a discovery-only project name", async () => {
+		const knownTeamPaths = new Map([["untrusted", "/tmp/untrusted"]]);
+		const offlineCatalog = new Map<string, string>();
+		const registry: TeamRegistry = new Map();
+		const conversationRegistry: ConversationRegistry = new Map();
+		const mailboxStore = new DeviceMailboxStore();
+		const handler = createConsoleDispatcher({
+			registry,
+			conversationRegistry,
+			mailboxStore,
+			localGatewayId: "test-host",
+			localDomainId: "test-domain",
+			routes: {
+				deliverToOwner: stubDeliver,
+				send: async () => jsonRes({}),
+				respond: () => jsonRes({}),
+				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
+				discoverFull: async () => ({ teams: [], coverage: { rosterKnown: true, asked: 0, answered: 0 } }),
+			},
+			isTrustedCatalogProject: (name) => offlineCatalog.has(name),
+		});
+
+		const reply = await handler.handleFrame(frame({ kind: "register" }, "op1", "untrusted", "conv-untrusted"));
+		expect(knownTeamPaths.has("untrusted")).toBe(true);
+		expect(reply.ok).toBe(true);
+		expect(registry.get("untrusted")).toBeDefined();
 	});
 
 	it("rejects a device name already held by a real team", async () => {

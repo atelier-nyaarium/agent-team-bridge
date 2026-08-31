@@ -137,7 +137,7 @@ describe("console terminal ops: rename / close / forget", () => {
 	it("forget still drops the resume record when the project is unknown to the catalog (resolveTmuxTarget throws)", async () => {
 		const dropped: string[] = [];
 		const h = makeTerminalHarness(
-			() => false, // isProjectName: nothing is a known catalog project (e.g. right after a gateway restart)
+			() => false, // No trusted catalog project after restart.
 			undefined,
 			{ dropSessionResume: (team) => dropped.push(team) },
 		);
