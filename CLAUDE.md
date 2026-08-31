@@ -234,11 +234,11 @@ code does not belong here; rationale lives in `git log`.
       either language hand-rolls the search again: the corpus proves behaviour, that proves ownership.
     - **Two rule notions, not interchangeable.** `TOOLBAR_RUN_RE` is U+2500 only, the composer's own
       boundary; `ANY_RULE_RUN_RE` spans U+2500-U+259F for any divider, since the limit dialog's is
-      U+2594. One helper serving both was the first design and it was wrong.
-    - **`limitNotice` searches in TWO passes and the order is load-bearing.** Pass 1 is the historical
-      whole-line predicate, so any frame that used to resolve resolves identically; pass 2 admits a
-      welded rule only when pass 1 found nothing. Widening in place looked equivalent and was not - a
-      titled border is a text-bearing rule line, it would newly qualify, and since the search takes the
+      U+2594. One helper serving both is wrong.
+    - **`limitNotice` searches in TWO passes and the order is load-bearing.** Pass 1 is the whole-line
+      predicate, so every frame it resolves resolves identically; pass 2 admits a welded rule only
+      when pass 1 found nothing. Widening in place is not equivalent: a titled border is a
+      text-bearing rule line, it would newly qualify, and since the search takes the
       bottom-most match the divider could move DOWN past the real one and return a null headline where
       one was found before. No fixture covers that, so the tests would have called it equivalent.
     - **The composer glyph is a two-member class** (Linux U+276F, the Windows build U+003E, same binary
@@ -312,7 +312,7 @@ fails fast.
 A host spawn point is a named SHELL on the host machine. `host` is bash and every machine has one;
 `windows` is PowerShell over WSL interop, so a WSL box can run agents on its Windows side. Both are
 ordinary tmux sessions on the host, so peek, tmux_send, forget, SessionStore and the address grammar
-are unchanged. Design record: `plans/windows-spawn-point.md`.
+are unchanged.
 
 - **`isHostSpawn` is the one owner of the question**, and `host-spawn.ts` the one table. That rule was
   a bare `project === "host"` literal in EIGHT sites that all had to agree - both agent-service
@@ -817,7 +817,7 @@ coldest object, so eviction there is silent permanent loss.
 - **`remove()` still reclaims nothing**, deliberately. It carries ids and no evidence the destination
   stored anything, and the console is the LAST component to update, so a reclaiming Gateway would
   destroy the only copy for every console still sending the old pair. A leaked directory per move is
-  the accepted trade. See `plans/board-attachments.md` for the full reasoning and what closing it needs.
+  the accepted trade.
 
 ### Awareness
 
@@ -825,8 +825,7 @@ The owner changes something a session holds and the session keeps acting on old 
 told. `gateway/awarenessBank.ts` is one bank for N subscribers; a subscriber owns identity, diff and
 render, and the bank and delivery never look inside a change. The board is subscriber one
 (`boardAwareness.ts`); the IDE extension is the planned second, for files, because an editor knows
-whose save it was and a filesystem watcher would echo the agent's own edits back at it. Design
-record: `plans/awareness-subscribers.md`.
+whose save it was and a filesystem watcher would echo the agent's own edits back at it.
 
 - **It rides the next message.** The send route drains the session's bank into every outbound
   `channel_push` as a sibling `awareness` field, and the plugin renders it as a labeled block under
@@ -866,7 +865,7 @@ record: `plans/awareness-subscribers.md`.
   are separate answers, or a session that never left is reported as dead, and the hold matches
   `WAKE_TIMEOUT_MS` rather than guessing lower.
 - **The phone ships an edit at once, and ahead of a send.** Every board enqueue kicks the poll loop,
-  since a visible app holds each poll for up to 40s and an edit used to wait that out on the phone;
+  since a visible app holds each poll for up to 40s and an edit would otherwise wait that out;
   `deliver` drains the board queue before the wire send, or the notice rides the message AFTER the one
   the owner expects.
 
@@ -914,17 +913,17 @@ generation rather than reusing it.
 
 **A retired generation publishes nothing new, and `AgentDaemonCore` owns that answer.** `live` is
 registry membership and `retire` drops the session, so giving a generation up and being replaced are
-one state instead of two that can disagree. Tracking retirement beside the registry was tried twice
-and left either a live generation silent or a dead one talking. `publish` refuses on a dead session,
-which is how the Copilot daemon stopped publishing from replaced generations and why a backend added
+one state instead of two that can disagree. Retirement tracked beside the registry leaves either a
+live generation silent or a dead one talking. `publish` refuses on a dead session, which is why the
+Copilot daemon cannot publish from a replaced generation and why a backend added
 later cannot forget. A terminal and a commentary item are dropped; a receipt cannot fall silent, so
 BOTH daemons ask `live` before one and refuse a command whose generation retired mid-flight, a
 refusal carrying no generation and being delivered where an acceptance the gateway fences out hangs
 the caller. Retirement retracts nothing already published: the outbox still replays what it retained.
 
-**`release` names the generation it gives up, and the parameter is required.** The manager already
-refused to let a late `onExit` tear down its successor; `release` was the one caller bypassing that
-rule, so a slow open condemning itself could reap the lease another agent had just acquired.
+**`release` names the generation it gives up, and the parameter is required.** The manager refuses to
+let a late `onExit` tear down its successor, and an unnamed release bypasses that rule: a slow open
+condemning itself reaps the lease another agent just acquired.
 `AgentDaemonCore` fences the other end: an open for an older generation neither closes the session
 already serving nor replaces it, and its caller is handed that live session, since refusing a command
 whose target is healthy is the wrong answer to losing a race.
@@ -990,7 +989,7 @@ operation is never re-dispatched, a longer hold could never deliver its answer a
 
 **A refused REQUEST is not an unwell AGENT.** The result envelope only permits an error when the
 agent is genuinely unavailable or recovering, so request-level failures answer HTTP 400 with
-`CodexRequestErrorSchema` instead. Routing them through the result envelope shipped three 500s.
+`CodexRequestErrorSchema` instead. Routed through the result envelope they answer 500.
 
 **The model is a parameter on start, never configuration.** It is fixed for a thread's life and one
 child serves threads that may each want a different one, so it belongs on the call. It is verified
@@ -1121,8 +1120,8 @@ permissions for the supervised target.
     `presence-authority-residue.test.ts` is the backstop, in the TS suite so it blocks a PR (the Kotlin
     tests run after merge), with positive controls so an empty sweep fails instead of looking clean.
   - **A local action is a RECEIPT, never a status override** (`ActionReceipt`). This device's own
-    request is the freshest fact it holds, and `wakeSession` used to throw it away and then wait to be
-    told what it already knew. Scoped by opId, so an overlapping wake and relaunch cannot retire each
+    request is the freshest fact it holds, and discarding it leaves `wakeSession` waiting to be told
+    what it already knew. Scoped by opId, so an overlapping wake and relaunch cannot retire each
     other's. Carries an outcome rather than only a time, because "asked", "accepted" and "failed" are
     three different things a timer expresses none of. **Evidence always outranks it**: a row reporting
     the session up retires the receipt rather than being overridden by it, since an optimistic value
@@ -1155,8 +1154,7 @@ permissions for the supervised target.
   filled every slot with finished titles and hid the entry being worked on behind the count.
 - **One-line rows** (`oneLine`): ASCII whitespace collapse for a row that cannot show a second line,
   which is the card's rungs, the notification shade and `BoardStrip`'s. Wrapping rows do not call it.
-  Sanitizing invisible or bidi characters was tried, drew four audit findings, and was ruled out; see
-  `plans/pain-points.md` before reintroducing one.
+  Sanitizing invisible or bidi characters is ruled out here; that belongs to whatever writes the row.
 - **Unfinished gateway enrollment** (`PendingEnroll.kt`): the owner-signed admission goes out BEFORE
   any delivery is attempted and has to, since `sealBundle` carries that same admission inside the
   bundle and rolling it back would break the paste fallback that is the whole recovery path. So an
@@ -1517,9 +1515,9 @@ The three start scripts do NOT behave alike, and the difference decides whether 
   keeps running and only a config change recreates it - deliberate, since recreating drops every
   gateway. It therefore does NOT pick up new Router code; use `--build` against its own compose
   project for that.
-- `start-host-daemon.sh` kills a running daemon and relaunches it. It used to decline with "already
-  running", which left the old build serving while reporting success - invisible until wake, peek
-  and spawn failed. The daemon is the one component whose staleness has no immediate symptom.
+- `start-host-daemon.sh` kills a running daemon and relaunches it. Declining while one runs leaves
+  the old build serving under a success report, which shows up only when wake, peek and spawn fail.
+  The daemon is the one component whose staleness has no immediate symptom.
 
 `./down.sh` is the ALL-components stop: gateway, federation Router, host daemon, and both networks.
 Bringing it back is three scripts, and the Router is its own compose project so it starts and stops
@@ -1630,9 +1628,9 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    `transportInstalled` accepts ONLY the direct shape, the same rule as `loadRouterTransport`, or the
    menu says "already enrolled" over a file the gateway itself reads as "arm for enrollment".
    - **The payload and the wait are ONE screen** (`EnrollSettle`), and there is no action between
-     them. A keypress used to sit there labelled "Done. Continue Enrollment", which promised a next
-     step that did not exist and let an admin walk past the comparison without making it and then
-     have no way back to it. `readKeyWhile` is what makes settling possible at all: `ask` is Bun's
+     them. An action here promises a next step that does not exist, and lets an admin walk past the
+     comparison without making it and with no way back to it. `readKeyWhile` is what makes settling
+     possible at all: `ask` is Bun's
      global `prompt()`, which blocks the whole event loop, so nothing could poll for the phone behind
      it. Raw mode buys the concurrency, restores cooked mode on every exit, and re-raises ^C by hand
      because raw mode swallows it.
@@ -1655,7 +1653,7 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
    it: the Domain id is what its own retry needs, and it is what the local half removes. The id comes
    from `.env` OR the Router's own `isAdminDomain` mark (`findAdminDomainId`), since the old purges
    deleted `.env` and left exactly the state where the key is gone and the Domain is not.
-   - **The phone's half of option 0 is Settings > Domain & Trust > Forget this Domain** (`plans/forget-domain.md`):
+   - **The phone's half of option 0 is Settings > Domain & Trust > Forget this Domain**:
      `clearAll` and nothing else, no wire op, for everyone provisioned. Revoke and Delete stays the
      app-only path, hidden from admins, because it ALSO purges the Domain server-side. The dialog
      branches on `holdsDomainOwnerKey`, read WITHOUT minting: the owner key is generated on the first
@@ -1672,15 +1670,15 @@ One repo, one machine, no cluster. The gateway-to-Router WS is admission-only, n
      `!provisioned` BEFORE its reconcile runs, so a wiped phone kept notifications that opened threads
      it no longer had. Scoped by id range, never `cancelAll()`, which would take the foreground and
      transport notifications with it. That scoping is only sound because BOTH of those ids sit below
-     the team range, pinned by `ServiceNotifications`' init check: the transport id used to be 4271,
-     inside it, and the existing reconcile sweep took the lockscreen transport down on every unread
-     change until the next playback event re-posted it.
+     the team range, pinned by `ServiceNotifications`' init check: an id inside that range lets the
+     reconcile sweep take the lockscreen transport down on every unread change, until the next
+     playback event re-posts it.
    - **Purge Gateway tells the network nothing, on purpose, and says so.** An admission is an
      owner-signed fact mirrored on the Router, every Gateway and the phone, and each mirror retires
      one only on an owner-signed REVOCATION - which this host cannot sign, since the owner's SIGNING
-     key never leaves the phone (the public key does reach the Router). It used to edit the admission
-     out of the Router's file instead: that bounced the Router (dropping every other Gateway and
-     phone), reached the Router and, at their next register, the other Gateways, but never the phone
+     key never leaves the phone (the public key does reach the Router). Editing the admission out of
+     the Router's file instead bounces the Router, dropping every other Gateway and phone, and
+     reaches the Router and, at their next register, the other Gateways, but never the phone
      (`applyDomainSync` UNIONS its keyring, so the ghost stayed listed and its board kept being read),
      and it read the Domain id from `.env`, which only Router Setup writes, so on any phone-enrolled
      machine it silently did nothing at all. The purge now names the one thing that finishes the
