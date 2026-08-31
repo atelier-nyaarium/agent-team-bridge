@@ -601,11 +601,18 @@ a workload no gateway produces.
 - Unit: each step's tests above, and the whole suite. Doubles are extended, never invented: a fixture
   inventing a wire shape is the recorded lesson in `plans/pain-points.md`.
 - The gate: `bun run lint` and `bun run test`, both halves read.
-- Live, after Step 3 and again after Step 5: drive `codexStartAgent` through the installed plugin
-  against the host daemon, run a fan-out of three short threads, and watch `ps` for the app server's
-  children: three pairs while the turns run, none once every turn has settled, and `codexMessageAgent`
-  on one of them bringing exactly one pair back. `thread/loaded/list` against the daemon's app server
-  is the second witness.
+- ✅ Live, against the restarted host daemon. Two trials, both watched by polling `ps` for children of
+  the `main-host-daemon.ts` process:
+  - Idle. The daemon opens an app server at startup; with nothing asked of it, that child was gone
+    after 581s, which is `REAP_QUIET_MS` from when it started rather than from when the watch did.
+  - After real work. Two `codexStartAgent` turns ran to completion through one app server holding
+    156MB; it was gone 601s after the last command.
+  - At rest afterwards the daemon has zero children and nothing is orphaned onto init. The remaining
+    `codex app-server` processes on the box belong to a session's own plugin server, live seconds and
+    hold under 4MB, and never reach this path.
+  What this replaced: before the restart, ONE app server owned by the previous daemon had been alive
+  12h51m holding 1017MB, having served this session's audit traffic all night. There was no reaper to
+  end it, which is the whole defect in one process.
 - Release: a patch of the plugin; no wire shape changes. The daemon must be restarted to run it
   (`./start-host-daemon.sh`), since the daemon is the component whose staleness has no symptom.
 
