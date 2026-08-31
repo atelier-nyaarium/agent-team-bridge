@@ -13,7 +13,12 @@ const DEVCONTAINER = path.join(REPO_ROOT, "src", "mcp", "devcontainer");
 /** The one module that may hold how long a turn has been silent. */
 const OWNER = path.join(DEVCONTAINER, "codexLiveTurns.ts");
 
-/** A turn's watchdog state, by the term only its owner has reason to write. */
+/**
+ * A turn's watchdog state, by the term only its owner has reason to write.
+ *
+ * Worth what a token check is worth: a second clock under another name walks past it. The class
+ * itself is held by `codex-live-turns.test.ts`, which tests the behaviour rather than the spelling.
+ */
 const LIVENESS = /\bstrikes\b/;
 
 ////////////////////////////////

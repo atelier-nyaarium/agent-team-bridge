@@ -574,7 +574,9 @@ export class CodexDaemonService {
 	private async watchTurns(session: TargetSession): Promise<void> {
 		for (const { turnId, binding, warned } of session.turns.overdue(NO_PROGRESS_MS)) {
 			const observed = await this.readOutcome(session, binding.threadId, turnId);
-			if (!this.core.live(session) || !session.turns.has(turnId)) return;
+			if (!this.core.live(session)) return;
+			// Settled or rebound while the read was in flight: that thread is not this turn's any more.
+			if (session.turns.bindingOn(binding.threadId, turnId) === undefined) continue;
 			if (observed.known === "settled") {
 				this.dropDeadline(session, turnId);
 				this.settle(session, binding.threadId, turnId, observed.outcome);

@@ -390,8 +390,13 @@ turn carrying its binding, its clock and whether the watchdog has warned it. Tha
 for the class below: a clock cannot exist apart from the turn it measures, a frame refreshes a turn
 only from that turn's own thread, and a rebind keeps the warning already given, because the gateway
 asking again is not the turn working. The daemon is handed `overdue` entries saying whether each was
-already `warned`, never a counter, and `live-turns-residue.test.ts` fails the build if any other
-module in `devcontainer/` keeps a turn's watchdog state.
+already `warned`, never a counter. A rebind onto the same thread keeps both, since the gateway asking
+again is not the turn working; onto another thread it is a different identity and inherits neither,
+and the watchdog rechecks the binding after its read rather than acting on the thread it started
+with. `live-turns-residue.test.ts` fails the build if another module in `devcontainer/` keeps a
+turn's watchdog state, and is worth what a token check is worth: a second clock under another name
+walks past it. `codex-live-turns.test.ts` holds the class itself by behaviour, which is the part a
+spelling cannot be trusted with.
 
 The first interrupt lands around 120s, inside the 240s caller wait budget, which is deliberate.
 Retirement is nominally 240s but the sweep cadence can carry it to roughly 270s, so it is NOT

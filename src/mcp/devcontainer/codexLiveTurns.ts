@@ -30,10 +30,14 @@ export class CodexLiveTurns {
 		return this.held.size;
 	}
 
-	/** Rebinding keeps the strikes already earned: the gateway asking again is not the turn working. */
+	/**
+	 * Rebinding onto the SAME thread keeps the clock and the warning, since the gateway asking again
+	 * is not the turn working. Onto another thread it is a different identity, which inherits neither
+	 * the silence nor the warning the thread it replaced had earned.
+	 */
 	bind(turnId: string, binding: TurnBinding): void {
 		const known = this.held.get(turnId);
-		if (known) {
+		if (known?.binding.threadId === binding.threadId) {
 			known.binding = binding;
 			return;
 		}
