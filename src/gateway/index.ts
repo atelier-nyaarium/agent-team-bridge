@@ -24,7 +24,7 @@ import type { AwarenessObservation } from "./awarenessBank.js";
 import { type AwarenessBank, createAwarenessBank } from "./awarenessBank.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
 import { boardAwarenessSubscriber } from "./boardAwareness.js";
-import { type BoardDisposition, BoardStore } from "./boardStore.js";
+import { type BoardDisposition, type BoardReply, BoardStore, isBoardReply } from "./boardStore.js";
 import {
 	armingOf,
 	type BootState,
@@ -212,6 +212,11 @@ export async function startGateway(): Promise<void> {
 	// file's usual periodic tick, so it holds its own DurableStore instead of sharing a tick-driven
 	// snapshot.
 	const durableOpStore = openDurable(DATA_DIR, "op-idempotency", (d) => new DurableOpStore(d));
+	// The same mechanism for the board's ABSOLUTE writes, in its own file: a shared one would let a
+	// coincidental opId collision replay a console result as a board reply.
+	const boardReplays = openDurable(DATA_DIR, "board-idempotency", (d) =>
+		DurableOpStore.withValidator<BoardReply>(d, isBoardReply),
+	);
 	// Session records: the durable known-session list (id-keyed, with the Claude harness resume id
 	// so a later wake can `claude --resume <id>`). Entries past this TTL are swept on the persist
 	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
@@ -440,6 +445,9 @@ export async function startGateway(): Promise<void> {
 			// masked at read time - see durableOpStore.ts's own sweep() doc (every OTHER conversation's
 			// persist() re-serializes the whole store, so idle dead weight inflates everyone's writes).
 			{ name: "op-idempotency-sweep", run: () => durableOpStore.sweep() },
+			// Same reason as the console's: without it, expired board replays are masked at read time
+			// but stay resident and re-serialized on every persist.
+			{ name: "board-idempotency-sweep", run: () => boardReplays.sweep() },
 			{ name: "console-capabilities-sweep", run: () => capabilityStore.sweep() },
 			{
 				name: "blob-sweep",
@@ -1044,6 +1052,7 @@ export async function startGateway(): Promise<void> {
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: f ? () => (f.allowlist.ownerSignPub ? ownerKeyId(f.allowlist.ownerSignPub) : null) : null,
 			boardStore,
+			boardReplays,
 			awareness: awareness ?? undefined,
 		});
 	}

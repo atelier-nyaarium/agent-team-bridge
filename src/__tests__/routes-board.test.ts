@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { BoardStore, isBoardReply, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway/routes.js";
 import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { DurableStore } from "../shared/durable-store.js";
@@ -227,6 +228,67 @@ describe("routes", () => {
 				}[]
 			)[0];
 			expect(after).toMatchObject({ title: "edited", state: "done" });
+		});
+
+		it("a durable replay survives a restart, so a retried update cannot regress a newer edit", async () => {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-replay-"));
+			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
+			const replayDurable = new DurableStore(dir, "board-idempotency");
+			const boot = () =>
+				createRoutes(
+					makeCtx({
+						boardStore: board,
+						ownerId: () => "owner-1",
+						// A fresh carry-over each boot: only the durable file crosses the restart.
+						carryOver: createRoutesCarryOver(),
+						boardReplays: DurableOpStore.withValidator(replayDurable, isBoardReply),
+					}),
+				);
+
+			const before = boot();
+			const id = (
+				await call(before.taskBoard, {
+					from: "recipe-app",
+					action: "create",
+					operationId: "op-c",
+					title: "orig",
+					assignTo: "self",
+				})
+			).body.id as string;
+			const update = { from: "recipe-app", action: "update", id, operationId: "op-u", state: "done" };
+			await call(before.taskBoard, update);
+
+			// Someone else moves it on, then the gateway restarts and the original update retries.
+			await call(before.taskBoard, { from: "recipe-app", action: "update", id, state: "in_progress" });
+			await call(boot().taskBoard, update);
+
+			const after = (
+				(await call(boot().taskBoard, { from: "recipe-app", action: "list", scope: "session" })).body
+					.entries as {
+					state: string;
+				}[]
+			)[0];
+			expect(after.state).toBe("in_progress");
+		});
+
+		it("one operation id reused across two actions replays neither into the other", async () => {
+			// Operation ids arrive on the wire, so nothing stops a caller reusing one. Without the
+			// action in the replay key, the claim below would be answered with the create's reply.
+			const { ctx } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "dup",
+				title: "shared id",
+				assignTo: "backlog",
+			});
+			const id = created.body.id as string;
+
+			const claimed = await call(taskBoard, { from: "recipe-app", action: "claim", operationId: "dup", id });
+
+			expect(claimed.body).toMatchObject({ applied: true });
+			expect(claimed.body.id).toBeUndefined();
 		});
 
 		it("never returns another session's entries at any scope, and a claim of held work refuses", async () => {

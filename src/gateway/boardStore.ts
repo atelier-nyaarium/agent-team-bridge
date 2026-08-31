@@ -23,6 +23,17 @@ export { BOARD_REFUSED_PREFIX, mayWrite, OWNER_ACTOR, refusalError, visibleTo } 
 ////////////////////////////////
 //  Interfaces & Types
 
+/** A settled board-route reply, as recorded for replay. Every exit carries `applied`. */
+export type BoardReply = { applied: boolean } & Record<string, unknown>;
+
+/** Guards a restored replay row against corruption. It does NOT separate surfaces: a console board
+ * result carries `applied` too, so the SEPARATE durable file is what keeps the two apart. */
+export function isBoardReply(candidate: unknown): candidate is BoardReply {
+	return (
+		typeof candidate === "object" && candidate !== null && typeof (candidate as BoardReply).applied === "boolean"
+	);
+}
+
 /**
  * Where attachment bytes go when an entry stops naming them. Behind an interface because the store
  * is otherwise free of the filesystem, and the two reclaim sites are the only ones there are:

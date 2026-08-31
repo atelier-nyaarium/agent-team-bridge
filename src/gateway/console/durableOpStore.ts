@@ -6,9 +6,13 @@ import { ConsoleOpResultSchema } from "../../shared/schemas.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-type OpRecord = { state: "in-flight" } | { state: "complete"; result: ConsoleOpResult };
+export type OpRecord<Result = ConsoleOpResult> = { state: "in-flight" } | { state: "complete"; result: Result };
 
-type Entry = { record: OpRecord; expiresAt: number; generation: number };
+type Entry<Result> = { record: OpRecord<Result>; expiresAt: number; generation: number };
+
+/** Validates a persisted result on restore, against corruption and a schema change. Surfaces are
+ * kept apart by their separate durable files, not by this. */
+export type ResultValidator<Result> = (candidate: unknown) => candidate is Result;
 
 // The same per-conversation bound the in-memory opCache already uses (shared/console-protocol.ts)
 // - a durable op can never outnumber the ops that pass through it.
@@ -71,8 +75,8 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
  * real result schema and re-applies the live caps, counting and logging anything rejected instead
  * of silently dropping it.
  */
-export class DurableOpStore {
-	private readonly byConversation = new Map<string, Map<string, Entry>>();
+export class DurableOpStore<Result = ConsoleOpResult> {
+	private readonly byConversation = new Map<string, Map<string, Entry<Result>>>();
 	private nextGeneration = 1;
 
 	public constructor(
@@ -81,12 +85,18 @@ export class DurableOpStore {
 		private readonly maxOpsPerConversation: number = DEFAULT_MAX_OPS_PER_CONVERSATION,
 		private readonly maxConversations: number = DEFAULT_MAX_CONVERSATIONS,
 		private readonly now: () => number = Date.now,
+		private readonly validResult: ResultValidator<Result> = isConsoleOpResult as ResultValidator<Result>,
 	) {
 		this.restore();
 	}
 
+	/** A store over a non-console result, on this surface's own validator and default bounds. */
+	public static withValidator<R>(durable: DurableStore, validResult: ResultValidator<R>): DurableOpStore<R> {
+		return new DurableOpStore<R>(durable, undefined, undefined, undefined, undefined, validResult);
+	}
+
 	/** The stored record for `(conversationId, opId)`, or undefined if unknown or expired. */
-	public get(conversationId: string, opId: string): OpRecord | undefined {
+	public get(conversationId: string, opId: string): OpRecord<Result> | undefined {
 		const entry = this.byConversation.get(conversationId)?.get(opId);
 		if (!entry || entry.expiresAt <= this.now()) return undefined;
 		return entry.record;
@@ -124,7 +134,7 @@ export class DurableOpStore {
 	 * genuine success must never overwrite the FIRST completion's result (two concurrent successes
 	 * for one opId can legitimately produce different result content, e.g. a fast send's own
 	 * `{status:"running"}` vs the backgrounded path's `{status:"sent"}` for the same op). */
-	public markComplete(conversationId: string, opId: string, result: ConsoleOpResult): void {
+	public markComplete(conversationId: string, opId: string, result: Result): void {
 		const existing = this.byConversation.get(conversationId)?.get(opId);
 		if (existing?.record.state === "complete") {
 			// Two concurrent attempts for the same opId both genuinely succeeded - a real duplicate
@@ -189,8 +199,8 @@ export class DurableOpStore {
 		return removedAny;
 	}
 
-	private write(conversationId: string, opId: string, record: OpRecord, generation: number): void {
-		const perConv = this.byConversation.get(conversationId) ?? new Map<string, Entry>();
+	private write(conversationId: string, opId: string, record: OpRecord<Result>, generation: number): void {
+		const perConv = this.byConversation.get(conversationId) ?? new Map<string, Entry<Result>>();
 		this.touchCapped(this.byConversation, conversationId, perConv, this.maxConversations, "conversation");
 		this.touchCapped(
 			perConv,
@@ -218,9 +228,9 @@ export class DurableOpStore {
 	}
 
 	private persist(): void {
-		const snapshot: Array<[string, Array<[string, OpRecord, number, number]>]> = [];
+		const snapshot: Array<[string, Array<[string, OpRecord<Result>, number, number]>]> = [];
 		for (const [conv, perConv] of this.byConversation) {
-			const rows: Array<[string, OpRecord, number, number]> = [];
+			const rows: Array<[string, OpRecord<Result>, number, number]> = [];
 			for (const [opId, entry] of perConv) rows.push([opId, entry.record, entry.expiresAt, entry.generation]);
 			snapshot.push([conv, rows]);
 		}
@@ -244,7 +254,7 @@ export class DurableOpStore {
 				rejectedConversations++;
 				continue;
 			}
-			const perConv = new Map<string, Entry>();
+			const perConv = new Map<string, Entry<Result>>();
 			for (const row of rows) {
 				if (!Array.isArray(row) || row.length !== 4) {
 					rejectedRows++;
@@ -260,7 +270,7 @@ export class DurableOpStore {
 					rejectedRows++;
 					continue;
 				}
-				if (!isOpRecord(record)) {
+				if (!isOpRecord(record, this.validResult)) {
 					rejectedRows++;
 					continue;
 				}
@@ -290,9 +300,13 @@ export class DurableOpStore {
  * its durable snapshot rather than blindly casting. A `complete` record's result is checked
  * against the real wire schema, not just "is it an object", since it flows straight to a sealed
  * console reply with no other validation on that path. */
-function isOpRecord(value: unknown): value is OpRecord {
+function isOpRecord<Result>(value: unknown, validResult: ResultValidator<Result>): value is OpRecord<Result> {
 	if (typeof value !== "object" || value === null || !("state" in value)) return false;
 	if (value.state === "in-flight") return true;
 	if (value.state !== "complete") return false;
-	return "result" in value && ConsoleOpResultSchema.safeParse(value.result).success;
+	return "result" in value && validResult(value.result);
 }
+
+/** The console's own result validator, so its call sites keep the schema they always had. */
+export const isConsoleOpResult: ResultValidator<ConsoleOpResult> = (candidate): candidate is ConsoleOpResult =>
+	ConsoleOpResultSchema.safeParse(candidate).success;

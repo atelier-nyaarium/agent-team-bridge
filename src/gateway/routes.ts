@@ -32,12 +32,14 @@ import { createBlobFetcher } from "./blobFetch.js";
 import type { CascadeChange } from "./boardCascade.js";
 import {
 	type BoardActor,
+	type BoardReply,
 	type BoardResult,
 	type BoardStore,
 	boardEntryIdForOperation,
 	mayWrite,
 	visibleTo,
 } from "./boardStore.js";
+import type { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsolePushOps } from "./consolePushOps.js";
 import { sealTargetFor } from "./federation/sealTarget.js";
 import { createPresenceExchange } from "./presenceExchange.js";
@@ -151,6 +153,9 @@ export interface RoutesDeps {
 	auth?: SessionAuthority;
 	// The owner's task board (boardStore.ts). Absent when not wired; the board route then 503s.
 	boardStore?: BoardStore;
+	// Restart-proof replay for the board's ABSOLUTE writes. Absent only in tests, which then fall
+	// back to the in-memory carry-over map.
+	boardReplays?: DurableOpStore<BoardReply>;
 	// State that must survive a rebuild (see RoutesCarryOver). Absent in test harnesses, which build
 	// the route table once and never rebuild it.
 	carryOver?: RoutesCarryOver;
@@ -221,6 +226,7 @@ export function createRoutes({
 	repushHandshake,
 	ownerId,
 	boardStore,
+	boardReplays,
 	awareness,
 	carryOver = createRoutesCarryOver(),
 }: RoutesDeps) {
@@ -245,16 +251,34 @@ export function createRoutes({
 			},
 		];
 	}
-	/** Settled replies for the board route's mutating operations, keyed `from:operationId`.
+	/** Settled replies for the board route's mutating operations, keyed by sender, action and
+	 * operation id.
 	 *
-	 * IN MEMORY, which is weaker than the console's durable equivalent and weaker than the rule
-	 * CLAUDE.md states for board mutations. The gap is real and narrow: an MCP operation id outlives
-	 * this process, so a gateway restart between committing a write and flushing its reply loses the
-	 * record, and the caller's retry re-applies an absolute set. `create` is unaffected - its replay
-	 * is structural, in the board file itself. Closing it wants this route's own durable file;
-	 * DurableOpStore is typed to console results and keyed by conversation, so it cannot just be
-	 * borrowed. Tracked in the plan. */
+	 * Durable when `boardReplays` is wired: an MCP operation id outlives this process, so a restart
+	 * between committing a write and flushing its reply would otherwise lose the record and let the
+	 * caller's retry re-apply an ABSOLUTE set over a newer value. The in-memory map remains only as
+	 * the fallback for harnesses that wire no durable store.
+	 *
+	 * The ACTION is in the key because operation ids arrive on the wire: a caller reusing one across
+	 * two actions would otherwise be handed the first action's reply for the second.
+	 *
+	 * Residual, and not closable here: the mutation and this record are two durable files, so a crash
+	 * between their writes still loses the record. Closing it wants both in one atomic snapshot. */
 	const boardOperationReplies = carryOver.boardOperationReplies;
+	const replayKeyOf = (action: string, operationId: string) => `${action}:${operationId}`;
+	const recallBoardReply = (from: string, action: string, operationId: string): BoardReply | undefined => {
+		const durable = boardReplays?.get(from, replayKeyOf(action, operationId));
+		if (durable?.state === "complete") return durable.result;
+		return boardOperationReplies.get(`${from}:${replayKeyOf(action, operationId)}`) as BoardReply | undefined;
+	};
+	const rememberBoardReply = (from: string, action: string, operationId: string, reply: BoardReply): void => {
+		if (boardReplays) {
+			boardReplays.markComplete(from, replayKeyOf(action, operationId), reply);
+			return;
+		}
+		boardOperationReplies.set(`${from}:${replayKeyOf(action, operationId)}`, reply);
+		capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
+	};
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
 	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
 	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
@@ -1459,8 +1483,7 @@ export function createRoutes({
 		// write regresses the field - an update whose reply was lost would set the value back on
 		// retry, and routerPost retries four times. Keyed per sender so two sessions cannot collide,
 		// and only after impersonation is refused, or an unauthenticated caller could read a reply.
-		const replayKey = r.operationId ? `${r.from}:${r.operationId}` : undefined;
-		const recorded = replayKey ? boardOperationReplies.get(replayKey) : undefined;
+		const recorded = r.operationId ? recallBoardReply(r.from, r.action, r.operationId) : undefined;
 		if (recorded) return jsonResponse(recorded);
 		if (!boardStore) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
 		const owner = ownerId?.();
@@ -1475,11 +1498,8 @@ export function createRoutes({
 
 		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes
 		// through jsonResponse directly: a malformed request is not an operation that happened.
-		const done = (bodyOut: Record<string, unknown>): Response => {
-			if (replayKey) {
-				boardOperationReplies.set(replayKey, bodyOut);
-				capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
-			}
+		const done = (bodyOut: BoardReply): Response => {
+			if (r.operationId) rememberBoardReply(r.from, r.action, r.operationId, bodyOut);
 			return jsonResponse(bodyOut);
 		};
 

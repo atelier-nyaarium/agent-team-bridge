@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isBoardReply } from "../gateway/boardStore.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import type { DurableStore } from "../shared/durable-store.js";
 
@@ -284,5 +285,26 @@ describe("DurableOpStore", () => {
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 		expect(store.get("conv-b", "op-1")).toBeDefined();
 		expect(store.get("conv-c", "op-1")).toBeDefined();
+	});
+});
+
+describe("DurableOpStore.withValidator", () => {
+	it("replays a non-console result across a restart", () => {
+		const durable = fakeDurable();
+		DurableOpStore.withValidator(durable, isBoardReply).markComplete("sess-a", "op-1", { applied: true });
+
+		// A second instance over the same file is the restart.
+		const restarted = DurableOpStore.withValidator(durable, isBoardReply);
+		expect(restarted.get("sess-a", "op-1")).toEqual({ state: "complete", result: { applied: true } });
+	});
+
+	it("rejects a restored row its own validator does not accept", () => {
+		// A console result in the board's file: replaying it would answer a board retry with the
+		// wrong-shaped body instead of re-applying nothing.
+		const durable = fakeDurable([
+			["sess-a", [["op-1", { state: "complete", result: { delivered: true } }, Date.now() + 100_000, 1]]],
+		]);
+
+		expect(DurableOpStore.withValidator(durable, isBoardReply).get("sess-a", "op-1")).toBeUndefined();
 	});
 });
