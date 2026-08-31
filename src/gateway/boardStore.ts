@@ -481,6 +481,7 @@ export class BoardStore {
 			let changed = false;
 			const members = this.subtree(board, id);
 			for (const memberId of members) {
+				if (board.entries.get(memberId)?.trashedAt !== undefined) return "entry_missing";
 				const holder = board.entries.get(memberId)?.sessionId;
 				if (holder !== undefined && holder !== sessionId) return "held";
 			}
@@ -506,6 +507,7 @@ export class BoardStore {
 			let changed = false;
 			for (const memberId of this.subtree(board, id)) {
 				const e = board.entries.get(memberId);
+				if (e?.trashedAt !== undefined) return "entry_missing";
 				if (!e || e.sessionId !== sessionId) continue;
 				delete e.sessionId;
 				changed = true;

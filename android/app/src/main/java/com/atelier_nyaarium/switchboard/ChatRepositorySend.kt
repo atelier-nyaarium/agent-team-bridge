@@ -24,7 +24,7 @@ suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = em
 		// A refusal here never reaches the wire, so without this the send is invisible on BOTH
 		// sides: no row leaves the phone and no op reaches the gateway.
 		DebugLog.log("Send", "admission refused before the wire: ${refused.message()}")
-		_state.update { it.copy(error = refused.message()) }
+		_state.update { it.copy(transientMessages = it.transientMessages + refused.message()) }
 		return@withContext null
 	}
 	// Local echo: persist the picked files so the sent message shows its own thumbnails through
@@ -88,17 +88,17 @@ suspend fun ChatRepository.retrySend(team: String, messageId: Long, targetDomain
 		val (files, refused) = rebuildFiles(msg)
 		if (refused != null) {
 			setMessageStatus(team, messageId, "error")
-			_state.update { it.copy(error = refused.message()) }
+			_state.update { it.copy(transientMessages = it.transientMessages + refused.message()) }
 			return@withContext
 		}
 		if (msg.text.isBlank() && files.isEmpty()) {
 			// Nothing recoverable (attachment copies gone); put the badge back and say why.
 			setMessageStatus(team, messageId, "error")
-			_state.update { it.copy(error = "Attachments are no longer on this device; cannot retry.") }
+			_state.update { it.copy(transientMessages = it.transientMessages + "Attachments are no longer on this device; cannot retry.") }
 			return@withContext
 		}
 		if (files.size < msg.files.size) {
-			_state.update { it.copy(error = "Some attachments are no longer on this device; resending the rest.") }
+			_state.update { it.copy(transientMessages = it.transientMessages + "Some attachments are no longer on this device; resending the rest.") }
 		}
 		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), false, targetDomainOverride)
 	}
@@ -119,7 +119,7 @@ internal suspend fun ChatRepository.deliver(
 ) {
 	var succeeded = false
 	fun fail(message: String?) {
-		_state.update { it.copy(error = message ?: "send failed") }
+		_state.update { it.copy(transientMessages = it.transientMessages + (message ?: "send failed")) }
 		setMessageStatus(team, echoId, "error")
 	}
 	try {

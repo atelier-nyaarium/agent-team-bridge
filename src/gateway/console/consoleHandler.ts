@@ -862,6 +862,8 @@ export function createConsoleDispatcher({
 				// deliberately swallows: the record drop must never run for a foreign or spawn-point
 				// target.
 				const { name } = targets.requireLocalComposite(op.target, "forget");
+				if (isWakeInFlight?.(name))
+					throw new Error(`"${name}" is waking; wait for it to finish before forgetting`);
 				const dedupKey = `${conversationId}:${opId}`;
 				// The tmux kill is best-effort: forget's actual contract is "stop listing this session",
 				// which the record drop below alone guarantees. targets.tmuxTarget can throw (the project

@@ -91,7 +91,7 @@ data class ChatState(
 	val firstRooted: Boolean = false,
 	/** A one-shot Snackbar message. Separate from `error`, which drives the STICKY health header, so a
 	 * one-off cannot bleed into an unrelated later render. Consumed via consumeTransientMessage(). */
-	val transientMessage: String? = null,
+	val transientMessages: List<String> = emptyList(),
 	/** At most one pending scheduled send per team. Held here rather than in a bare repository map so
 	 * the dock indicator and the session-tile clock icon are Compose-reactive. */
 	val scheduledSends: Map<String, ScheduledSend> = emptyMap(),

@@ -97,7 +97,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 		shares = byName
 		loaded = true
 	}
-	LaunchedEffect(Unit) {
+	LaunchedEffect(sessions, people) {
 		refresh()
 		// People on the roster I have not linked (by owner key) become "trust first" rows.
 		val linkedOwners = people.mapNotNull { it.ownerSignPub }.toSet()
@@ -127,7 +127,12 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 				scope.launch {
 					note = null
 					// Specific implies not-everyone: clear the everyone share first so the two never overlap.
-					if (shares[focus]?.everyone == true) repo.trust.setShareEveryoneTrusted(focus, false)
+					if (shares[focus]?.everyone == true) {
+						repo.trust.setShareEveryoneTrusted(focus, false).getOrElse { e ->
+							note = e.message?.take(120)
+							return@launch
+						}
+					}
 					repo.trust.setCrossDomainShare(focus, domainId, checked).onFailure { note = it.message?.take(120) }
 					refresh()
 				}

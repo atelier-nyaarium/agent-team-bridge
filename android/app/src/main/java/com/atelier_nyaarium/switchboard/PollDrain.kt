@@ -338,7 +338,8 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					} else {
 						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
 					}
-					if (adv.gap) repo._state.update { it.copy(gap = true) }
+					// A gap is a recovery event, not a process-lifetime health state.
+					repo._state.update { it.copy(gap = adv.gap) }
 					// Idle pushback: any genuinely-fresh entry is comms activity, resetting the silence
 					// clock back to the fast cadence.
 					if (adv.fresh.isNotEmpty()) repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
@@ -397,6 +398,8 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 									runCatching { sub.onAction(team, pluginId, actionType, e.payload) }
 										.onFailure { DebugLog.log("Drain", "plugin action subscriber threw: $it") }
 								}
+							} else {
+								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action -> DROPPED (missing plugin id or action type)")
 							}
 							continue
 						}

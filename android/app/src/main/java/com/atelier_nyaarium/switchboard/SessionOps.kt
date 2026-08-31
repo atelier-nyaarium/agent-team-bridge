@@ -101,14 +101,14 @@ internal class SessionOps(private val repo: ChatRepository) {
 					recentSpawnOpIds.remove(key)
 					repo._state.update {
 						it.copy(
-							transientMessage = if (result.labelSanitized == true) {
-								"\"$label\" has unsupported characters; the session was created using its id as the name instead"
-							} else it.transientMessage,
+							transientMessages = if (result.labelSanitized == true) {
+								it.transientMessages + "\"$label\" has unsupported characters; the session was created using its id as the name instead"
+							} else it.transientMessages,
 						)
 					}
 				}
 				.onFailure { e ->
-					repo._state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
+					repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Failed to create \"$label\"")) }
 				}
 		} finally {
 			// The removal point: cleared once createSession itself settles (success or failure), or on
@@ -120,8 +120,11 @@ internal class SessionOps(private val repo: ChatRepository) {
 
 	/** Take and clear the one-shot transient message, so a recomposition never re-shows it. */
 	fun consumeTransientMessage(): String? {
-		val msg = repo._state.value.transientMessage
-		if (msg != null) repo._state.update { it.copy(transientMessage = null) }
+		var msg: String? = null
+		repo._state.update { state ->
+			msg = state.transientMessages.firstOrNull()
+			state.copy(transientMessages = if (msg == null) state.transientMessages else state.transientMessages.drop(1))
+		}
 		return msg
 	}
 
@@ -248,7 +251,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 					// is already on its way to the user as a transient message.
 					settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
 					repo.presence.reapplyCachedTeams()
-					repo._state.update { it.copy(transientMessage = e.message ?: "wake failed") }
+					repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "wake failed")) }
 				}
 		}
 	}
@@ -363,12 +366,12 @@ internal class SessionOps(private val repo: ChatRepository) {
 						// session is gone either way and there is nothing left to retry against.
 						if (boardDisposition != null && applied != boardDisposition) {
 							repo._state.update {
-								it.copy(transientMessage = "Gateway needs an update; that session's tasks went back to the backlog.")
+								it.copy(transientMessages = it.transientMessages + "Gateway needs an update; that session's tasks went back to the backlog.")
 							}
 						}
 						withContext(Dispatchers.Main) { onForgotten?.invoke() }
 					}
-					.onFailure { e -> repo._state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
+					.onFailure { e -> repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) } }
 			}
 		} else {
 			// Nothing to send it to, so the local drop IS the whole forget.

@@ -1,7 +1,8 @@
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { filesUnder } from "./helpers/residue.js";
 
 ////////////////////////////////
 //  Constants
@@ -18,15 +19,10 @@ const NODE_HTTP_TYPES = /\bServerResponse\b|\bIncomingMessage\b|from "node:http"
 ////////////////////////////////
 //  Functions & Helpers
 
-function serverFiles(): string[] {
-	return fs
-		.readdirSync(SERVER_DIR)
-		.filter((name) => name.endsWith(".ts"))
-		.map((name) => path.join(SERVER_DIR, name));
-}
-
 function usesNodeHttp(file: string): boolean {
-	return NODE_HTTP_TYPES.test(fs.readFileSync(file, "utf8"));
+	return filesUnder(SERVER_DIR).some(
+		(candidate) => candidate === file && NODE_HTTP_TYPES.test(readFileSync(file, "utf8")),
+	);
 }
 
 ////////////////////////////////
@@ -34,7 +30,7 @@ function usesNodeHttp(file: string): boolean {
 
 describe("federation router launch seam", () => {
 	it("confines the node HTTP types to the adapter", () => {
-		const owners = serverFiles()
+		const owners = filesUnder(SERVER_DIR)
 			.filter(usesNodeHttp)
 			.map((file) => path.basename(file));
 		expect(owners).toEqual([path.basename(ADAPTER)]);

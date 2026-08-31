@@ -110,7 +110,7 @@ fun ChatRepository.closeTab(team: String) {
 	if (t?.isCloseTabTarget() == true) {
 		drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable { client().closeSession(team) }
-				.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
+				.onFailure { e -> _state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "close failed")) } }
 		}
 	}
 }
@@ -188,7 +188,7 @@ suspend fun ChatRepository.rename(team: String, name: String) {
 		}
 		if (reverted) {
 			val message = result.exceptionOrNull()?.message ?: "Could not rename to \"$trimmed\""
-			_state.update { it.copy(transientMessage = message) }
+			_state.update { it.copy(transientMessages = it.transientMessages + message) }
 		}
 	}
 }

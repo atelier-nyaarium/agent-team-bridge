@@ -345,8 +345,12 @@ fun ChatRepository.localDisplayName(): String = _state.value.displayName
 
 suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers.IO) {
 	val blob = store.load() ?: return@withContext
-	val j = JSONObject(blob).put("device", name)
-	store.save(j.toString())
+	val updated = runCatching { JSONObject(blob).put("device", name).toString() }
+		.getOrElse { e ->
+			_state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Invalid provisioning blob")) }
+			return@withContext
+		}
+	store.save(updated)
 	client = null
 	_state.update { it.copy(deviceName = name) }
 	connect()

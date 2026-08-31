@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { filesUnder } from "./helpers/residue.js";
 
 const SRC = path.join(import.meta.dirname, "..");
 const ALLOWLIST = new Map([["blob-store.ts", "partial and ingest files are resumable transfer state"]]);
@@ -12,16 +13,6 @@ const bareRenameCall = new RegExp(["(?<![.\\w])", "rename", "(?:Sync)?\\s*\\("].
 const importsFsRename =
 	/import\s*(?:type\s*)?\{[^}]*\brename(?:Sync)?\b[^}]*\}\s*from\s*["'](?:node:)?fs(?:\/promises)?["']/;
 const tempPattern = new RegExp(["\\.tmp\\.", "\\s*\\$\\{process\\.pid\\}"].join(""));
-
-function filesUnder(dir: string): string[] {
-	const files: string[] = [];
-	for (const entry of readdirSync(dir)) {
-		const full = path.join(dir, entry);
-		if (statSync(full).isDirectory()) files.push(...filesUnder(full));
-		else if (full.endsWith(".ts")) files.push(full);
-	}
-	return files;
-}
 
 function hasResidue(source: string): boolean {
 	if (tempPattern.test(source) || fsRenameCall.test(source)) return true;

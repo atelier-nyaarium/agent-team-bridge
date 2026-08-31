@@ -489,8 +489,8 @@ fun App(
 			val snackbarHostState = remember { SnackbarHostState() }
 			// One-shot: a create_session failure or abandonment surfaces here instead of the sticky
 			// connection-health state.error, so it never bleeds into an unrelated later health render.
-			LaunchedEffect(state.transientMessage) {
-				state.transientMessage?.let {
+			LaunchedEffect(state.transientMessages) {
+				state.transientMessages.firstOrNull()?.let {
 					repo.sessions.consumeTransientMessage()
 					snackbarHostState.showSnackbar(it)
 				}

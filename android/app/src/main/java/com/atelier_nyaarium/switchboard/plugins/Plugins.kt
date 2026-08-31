@@ -41,10 +41,9 @@ object Plugins {
 		Repo.get(app).drain.addInboundSubscriber(
 			InboundSubscriber { team, msg ->
 				val inbound = InboundMessage(team, msg.fromMe, msg.isPeer, msg.at, msg.files, msg.text)
-				host.inboundMessages.values().forEach { handler ->
-					runCatching { handler.onMessage(app.filesDir, inbound) }
-						.onFailure { com.atelier_nyaarium.switchboard.DebugLog.log("Plugins", "inbound handler threw: $it") }
-				}
+			host.inboundMessages.forEachCaught({ message, error ->
+				com.atelier_nyaarium.switchboard.DebugLog.log("Plugins", "$message: $error")
+			}) { handler -> handler.onMessage(app.filesDir, inbound) }
 			},
 		)
 		// Bridge plugin-action entries the same way: dispatch to the ONE handler claimed under the
