@@ -143,10 +143,12 @@ three audit laps but never implemented at the time, directly reversing an explic
 Phase 2's own audited-implementation cycle; the full writeup and the preserved original design are
 in `plans/cross-gateway-presence-exchange.md`.
 
-MOSTLY BUILT SINCE, and the entry is kept only for the ruling it records. `presence_push` is
-relayed by `presenceExchange.ts` and landed by `gatewayRelay.ts`, and `presenceFresh` is a live
-three-valued field. `planeField()` was never built and no longer names anything: the registry
-settled on `registerPlane`/`markDirty` instead.
+MOSTLY BUILT SINCE, and the entry is kept for the ruling it records and the one symptom that
+survives. `presence_push` is relayed by `presenceExchange.ts` and landed by `gatewayRelay.ts`.
+`presenceFresh` is STILL declared and never assigned: the schema and the Android model carry it,
+and `PresenceFacade.snapshot()` populates none of its three values, so it is forward-compatible
+rather than live. `planeField()` was never built and no longer names anything; the registry settled
+on `registerPlane`/`markDirty` instead.
 
 ### Real bugs the read-anchors/Phase-1 audit found and fixed
 
