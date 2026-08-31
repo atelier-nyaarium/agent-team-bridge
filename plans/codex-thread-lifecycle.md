@@ -162,7 +162,7 @@ and whatever the daemon needs, and every double follows or fails to compile.
 
 ## Step 3 - The daemon path through the owner
 
-Every terminal the daemon has reaches `client.settleTurn` through one `settle`, and `emitTerminal` is
+✅ Shipped. Every terminal the daemon has reaches `client.settleTurn` through one `settle`, and `emitTerminal` is
 reached only from the lifecycle's `onTerminal` hook, so nothing publishes a terminal without parking
 its thread. Three observers feed it: the event path (`onServerEvent`, through `CodexTurnTracker`),
 the reconcile read (`runReconcile`), and a bounded hold deadline. `settlePending` finally has a
@@ -404,3 +404,23 @@ evict while active, first-turn, parking and unknown threads stay visible.
 - A test asserting a phase is weaker than one asserting the wire. Several lifecycle tests read
   `stateOf` as their only evidence, and two of them could not tell a correct implementation from a
   no-op until the audit said so. Where a phase decides a request, assert the request.
+- `bun run lint` reports `biome: FAILED` without saying which file or rule, and the summary reporter's
+  output is dense enough in escape codes that finding out takes two more commands. Twice this lap tsc
+  and the whole suite were green while a formatting failure sat unread. The gate's own warning about
+  reading both halves is right, and the second half is the one that is hard to read.
+- The core's own tests built sessions by hand and published through them. When `publish` gained the
+  generation fence, four of them broke because they had never registered a session with the core, so
+  they had been exercising a state the daemon cannot reach. A test that constructs a collaborator's
+  private state instead of acquiring it through the real entry point proves less than it looks.
+- `FakeSession` in `codex-daemon-service.test.ts` models `ThreadLifecycle.settleTurn` by hand, and
+  nothing holds it to the real one. Widening `AppServerSession` made tsc check its SHAPE, which is how
+  the missing `settleTurn` was caught, but its RULES are a copy: publish once, park only an own turn.
+  A whole audit angle went on cataloguing where the copy diverges, and the answer each time was that
+  the lifecycle's own tests cover the rule against the real client. The doubles are honest today
+  because someone read both; there is no mechanism keeping them that way.
+- An audit round costs roughly half a million tokens and some of it is spent rebutting findings that
+  quote code accurately and describe it wrongly. Five sources of that were found and fixed as
+  misalignments this lap: a comment claiming retirement stops replay, one claiming a shape is unified
+  when four readers exist, a field named `sessions` beside the core's real registry, a lifecycle
+  header erasing its own buffering path, and a `read` field that reads as a fixture and is an
+  injection point. Naming and comments are audit throughput, not just readability.
