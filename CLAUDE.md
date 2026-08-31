@@ -956,13 +956,16 @@ forgotten on an older park's clock. Keying any of it by thread id instead shippe
 twice, because `mutate` tests identity only BEFORE its request: an operation awaiting a reply resumes
 holding a record `started` has replaced, so `retire` refuses to write for a record the map no longer
 holds, and `load` and `poison` drop only their own entry. Eviction passes over a record with an
-operation queued or a phase other than `parked`/`disposed`, and LEAVES the entry, since consuming one
-that declined to evict keeps that record for the lifecycle's life. `bindThread` bounds the daemon's
-bindings the same way, draining to the bound rather than one per bind, and never evicting the binding
-it was called to install: a bind moves its thread to the end, so the newest entry is the last one an
-oldest-first scan reaches. Both bounds are exceeded on purpose when everything in them is live work.
+operation queued or a phase other than `parked`/`disposed`, and LEAVES the entry there for the next
+pass to reconsider. Removing it instead would strand that record: parking is what enqueues an entry,
+and an already-parked thread never parks again, so a record that declined one eviction would never be
+offered another. `bindThread` bounds the daemon's bindings the same way, draining to the bound rather
+than one per bind, and never evicting the binding it was called to install: a bind moves its thread
+to the end, so the newest entry is the last one an oldest-first scan reaches. Neither is a hard
+ceiling, and that is deliberate: a map holding nothing but live work evicts nothing and stays over.
 The cost, which stays: a terminal redelivered after its record ages out publishes again, so the wire
-promise is once per turn WITHIN the window, and the gateway drops the duplicate at persistence.
+promise is once per turn WITHIN the window. `CodexAgentService.applyEvent` then ignores it, since the
+turn is no longer `inProgress`, so the duplicate reaches the wire but never the durable catalog.
 
 **A turn's clock and warning live in the same record as its binding** (`CodexLiveTurns`). Keeping
 identity in one map and liveness in another, both keyed by turn id, is half an identity and shipped

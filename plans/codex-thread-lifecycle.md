@@ -504,14 +504,16 @@ never become evictable and its entry would hold a slot no eviction could ever re
 drops the entry it replaces.
 
 Eviction then asks only what is left: a record is passed over while an operation is queued on it, and
-while its phase is anything but `parked` or `disposed`. A passed-over entry STAYS, so the next
-eviction reconsiders it. Consuming it instead retains that record for as long as the lifecycle lives,
-because parking is what would have enqueued it again.
+while its phase is anything but `parked` or `disposed`. A passed-over entry STAYS, so the next pass
+reconsiders it. Removing it instead would strand that record, since parking is what enqueues an entry
+and an already-parked thread never parks again, so one that declined an eviction would never be
+offered another.
 
 What the bound costs is real and stays: a terminal redelivered after its record has aged out
 republishes, because the record's published ids ARE the once-per-turn dedup and forgetting one
 forgets them. It takes `RETIRED_MEMORY` retirements plus the tracker's own settled window to reach,
-and the gateway drops the duplicate at persistence, where the turn is no longer `inProgress`. So the
+and `CodexAgentService.applyEvent` then ignores it, since the turn is no longer `inProgress`, so the
+duplicate reaches the wire but never the durable catalog. So the
 wire promise is once per turn within the window, not for all time. Capping `published` directly was
 tried in an earlier step and reverted for the same reason read the other way: the ids are what make
 publication once-per-turn and the record outlives them, so the cap traded the promise for nothing,
