@@ -23,7 +23,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -65,7 +64,7 @@ fun TrustCompareScreen(
 	peerName: String,
 	onClose: () -> Unit,
 ) {
-	val scope = rememberCoroutineScope()
+	val scope = repo.repoScope
 	var step by remember { mutableStateOf<TrustCompareStep>(TrustCompareStep.Loading) }
 	var busy by remember { mutableStateOf(false) }
 	// Set once the human commits trust, so leaving the screen afterward does NOT cancel the rendezvous.

@@ -26,6 +26,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 object DebugLog {
 	private val lock = Any()
 	private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+	private var initialized = false
 
 	////////////////////////////////
 	//  DEBUG-only ingest state
@@ -51,29 +52,35 @@ object DebugLog {
 
 	fun init(context: Context) {
 		val ctx = context.applicationContext
-		// This build writes no on-device log file; reap any older builds spilled (off-main, best-effort).
-		Thread { sweepSpilledLogs(ctx) }.apply { isDaemon = true }.start()
-		log(
-			"DebugLog",
-			"init build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}",
-		)
+		// The flag publishes only after the handler is installed, or a second caller passes through
+		// a DebugLog that has none. `log` re-enters this monitor, which Java allows.
+		synchronized(lock) {
+			if (initialized) return
+			// This build writes no on-device log file; reap any older builds spilled (off-main, best-effort).
+			Thread { sweepSpilledLogs(ctx) }.apply { isDaemon = true }.start()
+			log(
+				"DebugLog",
+				"init build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}",
+			)
 
-		// Surface an otherwise-silent crash to logcat (and the ring, on debug) before the app dies.
-		val prev = Thread.getDefaultUncaughtExceptionHandler()
-		Thread.setDefaultUncaughtExceptionHandler { thread, e ->
-			runCatching { log("CRASH", "uncaught on ${thread.name}: ${e.stackTraceToString()}") }
-			// The ring otherwise drains only on the poll cycle, so a crash before the first poll
-			// takes its own report down with the process - exactly the crash worth reading. Push it
-			// out here instead, on a bounded join because the crashing thread may be the main one.
-			runCatching {
-				Thread { runCatching { flushToIngest() } }
-					.apply {
-						isDaemon = true
-						start()
-						join(CRASH_FLUSH_TIMEOUT_MS)
-					}
+			// Surface an otherwise-silent crash to logcat (and the ring, on debug) before the app dies.
+			val prev = Thread.getDefaultUncaughtExceptionHandler()
+			Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+				runCatching { log("CRASH", "uncaught on ${thread.name}: ${e.stackTraceToString()}") }
+				// The ring otherwise drains only on the poll cycle, so a crash before the first poll
+				// takes its own report down with the process - exactly the crash worth reading. Push it
+				// out here instead, on a bounded join because the crashing thread may be the main one.
+				runCatching {
+					Thread { runCatching { flushToIngest() } }
+						.apply {
+							isDaemon = true
+							start()
+							join(CRASH_FLUSH_TIMEOUT_MS)
+						}
+				}
+				prev?.uncaughtException(thread, e)
 			}
-			prev?.uncaughtException(thread, e)
+			initialized = true
 		}
 	}
 
@@ -152,8 +159,8 @@ object DebugLog {
 	fun log(tag: String, msg: String) {
 		android.util.Log.d("sb/$tag", msg)
 		if (BuildConfig.DEBUG) {
-			val line = "${fmt.format(Date())} [$tag] $msg"
 			synchronized(lock) {
+				val line = "${fmt.format(Date())} [$tag] $msg"
 				ring.addLast(line)
 				while (ring.size > RING_CAP) ring.removeFirst()
 			}

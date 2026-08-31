@@ -85,7 +85,7 @@ fun EnrollCeremonyScreen(
 		onDispose {
 			if (!confirmed.get()) {
 				@Suppress("OPT_IN_USAGE")
-				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.ceremony.enrollCancel(ctx.handshakeId, ctx.role) } }
+				kotlinx.coroutines.GlobalScope.launch { runCatchingCancellable { repo.ceremony.enrollCancel(ctx.handshakeId, ctx.role) } }
 			}
 		}
 	}
@@ -136,7 +136,7 @@ fun EnrollCeremonyScreen(
 						// stops on a clear warning - never silently retried, since a mismatch may be tampering.
 						busy = true
 						scope.launch {
-							runCatching { repo.ceremony.enrollCancel(ctx.handshakeId, ctx.role) }
+							runCatchingCancellable { repo.ceremony.enrollCancel(ctx.handshakeId, ctx.role) }
 							step = EnrollStep.Failed(
 								"The codes did not match. Do not continue - rescan in person and try again, and if it keeps " +
 									"mismatching the connection may be tampered with.",

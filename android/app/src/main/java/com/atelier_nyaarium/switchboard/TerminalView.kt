@@ -192,7 +192,7 @@ fun TerminalView(
 	fun fire(text: String?, key: String?, submit: Boolean = true) {
 		scope.launch {
 			sendError = null
-			runCatching { onSend(text, key, submit) }.onFailure { sendError = it.message ?: "send failed" }
+			runCatchingCancellable { onSend(text, key, submit) }.onFailure { sendError = it.message ?: "send failed" }
 		}
 	}
 
@@ -313,7 +313,7 @@ fun TerminalView(
 							onClick = hapticClick {
 								resuming = true
 								scope.launch {
-									runCatching { onResumeAfterLimit() }
+									runCatchingCancellable { onResumeAfterLimit() }
 										.onFailure { sendError = it.message ?: "resume failed" }
 									resuming = false
 								}
@@ -355,7 +355,7 @@ fun TerminalView(
 							relaunching = true
 							wakeRequested = true
 							scope.launch {
-								runCatching { onRelaunch() }.onFailure { sendError = it.message ?: "wake failed" }
+								runCatchingCancellable { onRelaunch() }.onFailure { sendError = it.message ?: "wake failed" }
 								relaunching = false
 							}
 						},

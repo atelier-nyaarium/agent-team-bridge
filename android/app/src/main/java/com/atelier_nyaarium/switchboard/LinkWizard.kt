@@ -82,7 +82,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 			// also sweeps on its TTL, so a dropped cancel is bounded.
 			if (tok != null || pin != null) {
 				@Suppress("OPT_IN_USAGE")
-				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.trust.crossDomainCancel(tok, pin) } }
+				repo.repoScope.launch { runCatchingCancellable { repo.trust.crossDomainCancel(tok, pin) } }
 			}
 		}
 	}

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /**
  * Foreground service owning the bridge connection and poll loop, so messages keep
@@ -67,21 +68,22 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	// battery-optimization exemption is granted (Settings -> Background delivery). Released in a
 	// deep tier (see DeepIdleScheduler below) - the companion `passLock` covers a deep pass
 	// instead, so the CPU can actually suspend between alarm wakeups.
-	private var wakeLock: PowerManager.WakeLock? = null
+	@Volatile private var wakeLock: PowerManager.WakeLock? = null
+
+	private fun wakeLock(): PowerManager.WakeLock =
+		wakeLock ?: synchronized(this) {
+			wakeLock ?: (getSystemService(POWER_SERVICE) as PowerManager)
+				.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "switchboard:poll-loop")
+				.apply { setReferenceCounted(false) }
+				.also { wakeLock = it }
+		}
 
 	private fun acquireWakeLock() {
-		if (wakeLock?.isHeld == true) return
-		wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-			.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "switchboard:poll-loop")
-			.apply {
-				setReferenceCounted(false)
-				acquire()
-			}
+		wakeLock().let { if (!it.isHeld) it.acquire(TimeUnit.MINUTES.toMillis(10)) }
 	}
 
 	private fun releaseWakeLock() {
 		wakeLock?.let { if (it.isHeld) it.release() }
-		wakeLock = null
 	}
 
 	private fun alarmManager(): AlarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
@@ -99,16 +101,20 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	 * transition, which reaches here with the pass lock never having been acquired). */
 	override fun enterDeepSleep(wakeAtMillis: Long) {
 		if (destroyed) return
-		val am = alarmManager()
-		// canScheduleExactAlarms() is API 31+; minSdk is 33, so this is every device, but the
-		// guard is defensive against an OEM that revokes the auto-granted USE_EXACT_ALARM.
-		if (am.canScheduleExactAlarms()) {
-			am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
-		} else {
-			am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
+		try {
+			val am = alarmManager()
+			// Always true at minSdk 33. Defensive against an OEM revoking the auto-granted USE_EXACT_ALARM.
+			if (am.canScheduleExactAlarms()) {
+				am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
+			} else {
+				am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
+			}
+		} catch (e: Exception) {
+			DebugLog.log("Service", "deep sleep alarm failed: ${e.message}")
+		} finally {
+			releaseWakeLock()
+			releasePassLock()
 		}
-		releaseWakeLock()
-		releasePassLock()
 		postIdleStatus(wakeAtMillis)
 	}
 

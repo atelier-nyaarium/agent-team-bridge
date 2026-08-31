@@ -457,7 +457,7 @@ fun ThreadScreen(
 					onResume = {
 						resumingAfterLimit = true
 						resumeScope.launch {
-							runCatching { terminal.onResumeAfterLimit() }
+							runCatchingCancellable { terminal.onResumeAfterLimit() }
 							resumingAfterLimit = false
 						}
 					},

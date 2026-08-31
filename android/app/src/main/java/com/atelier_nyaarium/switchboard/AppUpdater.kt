@@ -6,8 +6,15 @@ import android.content.pm.PackageInfo
 import androidx.core.content.FileProvider
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.Call
+import okhttp3.Callback
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Self-update by direct download from the public GitHub release. The release
@@ -53,18 +60,38 @@ object AppUpdater {
 	 * Both variants ship from one CI run and share a versionCode, so a cross-variant fetch
 	 * (debug <-> release) skips the gate and always stages: the shared signing key makes the
 	 * equal-versionCode install a reinstall onto the other variant, not a downgrade. */
-	fun downloadAndStage(context: Context, variant: String): Result {
+	suspend fun downloadAndStage(context: Context, variant: String): Result {
 		val dir = File(context.cacheDir, "updates").apply { mkdirs() }
 		val staged = File(dir, "update.apk")
-		val ok = runCatching {
-			client.newCall(Request.Builder().url(urlFor(variant)).build()).execute().use { resp ->
-				if (!resp.isSuccessful) return Result.Failed("Download failed (HTTP ${resp.code})")
-				val sink = resp.body ?: return Result.Failed("Empty download")
-				staged.outputStream().use { out -> sink.byteStream().use { it.copyTo(out) } }
+		val downloadError = runCatchingCancellable {
+			suspendCancellableCoroutine<String?> { cont ->
+				val call = client.newCall(Request.Builder().url(urlFor(variant)).build())
+				cont.invokeOnCancellation { call.cancel() }
+				call.enqueue(object : Callback {
+					override fun onResponse(call: Call, response: Response) {
+						try {
+							response.use { resp ->
+								if (!resp.isSuccessful) {
+									cont.resume("Download failed (HTTP ${resp.code})")
+									return@use
+								}
+								val body = resp.body
+								if (body == null) {
+									cont.resume("Empty download")
+									return@use
+								}
+								staged.outputStream().use { out -> body.byteStream().use { it.copyTo(out) } }
+								cont.resume(null)
+							}
+						} catch (e: Throwable) {
+							cont.resumeWithException(e)
+						}
+					}
+					override fun onFailure(call: Call, e: IOException) = cont.resumeWithException(e)
+				})
 			}
-			true
 		}.getOrElse { return Result.Failed(it.message ?: "Download error") }
-		if (!ok) return Result.Failed("Download error")
+		if (downloadError != null) return Result.Failed(downloadError)
 
 		val info = context.packageManager.getPackageArchiveInfo(staged.path, 0)
 			?: return Result.Failed("Downloaded file is not an APK")
