@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveSessionNaming, stableTeamName } from "../mcp/team-name.js";
+import { isValidSessionName } from "../shared/session-id.js";
 
 const SID_A = "c44a37c4-501a-4db0-871c-90e927014163";
 const SID_B = "78520221-0000-0000-0000-000000000000";
@@ -33,6 +34,12 @@ describe("stableTeamName", () => {
 // Every live registrant must be a composite `spawn.session`; a bare arity-1 name is reserved for a
 // catalog spawn-point. Pin each normalization branch.
 describe("resolveSessionNaming", () => {
+	it("recognizes only canonical composite slug names", () => {
+		expect(isValidSessionName("recipe-app.scratch")).toBe(true);
+		expect(isValidSessionName("Recipe.scratch")).toBe(false);
+		expect(isValidSessionName("recipe.app.scratch")).toBe(false);
+	});
+
 	it("unset PROJECT_NAME composes host.<stable-hex>", () => {
 		expect(resolveSessionNaming(undefined, SID_A)).toBe(`host.${stableTeamName(SID_A)}`);
 	});

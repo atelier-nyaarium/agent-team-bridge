@@ -8,6 +8,7 @@ import {
 	resolveLiveIncarnation,
 	type TeamRegistry,
 } from "../gateway/websocket.js";
+import { HANDSHAKE_PENDING_TTL_MS } from "../gateway/wsTypes.js";
 import { SessionStore } from "../shared/session-store.js";
 import { authFor, createMockWs, handshakeIdFrom, handshakePushCount } from "./helpers/websocket.js";
 
@@ -21,7 +22,8 @@ describe("handshake-established session records", () => {
 		intervals = [];
 	});
 
-	function setup(sessionStore = new SessionStore()) {
+	function setup(sessionStore = new SessionStore(), now?: () => number, withoutStore = false) {
+		const configuredStore = withoutStore ? undefined : sessionStore;
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const handlers = createWebSocketHandlers({
@@ -31,8 +33,9 @@ describe("handshake-established session records", () => {
 			knownTeamPaths: new Map(),
 			offlineCatalog: new Map(),
 			wakeCoordinator: new WakeCoordinator(),
-			sessionStore,
-			auth: authFor(registry, sessionStore),
+			sessionStore: configuredStore,
+			auth: authFor(registry, configuredStore),
+			now,
 		});
 		intervals.push(handlers.heartbeatInterval);
 		return { handlers, registry, conversationRegistry, sessionStore };
@@ -207,9 +210,28 @@ describe("handshake-established session records", () => {
 		register(handlers, ws2, { team: "host.def", subId: "s2", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
 
-		// Refused: no record for the second segment, and the first record's live pointer is not stolen.
+		expect(ws2.close).toHaveBeenCalled();
+		expect(ws2.data.handshakeConfirmed).toBe(false);
 		expect(sessionStore.getByTeam("host.def")).toBeUndefined();
 		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toEqual({ team: "host.abc", subId: "s1" });
+		expect(sessionStore.size).toBe(1);
+	});
+
+	it("hands over a transcript when its prior socket is gone", () => {
+		const { handlers, sessionStore } = setup();
+		const ws1 = createMockWs();
+		register(handlers, ws1, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
+		handlers.close(ws1);
+
+		const ws2 = createMockWs();
+		register(handlers, ws2, { team: "host.def", subId: "s2", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
+
+		expect(ws2.close).not.toHaveBeenCalled();
+		expect(ws2.data.handshakeConfirmed).toBe(true);
+		expect(sessionStore.getByTeam("host.def")?.liveTeam).toEqual({ team: "host.def", subId: "s2" });
+		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toBeUndefined();
 		expect(sessionStore.size).toBe(1);
 	});
 
@@ -249,13 +271,49 @@ describe("handshake-established session records", () => {
 		expect(handshakePushCount(ws)).toBe(1);
 	});
 
-	it("a pending handshake answered after many heartbeat ticks still confirms (no TTL cliff)", () => {
-		const { handlers } = setup();
+	it("expires and evicts an unanswered handshake at its deadline", () => {
+		let now = 0;
+		const { handlers } = setup(new SessionStore({ now: () => now }), () => now);
 		const ws = createMockWs();
 		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
-		const hsId = handshakeIdFrom(ws);
-		for (let i = 0; i < 50; i++) handlers.heartbeatTick();
-		expect(handlers.resolveHandshake(hsId, { isMainOrLead: true })).toBe(true);
+		now = HANDSHAKE_PENDING_TTL_MS;
+		handlers.heartbeatTick();
+		expect(ws.close).toHaveBeenCalled();
+		expect(handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true })).toBe(false);
+		expect(ws.data.handshakeConfirmed).toBe(false);
+	});
+
+	it("peer pong keeps a connected confirmed record from TTL sweep", () => {
+		let clock = 0;
+		const sessionStore = new SessionStore({ now: () => clock });
+		const { handlers } = setup(sessionStore);
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+		clock = 100;
+		handlers.pong(ws);
+
+		expect(sessionStore.sweep(50)).toEqual([]);
+	});
+
+	it("does not evict a valid client when recording is disabled", () => {
+		const { handlers } = setup(undefined, undefined, true);
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+
+		expect(ws.close).not.toHaveBeenCalled();
+		expect(ws.data.handshakeConfirmed).toBe(true);
+	});
+
+	it("does not confirm or evict on garbage handshake prose", () => {
+		const { handlers, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+		expect(handlers.resolveHandshake(handshakeIdFrom(ws), undefined, "I am definitely the lead")).toBe(true);
+		expect(ws.data.handshakeConfirmed).toBe(false);
+		expect(ws.close).not.toHaveBeenCalled();
+		expect(sessionStore.size).toBe(0);
 	});
 
 	it("a register carrying the remembered lead role confirms silently, with no handshake push at all, once the team has answered a real handshake before", () => {

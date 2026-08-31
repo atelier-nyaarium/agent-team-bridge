@@ -44,6 +44,13 @@ export function isComposite(name: string): boolean {
 	return name.includes(ADDRESS_SEP);
 }
 
+/** Exactly two slug segments. */
+export function isValidSessionName(name: string): boolean {
+	if (!isComposite(name)) return false;
+	const { project, session } = parseSessionName(name);
+	return isSlug(project) && isSlug(session);
+}
+
 ////////////////////////////////
 //  Unified address grammar (network-addressing migration)
 //

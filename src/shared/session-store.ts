@@ -383,11 +383,27 @@ export class SessionStore {
 	 */
 	establishOnConfirm(
 		team: string,
-		{ claudeSessionId, label, live }: { claudeSessionId?: string; label?: string; live: LiveRef },
+		{
+			claudeSessionId,
+			label,
+			live,
+			handover = false,
+		}: { claudeSessionId?: string; label?: string; live: LiveRef; handover?: boolean },
 	): SessionRecord | undefined {
 		if (!isComposite(team)) return undefined;
 		let record = this.bindBySegment(team, { claudeSessionId });
-		if (!record && claudeSessionId) record = this.bindResume(claudeSessionId);
+		if (!record && claudeSessionId) {
+			record = this.bindResume(claudeSessionId);
+			if (record && handover) {
+				const previousTeam = this.teamOf(record);
+				const { project: spawn, session: id } = parseSessionName(team);
+				if (this.records.has(team)) return undefined;
+				this.records.delete(previousTeam);
+				record.spawn = spawn;
+				record.id = id;
+				this.records.set(team, record);
+			}
+		}
 		if (!record) {
 			const { project: spawn, session: id } = parseSessionName(team);
 			record =

@@ -169,10 +169,11 @@ describe("HandshakeGate", () => {
 		expect(gate.confirmedBy("app.dev")).toBe(binding);
 	});
 
-	it("a structured claim wins over free text, and silence is a worker", () => {
+	it("accepts structured claims and exact legacy tokens only", () => {
 		expect(HandshakeGate.leadClaim({ isMainOrLead: true })).toBe(true);
 		expect(HandshakeGate.leadClaim({ isMainOrLead: false }, "true")).toBe(false);
-		expect(HandshakeGate.leadClaim(undefined, "I am the lead: TRUE")).toBe(true);
-		expect(HandshakeGate.leadClaim()).toBe(false);
+		expect(HandshakeGate.leadClaim(undefined, " true ")).toBe(true);
+		expect(HandshakeGate.leadClaim(undefined, "I am the lead: TRUE")).toBeUndefined();
+		expect(HandshakeGate.leadClaim()).toBeUndefined();
 	});
 });

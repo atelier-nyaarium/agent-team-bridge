@@ -178,7 +178,7 @@ export class PresenceFacade {
 
 	establishOnConfirm(
 		team: string,
-		args: { claudeSessionId?: string; label?: string; live: { team: string; subId: string } },
+		args: { claudeSessionId?: string; label?: string; live: { team: string; subId: string }; handover?: boolean },
 	): SessionRecord | undefined {
 		const r = this.sessionStore.establishOnConfirm(team, args);
 		this.markDirty();

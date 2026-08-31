@@ -16,10 +16,6 @@ stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host sessio
 - [medium] **`down.sh` kills the host daemon and `start-gateway.sh` does not restart it.** The
   restart ritual has a missable third step whose omission is silent until wake/peek/spawn fail. It
   bit twice in one day, once during a release and once during the resulting debugging.
-- [low] **A deaf manual session lingers as "verifying" while it lives.** It never answers its
-  handshake, so it never becomes a record (confirm is what creates one, verified against the durable
-  file) and vanishes on exit. The cost is confusion, not residue: the owner sees a session they
-  cannot interact with beside the asleep card they meant to revive.
 
 ## Codex delegation (`plans/codex-thinking.md`, deleted, shipped - 2026-08-06)
 
@@ -531,18 +527,6 @@ are not lost. Verified still-present in current code at migration time.
 Migrated from `plans/handshake-session-linkage.md` (deleted, shipped) so its still-open residuals are
 not lost.
 
-- [high] `src/gateway/websocket.ts : createWebSocketHandlers : establishRecord` - **bug-class** -
-  first-binding-holds only refuses a LIVE holder, so an asleep holder lets tier-1 bindBySegment bind
-  the same claudeSessionId onto a second record, breaking one-record-per-transcript and spawning
-  duplicate `--resume` processes on wake. Needs a resumeRecord check even when the holder is asleep.
-- [medium] `src/shared/session-store.ts : SessionStore : sweep` - **bug-class** - TTL sweep can drop a
-  still-connected record because lastSeen is refreshed only by teams()->touchLive (never the
-  heartbeat), making a live session invisible in teams() and re-mintable while resolveLiveIncarnation
-  still routes to it. 30-day window; fix is to touchLive from the heartbeat or spare live records.
-- [medium] `src/gateway/websocket.ts : createWebSocketHandlers : resolveHandshake` - **bug-class** -
-  `ws.data.handshakeConfirmed` is set before establishRecord, so a first-binding-holds refusal leaves
-  a confirmed-but-recordless socket that resolveLiveIncarnation reports as canonical live, producing a
-  routable-but-invisible duplicate. Set confirmed only after establishRecord succeeds.
 
 ## Host session resume (PR #100, 2026-06-29)
 
@@ -580,13 +564,6 @@ theoretical concerns.
   composite registers can grow the map and `session-resume.json` unboundedly.
 
 ## Console device-name address (PR #99)
-
-### `PROJECT_NAME` / `from` not slug-validated -> `localAddress` throws
-`PROJECT_NAME` is read from env and propagated as the sender `from` with no slug check, so a non-slug
-value (spaces/caps) makes `localAddress(from)` throw uncaught:
-- `src/mcp/index.ts : startMcp` - the root: `PROJECT_NAME` is never asserted to be a slug
-- `src/gateway/routes.ts : humanNotify` - `localAddress(from)` (the schema validates length, not slug); a non-slug `PROJECT_NAME` crashes `/human/notify`
-- `src/gateway/routes.ts : sendCrossGateway` - `localAddress(from)` on an agent cross-Gateway send throws on a non-slug team field
 
 ## Session id teardown (`plans/session-id-teardown.md`, found during Phase B red-team)
 

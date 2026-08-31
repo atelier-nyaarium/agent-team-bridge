@@ -13,6 +13,7 @@ export type TeamRegistry = Map<string, Map<string, ServerWebSocket<WsData>>>;
 export type ConversationRegistry = Map<string, ServerWebSocket<WsData>>;
 
 export interface WebSocketDeps {
+	now?: () => number;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	knownTeamPaths: Map<string, string>;

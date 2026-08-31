@@ -50,6 +50,7 @@ export function createWebSocketHandlers({
 	auth,
 	presenceWriter,
 	announcePresenceDirty,
+	now,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 	// Falls back to sessionStore directly (its own methods have identical signatures) when no
@@ -57,6 +58,10 @@ export function createWebSocketHandlers({
 	const liveWriter = presenceWriter ?? sessionStore;
 
 	function heartbeatTick() {
+		for (const pending of handshakeGate.expirePending()) {
+			const ws = registry.get(pending.team)?.get(pending.subId);
+			if (ws && !ws.data.handshakeConfirmed) evictSocket(ws);
+		}
 		handshakeGate.sweep();
 		for (const subs of registry.values()) {
 			for (const ws of subs.values()) {
@@ -75,7 +80,7 @@ export function createWebSocketHandlers({
 
 	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,
 	// which binding confirmed a team's lead) live in the gate; every socket effect stays here.
-	const handshakeGate = new HandshakeGate();
+	const handshakeGate = new HandshakeGate(now);
 
 	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
 	 * that already reports its remembered role skips this entirely (see the register handler's
@@ -129,6 +134,7 @@ export function createWebSocketHandlers({
 		const vConv = victim.data.conversationId;
 		if (vConv && conversationRegistry.get(vConv) === victim) conversationRegistry.delete(vConv);
 		victim.close();
+		announcePresenceDirty?.();
 	}
 
 	function open(ws: ServerWebSocket<WsData>): void {
@@ -323,8 +329,11 @@ export function createWebSocketHandlers({
 				const confirmedBy = handshakeGate.confirmedBy(team);
 				const sameConfirmer = !!auth && !!confirmedBy && auth.sameAs(confirmedBy, auth.toAnswerFor(ws));
 				if (reg.data.isMainOrLead === true && sameConfirmer) {
+					if (establishRecord(ws, { team, subId }) === "refused") {
+						evictSocket(ws);
+						return;
+					}
 					ws.data.handshakeConfirmed = true;
-					establishRecord(ws, { team, subId });
 					console.log(`[ws] ${team}/${subId} reconnected as remembered lead - handshake skipped`);
 				} else {
 					mintHandshake(ws, team, subId);
@@ -497,9 +506,13 @@ export function createWebSocketHandlers({
 	/** Establish the durable session record for a confirmed lead. The binding-order precedence lives
 	 * in the store; here we supply the stashed register ids and the confirming incarnation, and apply
 	 * first-binding-holds (a registry probe the store cannot make). */
-	function establishRecord(ws: ServerWebSocket<WsData>, pending: { team: string; subId: string }): void {
-		if (!sessionStore) return;
+	function establishRecord(
+		ws: ServerWebSocket<WsData>,
+		pending: { team: string; subId: string },
+	): "confirmed" | "refused" | "not-recorded" {
+		if (!sessionStore) return "not-recorded";
 		const claudeSessionId = ws.data.claudeSessionId;
+		let handover = false;
 		// First-binding-holds: if this transcript already lives on a DIFFERENT record's live
 		// incarnation, refuse to re-bind it here (the first binding holds), so a second live process on
 		// one transcript never steals the card. The session's own segment (a daemon relaunch of the
@@ -507,25 +520,34 @@ export function createWebSocketHandlers({
 		if (claudeSessionId) {
 			const holder = sessionStore.resumeRecord(claudeSessionId);
 			if (holder && sessionStore.teamOf(holder) !== pending.team) {
-				const live = resolveLiveIncarnation(registry, sessionStore, sessionStore.teamOf(holder));
-				if (live && live !== registry.get(pending.team)?.get(pending.subId)) {
+				const holderTeam = sessionStore.teamOf(holder);
+				const live = resolveLiveIncarnation(registry, sessionStore, holderTeam);
+				if (live && live !== ws && live.readyState === 1 && !live.data.virtual) {
 					console.log(
-						`[ws] first-binding-holds: ${pending.team}/${pending.subId} claims a transcript already live on ${sessionStore.teamOf(holder)}; refusing`,
+						`[ws] transcript binding refused: ${pending.team}/${pending.subId} conflicts with ${holderTeam}`,
 					);
-					return;
+					return "refused";
 				}
+				handover = true;
 			}
 		}
 		const record = liveWriter?.establishOnConfirm(pending.team, {
 			claudeSessionId,
 			label: ws.data.cwdName,
 			live: { team: pending.team, subId: pending.subId },
+			handover,
 		});
 		if (record) {
 			console.log(
 				`[ws] session record ${sessionStore.teamOf(record)} confirmed (label "${record.sessionLabel}")`,
 			);
 		}
+		return record ? "confirmed" : "refused";
+	}
+
+	function pong(ws: ServerWebSocket<WsData>): void {
+		ws.data.missedPings = 0;
+		if (ws.data.handshakeConfirmed && ws.data.teamName) sessionStore?.touchLive(ws.data.teamName);
 	}
 
 	/** Resolve a handshake response. Returns true if it was a handshake session. */
@@ -560,10 +582,18 @@ export function createWebSocketHandlers({
 		// was evicted must not resurrect a record or mutate registry state.
 		if (ws.readyState !== 1) return true;
 
-		if (HandshakeGate.leadClaim(replyAsJson, response)) {
+		const claim = HandshakeGate.leadClaim(replyAsJson, response);
+		if (claim === undefined) {
+			console.log(`[ws] ignored malformed handshake answer: ${pending.team}/${pending.subId}`);
+			return true;
+		}
+		if (claim) {
+			if (establishRecord(ws, pending) === "refused") {
+				evictSocket(ws);
+				return true;
+			}
 			ws.data.handshakeConfirmed = true;
 			if (auth) handshakeGate.confirmLead(pending.team, auth.toAnswerFor(ws));
-			establishRecord(ws, pending);
 			console.log(`[ws] handshake confirmed: ${pending.team}/${pending.subId} is lead`);
 		} else {
 			console.log(`[ws] handshake rejected: ${pending.team}/${pending.subId} is worker, closing`);
@@ -580,6 +610,7 @@ export function createWebSocketHandlers({
 		heartbeatInterval,
 		heartbeatTick,
 		resolveHandshake,
+		pong,
 		findPendingHandshakeId: (team: string, subId: string) => handshakeGate.pendingIdFor(team, subId),
 		repushHandshake,
 	};

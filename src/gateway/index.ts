@@ -1487,7 +1487,7 @@ export async function startGateway(): Promise<void> {
 				wsHandlers.close(ws);
 			},
 			pong(ws) {
-				ws.data.missedPings = 0;
+				wsHandlers.pong(ws);
 			},
 		},
 	});

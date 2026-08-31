@@ -11,7 +11,7 @@ import {
 } from "../shared/agent-backend.js";
 import { isAgentBackendInstalled } from "../shared/agent-binary.js";
 import { isInsideContainer } from "../shared/env.js";
-import { parseSessionName } from "../shared/session-id.js";
+import { isValidSessionName, parseSessionName } from "../shared/session-id.js";
 import type { AgentDispatch } from "./agentDispatch.js";
 import { registerBoardTools } from "./board/boardTools.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
@@ -93,6 +93,9 @@ export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
 	const envPinned = Boolean(process.env.PROJECT_NAME);
 	process.env.PROJECT_NAME = resolveSessionNaming(process.env.PROJECT_NAME, process.env.CLAUDE_CODE_SESSION_ID);
+	if (!isValidSessionName(process.env.PROJECT_NAME)) {
+		throw new Error("invalid PROJECT_NAME: expected a project.session name using lowercase slug segments");
+	}
 	// A session launched without the daemon's env pin registers under a DERIVED name.
 	console.error(
 		`[bridge] identity ${process.env.PROJECT_NAME} (${envPinned ? "env-pinned" : "derived - manual launch?"})`,

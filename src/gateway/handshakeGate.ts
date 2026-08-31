@@ -71,11 +71,13 @@ export class HandshakeGate {
 		});
 	}
 
-	/** What a handshake answer claims. A structured reply wins; free text falls back to a match. */
-	static leadClaim(replyAsJson?: Record<string, unknown>, response?: string): boolean {
+	/** Structured claims or exact legacy tokens only. */
+	static leadClaim(replyAsJson?: Record<string, unknown>, response?: string): boolean | undefined {
 		if (replyAsJson && typeof replyAsJson.isMainOrLead === "boolean") return replyAsJson.isMainOrLead;
-		if (response) return /true/i.test(response);
-		return false;
+		const legacy = response?.trim().toLowerCase();
+		if (legacy === "true") return true;
+		if (legacy === "false") return false;
+		return undefined;
 	}
 
 	/** Mint a fresh lead handshake for a (team, subId) and return its wire push for the caller to
@@ -185,5 +187,17 @@ export class HandshakeGate {
 			}
 		}
 		return dropped;
+	}
+
+	/** Close sockets past the handshake deadline. */
+	expirePending(): HandshakePending[] {
+		const now = this.now();
+		const expired: HandshakePending[] = [];
+		for (const [hsId, pending] of this.pending) {
+			if (!this.expired(pending, now)) continue;
+			expired.push(pending);
+			this.pending.delete(hsId);
+		}
+		return expired;
 	}
 }
