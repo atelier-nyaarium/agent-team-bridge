@@ -804,14 +804,13 @@ lines. The plan is deleted; what follows is what it left behind.
   content, which is the exact defect six commits were spent removing.
 - **No cross-runtime vector pins `safeName`/`uniqueName`.** Its absence is why both filename
   divergences (an astral character splitting into two underscores; dedupe seeded from a set rather
-  than the ordered assignment) shipped with a green suite.
+  than the ordered assignment) shipped with a green suite. WILL NOT DO: test-coverage debt, and both
+  divergences it would have caught are already fixed.
 - ~~**`referenceRoot()` cannot fall back to cwd inside a container.**~~ STALE: the function is
   retired, and `ref-owners-residue.test.ts` fails the build if the name returns under `src`.
-- **`walkSegments` branches are paths, not nodes,** with no memo on `(node, consumed)`. Measured 2.2s
-  on a 724-byte file of deeply nested same-named functions; memoizing collapses it to linear.
-- **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
-  segment. `searchAreas` supplies the sibling run for navigation, but the RANGE is still the node's
-  own extent.
+- ~~**`walkSegments` branches are paths, not nodes.**~~ STALE: no `walkSegments` remains in the repo.
+- ~~**A C# file-scoped namespace resolves to its own one-line declaration.**~~ STALE: the
+  `searchAreas` this described is gone too. Re-derive from current code before re-recording either.
 - ~~**Aliased spellings of one file ship duplicate snapshots.**~~ RESOLVED: `resolveRefs` canonicalizes
   through `identityOf` (`fs.realpathSync.native`), so every spelling of one file, symlinks included,
   collapses onto the first written one before the builder groups.
