@@ -337,14 +337,6 @@ their existing entries.
   register, surfaced in teams()), but nothing gates on it and the reverse direction (gateway
   advertising its version) does not exist. Guard candidates: stamp the gateway version on /health
   + a reload_plugins pre-flight, or a register-time skew warning.
-- [medium] `src/gateway/routes.ts : HumanNotifySchema` - **framework-first, recurring deploy
-  class** - with marketplace autoUpdate, the fleet-wide 400 window for ANY strict-schema field
-  addition opens at the version-bump PUSH (any session restart auto-updates), not at a deliberate
-  fleet reload. The fullSpoken arc dodged it per-field (gateway-side optional, ship order:
-  gateway rebuild, then bump push), but that is prose-only discipline the NEXT wire field must
-  remember. Framework direction: a lenient-at-the-gateway-edge convention for notice/tier fields
-  (the RespondBodySchema precedent) or the version handshake above.
-
 ## Announce chip (`plans/announce-chip.md`, deleted, shipped - 2026-07-11)
 
 Migrated from `plans/announce-chip.md` (deleted, shipped - the attachment-chip decoration seam +
@@ -390,13 +382,6 @@ were cut per this file's own convention.
   permanently `null` at runtime, so the auto-reply branch (answer a lead/worker handshake
   automatically) never fires in practice - every handshake falls through to "let the LLM decide"
   instead. Either wire a real caller or delete the dead branch.
-- [medium] `android/.../ChatRepository.kt : pollJob` (the `kind == "plugin_action"` drain branch) -
-  **bug-class** - every sibling drop/skip path in the drain loop logs a `DebugLog` line with its drop
-  reason (`DROPPED`, `SKIPPED`) unconditionally; this branch only logs inside the
-  `if (pluginId != null && actionType != null)` guard, so a malformed plugin-action entry (null
-  `pluginId`/`actionType`) is silently `continue`'d with zero trace - the one drop path that breaks
-  CLAUDE.md's documented `[Drain]` log coverage ("kind, resolved thread, OR the drop reason").
-
 Residual painpoints from shipped work, collected by crust scouts (record only, not fixed). Pruned to
 concrete, reachable issues - dup-logic, naming nits, dead code with no consequence, and anything
 gated behind a disclaimed precondition ("only reachable via a corrupted file", "negligible at this
@@ -456,11 +441,6 @@ paths still leak a pending reconnect timer. Cosmetic on a process that is exitin
 Migrated from `plans/pre-handshake-terminal-view.md` (deleted, shipped) so its still-open residuals
 are not lost. Verified still-present in current code at migration time.
 
-- [high] `src/gateway/console/consoleHandler.ts : forget` - **bug-class** - `forget` has no
-  `isWakeInFlight` guard, though its sibling `close_session` added exactly that guard. A `forget`
-  fired mid-wake kills a not-yet-up pane (no-op), then the in-flight wake completes and re-mints the
-  record on confirm - resurrecting a session the human PERMANENTLY forgot (worse than close's
-  keep-record case). Give forget the same guard.
 - [high] `android/.../ChatRepository.kt : forget` - **bug-class** - `forget()` deletes local state
   synchronously then fires `client().forget(team)` in a bare `runCatching` with no `onFailure`, so a
   gateway-side failure is swallowed silently, leaving the UI showing the session gone while its tmux
@@ -481,11 +461,6 @@ not lost.
 
 ### In the shipped code - worth a near-term follow-up
 
-- [high] `hostDaemon.ts : handleWake : host branch` - the host reattach runs `awaitReady` (a full
-  ~90s poll budget) BEFORE the dead-shell check, then on a dead shell kills and runs `awaitReady`
-  again - up to ~180s before `wake_result`. The devcontainer branch avoids this by peeking once for a
-  reattach and only `awaitReady`ing a fresh `created` launch. Fix: peek-first in the host reattach
-  (return immediately if ready/working), reserve `awaitReady` for the post-relaunch path.
 - [medium] `hostDaemon.ts : buildLaunchCommand : effort` - the model/effort flags are hardcoded for
   every host session including resumes, so a host agent relaunches on its hardcoded tier on each wake
   with no signal.
@@ -493,9 +468,6 @@ not lost.
   - the `create_session` op carries no `resumeSessionId`, so tapping "New Session" on a host name the
   gateway already has a resume id for starts fresh and abandons the saved transcript. Only the wake
   path resumes. Decide whether create_session should offer resume.
-- [medium] `hostDaemon.ts : hostOpRunner.createSession` - returns `{created:true}` as soon as the tmux
-  exists (fire-and-forget `awaitReady`), while `handleWake` blocks on readiness; the asymmetry means a
-  console create_session reports success before the REPL is up.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
@@ -516,9 +488,6 @@ theoretical concerns.
 
 ## Session id teardown (`plans/session-id-teardown.md`, found during Phase B red-team)
 
-- [medium] `android/.../Sharing.kt : SharingScreen` - **bug-class** - the per-session share-audience map (`shares`, Private/Everyone/Specific) and the "trust first" roster (`trustFirst`) are populated only once via `LaunchedEffect(Unit)` and re-populated only by this same screen's own mutating actions; neither reacts to `state` changing for an external reason while the screen stays mounted. Two concretely reachable consequences: `modeSummary()`'s fallback renders the raw internal `domainId` string once a shared Domain drops out of the live `people` list but is still recorded in the stale `shares` entry; the Specific-people picker can show the same person twice in contradictory states. The only present workaround is leaving and re-entering Sharing.
-- [high] `src/gateway/console/consoleHandler.ts : create_session` (host target) / `gateway/index.ts : inflightCreates` - **bug-class** - a host-target `create_session` never goes through `tryWakeTeam`/`wakeCoordinator` (that path is gated to `target.kind === "devcontainer"` only); the RPC resolves as soon as `tmux new-session -d` itself launches, not once the Claude CLI inside has booted and completed its MCP handshake. So `teams()` reports plain `"available"` while the freshly spawned Claude is still cold-starting - `SessionCard`'s spinner drops early, showing a state visually identical to a genuinely idle session. Reachable via the board's synthetic Host spawn-point header (any "+" tap on Host). The devcontainer wake path is unaffected.
-- [high] `android/.../ChatRepository.kt : transientMessage` - **bug-class** - a single nullable `String?` field on `ChatState`, written by five independent async call sites and drained by exactly one consumer that only exists in composition while `SessionsScreen` is on screen. Two loss mechanisms: StateFlow conflation (two writes close together collapse to one emission), and any write while a thread is open is invisible until the user backs out to the board - an earlier, possibly more actionable message is silently discarded in favor of whatever landed last. Needs either a small queue or an app-scoped consumer instead of a single nullable field with a screen-scoped reader.
 
 ## Session id/name teardown closeout (`plans/session-id-teardown.md`, deleted, shipped - Phases A-G complete, 2026-07-09)
 
@@ -555,15 +524,6 @@ crust-collection sweep.
   routine device rename.
 
 **Medium:**
-- [medium] `android/.../ChatRepository.kt : send/retrySend/deliver(fail)` vs `ChatState.transientMessage`
-  - **bug-class** - these write one-off send-failure text into the STICKY `error` field instead of
-  `transientMessage`; `error` is only cleared at connection-lifecycle events, so a failed send's text
-  can linger in the connection-health banner well past the failure.
-- [medium] `android/.../Sharing.kt : SharingScreen.onToggleDomain` - **bug-class** - discards the result
-  of its everyone-clear call entirely before unconditionally applying the specific-share write,
-  unlike the sibling `applyMode()` branch that aborts on failure; a transient failure here can leave a
-  session shared to both "everyone" and a named person at once, the exact overlap a neighboring
-  comment says must never happen.
 
 ## Reply-tool redesign (`plans/reply-tool-redesign.md`, deleted, shipped and deployed - 2026-07-09)
 
@@ -586,35 +546,8 @@ confirmed live during this plan's own deploy, not just theorized.
 ### Crust-collection sweep
 
 **High:**
-- [high] `src/mcp/devcontainer/helpers.ts : ensureContainerUpAsync / isContainerReady /
-  hasPluginSettings / provisionPluginSettings` - **architecture, confirmed live** - the devcontainer
-  boot path never re-checks or refreshes plugin freshness. The common case (`isContainerReady()` true
-  - merely session-asleep, not actually stopped) returns immediately with zero plugin logic at all;
-  the cold-boot branch only checks whether the plugin key EXISTS, never whether it's current. A
-  devcontainer asleep during a live "reload all live sessions" sweep boots on whatever plugin code
-  its cache last had, and nothing at boot catches it up - this is the structural reason the reply-tool
-  redesign's own deploy needed a manual per-session `reload_plugins` call rather than one fleet-wide
-  sweep being sufficient.
-- [high] `src/mcp/devcontainer/hostDaemon.ts : handleWake` (devcontainer branch) /
-  `buildLaunchCommand` - **architecture** - confirms the above directly: there is no boot-time
-  equivalent of the `reload_plugins` op (no `/plugin update`, no `/mcp reconnect`) anywhere between
-  container-up and launching Claude. `reloadPlugins.ts` is reachable only via a live MCP tool call or
-  console op against an already-running session.
-- [high] `src/mcp/devcontainer/reloadPlugins.ts : registerReloadPlugins` (self-targeting) -
-  **confirmed live during this plan's own deploy** - `reload_plugins` targeting "self" drives the
-  calling session's own tmux pane via keystroke automation, the same underlying mechanism
-  `compact_session`/`set_effort_level` document as requiring the session to be IDLE to register.
-  Calling it against an actively-busy session does not error, reports `initiated: true`, and silently
-  fails to take effect - confirmed directly: this session's own self-targeted reload during the
-  redesign's live deploy did not update its tool schema until the human manually ran
-  `/plugin`/`/reload-plugins`/`/mcp` themselves at a natural idle point.
 
 **Medium:**
-- [medium] `src/gateway/websocket.ts : resolveHandshake` - **bug-class** - the `/true/i.test(response)`
-  prose fallback mis-resolves a reply lacking the literal substring "true" to WORKER (permanent
-  eviction, `suppressReconnect` never resets). Directly relevant given a mid-transition agent can end
-  up on a stale tool and fall back to this exact prose path, as happened during this plan's own
-  deploy - the regex itself was never tightened.
 
 ## Team collab sessions (`plans/team-collab-sessions.md`, deleted, shipped and deployed - 2026-07-10)
 
@@ -640,14 +573,6 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   a purely cosmetic downstream failure. Root cause: `mirrorPeer`'s own try/catch doesn't cover
   `ownerId?.()`, which runs before the try block, contradicting its doc comment's "never surfaces to
   the caller" guarantee. Untested.
-- [high, pre-existing, predates this plan] `src/shared/federation-protocol.ts` (`send.from`) /
-  `src/gateway/routes.ts : mirrorPeer` - **bug-class** - `send.from` is an unauthenticated free
-  string with no binding to the cryptographically-verified `srcDomainId`/`srcGateway`. A federated
-  inbound send's `mirrorPeer` call uses this wire `from` verbatim as the mirrored entry's sender -
-  reachable by any admitted same-Domain or shared-cross-Domain peer, letting it attribute an inbound
-  message to any arbitrary string up to 320 chars in the receiving owner's own console mailbox and
-  live agent. Misattribution within an otherwise-legitimate delivery, not a routing bypass. Needs a
-  dedicated look at `send`'s sender-identity model.
 
 **Medium:**
 - [medium] `src/gateway/routes.ts : teams()` - pre-existing - `commonFields`'s `domainIdField` omits
@@ -656,16 +581,6 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   name in this case - inconsistent with the rest of the system's arming-mode convention, though
   still locally resolvable. Fix: stamp `domainId: localDomainId ?? LOCAL_DOMAIN_SENTINEL`
   unconditionally in `commonFields`.
-- [medium] `src/shared/schemas.ts : TeamInfoSchema` - **framework-first** - fully specified but never
-  runtime-parsed against wire data anywhere; every hop a `TeamInfo[]` payload crosses does a bare
-  `as` cast, and `bridgeDiscover.ts` hand-rolls a drifted `DiscoverEntry` interface. A naive
-  `.safeParse()` would be wrong, not just incomplete: `status`/`kind` are closed zod enums but the
-  Kotlin side deliberately decodes both as open Strings for forward-compatibility, so reusing the
-  schema as-is would silently drop every entry from a peer running a newer protocol version.
-  Highest-consequence site: `consoleHandler.ts`'s `list_teams` result reaches Android via one atomic
-  `kotlinx.serialization` decode of `List<TeamInfo>`, so one malformed peer entry can hide every
-  session, local included, from the phone. Needs a deliberately loosened variant (strict on
-  `team`/`gatewayId`/`queue_depth`, permissive on `status`/`kind`/`mode`).
 - [medium] `src/gateway/routes.ts : send` - **bug-class** - the channel-mode branch's two
   local-participant `mirrorPeer` calls are unguarded sequential statements; if the first throws, the
   second (the recipient's own mirror copy) never runs, and the enclosing catch misreports the whole
@@ -902,13 +817,6 @@ registering a victim's name still receives its pushes); and `bindResume`'s tier-
 
 ## Console capability union (`plans/artifact-references.md` Phase 1, 2026-07-24)
 
-**A revoked device keeps voting in the capability union for 14 days.** Removing a lost phone
-through Your devices drops its admission, so the sealer rejects its frames from then on and its
-`lastSeen` freezes. Nothing purges its `CapabilityStore` record: the class has no per-device
-delete, and `teardownDevice`/`removePeer` (which do clear bindings, signers, opCache, ownerDevices
-and the mailbox consumer) are never reached on revocation. So `snapshot()` counts it as live until
-the 14-day TTL expires it.
-
 Two adversarial verifiers split on this, and the surviving harm is small. The union only ever ADDS
 ids, so a stale record can never strip a capability a live console has, and it cannot pin different
 instruction text either: the text ships in the APK's own `manifest.json`, so every device on a
@@ -983,11 +891,6 @@ lines. The plan is deleted; what follows is what it left behind.
 
 **Open work, roughly by cost:**
 
-- **Dead style: `a.link-handled.link-fuzzy`.** `thread.css` styles it and no code has ever applied
-  that class, so a drifted ref reads the same as an exact one in the chat body. NOT wanted: the owner
-  asked twice for the amber SYMBOL highlight inside the code viewer, which was already built and
-  works, and confirmed the chat-body tier is not what was meant. Either wire it or delete the rule,
-  but a styled class nothing sets is what made this look like a missing feature for a whole evening.
 - ~~**The reserved manifest name is claimable when a body carries no detected ref.**~~ RESOLVED, and
   worth reading before anyone reaches for a filename check again. There is no reserved name and no
   positional selection rule: a snapshot declares `role: "ref-snapshot"` at compose time and a
@@ -1012,7 +915,6 @@ lines. The plan is deleted; what follows is what it left behind.
 - **`coversWholeFile` disagrees with `wholeFile()` by one line** on any file ending in a newline, so a
   matcher-miss on an oversized file gets the wrong error message. Nothing is smuggled past the cap.
 - **`columnOf` returns -1** for a match at index 0 when the file begins with a newline.
-- **A GDScript highlight grammar is not vendored,** so `.gd` snapshots render unhighlighted.
 - **`AttachmentChipDecorator` has no message coordinate,** so the References hide verdict scans every
   summary the team ever recorded rather than the one row's. See the seam lesson below.
 
@@ -1116,11 +1018,6 @@ live there or in residue tests. What follows is what stayed open.
 Found by the red team on `plans/no-ack-push.md` phase 2. All four predate that work and none were
 fixed there; the notice framework only made them visible.
 
-- [medium] **`claim` and `release` disagree with `mayWrite` about trashed members.** `claim`'s trash
-  guard is on the TARGET only; its member loop reads `sessionId` raw, so claiming a parent silently
-  takes the owner's trashed children. `release` is the same hole outward. The owner untrashes their
-  own set-aside item and it lands under a session that never held it. Both loops need the same trash
-  test `mayWrite` and `visibleTo` already apply.
 - CLOSED. **`clearDone` and `sessionEnded` could trash a parent out from under a surviving child.**
   `clearDone`'s guard counted only unfinished children, so a done child held by ANOTHER session
   neither protected its parent nor went with it; `sessionEnded` had no guard at all. Both now use
