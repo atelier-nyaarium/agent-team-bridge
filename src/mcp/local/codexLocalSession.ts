@@ -18,30 +18,47 @@ import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./loca
  * parks a resolver here. The child dying settles them all, or a caller waits its whole budget.
  */
 export class CodexLocalSession implements LocalBackendSession {
-	private readonly pending = new Map<string, (terminal: LocalTerminal) => void>();
-	/** Threads THIS session created and has not yet run, which is exactly the set that needs NO
-	 * resume. Everything else does - including a thread inherited from a reaped predecessor, which
-	 * this session has never loaded at all. Tracking the used set instead made a fresh child skip
-	 * the resume for an inherited thread and fail its first follow-up. */
-	private readonly fresh = new Set<string>();
+	/** Keyed by turn, holding its thread, so a terminal cannot resolve a turn from another one. */
+	private readonly pending = new Map<string, { threadId: string; resolve: (terminal: LocalTerminal) => void }>();
+	/** A terminal the owner drained before `turn/start` returned its id, so nothing could park it yet. */
+	private readonly early = new Map<string, { threadId: string; terminal: LocalTerminal }>();
+	/** Starts in flight per thread, which is the only window `early` may fill in. */
+	private readonly starting = new Map<string, number>();
 	private activityListener?: (turnId: string, text: string) => void;
 	private closedListener?: () => void;
+	/** Events already in the pipe outlive the close that emptied it; none of them speak for it. */
+	private closed = false;
 
 	private constructor(private readonly client: AppServerSession) {}
 
 	static async open(child: AgentChild): Promise<CodexLocalSession> {
-		const client = await defaultOpenClient(child, CODEX_DEFAULT_MODEL);
-		const session = new CodexLocalSession(client);
-		const tracker = new CodexTurnTracker((item) => session.activityListener?.(item.turnId, item.text));
+		// Named before it exists: the hooks serve the session built from the client they open.
+		let session: CodexLocalSession | undefined;
+		const client = await defaultOpenClient(child, CODEX_DEFAULT_MODEL, {
+			onTerminal: (threadId, turnId, terminal) => session?.settle(threadId, turnId, terminal),
+			onPoisoned: () => session?.retire(),
+		});
+		const opened = new CodexLocalSession(client);
+		session = opened;
+		const tracker = new CodexTurnTracker((item) => {
+			if (!opened.closed) opened.activityListener?.(item.turnId, item.text);
+		});
 		client.onEvent((message) => {
 			const outcome = tracker.accept(message);
-			if (outcome) session.settle(outcome.turnId, terminalOf(outcome));
+			if (!outcome) return;
+			// Through the owner, which publishes it once and parks the thread behind it.
+			void client.settleTurn(outcome.threadId, outcome.turnId, terminalOf(outcome)).catch((error) => {
+				console.error(
+					`[codex-local] settling ${outcome.turnId}: ${error instanceof Error ? error.message : ""}`,
+				);
+			});
 		});
 		child.onExit(() => {
-			session.settleAll(`codex app-server exited`);
-			session.closedListener?.();
+			opened.closed = true;
+			opened.settleAll(`codex app-server exited`);
+			opened.closedListener?.();
 		});
-		return session;
+		return opened;
 	}
 
 	onActivity(listener: (turnId: string, text: string) => void): void {
@@ -53,21 +70,18 @@ export class CodexLocalSession implements LocalBackendSession {
 	}
 
 	async openThread(options: { cwd: string; model?: string }): Promise<string> {
-		const threadId = await this.client.startThread({ cwd: options.cwd, model: options.model });
-		this.fresh.add(threadId);
-		return threadId;
+		return this.client.startThread({ cwd: options.cwd, model: options.model });
 	}
 
+	/** The owner loads a parked or inherited thread; one it just started is already loaded. */
 	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
-		// App Server may unload an idle thread, and starting a turn on an unloaded one fails. Only a
-		// thread this session just created is known to be loaded already.
-		if (this.fresh.delete(threadId)) {
+		this.starting.set(threadId, (this.starting.get(threadId) ?? 0) + 1);
+		try {
 			const turnId = await this.client.startTurn(threadId, prompt);
-			return { turnId, settled: this.park(turnId) };
+			return { turnId, settled: this.park(threadId, turnId) };
+		} finally {
+			this.endStart(threadId);
 		}
-		await this.client.resumeThread(threadId);
-		const turnId = await this.client.startTurn(threadId, prompt);
-		return { turnId, settled: this.park(turnId) };
 	}
 
 	/** A steer keeps the running turn's id, so the caller's existing handle still describes it. */
@@ -80,27 +94,58 @@ export class CodexLocalSession implements LocalBackendSession {
 	}
 
 	close(): void {
+		if (this.closed) return;
+		this.closed = true;
 		this.settleAll(`codex app-server closed`);
 		this.client.close();
 	}
 
-	private park(turnId: string): Promise<LocalTerminal> {
+	/** A generation the owner gave up on. The runtime reopens, costing a relaunch. */
+	private retire(): void {
+		this.close();
+		this.closedListener?.();
+	}
+
+	/** The last start on this thread is over, so any terminal it left unclaimed belongs to nobody. */
+	private endStart(threadId: string): void {
+		const left = (this.starting.get(threadId) ?? 1) - 1;
+		if (left > 0) {
+			this.starting.set(threadId, left);
+			return;
+		}
+		this.starting.delete(threadId);
+		for (const [turnId, held] of [...this.early]) {
+			if (held.threadId === threadId) this.early.delete(turnId);
+		}
+	}
+
+	private park(threadId: string, turnId: string): Promise<LocalTerminal> {
+		const beat = this.early.get(turnId);
+		if (beat?.threadId === threadId) {
+			this.early.delete(turnId);
+			return Promise.resolve(beat.terminal);
+		}
 		return new Promise<LocalTerminal>((resolve) => {
-			this.pending.set(turnId, resolve);
+			this.pending.set(turnId, { threadId, resolve });
 		});
 	}
 
-	private settle(turnId: string, terminal: LocalTerminal): void {
-		const resolve = this.pending.get(turnId);
-		if (!resolve) return;
+	private settle(threadId: string, turnId: string, terminal: LocalTerminal): void {
+		const parked = this.pending.get(turnId);
+		if (!parked) {
+			if (this.starting.has(threadId)) this.early.set(turnId, { threadId, terminal });
+			return;
+		}
+		if (parked.threadId !== threadId) return;
 		this.pending.delete(turnId);
-		resolve(terminal);
+		parked.resolve(terminal);
 	}
 
 	private settleAll(error: string): void {
-		for (const [turnId, resolve] of [...this.pending]) {
+		this.early.clear();
+		for (const [turnId, parked] of [...this.pending]) {
 			this.pending.delete(turnId);
-			resolve({ status: "failed", error });
+			parked.resolve({ status: "failed", error });
 		}
 	}
 }

@@ -488,7 +488,10 @@ export class LocalAgentRuntime {
 		};
 		agent.turns.push(turn);
 		agent.activeTurnId = turn.id;
-		agent.settled = handle.settled;
+		// `LocalTurnHandle` promises this never rejects. Held to it here, so a backend that breaks the
+		// promise loses one turn rather than raising an unhandled rejection.
+		const settled = handle.settled.catch((error): LocalTerminal => ({ status: "failed", error: errorText(error) }));
+		agent.settled = settled;
 		agent.exchanges.push({
 			kind,
 			prompt,
@@ -501,7 +504,7 @@ export class LocalAgentRuntime {
 		});
 		// Registered before the race, so a terminal beating the budget is recorded. applyTerminal is
 		// idempotent for the case where it does not.
-		void handle.settled.then((terminal) => this.applyTerminal(agent, turn.id, terminal));
+		void settled.then((terminal) => this.applyTerminal(agent, turn.id, terminal));
 
 		return this.waitFor(agent, turn.id, kind === "start" ? "started" : this.spec.followupDelivery);
 	}

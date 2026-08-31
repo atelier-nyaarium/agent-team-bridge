@@ -295,20 +295,57 @@ watchdog reads thread state, so Step 5 either lands on one classifier or writes 
 
 ## Step 4 - The local path through the owner
 
-`CodexLocalSession` keeps `pending` as turn id to resolver, so `settle` receives a turn id and no
-thread id, and `startTurn` resumes any thread it did not itself create. `LocalAgentRuntime` caches
-the session, evicts it on `onClosed`, and reaps the child after `LOCAL_IDLE_REAP_MS` under a lease
-held across the whole request.
+✅ Shipped. `LocalAgentRuntime` caches the session, evicts it on `onClosed`, and reaps the child after
+`LOCAL_IDLE_REAP_MS` under a lease held across the whole request. That is unchanged; what moved is
+everything under it.
 
-Each pending entry carries its thread id, the tracker's outcome reaches `client.settleTurn`, and
-`onTerminal` resolves the parked promise. `onPoisoned` closes the session, which the runtime already
-evicts and reopens on the next call, so a poisoned generation costs one relaunch and a resume. The
-runtime's reaper and lease are unchanged; the thread is parked long before the child is.
+The tracker's outcome reaches `client.settleTurn`, `onTerminal` resolves the parked promise, and each
+pending entry carries its thread id so a terminal matches on both halves of the key. The match is a
+guard, not a proof: the tracker refuses an item whose thread disagrees and remembers a settled turn
+id, so no terminal the owner publishes should reach the wrong parked turn, and the check is what says
+so at the point of use. `onPoisoned` retires the session, which is closing it AND invoking
+`closedListener`, since the runtime evicts on that callback alone; a close that stayed quiet would
+leave a dead child cached until the idle reaper ran, sending every call in between into a closed pipe.
+It costs one relaunch and a resume.
 
-Tests: `src/__tests__/local-agent-runtime.test.ts` through `FakeBackendSession` with deferred park
-and activate gates: two concurrent agents settling on one session, a terminal racing a follow-up,
-a follow-up after park, a follow-up after the reaper replaced the child, and pending resolved by
-thread and turn id.
+A terminal can be published BEFORE its own turn is parked, and this is the one race the local path
+had to grow machinery for. The owner drains a terminal buffered under a pending `turn/start` inside
+that same call, so `onTerminal` can fire before `startTurn` has returned the id the caller parks
+under. Such a terminal is held in `early` and consumed by the `park` that follows it. The hold is
+bounded by the start itself: only a thread with a start in flight may fill it, and the last start to
+finish on that thread drops whatever it left. Without that, a turn whose whole life beat its own
+start reply resolved for nobody and the caller waited its entire budget, which is the same hang this
+plan opened to remove, one layer down.
+
+Child exit, `close` and `retire` settle parked turns directly rather than through the owner. There is
+no owner to ask when the child is gone: the terminals become `failed`, and nothing is parked.
+
+`startTurn` no longer decides whether to resume. The session kept a `fresh` set naming threads it had
+created and not yet run, and resumed everything else by hand, which is the load decision
+`ThreadLifecycle` already owns and states per phase: `unloaded` and `parked` resume, with the
+unarchive fallback behind a refusal; `idle` and `active` are already loaded; `parking` only cancels
+its retry. Two copies of one rule is the shape this plan exists to remove, so the set is gone. The
+deletion was proved on the wire rather than argued, since the set's own comment recorded a real bug
+it had fixed: a thread this session created writes `thread/start` then `turn/start` and no resume; a
+second turn after its archive writes `thread/resume` first; a thread INHERITED by a session that never
+created it, which is the reaper's case and the one the comment warned about, writes `thread/resume`
+before `turn/start`; a refused resume writes `thread/unarchive` and resumes again; a refused unarchive
+surfaces the original refusal; and a disposed or poisoned thread writes nothing at all and refuses.
+
+A closed session speaks for nothing: events already in the pipe outlive the close that emptied it, so
+activity from one is dropped rather than recorded against an agent the runtime may have evicted, and
+`close` is idempotent since `retire` calls it and the child's own exit may follow. The runtime holds
+`LocalTurnHandle.settled` to its promise of never rejecting rather than trusting it, so a backend that
+breaks the promise loses one turn instead of raising an unhandled rejection. The thread is parked long
+before the child is.
+
+Tests: `src/__tests__/codex-local-session.test.ts` drives the session through the real client and
+transport over a fake child, since every local test until now ran through `FakeBackendSession` and
+this class had none of its own: a turn settling and its thread archiving behind it, two threads each
+answered with their own outcome, a follow-up after park resuming and settling, a terminal landing
+while a follow-up is still starting, a turn whose terminal beat its own start reply, a child exit
+failing every parked turn, no activity delivered after a close, and an unanswerable archive firing
+`closedListener`, which is the callback the runtime evicts on.
 
 ## Step 5 - Watchdog, leases and reaping
 
