@@ -65,8 +65,7 @@ describe("host spawn residue", () => {
 
 	// Scope, stated so it is not mistaken for a whole-repo guarantee: TypeScript under src/ only.
 	// It cannot see Kotlin (android/), scripts/, or an indirect form where the literal reaches a
-	// variable first. The console's own hardcoded "host" sites are real and live outside this net;
-	// they are listed in plans/windows-spawn-point.md as part of registering `windows`.
+	// variable first. The console's own hardcoded "host" sites are real and live outside this net.
 	it('no TypeScript under src/ outside host-spawn.ts compares a spawn segment to the bare "host" literal', () => {
 		const offenders: string[] = [];
 		for (const file of sourceFiles(SRC)) {

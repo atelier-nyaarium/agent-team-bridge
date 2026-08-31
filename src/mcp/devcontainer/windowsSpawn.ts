@@ -4,7 +4,7 @@
 // Daemon-side rather than in `host-spawn.ts` because only the machine running the daemon can probe
 // itself, and because both halves shell out. The registry stays a pure leaf the gateway can read.
 //
-// Every rule here was measured on a WSL box, not reasoned. See plans/windows-spawn-point.md.
+// Every rule here is measured on a WSL box, not reasoned.
 
 import { execFileSync } from "node:child_process";
 import { isSpawnWorkdirPath } from "../../shared/host-op.js";

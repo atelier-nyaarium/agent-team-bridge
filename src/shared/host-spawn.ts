@@ -15,8 +15,7 @@
 // same rule that keeps `host-op.ts` dependency-free. DETECTION is deliberately absent - only the
 // machine running the daemon can probe itself - and so is path translation, which needs `wslpath`.
 //
-// `windows` (PowerShell over WSL interop) is designed but not registered; see
-// `plans/windows-spawn-point.md` for the entry and the daemon-side half it lands with.
+// `windows` is PowerShell over WSL interop, and its daemon-side half lives in `windowsSpawn.ts`.
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -112,7 +111,7 @@ const HOST: HostSpawnPoint = {
 
 /** PowerShell over WSL interop. Its tmux session still runs in WSL; only the interpreter crosses.
  *
- * Every decision here was measured on a WSL box rather than reasoned (see plans/windows-spawn-point.md):
+ * Every decision here is measured on a WSL box rather than reasoned:
  *
  * - `WSLENV`, APPENDED not assigned. An exported variable does not reach a Win32 child on its own;
  *   WSL passes only what WSLENV names. Both identity variables are listed with `/w` (cross the
