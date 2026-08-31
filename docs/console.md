@@ -1,0 +1,152 @@
+# Console
+
+The Android console, its bridge to the Gateway, and the terminal view.
+
+## Bridge
+
+Poll-based, keyed by per-install `conversationId`. Device Name is display-only. `ConsolePeer`
+participates in normal peer registries; its `send()` appends to the mailbox drained by `poll`.
+
+- Mutating ops deduplicate by `(conversationId, opId)`. `send` and `respond` also use
+  `DurableOpStore`, preserving delivery identity across restart.
+- Mailbox instances carry an epoch. A stale poll cannot acknowledge a replacement instance. Eviction
+  prefers display-only `"peer"` entries over unread mail.
+- `mirrorPeer` is display-only and never applies to console senders or targets.
+- Plugin actions use one generic `kind: "plugin_action"` entry. `threadAddr` comes only from the
+  request's `from`.
+- `consolePushOps.deliverToOwner` is the sole mailbox writer, enforced by a residue test.
+  `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain
+  only and deduplicated by `dedupeKey`.
+
+## Terminal view
+
+Terminal operations reach the host through correlated `host_op` RPCs. `hostOpRunner.ts` owns peek
+single-flight, cadence and concurrency limits, and mutating-op deduplication.
+
+- `tmuxCore.ts` builds spawn argv without a shell. Exact tmux lookup uses `-t =<name>`; prefix lookup
+  would let `story` select `story-2`.
+- `peekWithFallback` returns Docker logs before a pane exists. The result uses flat optional `kind`
+  and `text`; a discriminated union does not work with the Kotlin wire model.
+- A fresh wake with no capturable pane is reported as failed, allowing `/send` to fail instead of
+  waiting forever.
+- The reserved `host` slot requires `HOST_WS_TOKEN`.
+
+## Armed goals
+
+Long-press **Goal** sends the message, then types `/goal <description>` into the session pane.
+Console-only, over `send` and `tmux_send`.
+
+- Waiting for the turn does not work: the message bypasses the composer, so the queued line runs
+  after the turn.
+- A single pasted `/goal` line does not work: the CLI reads the burst as paste. Use three tmux sends
+  with Enter separate.
+- Injection requires an empty composer and a ready pane. A draft or dialog consumes or joins the
+  command.
+- The live composer is the last prompt row. Earlier prompt rows may represent queued messages.
+- Clear the pending record before the first keystroke. A partial sequence can be re-armed; a second
+  injection can submit a duplicated goal.
+- `sentAt` gates injection. Never type a goal for a message that did not send.
+
+## Capability union
+
+A session's tools use separate console and daemon capability sources. The MCP reads both before
+creating `McpServer`. The console source has a 14-day TTL and 500-device cap; the daemon source has
+no TTL.
+
+- **`/capabilities` keeps sources separate.** `enabledPlugins` and `daemonCapabilities` are disjoint
+  sections. Absent means no report, empty means affirmative none.
+- **A flat capability answer lifts into `console`,** and the route serves flat fields beside
+  sections.
+- A daemon declaration counts only after the `HOST_WS_TOKEN` gate.
+- Offline fallback is the last answer that actually arrived. `GATED_CAPABILITY_IDS` drives both
+  gates; the daemon id is pinned separately.
+- **Always-on instructions carry names, not guidance.** The harness caps `capabilityInstructions` and
+  silently truncates long guidance; `switchboard_capabilities` serves guidance per call.
+- That tool answers from the startup snapshot. A fresh read may warn about drift but must not
+  describe tools absent from the session.
+- A running session's tools do not change until its next start.
+
+**File map:**
+
+- `src/shared/capabilities.ts` - capability ids, guidance, daemon declarations, source folding.
+- `src/gateway/console/capabilityStore.ts` - durable console capability reports.
+- `src/gateway/daemonCapabilities.ts` - daemon capability reports.
+- `src/mcp/capabilities.ts`, `capabilitiesTool.ts` - startup gating and guidance serving.
+
+## Android app
+
+- **Plugin framework** (`android/.../plugins/`): the registry owns plugin claims and sweeps them when
+  a plugin is disabled. `threadDockSlots` stays outside the caught-dispatch path, because Compose
+  values cannot cross a non-inline lambda.
+- **Inbound pipeline:** handlers receive wire fields and file names, never file bytes. Subscribers
+  run synchronously before `mailboxSync.commit`. A `SharedFlow` here breaks that ordering.
+- **Row re-render** (`ThreadRenderer`): any changing row payload must enter its fingerprint. JS
+  bridge state mutates in place and intentionally does not.
+- **Presence authority** (`Presence.kt`): the gateway's own presence is pushed; other machines are
+  discovered by polling. A bare presence value does not reveal which channel produced it.
+- **Presence residue** (`presence-authority-residue.test.ts`): `status` is private, `Presence`
+  construction is private, and consumers use authority-bearing members such as `isLive`, `isOnline`,
+  `mayHavePane`, `authoritative`. Do not restore writable status strings.
+- **Action receipts** (`ActionReceipt`): local actions are receipts, not status overrides. Evidence
+  retires a receipt; it never loses to an optimistic local value. Receipts are scoped by `opId`.
+- **Presence TTL** (`PresenceTest`): must exceed one discovery interval, or a slow cold boot expires
+  before discovery speaks.
+- **Unreachable presence:** do not peek a row marked `UNREACHABLE`. Failed peeks repeat until
+  `failCount` backs off.
+- **Non-authoritative presence:** probe once per terminal mount. Polling is not evidence.
+- **Working and needs-login** (`ChatState.working`): presence first, local peek only as fallback.
+  Foreground re-declares screen focus so an open thread does not stay at background cadence.
+- **Session card rungs** (`SessionCardPreview.kt`): the session's own reply supplies the headline;
+  the owner's row never does. Each rung carries its own row time; ordering uses `lastActivity`.
+- **Card board branch** (`cardBranchOf`): retain the root and a window around the current entry;
+  collapse contiguous finished runs. A prefix of finished titles can hide the active entry.
+- **Unfinished gateway enrollment** (`PendingEnroll.kt`): admission is persisted before POST and
+  before delivery. Resume only with the saved bundle and the arming it was sealed against; a 404
+  requires re-arm and re-scan.
+- **Terminal copy** (`TerminalCopy.kt`, `TerminalAnsi.kt`): trim only trailing cells with neither
+  background nor reverse. Painted trailing cells are content. Join only a single whitespace-free URL
+  with a scheme.
+- **Terminal padding** (`shared/pane-trim.ts`, `TerminalCopy.kt`): trimming occurs at capture and at
+  render because daemon and console updates are independent. Keep `-J`; it preserves spaces and joins
+  tmux-wrapped rows.
+- **Designer plugin** (`plugins/designer/`): owns design cards, live content-keyed rendering, and
+  per-team `DesignStore`.
+- **Unread tracking** (`ReadAnchor.kt`, `thread.js`): anchors match mailbox rows by epoch and
+  sequence equality. Reads drain by scroll position.
+- **Idle pushback** (`IdlePushbackManager.kt`): owns silent-poll backoff and aligned `AlarmManager`
+  wakeups.
+- **Playback requests** (`PlaybackRequests.kt`, `SttsPlayer.kt`): registry state mints and queues
+  each event under the same lock as its transition. `PlaybackResidueTest` owns the single-mint
+  boundary. Warm-up holds no claim and purge reaches it through the epoch.
+- **Playback queue** (`PlaybackQueue.kt`, `PlaybackOps.kt`): yielding requests stand down when sound
+  is taken. `advance` installs the next head before returning it; declining that handoff strands the
+  entry.
+- **Spoken markers** (`ChatRepository`): chime, sentinel, and body remain separate requests. Match
+  terminals by returned request identity, not by current queue entry. Cache by spoken words, not
+  entry alone. Resume does not re-announce parked markers.
+- **Playback surfaces** (`SttsTransport.kt`, `QueueBubble.kt`, `QueueSheet.kt`): read repository
+  state after queue settlement, not raw playback events. The bubble stays on Views because a Service
+  lacks Compose's ViewTree owners. The board header is the third access path when notification and
+  transport permissions are denied.
+- **Abandon semantics** (`SttsPlayer.abandon`): callers declare whether position survives; there is
+  no default. Markers and settings samples are never resumable.
+- **Audio focus** (`SpeechFocus.kt`): a focus-induced pause retains the request and duckable loss
+  keeps speaking. A refused focus request registers no listener. Becoming noisy is a route change,
+  not focus loss.
+- **Transport pause** (`transportPaused`): normalize in the getter so an idle queue cannot expose
+  paused state.
+- **Attachment viewer** (`AttachmentDisplay.kt`, `AttachmentViewer.kt`): choose the viewer stage by
+  actual decoder capability, not MIME prefix. WebView and `BitmapFactory` disagree in both
+  directions.
+- **Zoom math** (`ZoomMath.kt`): derive limits per image and sample size; the layer scale is not the
+  displayed zoom percentage. Emulator coverage is required for the 100% one-to-one seam.
+- **Text preview** (`TextPeek.kt`): classify with `CharsetDecoder`. `String(bytes)` substitutes
+  U+FFFD and makes binary data look textual.
+- **Save targets** (`SaveTarget.kt`): SAF and MediaStore are separate paths. Revalidate stored
+  grants; only a missing folder returns to the picker.
+- **Composer drafts** (`Draft.kt`, `DraftStrip.kt`): drafts are per-team store state. File tiles key
+  by file, not position. `Draft.locations` preserves source metadata and every writer must copy it.
+- **Thumbnail sizing** (`ImageThumbs.kt`): bound both short and long edges. Extreme aspect ratios
+  otherwise decode at full size.
+- **Scheduled send** (`ScheduledSend.kt`, `ScheduledSendOps.kt`): one banked record per team and one
+  shared earliest alarm; firing is mutex-guarded.

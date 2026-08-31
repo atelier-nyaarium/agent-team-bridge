@@ -8,7 +8,7 @@ const fixtureRoot = path.join(root, "tests/fixtures/ref-project");
 const SURFACES = [
 	"android/app/src/main/assets/plugins/references/manifest.json",
 	"skills/crosstalk/SKILL.md",
-	"CLAUDE.md",
+	"docs/references.md",
 	"src/mcp/capabilities.ts",
 ] as const;
 // Unescaped, so a template literal's \` reads as the backtick an agent is shown.
