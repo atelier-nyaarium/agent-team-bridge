@@ -5,9 +5,12 @@ import {
 	CodexAppServerClient,
 	createJsonlTransport,
 	isAppServerFailure,
+	type LifecycleHooks,
 	strongestEffort,
 } from "../mcp/devcontainer/codexAppServer.js";
 import type { CodexChild } from "../mcp/devcontainer/codexTargets.js";
+import { DISPOSE_QUIET_MS, PARK_RETRY_MS } from "../mcp/devcontainer/codexThreadLifecycle.js";
+import type { TerminalOutcome } from "../mcp/devcontainer/codexTurnOutcome.js";
 import { CodexTurnTracker } from "../mcp/devcontainer/codexTurnTracker.js";
 
 ////////////////////////////////
@@ -569,9 +572,9 @@ describe("the client's own guarantees", () => {
 		await client.startThread({ cwd: "/tmp" });
 		await client.resumeThread("t");
 		await client.readThread("t");
-		await client.startTurn("t", "hi");
-		await client.steerTurn("t", "u", "more");
-		await client.interruptTurn("t", "u");
+		const turnId = await client.startTurn("t", "hi");
+		await client.steerTurn("t", turnId, "more");
+		await client.interruptTurn("t", turnId);
 
 		expect(f.methods()).toEqual([
 			"initialize",
@@ -584,6 +587,673 @@ describe("the client's own guarantees", () => {
 			"turn/steer",
 			"turn/interrupt",
 		]);
+	});
+});
+
+describe("the thread lifecycle", () => {
+	const MODEL = "gpt-5.6-luna";
+	const DONE: TerminalOutcome = { status: "completed", finalResponse: "ok" };
+
+	/** Flushes the pipe and the microtasks behind it under fake timers. */
+	const tick = () => vi.advanceTimersByTimeAsync(1);
+
+	type Fake = ReturnType<typeof fakeChild>;
+
+	/** The nth request of a method, once the client has written it. */
+	async function requested(f: Fake, method: string, nth = 0) {
+		for (let attempt = 0; attempt < 50; attempt += 1) {
+			const hits = f.sent().filter((m) => m.method === method);
+			if (hits.length > nth) return hits[nth];
+			await tick();
+		}
+		throw new Error(`${method} #${nth} was never requested`);
+	}
+
+	async function answer(f: Fake, method: string, result: unknown, nth = 0) {
+		const request = await requested(f, method, nth);
+		f.feed({ jsonrpc: "2.0", id: request.id, result });
+		await tick();
+	}
+
+	async function refuse(f: Fake, method: string, message: string, nth = 0) {
+		const request = await requested(f, method, nth);
+		f.feed({ jsonrpc: "2.0", id: request.id, error: { code: -32600, message } });
+		await tick();
+	}
+
+	function readOf(threadId: string, turns: unknown[]) {
+		return { thread: { id: threadId, turns } };
+	}
+
+	/** The real transport over a fake child, so every failure here is one the transport minted. */
+	async function openLifecycle(hooks: LifecycleHooks = {}) {
+		const f = fakeChild();
+		const transport = createJsonlTransport(f.child);
+		const opening = CodexAppServerClient.open(transport, MODEL, hooks);
+		await answer(f, "initialize", {});
+		await answer(f, "model/list", { data: [{ id: MODEL }] });
+		const client = await opening;
+		const starting = client.startThread({ cwd: "/tmp" });
+		await answer(f, "thread/start", { thread: { id: THREAD } });
+		await starting;
+		return { f, client };
+	}
+
+	/** A thread with one settled turn, parked. */
+	async function parked(hooks: LifecycleHooks = {}) {
+		const opened = await openLifecycle(hooks);
+		const turn = opened.client.startTurn(THREAD, "go");
+		await answer(opened.f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+		expect(await turn).toBe(TURN);
+		const settling = opened.client.settleTurn(THREAD, TURN, DONE);
+		await answer(opened.f, "thread/archive", {});
+		await settling;
+		expect(opened.client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+		return opened;
+	}
+
+	const methods = (f: Fake) => f.sent().map((m) => m.method as string);
+
+	it("settles a terminal that beat the turn/start response once the id is known, then parks", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await requested(f, "turn/start");
+			await client.settleTurn(THREAD, TURN, DONE);
+			expect(terminals).toEqual([]);
+
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await answer(f, "thread/archive", {});
+
+			expect(await turn).toBe(TURN);
+			expect(terminals).toEqual([[THREAD, TURN, DONE]]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+			expect((await requested(f, "thread/archive")).params).toEqual({ threadId: THREAD });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes the terminal before the archive request leaves, and only once for two observers", async () => {
+		vi.useFakeTimers();
+		try {
+			const seen: string[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: () => seen.push("terminal") });
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+
+			const first = client.settleTurn(THREAD, TURN, DONE);
+			const second = client.settleTurn(THREAD, TURN, DONE);
+			await requested(f, "thread/archive");
+			expect(seen).toEqual(["terminal"]);
+			await answer(f, "thread/archive", {});
+			await Promise.all([first, second]);
+
+			expect(seen).toEqual(["terminal"]);
+			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("runs a follow-up that arrives during the archive after it, resuming the parked thread first", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await requested(f, "thread/archive");
+
+			const followup = client.startTurn(THREAD, "again");
+			await tick();
+			expect(methods(f).filter((m) => m === "thread/resume")).toHaveLength(0);
+			await answer(f, "thread/archive", {});
+			await settling;
+			await answer(f, "thread/resume", {});
+			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
+
+			expect(await followup).toBe("turn-2");
+			expect(methods(f).slice(-3)).toEqual(["thread/archive", "thread/resume", "turn/start"]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: "turn-2" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("poisons the generation when the archive reply never comes, and refuses the thread afterwards", async () => {
+		vi.useFakeTimers();
+		try {
+			const poisoned: unknown[] = [];
+			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE).catch((error) => error);
+			await requested(f, "thread/archive");
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(await settling).toMatchObject({ kind: "timeout" });
+			expect(poisoned).toEqual([
+				[THREAD, { kind: "failure", failure: expect.objectContaining({ kind: "timeout" }) }],
+			]);
+			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("poisoned");
+			expect(methods(f).filter((m) => m === "thread/resume" || m === "turn/start")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("adopts a running turn the read shows when the archive is refused", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await refuse(f, "thread/archive", "no rollout found for thread id");
+			await answer(f, "thread/read", readOf(THREAD, [{ id: "turn-9", status: "inProgress", items: [] }]));
+			await settling;
+
+			expect((await requested(f, "thread/read")).params).toEqual({ threadId: THREAD, includeTurns: true });
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: "turn-9" });
+			expect(methods(f)).not.toContain("thread/delete");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("deletes a thread two quiet reads prove empty when the archive is refused", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await refuse(f, "thread/archive", "no rollout found for thread id");
+			await answer(f, "thread/read", readOf(THREAD, []));
+			expect(methods(f)).not.toContain("thread/delete");
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS);
+			await answer(f, "thread/read", readOf(THREAD, []), 1);
+			await answer(f, "thread/delete", {});
+			await settling;
+
+			expect((await requested(f, "thread/delete")).params).toEqual({ threadId: THREAD });
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "disposed" });
+			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("disposed");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never deletes on an unknown read, retries the park on a timer, and gives up on the generation", async () => {
+		vi.useFakeTimers();
+		try {
+			const poisoned: unknown[] = [];
+			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				await refuse(f, "thread/archive", "no rollout found for thread id", attempt);
+				// A read naming another thread is an answer the lifecycle cannot use.
+				await answer(f, "thread/read", readOf("someone-else", []), attempt);
+				if (attempt < 2) {
+					expect(client.stateOf(THREAD)).toMatchObject({ phase: "parking" });
+					await vi.advanceTimersByTimeAsync(PARK_RETRY_MS);
+				}
+			}
+			await settling;
+
+			expect(methods(f)).not.toContain("thread/delete");
+			expect(poisoned).toEqual([[THREAD, { kind: "exhausted", attempts: 3 }]]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "poisoned" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("drops a park retry once a follow-up has moved the thread on", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await refuse(f, "thread/archive", "no rollout found for thread id");
+			await answer(f, "thread/read", readOf("someone-else", []));
+			await settling;
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parking" });
+
+			// Still loaded while parking, so the follow-up needs no resume, only the retry dropped.
+			const followup = client.startTurn(THREAD, "again");
+			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
+			expect(await followup).toBe("turn-2");
+			await vi.advanceTimersByTimeAsync(PARK_RETRY_MS * 2);
+
+			expect(methods(f)).not.toContain("thread/resume");
+			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: "turn-2" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("unarchives a parked thread when its resume is refused, then resumes and starts the turn", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await parked();
+			const followup = client.startTurn(THREAD, "again");
+			await refuse(f, "thread/resume", "session is archived. Run `codex unarchive` first.");
+			await answer(f, "thread/unarchive", {});
+			await answer(f, "thread/resume", {}, 1);
+			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
+
+			expect(await followup).toBe("turn-2");
+			expect((await requested(f, "thread/unarchive")).params).toEqual({ threadId: THREAD });
+			expect(methods(f).slice(-4)).toEqual(["thread/resume", "thread/unarchive", "thread/resume", "turn/start"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("surfaces the resume failure, not the unarchive's, when both are refused", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await parked();
+			const followup = client.startTurn(THREAD, "again").catch((error) => error);
+			await refuse(f, "thread/resume", "resume said no");
+			await refuse(f, "thread/unarchive", "unarchive said no");
+
+			const failure = await followup;
+			expect(isAppServerFailure(failure)).toBe(true);
+			expect(failure).toMatchObject({ kind: "refused", message: "resume said no" });
+			expect(methods(f).filter((m) => m === "turn/start")).toHaveLength(1);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses a control only for another turn it knows is active, and lets the server arbitrate the rest", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			// Idle here, and a thread never loaded here: both are the server's call, as after a daemon restart.
+			const idle = client.steerTurn(THREAD, "turn-old", "carry on");
+			await answer(f, "turn/steer", { turnId: "turn-old" });
+			await idle;
+			const inherited = client.interruptTurn("thread-inherited", "turn-old");
+			await answer(f, "turn/interrupt", {});
+			await inherited;
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+
+			await expect(client.steerTurn(THREAD, "turn-other", "wrong")).rejects.toThrow("no active turn");
+			await expect(client.interruptTurn(THREAD, "turn-other")).rejects.toThrow("no active turn");
+			const steering = client.steerTurn(THREAD, TURN, "more");
+			await answer(f, "turn/steer", { turnId: TURN }, 1);
+			await steering;
+			const interrupting = client.interruptTurn(THREAD, TURN);
+			await answer(f, "turn/interrupt", {}, 1);
+			await interrupting;
+
+			expect(methods(f).filter((m) => m === "turn/steer" || m === "turn/interrupt")).toEqual([
+				"turn/steer",
+				"turn/interrupt",
+				"turn/steer",
+				"turn/interrupt",
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes a terminal for a turn it does not own without parking, and parks its own", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+
+			await client.settleTurn(THREAD, "turn-other", DONE);
+			await client.settleTurn(THREAD, "turn-other", DONE);
+			expect(terminals).toEqual([[THREAD, "turn-other", DONE]]);
+			expect(methods(f)).not.toContain("thread/archive");
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: TURN });
+
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await answer(f, "thread/archive", {});
+			await settling;
+			expect(terminals).toHaveLength(2);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("parks an idle thread whose turn it never started when that turn's terminal arrives", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+
+			const settling = client.settleTurn(THREAD, "turn-inherited", DONE);
+			await answer(f, "thread/archive", {});
+			await settling;
+
+			expect(terminals).toEqual([[THREAD, "turn-inherited", DONE]]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a read in the thread's queue, behind a turn/start still in flight", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await requested(f, "turn/start");
+			const reading = client.readThread(THREAD);
+			await tick();
+			expect(methods(f)).not.toContain("thread/read");
+
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			await answer(f, "thread/read", readOf(THREAD, [{ id: TURN, status: "inProgress", items: [] }]));
+			expect(await reading).toEqual(readOf(THREAD, [{ id: TURN, status: "inProgress", items: [] }]));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("resumes a thread it only knows by name, and nothing for one it already loaded", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			await client.resumeThread(THREAD);
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			await client.resumeThread(THREAD);
+			expect(methods(f)).not.toContain("thread/resume");
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: TURN });
+
+			const inherited = client.resumeThread("thread-inherited");
+			await answer(f, "thread/resume", {});
+			await inherited;
+			expect((await requested(f, "thread/resume")).params).toEqual({ threadId: "thread-inherited" });
+			expect(client.stateOf("thread-inherited")).toMatchObject({ phase: "idle" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes a terminal buffered under a start that was refused, and parks the thread it left idle", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+			const turn = client.startTurn(THREAD, "go").catch((error) => error);
+			await requested(f, "turn/start");
+			await client.settleTurn(THREAD, "turn-other", DONE);
+			await refuse(f, "turn/start", "no capacity");
+			await answer(f, "thread/archive", {});
+
+			expect(await turn).toMatchObject({ kind: "refused" });
+			expect(terminals).toEqual([[THREAD, "turn-other", DONE]]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("tracks a thread it hears of only through a terminal, publishing and parking it", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+
+			const settling = client.settleTurn("thread-inherited", "turn-old", DONE);
+			await answer(f, "thread/archive", {});
+			await settling;
+
+			expect(terminals).toEqual([["thread-inherited", "turn-old", DONE]]);
+			expect((await requested(f, "thread/archive")).params).toEqual({ threadId: "thread-inherited" });
+			expect(client.stateOf("thread-inherited")).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses a read of a thread it disposed, rather than asking about one that is gone", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const empty = client.adoptOrDispose(THREAD);
+			await answer(f, "thread/read", readOf(THREAD, []));
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS);
+			await answer(f, "thread/read", readOf(THREAD, []), 1);
+			await answer(f, "thread/delete", {});
+			await empty;
+
+			await expect(client.readThread(THREAD)).rejects.toThrow("disposed");
+			expect(methods(f).filter((m) => m === "thread/read")).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("budgets a refused delete like any other park that did not happen", async () => {
+		vi.useFakeTimers();
+		try {
+			const poisoned: unknown[] = [];
+			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				await refuse(f, "thread/archive", "no rollout found for thread id", attempt);
+				await answer(f, "thread/read", readOf(THREAD, []), attempt * 2);
+				await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS);
+				await answer(f, "thread/read", readOf(THREAD, []), attempt * 2 + 1);
+				await refuse(f, "thread/delete", "delete said no", attempt);
+				if (attempt < 2) await vi.advanceTimersByTimeAsync(PARK_RETRY_MS);
+			}
+			await settling;
+
+			expect(poisoned).toEqual([[THREAD, { kind: "exhausted", attempts: 3 }]]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "poisoned" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("serializes a steer and an interrupt on a thread it only knows by name", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const steering = client.steerTurn("thread-inherited", "turn-old", "carry on");
+			const interrupting = client.interruptTurn("thread-inherited", "turn-old");
+			await tick();
+			expect(methods(f)).not.toContain("turn/interrupt");
+
+			await answer(f, "turn/steer", { turnId: "turn-old" });
+			await steering;
+			await answer(f, "turn/interrupt", {});
+			await interrupting;
+
+			expect(methods(f).slice(-2)).toEqual(["turn/steer", "turn/interrupt"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes a terminal buffered under another id once the start resolves, without parking", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await requested(f, "turn/start");
+			await client.settleTurn(THREAD, "turn-other", DONE);
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+
+			expect(await turn).toBe(TURN);
+			expect(terminals).toEqual([[THREAD, "turn-other", DONE]]);
+			expect(methods(f)).not.toContain("thread/archive");
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: TURN });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes once when two observers report the turn, one before and one after the start reply", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+			const turn = client.startTurn(THREAD, "go");
+			await requested(f, "turn/start");
+			await client.settleTurn(THREAD, TURN, DONE);
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			const second = client.settleTurn(THREAD, TURN, DONE);
+			await answer(f, "thread/archive", {});
+			await turn;
+			await second;
+
+			expect(terminals).toEqual([[THREAD, TURN, DONE]]);
+			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("poisons the thread when a read never answers, so a doubtful thread is not adopted on guesswork", async () => {
+		vi.useFakeTimers();
+		try {
+			const poisoned: unknown[] = [];
+			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
+			const adopting = client.adoptOrDispose(THREAD).catch((error) => error);
+			await requested(f, "thread/read");
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(await adopting).toMatchObject({ kind: "timeout" });
+			expect(poisoned).toEqual([
+				[THREAD, { kind: "failure", failure: expect.objectContaining({ kind: "timeout" }) }],
+			]);
+			expect(methods(f)).not.toContain("thread/delete");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("releases an operation paused between its two reads when the client closes", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const adopting = client.adoptOrDispose(THREAD).catch((error) => error);
+			await answer(f, "thread/read", readOf(THREAD, []));
+			client.close();
+			await tick();
+
+			expect(await adopting).toMatchObject({ kind: "closed" });
+			expect(methods(f)).not.toContain("thread/delete");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("adopts what a doubtful thread holds: a running turn becomes ours, a settled one is settled", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+
+			const running = client.adoptOrDispose(THREAD);
+			await answer(f, "thread/read", readOf(THREAD, [{ id: "turn-r", status: "inProgress", items: [] }]));
+			expect(await running).toEqual({ known: "running", turnId: "turn-r" });
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "active", turnId: "turn-r" });
+
+			const settled = client.adoptOrDispose(THREAD);
+			await answer(
+				f,
+				"thread/read",
+				readOf(THREAD, [
+					{
+						id: "turn-s",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "done", phase: "final_answer" }],
+					},
+				]),
+				1,
+			);
+			await answer(f, "thread/archive", {});
+			expect(await settled).toMatchObject({ known: "settled", turnId: "turn-s" });
+			expect(terminals).toEqual([
+				[THREAD, "turn-s", { status: "completed", finalResponse: "done", finalItemId: "item-1" }],
+			]);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parked" });
+
+			// Adopting again what was already settled here publishes nothing and archives nothing.
+			const again = client.adoptOrDispose(THREAD);
+			await answer(
+				f,
+				"thread/read",
+				readOf(THREAD, [
+					{
+						id: "turn-s",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "done", phase: "final_answer" }],
+					},
+				]),
+				2,
+			);
+			expect(await again).toMatchObject({ known: "settled", turnId: "turn-s" });
+			expect(terminals).toHaveLength(1);
+			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("disposes of a doubtful thread only after two quiet reads prove it empty, and leaves an unknown one alone", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+
+			const unknown = client.adoptOrDispose(THREAD);
+			await answer(f, "thread/read", readOf("someone-else", []));
+			expect(await unknown).toEqual({ known: "unknown" });
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS * 2);
+			expect(methods(f).slice(-1)).toEqual(["thread/read"]);
+
+			const empty = client.adoptOrDispose(THREAD);
+			await answer(f, "thread/read", readOf(THREAD, []), 1);
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS);
+			await answer(f, "thread/read", readOf(THREAD, []), 2);
+			await answer(f, "thread/delete", {});
+			expect(await empty).toEqual({ known: "empty" });
+			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("disposed");
+			expect(methods(f).filter((m) => m === "turn/start")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

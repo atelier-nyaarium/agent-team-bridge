@@ -51,6 +51,7 @@ describe("App Server request params", () => {
 	it("names the steered turn expectedTurnId, which is not what interrupt calls it", async () => {
 		const { client, transport } = await openClient();
 
+		await client.startTurn(THREAD_ID, "do the thing");
 		await client.steerTurn(THREAD_ID, TURN_ID, "changed my mind");
 		await client.interruptTurn(THREAD_ID, TURN_ID);
 
@@ -97,6 +98,17 @@ describe("App Server request params", () => {
 		await client.readThread(THREAD_ID);
 
 		expect(transport.paramsOf("thread/read")).toEqual({ threadId: THREAD_ID, includeTurns: true });
+	});
+
+	it("resumes and archives a thread by its id alone", async () => {
+		const { client, transport } = await openClient();
+
+		await client.resumeThread(THREAD_ID);
+		await client.startTurn(THREAD_ID, "do the thing");
+		await client.settleTurn(THREAD_ID, TURN_ID, { status: "completed", finalResponse: "done" });
+
+		expect(transport.paramsOf("thread/resume")).toEqual({ threadId: THREAD_ID });
+		expect(transport.paramsOf("thread/archive")).toEqual({ threadId: THREAD_ID });
 	});
 
 	it("handshakes before it will hand out a thread", async () => {

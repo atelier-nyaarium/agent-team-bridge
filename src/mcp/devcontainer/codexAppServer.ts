@@ -1,9 +1,12 @@
-import {
-	CodexAppServerResponseSchema,
-	CodexAppServerThreadStartResultSchema,
-	CodexAppServerTurnStartResultSchema,
-} from "../../shared/codex-agent.js";
+import { CodexAppServerResponseSchema, CodexAppServerThreadStartResultSchema } from "../../shared/codex-agent.js";
 import type { CodexChild } from "./codexTargets.js";
+import {
+	type LifecycleDeps,
+	type ThreadInspection,
+	ThreadLifecycle,
+	type ThreadPhase,
+} from "./codexThreadLifecycle.js";
+import type { TerminalOutcome } from "./codexTurnOutcome.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -24,6 +27,9 @@ export interface ThreadSettings {
 	/** Optional override. Verified against `model/list` like the default, never taken on trust. */
 	model?: string;
 }
+
+/** What the lifecycle tells its consumer; both default to nothing so a caller that only reads needs neither. */
+export type LifecycleHooks = Partial<Pick<LifecycleDeps, "onTerminal" | "onPoisoned">>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -248,11 +254,21 @@ export function strongestEffort(model: {
  * offered, and every permission request is refused rather than granted.
  */
 export class CodexAppServerClient {
+	private readonly lifecycle: ThreadLifecycle;
+
 	private constructor(
 		private readonly transport: AppServerTransport,
 		private readonly defaultModel: string,
 		private readonly offered: OfferedModels,
-	) {}
+		hooks: LifecycleHooks,
+	) {
+		this.lifecycle = new ThreadLifecycle({
+			request: (method, params) => transport.request(method, params),
+			classify: (error) => (isAppServerFailure(error) ? error : null),
+			onTerminal: hooks.onTerminal ?? (() => {}),
+			onPoisoned: hooks.onPoisoned ?? (() => {}),
+		});
+	}
 
 	/**
 	 * Handshake, then confirm the model.
@@ -260,7 +276,11 @@ export class CodexAppServerClient {
 	 * An unlisted model is refused rather than falling back to the server's default. `initialize`
 	 * advertises no version, so `model/list` is the only compatibility check there is.
 	 */
-	static async open(transport: AppServerTransport, requestedModel: string): Promise<CodexAppServerClient> {
+	static async open(
+		transport: AppServerTransport,
+		requestedModel: string,
+		hooks: LifecycleHooks = {},
+	): Promise<CodexAppServerClient> {
 		await transport.request("initialize", {
 			clientInfo: { name: "switchboard", title: "Switchboard", version: "1" },
 		});
@@ -275,7 +295,7 @@ export class CodexAppServerClient {
 		}
 		if (!offered.has(requestedModel)) throw new Error(`model not offered: ${requestedModel}`);
 
-		return new CodexAppServerClient(transport, requestedModel, offered);
+		return new CodexAppServerClient(transport, requestedModel, offered, hooks);
 	}
 
 	onEvent(listener: (message: { method: string; params?: unknown }) => void): void {
@@ -296,30 +316,32 @@ export class CodexAppServerClient {
 			approvalPolicy: "never",
 			sandbox: "workspace-write",
 		});
-		return CodexAppServerThreadStartResultSchema.parse(result).thread.id;
+		const threadId = CodexAppServerThreadStartResultSchema.parse(result).thread.id;
+		this.lifecycle.started(threadId);
+		return threadId;
 	}
 
+	/** Loads the thread whatever its state: a parked one is unarchived first. */
 	async resumeThread(threadId: string): Promise<void> {
-		await this.transport.request("thread/resume", { threadId });
+		await this.lifecycle.activate(threadId);
 	}
 
 	/** `includeTurns` is load-bearing and NOT the default. Without it the reply is well-formed with an
 	 * empty `turns` array, and reconciliation reports a completed turn as unrecoverable. */
 	async readThread(threadId: string): Promise<unknown> {
-		return this.transport.request("thread/read", { threadId, includeTurns: true });
+		return this.lifecycle.read(threadId, { threadId, includeTurns: true });
 	}
 
 	async startTurn(threadId: string, text: string): Promise<string> {
-		const result = await this.transport.request("turn/start", {
+		return this.lifecycle.startTurn(threadId, {
 			threadId,
 			input: [{ type: "text", text }],
 		});
-		return CodexAppServerTurnStartResultSchema.parse(result).turn.id;
 	}
 
 	/** The wire field is `expectedTurnId`; `turn/interrupt` names the same value `turnId`. */
 	async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
-		await this.transport.request("turn/steer", {
+		await this.lifecycle.steerTurn(threadId, turnId, {
 			threadId,
 			expectedTurnId: turnId,
 			input: [{ type: "text", text }],
@@ -327,10 +349,25 @@ export class CodexAppServerClient {
 	}
 
 	async interruptTurn(threadId: string, turnId: string): Promise<void> {
-		await this.transport.request("turn/interrupt", { threadId, turnId });
+		await this.lifecycle.interruptTurn(threadId, turnId, { threadId, turnId });
+	}
+
+	/** The one entry for a terminal: published through the hook, then the thread is parked. */
+	settleTurn(threadId: string, turnId: string, terminal: TerminalOutcome): Promise<void> {
+		return this.lifecycle.settleTurn(threadId, turnId, terminal);
+	}
+
+	/** For a thread whose first turn is in doubt: take what it holds, or delete it once two reads prove nothing. */
+	adoptOrDispose(threadId: string): Promise<ThreadInspection> {
+		return this.lifecycle.adoptOrDispose(threadId);
+	}
+
+	stateOf(threadId: string): ThreadPhase | undefined {
+		return this.lifecycle.stateOf(threadId);
 	}
 
 	close(): void {
+		this.lifecycle.close();
 		this.transport.close();
 	}
 }

@@ -68,42 +68,77 @@ borrowed prototype and a reached constructor.
 `turn/steer` and `turn/interrupt`. It holds no state per thread. Both drivers resume a thread they did not just create before starting a turn, which is the
 half of the lifecycle that exists; nothing ever unloads one.
 
-The client gains a per-thread lifecycle record and becomes its only owner. States: `starting`,
-`firstTurn`, `active(turnId, epoch)`, `parking`, `parked`, `disposed`, `poisoned`. Every request
-for a thread and every terminal accepted for it passes through that thread's queue, so two
-operations on one thread never interleave on the wire.
+The client composes `ThreadLifecycle` (`src/mcp/devcontainer/codexThreadLifecycle.ts`) and is its
+only user: the failure guard is injected, so the two modules do not import each other. A record
+exists from the moment the server returns a thread id, or from the first time a caller names a
+thread this client never started. Phases: `unloaded` (reached by name only, so not known to be
+loaded; its first activation resumes it), `idle` (loaded with no turn of ours, whether just started
+or resumed and then refused a turn), `active(turnId, epoch)`, `parking`, `parked`, `disposed`,
+`poisoned(reason)`. The epoch is the record's own counter, advanced by every activation, so a retry
+scheduled for an earlier life of the thread drops itself. Every request for a thread, the read
+included, and every terminal accepted for it passes through that thread's queue, so two operations
+on one thread never interleave on the wire. `open` takes the two consumer hooks, `onTerminal` and
+`onPoisoned`, both defaulting to nothing. `stateOf` answers a thread's phase for a consumer.
 
-- `startThread` leaves the thread in `firstTurn`. `startTurn` in `firstTurn` goes straight to
-  `turn/start`; in `parked` it activates first: `thread/resume`, and on a refusal `thread/unarchive`
-  then `thread/resume`, surfacing the original resume failure if the unarchive refuses. The turn id
-  the response returns moves the thread to `active` with a new epoch. A terminal that arrives for
-  this thread before that response resolves is buffered and matched by thread and turn id once the
-  id is known.
+- `startThread` leaves the thread `idle`. `startTurn` loads the thread first and then sends
+  `turn/start`: nothing for `idle` or `active`; for `parking` the pending retry is dropped, since the
+  thread is still loaded; for `parked` or `unloaded` a `thread/resume`, and on a refusal
+  `thread/unarchive` then `thread/resume`, surfacing the original resume failure if the unarchive
+  refuses. `resumeThread` is the same loading for a caller that needs the thread loaded and nothing
+  else, and is a no-op on a thread already loaded. The turn id the response returns moves the thread
+  to `active` with the next epoch. A terminal that arrives for this thread before that response
+  resolves is buffered outside the queue; once the id is known the buffered one for that turn settles
+  it and any other is published without parking. A `turn/start` that fails publishes them too, since
+  no turn of ours will ever own them, and then the failure reaches the caller.
 - `settleTurn(threadId, turnId, terminal)` is the only entry for a terminal, from whichever observer
-  saw it. It validates thread, turn and epoch, hands the terminal to the injected `onTerminal` so it
-  is published and retained before anything is unloaded, then parks.
+  saw it. A terminal is the one report a turn gets, so a thread this client has no record of is
+  tracked rather than dropped: after a restart the daemon routes terminals for threads a previous
+  generation started. It is handed to the injected `onTerminal` once per turn, so it is published and
+  retained before anything is unloaded; the thread then parks only when that turn is its own active
+  one, or when it had no turn of its own (`idle`, or `unloaded`, since a terminal proves the thread
+  was loaded). A terminal for another turn while one of ours is active is published and changes
+  nothing. Parking a thread this client never loaded is safe because one client owns a target's
+  threads at a time: a generation is retired before its successor opens.
 - `park` archives. A refusal runs the dispose rule rather than a retry: `thread/read` twice across a
-  short quiet interval; two reads proving zero turns delete the thread (`disposed`); a read showing a
-  turn adopts it, `active` if in progress or settled through `settleTurn`; anything else counts
-  against a bounded retry and age budget, and exhausting it poisons the generation. Logging a failed
-  archive is not a state.
-- `steerTurn` is accepted only in `active` with the matching turn id. `interruptTurn` is accepted in
-  `active` and changes nothing; the terminal or the watchdog in Step 5 decides what follows.
-- A timeout or an unreadable reply on `thread/archive`, `thread/unarchive`, `thread/delete`,
-  `thread/resume` or `turn/start` moves the thread to `poisoned` and fires the injected `onPoisoned`,
-  since the request may still land on the server after a later activation and a local epoch cannot
-  recall it. The consumer retires that generation; nothing on it is activated again.
-- Retries are a cancellable desired state outside the queue's lock; an activation cancels any
-  unsent retry by advancing the epoch and waits only for a request already on the wire.
-- `close` cancels every timer and retry.
+  short quiet interval (`DISPOSE_QUIET_MS`); two reads proving zero turns delete the thread
+  (`disposed`); a read showing a running turn adopts it as `active`; anything else, a refused delete
+  included, counts against a bounded budget (`PARK_ATTEMPTS`) with a retry after `PARK_RETRY_MS`, and
+  exhausting it poisons the generation with reason `exhausted`. Logging a failed archive is not a
+  state, and no path leaves a thread `parking` with nothing scheduled.
+- `adoptOrDispose` is the same read for a thread whose first turn is in doubt: a running turn becomes
+  `active`; a settled one is accepted the way `settleTurn` accepts a terminal, after which the read is
+  authoritative over a stale `active`, and one already published here parks without publishing
+  again; two quiet reads proving nothing delete it; an unknown read changes nothing.
+- `steerTurn` and `interruptTurn` are refused only for what this client knows is wrong: another turn
+  of its own is active, or the thread is `disposed` or `poisoned`. Everything else, an idle or
+  unloaded thread and a thread with no record here, goes to the server, which arbitrates: after a
+  daemon restart the daemon steers turns a previous generation started, and Step 3 is where those
+  are adopted. They are queued like every other request all the same, so two controls on one thread
+  never race. `readThread` is the same: queued, and refused for a thread that ended.
+- A transport failure of kind `timeout` or `unreadable` on any lifecycle request (`thread/archive`,
+  `thread/unarchive`, `thread/delete`, `thread/read`, `thread/resume`, `turn/start`) moves the thread
+  to `poisoned` with reason `failure` and fires the injected `onPoisoned`, since the request may still
+  land on the server after a later activation and a local epoch cannot recall it; the caller sees the
+  minted failure. A well-formed reply the schema rejects is not that: a read answers `unknown`, and a
+  `turn/start` throws the parse error with the thread unchanged. The consumer retires a poisoned
+  generation; nothing on it is activated again, and every request for a `disposed` or `poisoned`
+  thread is refused.
+- A park retry is a timer outside the queue's lock, one per thread; an activation cancels it and
+  advances the epoch, and a retry that fires after the thread moved on finds a phase or epoch that is
+  no longer its own and drops itself. A follow-up waits only for a request already on the wire.
+- `close` cancels every timer and retry; an operation paused between its two reads is released at
+  once and meets the closed transport, so nothing is left hanging.
 
-Tests: `src/__tests__/codex-app-server.test.ts` with a gated transport whose individual request
-promises release in any order: terminal before the `turn/start` response, follow-up during archive,
-the same terminal from two observers, archive response lost, archive refused with a sole settled
-turn to adopt, archive refused with two zero-turn reads, archive refused with an unknown read and no
-delete, resume refused then unarchive and resume, unarchive refused surfacing the resume failure.
-`src/__tests__/codex-app-server-wire.test.ts` through `RecordingTransport` pins the exact
-`thread/archive`, `thread/unarchive`, `thread/delete`, `thread/read` and `thread/resume` shapes.
+Tests: `src/__tests__/codex-app-server.test.ts` through the real transport over `fakeChild`, each
+request answered by hand in any order under fake timers, so every failure is one the transport
+minted: terminal before the `turn/start` response, follow-up during archive, the same terminal from
+two observers, archive response lost, archive refused with a running turn to adopt, archive refused
+with two zero-turn reads, archive refused with an unknown read and no delete, a park retry dropped
+by a follow-up, resume refused then unarchive and resume, unarchive refused surfacing the resume
+failure, steer and interrupt gated to the active turn, and `adoptOrDispose` for each of its four
+answers. The exact `thread/archive`, `thread/unarchive`, `thread/delete` and `thread/read` shapes are
+pinned there; `src/__tests__/codex-app-server-wire.test.ts` pins `thread/resume` and
+`thread/archive` through `RecordingTransport`.
 
 ## Step 3 - The daemon path through the owner
 
