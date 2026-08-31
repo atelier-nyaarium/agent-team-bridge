@@ -805,9 +805,8 @@ lines. The plan is deleted; what follows is what it left behind.
 - **No cross-runtime vector pins `safeName`/`uniqueName`.** Its absence is why both filename
   divergences (an astral character splitting into two underscores; dedupe seeded from a set rather
   than the ordered assignment) shipped with a green suite.
-- **`referenceRoot()` cannot fall back to cwd inside a container,** because `PROJECT_NAME` is always
-  set by then, so any container whose project is not literally at `/workspace/<spawn>` fails every
-  ref-bearing send with a root-does-not-exist error.
+- ~~**`referenceRoot()` cannot fall back to cwd inside a container.**~~ STALE: the function is
+  retired, and `ref-owners-residue.test.ts` fails the build if the name returns under `src`.
 - **`walkSegments` branches are paths, not nodes,** with no memo on `(node, consumed)`. Measured 2.2s
   on a 724-byte file of deeply nested same-named functions; memoizing collapses it to linear.
 - **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
@@ -821,8 +820,9 @@ lines. The plan is deleted; what follows is what it left behind.
   without a trailing newline.
 - ~~**`columnOf` returns -1** for a match at index 0 when the file begins with a newline.~~ FIXED:
   `lastIndexOf` clamps a negative `fromIndex` to 0, so index 0 now short-circuits.
-- **`AttachmentChipDecorator` has no message coordinate,** so the References hide verdict scans every
-  summary the team ever recorded rather than the one row's. See the seam lesson below.
+- **`AttachmentChipDecorator` has no message coordinate.** The scan-every-summary consequence is
+  GONE: the plugin reads the tapped file's declared `role` instead. The missing coordinate itself
+  stands, with no defect currently resting on it. See the seam lesson below.
 
 **Lessons, the ones that cost something:**
 
