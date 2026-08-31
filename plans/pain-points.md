@@ -4,11 +4,12 @@ Every `[high]` and `[medium]` entry has been fixed, verified already fixed, or m
 with its reason: refactors, test-coverage debt, optimizations, infrastructure, unmade product
 decisions, and another repository's bug.
 
-Two things this file does NOT claim. The composite `host.*` bypass is a LIVE defect, not a
+One thing this file does NOT claim. The composite `host.*` bypass is a LIVE defect, not a
 non-defect: a name with no active binding stays claimable, so `host.foo` clears both the host-token
 gate and the reserved-name set. It is unfixed because the only fix locks out the hand-launched host
-window the owner requires, which makes it an owner decision, not a closed one. And the `[low]`
-residuals below were never triaged in this pass; they are recorded, not cleared.
+window the owner requires, which makes it an owner decision, not a closed one.
+
+`[low]` entries were triaged only where one named a cheap concrete fix. The rest are recorded.
 
 Standing prohibitions are kept because losing one invites the mistake back.
 
@@ -773,7 +774,9 @@ Both were reachable because "restore this file" and "contain this file's failure
 concerns that each caller improvised, and the capability work added the fifth improvisation. They
 are one call now.
 
-**Deferred, with reasons rather than as a backlog dump:**
+**WILL NOT DO, each with its reason rather than as a backlog dump.** All three are type and
+lifecycle designs over working code; the third eliminates no bug class by its own assessor's
+account.
 
 - **`CapabilityAnswer`, the no-answer as a VALUE** (the `sessionAuthority.ts` treatment). Today
   "the device said nothing" versus "the device reports nothing enabled" is spelled four ways across
@@ -868,6 +871,9 @@ Its own painpoints were folded into the artifact-references section above as the
 
 The build type shipped and earns its keep, but it carried three open items its plan never closed.
 
+WILL NOT DO, all three: test-harness capability and cosmetics on a sandbox-only build. None affects
+a shipped build, and the first needs a seam in shared production code to serve a fixture.
+
 - **The sandbox cannot fake presence states** (`working`, `verifying`, `available`), which drive the
   pulse bar and the terminal view's own gating. Confirmed as a real gap while shipping the
   usage-limit dialog: the chat dock and board tile were both verifiable by seeding a `Team`, but the
@@ -931,12 +937,12 @@ fixed there; the notice framework only made them visible.
   any survivor is kept. `promoteOrphans` stays as the backstop for the one delete that cannot refuse.
 - [low] **An assign to a session that is not confirmed-live announces nothing**, and the console offers
   exactly those sessions as targets with no visual distinction. The entry lands, the board plane
-  confirms it, and the notice is dropped at the send edge. Either the board should wake the target, or
-  the picker should say which targets are live.
+  confirms it, and the notice is dropped at the send edge. WILL NOT DO: both candidate fixes are
+  product decisions, whether the board wakes a target and whether the picker marks liveness.
 - [low] **A dropped take-away is unrecoverable**, and `claude --resume` restores a transcript that still
   believes it holds the entry. The agent then hits `entry_missing` or `held`, which it is taught are
-  permanent. Question 4 chose DROP deliberately, but its rationale ("the agent re-reads on receipt")
-  only covers `changed`; a take-away leaves no durable fact to re-read.
+  permanent. WILL NOT DO: question 4 chose DROP deliberately. Reversing it means a durable take-away
+  fact, which is a protocol addition rather than a defect fix.
 
 ## One-line display strings on the console (2026-08-07, closed)
 
