@@ -904,6 +904,73 @@ describe("the thread lifecycle", () => {
 		}
 	});
 
+	it("leaves a replacement's retirement alone when the resume it replaced finally lands", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			let archives = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			await retire("reused");
+			// Resuming the parked thread, then the server hands its id to a new one before that lands.
+			const reviving = client.resumeThread("reused");
+			await requested(f, "thread/resume");
+			const restarting = client.startThread({ cwd: "/tmp" });
+			await answer(f, "thread/start", { thread: { id: "reused" } }, 1);
+			await restarting;
+			await retire("reused");
+			await answer(f, "thread/resume", {});
+			await reviving.catch(() => undefined);
+
+			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`);
+
+			// The replacement kept a retirement of its own, so its turn to be forgotten still comes.
+			expect(client.stateOf("reused")).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives up a poisoned thread's retirement, which it could never spend", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const POISONED = 10;
+			let archives = 0;
+			let resumes = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			for (let index = 0; index < POISONED; index += 1) {
+				await retire(`bad-${index}`);
+				const reviving = client.resumeThread(`bad-${index}`);
+				const request = await requested(f, "thread/resume", resumes);
+				resumes += 1;
+				// Neither an answer nor a refusal: the outcome is unknowable, which poisons the record.
+				f.feed({ jsonrpc: "2.0", id: request.id, result: { unreadable: true }, error: {} });
+				await tick();
+				await reviving.catch(() => undefined);
+			}
+
+			await retire("victim");
+			for (let index = 0; index < RETIRED_MEMORY - POISONED; index += 1) await retire(`spare-${index}`);
+
+			// A retirement no eviction can ever act on must not sit in the window ahead of one that can.
+			expect(client.stateOf("victim")).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("publishes the terminal before the archive request leaves, and only once for two observers", async () => {
 		vi.useFakeTimers();
 		try {

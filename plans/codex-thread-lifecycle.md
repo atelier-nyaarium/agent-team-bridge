@@ -497,13 +497,16 @@ Retirements live in an ordered map of one entry per thread, and retiring MOVES a
 rather than appending. That is the whole mechanism: a record cannot hold two entries, so it cannot be
 forgotten on an older park's clock.
 
-The entry always names the record the map holds, and three writes keep it that way. `retire` refuses
-to write for a record the map no longer holds, which is the case a check at eviction cannot replace:
-`mutate` tests identity only BEFORE its request, so a `started` that reuses an id while an archive is
-in flight leaves the old park to resume and retire a record that is no longer the thread's. `started`
-drops the entry when it replaces a record, since that retirement belonged to the thread whose id this
-one took. `load` drops it when a thread comes back, so a reactivated thread stops counting against
-the window the threads behind it are waiting in.
+The entry always names the record the map holds, and every write to the map is keyed by the RECORD,
+never by the id alone. That rule is the whole defence, because `mutate` tests identity only BEFORE
+its request and never after, so any operation awaiting a reply can resume holding a record that
+`started` has since replaced. `retire` refuses to write for a record the map no longer holds, which
+is the case a check at eviction cannot replace. `load` drops the entry when a thread comes back, so a
+reactivated thread stops counting against the window the threads behind it wait in, and it drops only
+its OWN entry: keyed by id, a late resume deletes the retirement of the replacement that took the id,
+and that record is then never forgotten. `poison` drops the entry too, since a poisoned record can
+never become evictable and its entry would hold a slot no eviction could ever reclaim. `started`
+drops the entry it replaces.
 
 Eviction then asks only what is left: a record is passed over while an operation is queued on it, and
 while its phase is anything but `parked` or `disposed`. A passed-over entry STAYS, so the next
@@ -553,10 +556,11 @@ retirement of the thread it replaced, a reactivated thread's window starts over 
 from its first park, and a record with a read in flight is passed over. Each of those also asserts a
 CONTROL that must be gone, not only the thread that must survive, because two of them were calibrated
 to the retirement queue's duplicate entries and stopped triggering eviction at all when it became a
-map: they passed against the mechanism they were written to catch. Three more pin what the refactor
-alone did not: a thread replaced mid-archive does not retire over its replacement, a thread that
-loads again stops crowding the window, and a record passed over for being busy is forgotten once its
-work is done rather than never. Two more pin the eviction
+map: they passed against the mechanism they were written to catch. Five more pin what the refactor
+alone did not: a thread replaced mid-archive does not retire over its replacement, a late resume does
+not delete the retirement of the thread that took its id, a thread that loads again stops crowding
+the window, a poisoned thread gives up the slot it could never spend, and a record passed over for
+being busy is forgotten once its work is done rather than never. Two more pin the eviction
 rule itself: a bind with nothing else evictable keeps its own binding, and threads settling together
 are drained in one bind rather than one per bind. Each was written by removing the guard it names and
 watching it fail.
@@ -590,6 +594,12 @@ a workload no gateway produces.
   now MOVES a record in an ordered map, the way `bindThread` already does with bindings, so identity
   and sequence have nothing left to check and a declined eviction leaves the entry in place. The
   class is gone rather than guarded, and the tests that pinned the guards pin the shape instead.
+- An id used where a record was meant, once per write site. The same substitution reappeared at each
+  new write to the retirement map: `retire` wrote a stale record's entry, `load` deleted whichever
+  entry held the id rather than its own. Both delete the wrong thread's retirement, and the second
+  was written while fixing the first. Any write here is keyed by the record, and the reason is that
+  `mutate` re-enters after its await without rechecking identity, so EVERY continuation in this class
+  may be holding a record the map has moved on from.
 
 ## Verification
 

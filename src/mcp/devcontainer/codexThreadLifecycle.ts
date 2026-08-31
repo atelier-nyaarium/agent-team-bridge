@@ -301,7 +301,7 @@ export class ThreadLifecycle {
 		record.epoch += 1;
 		record.state = { phase: "idle" };
 		// Loaded again, so its retirement is spent; a resume that threw leaves the old one standing.
-		this.retired.delete(threadId);
+		if (this.retired.get(threadId) === record) this.retired.delete(threadId);
 	}
 
 	private async resume(threadId: string, record: ThreadRecord): Promise<void> {
@@ -444,6 +444,8 @@ export class ThreadLifecycle {
 		if (record.state.phase === "poisoned") return;
 		this.cancelRetry(record);
 		record.state = { phase: "poisoned", reason };
+		// Poison is terminal, so this record can never become evictable and its entry only crowds the map.
+		if (this.retired.get(threadId) === record) this.retired.delete(threadId);
 		this.deps.onPoisoned(threadId, reason);
 	}
 
