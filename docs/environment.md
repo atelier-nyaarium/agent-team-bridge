@@ -21,7 +21,7 @@ hand-edited, so there is no `.env.example`.
 | `FEDERATION_BIND` | The LAN address the Router binds and advertises. `scripts/lib/routerStart.ts` detects and writes it on every start, never typed, so a DHCP move reaches `.env` before compose reads it. `setup-verify.ts` and `setup-provision.ts` probe the same value |
 | `FEDERATION_PUBLIC_HOST`, `FEDERATION_PUBLIC_PORT` | The Router's address from outside, the one thing setup asks. An empty host means LAN only, and the port is not asked. The port is advertised only when it differs from the Router's own |
 | `FEDERATION_WS_TOKEN` | Bearer the gateway presents at the Router's WS upgrade. Fail-closed. Minted into `.env` by `start-federation.sh` |
-| `CONSOLE_BRIDGE_TOKEN` | App token every console presents on the op surface. Fail-closed. Minted by `start-federation.sh`, and carried across by `export:federation` so provisioned consoles are not turned away |
+| `CONSOLE_BRIDGE_TOKEN` | App token every console presents on the op surface. Fail-closed. Minted into `.env` by `start-federation.sh` |
 
 ## Host daemon
 

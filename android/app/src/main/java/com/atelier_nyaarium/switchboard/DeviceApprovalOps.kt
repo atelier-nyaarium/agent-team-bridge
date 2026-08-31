@@ -20,7 +20,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	fun deviceApprovalReach(): String? =
 		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
-	/** The Router cert fingerprint to pin the reach against, empty when the reach is the k8s ingress. */
+	/** The Router cert fingerprint to pin the reach against, empty when this device holds none. */
 	private fun routerCertFp(): String =
 		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.routerCertFp ?: ""
 
@@ -44,7 +44,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 				.put("nonce", nonce)
 				.put("reach", reach)
 				// A fresh device holds no provisioning record, so the QR is the only place it can
-				// learn which cert to pin against a self-signed Router. Empty for a k8s reach.
+				// learn which cert to pin against a self-signed Router.
 				.put("reachCertFp", routerCertFp())
 				.toString()
 			DeviceApprovalArmed(approvalId, nonce, qr)
@@ -92,16 +92,9 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	private fun buildConsoleTransport(): ConsoleTransport {
 		val prov = Provisioning.parse(repo.store.load() ?: error("not provisioned"))
 		return ConsoleTransport(
-			transport = prov.transport,
-			apiUrl = prov.apiUrl,
-			caPem = prov.caPem,
-			saToken = prov.saToken,
 			routerUrl = prov.routerUrl,
 			routerCertFp = prov.routerCertFp,
 			appToken = prov.appToken,
-			namespace = prov.namespace,
-			service = prov.service,
-			port = prov.port.toLong(),
 			domainId = repo.confirmedDomainId(),
 			gatewayId = repo.localGatewayId.takeIf { it.isNotEmpty() } ?: repo.store.loadGatewayId().takeIf { it.isNotEmpty() },
 			domainVersion = repo.store.loadDomainVersion().ifEmpty { null },
@@ -173,19 +166,12 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	 * no owner key, so it must NEVER self-sign. provisioned flips LAST so the poll loop starts only
 	 * after consoleAdmitted is set, never racing a self-admission with a throwaway owner key. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
-		// Every transport field is restated: a rebuild that enumerates only the k8s ones drops a
-		// direct record on the way in, and the new device silently provisions against nothing.
+		// Every transport field is restated: a rebuild that enumerates a subset drops a record on the
+		// way in, and the new device silently provisions against nothing.
 		val prov = com.atelier_nyaarium.switchboard.proto.Provisioning(
-			transport = transport.transport,
-			apiUrl = transport.apiUrl.ifEmpty { null },
-			caPem = transport.caPem.ifEmpty { null },
-			saToken = transport.saToken.ifEmpty { null },
 			routerUrl = transport.routerUrl.ifEmpty { null },
 			routerCertFp = transport.routerCertFp.ifEmpty { null },
 			appToken = transport.appToken,
-			namespace = transport.namespace,
-			service = transport.service,
-			port = transport.port,
 		)
 		val blob = wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.Provisioning.serializer(), prov)
 		repo.store.save(blob)

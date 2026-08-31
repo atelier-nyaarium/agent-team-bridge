@@ -13,7 +13,6 @@ import {
 //  Constants
 
 const DIRECT = {
-	transport: "direct",
 	routerUrl: "https://federation-router:20001",
 	routerCertFp: "AB12",
 	bearer: "secret",
@@ -44,24 +43,20 @@ describe("loadRouterTransport", () => {
 		expect(loadRouterTransport(dir)).toBeNull();
 	});
 
-	it("reads the direct branch", () => {
+	it("reads a complete file", () => {
 		write(DIRECT);
-		const loaded = loadRouterTransport(dir);
-		expect({ transport: loaded?.transport, url: loaded?.routerUrl }).toEqual({
-			transport: "direct",
-			url: DIRECT.routerUrl,
-		});
+		expect(loadRouterTransport(dir)?.routerUrl).toBe(DIRECT.routerUrl);
 	});
 
-	// A retired-branch file must leave the gateway standalone and armed for enrollment, never
-	// half-adopted: its fields describe a relay this build can no longer reach.
-	it("refuses a retired k8s file rather than half-reading it", () => {
+	// A file in a retired shape must leave the gateway standalone and armed for enrollment, never
+	// half-adopted: its fields describe a relay this build cannot reach.
+	it("refuses a file in a retired shape rather than half-reading it", () => {
 		write({ apiUrl: "https://api.example", saToken: "sa", caPem: "pem" });
 		expect(loadRouterTransport(dir)).toBeNull();
 	});
 
-	it("refuses a direct branch missing its own fields", () => {
-		write({ transport: "direct", routerUrl: DIRECT.routerUrl });
+	it("refuses a file missing any of its three fields", () => {
+		write({ routerUrl: DIRECT.routerUrl });
 		expect(loadRouterTransport(dir)).toBeNull();
 	});
 

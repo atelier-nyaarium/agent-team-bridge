@@ -18,6 +18,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -52,7 +53,6 @@ class PostRouterDirectTest {
 	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleHttp.postRouterDirect(
 		client,
 		server.url("/relay").toString(),
-		"sa-token",
 		"app-token",
 		"Test",
 		"case",
@@ -93,14 +93,15 @@ class PostRouterDirectTest {
 	}
 
 	@Test
-	fun postRouterDirect_sendsAuthHeadersAndPostsToTheGivenUrl() = runBlocking {
+	fun postRouterDirect_sendsTheAppTokenAndPostsToTheGivenUrl() = runBlocking {
 		server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
 		call()
 		val recorded = server.takeRequest()
 		assertEquals("POST", recorded.method)
 		assertEquals("/relay", recorded.path)
-		assertEquals("Bearer sa-token", recorded.getHeader("Authorization"))
 		assertEquals("Bearer app-token", recorded.getHeader("X-Console-Bridge-Token"))
+		// The Router gates on the app token alone; nothing carries a second credential.
+		assertNull(recorded.getHeader("Authorization"))
 	}
 
 	@Test(expected = IOException::class)
@@ -112,7 +113,7 @@ class PostRouterDirectTest {
 			dead.start()
 			val deadUrl = dead.url("/relay").toString()
 			dead.shutdown()
-			ConsoleHttp.postRouterDirect(client, deadUrl, "sa-token", "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
+			ConsoleHttp.postRouterDirect(client, deadUrl, "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
 		}
 	}
 

@@ -158,7 +158,7 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	// field drift fails loudly here, not silently on the device.
 	// sttsUrl/sttsKey are NOT emitted: voice creds are device-owned (entered in the app's Voice
 	// settings, persisted on the phone), so a re-provision never wipes voice. Do not re-add them.
-	await writeProvisioningBlob({ transport: "direct", routerUrl, routerCertFp, appToken, pendingTenant }, BLOB_FILE);
+	await writeProvisioningBlob({ routerUrl, routerCertFp, appToken, pendingTenant }, BLOB_FILE);
 	secureFile(BLOB_FILE);
 	note(`Setup code: ${BLOB_FILE}`);
 }

@@ -56,7 +56,7 @@ internal fun readClipboard(context: Context): String? {
 /** True once the text is a JSON object with the fields a Provisioning needs. */
 internal fun looksProvisionable(s: String): Boolean = runCatching {
 	val j = org.json.JSONObject(s.trim())
-	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
+	j.has("routerUrl") && j.has("routerCertFp")
 }.getOrDefault(false)
 
 /** A provisioning blob is small JSON; anything larger is a mis-picked file. */

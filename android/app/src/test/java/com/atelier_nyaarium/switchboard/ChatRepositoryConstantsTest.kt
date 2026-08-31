@@ -48,13 +48,13 @@ class ChatRepositoryConstantsTest {
 	}
 
 	@Test
-	fun heldReadTimeoutStaysUnderTheApiserverProxyCeiling() {
-		// The binding constraint on the whole long-poll chain (see ConsoleClient.poll's comment):
-		// the client's held read timeout must return before the untracked apiserver proxy resets
-		// the socket. Deliberately thin headroom (58s < 60s) - pinned strict, not loose.
+	fun heldReadWindowOutlastsTheRoutersOwnHold() {
+		// The binding constraint on the whole long-poll chain (see ConsoleClient.poll's comment): the
+		// Router answers a held poll at ROUTER_HOLD_MS, so the client's read window must still be open
+		// then. Undercut it and every held poll fails here while the Router is answering normally.
 		assertTrue(
-			"LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS must stay under PROXY_CEILING_MS",
-			ChatRepository.LONG_POLL_HOLD_MS + ConsoleHttp.HELD_READ_MARGIN_MS < ConsoleHttp.PROXY_CEILING_MS,
+			"LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS must outlast ROUTER_HOLD_MS",
+			ChatRepository.LONG_POLL_HOLD_MS + ConsoleHttp.HELD_READ_MARGIN_MS > ConsoleHttp.ROUTER_HOLD_MS,
 		)
 	}
 

@@ -26,21 +26,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * seal/relay path behind one widened ConsoleClient member, leaving `blobs` as the only other.
  */
 internal class ConsoleRelayTransport(internal val prov: Provisioning, internal val store: AppStateStore) {
-	private val direct = prov.transport == "direct"
+	/** Trust is the Router's pinned leaf. */
+	internal val client = ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp)
 
-	/** Trust is a pinned CA through the k8s proxy, or the Router's pinned leaf. Built per branch
-	 * because a direct record carries no CA to build the other one from. */
-	internal val client =
-		if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
-
-	/** The Router addresses this device knows, in the order they are tried. On the k8s branch there is
-	 * exactly one (the proxy), so the whole failover machinery below is inert there. */
+	/** The Router addresses this device knows, in the order they are tried. */
 	private val candidates: List<String> =
-		if (direct) {
-			reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, DEFAULT_ROUTER_PORT)
-		} else {
-			listOf("${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy")
-		}
+		reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, DEFAULT_ROUTER_PORT)
 
 	/** Index of the candidate every op currently posts to. Advanced by [failedToReach], never reset:
 	 * an address that failed once is retried only after every other one has, which is what a phone
@@ -74,7 +65,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		// answer is decided.
 		DebugLog.log(
 			"Relay",
-			"transport direct=$direct candidates=${candidates.map { runCatching { java.net.URI(it).host }.getOrNull() ?: "?" }}",
+			"transport candidates=${candidates.map { runCatching { java.net.URI(it).host }.getOrNull() ?: "?" }}",
 		)
 	}
 
@@ -125,10 +116,9 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	 * The stored address is only ever "which Router do I start at"; after the first answer the Router
 	 * itself is the truth. So a bootstrap left pointing at a raw LAN IP is rewritten to the domain,
 	 * which survives a DHCP change - the LAN address it replaces arrives fresh in `lanAddresses` on
-	 * every connect anyway. Only meaningful on the direct branch; the k8s proxy has nothing to learn.
+	 * every connect anyway.
 	 */
 	internal fun reached(advertised: RouterReach?) {
-		if (!direct) return
 		val known = RouterReach.decode(store.loadRouterReach())
 		// The port travels with the host it was advertised beside: a Router that named a public host
 		// also said which port, and absent there means its own, never a port remembered from before.
@@ -227,7 +217,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
 	}
 
-	/** Send a console op through the service-proxy to the console bridge. Mutating ops pass their own
+	/** Send a console op to the Router. Mutating ops pass their own
 	 * stable opId so a retry after a lost reply replays the cached result server-side instead of running
 	 * the op twice. A held op (long-poll) passes a read timeout above its server-side hold. Every call
 	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts.
@@ -266,8 +256,6 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 			}
 			val req = Request.Builder()
 				.url("$base/relay")
-				// The SA token authenticates the k8s proxy hop, which a direct call does not make.
-				.apply { if (!direct) header("Authorization", "Bearer ${prov.saToken}") }
 				.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 				.post(payload)
 				.build()
@@ -284,11 +272,9 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	}
 
 	/** This instance's Router-direct POST, filling in ConsoleHttp's testable postRouterDirect primitive
-	 * with this ConsoleClient's own client/url/tokens. Every production Router-direct call site goes
-	 * through here instead of repeating those four positional args - besides the duplication, three of
-	 * them are adjacent same-typed Strings (url, saToken, appToken) that Kotlin cannot keyword-enforce
-	 * positionally, so a hand-repeated call is one transposition away from swapping which credential
-	 * rides which header. logBody has NO default (mirrors the ConsoleHttp primitive) - a call whose 2xx
+	 * with this ConsoleClient's own client/url/token. Every production Router-direct call site goes
+	 * through here instead of repeating those positional args.
+	 * logBody has NO default (mirrors the ConsoleHttp primitive) - a call whose 2xx
 	 * result carries secret material the debug log must never echo passes false; every other site
 	 * states true explicitly, so a new site cannot compile without deciding rather than silently
 	 * inheriting a "log everything" default. */
@@ -299,7 +285,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		logBody: Boolean,
 		fail: (String) -> R,
 	): R = withReachFailover { base ->
-		ConsoleHttp.postRouterDirect(clientFor(base), "$base/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+		ConsoleHttp.postRouterDirect(clientFor(base), "$base/relay", prov.appToken, tag, describe, body, logBody, fail)
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */

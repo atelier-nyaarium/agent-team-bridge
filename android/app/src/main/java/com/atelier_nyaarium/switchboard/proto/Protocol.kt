@@ -519,10 +519,6 @@ data class ConsoleTmuxSendResult(
 
 @Serializable
 data class Provisioning(
-	val transport: String? = null,
-	val apiUrl: String? = null,
-	val caPem: String? = null,
-	val saToken: String? = null,
 	val routerUrl: String? = null,
 	val routerCertFp: String? = null,
 	val appToken: String? = null,
@@ -743,10 +739,6 @@ data class PendingTenant(
 
 @Serializable
 data class GatewayTransport(
-	val transport: String? = null,
-	val apiUrl: String? = null,
-	val saToken: String? = null,
-	val caPem: String? = null,
 	val routerUrl: String? = null,
 	val routerCertFp: String? = null,
 	val bearer: String? = null,
@@ -860,9 +852,6 @@ data class TransportRequest(
 @Serializable
 data class TransportResult(
 	val ok: Boolean,
-	val transport: String? = null,
-	val saToken: String? = null,
-	val caPem: String? = null,
 	val routerUrl: String? = null,
 	val routerCertFp: String? = null,
 	val bearer: String? = null,

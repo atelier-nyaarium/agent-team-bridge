@@ -15,13 +15,9 @@ import org.junit.Test
 class FriendOnboardingTest {
 	private fun prov(pending: PendingTenantRef?) =
 		Provisioning(
-			apiUrl = "https://api",
-			caPem = "ca",
-			saToken = "sa",
+			routerUrl = "https://router.example:20001",
+			routerCertFp = "ab12",
 			appToken = "app",
-			namespace = "evie-bot",
-			service = "evie-console-bridge",
-			port = 20004,
 			device = "dev",
 			conversationId = "conv",
 			pendingTenant = pending,

@@ -20,29 +20,18 @@ import kotlinx.serialization.json.Json
 //  Interfaces & Types
 
 /**
- * Credential blob the console holds. Reaches the console bridge through the k8s API
- * service-proxy: the SA token authenticates to the API server, the app token (a separate
- * forwarded header) authenticates to the Router.
+ * Credential blob the console holds. Reaches the console bridge through the leaf-pinned Router,
+ * which the app token authenticates to.
  *
- * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime
- * behavior a schema cannot express: device defaulting to Build.MODEL, conversationId
- * minting a UUID, trailing-slash URL normalization, the service-proxy defaults.
+ * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime behavior a
+ * schema cannot express: device defaulting to Build.MODEL, conversationId minting a UUID, and
+ * trailing-slash URL normalization.
  */
 data class Provisioning(
-	/** "k8s" (the service-proxy) or "direct" (the self-hosted Router). Absent on an old blob reads
-	 * as k8s, so its port keeps the proxy meaning. */
-	val transport: String = "k8s",
-	/** Empty on a direct blob; the k8s branch's fields. */
-	val apiUrl: String,
-	val caPem: String,
-	val saToken: String,
-	/** Empty on a k8s blob; the Router endpoint and the leaf fingerprint pinned against it. */
+	/** The Router endpoint and the leaf fingerprint pinned against it. */
 	val routerUrl: String = "",
 	val routerCertFp: String = "",
 	val appToken: String,
-	val namespace: String,
-	val service: String,
-	val port: Int,
 	val device: String,
 	val conversationId: String,
 	/** Present on a friend invite blob: the pending Domain id + one-time invite nonce the app
@@ -61,16 +50,9 @@ data class Provisioning(
 		fun parse(blob: String): Provisioning {
 			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
 			return Provisioning(
-				transport = p.transport ?: "k8s",
-				apiUrl = p.apiUrl?.trimEnd('/') ?: "",
-				caPem = p.caPem ?: "",
-				saToken = p.saToken ?: "",
 				routerUrl = p.routerUrl?.trimEnd('/') ?: "",
 				routerCertFp = p.routerCertFp ?: "",
 				appToken = p.appToken ?: "",
-				namespace = p.namespace ?: "evie-bot",
-				service = p.service ?: "evie-console-bridge",
-				port = p.port?.toInt() ?: 20004,
 				device = p.device ?: (android.os.Build.MODEL ?: "android"),
 				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
 				pendingTenant = p.pendingTenant,
@@ -98,7 +80,7 @@ internal data class EnrollEnvelope(
 // internal (not private): referenced from postRouterDirect, an internal inline fun - an inline
 // function's body cannot access a private-in-file type even from the same file (the compiler
 // treats inlining as a visibility-widening operation). Same bug class as ConsoleHttp's
-// PINNED_*/HELD_*/PROXY_CEILING_MS constants; see their comment for the general rule.
+// PINNED_*/HELD_*/ROUTER_HOLD_MS constants; see their comment for the general rule.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** First-root POST body: a top-level `firstRoot` field routes to the Router's console-bridge

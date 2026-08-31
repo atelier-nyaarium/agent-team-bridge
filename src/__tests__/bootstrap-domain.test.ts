@@ -170,7 +170,7 @@ describe("readAdminDomain (fresh vs re-provision detection)", () => {
 //  Blob pendingTenant wiring (the discriminator the app reads)
 
 describe("provisioning blob pendingTenant (the pending vs rooted discriminator)", () => {
-	const base = { apiUrl: "https://k8s.example:6443", caPem: "ca", saToken: "sa", appToken: "app" };
+	const base = { routerUrl: "https://router.example:20001", routerCertFp: "ab12", appToken: "app" };
 
 	it("carries pendingTenant when fresh (admin domainId + the standard-base64 invite nonce)", () => {
 		const nonce = randomBytes(18).toString("base64");

@@ -419,7 +419,6 @@ export class RouterServer {
 		const port = reach?.publicHost ? (reach.publicPort ?? this.params.port) : this.params.port;
 		return {
 			ok: true,
-			transport: "direct",
 			routerUrl: `https://${host}:${port}`,
 			routerCertFp: this.tls.certFp,
 			bearer: this.params.federationToken,

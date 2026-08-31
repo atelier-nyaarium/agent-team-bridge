@@ -117,11 +117,7 @@ export const TransportRequestSchema = z
 export const TransportResultSchema = z
 	.object({
 		ok: z.boolean(),
-		// Absent reads as "k8s", so an older Router's reply still installs.
-		transport: z.enum(["k8s", "direct"]).optional(),
-		saToken: z.string().optional(),
-		caPem: z.string().optional(),
-		// The direct branch: what a Gateway needs to dial the Router and pin it.
+		// What a Gateway needs to dial the Router and pin it.
 		routerUrl: z.string().optional(),
 		routerCertFp: z.string().optional(),
 		bearer: z.string().optional(),

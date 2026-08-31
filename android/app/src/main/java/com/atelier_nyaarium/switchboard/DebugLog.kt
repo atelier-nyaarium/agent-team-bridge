@@ -42,7 +42,6 @@ object DebugLog {
 	// Ingest endpoint params, set once provisioned. All @Volatile; written from
 	// the main thread, read from the poll loop IO thread.
 	@Volatile private var ingestBase: (() -> String)? = null
-	@Volatile private var ingestSaToken: String? = null
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
 	@Volatile private var ingestConversationId: String? = null
@@ -91,14 +90,10 @@ object DebugLog {
 	 */
 	fun attachIngest(prov: Provisioning, baseUrl: () -> String) {
 		if (BuildConfig.DEBUG) {
-			// Branch like every other console call. The k8s form needs an SA token the direct blob
-			// does not carry, so building it unconditionally left the whole trace stranded on-device
-			// for exactly the setup most likely to need reading. The base is a PROVIDER, not a value:
-			// the transport fails over between Router addresses, and a flush that kept dialing the
-			// one it was attached with would die on exactly the network change worth reading about.
-			val direct = prov.transport == "direct"
+			// The base is a PROVIDER, not a value: the transport fails over between Router addresses,
+			// and a flush that kept dialing the one it was attached with would die on exactly the
+			// network change worth reading about.
 			ingestBase = baseUrl
-			ingestSaToken = if (direct) "" else prov.saToken
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
 			ingestConversationId = prov.conversationId
@@ -106,12 +101,9 @@ object DebugLog {
 			// Android stacks reached the same host with different outcomes on one device (OkHttp
 			// connected through the LAN hairpin, HttpURLConnection timed out), and a debug channel
 			// that dies where the real one lives is worse than none: it says "nothing is wrong".
-			ingestClient =
-				runCatching {
-					if (direct) ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) else ConsoleHttp.buildPinnedClient(prov.caPem)
-				}.getOrNull()
+			ingestClient = runCatching { ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) }.getOrNull()
 			val host = runCatching { java.net.URI(baseUrl()).host }.getOrNull() ?: "?"
-			log("Ingest", "attached direct=$direct host=$host client=${ingestClient != null}")
+			log("Ingest", "attached host=$host client=${ingestClient != null}")
 		}
 	}
 
@@ -122,7 +114,6 @@ object DebugLog {
 	fun flushToIngest() {
 		if (BuildConfig.DEBUG) {
 			val url = ingestBase?.let { "${it().trimEnd('/')}/ingest" } ?: return
-			val saToken = ingestSaToken ?: return
 			val appToken = ingestAppToken ?: return
 			val device = ingestDevice ?: return
 			val convId = ingestConversationId ?: return
@@ -141,9 +132,6 @@ object DebugLog {
 					okhttp3.Request.Builder()
 						.url(url)
 						.post(body.toRequestBody("application/json".toMediaType()))
-						// The SA token authenticates to the API SERVER, so it is meaningless (and
-						// absent) on the direct branch, where the Router gates on the app token alone.
-						.apply { if (saToken.isNotEmpty()) header("Authorization", "Bearer $saToken") }
 						.header("X-Console-Bridge-Token", "Bearer $appToken")
 						.build()
 				// Read the code to complete the round-trip; discard the body. Logged straight to logcat

@@ -45,9 +45,9 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 			?: return@withContext EnrollDelivery(false, repo._state.value.error ?: "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
-		// Pull the gateway-bridge transport (proxy SA token + CA) from the Router by proving this owner roots
-		// a network. apiUrl + the network id come from the provisioning blob: apiUrl is the SAME external
-		// apiserver the console bridge uses, and domainId is the rooted Domain the Gateway adopts.
+		// Pull the gateway-bridge transport from the Router by proving this owner roots a network.
+		// The provisioning blob supplies the Router endpoint the console itself uses, and domainId is
+		// the rooted Domain the Gateway adopts.
 		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()
 			?: return@withContext EnrollDelivery(true, "Added, but this device is not provisioned - re-import your setup blob.", null)
 		val result = try {
@@ -62,16 +62,9 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 				null,
 			)
 		}
-		// The Router names its own branch. Direct carries what the Gateway dials and pins; the k8s
-		// branch stays readable only so an older Router still enrolls a Gateway, and goes when the
-		// last one is retired. Either way the required fields are checked HERE, so a half-answer
-		// fails with a cause rather than sealing a bundle the Gateway will refuse to install.
-		val direct = result.transport == "direct"
-		val missing = if (direct) {
-			result.routerUrl == null || result.routerCertFp == null || result.bearer == null
-		} else {
-			result.saToken == null || result.caPem == null
-		}
+		// The required fields are checked HERE, so a half-answer fails with a cause rather than
+		// sealing a bundle the Gateway will refuse to install.
+		val missing = result.routerUrl == null || result.routerCertFp == null || result.bearer == null
 		if (!result.ok || missing) {
 			return@withContext EnrollDelivery(
 				true,
@@ -82,16 +75,11 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		// The Gateway dials `routerUrl` as its BOOTSTRAP and re-learns the Router's other addresses
 		// from its own register reply, so this address only has to work once, from wherever that
 		// machine stands.
-		val transport = if (direct) {
-			GatewayTransport(
-				transport = "direct",
-				routerUrl = result.routerUrl,
-				routerCertFp = result.routerCertFp,
-				bearer = result.bearer,
-			)
-		} else {
-			GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
-		}
+		val transport = GatewayTransport(
+			routerUrl = result.routerUrl,
+			routerCertFp = result.routerCertFp,
+			bearer = result.bearer,
+		)
 		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		deliver(scanned.gatewayId, frameJson, scanned.lanHost, scanned.lanPort, scanned.certFp)

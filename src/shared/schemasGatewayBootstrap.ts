@@ -9,8 +9,8 @@ import { GatewayTransportSchema } from "./schemasGatewayTransport.js";
 //  The owner Console mints this for a Gateway it just admitted and seals it to the
 //  Gateway's box key (so plain-HTTP LAN delivery or a pasted blob stays confidential
 //  and tamper-evident). It never crosses the Router: the Console carries it to the Gateway
-//  directly. `transport` is the same SA-token-over-service-proxy shape the Console
-//  uses, so one credential mechanism serves both member kinds. `admission` is this
+//  directly. `transport` is the same endpoint-and-pin shape the Console uses, so one
+//  credential mechanism serves both member kinds. `admission` is this
 //  Gateway's own owner-signed admission; `domain` mirrors the keyring so the Gateway
 //  can verify peers from its first boot.
 

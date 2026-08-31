@@ -21,7 +21,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Talks to the console bridge through the CA-pinned k8s API service-proxy.
+ * Talks to the console bridge through the leaf-pinned Router.
  *
  * The mailbox ops live here; every other family is an extension function in a sibling file
  * (ConsoleClientEnroll / ConsoleClientBlobs / ConsoleClientSessions / ConsoleClientCrossDomain),
@@ -45,13 +45,11 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 		}
 
 	/**
-	 * CA-pinned preflight: the console-bridge liveness probe through the API service-proxy, on the
-	 * same path the real ops use, so it proves TLS pinning, reachability, and SA auth.
+	 * Leaf-pinned preflight: the Router liveness probe, on the same path the real ops use, so it
+	 * proves TLS pinning and reachability together.
 	 *
-	 * It must NOT hit a raw cluster endpoint like `get namespace`: the console SA (console-bridge-proxy)
-	 * is scoped to the service-proxy verb only, so a namespace GET 403s and strands every connect before
-	 * the admission submit, leaving the console forever "not admitted". /health needs no app token, so a
-	 * failure here means the cluster or tunnel is down, separate from "the bridge rejected our creds".
+	 * /health needs no app token, so a failure here means the Router is unreachable, which is a
+	 * separate answer from "the Router rejected our creds".
 	 */
 	suspend fun apiReachable(): String {
 		// The one probe that may fail over: it is the first thing a connect does, so a phone that just
@@ -59,7 +57,6 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 		val code = transport.withReachFailover { base ->
 			val req = Request.Builder()
 				.url("$base/health")
-				.apply { if (transport.prov.saToken.isNotEmpty()) header("Authorization", "Bearer ${transport.prov.saToken}") }
 				.get()
 				.build()
 			transport.clientFor(base).newCall(req).execute().use { resp ->
@@ -85,7 +82,6 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 	 * second opinion about liveness that could disagree with it.
 	 */
 	fun fetchConnectedGateways(): List<String>? {
-		if (transport.prov.transport != "direct") return null
 		val req = Request.Builder()
 			.url("${transport.proxyBase}/console")
 			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
@@ -104,7 +100,6 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 	/** The Router's advertised public host and LAN addresses. Behind the app token, so a stranger on
 	 * the port sees the same /health as before and nothing about the network behind it. */
 	private fun fetchReach(): RouterReach? {
-		if (transport.prov.transport != "direct") return null
 		val req = Request.Builder()
 			.url("${transport.proxyBase}/console")
 			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
@@ -252,11 +247,11 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions,
 			knownTaskBoardVersion = knownTaskBoardVersion,
 		)
-		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), the Router's relay
-		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
-		// (58s) catches a vanished Router, and the apiserver proxy's PROXY_CEILING_MS (60s) outranks
-		// them all - pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < PROXY_CEILING_MS in
-		// ChatRepositoryConstantsTest. Each failure layer returns before the next races it.
+		// Ordered timeout chain for a held poll: the gateway replies by holdMs (40s), the Router's
+		// relay hold fires at ROUTER_HOLD_MS (55s) if the gateway vanished, and this read timeout at
+		// holdMs+HELD_READ_MARGIN_MS (58s) catches a vanished Router last - pinned as
+		// LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS > ROUTER_HOLD_MS in ChatRepositoryConstantsTest.
+		// Each layer returns before the next races it.
 		val heldReadTimeoutMs = if (holdMs > 0) holdMs + ConsoleHttp.HELD_READ_MARGIN_MS else null
 		val body = transport.relay(
 			op,

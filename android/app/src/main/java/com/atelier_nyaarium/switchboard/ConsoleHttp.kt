@@ -2,15 +2,11 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
-import java.io.ByteArrayInputStream
 import java.io.IOException
-import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.cert.CertificateException
-import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -45,15 +41,14 @@ internal object ConsoleHttp {
 
 	// The gap between a held poll's requested hold and the read timeout that bounds it -
 	// see poll()'s heldReadTimeoutMs. Named (not a bare literal) because
-	// ChatRepositoryConstantsTest pins LONG_POLL_HOLD_MS + this against PROXY_CEILING_MS.
+	// ChatRepositoryConstantsTest pins LONG_POLL_HOLD_MS + this against ROUTER_HOLD_MS.
 	internal const val HELD_READ_MARGIN_MS = 18_000L
 
-	// Mirrors the apiserver proxy's own read timeout (untracked infra config, not in this
-	// repo) - an infra change to that value must update this one too. The binding constraint
-	// on the whole long-poll chain: the client's held read timeout must return before the
-	// proxy resets the socket, pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < this in
-	// ChatRepositoryConstantsTest.
-	internal const val PROXY_CEILING_MS = 60_000L
+	// The Router's own hold on a console request (federation-server/consoleSurface.ts's
+	// DEFAULT_TIMEOUT_MS) - change both together. The client's held read window must OUTLAST it, or
+	// a held poll times out on this side while the Router is still about to answer normally. Pinned
+	// as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS > this in ChatRepositoryConstantsTest.
+	internal const val ROUTER_HOLD_MS = 55_000L
 
 	// Bounds the common (non-held) relay() call: base read timeout + connect + margin.
 	// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout
@@ -146,7 +141,6 @@ internal object ConsoleHttp {
 	internal suspend inline fun <reified R> postRouterDirect(
 		httpClient: OkHttpClient,
 		url: String,
-		saToken: String,
 		appToken: String,
 		tag: String,
 		describe: String,
@@ -156,8 +150,6 @@ internal object ConsoleHttp {
 	): R {
 		val req = Request.Builder()
 			.url(url)
-			// Empty on a direct record: that token authenticates the k8s proxy hop, not the Router.
-			.apply { if (saToken.isNotEmpty()) header("Authorization", "Bearer $saToken") }
 			.header("X-Console-Bridge-Token", "Bearer $appToken")
 			.post(body)
 			.build()
@@ -212,38 +204,19 @@ internal object ConsoleHttp {
 		}
 	}
 
-	/** Trust ONLY the supplied cluster CA (the API server cert is cluster-signed). */
-	internal fun buildPinnedClient(caPem: String): OkHttpClient {
-		val ca = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(caPem.toByteArray()))
-		val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-			load(null, null)
-			setCertificateEntry("cluster-ca", ca)
-		}
-		val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
-		val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
-		val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
-		// The relay holds a send op server-side for up to 25s (the gateway's
-		// send bound) before answering "running", so OkHttp's 10s default read
-		// timeout would mislabel every cold-wake send as failed. Write gets
-		// headroom for a 500 MB attachment upload on slow links. No callTimeout here
-		// deliberately: it varies per call (tight for poll/relay, unbounded for send's
-		// upload), so relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
-		return OkHttpClient.Builder()
-			.sslSocketFactory(ssl.socketFactory, tm)
-			.connectTimeout(PINNED_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-			.readTimeout(PINNED_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-			.writeTimeout(PINNED_WRITE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-			.build()
-	}
-
 	/**
 	 * A client trusting EXACTLY the Router's self-signed leaf, by SHA-256 fingerprint.
 	 *
 	 * Hostname verification is disabled here and only here: a pinned leaf has no CA chain and no
 	 * meaningful subject, which is what lets the same certificate answer on a LAN IP, a DDNS name,
 	 * or a port-forwarded address without reissue. The pin is the trust, and it is delivered
-	 * out-of-band in the provisioning blob. Same timeout profile as the CA-pinned client, so a
-	 * held poll is not mislabelled as a failure.
+	 * out-of-band in the provisioning blob.
+	 *
+	 * The relay holds a send op server-side for up to 25s (the gateway's send bound) before
+	 * answering "running", so OkHttp's 10s default read timeout would mislabel every cold-wake send
+	 * as failed. Write gets headroom for a 500 MB attachment upload on slow links. No callTimeout
+	 * here deliberately: it varies per call (tight for poll/relay, unbounded for send's upload), so
+	 * relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
 	 */
 	internal fun buildLeafPinnedClient(certFpHex: String): OkHttpClient {
 		val tm = object : X509TrustManager {

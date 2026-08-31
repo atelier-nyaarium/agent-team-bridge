@@ -10,7 +10,6 @@ function buildFrame(
 	nonce: string,
 	gatewayId: string,
 	admissionSigner: Identity = owner,
-	direct = false,
 ): unknown {
 	const admission: Admission = {
 		kind: "gateway",
@@ -23,14 +22,11 @@ function buildFrame(
 	const signed = signAdmission(admission, admissionSigner.sign.priv, admissionSigner.sign.pub);
 	// Realistic field lengths, so the size assertion below measures a real bundle rather than a toy:
 	// a 64-hex fingerprint and a 64-hex bearer are what the Router actually hands out.
-	const transport = direct
-		? {
-				transport: "direct",
-				routerUrl: "https://switchboard.example.com:20001",
-				routerCertFp: "ce".repeat(32),
-				bearer: "ab".repeat(32),
-			}
-		: { apiUrl: "https://api", saToken: "sa", caPem: "ca", appToken: "app" };
+	const transport = {
+		routerUrl: "https://switchboard.example.com:20001",
+		routerCertFp: "ce".repeat(32),
+		bearer: "ab".repeat(32),
+	};
 	const bundle = {
 		nonce,
 		transport,
@@ -50,7 +46,7 @@ describe("openBootstrapBundle", () => {
 	it("opens a valid bundle sealed to this Gateway", () => {
 		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
 		const bundle = openBootstrapBundle(frame, sw, "n1", "sakura");
-		expect(bundle.transport.apiUrl).toBe("https://api");
+		expect(bundle.transport.routerUrl).toBe("https://switchboard.example.com:20001");
 		expect(bundle.domain.ownerSignPub).toBe(owner.sign.pub);
 	});
 
@@ -82,11 +78,11 @@ describe("openBootstrapBundle", () => {
 	// a bundle carrying the whole roster grew ~370 bytes per member and crossed the 4096-byte line the
 	// tty discards past, which is how paste enrollment broke on the first machine that was not the first.
 	it("installs from a bundle that names only the root and its own admission, and that fits a paste", () => {
-		const frame = buildFrame(owner, sw, console_, "n1", "sakura", owner, /* direct */ true);
+		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
 		const bundle = openBootstrapBundle(frame, sw, "n1", "sakura");
 		expect(bundle.domain.admissions).toHaveLength(1);
 		expect(bundle.domain.revocations).toHaveLength(0);
-		expect(bundle.transport.transport).toBe("direct");
+		expect(bundle.transport.routerCertFp).toHaveLength(64);
 		const wire = JSON.stringify(frame).length;
 		expect(wire, `sealed frame is ${wire} bytes`).toBeLessThan(2048);
 	});

@@ -119,15 +119,12 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 			}
 		}
 
-	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
-	 * admin was itself provisioned with (this owner's own blob) plus the pending tenant's
-	 * {domainId, nonce}. The friend reaches the SAME shared console-bridge as the admin and
-	 * first-roots over the console-bridge /relay path; the admin's own console-bridge SA +
-	 * CONSOLE_BRIDGE_TOKEN is what authorizes the friend's first_root there. The route Gateway's
-	 * bootstrap-transport would instead hand over the gateway-bridge SA + BRIDGE_TOKEN, which the
-	 * console-bridge service-proxy RBAC-403s and 401s on the app token. The blob omits service/port so
-	 * the friend defaults to evie-console-bridge:20004. The JSON is what the paste / file-import path
-	 * also accepts. */
+	/** Build the invite blob a hosted tenant's QR encodes: the console transport creds the admin was
+	 * itself provisioned with (this owner's own blob) plus the pending tenant's {domainId, nonce}.
+	 * The friend reaches the SAME Router as the admin and first-roots over its /relay path; the
+	 * admin's own CONSOLE_BRIDGE_TOKEN is what authorizes the friend's first_root there. The route
+	 * Gateway's bootstrap-transport would instead hand over the gateway bearer, which that path does
+	 * not accept. The JSON is what the paste / file-import path also accepts. */
 	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
 		runCatching {
 			val blob = repo.store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
@@ -145,13 +142,8 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 				.put("adminDomainId", adminDomain)
 				.put("handshakeId", invite.handshakeId)
 				.put("pin", invite.pin)
-			// The invite carries whichever branch this owner is on, or a direct-mode owner mints
-			// an invite pointing at an endpoint the friend cannot reach.
+			// The invite carries this owner's own endpoint, or the friend cannot reach it.
 			val obj = JSONObject()
-				.put("transport", prov.transport)
-				.put("apiUrl", prov.apiUrl)
-				.put("saToken", prov.saToken)
-				.put("caPem", prov.caPem)
 				.put("routerUrl", prov.routerUrl)
 				.put("routerCertFp", prov.routerCertFp)
 				.put("appToken", prov.appToken)

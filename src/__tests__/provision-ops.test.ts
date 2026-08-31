@@ -242,9 +242,8 @@ describe("delete_domain vectors (owner-signed)", () => {
 
 describe("ProvisioningSchema pendingTenant (the pending-Domain discriminator)", () => {
 	const base = {
-		apiUrl: "https://k8s.example:6443",
-		caPem: "-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----",
-		saToken: "sa-token-value",
+		routerUrl: "https://router.example:20001",
+		routerCertFp: "ab12",
 	};
 
 	it("round-trips a blob carrying pendingTenant", () => {

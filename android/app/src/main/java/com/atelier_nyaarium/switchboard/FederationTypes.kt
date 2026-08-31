@@ -38,7 +38,7 @@ data class ScannedDeviceApproval(
 	val approvalId: String,
 	val nonce: String,
 	val reach: String,
-	/** Pin for the reach when it is a self-signed Router; empty for the k8s ingress. */
+	/** Pin for the reach, empty when this device holds none. */
 	val reachCertFp: String = "",
 	val sas: String,
 )
@@ -48,18 +48,10 @@ data class ScannedDeviceApproval(
  * Gateway without holding the owner key. */
 @kotlinx.serialization.Serializable
 data class ConsoleTransport(
-	/** "k8s" (the service-proxy) or "direct" (the self-hosted Router). Absent reads as k8s. */
-	val transport: String = "k8s",
-	val apiUrl: String,
-	val caPem: String,
-	val saToken: String,
-	/** The direct branch: the Router endpoint and the leaf fingerprint pinned against it. */
+	/** The Router endpoint and the leaf fingerprint pinned against it. */
 	val routerUrl: String = "",
 	val routerCertFp: String = "",
 	val appToken: String,
-	val namespace: String,
-	val service: String,
-	val port: Long,
 	val domainId: String? = null,
 	val gatewayId: String? = null,
 	val domainVersion: String? = null,

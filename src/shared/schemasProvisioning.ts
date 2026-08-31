@@ -41,17 +41,8 @@ export const EnrollHandshakeRefSchema = z
 
 export const ProvisioningSchema = z
 	.object({
-		// Which endpoint the fields below describe. Absent reads as "k8s", so a blob written
-		// before the Router existed keeps its meaning and its port keeps the proxy sense.
-		// A flat discriminant rather than a zod union: this blob is DECODED by the phone, and
-		// the Kotlin codegen only emits sealed classes for encode-side roots.
-		transport: z.enum(["k8s", "direct"]).optional(),
-		// The k8s branch. Optional at the type level so a direct-only blob is representable;
-		// the refinement below is what actually requires them.
-		apiUrl: z.string().min(1).optional(),
-		caPem: z.string().optional(),
-		saToken: z.string().optional(),
-		// The direct branch: the Router's own endpoint and the leaf fingerprint pinned against it.
+		// The Router's own endpoint and the leaf fingerprint pinned against it. Optional at the type
+		// level because the Kotlin codegen sees flat fields; the refinement below requires the pair.
 		routerUrl: z.string().min(1).optional(),
 		routerCertFp: z.string().min(1).optional(),
 		appToken: z.string().optional(),
@@ -75,14 +66,11 @@ export const ProvisioningSchema = z
 		// entry is shown disabled.
 		deviceApprovalReach: z.string().optional(),
 	})
-	// The branch's own fields are required together. A refinement never reaches the JSON Schema,
-	// so Kotlin still sees flat optionals and this stays the one place the pairing is enforced.
+	// The Router endpoint and its pinned fingerprint are required together. A refinement never
+	// reaches the JSON Schema, so Kotlin still sees flat optionals and this stays the one place the
+	// pairing is enforced.
 	// `.meta()` goes LAST: refine returns a new instance, and the codegen looks the id up by it.
-	.refine(
-		(value) =>
-			value.transport === "direct"
-				? !!value.routerUrl && !!value.routerCertFp
-				: !!value.apiUrl && value.caPem != null && value.saToken != null,
-		{ message: "provisioning is missing the fields its transport requires" },
-	)
+	.refine((value) => !!value.routerUrl && !!value.routerCertFp, {
+		message: "provisioning is missing its Router endpoint or pinned fingerprint",
+	})
 	.meta({ id: "Provisioning" });

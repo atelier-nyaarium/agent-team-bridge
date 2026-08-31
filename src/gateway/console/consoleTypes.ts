@@ -289,10 +289,10 @@ export const CREATE_SESSION_BOUND_MS = 25_000;
 
 // The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
 // outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
-// value. Must clear the relay chain with headroom: the Router holds the console's HTTP request 55s and
-// the apiserver proxy allows 60s (ConsoleHttp.PROXY_CEILING_MS). The Android console's own
-// LONG_POLL_HOLD_MS must stay at or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts
-// and ChatRepositoryConstantsTest.kt, update all sides together.
+// value. Must clear the relay chain with headroom: the Router holds the console's HTTP request 55s
+// (ConsoleHttp.ROUTER_HOLD_MS mirrors it). The Android console's own LONG_POLL_HOLD_MS must stay at
+// or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts and ChatRepositoryConstantsTest.kt,
+// update all sides together.
 export const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 
 // At-most-once side effects: the console->Router->gateway path is at-least-once (a lost reply makes

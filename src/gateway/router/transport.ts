@@ -6,10 +6,8 @@ import { DEFAULT_ROUTER_PORT, type RouterReach } from "../../shared/router-reach
 //  Interfaces & Types
 
 /** The Gateway's reach-relay credentials: the self-hosted Router, dialed by URL and pinned by its
- * leaf fingerprint. `transport` survives the k8s retirement as a stored discriminant, since blobs
- * written before it still carry the field and a Gateway must reject one rather than mis-read it. */
+ * leaf fingerprint. */
 export interface RouterTransport {
-	transport: "direct";
 	routerUrl: string;
 	routerCertFp: string;
 	bearer: string;
@@ -20,10 +18,11 @@ type RawTransport = Partial<RouterTransport>;
 ////////////////////////////////
 //  Functions & Helpers
 
+// All three or nothing: a file missing any of them leaves the gateway standalone rather than
+// half-configured, which is also what refuses a file written in a retired shape.
 function normalize(raw: RawTransport): RouterTransport | null {
-	if (raw.transport !== "direct" || !raw.routerUrl || !raw.routerCertFp || !raw.bearer) return null;
+	if (!raw.routerUrl || !raw.routerCertFp || !raw.bearer) return null;
 	return {
-		transport: "direct",
 		routerUrl: raw.routerUrl.replace(/\/$/, ""),
 		routerCertFp: raw.routerCertFp.toLowerCase(),
 		bearer: raw.bearer,

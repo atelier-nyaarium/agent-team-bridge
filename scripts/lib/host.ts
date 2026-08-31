@@ -139,8 +139,8 @@ export async function containerUp(): Promise<boolean> {
 
 /** Ensure the gateway container is up, starting it if down (e.g. right after a purge). Builds so a
  * pulled code change is picked up rather than an old image crash-looping; the layer cache keeps an
- * unchanged build fast. This deliberately does not require Kubernetes: a new Gateway starts in
- * credentials-free arming mode until its Console delivers an enrollment bundle. */
+ * unchanged build fast. A new Gateway starts in credentials-free arming mode until its Console
+ * delivers an enrollment bundle. */
 export async function ensureContainer(): Promise<void> {
 	if (await containerUp()) return;
 	note(`Starting gateway docker`);

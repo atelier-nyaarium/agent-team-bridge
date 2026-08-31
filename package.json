@@ -6,7 +6,6 @@
 		"start:gateway": "bun run src/main-gateway.ts",
 		"start:mcp": "bun run src/main-mcp.ts",
 		"start:host-daemon": "bun run src/main-host-daemon.ts",
-		"export:federation": "bun run scripts/federation-export.ts",
 		"build": "bun run scripts/build.ts",
 		"lint": "bun scripts/lint.ts",
 		"lint:fix": "biome check --write .",

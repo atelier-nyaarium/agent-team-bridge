@@ -8,23 +8,16 @@ import { z } from "zod";
 
 export const GatewayTransportSchema = z
 	.object({
-		// Absent reads as "k8s", so a bundle sealed before the Router existed still installs.
-		transport: z.enum(["k8s", "direct"]).optional(),
-		apiUrl: z.string().min(1).optional(),
-		saToken: z.string().min(1).optional(),
-		caPem: z.string().min(1).optional(),
-		// The direct branch. `routerUrl` is what the GATEWAY dials, which on one host is the
-		// docker-network alias rather than the LAN address the phone uses.
+		// `routerUrl` is what the GATEWAY dials, which on one host is the docker-network alias
+		// rather than the LAN address the phone uses.
 		routerUrl: z.string().min(1).optional(),
 		routerCertFp: z.string().min(1).optional(),
 		bearer: z.string().min(1).optional(),
 	})
+	// Optional at the type level because the Kotlin codegen sees flat fields; all three are required
+	// together, and this is the one place that pairing is enforced.
 	// `.meta()` goes LAST: refine returns a new instance, and the codegen looks the id up by it.
-	.refine(
-		(value) =>
-			value.transport === "direct"
-				? !!value.routerUrl && !!value.routerCertFp && !!value.bearer
-				: !!value.apiUrl && !!value.saToken && !!value.caPem,
-		{ message: "gateway transport is missing the fields its transport requires" },
-	)
+	.refine((value) => !!value.routerUrl && !!value.routerCertFp && !!value.bearer, {
+		message: "gateway transport is missing its Router endpoint, pinned fingerprint, or bearer",
+	})
 	.meta({ id: "GatewayTransport" });
