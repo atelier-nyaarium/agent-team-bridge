@@ -137,13 +137,17 @@ code does not belong here; rationale lives in `git log`.
       is refused, a model is checked against `model/list` at each point of use, not just at open, and
       a failed request rejects with the `AppServerFailure` only this module mints, classified by
       `kind` (see Codex delegation below)
-    - `codexThreadLifecycle.ts` - a thread's life after the App Server loads it: one queue per thread,
+    - `codexThreadLifecycle.ts` - a thread's life after the App Server loads it: a queue per thread,
       and a settled turn published then archived so its MCP servers die (see Codex delegation below)
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
-    - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
-      per-agent serialization, and the outbox the gateway acknowledges against. `session()` shares one
-      open per target, since commands serialize per AGENT and two agents share a child
+    - `agentDaemonCore.ts` - what the Codex and Copilot daemons share: the session registry and the
+      generation fence over it (`live`, `retire`, and a `publish` that refuses a dead generation),
+      per-agent serialization, event numbering, and the outbox behind `replay` and `acknowledge`.
+      Backend protocol lives in the services above it, never here
+    - `codexDaemonService.ts` - the Codex daemon's half of the relay: commands in, receipts and events
+      out. `session()` shares one open per target, since commands serialize per AGENT and two agents
+      share a child. `copilotDaemonService.ts` is the same shape over ACP sessions and prompts
   - `local/` - the daemonless backend a session runs itself (see Local agent mode).
     `localAgentRuntime.ts` owns the catalog, wait budget and answer shaping; `codexLocalSession.ts` /
     `copilotLocalSession.ts` are the per-protocol adapters; `localAgentHost.ts` wires a backend to the

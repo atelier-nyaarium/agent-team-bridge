@@ -50,6 +50,13 @@ const OUTBOX_MAX_ENTRIES = 1_000;
 ////////////////////////////////
 //  Class
 
+/**
+ * What every agent daemon shares: which generation serves a target, and the stream back to the
+ * gateway.
+ *
+ * It owns the registry and the fence over it, so a backend cannot publish under a generation the
+ * gateway has retired. Protocol belongs to the service above it.
+ */
 export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 	private readonly sessions = new Map<string, TSession>();
 	private readonly opening = new Map<string, Promise<TSession | null>>();
