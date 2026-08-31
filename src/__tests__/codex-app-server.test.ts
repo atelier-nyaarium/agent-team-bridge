@@ -1021,6 +1021,64 @@ describe("the thread lifecycle", () => {
 		}
 	});
 
+	it("takes a started thread as new whatever it knew of that id, and drops the old record's retry", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			// Left parking with a retry pending, which must not reach the thread the server starts next.
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await refuse(f, "thread/archive", "no rollout found for thread id");
+			await answer(f, "thread/read", readOf("someone-else", []));
+			await settling;
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parking" });
+
+			const starting = client.startThread({ cwd: "/tmp" });
+			await answer(f, "thread/start", { thread: { id: THREAD } }, 1);
+			expect(await starting).toBe(THREAD);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "idle" });
+
+			await vi.advanceTimersByTimeAsync(PARK_RETRY_MS * 2);
+			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
+
+			// Loaded, so its first turn needs no resume.
+			const next = client.startTurn(THREAD, "again");
+			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
+			expect(await next).toBe("turn-2");
+			expect(methods(f)).not.toContain("thread/resume");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops an operation the replaced thread left in flight, so its delete cannot reach the new one", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go");
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+			// Paused between the two reads of the dispose rule when the server hands the id back.
+			const settling = client.settleTurn(THREAD, TURN, DONE).catch((error) => error);
+			await refuse(f, "thread/archive", "no rollout found for thread id");
+			await answer(f, "thread/read", readOf(THREAD, []));
+
+			const starting = client.startThread({ cwd: "/tmp" });
+			await answer(f, "thread/start", { thread: { id: THREAD } }, 1);
+			expect(await starting).toBe(THREAD);
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS * 2);
+
+			expect(await settling).toMatchObject({ message: expect.stringContaining("replaced") });
+			expect(methods(f)).not.toContain("thread/delete");
+			expect(methods(f).filter((m) => m === "thread/read")).toHaveLength(1);
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "idle" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("tracks a thread it hears of only through a terminal, publishing and parking it", async () => {
 		vi.useFakeTimers();
 		try {

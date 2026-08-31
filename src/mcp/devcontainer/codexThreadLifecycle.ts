@@ -48,7 +48,7 @@ interface ThreadRecord {
 	/** A `turn/start` whose id is not known yet, and the terminals that beat its response. */
 	pendingStart: boolean;
 	buffered: Map<string, TerminalOutcome>;
-	/** Turns whose terminal already left through `onTerminal`. */
+	/** Turns whose terminal already left through `onTerminal`; one entry per settled turn of this thread. */
 	published: Set<string>;
 	/** Archive refusals since the last activation; exhausted, the generation is poisoned. */
 	parkAttempts: number;
@@ -89,8 +89,15 @@ export class ThreadLifecycle {
 			.map(([threadId]) => threadId);
 	}
 
-	/** A thread the server just started for this client: loaded, with no turn yet. */
+	/**
+	 * A thread the server just started for this client: loaded, with no turn yet.
+	 *
+	 * The reply is authoritative, so an id this client already knew is a new thread and its record is
+	 * replaced. The old record's retry is cancelled first, or it would park the new one.
+	 */
 	started(threadId: string): void {
+		const previous = this.threads.get(threadId);
+		if (previous) this.cancelRetry(previous);
 		this.threads.set(threadId, { ...this.fresh(), state: { phase: "idle" } });
 	}
 
@@ -386,6 +393,9 @@ export class ThreadLifecycle {
 		params: unknown,
 		read: (result: unknown) => T,
 	): Promise<T> {
+		// A record the map no longer holds belongs to a thread the server replaced; its requests would
+		// reach the new one, so an operation already in flight stops here rather than at the wire.
+		if (this.threads.get(threadId) !== record) throw new Error(`thread ${threadId} was replaced`);
 		try {
 			return read(await this.deps.request(method, params));
 		} catch (error) {

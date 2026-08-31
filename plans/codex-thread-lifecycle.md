@@ -128,6 +128,13 @@ on one thread never interleave on the wire. `open` takes the two consumer hooks,
   no longer its own and drops itself. A follow-up waits only for a request already on the wire.
 - `close` cancels every timer and retry; an operation paused between its two reads is released at
   once and meets the closed transport, so nothing is left hanging.
+- A `thread/start` reply is authoritative: the server minted that id, so whatever this client believed
+  about it is stale and the record is replaced by a fresh loaded one, with the old record's retry
+  cancelled and any operation still in flight on it stopped at its next request, so neither can
+  archive or delete the thread that now holds the id. Every other path refuses a `disposed` or `poisoned`
+  thread. A thread remembers each turn it published, so a duplicate terminal is suppressed for as
+  long as the record lives; retiring records is Step 6's retention, and bounding that set instead
+  would trade the once-per-turn promise for it.
 
 Tests: `src/__tests__/codex-app-server.test.ts` through the real transport over `fakeChild`, each
 request answered by hand in any order under fake timers, so every failure is one the transport
@@ -139,6 +146,19 @@ failure, steer and interrupt gated to the active turn, and `adoptOrDispose` for 
 answers. The exact `thread/archive`, `thread/unarchive`, `thread/delete` and `thread/read` shapes are
 pinned there; `src/__tests__/codex-app-server-wire.test.ts` pins `thread/resume` and
 `thread/archive` through `RecordingTransport`.
+
+### What Step 3 inherits
+
+Three readers now answer "what happened to a turn" from different sources: `CodexTurnTracker` from
+the live event stream, `outcomeFromRead` from a read keyed by a turn id, and `inspectRead` from a
+read with no turn id, with `CodexDaemonService.runningTurn` interpreting a read a fourth time. They
+share the settled, running and unknown vocabulary and duplicate the schema check, the turn selection
+and the answer classification, so a change to a status or an item phase has four places to reach.
+Step 3 is where the daemon's three terminal paths meet the owner, which is where the shape of one
+reader with live and snapshot adapters becomes clear; decide it there rather than guessing here.
+
+`AppServerSession` still names only the pre-lifecycle methods, so Step 3 widens it with `settleTurn`
+and whatever the daemon needs, and every double follows or fails to compile.
 
 ## Step 3 - The daemon path through the owner
 
