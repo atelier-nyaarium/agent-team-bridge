@@ -6,8 +6,9 @@ decisions, and another repository's bug.
 
 One thing this file does NOT claim. The composite `host.*` bypass is a LIVE defect, not a
 non-defect: a name with no active binding stays claimable, so `host.foo` clears both the host-token
-gate and the reserved-name set. It is unfixed because the only fix locks out the hand-launched host
-window the owner requires, which makes it an owner decision, not a closed one.
+gate and the reserved-name set, and the prefix routes a later wake to the HOST MACHINE rather than
+a devcontainer. It is unfixed because the only fix locks out the hand-launched host window the
+owner requires, which makes it an owner decision, not a closed one.
 
 `[low]` entries were triaged only where one named a cheap concrete fix. The rest are recorded.
 
@@ -701,11 +702,24 @@ so they remain mutually impersonable by OS construction, permanently.
 **The `host` SPAWN is still unreserved,** and deliberately so. Both host protections match the bare
 string `host`, while every real host session is `host.<6hex>`, so a container can register a
 `host.*` name no record has armed. Reserving the prefix does not work: a hand-launched host Claude
-registers exactly that shape and would be locked out, which the owner's comfort ceiling forbids. A
-squat confers no privilege (the tmux drive path is console-side behind the sealed relay) but does
-list as a host-machine session on the board, so the owner could mistake it for their own. Closing
-it needs a way to tell a legitimate hand-launched host session from a squatter, which nothing
-today provides.
+registers exactly that shape and would be locked out, which the owner's comfort ceiling forbids.
+Closing it needs a way to tell a legitimate hand-launched host session from a squatter, which
+nothing today provides.
+
+**"A squat confers no privilege" was WRONG, and is corrected here.** The `host.` prefix is the one
+thing that routes a wake to the HOST MACHINE instead of a devcontainer, traced end to end:
+`isHostSpawn("host")` is true, `isReservedHostSession` blocks only `host-daemon`, and that branch
+builds a real host `TmuxTarget` and runs `buildLaunchCommand`. So a squatted `host.<anything>`,
+woken by an unauthenticated `/send` to it, starts a real Claude on the host in a workdir its own
+label influences. An ordinary name like `foo` falls through to the devcontainer branch and finds
+nothing, which is the whole marginal difference. `claudeSessionId` is caller-supplied at
+registration and emitted later as `--resume <id>`, so the transcript id is the squatter's choice
+too, though resuming anything real needs a valid id they have no way to learn.
+
+What a squat still cannot reach: the daemon slot itself, since `HOST_WS_TOKEN` guards team exactly
+`"host"`, so no catalog, presence or host-op replies; and the console's tmux keystroke path, which
+stays behind the owner-signed sealed relay. The old note was right about the relay and wrong to
+generalize from it.
 
 **Still owed, and WILL NOT DO without an owner decision:** the LAN-stranger half in any form. It
 needs token delivery to a hand-launched host Claude window, which is undesigned, and the origin-aware
