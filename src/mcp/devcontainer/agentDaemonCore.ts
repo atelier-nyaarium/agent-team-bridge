@@ -142,7 +142,7 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 		return this.sessions.get(session.targetId) === session;
 	}
 
-	/** Give up a generation. Nothing it holds is served or published again. */
+	/** Give up a generation: it serves and publishes nothing new. Retained entries still replay. */
 	retire(session: TSession): void {
 		if (this.live(session)) this.sessions.delete(session.targetId);
 	}

@@ -31,7 +31,8 @@ class FakeSession implements AppServerSession {
 	archiveGate?: Promise<void>;
 	/** Held open to land a turn's terminal while its steer is still in flight. */
 	steerGate?: Promise<void>;
-	read: unknown = { thread: { id: "thread-1", turns: [] } };
+	/** The snapshot `thread/read` answers with. Tests reassign it per scenario. */
+	threadReadResult: unknown = { thread: { id: "thread-1", turns: [] } };
 	/** What the real client hands its lifecycle; the daemon's terminals reach the gateway through them. */
 	hooks: LifecycleHooks = {};
 
@@ -68,7 +69,7 @@ class FakeSession implements AppServerSession {
 	}
 	async readThread() {
 		this.calls.push("readThread");
-		return this.read;
+		return this.threadReadResult;
 	}
 	async startTurn(threadId: string) {
 		this.calls.push("startTurn");
@@ -230,7 +231,7 @@ describe("Codex answer selection", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [
@@ -326,7 +327,7 @@ describe("Codex terminals through the thread lifecycle", () => {
 
 	it("settles a reconciled terminal through the lifecycle rather than straight to the gateway", async () => {
 		const context = setup();
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [
@@ -406,7 +407,7 @@ describe("Codex terminals through the thread lifecycle", () => {
 		await settle();
 		context.sent.length = 0;
 		context.session.calls.length = 0;
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
 		};
 
@@ -464,7 +465,7 @@ describe("Codex terminals through the thread lifecycle", () => {
 		await settle();
 		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(1);
 
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [
@@ -514,7 +515,7 @@ describe("Codex terminals through the thread lifecycle", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [
@@ -898,7 +899,7 @@ describe("Codex daemon commands", () => {
 
 		context.session.completeTurn("turn-1", "done");
 		await settle();
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-9", status: "inProgress", items: [] }] },
 		};
 		landed();
@@ -1020,7 +1021,7 @@ describe("Codex daemon commands", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [
@@ -1059,7 +1060,7 @@ describe("Codex daemon commands", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
-		context.session.read = { thread: { id: "thread-1", turns: [] } };
+		context.session.threadReadResult = { thread: { id: "thread-1", turns: [] } };
 
 		context.service.handleCommand({
 			type: "codex_command",
@@ -1083,7 +1084,7 @@ describe("Codex daemon commands", () => {
 		context.service.handleCommand(startCommand());
 		await settle();
 		context.sent.length = 0;
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
 		};
 
@@ -1105,7 +1106,7 @@ describe("Codex daemon commands", () => {
 	it("reports a turn that started despite a failed startTurn rather than refusing it", async () => {
 		const context = setup();
 		context.session.startTurnFails = new Error("connection reset");
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-live", status: "inProgress", items: [] }] },
 		};
 		context.service.handleCommand(startCommand());
@@ -1119,7 +1120,7 @@ describe("Codex daemon commands", () => {
 	it("refuses a start whose turn App Server confirms never began", async () => {
 		const context = setup();
 		context.session.startTurnFails = new Error("connection reset");
-		context.session.read = { thread: { id: "thread-1", turns: [] } };
+		context.session.threadReadResult = { thread: { id: "thread-1", turns: [] } };
 		context.service.handleCommand(startCommand());
 		await settle();
 
@@ -1132,7 +1133,7 @@ describe("Codex daemon commands", () => {
 		await settle();
 		context.sent.length = 0;
 		context.session.steerFails = new Error("thread is busy");
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
 		};
 
@@ -1162,7 +1163,7 @@ describe("Codex daemon commands", () => {
 		await settle();
 		context.sent.length = 0;
 		context.session.steerFails = new Error("turn already completed");
-		context.session.read = {
+		context.session.threadReadResult = {
 			thread: {
 				id: "thread-1",
 				turns: [

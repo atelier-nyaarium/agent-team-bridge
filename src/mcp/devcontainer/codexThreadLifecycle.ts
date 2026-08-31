@@ -1,5 +1,5 @@
-// A thread's life after the App Server loads it: every request and every terminal for one thread
-// passes through that thread's queue, and a settled turn parks the thread so its servers die.
+// A thread's life after the App Server loads it: requests queue per thread, a terminal arriving
+// during `turn/start` is buffered until its turn id is known, and a settled turn parks the thread.
 
 import { CodexAppServerThreadReadResultSchema, CodexAppServerTurnStartResultSchema } from "../../shared/codex-agent.js";
 import type { AppServerFailure } from "./codexAppServer.js";
@@ -101,7 +101,7 @@ export class ThreadLifecycle {
 		this.threads.set(threadId, { ...this.fresh(), state: { phase: "idle" } });
 	}
 
-	/** A thread a caller reached by name that this client never started. */
+	/** Ensure a record exists, including for a thread this client never started. */
 	track(threadId: string): void {
 		if (!this.threads.has(threadId)) this.threads.set(threadId, this.fresh());
 	}

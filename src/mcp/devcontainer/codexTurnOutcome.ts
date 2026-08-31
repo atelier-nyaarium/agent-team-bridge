@@ -4,7 +4,7 @@ import type { TurnOutcome } from "./codexTurnTracker.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** One shape for both the live tracker and a post-restart `thread/read`. */
+/** One terminal shape for both a witnessed turn and one rebuilt from `thread/read`. */
 export type TerminalOutcome =
 	| { status: "completed"; finalResponse?: string; finalItemId?: string }
 	| { status: "failed"; error: string }

@@ -257,6 +257,9 @@ replacing the one already serving, a target whose replacement fails to open adve
 and publishing nothing for a session that was retired or replaced, which is the check every backend
 on this core inherits. `src/__tests__/copilot-daemon-service.test.ts` covers the twin refusing a
 command whose generation retires mid-flight rather than losing its acceptance.
+`src/__tests__/daemon-fence-residue.test.ts` allows each service on the core exactly one direct
+`deps.send`, its own generationless refusal, so a later emitter cannot route a fenced frame around
+`publish`.
 
 ### Bug Classes
 
@@ -282,6 +285,13 @@ before a receipt that codex does.
 
 The lesson is the shape: a fact ABOUT a registry belongs in it. Every arrangement that tracked
 retirement beside the registry left either a live generation silent or a dead one talking.
+
+**Carried forward, and Step 5 must not add a fifth.** Four readers interpret the same `thread/read`
+snapshot independently: `outcomeFromRead`, `inspectRead`, `runningTurn`, and the tracker's own
+classification. The architecture audit ranked collapsing them to one classifier as its single
+recommendation, on the grounds that two call sites cannot then disagree about one snapshot, and that
+a status or item-phase change would otherwise land in four places, three findable only by grep. The
+watchdog reads thread state, so Step 5 either lands on one classifier or writes the fifth.
 
 ## Step 4 - The local path through the owner
 

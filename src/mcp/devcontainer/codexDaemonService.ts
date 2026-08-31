@@ -64,8 +64,8 @@ function heldTurn(message: unknown): { threadId: string; turnId: string } | null
  */
 export class CodexDaemonService {
 	private readonly core: AgentDaemonCore<TargetSession>;
-	/** Sessions built here, so a shutdown leaves no deadline running. */
-	private readonly sessions = new Set<TargetSession>();
+	/** Not a registry: whose deadlines to clear. `AgentDaemonCore` owns which generation serves. */
+	private readonly deadlineSessions = new Set<TargetSession>();
 	private stopped = false;
 
 	constructor(private readonly deps: CodexDaemonDeps) {
@@ -115,8 +115,8 @@ export class CodexDaemonService {
 	/** Retired before the clients close, so nothing a close settles still counts as live. */
 	shutdown(): void {
 		this.stopped = true;
-		for (const session of this.sessions) this.clearDeadlines(session);
-		this.sessions.clear();
+		for (const session of this.deadlineSessions) this.clearDeadlines(session);
+		this.deadlineSessions.clear();
 		this.core.shutdown();
 	}
 
@@ -404,13 +404,13 @@ export class CodexDaemonService {
 		const opening = session;
 		client.onEvent((message) => this.onServerEvent(opening, message));
 		// Older generations of this target keep no deadline running. A newer one outranks this open.
-		for (const previous of this.sessions) {
+		for (const previous of this.deadlineSessions) {
 			if (previous.targetId !== opening.targetId) continue;
 			if (previous.generation > opening.generation) continue;
 			this.clearDeadlines(previous);
-			this.sessions.delete(previous);
+			this.deadlineSessions.delete(previous);
 		}
-		this.sessions.add(opening);
+		this.deadlineSessions.add(opening);
 		return session;
 	}
 
@@ -515,7 +515,7 @@ export class CodexDaemonService {
 		);
 		this.core.retire(session);
 		this.clearDeadlines(session);
-		this.sessions.delete(session);
+		this.deadlineSessions.delete(session);
 		this.deps.targets.release(session.targetId, session.generation);
 	}
 
