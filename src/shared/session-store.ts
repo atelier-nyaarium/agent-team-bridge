@@ -78,6 +78,12 @@ export type CopilotCatalogWriter = AgentCatalogWriter<CopilotAgentCatalog, Copil
 /** Catalog names and reserved sessions live in gateway state, injected by the gateway. */
 export type ClashPredicate = (id: string) => boolean;
 
+/** Liveness is the socket registry's answer, which the store does not hold. */
+export interface SweepCap {
+	maxEntries: number;
+	isLive: (team: string) => boolean;
+}
+
 export interface SessionStoreOptions {
 	clash?: ClashPredicate;
 	now?: () => number;
@@ -451,7 +457,7 @@ export class SessionStore {
 
 	/** Caller-driven, so the gateway can sweep BEFORE snapshot(): the persisted file never carries a
 	 * just-expired record. Returns the removed keys, for end-of-life hooks. */
-	sweep(ttlMs: number): string[] {
+	sweep(ttlMs: number, cap?: SweepCap): string[] {
 		const cutoff = this.now() - ttlMs;
 		const removed: string[] = [];
 		for (const [team, record] of this.records) {
@@ -460,6 +466,17 @@ export class SessionStore {
 				this.records.delete(team);
 				removed.push(team);
 			}
+		}
+		if (!cap || this.records.size <= cap.maxEntries) return removed;
+		// Least-recently-seen first, since insertion order says nothing about which record is idle.
+		const evictable = [...this.records]
+			.filter(([team]) => !cap.isLive(team))
+			.sort((left, right) => left[1].lastSeen - right[1].lastSeen);
+		for (const [team, record] of evictable) {
+			if (this.records.size <= cap.maxEntries) break;
+			this.releaseLabel(record);
+			this.records.delete(team);
+			removed.push(team);
 		}
 		return removed;
 	}

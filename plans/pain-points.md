@@ -13,9 +13,8 @@ stranger. Runbook is now CLAUDE.md's "Restart ritual, and starting a host sessio
   harness's "Channel notifications skipped" line in mcp-logs and the gateway's unanswered handshake.
   A guard worth considering: the MCP refusing to register (or loudly warning) when it derived a
   `host.*` name AND the harness skipped its channel subscription, if the harness ever exposes that.
-- [medium] **`down.sh` kills the host daemon and `start-gateway.sh` does not restart it.** The
-  restart ritual has a missable third step whose omission is silent until wake/peek/spawn fail. It
-  bit twice in one day, once during a release and once during the resulting debugging.
+  WILL NOT DO: the guard needs the harness to expose whether it skipped its channel subscription,
+  which nothing today provides.
 
 ## Codex delegation (`plans/codex-thinking.md`, deleted, shipped - 2026-08-06)
 
@@ -441,15 +440,7 @@ paths still leak a pending reconnect timer. Cosmetic on a process that is exitin
 Migrated from `plans/pre-handshake-terminal-view.md` (deleted, shipped) so its still-open residuals
 are not lost. Verified still-present in current code at migration time.
 
-- [high] `android/.../ChatRepository.kt : forget` - **bug-class** - `forget()` deletes local state
-  synchronously then fires `client().forget(team)` in a bare `runCatching` with no `onFailure`, so a
-  gateway-side failure is swallowed silently, leaving the UI showing the session gone while its tmux
-  + record may still be alive. `closeTab`/`wakeSession` both attach an `onFailure` transient message;
-  forget, the more destructive op, was left the odd one out.
-- [medium] `consoleHandler.ts : create_session rollback sites` - **bug-class** - both rollback paths
-  call `sessionStore.forget(...)` on `!ok` with no re-check of `confirmedAt`/live-incarnation, so a
-  launch that reports failure after the session actually confirmed could drop a live record. Same
-  class as the (now-deleted) handshake-linkage plan's documented rollback races.
+All entries fixed and verified against current code.
 
 ## Handshake-established session linkage (PR #107, 2026-07-02)
 
@@ -461,9 +452,8 @@ not lost.
 
 ### In the shipped code - worth a near-term follow-up
 
-- [medium] `hostDaemon.ts : buildLaunchCommand : effort` - the model/effort flags are hardcoded for
-  every host session including resumes, so a host agent relaunches on its hardcoded tier on each wake
-  with no signal.
+- WILL NOT DO: `hostDaemon.ts : buildLaunchCommand` hardcodes model/effort for every host session.
+  Plumbing a per-session tier through is a new feature, not a defect fix.
 - [medium] `shared/host-op.ts : HostOp : createSession` (+ `hostDaemon.ts : hostOpRunner.createSession`)
   - the `create_session` op carries no `resumeSessionId`, so tapping "New Session" on a host name the
   gateway already has a resume id for starts fresh and abandons the saved transcript. Only the wake
@@ -471,9 +461,11 @@ not lost.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
-Owner-deferred (decision A); the root fix is the Gateway LAN auth surface section at the end of this
-file, still unbuilt. These are concrete manifestations of that same known gap, not standalone
-theoretical concerns.
+WILL NOT DO without an owner decision. Every item below is the same gap: a name with no active
+binding stays claimable by anyone, and `handshakeConfirmed` is not an authentication signal (a
+squatter answers its own handshake with no credential). Closing them needs a way to tell a
+legitimate hand-launched `host.*` session from a squatter, which nothing today provides, and
+reserving the prefix would lock out the hand-launch the owner requires.
 
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
   match the bare `host` exactly, so a composite `host.foo` bypasses both.
@@ -481,8 +473,6 @@ theoretical concerns.
   (`host` is a valid slug) and surfaces as a phantom available card.
 - [medium] `index.ts : doWakeTeam` - the reserved guard only blocks `host-daemon`; any other `host.*`
   is woken with the attacker's `resumeSessionId` forwarded.
-- [medium] `index.ts : sessionResume` - no entry-count ceiling (only the 30-day TTL), so unauthenticated
-  composite registers can grow the map and `session-resume.json` unboundedly.
 
 ## Console device-name address (PR #99)
 
@@ -512,16 +502,7 @@ crust-collection sweep.
 ### Phase F crust-collection sweep
 
 **High:**
-- [high] `android/.../ChatRepository.kt : ChatState.gap` - **bug-class** - set to `true` on a dropped-
-  mailbox-entries pulse but never reset anywhere, even though the pulse that set it resolves itself
-  the very next poll cycle. The sticky "Some messages were dropped" banner it drives has no dismiss
-  action, so the first mailbox-eviction event a device ever experiences leaves that banner on screen
-  for the rest of the process's life.
-- [high] `android/.../ChatRepository.kt : setDeviceName` - **bug-class** - fired the same
-  fire-and-forget way as rename/closeTab/wakeSession/forget, no CoroutineExceptionHandler anywhere in
-  the app, and unlike its neighbor `provision()` does not wrap its `JSONObject(blob).put("device",
-  name)` at all. A corrupted stored provisioning blob throws uncaught and crashes the app on a
-  routine device rename.
+All entries fixed and verified against current code.
 
 **Medium:**
 
@@ -808,12 +789,21 @@ list as a host-machine session on the board, so the owner could mistake it for t
 it needs a way to tell a legitimate hand-launched host session from a squatter, which nothing
 today provides.
 
-**Still owed, nobody assigned:** the LAN-stranger half in any form (the whole list above is still
-reachable by a wifi neighbour); deleting the dead `/ingest` route; validating `/connector`'s
-project hostname; a body-size cap on `/human/notify`; read-side ownership on `/poll` and
-`/pending`; the ungated fan-out (delivery is never gated on handshake confirmation, so a socket
-registering a victim's name still receives its pushes); and `bindResume`'s tier-2 path, where
-`bind()` matches a record by transcript id regardless of the registering team.
+**Still owed, and WILL NOT DO without an owner decision:** the LAN-stranger half in any form. It
+needs token delivery to a hand-launched host Claude window, which is undesigned, and the origin-aware
+gate that was tried is recorded above as unsound. Read-side ownership on `/poll` and `/pending`
+chains off the same gate.
+
+Four items on this list are now closed, verified against current code: `/connector`'s project is
+checked against the offline catalog before it is dialled; the gateway has a global
+`maxRequestBodySize`; `bindResume` distinguishes a transcript conflict from a legitimate handover;
+and `/ingest` is a live Router route the Android debug client posts to, so the claim that nothing
+used it was wrong and deleting it would have broken that client.
+
+The ungated fan-out is WILL NOT DO on its merits, not deferred. Gating delivery on
+`handshakeConfirmed` stops nobody: a squatter that can register a name can answer that name's
+handshake with no credential. There is no mailbox replay on the `channel_push` path, so the gate
+would drop real messages to legitimate sockets that had not confirmed yet.
 
 ## Console capability union (`plans/artifact-references.md` Phase 1, 2026-07-24)
 

@@ -7,9 +7,9 @@ pushd "$(dirname "$0")" > /dev/null || exit 1
 TMUX_SESSION="host-daemon"
 
 # Kill the host daemon tmux session
-if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
 	echo "Killing tmux session '${TMUX_SESSION}'..."
-	tmux kill-session -t "$TMUX_SESSION"
+	tmux kill-session -t "=$TMUX_SESSION"
 else
 	echo "No tmux session '${TMUX_SESSION}' running."
 fi

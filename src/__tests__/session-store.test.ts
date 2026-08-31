@@ -404,6 +404,41 @@ describe("SessionStore TTL", () => {
 		expect(store.getByTeam("host.fresh1")).toBeDefined();
 	});
 
+	it("evicts least-recently-seen down to the cap, keeping live records past it", () => {
+		let clock = 0;
+		const store = new SessionStore({
+			now: () => clock,
+			idGen: scriptedIds("oldest", "middle", "newest", "livest"),
+		});
+		for (const label of ["oldest", "middle", "newest", "livest"]) {
+			store.mint({ spawn: "host", sessionLabel: label });
+			clock += 10;
+		}
+		store.touchLive("host.livest");
+
+		const removed = store.sweep(1_000_000, { maxEntries: 2, isLive: (team) => team === "host.oldest" });
+
+		// Live is skipped even though it is the least recently seen, so the next-oldest goes instead.
+		expect(removed).toEqual(["host.middle", "host.newest"]);
+		expect(store.getByTeam("host.oldest")).toBeDefined();
+		expect(store.getByTeam("host.livest")).toBeDefined();
+	});
+
+	it("leaves the cap alone when the store is within it", () => {
+		const store = new SessionStore({ now: () => 0, idGen: scriptedIds("only01") });
+		store.mint({ spawn: "host", sessionLabel: "only" });
+		expect(store.sweep(1_000, { maxEntries: 8, isLive: () => false })).toEqual([]);
+		expect(store.getByTeam("host.only01")).toBeDefined();
+	});
+
+	it("keeps every record when the cap cannot be met without evicting a live one", () => {
+		const store = new SessionStore({ now: () => 0, idGen: scriptedIds("live001", "live002") });
+		store.mint({ spawn: "host", sessionLabel: "one" });
+		store.mint({ spawn: "host", sessionLabel: "two" });
+		expect(store.sweep(1_000, { maxEntries: 1, isLive: () => true })).toEqual([]);
+		expect(store.list()).toHaveLength(2);
+	});
+
 	it("forget removes the record and returns whether it existed", () => {
 		const store = new SessionStore({ idGen: scriptedIds("gone12") });
 		store.mint({ spawn: "host" });

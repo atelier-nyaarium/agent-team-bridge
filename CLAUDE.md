@@ -525,12 +525,15 @@ docker logs switchboard-federation --since 15m 2>&1 | grep '\[console-ingest\]'
 
 ### Restart ritual, and starting a host session by hand
 
-`./down.sh` stops the host daemon as well as the Gateway. `./start-gateway.sh` does not restart it.
-Use:
+`./down.sh` stops the host daemon as well as the Gateway, and `./start-gateway.sh` owns only the
+Gateway, so `./start-all.sh` is the counterpart that brings all three back in order:
 
 ```bash
-./start-federation.sh && ./start-gateway.sh && ./start-host-daemon.sh
+./start-all.sh
 ```
+
+The component scripts stay independently usable; a Gateway-only machine still runs
+`./start-gateway.sh` alone.
 
 `start-federation.sh` does not rebuild the Router. Use `--build` for new Router code.
 `start-host-daemon.sh` restarts the daemon. Declining a restart leaves the old build serving.

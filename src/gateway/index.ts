@@ -217,6 +217,8 @@ export async function startGateway(): Promise<void> {
 	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
 	// project or a reserved host session, so the clash space is injected here.
 	const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+	// Minting is reachable without a credential, so the TTL alone bounds nothing over 30 days.
+	const MAX_SESSION_RESUME_ENTRIES = 2_000;
 	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
 	let persistAgentCatalogChecked: (() => void) | undefined;
 	let codexCatalogWriter: CodexCatalogWriter | undefined;
@@ -422,7 +424,10 @@ export async function startGateway(): Promise<void> {
 				// is called, so announcing every 3 seconds would cost a full presence rebuild forever
 				// for a cutoff that removes something roughly once per record per month.
 				run: () => {
-					const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS);
+					const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS, {
+						maxEntries: MAX_SESSION_RESUME_ENTRIES,
+						isLive: (team) => resolveLiveIncarnation(registry, sessionStore, team) !== undefined,
+					});
 					if (sweptTeams.length === 0) return;
 					presence.markDirty();
 					// A swept session is one nobody decided about, so its work returns to the backlog
