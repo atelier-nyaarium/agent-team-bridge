@@ -369,9 +369,10 @@ failing every parked turn, no activity delivered after a close, and an unanswera
 
 ## Step 5 - Watchdog, leases and reaping
 
-The daemon path has no reaper: `ExecutionTargetManager.release` runs on shutdown and on a failed
-open. `LocalAgentRuntime.reapIfIdle` shows the shape, with `inFlight` held across a whole request so
-the reaper cannot fire between a turn starting and its record being written.
+✅ Shipped. Until this step the daemon path had no reaper at all: `ExecutionTargetManager.release` ran
+on shutdown and on a failed open, which is why idle children accumulated. `LocalAgentRuntime.reapIfIdle`
+showed the shape, with `inFlight` held across a whole request so the reaper cannot fire between a turn
+starting and its record being written.
 
 One sweep serves both, on the daemon's injected clock. It walks overdue turns first, since settling
 one is what makes its target reapable, and reaps afterwards.
@@ -568,6 +569,15 @@ evict while active, first-turn, parking and unknown threads stay visible.
   A whole audit angle went on cataloguing where the copy diverges, and the answer each time was that
   the lifecycle's own tests cover the rule against the real client. The doubles are honest today
   because someone read both; there is no mechanism keeping them that way.
+- Three audits in a row found the same class in this lap's work, and each found it one layer deeper:
+  what counts as a frame, whose clock is refreshed, whose thread the frame belonged to. Each fix was
+  correct and none was the fix, because the shape underneath went unquestioned until the architecture
+  pass named it. A defect found three times in one mechanism is not three defects, and the cheapest
+  moment to ask what shape permits it is the first repeat, not the third.
+- A guard proved by planting can still be the wrong guard. Two reap refusals passed their plants and
+  were still vacuous: one was refused by a different guard than it named, the other blocked the call
+  that installs the sweep, so no sweep ran and it asserted nothing at all. Planting proves a test
+  notices SOMETHING; it does not prove the test is about what its name says.
 - An ordering guarantee argued in prose is not one. Three architecture angles converged on queueing
   the drain behind `startTurn` so a caller registers first, and every word of the reasoning is right
   except the conclusion: a caller resumes an unknowable number of microtasks later, and the client's

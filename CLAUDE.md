@@ -141,6 +141,9 @@ code does not belong here; rationale lives in `git log`.
       and a settled turn published then archived so its MCP servers die (see Codex delegation below)
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
+    - `codexLiveTurns.ts` - which turns a generation holds and whether each is moving: one record per
+      turn carrying its binding, its clock and its warning, so none can be reached without the thread
+      that owns them (see Codex delegation below)
     - `agentDaemonCore.ts` - what the Codex and Copilot daemons share: the session registry and the
       generation fence over it (`live`, `retire`, and a `publish` that refuses a dead generation),
       per-agent serialization, event numbering, and the outbox behind `replay` and `acknowledge`.
@@ -933,6 +936,23 @@ parks there and the daemon binds there. Ordering it by scheduling does NOT work:
 unknowable number of microtasks later, the client's `async` wrapper alone adding two. It is required
 rather than optional, since omitting it inherits that losing race silently, and a residue test holds
 every `AppServerSession` double to taking it and calling it, which the type cannot.
+
+**A turn that stops reporting is asked about, and a target nobody is using is reaped.** One sweep on
+the daemon's injected clock carries both. Progress is ANY frame naming the turn, from that turn's own
+thread: counting only the frames the tracker parses interrupts a turn that spends its life running
+commands, and matching a turn id alone lets another thread's frame speak for it. A read that says
+`inProgress` again is not progress, since a hung turn says that forever. A silent turn is interrupted
+once, then its generation is retired. The reaper refuses on any lease, any turn still held, any
+terminal on its deadline, or any thread the owner calls `active` or `parking`; waiting for `parked`
+alone never fires, because nothing parks a thread that never ran a turn. Its quiet period is stamped
+by commands ending, never by the sweep, which would reset the clock it is about to read.
+
+**A turn's clock and warning live in the same record as its binding** (`CodexLiveTurns`). Keeping
+identity in one map and liveness in another, both keyed by turn id, is half an identity and shipped
+three bugs: another thread's frame refreshing a turn, a turn inheriting the session's clock, a rebind
+wiping the warning. A rebind onto the same thread keeps both; onto another thread it is a different
+identity and inherits neither. `live-turns-residue.test.ts` gates the spelling, `codex-live-turns.test.ts`
+gates the behaviour, and only the second can be trusted with the class.
 
 **A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
 request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,
