@@ -64,7 +64,7 @@ borrowed prototype and a reached constructor.
 
 ## Step 2 - The thread lifecycle owner in the Codex client
 
-`CodexAppServerClient` speaks `thread/start`, `thread/resume`, `thread/read`, `turn/start`,
+✅ Shipped. `CodexAppServerClient` speaks `thread/start`, `thread/resume`, `thread/read`, `turn/start`,
 `turn/steer` and `turn/interrupt`. It holds no state per thread. Both drivers resume a thread they did not just create before starting a turn, which is the
 half of the lifecycle that exists; nothing ever unloads one.
 
@@ -280,3 +280,18 @@ evict while active, first-turn, parking and unknown threads stay visible.
   every edit to the real one. Filed against nyaaskills.
 - An auditor generalized "avoid lazy dash-joins" into a no-semicolons rule and filed four findings
   under it. A finding that cites a rule is vetted against the rule's own text before it is applied.
+- Four readers now interpret a turn: `CodexTurnTracker` from the event stream, `outcomeFromRead` from
+  a read keyed by a turn id, `inspectRead` from a read with none, and `CodexDaemonService.runningTurn`
+  from a read again. They agree on the settled, running and unknown vocabulary and duplicate the
+  schema check, the turn selection and the answer classification. Step 3 is where three of them meet.
+- An architecture fix landed a defect the red team then found in three forms, all one cause: reusing
+  an existing record in `ThreadLifecycle.started` for a thread id the server handed back. A
+  `thread/start` reply is authoritative, so the record is replaced; the audit's real point was the
+  stale retry and the in-flight operation the old record still held, and those are what the fix
+  cancels and stops. Reusing state to preserve history was the wrong shape for an authoritative reply.
+- The same fix bounded the per-thread published set to stop it growing, which traded the once-per-turn
+  publication promise for a leak that is really Step 6's record retention. A bound on the wrong
+  collection buys nothing: bound the thing whose lifetime is unbounded, not the thing inside it.
+- A test asserting a phase is weaker than one asserting the wire. Several lifecycle tests read
+  `stateOf` as their only evidence, and two of them could not tell a correct implementation from a
+  no-op until the audit said so. Where a phase decides a request, assert the request.
