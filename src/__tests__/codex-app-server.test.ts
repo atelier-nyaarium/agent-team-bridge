@@ -736,12 +736,12 @@ describe("the thread lifecycle", () => {
 			const restarting = client.startThread({ cwd: "/tmp" });
 			await answer(f, "thread/start", { thread: { id: "reused" } }, 1);
 			await restarting;
-			await retire("reused");
 
-			// Enough to shift the first thread's retirement off the queue, but not the replacement's.
-			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1) await retire(`spare-${index}`);
+			// Past the bound, so the retirement of the thread whose id this one took comes up for eviction.
+			for (let index = 0; index < RETIRED_MEMORY + 1; index += 1) await retire(`spare-${index}`);
 
-			expect(client.stateOf("reused")).toMatchObject({ phase: "parked" });
+			expect(client.stateOf("reused")).toMatchObject({ phase: "idle" });
+			expect(client.stateOf("spare-0")).toBeUndefined();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -761,16 +761,18 @@ describe("the thread lifecycle", () => {
 			};
 
 			await retire("busy", "busy-1");
+			// Retired between its two parks, so the second park has to MOVE it past them to survive.
+			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1)
+				await retire(`spare-${index}`, `spare-${index}`);
+
 			const reviving = client.resumeThread("busy");
 			await answer(f, "thread/resume", {}, 0);
 			await reviving;
 			await retire("busy", "busy-2");
-
-			// Enough to shift the FIRST park's entry, which must not spend the record's second window.
-			for (let index = 0; index < RETIRED_MEMORY - 1; index += 1)
-				await retire(`spare-${index}`, `spare-${index}`);
+			await retire("last", "last-turn");
 
 			expect(client.stateOf("busy")).toMatchObject({ phase: "parked" });
+			expect(client.stateOf("spare-0")).toBeUndefined();
 			// The record still holds its first turn, so a late duplicate does not report again.
 			await client.settleTurn("busy", "busy-1", DONE);
 			expect(published.filter((turnId) => turnId === "busy-1")).toHaveLength(1);
@@ -802,6 +804,101 @@ describe("the thread lifecycle", () => {
 
 			await answer(f, "thread/read", readOf("held", []));
 			await reading;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("forgets a record passed over for being busy once its work is done", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			let archives = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			await retire("held");
+			const reading = client.readThread("held");
+			await requested(f, "thread/read");
+
+			// Passed over here, since its read is still out.
+			for (let index = 0; index < RETIRED_MEMORY; index += 1) await retire(`spare-${index}`);
+			expect(client.stateOf("held")).toMatchObject({ phase: "parked" });
+
+			await answer(f, "thread/read", readOf("held", []));
+			await reading;
+			// Its turn comes round again, which a retirement consumed rather than passed over never would.
+			await retire("last");
+
+			expect(client.stateOf("held")).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("spends a thread's retirement when it loads again, rather than leaving it to crowd the window", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const LOADED = 10;
+			let archives = 0;
+			let resumes = 0;
+			const retire = async (threadId: string) => {
+				const settling = client.settleTurn(threadId, `${threadId}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await settling;
+			};
+
+			for (let index = 0; index < LOADED; index += 1) {
+				await retire(`back-${index}`);
+				const reviving = client.resumeThread(`back-${index}`);
+				await answer(f, "thread/resume", {}, resumes);
+				resumes += 1;
+				await reviving;
+			}
+
+			await retire("victim");
+			for (let index = 0; index < RETIRED_MEMORY - LOADED; index += 1) await retire(`spare-${index}`);
+
+			// Only retirements that still stand should count against the window this thread sits in.
+			expect(client.stateOf("victim")).toMatchObject({ phase: "parked" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("drops the retirement of a thread replaced while its archive was still in flight", async () => {
+		vi.useFakeTimers();
+		try {
+			const { f, client } = await openLifecycle();
+			const turn = client.startTurn(THREAD, "go", noteTurn);
+			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
+			await turn;
+
+			const settling = client.settleTurn(THREAD, TURN, DONE);
+			await requested(f, "thread/archive");
+			// The server hands the id back for a new thread before the old one's archive lands.
+			const restarting = client.startThread({ cwd: "/tmp" });
+			await answer(f, "thread/start", { thread: { id: THREAD } }, 1);
+			await restarting;
+			await answer(f, "thread/archive", {});
+			await settling;
+
+			let archives = 1;
+			for (let index = 0; index < RETIRED_MEMORY; index += 1) {
+				const spare = client.settleTurn(`spare-${index}`, `spare-${index}-turn`, DONE);
+				await answer(f, "thread/archive", {}, archives);
+				archives += 1;
+				await spare;
+			}
+
+			// The replacement is what this id names now, and the old thread's park cannot forget it.
+			expect(client.stateOf(THREAD)).toMatchObject({ phase: "idle" });
 		} finally {
 			vi.useRealTimers();
 		}

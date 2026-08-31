@@ -493,15 +493,22 @@ A thread record ages out only from `parked` or `disposed`, oldest retirement fir
 record. Every other phase stays: an evicted `active` record would read to the reaper as a thread it
 has no reason to wait for.
 
-A retirement names the RECORD it retired and which of that record's retirements it was, never the
-thread id alone. An id is not an identity here: the server may hand back an id this client already
-knew, and `started` replaces the record when it does. Keyed by id alone, the first thread's
-retirement reaches forward and deletes its replacement. Keyed by record alone, a thread that parked,
-reactivated and parked again holds two entries for one record, and the older one spends the window
-the newer one had just restarted; at a `RETIRED_MEMORY` of 1 it forgets the record immediately. Only
-a record's latest retirement may forget it, and a record with an operation still queued is passed
-over entirely, since deleting it under its own queue makes the next operation fail as `was replaced`
-when nothing replaced it.
+Retirements live in an ordered map of one entry per thread, and retiring MOVES a thread to the back
+rather than appending. That is the whole mechanism: a record cannot hold two entries, so it cannot be
+forgotten on an older park's clock.
+
+The entry always names the record the map holds, and three writes keep it that way. `retire` refuses
+to write for a record the map no longer holds, which is the case a check at eviction cannot replace:
+`mutate` tests identity only BEFORE its request, so a `started` that reuses an id while an archive is
+in flight leaves the old park to resume and retire a record that is no longer the thread's. `started`
+drops the entry when it replaces a record, since that retirement belonged to the thread whose id this
+one took. `load` drops it when a thread comes back, so a reactivated thread stops counting against
+the window the threads behind it are waiting in.
+
+Eviction then asks only what is left: a record is passed over while an operation is queued on it, and
+while its phase is anything but `parked` or `disposed`. A passed-over entry STAYS, so the next
+eviction reconsiders it. Consuming it instead retains that record for as long as the lifecycle lives,
+because parking is what would have enqueued it again.
 
 What the bound costs is real and stays: a terminal redelivered after its record has aged out
 republishes, because the record's published ids ARE the once-per-turn dedup and forgetting one
@@ -543,7 +550,13 @@ answered again once the gateway reconciles it. `src/__tests__/codex-app-server.t
 lifecycle's own retention over the real client: a settled record is forgotten while one resumed since
 keeps its record and does not republish its turn, and a thread whose id was reused outlives the
 retirement of the thread it replaced, a reactivated thread's window starts over instead of running
-from its first park, and a record with a read in flight is passed over. Two more pin the eviction
+from its first park, and a record with a read in flight is passed over. Each of those also asserts a
+CONTROL that must be gone, not only the thread that must survive, because two of them were calibrated
+to the retirement queue's duplicate entries and stopped triggering eviction at all when it became a
+map: they passed against the mechanism they were written to catch. Three more pin what the refactor
+alone did not: a thread replaced mid-archive does not retire over its replacement, a thread that
+loads again stops crowding the window, and a record passed over for being busy is forgotten once its
+work is done rather than never. Two more pin the eviction
 rule itself: a bind with nothing else evictable keeps its own binding, and threads settling together
 are drained in one bind rather than one per bind. Each was written by removing the guard it names and
 watching it fail.
@@ -569,15 +582,14 @@ a workload no gateway produces.
 - A name standing in for an identity. A thread id is reusable, so a bookkeeping entry keyed by id
   acts on whatever holds that name when it is read, not on the thing it was written for. Entries here
   carry the record, and a mismatch is skipped rather than resolved.
-- An eviction decided from a snapshot the subject has moved past. `ThreadLifecycle.retire` writes a
-  queue entry now and acts on it much later, and its predicate was patched four times in one lap:
-  a phase recheck, then record identity for a reused id, then a retirement sequence for a record that
-  parked twice, then an in-flight count for a record with work still queued. Each round added another
-  way to ask whether the entry had gone stale, which is the mechanism asking to be inverted rather
-  than four separate defects. A retirement should MOVE a record to the back of an ordered map, the way
-  `bindThread` already does with bindings, so one entry per record exists and is current by
-  construction; identity and sequence then have nothing to check. Deferred here on purpose, and the
-  patches that stand are the ones the tests pin. Raised to `architecture-fan-out`.
+- An eviction decided from a snapshot the subject has moved past. `ThreadLifecycle.retire` wrote a
+  queue entry and acted on it much later, and its predicate took four patches: a phase recheck, then
+  record identity for a reused id, then a retirement sequence for a record parked twice, then an
+  in-flight count. Each round asked one more way whether the entry had gone stale, and the fourth
+  introduced its own leak, since a consumed entry that declined to evict never came back. Retirement
+  now MOVES a record in an ordered map, the way `bindThread` already does with bindings, so identity
+  and sequence have nothing left to check and a declined eviction leaves the entry in place. The
+  class is gone rather than guarded, and the tests that pinned the guards pin the shape instead.
 
 ## Verification
 
@@ -613,6 +625,11 @@ a workload no gateway produces.
   every edit to the real one. Filed against nyaaskills.
 - An auditor generalized "avoid lazy dash-joins" into a no-semicolons rule and filed four findings
   under it. A finding that cites a rule is vetted against the rule's own text before it is applied.
+- A retention test calibrated to one data structure goes inert when the structure changes, and looks
+  identical to a passing test. Two here counted fillers against the retirement queue's duplicate
+  entries; as a map the counts no longer crossed the bound, so no eviction ran and both passed while
+  asserting nothing. A test that something SURVIVED eviction must also assert something else did not,
+  or it cannot tell "protected" from "never evicted".
 - A relay agent twice returned its own status sentence instead of the report it was asked to relay
   verbatim, once as a whole audit pass. An empty relay reads exactly like a clean audit, so a pass
   with no findings is checked for a report before it is believed. Both times the missing angle held
