@@ -216,45 +216,12 @@ relationship) were cut. Five of the Phase D crust-collection findings below (inc
 marked high) were independently verified against the actual code before being recorded, not taken
 on the scouting agents' tone alone.
 
-**High:**
-- [high] `android/.../FederationManager.kt : FederationManager.ownerIdentity` - **bug-class,
-  verified** - returns the raw owner Ed25519/X25519 PRIVATE keypair, the sole root-of-trust key,
-  with default (public) visibility despite zero callers anywhere outside the class itself (confirmed
-  by grepping the whole android tree). Every sibling accessor (`ownerSignPub`/`ownerBoxPub`/
-  `ownerSas`) is deliberately narrowed to public material only; `FederationManager`/`AppStateStore`
-  both have public constructors, so any code in the module could build its own instance over the
-  same store and read the raw private key straight out. Marking it `private` would compile clean
-  today and turns the (already-intended) restriction into a compile-time guarantee.
-
 **Medium:**
-- [medium] `android/.../FederationManager.kt` : the `signRosterRequest`/`signTransportRequest`/
-  `signTrustPendingRequest` family - **framework-first** - ~16 functions hand-repeat the same
-  fetch-identity/sign-object shape with no shared helper; two of the three carry an explicit
-  "(not the console key)" warning comment, evidence the console-vs-owner choice is already
-  considered a mistake-in-waiting.
-- [medium] `android/.../SttsPlayer.kt : SttsPlayer.playFile`'s MediaPlayer listeners - **bug-class**
-  - `setOnCompletionListener`/`setOnErrorListener` release and null `loudness` unconditionally,
-  unlike the sibling `player = null` lines gated on `currentKey == k`. A stale callback for a
-  just-superseded track can silently kill the NEW track's volume boost mid-playback.
-- [medium] `android/.../Attachments.kt : Attachments.storeOutgoing` - **bug-class** - writes each
-  outgoing attachment straight to its final path with no tmp-file-plus-rename, unlike `decode()`'s
-  documented atomic write for inbound files. A crash mid-write leaves a truncated file that
-  `reconcilePending`'s retry path would silently resend.
-- [medium] `android/.../ChatRepository.kt : closeTab`/`wakeSession`/`forget` (vs `rename`) -
-  **framework-first** - the "is this parsed Address my own (domain, gateway)" predicate is
-  hand-copied 6 times across ChatRepository.kt and MainActivity.kt, and only `rename()` tests
-  domain AND gateway; the other 5 test gateway alone, against the codebase's own documented
-  invariant that a gateway id is unique only within a Domain.
 - [medium] `android/.../ConsoleClient.kt : relay()` - **latent logging footgun for future work** -
   Phase C's `postRouterDirect` redaction fix only covers the 9 router-direct ops; `relay()` (Phase D's
   target) logs nothing today, but several of the ~21 ops it serves carry genuine plaintext secrets
   once `unsealReply()` decrypts them. A future trace line placed on the decoded result (rather than
   the still-sealed raw response) would leak. Not a live issue - nothing logs there yet.
-- [medium] `plugins/designer/DesignerCards.kt : relOf` - **dup-logic** - a third, independently
-  written copy of the same "strip a src down to its attachments-relative path" parse `Attachments.kt`
-  owns; this copy has already drifted (no `takeIf { isNotEmpty() }` guard, so a malformed src
-  silently becomes `""` instead of failing safely). `DesignerCards.kt` already imports
-  `Attachments`, so delegating is a one-line change.
 
 **Low:**
 - [low] `android/.../FederationManager.kt : consoleAdmission` vs `admitConsole` - **naming trap** -
@@ -353,18 +320,6 @@ their existing entries.
   re-opening the blank-tier-plays-silence hole (worst at load: every absent tier on every legacy
   row becomes ""). Precedent for the fix is in the same file: extract a pure entry-to-Message
   tier projection the way `resolveMessageAttribution` was extracted and pinned.
-- [low] `android/.../SttsPlayer.kt : stripUnspeakable` - **bug-class** - the fence rule is
-  unanchored and its `$` alternative means an odd count of inline triple-backticks eats all
-  trailing prose to end-of-message (replaced by "Code block omitted", never spoken). Byte-identical
-  to the retired sanitize()'s rule (not a regression), but tierless peer asks are multi-KB
-  markdown that participates in autoplay, so a brief quoting fence syntax inline drops its tail
-  from speech with no cue. Fix direction: anchor the opener (`(?m)^` + fence) or pair-count.
-- [low] `android/.../SttsPlayer.kt : key/cacheFile` (+ `ChatRepository : playMessage/preloadMessage`
-  lookup) - **dormant-fragility** - the audio cache keys on `at`, which is a per-append
-  `Date.now()` stamp, NOT unique: two entries landing the same millisecond in one thread share it
-  while staying distinct rows, so Play on one can speak or replay the other and both glyphs light.
-  Pre-existing; recorded because the arc re-blessed the keying on the stated-but-false uniqueness
-  premise. Fix direction: key wire rows on (epoch, seq), already on Message.
 - [medium] `nyaaskills/src/cycle/lib/notify.ts : relayInstruction + NotifyHumanSchema /
   buildNotifyHuman` (+ `cycleCheckpoint.ts : schema`, + `cycle.test.ts` payload pins) -
   **bug-class, rides nyaaskills' next deploy** - the checkpoint relay instruction misleads on BOTH
@@ -397,12 +352,6 @@ the Designer's rel-keyed card-title decorator; architecture in CLAUDE.md "Androi
 framework"). Collected by its close-out crust sweep over the surfaces touched since the prior
 sweep, including the fast-tracked `DesignerThumbs` thumbnails work that had skipped a full cycle.
 
-- [medium] `android/.../ThreadRendererPool.kt : get : playEnabled` - **bug-class** - `playEnabled`
-  is copied BY VALUE onto a renderer at creation, unlike `resolveFrom`/`selfLabel`/`decorateFile`
-  (live-reading closures). `MainActivity` re-assigns the pool's var every recomposition, but
-  nothing re-copies it to existing renderers - STTS provisioning mid-session never lights the Play
-  buttons on any already-open thread. Functionally dead, not cosmetically stale. Fix: a live
-  closure like its siblings, plus `fingerprint()` awareness so already-rendered rows re-push.
 - [medium] `android/.../plugins/designer/DesignerThumbs.kt : renderOn` - **bug-class** - a timed-
   out render never `stopLoading()`s and registers no `invokeOnCancellation`; a straggling
   `onPageFinished` from the abandoned load can fire against the NEXT render's client and resolve
@@ -606,10 +555,6 @@ crust-collection sweep.
   routine device rename.
 
 **Medium:**
-- [medium] `android/.../ChatRepository.kt : closeTab/wakeSession/forget` (vs `rename`) - **bug-class** -
-  all three gate on gateway-id equality alone (no domain check), the exact gap `rename()`'s own doc
-  comment names and fixes for itself; `forget` is the most consequential since it's the most destructive
-  op of the three.
 - [medium] `android/.../ChatRepository.kt : send/retrySend/deliver(fail)` vs `ChatState.transientMessage`
   - **bug-class** - these write one-off send-failure text into the STICKY `error` field instead of
   `transientMessage`; `error` is only cleared at connection-lifecycle events, so a failed send's text
@@ -619,9 +564,6 @@ crust-collection sweep.
   unlike the sibling `applyMode()` branch that aborts on failure; a transient failure here can leave a
   session shared to both "everyone" and a named person at once, the exact overlap a neighboring
   comment says must never happen.
-- [medium] `android/.../Management.kt : AddGatewayScreen`'s Approve action - **framework-first** - no
-  try/catch around a call that documents itself as intentionally throwing on a corrupt stored key, so
-  that failure leaves the button stuck on "Enrolling..." forever with no error shown.
 
 ## Reply-tool redesign (`plans/reply-tool-redesign.md`, deleted, shipped and deployed - 2026-07-09)
 
