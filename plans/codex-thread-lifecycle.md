@@ -327,7 +327,8 @@ The callback is REQUIRED, which is what stops the next consumer from silently in
 race by omitting it, and every call site that registers nothing now says so with a no-op instead of
 by absence. TypeScript alone does not finish the job, since a double with fewer parameters still
 satisfies the port, so `src/__tests__/app-server-double-residue.test.ts` requires every
-`AppServerSession` double to take the callback and CALL it.
+`AppServerSession` double to take the callback and CALL it. The local session refuses a start whose
+callback never ran rather than parking afterwards, since parking afterwards is the race itself.
 
 Only the local path was ever hurt by the ordering. The daemon binds the thread before it starts a
 turn, so `publishTerminal` finds that binding when the turn's own is still being written, and a
