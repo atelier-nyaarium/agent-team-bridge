@@ -86,6 +86,7 @@ function frame(message: unknown): string {
 	return `${JSON.stringify(message)}\n`;
 }
 
+/** The JSONL wire over a child's stdio. A failed request rejects with this module's own `AppServerFailure`. */
 export function createJsonlTransport(child: CodexChild): AppServerTransport {
 	let nextId = 1;
 	let buffered = "";

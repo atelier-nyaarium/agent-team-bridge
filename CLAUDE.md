@@ -134,7 +134,9 @@ code does not belong here; rationale lives in `git log`.
     - `codexTargets.ts` - one supervised `codex app-server` per execution target. A working directory
       is NOT a target property: a thread carries its own, so every host session shares one child
     - `codexAppServer.ts` - the JSONL transport and fail-closed client. Every server-initiated request
-      is refused, and a model is checked against `model/list` at each point of use, not just at open
+      is refused, a model is checked against `model/list` at each point of use, not just at open, and
+      a failed request rejects with the `AppServerFailure` only this module mints, classified by
+      `kind` (see Codex delegation below)
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
     - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
@@ -886,6 +888,15 @@ so is anything added beside them.
 
 **`thread/read` needs `includeTurns: true`** or it answers successfully with an empty `turns` array.
 Nothing catches that but a live server.
+
+**A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
+request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,
+`unreadable`, `closed`), minted by that module alone: the class is module-private, symbol-minted and
+guarded by `isAppServerFailure`. Every lifecycle refusal the App Server sends carries code -32600, so
+neither the code nor the wording discriminates an archived thread from one with no rollout;
+`codex-failure-residue.test.ts` fails the build on a branch on the wording anywhere outside the two
+transports. The transport ends three ways (child exit, a write the pipe refuses, `close()`) and every
+ending settles every waiter through one `fail()`; two of the three once forgot.
 
 **Notifications are dispatched in a microtask**, not inline. Resolving a request only SCHEDULES its
 continuation, so an inline listener runs first and inverts wire order whenever a reply and a
