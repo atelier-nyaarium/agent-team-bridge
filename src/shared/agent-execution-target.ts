@@ -35,7 +35,11 @@ export const AgentResolvedTargetSchema = z
 		targetId: z.string().min(1).max(512),
 		cwd: z.string().min(1).max(4096).refine(isAbsolutePath, "cwd must be absolute"),
 	})
-	.strict();
+	.strict()
+	.refine(
+		(target) => parseAgentTargetId(target.targetId)?.kind === target.kind,
+		"targetId must parse, and name the same kind",
+	);
 
 export const AgentOwnerKeySchema = z
 	.string()

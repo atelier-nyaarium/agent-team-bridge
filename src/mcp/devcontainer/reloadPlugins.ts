@@ -12,18 +12,20 @@ import { selfSessionTarget } from "./tmuxCore.js";
 ////////////////////////////////
 //  Schemas
 
-const ReloadPluginsSchema = z.object({
-	team: z
-		.string()
-		.optional()
-		.describe(
-			`
+const ReloadPluginsSchema = z
+	.object({
+		team: z
+			.string()
+			.optional()
+			.describe(
+				`
 Host-only target \`team\`, e.g. \`evie-bot\`.
 
 Resolves to \`{team}_devcontainer-dev-1\`. Omit for the host session.
 `.trim(),
-		),
-});
+			),
+	})
+	.strict();
 type ReloadPluginsArgs = z.infer<typeof ReloadPluginsSchema>;
 
 // biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat

@@ -9,7 +9,7 @@ import {
 	scrubChildEnv,
 	type TargetLogEvent,
 } from "../mcp/devcontainer/codexTargets.js";
-import { type CodexResolvedTarget, parseCodexTargetId } from "../shared/codex-agent.js";
+import { type CodexResolvedTarget, CodexResolvedTargetSchema, parseCodexTargetId } from "../shared/codex-agent.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -380,5 +380,24 @@ describe("reaping", () => {
 		expect(after.state === "running" && after.lease.generation).toBe(
 			(before.state === "running" ? before.lease.generation : 0) + 1,
 		);
+	});
+});
+
+describe("what a resolved target may say about itself", () => {
+	it("takes the two shapes the parser answers for", () => {
+		expect(CodexResolvedTargetSchema.safeParse(HOST).success).toBe(true);
+		expect(CodexResolvedTargetSchema.safeParse(CONTAINER).success).toBe(true);
+	});
+
+	it("refuses a targetId its own parser would reject", () => {
+		const cases = ["hostess", "container:", "container:Not A Slug", "devcontainer"];
+		for (const targetId of cases) {
+			expect(CodexResolvedTargetSchema.safeParse({ ...CONTAINER, targetId }).success).toBe(false);
+		}
+	});
+
+	it("refuses a kind the targetId contradicts, which is what the two fields disagreeing looks like", () => {
+		expect(CodexResolvedTargetSchema.safeParse({ ...HOST, targetId: "container:app" }).success).toBe(false);
+		expect(CodexResolvedTargetSchema.safeParse({ ...CONTAINER, targetId: "host" }).success).toBe(false);
 	});
 });

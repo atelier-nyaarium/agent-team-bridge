@@ -5,17 +5,18 @@ import { selfSessionTarget, sendText } from "./tmuxCore.js";
 ////////////////////////////////
 //  Schemas
 
-const CompactSessionSchema = z.object({
-	instructions: z
-		.string()
-		.min(1)
-		// One argv element, so it is capped below ARG_MAX and a NUL would truncate the line.
-		.max(16384)
-		.refine((v) => !/[\r\n]/.test(v) && !v.includes("\u0000"), {
-			message: `instructions must be a single line (no newlines or null bytes)`,
-		})
-		.describe(
-			`
+const CompactSessionSchema = z
+	.object({
+		instructions: z
+			.string()
+			.min(1)
+			// One argv element, so it is capped below ARG_MAX and a NUL would truncate the line.
+			.max(16384)
+			.refine((v) => !/[\r\n]/.test(v) && !v.includes("\u0000"), {
+				message: `instructions must be a single line (no newlines or null bytes)`,
+			})
+			.describe(
+				`
 Compaction instructions. One plain-text line with no newlines.
 
 ## Preserve
@@ -34,8 +35,9 @@ If a team exists via \`TeamCreate\`, preserve as verbatim as possible:
 - \`~/.claude/tasks/{team_name}/\`
 - in-flight task IDs and owners
 `.trim(),
-		),
-});
+			),
+	})
+	.strict();
 type CompactSessionArgs = z.infer<typeof CompactSessionSchema>;
 
 // biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat

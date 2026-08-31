@@ -7,9 +7,10 @@ import { selfSessionTarget, sendText } from "./tmuxCore.js";
 
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-const SetEffortLevelSchema = z.object({
-	level: z.enum(EFFORT_LEVELS).describe(
-		`
+const SetEffortLevelSchema = z
+	.object({
+		level: z.enum(EFFORT_LEVELS).describe(
+			`
 Effort level to set on the local Claude Code session.
 
 - \`low\`: quick, straightforward, minimal overhead.
@@ -18,8 +19,9 @@ Effort level to set on the local Claude Code session.
 - \`xhigh\`: deeper reasoning than high, just below maximum.
 - \`max\`: maximum capability, deepest reasoning.
 `.trim(),
-	),
-});
+		),
+	})
+	.strict();
 type SetEffortLevelArgs = z.infer<typeof SetEffortLevelSchema>;
 
 // biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat

@@ -61,10 +61,6 @@ are not.
   boundaries occupy one high-conflict module. It intentionally exposes one compatibility import
   today; preserve that barrel and split the implementation by trust boundary when a next consumer
   arrives.
-- [medium] `src/shared/codex-agent.ts : OpaqueIdSchema` - **misalignment** - used for ids that
-  have real internal structure. `CodexResolvedTarget.targetId` carries a grammar
-  (`container:<project>`), but its schema says only "a string up to 512 chars", so neither zod nor
-  tsc can catch a mismatch. Where an id has a grammar, the schema should carry it.
 - [medium] The Codex contract and persistence tests repeat several valid histories, receipts, and
   restored-service setups. Canonical creating / working / settled / receipt builders would collapse
   them.
@@ -512,13 +508,6 @@ were cut per this file's own convention.
   permanently `null` at runtime, so the auto-reply branch (answer a lead/worker handshake
   automatically) never fires in practice - every handshake falls through to "let the LLM decide"
   instead. Either wire a real caller or delete the dead branch.
-- [medium] `src/mcp/devcontainer/reloadPlugins.ts`, `setEffortLevel.ts`, `compactSession.ts` -
-  **bug-class** - all three tool schemas are plain `z.object({...})` with no `.strict()`, the only
-  tool-registration files left in `src/mcp/` that silently strip an unknown/typo'd field instead of
-  rejecting it (every other tool - channel, human, designer - uses `.strict()`). Same three files also
-  report failures as a JSON-stringified `{errors:[...]}` blob, structurally different from the flat
-  `{content, isError:true}` string shape every other `mcp/` tool uses - a caller assuming tool errors
-  are a flat string gets a nested JSON blob from just these three instead.
 - [medium] `android/.../ChatRepository.kt : pollJob` (the `kind == "plugin_action"` drain branch) -
   **bug-class** - every sibling drop/skip path in the drain loop logs a `DebugLog` line with its drop
   reason (`DROPPED`, `SKIPPED`) unconditionally; this branch only logs inside the

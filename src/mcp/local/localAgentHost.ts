@@ -6,7 +6,11 @@
 import os from "node:os";
 import path from "node:path";
 import { type AgentBackendDescriptor, agentEnvPrefix } from "../../shared/agent-backend.js";
-import { AGENT_HOST_TARGET_ID, type AgentResolvedTarget } from "../../shared/agent-execution-target.js";
+import {
+	AGENT_HOST_TARGET_ID,
+	type AgentResolvedTarget,
+	AgentResolvedTargetSchema,
+} from "../../shared/agent-execution-target.js";
 import { resolveWorkdir, workdirOrFallback } from "../../shared/agent-workdir.js";
 import {
 	CODEX_ACTIVITY_MAX_ITEMS,
@@ -114,11 +118,11 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 			? {}
 			: { busyMessage: `Copilot is still working. Await the turn or stop it before sending another.` }),
 		openSession: async (): Promise<LocalBackendSession> => {
-			const target: AgentResolvedTarget = {
+			const target: AgentResolvedTarget = AgentResolvedTargetSchema.parse({
 				kind: "host",
 				targetId: AGENT_HOST_TARGET_ID,
 				cwd: process.cwd(),
-			};
+			});
 			const availability = targets.acquire(target);
 			if (availability.state !== "running") throw unavailable(availability.errorClass, backend);
 			return isCodex
