@@ -138,13 +138,15 @@ on a closed file.
 
 Phase 1 item 6 (a gateway-owned anti-entropy timer for cross-Gateway VERSIONED presence exchange -
 `presence_push`, per-source sub-planes, a peer freshness state machine) was fully designed across
-three audit laps but never implemented - the shipped presence plane is local-Gateway-only, directly
-reversing an explicit user ruling (multi-gateway "should work in parallel, equally") with no
-recorded scope cut anywhere. Found by Phase 2's own audited-implementation cycle; the full writeup
-and the preserved original design are in `plans/cross-gateway-presence-exchange.md`. The
-`presenceFresh` wire field (declared, never assigned a value) and the `planeField()` closed-world
-schema-tagging enforcement (promised three times, never built - only the reactive tripwire exists)
-are the same gap's direct symptoms.
+three audit laps but never implemented at the time, directly reversing an explicit user ruling
+(multi-gateway "should work in parallel, equally") with no recorded scope cut anywhere. Found by
+Phase 2's own audited-implementation cycle; the full writeup and the preserved original design are
+in `plans/cross-gateway-presence-exchange.md`.
+
+MOSTLY BUILT SINCE, and the entry is kept only for the ruling it records. `presence_push` is
+relayed by `presenceExchange.ts` and landed by `gatewayRelay.ts`, and `presenceFresh` is a live
+three-valued field. `planeField()` was never built and no longer names anything: the registry
+settled on `registerPlane`/`markDirty` instead.
 
 ### Real bugs the read-anchors/Phase-1 audit found and fixed
 
@@ -441,8 +443,8 @@ crust-collection sweep.
 ### Phase A/G residual
 
 - [high] `src/gateway/routes.ts : send` / `src/gateway/wake.ts : decideWakeCreate` - **bug-class** - no
-  rate limit or size cap on session minting. A caller with ordinary `crosstalk_send` access can mint an
-  unbounded number of phantom `SessionStore` records and drive real host-daemon wake dispatches
+  RATE limit on session minting (the size cap now exists, see below). A caller with ordinary
+  `crosstalk_send` access can mint phantom `SessionStore` records and drive real host-daemon wake dispatches
   (container bring-up included) with a plain loop over distinct `to`+`displayLabel` pairs -
   `mintedFrom` retry-safety only collapses a *repeated* request, never bounds *distinct* ones, by
   design. Compounds the same already-known, already-decided-but-unshipped gap as the Trust Surface
@@ -633,10 +635,12 @@ evie's `BridgeTransport` calls `Bun.serve` with no `maxPayloadLength`; Bun's def
 it CLOSES the WebSocket on a larger message. So the effective ceiling on one drain is roughly
 9 MB of decoded attachment bytes across the whole backlog. A phone parked on the 12-hour idle
 tier while attachment-bearing notices accumulate (screenshots already make this reachable today,
-no new feature needed) can cross it, and the failure mode is nasty: the gateway's entire router WS
-drops BEFORE delivery, the console never receives so never acks, and every subsequent poll
-re-kills the WS - while the actively-polling console keeps refreshing `lastActivity`, so the 1h
-mailbox idle TTL never clears the poison.
+no new feature needed) can cross it.
+
+THE POISON LOOP IS CLOSED. `relayPump.ts` measures the sealed frame against `MAX_RELAY_FRAME_BYTES`
+and refuses that one reply as an error, so an oversized drain no longer drops the router WS before
+delivery and cannot re-kill it on every subsequent poll. What is still absent is paging, so such a
+backlog is answered with an error rather than delivered.
 
 Fix directions (either suffices): page the drain (cap entries/bytes per poll response and let the
 cursor advance incrementally across polls - verify the console's ack-highest-received semantics
