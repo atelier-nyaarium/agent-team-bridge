@@ -149,7 +149,8 @@ code does not belong here; rationale lives in `git log`.
       out. `session()` shares one open per target, since commands serialize per AGENT and two agents
       share a child. `copilotDaemonService.ts` is the same shape over ACP sessions and prompts
   - `local/` - the daemonless backend a session runs itself (see Local agent mode).
-    `localAgentRuntime.ts` owns the catalog, wait budget and answer shaping; `codexLocalSession.ts` /
+    `localAgentRuntime.ts` owns the catalog, wait budget and answer shaping; `codexLocalSession.ts`
+    drives one `codex app-server` through the same `ThreadLifecycle` the daemon uses; it and
     `copilotLocalSession.ts` are the per-protocol adapters; `localAgentHost.ts` wires a backend to the
     target manager and validates both ends against the schemas the gateway route uses
   - `agentDispatch.ts` - the one seam saying where an agent tool call is served
@@ -1017,7 +1018,18 @@ survives a Gatewayless setup. Installing the CLI is the whole opt-in on both pat
   arrives on the event stream and reaches no lease - without it a long turn is reapable the instant
   it ends.
 - **Codex loads a thread before any follow-up turn**, the way the daemon does; `ThreadLifecycle` owns
-  that, so a thread already loaded costs no request and a parked one is unarchived and resumed.
+  that, so a thread already loaded costs no request and a parked one is unarchived and resumed. The
+  session states no load rule of its own: keeping a second copy of it made a fresh child skip the
+  resume for an inherited thread and fail its first follow-up.
+- **A local turn settles through the same owner the daemon uses.** `CodexLocalSession` hands the
+  tracker's outcome to `client.settleTurn` rather than resolving its own promise, so a local thread
+  parks and its MCP servers die like a delegated one; `onTerminal` is what resolves the caller. A
+  poisoned generation retires the session, which means closing it AND firing `onClosed`, since that
+  callback is the only thing the runtime evicts on. Child exit, close and retirement settle parked
+  turns directly, because there is no owner left to ask.
+- **`LocalTurnHandle.settled` is held to never rejecting, not trusted to.** The runtime normalizes a
+  rejection into a failed terminal, so a backend that breaks the promise loses one turn rather than
+  raising an unhandled rejection.
 - The child is reaped when stdin closes. Nothing else ever will, since no daemon supervises it.
 
 **Residual risk, stated plainly:** a Codex thread holds workspace-write and network access for its
