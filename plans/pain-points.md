@@ -463,32 +463,6 @@ Migrated from `plans/host-daemon-cleanup.md` (deleted; its phases 1-4 shipped in
 parked Phase 5 + dead-launch hardening moved to `features-and-fixes.md` Item 16). These are the
 deferred follow-ups its audits surfaced, verbatim at migration time.
 
-### Trusted-vs-untrusted catalog conflation
-
-`isCatalogProject` and its clone union a TRUSTED source (`offlineCatalog`, host-token-gated) with an
-UNTRUSTED, durable one (`knownTeamPaths`, written by the unauthenticated `/bridge` register). The
-connector now gates on `offlineCatalog` only; these other sites still union, so an unauthenticated
-register can influence them:
-
-- [medium] `src/gateway/routes.ts : createRoutes : isDevcontainer` - sets `TeamInfo.kind`; an
-  attacker-registered name can make a loose team show as a devcontainer spawn-point (console UI
-  confusion, failed terminal-view).
-- [low] `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : isProjectName` -
-  device-name collision gate; an attacker register of a device name blocks that console from
-  registering (transient DoS).
-- [low] `src/gateway/console/consoleHandler.ts : resolveTmuxTarget` - terminal-view devcontainer
-  resolution; benign today (the `docker exec` on a bogus `<name>_devcontainer-dev-1` fails
-  gracefully) but inconsistent.
-- [low] `src/gateway/index.ts : startGateway : isCatalogProject` (+ its `doWakeTeam` use) - the
-  shared union predicate; `doWakeTeam` is currently safe (composites can never be catalog members)
-  but reads on the untrusted half.
-- Systemic fix: a named trusted predicate (`isTrustedCatalogProject` = offlineCatalog-only) or a
-  typed `Catalog` value object exposing trusted vs any membership, applied per site. The tradeoff:
-  `knownTeamPaths` is the durability fallback for a host-daemon outage (offlineCatalog clears on
-  disconnect), so flipping a site to trusted-only degrades it during an outage. Decide per site
-  whether trust or durability wins. ROOT cause (unauthenticated `/bridge` register) is the Gateway
-  LAN auth surface section at the end of this file (postponed).
-
 ### Outbound-target validation pattern
 
 - [medium, large-defer] `src/gateway/connectorProxy.ts : setupProxy` - dials `ws://<project>:20002`
@@ -604,8 +578,6 @@ theoretical concerns.
   is woken with the attacker's `resumeSessionId` forwarded.
 - [medium] `index.ts : sessionResume` - no entry-count ceiling (only the 30-day TTL), so unauthenticated
   composite registers can grow the map and `session-resume.json` unboundedly.
-- [medium] `routes.ts : isDevcontainer` - unions trusted `offlineCatalog` with untrusted
-  `knownTeamPaths` (also tracked under "Host daemon cleanup" above).
 
 ## Console device-name address (PR #99)
 
