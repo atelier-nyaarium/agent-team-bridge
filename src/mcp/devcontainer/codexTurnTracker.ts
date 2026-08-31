@@ -86,6 +86,12 @@ export class CodexTurnTracker {
 		return null;
 	}
 
+	/** True only while a terminal waits here for its final item. */
+	holding(threadId: string, turnId: string): boolean {
+		const entry = this.turns.get(turnId);
+		return entry?.threadId === threadId && entry.pendingTerminal !== undefined;
+	}
+
 	/** Settle a turn whose terminal arrived but whose final item never did. Reports only what is
 	 * held, so a turn with no answer settles without one. */
 	settlePending(threadId: string, turnId: string): TurnOutcome | null {

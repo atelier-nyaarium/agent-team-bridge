@@ -269,7 +269,7 @@ describe("a child that dies", () => {
 		const h = harness();
 		h.manager.acquire(HOST);
 		const first = h.children[0];
-		h.manager.release(HOST.targetId);
+		h.manager.release(HOST.targetId, 1);
 		h.advance(60_000);
 		h.manager.acquire(HOST);
 
@@ -345,9 +345,21 @@ describe("reaping", () => {
 	it("kills a target's child on release", () => {
 		const h = harness();
 		h.manager.acquire(HOST);
-		h.manager.release(HOST.targetId);
+		h.manager.release(HOST.targetId, 1);
 
 		expect(h.children[0]?.killed).toBe(true);
+	});
+
+	it("keeps a child a release naming an older generation asked to reap", () => {
+		const h = harness();
+		h.manager.acquire(HOST);
+		h.manager.release(HOST.targetId, 1);
+		h.advance(60_000);
+		h.manager.acquire(HOST);
+
+		h.manager.release(HOST.targetId, 1);
+
+		expect(h.children[1]?.killed).toBe(false);
 	});
 
 	it("kills every child on shutdown, so none outlives the daemon", () => {
@@ -362,7 +374,7 @@ describe("reaping", () => {
 	it("starts a fresh generation after a release", () => {
 		const h = harness();
 		const before = h.manager.acquire(HOST);
-		h.manager.release(HOST.targetId);
+		h.manager.release(HOST.targetId, 1);
 		const after = h.manager.acquire(HOST);
 
 		expect(after.state === "running" && after.lease.generation).toBe(

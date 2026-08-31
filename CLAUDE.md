@@ -903,6 +903,23 @@ generation. So does a request whose fate is unknown, a timeout or an unreadable 
 still land after a later activation and no local epoch can recall it: the consumer retires that
 generation rather than reusing it. Design record: `plans/codex-thread-lifecycle.md`.
 
+**A retired generation publishes nothing new, and `AgentDaemonCore` owns that answer.** `live` is
+registry membership and `retire` drops the session, so giving a generation up and being replaced are
+one state instead of two that can disagree. Tracking retirement beside the registry was tried twice
+and left either a live generation silent or a dead one talking. `publish` refuses on a dead session,
+which is how the Copilot daemon stopped publishing from replaced generations and why a backend added
+later cannot forget. A terminal and a commentary item are dropped; a receipt cannot fall silent, so
+BOTH daemons ask `live` before one and refuse a command whose generation retired mid-flight, a
+refusal carrying no generation and being delivered where an acceptance the gateway fences out hangs
+the caller. Retirement retracts nothing already published: the outbox still replays what it retained.
+
+**`release` names the generation it gives up, and the parameter is required.** The manager already
+refused to let a late `onExit` tear down its successor; `release` was the one caller bypassing that
+rule, so a slow open condemning itself could reap the lease another agent had just acquired.
+`AgentDaemonCore` fences the other end: an open for an older generation neither closes the session
+already serving nor replaces it, and its caller is handed that live session, since refusing a command
+whose target is healthy is the wrong answer to losing a race.
+
 **A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
 request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,
 `unreadable`, `closed`), minted by that module alone: the class is module-private, symbol-minted and

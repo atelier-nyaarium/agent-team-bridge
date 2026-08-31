@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { LifecycleHooks } from "../mcp/devcontainer/codexAppServer.js";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
 import { CodexDaemonService, resolveAgentTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
+import type { PoisonReason } from "../mcp/devcontainer/codexThreadLifecycle.js";
+import type { TerminalOutcome } from "../mcp/devcontainer/codexTurnOutcome.js";
 import type { CodexResolvedTarget } from "../shared/codex-agent.js";
 
 const OWNER_KEY = "recipe-app.work";
 const AGENT_ID = "codex_0123456789abcdef0123456789abcdef";
 const REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 const OPERATION_ID = "123e4567-e89b-42d3-a456-426614174001";
+const OPERATION_ID_TWO = "123e4567-e89b-42d3-a456-426614174009";
 const TARGET_ID = "container:recipe-app";
 const RESOLVED_TARGET: CodexResolvedTarget = {
 	kind: "devcontainer",
@@ -21,10 +25,39 @@ class FakeSession implements AppServerSession {
 	turnCounter = 0;
 	steerFails?: Error;
 	startTurnFails?: Error;
+	settleFails?: Error;
+	closeFails?: Error;
+	/** Held open to prove a terminal reaches the gateway before the thread is unloaded. */
+	archiveGate?: Promise<void>;
+	/** Held open to land a turn's terminal while its steer is still in flight. */
+	steerGate?: Promise<void>;
 	read: unknown = { thread: { id: "thread-1", turns: [] } };
+	/** What the real client hands its lifecycle; the daemon's terminals reach the gateway through them. */
+	hooks: LifecycleHooks = {};
+
+	private readonly published = new Set<string>();
+	private readonly active = new Map<string, string>();
 
 	onEvent(listener: (message: { method: string; params?: unknown }) => void) {
 		this.listener = listener;
+	}
+	/** What `ThreadLifecycle.accept` does: publish once per turn, and park only an own turn or none. */
+	async settleTurn(threadId: string, turnId: string, terminal: TerminalOutcome) {
+		this.calls.push("settleTurn");
+		if (!this.published.has(turnId)) {
+			this.published.add(turnId);
+			this.hooks.onTerminal?.(threadId, turnId, terminal);
+		}
+		const own = this.active.get(threadId);
+		if (own !== undefined && own !== turnId) return;
+		this.active.delete(threadId);
+		if (this.archiveGate) await this.archiveGate;
+		if (this.settleFails) throw this.settleFails;
+		this.calls.push("archive");
+	}
+	/** A request whose fate the lifecycle could not learn. */
+	poison(threadId: string, reason: PoisonReason) {
+		this.hooks.onPoisoned?.(threadId, reason);
 	}
 	async startThread() {
 		this.calls.push("startThread");
@@ -37,14 +70,17 @@ class FakeSession implements AppServerSession {
 		this.calls.push("readThread");
 		return this.read;
 	}
-	async startTurn() {
+	async startTurn(threadId: string) {
 		this.calls.push("startTurn");
 		if (this.startTurnFails) throw this.startTurnFails;
 		this.turnCounter += 1;
-		return `turn-${this.turnCounter}`;
+		const turnId = `turn-${this.turnCounter}`;
+		this.active.set(threadId, turnId);
+		return turnId;
 	}
 	async steerTurn() {
 		this.calls.push("steerTurn");
+		if (this.steerGate) await this.steerGate;
 		if (this.steerFails) throw this.steerFails;
 	}
 	async interruptTurn() {
@@ -52,6 +88,7 @@ class FakeSession implements AppServerSession {
 	}
 	close() {
 		this.calls.push("close");
+		if (this.closeFails) throw this.closeFails;
 	}
 
 	/** Drive the App Server events one turn produces, in the order a real one emits them. */
@@ -71,23 +108,56 @@ class FakeSession implements AppServerSession {
 	}
 }
 
-function setup(options: { availability?: TargetAvailability } = {}) {
+function setup(
+	options: { availability?: TargetAvailability; poisonOnOpen?: PoisonReason; openGate?: Promise<void> } = {},
+) {
 	const session = new FakeSession();
 	const child = {} as CodexChild;
 	const released: string[] = [];
+	// A released target's next acquire is a new generation, as the supervisor mints them.
+	let generation = 3;
 	const targets: TargetSupervisor = {
-		acquire: () => options.availability ?? { state: "running", lease: { generation: 3, child } },
-		release: (targetId) => released.push(targetId),
+		acquire: () => options.availability ?? { state: "running", lease: { generation, child } },
+		// The manager reaps only the generation named, so a stale release takes nothing.
+		release: (targetId, reaped) => {
+			if (reaped !== generation) return;
+			released.push(targetId);
+			generation += 1;
+		},
 	};
 	const sent: Record<string, unknown>[] = [];
+	/** Deadlines the test fires by hand, so a held terminal needs no clock. */
+	const timers: Array<{ run: () => void; ms: number; cleared: boolean }> = [];
 	const service = new CodexDaemonService({
 		targets,
 		daemonInstanceId: "daemon-1",
 		send: (message) => sent.push(message),
-		openClient: async () => session,
+		openClient: async (_child, _model, hooks) => {
+			session.hooks = hooks;
+			// A client that condemns itself while the daemon is still awaiting it.
+			if (options.poisonOnOpen) hooks.onPoisoned?.("thread-1", options.poisonOnOpen);
+			if (options.openGate) await options.openGate;
+			return session;
+		},
 		resolveHostCwd: () => "/home/agent",
+		setTimer: (run, ms) => {
+			const timer = { run, ms, cleared: false };
+			timers.push(timer);
+			return (timers.length - 1) as unknown as ReturnType<typeof setTimeout>;
+		},
+		clearTimer: (handle) => {
+			const timer = timers[handle as unknown as number];
+			if (timer) timer.cleared = true;
+		},
 	});
-	return { service, session, sent, released };
+	const fireDeadlines = async () => {
+		for (const timer of timers.filter((candidate) => !candidate.cleared)) {
+			timer.cleared = true;
+			timer.run();
+		}
+		await settle();
+	};
+	return { service, session, sent, released, timers, fireDeadlines };
 }
 
 /** Let the service's own promise chain drain. Commands are serialized, so a handful of ticks covers
@@ -203,6 +273,520 @@ describe("Codex answer selection", () => {
 	});
 });
 
+describe("Codex terminals through the thread lifecycle", () => {
+	const terminalsOf = (sent: Record<string, unknown>[]) => sent.filter((message) => message.kind === "terminal");
+
+	it("settles an event terminal through the lifecycle, publishing before the thread is archived", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+		let unblock = () => {};
+		context.session.archiveGate = new Promise((resolve) => {
+			unblock = () => resolve();
+		});
+
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		// The gateway has its copy while the archive is still in flight, which is what park-after means.
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "done" }]);
+		expect(context.session.calls).toEqual(["settleTurn"]);
+
+		unblock();
+		await settle();
+		expect(context.session.calls).toEqual(["settleTurn", "archive"]);
+	});
+
+	it("publishes a terminal for a turn the thread does not own without unloading it", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+
+		context.session.listener({
+			method: "item/completed",
+			params: {
+				threadId: "thread-1",
+				turnId: "turn-stale",
+				item: { type: "agentMessage", id: "item-1", text: "from an older turn", phase: "final_answer" },
+			},
+		});
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-stale", status: "completed" } },
+		});
+		await settle();
+
+		expect(context.session.calls).toEqual(["settleTurn"]);
+		expect(terminalsOf(context.sent)).toMatchObject([{ turnId: "turn-stale" }]);
+	});
+
+	it("settles a reconciled terminal through the lifecycle rather than straight to the gateway", async () => {
+		const context = setup();
+		context.session.read = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{
+						id: "turn-1",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "recovered", phase: "final_answer" }],
+					},
+				],
+			},
+		};
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+
+		expect(context.session.calls).toContain("settleTurn");
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "recovered" }]);
+	});
+
+	it("parks a thread whose terminal arrives for a binding the session does not hold", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+
+		// A thread of a previous generation, which this session has no binding for.
+		context.session.listener({
+			method: "item/completed",
+			params: {
+				threadId: "thread-inherited",
+				turnId: "turn-9",
+				item: { type: "agentMessage", id: "item-1", text: "orphan", phase: "final_answer" },
+			},
+		});
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-inherited", turn: { id: "turn-9", status: "completed" } },
+		});
+		await settle();
+
+		expect(context.session.calls).toEqual(["settleTurn", "archive"]);
+		expect(terminalsOf(context.sent)).toEqual([]);
+	});
+
+	it("settles a turn whose final item never arrives, rather than holding it forever", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+
+		// The terminal alone, with no final item behind it: the tracker holds it.
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		expect(terminalsOf(context.sent)).toEqual([]);
+
+		await context.fireDeadlines();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "" }]);
+		expect(context.session.calls).toContain("archive");
+	});
+
+	it("invents no terminal when a read contradicts the one it is holding", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+		context.session.read = {
+			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
+		};
+
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		await context.fireDeadlines();
+
+		expect(terminalsOf(context.sent)).toEqual([]);
+		expect(context.session.calls).not.toContain("settleTurn");
+		// One read, and no deadline left running: a turn the server still calls live is Step 5's.
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+	});
+
+	it("arms one deadline for a held terminal, and none for one it already settled", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		const completed = {
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		};
+
+		context.session.listener(completed);
+		context.session.listener(completed);
+		await settle();
+		expect(context.timers).toHaveLength(1);
+
+		context.session.listener({
+			method: "item/completed",
+			params: {
+				threadId: "thread-1",
+				turnId: "turn-1",
+				item: { type: "agentMessage", id: "item-1", text: "late", phase: "final_answer" },
+			},
+		});
+		await settle();
+		context.session.listener(completed);
+		await settle();
+
+		expect(context.timers).toHaveLength(1);
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+	});
+
+	it("drops the deadline when a reconcile settles the turn instead", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(1);
+
+		context.session.read = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{
+						id: "turn-1",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "recovered", phase: "final_answer" }],
+					},
+				],
+			},
+		};
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+		expect(terminalsOf(context.sent).at(-1)).toMatchObject({ finalResponse: "recovered" });
+	});
+
+	it("lets no deadline of a shut-down daemon fire", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		// Asserting only that none is left running would pass against a daemon that arms none.
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(1);
+
+		context.service.shutdown();
+
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+	});
+
+	it("takes the read's answer for a held turn over the empty one the tracker holds", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.read = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{
+						id: "turn-1",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "the answer", phase: "final_answer" }],
+					},
+				],
+			},
+		};
+
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		await context.fireDeadlines();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "the answer" }]);
+	});
+
+	it("drops the deadline when the final item lands in time", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(1);
+
+		context.session.listener({
+			method: "item/completed",
+			params: {
+				threadId: "thread-1",
+				turnId: "turn-1",
+				item: { type: "agentMessage", id: "item-1", text: "late", phase: "final_answer" },
+			},
+		});
+		await settle();
+
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "late" }]);
+	});
+
+	it("retires the generation when the lifecycle cannot learn a request's fate", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		context.session.listener({
+			method: "turn/completed",
+			params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+		});
+		await settle();
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(1);
+
+		context.session.poison("thread-1", { kind: "exhausted", attempts: 3 });
+		await settle();
+
+		expect(context.released).toEqual([TARGET_ID]);
+		// Nothing of that generation is asked again, the pending deadline included.
+		expect(context.timers.filter((timer) => !timer.cleared)).toHaveLength(0);
+	});
+
+	it("serves the target's other agent from a fresh generation after one poisons it", async () => {
+		const context = setup();
+		const other = "codex_fedcba9876543210fedcba9876543210";
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.service.handleCommand({ ...startCommand(), agentId: other, operationId: OPERATION_ID_TWO });
+		await settle();
+		expect(context.sent.at(-1)).toMatchObject({ agentId: other, generation: 3 });
+		context.sent.length = 0;
+
+		context.session.poison("thread-1", { kind: "failure", failure: { kind: "timeout" } as never });
+		await settle();
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: other,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+		});
+		await settle();
+
+		expect(context.released).toEqual([TARGET_ID]);
+		expect(context.sent.at(-1)).toMatchObject({ kind: "reconciled", agentId: other, generation: 4 });
+	});
+
+	it("releases a target whose client condemns itself before the session exists", async () => {
+		const context = setup({ poisonOnOpen: { kind: "exhausted", attempts: 3 } });
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		// Nothing was asked of the child, and the lease it holds is not left to it.
+		expect(context.session.calls).toEqual(["close"]);
+		expect(context.released).toEqual([TARGET_ID]);
+		expect(context.sent).toMatchObject([{ kind: "rejected", agentId: AGENT_ID }]);
+	});
+
+	it("releases a condemned target even when closing its client throws", async () => {
+		const context = setup({ poisonOnOpen: { kind: "exhausted", attempts: 3 } });
+		context.session.closeFails = new Error("close said no");
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		expect(context.released).toEqual([TARGET_ID]);
+	});
+
+	it("lets an open that finishes after a shutdown serve nobody", async () => {
+		let opened = () => {};
+		const context = setup({
+			openGate: new Promise<void>((resolve) => {
+				opened = resolve;
+			}),
+		});
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		context.service.shutdown();
+		opened();
+		await settle();
+
+		// Nothing was asked of the child, and the lease it holds does not outlive the daemon.
+		expect(context.session.calls).toEqual(["close"]);
+		expect(context.released).toEqual([TARGET_ID]);
+	});
+
+	it("acquires no target for a command that arrives after a shutdown", async () => {
+		const context = setup();
+		context.service.shutdown();
+
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		// Acquiring would spawn the very child the shutdown exists to stop spawning.
+		expect(context.session.calls).toEqual([]);
+		expect(context.sent).toMatchObject([{ kind: "rejected", agentId: AGENT_ID }]);
+	});
+
+	it("reports a terminal under the thread it happened on, not a stale binding's", async () => {
+		const context = setup();
+		const other = "codex_fedcba9876543210fedcba9876543210";
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		// A second agent takes thread-2 while turn-1 is still bound to thread-1.
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: other,
+			target: RESOLVED_TARGET,
+			threadId: "thread-2",
+		});
+		await settle();
+		context.sent.length = 0;
+
+		context.session.hooks.onTerminal?.("thread-2", "turn-1", { status: "completed", finalResponse: "done" });
+		await settle();
+
+		expect(terminalsOf(context.sent)).toMatchObject([{ agentId: other, threadId: "thread-2" }]);
+
+		// That terminal was never turn-1's on thread-1, so it did not take its binding either.
+		context.session.calls.length = 0;
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "message",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID_TWO,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			expectedTurnId: "turn-1",
+			prompt: "Also check the lexer",
+		});
+		await settle();
+
+		expect(context.session.calls).toEqual(["steerTurn"]);
+	});
+
+	it("publishes nothing more from a generation it has retired", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.session.poison("thread-1", { kind: "exhausted", attempts: 3 });
+		await settle();
+		context.sent.length = 0;
+
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		expect(context.sent).toEqual([]);
+	});
+
+	it("refuses a command whose generation retires while it is in flight", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+
+		let landed = () => {};
+		context.session.steerGate = new Promise<void>((resolve) => {
+			landed = resolve;
+		});
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "message",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID_TWO,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			expectedTurnId: "turn-1",
+			prompt: "Also check the lexer",
+		});
+		await settle();
+
+		context.session.poison("thread-1", { kind: "exhausted", attempts: 3 });
+		await settle();
+		landed();
+		await settle();
+
+		// An acceptance on a retired fence is dropped at the gateway, so the caller would never hear.
+		expect(context.sent.at(-1)).toMatchObject({ kind: "rejected", agentId: AGENT_ID });
+	});
+
+	it("lets a terminal held over a generation change reach nobody", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		const stale = context.session.hooks.onTerminal;
+
+		context.session.poison("thread-1", { kind: "exhausted", attempts: 3 });
+		await settle();
+		context.service.handleCommand({ ...startCommand(), operationId: OPERATION_ID_TWO });
+		await settle();
+		context.sent.length = 0;
+
+		stale?.("thread-1", "turn-1", { status: "completed", finalResponse: "answered too late" });
+		await settle();
+
+		expect(context.sent).toEqual([]);
+	});
+
+	it("reports the terminal even when the archive behind it fails", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.settleFails = new Error("archive said no");
+
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+
+		// Through the lifecycle, not straight to the gateway: the archive it drives is what failed.
+		expect(context.session.calls).toContain("settleTurn");
+		expect(terminalsOf(context.sent)).toMatchObject([{ state: "completed", finalResponse: "done" }]);
+		// Retiring the generation is the lifecycle's call, not this catch's.
+		expect(context.released).toEqual([]);
+	});
+});
+
 describe("Codex daemon commands", () => {
 	it("starts a thread and reports the accepted delivery", async () => {
 		const context = setup();
@@ -252,6 +836,77 @@ describe("Codex daemon commands", () => {
 		await settle();
 
 		expect(context.sent.at(-1)).toMatchObject({ kind: "accepted", delivery: "started", turnId: "turn-2" });
+	});
+
+	it("starts a new turn when a steered turn ends while the steer is still in flight", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+
+		let landed = () => {};
+		context.session.steerGate = new Promise<void>((resolve) => {
+			landed = resolve;
+		});
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "message",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID_TWO,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			expectedTurnId: "turn-1",
+			prompt: "Also check the lexer",
+		});
+		await settle();
+
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+		landed();
+		await settle();
+
+		// Reporting the steer accepted would leave the gateway waiting on a turn that already ended.
+		expect(context.sent.at(-1)).toMatchObject({ kind: "accepted", delivery: "started", turnId: "turn-2" });
+	});
+
+	it("refuses to re-send a steered prompt while App Server still has the thread working", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.calls.length = 0;
+
+		let landed = () => {};
+		context.session.steerGate = new Promise<void>((resolve) => {
+			landed = resolve;
+		});
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "message",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			operationId: OPERATION_ID_TWO,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			expectedTurnId: "turn-1",
+			prompt: "Also check the lexer",
+		});
+		await settle();
+
+		context.session.completeTurn("turn-1", "done");
+		await settle();
+		context.session.read = {
+			thread: { id: "thread-1", turns: [{ id: "turn-9", status: "inProgress", items: [] }] },
+		};
+		landed();
+		await settle();
+
+		// Re-sending would run one prompt twice, with the write and network access it carries.
+		expect(context.session.calls).not.toContain("startTurn");
+		expect(context.sent.at(-1)).toMatchObject({ kind: "rejected", agentId: AGENT_ID });
 	});
 
 	it("refuses a command whose target cannot run, without retaining the refusal", async () => {
@@ -457,6 +1112,8 @@ describe("Codex daemon commands", () => {
 		await settle();
 
 		expect(context.sent).toMatchObject([{ kind: "accepted", threadId: "thread-1", turnId: "turn-live" }]);
+		// Adopted, never sent again: the prompt may already have run.
+		expect(context.session.calls.filter((call) => call === "startTurn")).toHaveLength(1);
 	});
 
 	it("refuses a start whose turn App Server confirms never began", async () => {

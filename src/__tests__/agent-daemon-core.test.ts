@@ -27,7 +27,7 @@ function session(targetId = "host", generation = 1): AgentDaemonSession {
 function core(
 	sent: Record<string, unknown>[],
 	targets: TargetSupervisor = {
-		acquire: () => ({ state: "unavailable", errorClass: "unused" }),
+		acquire: () => ({ state: "running", lease: { generation: 1, child: {} as AgentChild } }),
 		release: () => {},
 	},
 ): AgentDaemonCore<AgentDaemonSession> {
@@ -53,11 +53,22 @@ async function settle(): Promise<void> {
 	for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
 }
 
+/** Publishing is fenced to the registry, so a session under test has to be one the core opened. */
+async function serving(
+	daemon: AgentDaemonCore<AgentDaemonSession>,
+	targetId = "host",
+	generation = 1,
+): Promise<AgentDaemonSession> {
+	const live = session(targetId, generation);
+	await daemon.acquireSession({ ...TARGET, targetId } as AgentResolvedTarget, async () => live);
+	return live;
+}
+
 describe("AgentDaemonCore", () => {
-	it("numbers published messages per session", () => {
+	it("numbers published messages per session", async () => {
 		const sent: Record<string, unknown>[] = [];
 		const daemon = core(sent);
-		const live = session();
+		const live = await serving(daemon);
 
 		daemon.publish(live, { kind: "first" }, schema);
 		daemon.publish(live, { kind: "second" }, schema);
@@ -66,10 +77,10 @@ describe("AgentDaemonCore", () => {
 		expect(live.nextEventId).toBe(2);
 	});
 
-	it("retains only reliable messages", () => {
+	it("retains only reliable messages", async () => {
 		const sent: Record<string, unknown>[] = [];
 		const daemon = core(sent);
-		const live = session();
+		const live = await serving(daemon);
 
 		daemon.publish(live, { reliable: true }, schema);
 		daemon.publish(live, { reliable: false }, schema);
@@ -80,10 +91,10 @@ describe("AgentDaemonCore", () => {
 		expect(sent.map((message) => message.eventId)).toEqual([0, 2]);
 	});
 
-	it("evicts the oldest entry at the per-generation cap and logs it", () => {
+	it("evicts the oldest entry at the per-generation cap and logs it", async () => {
 		const sent: Record<string, unknown>[] = [];
 		const daemon = core(sent);
-		const live = session();
+		const live = await serving(daemon);
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
@@ -102,11 +113,11 @@ describe("AgentDaemonCore", () => {
 		}
 	});
 
-	it("replays entries oldest first and acknowledges committed entries", () => {
+	it("replays entries oldest first and acknowledges committed entries", async () => {
 		const sent: Record<string, unknown>[] = [];
 		const daemon = core(sent);
-		const first = session("first");
-		const second = session("second");
+		const first = await serving(daemon, "first");
+		const second = await serving(daemon, "second");
 
 		daemon.publish(first, { reliable: true, label: "first-0" }, schema);
 		daemon.publish(first, { reliable: true, label: "first-1" }, schema);
@@ -186,5 +197,111 @@ describe("AgentDaemonCore", () => {
 			daemonInstanceId: "daemon-1",
 			targets: [{ targetId: "host", generation: 4 }],
 		});
+	});
+
+	it("publishes nothing for a session it has retired, whichever backend built it", async () => {
+		const sent: Record<string, unknown>[] = [];
+		const daemon = core(sent);
+		const live = await serving(daemon);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			daemon.retire(live);
+			daemon.publish(live, { kind: "terminal" }, schema);
+
+			expect(sent).toEqual([]);
+			expect(daemon.getSession("host")).toBeUndefined();
+		} finally {
+			error.mockRestore();
+		}
+	});
+
+	it("publishes nothing for a session a newer generation replaced", async () => {
+		const sent: Record<string, unknown>[] = [];
+		let generation = 1;
+		const daemon = core(sent, {
+			acquire: () => ({ state: "running", lease: { generation, child: {} as AgentChild } }),
+			release: () => {},
+		});
+		const stale = session("host", 1);
+		await daemon.acquireSession(TARGET, async () => stale);
+		generation = 2;
+		await daemon.acquireSession(TARGET, async () => session("host", 2));
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			daemon.publish(stale, { kind: "terminal" }, schema);
+
+			expect(sent).toEqual([]);
+		} finally {
+			error.mockRestore();
+		}
+	});
+
+	it("advertises no session for a target whose replacement failed to open", async () => {
+		const sent: Record<string, unknown>[] = [];
+		let generation = 1;
+		const daemon = core(sent, {
+			acquire: () => ({ state: "running", lease: { generation, child: {} as AgentChild } }),
+			release: () => {},
+		});
+		const first = session("host", 1);
+		await daemon.acquireSession(TARGET, async () => first);
+		generation = 2;
+
+		await daemon.acquireSession(TARGET, async () => null);
+
+		// Its client is closed, so announcing it would send the gateway reconciling against a dead child.
+		expect(first.client.close).toHaveBeenCalled();
+		expect(daemon.getSession("host")).toBeUndefined();
+		expect(daemon.hello()).toMatchObject({ targets: [] });
+	});
+
+	it("hands a slower open for an older generation the session already serving", async () => {
+		const sent: Record<string, unknown>[] = [];
+		const child = {} as AgentChild;
+		let generation = 1;
+		const targets: TargetSupervisor = {
+			acquire: () => ({ state: "running", lease: { generation, child } }),
+			release: () => {},
+		};
+		const daemon = core(sent, targets);
+		const slow = deferred<AgentDaemonSession>();
+		const stale = session("host", 1);
+
+		const first = daemon.acquireSession(TARGET, () => slow.promise);
+		await settle();
+		// The lease turned over while the first open was still in flight.
+		generation = 2;
+		const live = session("host", 2);
+		await daemon.acquireSession(TARGET, async () => live);
+		slow.resolve(stale);
+
+		// Reporting the target unavailable would refuse a command its child can serve.
+		expect(await first).toBe(live);
+		expect(daemon.getSession("host")).toBe(live);
+		expect(stale.client.close).toHaveBeenCalled();
+		expect(live.client.close).not.toHaveBeenCalled();
+	});
+
+	it("lets an open for an older generation not close the one already serving", async () => {
+		const sent: Record<string, unknown>[] = [];
+		const child = {} as AgentChild;
+		const daemon = core(sent, {
+			acquire: () => ({ state: "running", lease: { generation: 1, child } }),
+			release: () => {},
+		});
+		const live = session("host", 2);
+		await daemon.acquireSession(TARGET, async () => live);
+
+		const built = vi.fn();
+		const again = await daemon.acquireSession(TARGET, async () => {
+			built();
+			return session("host", 1);
+		});
+
+		expect(again).toBe(live);
+		expect(built).not.toHaveBeenCalled();
+		expect(live.client.close).not.toHaveBeenCalled();
 	});
 });

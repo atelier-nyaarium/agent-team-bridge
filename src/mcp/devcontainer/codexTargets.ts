@@ -30,7 +30,8 @@ export interface TargetLease {
 /** Narrower than the manager: a consumer cannot reach backoff or generation counters. */
 export interface TargetSupervisor {
 	acquire(target: AgentResolvedTarget): TargetAvailability;
-	release(targetId: string): void;
+	/** The generation names the lease being given up, so a late release cannot take its successor. */
+	release(targetId: string, generation: number): void;
 }
 
 export type TargetAvailability =
@@ -301,17 +302,20 @@ export class ExecutionTargetManager implements TargetSupervisor {
 	}
 
 	/** A deliberate stop is not a failure, so it costs no backoff. */
-	release(targetId: string): void {
+	release(targetId: string, generation: number): void {
 		const entry = this.targets.get(targetId);
-		if (!entry?.lease) return;
-		this.log({ targetId, generation: entry.lease.generation, state: "reaped" });
+		// A late release must not tear down its successor.
+		if (entry?.lease?.generation !== generation) return;
+		this.log({ targetId, generation, state: "reaped" });
 		entry.lease.child.kill();
 		entry.lease = undefined;
 	}
 
 	/** Generation counters survive, so no generation a late exit carries is handed out again. */
 	shutdown(): void {
-		for (const targetId of [...this.targets.keys()]) this.release(targetId);
+		for (const [targetId, entry] of [...this.targets]) {
+			if (entry.lease) this.release(targetId, entry.lease.generation);
+		}
 	}
 
 	private recordFailure(targetId: string, errorClass: string): TargetAvailability {

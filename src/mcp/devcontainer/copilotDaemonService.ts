@@ -139,7 +139,7 @@ export class CopilotDaemonService {
 		const turnId = crypto.randomUUID();
 		const binding: Binding = { ownerKey: command.ownerKey, agentId: command.agentId, sessionId: info.sessionId };
 		session.sessions.set(info.sessionId, binding);
-		this.emitReceipt(session, {
+		this.emitReceipt(session, command, {
 			kind: "accepted",
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
@@ -171,7 +171,7 @@ export class CopilotDaemonService {
 			session.sessions.set(command.sessionId, binding);
 		}
 		const turnId = crypto.randomUUID();
-		this.emitReceipt(session, {
+		this.emitReceipt(session, command, {
 			kind: "accepted",
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
@@ -229,7 +229,7 @@ export class CopilotDaemonService {
 			return this.reject(command, `Copilot turn is no longer active`);
 		active.cancelled = true;
 		session.client.cancel(command.sessionId);
-		this.emitReceipt(session, {
+		this.emitReceipt(session, command, {
 			kind: "interruptResult",
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
@@ -261,7 +261,7 @@ export class CopilotDaemonService {
 				sessionId: command.sessionId,
 			});
 		}
-		this.emitReceipt(session, {
+		this.emitReceipt(session, command, {
 			kind: "reconciled",
 			requestId: command.requestId,
 			ownerKey: command.ownerKey,
@@ -283,7 +283,7 @@ export class CopilotDaemonService {
 			client = await opened(lease.child);
 		} catch (error) {
 			this.openErrors.set(target.targetId, describe(error));
-			this.deps.targets.release(target.targetId);
+			this.deps.targets.release(target.targetId, lease.generation);
 			return null;
 		}
 		this.openErrors.delete(target.targetId);
@@ -354,7 +354,17 @@ export class CopilotDaemonService {
 		this.core.publish(session, { type: "copilot_event", ...event }, CopilotDaemonEventSchema, "first");
 	}
 
-	private emitReceipt(session: TargetSession, receipt: Record<string, unknown>): void {
+	/**
+	 * A receipt carries this generation's fence, which the gateway drops once it has retired it.
+	 *
+	 * So a command whose generation died mid-flight is refused instead: a refusal carries no
+	 * generation and is delivered, where an acceptance the gateway fences out hangs the caller.
+	 */
+	private emitReceipt(session: TargetSession, command: CopilotDaemonCommand, receipt: Record<string, unknown>): void {
+		if (!this.core.live(session)) {
+			this.reject(command, `Copilot generation was retired mid-command`);
+			return;
+		}
 		this.core.publish(
 			session,
 			{

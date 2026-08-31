@@ -162,27 +162,126 @@ and whatever the daemon needs, and every double follows or fails to compile.
 
 ## Step 3 - The daemon path through the owner
 
-`CodexDaemonService.onServerEvent` feeds `CodexTurnTracker` and calls `emitTerminal`;
-`runReconcile` resumes the thread, reads it, and calls `emitTerminal` directly; `beginTurn` asks
-`runningTurn` after a failed `turn/start` and `runStart` rejects with no terminal when the answer is
-`none` or `unknown`; `settlePending` has no caller, so a completed turn whose final item never
-arrives is held forever (`plans/pain-points.md`).
+Every terminal the daemon has reaches `client.settleTurn` through one `settle`, and `emitTerminal` is
+reached only from the lifecycle's `onTerminal` hook, so nothing publishes a terminal without parking
+its thread. Three observers feed it: the event path (`onServerEvent`, through `CodexTurnTracker`),
+the reconcile read (`runReconcile`), and a bounded hold deadline. `settlePending` finally has a
+caller, which closes the hang recorded in `plans/pain-points.md`: a completed turn whose final item
+never arrived was held forever, and the caller's only escape was `codexStopAgent`.
 
-Every terminal reaches `client.settleTurn`: the event path, the reconcile read, and a bounded hold
-deadline that performs one `thread/read` and then calls `settlePending`, publishing an empty answer
-as an explicit degraded outcome. `onTerminal` is `emitTerminal` plus retention in the daemon's
-outbox, which is what "published before park" means; the gateway's acknowledgement stays
-asynchronous. `onPoisoned` releases the target through `TargetSupervisor.release` and moves every
-binding on that generation into recovery, so the gateway reconciles them; an ambiguous `turn/start`
-is never replayed, since the fresh generation resumes and reads first and adopts whatever turn the
-thread holds. A settle parks by the outcome's thread id before the binding lookup, so a terminal for
-a binding the session no longer holds still unloads its thread.
+The deadline performs ONE `thread/read`. A read that settles the turn answers with its outcome; a
+read that says nothing about it, a failed read included, settles the held terminal instead through
+`settlePending`. That answer may be empty, and nothing on the event distinguishes a turn that
+produced no answer from a read that never learned one. A read that still calls the turn in progress
+contradicts the terminal that armed the deadline, so nothing is invented and nothing is re-armed:
+that turn is what the Step 5 watchdog is for, and the tracker keeps holding it so a late item still
+settles it normally. A deadline is armed only while `CodexTurnTracker.holding` says that turn is
+waiting, so a redelivered terminal arms nothing and one turn never has two; it is dropped by whatever
+settles the turn first, a reconcile included; it checks that its generation is still the current one
+both before and after its read; and a shutdown or a replacement clears every one of them.
+`HELD_TERMINAL_MS` is ten seconds, the final item's own latency rather than a request timeout, far
+inside the 240s caller budget that used to be the only bound.
+
+`onTerminal` is `emitTerminal` plus retention in the daemon's outbox, which is what "published before
+park" means; the gateway's acknowledgement stays asynchronous. Retention is what the outbox already
+promises and no more: a message its schema rejects is dropped, now with a log rather than in silence,
+and the pre-existing overflow rule can still evict a retained one.
+
+`AgentDaemonCore` owns whether a generation still speaks, because both daemons publish through it and
+only one of them had learned to ask. `live` is registry membership and `retire` DROPS the session, so
+giving one up and being replaced by a newer one are the same state rather than two that can disagree.
+`publish` refuses on a dead one, which is what fixes the Copilot twin: it never had the check, and its
+in-flight prompt published under a fence the gateway had already retired. A predecessor is
+deregistered before it is closed, since a closed session left in the registry is still announced by
+`hello` and still passes that fence, and a replacement that fails to open leaves the target with no
+session rather than a dead one.
+
+Both daemons still ask `live` themselves before a receipt, because that one cannot simply fall
+silent: a command whose generation retires mid-flight is REFUSED, a refusal carrying no generation
+and being delivered where an acceptance the gateway fences out hangs the caller waiting on it. Codex
+asks it before a terminal and a commentary item too, which are dropped rather than refused. Already-published messages are not
+retracted; the outbox still replays what it retained, since retirement does not make a terminal that
+really happened untrue.
+
+A binding is found by turn id only when its thread agrees, and by thread id otherwise, since the
+event names the binding's thread rather than the outcome's: a turn id the session still maps to an
+older thread would report the turn under the wrong thread and the wrong agent. The same answer says
+whether the entry in `turns` is this terminal's to delete, since taking a live turn's binding leaves
+the next message for it starting a turn rather than steering one.
+
+`CodexTurnTracker` suppresses a redelivered terminal from its last `SETTLED_MEMORY` settled turns and
+no further back, so "a redelivered terminal arms nothing" holds for the window its own comment
+claims, a late duplicate arriving near its own turn, and not for one redelivered hundreds of turns
+later.
+
+`onPoisoned` releases the target through `TargetSupervisor.release`, which IS the retirement: the
+next command acquires a new generation and the gateway reconciles its own stale records against that
+one. The daemon has no frame that says "recovering", so it announces nothing of its own. A client
+that condemns itself before `open` has built its session is released the same way and never
+registered, since the hook has no session to retire and the lease would otherwise outlive the child
+it condemns; a `close` that throws on the way out does not skip that release, because the release is
+what actually retires the child. An open that finishes after `shutdown` is discarded through that
+same path, and a command that arrives after one is refused before it can acquire anything, since
+dispatching it would spawn the very child the shutdown exists to stop spawning.
+
+`release` names the generation it gives up, and the manager reaps only that one. The rule already
+existed for a late `onExit`, whose comment says a late exit must not tear down its successor, and
+`release` was the single caller bypassing it: a slow open that condemned itself could reap the lease
+a second agent had just acquired. Naming the generation is required rather than optional, so a caller
+that forgets fails the type check. `AgentDaemonCore` fences the other end of the same race: an open
+for an older generation neither closes the session already serving nor replaces it, and its caller is
+handed that live session rather than a null, since refusing a command whose target is healthy is the
+wrong answer to losing a race. An ambiguous
+`turn/start` is never replayed, since `beginTurn` adopts whatever
+turn the thread already holds. A steer that returns after its own turn's terminal published gets no
+`steered` receipt, since that leaves the gateway waiting on a turn that has ended; the terminal may
+have carried the prompt with it, so the same rule a failed steer follows decides what happens next,
+and only App Server saying nothing runs on that thread makes it a new turn. A settle parks by the
+outcome's thread id before the binding lookup,
+so a terminal for a binding the session no longer holds still unloads its thread.
 
 Tests: `src/__tests__/codex-daemon-service.test.ts`, with `FakeSession` gaining the lifecycle calls,
 deferred request gates, coded failures and recorded call order: event settlement, reconcile
 settlement, the hold deadline, terminal retained before the archive request, no binding at event
 arrival, sole-turn adoption, an unknown first turn without delete, an ambiguous `turn/start` without
-prompt replay, and poisoning releasing the target with the other agent recovering.
+prompt replay, poisoning releasing the target with the other agent recovering, a client condemning
+itself before its session exists, a terminal held across a generation change reaching nobody, a steer
+whose turn ends while the steer is in flight, that same steer refused rather than re-sent while the
+thread is still working, a retired generation publishing nothing more, a command refused when its
+generation retires mid-flight, a condemned target released even when closing its client throws, an
+open finishing after a shutdown serving nobody, a command arriving after one acquiring nothing, and a
+terminal reported under the thread it happened on without taking another thread's turn binding.
+`src/__tests__/codex-targets.test.ts` covers a release naming an older generation reaping nothing.
+`src/__tests__/agent-daemon-core.test.ts` covers an open for an older generation neither closing nor
+replacing the one already serving, a target whose replacement fails to open advertising no session,
+and publishing nothing for a session that was retired or replaced, which is the check every backend
+on this core inherits. `src/__tests__/copilot-daemon-service.test.ts` covers the twin refusing a
+command whose generation retires mid-flight rather than losing its acceptance.
+
+### Bug Classes
+
+**Mechanism:** whether a generation still speaks, asked before anything reaches the gateway.
+
+**Class:** the answer lived beside the registry that decides it instead of in it, so every round
+found another state where the two disagreed.
+
+Four rounds. Round 1 put the check in the codex service as `core.getSession(...) === session`, which
+misses retirement: a poisoned generation stays registered until something replaces it, so it kept
+publishing. Round 2 moved the authority to a second registry the service kept itself, which fixed
+retirement and broke replacement, since a slow open for a dead generation evicted the live one and
+silenced a healthy child. Round 3 kept both registries and asked both, which was correct and still
+wrong-shaped. Round 4 moved the question to `AgentDaemonCore`, where `retire` drops the session from
+the one registry that already answers "which generation serves".
+
+Two things fell out of that move which no amount of patching in the service would have reached. The
+Copilot daemon publishes through the same core and never had the check at all, so it was publishing
+from replaced generations the whole time. And `publish` itself now refuses a dead session, so a
+backend added later cannot forget. The gate alone left Copilot's callers hanging on a dropped
+acceptance, which is the one thing a silent drop must never do, so it takes the same explicit check
+before a receipt that codex does.
+
+The lesson is the shape: a fact ABOUT a registry belongs in it. Every arrangement that tracked
+retirement beside the registry left either a live generation silent or a dead one talking.
 
 ## Step 4 - The local path through the owner
 
@@ -223,8 +322,8 @@ other agent's recovery; `src/__tests__/local-agent-runtime.test.ts` for a follow
 
 ## Step 6 - Bounded bookkeeping
 
-`TargetSession.threads` and `turns` never delete an entry; `CodexTurnTracker` bounds settled turns
-at `SETTLED_MEMORY`.
+`TargetSession.threads` never deletes an entry, and `turns` deletes only the turn a terminal or an
+adopted steer retired; `CodexTurnTracker` bounds settled turns at `SETTLED_MEMORY`.
 
 Only acknowledged `parked` and `disposed` lifecycle entries age out, bounded the way the tracker's
 settled set is. `firstTurn`, `active`, `parking` and `poisoned` entries stay registered until they

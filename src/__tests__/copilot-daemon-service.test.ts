@@ -125,6 +125,65 @@ it("rejects an explicitly requested model that ACP did not apply", async () => {
 	);
 });
 
+it("refuses a command whose generation retires while it is in flight", async () => {
+	const sent: Record<string, unknown>[] = [];
+	let started = () => {};
+	const opening = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const client = {
+		onEvent: () => {},
+		newSession: async () => ({ sessionId: "session-1", model: { state: "applied", model: "auto" } }),
+		loadSession: async () => {},
+		prompt: async () => ({ stopReason: "end_turn" }),
+		cancel: () => {},
+		close: () => {},
+	} as unknown as CopilotAcpClient;
+	let generation = 1;
+	const service = new CopilotDaemonService({
+		targets: {
+			acquire: () => ({ state: "running", lease: { generation, child: {} as AgentChild } }),
+			release: () => {},
+		},
+		daemonInstanceId: "daemon-1",
+		send: (message) => sent.push(message),
+		openClient: async () => {
+			await opening;
+			return client;
+		},
+		resolveHostCwd: () => "/home/agent",
+	});
+
+	service.handleCommand({
+		type: "copilot_command",
+		kind: "start",
+		requestId: REQUEST_ID,
+		ownerKey: OWNER_KEY,
+		agentId: AGENT_ID,
+		operationId: OPERATION_ID,
+		target: { kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
+		prompt: "Review the parser",
+	});
+	await settle();
+	// A newer generation takes the target while the first is still opening.
+	generation = 2;
+	service.handleCommand({
+		type: "copilot_command",
+		kind: "start",
+		requestId: "123e4567-e89b-42d3-a456-426614174005",
+		ownerKey: OWNER_KEY,
+		agentId: "copilot_fedcba9876543210fedcba9876543210",
+		operationId: "123e4567-e89b-42d3-a456-426614174006",
+		target: { kind: "devcontainer", project: "recipe-app", hostProjectPath: "/projects/recipe-app" },
+		prompt: "Review the lexer",
+	});
+	started();
+	await settle();
+
+	// Losing the acceptance instead would leave that caller waiting on a generation nobody holds.
+	expect(sent.filter((message) => message.agentId === AGENT_ID)).toMatchObject([{ kind: "rejected" }]);
+});
+
 it("classifies login failures in rejected receipts", async () => {
 	const sent: Record<string, unknown>[] = [];
 	const targets: TargetSupervisor = {

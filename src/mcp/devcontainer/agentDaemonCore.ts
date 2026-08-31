@@ -132,6 +132,21 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 		return this.sessions.get(targetId);
 	}
 
+	/**
+	 * Whether this generation still serves its target, which is what every publisher must ask.
+	 *
+	 * Tracking retirement BESIDE the registry rather than in it was tried and silenced a healthy
+	 * child, so `retire` drops the session and this one question answers both.
+	 */
+	live(session: TSession): boolean {
+		return this.sessions.get(session.targetId) === session;
+	}
+
+	/** Give up a generation. Nothing it holds is served or published again. */
+	retire(session: TSession): void {
+		if (this.live(session)) this.sessions.delete(session.targetId);
+	}
+
 	shutdown(): void {
 		for (const session of this.sessions.values()) session.client.close();
 		this.sessions.clear();
@@ -148,6 +163,13 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 		schema: AgentDaemonSchema<T>,
 		eventIdPlacement: EventIdPlacement = "last",
 	): void {
+		// The gateway fences a retired generation out, so publishing under one only looks delivered.
+		if (!this.live(session)) {
+			console.error(
+				`[${this.options.backendId}-daemon] dropped a ${partial.kind} from a retired generation on ${session.targetId}`,
+			);
+			return;
+		}
 		const eventId = session.nextEventId;
 		session.nextEventId += 1;
 		const message =
@@ -167,7 +189,13 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 						eventId,
 					};
 		const parsed = schema.safeParse(message);
-		if (!parsed.success) return;
+		if (!parsed.success) {
+			// Silence here loses a terminal whose thread the lifecycle unloads regardless.
+			console.error(
+				`[${this.options.backendId}-daemon] dropped an unpublishable ${partial.kind} on ${session.targetId}`,
+			);
+			return;
+		}
 		if (this.options.isReliable(parsed.data)) this.retain(session.targetId, session.generation, eventId, message);
 		this.options.send(message);
 	}
@@ -177,9 +205,24 @@ export class AgentDaemonCore<TSession extends AgentDaemonSession> {
 		lease: TargetLease,
 		buildSession: (target: AgentResolvedTarget, lease: TargetLease) => Promise<TSession | null>,
 	): Promise<TSession | null> {
-		this.sessions.get(target.targetId)?.client.close();
+		const before = this.sessions.get(target.targetId);
+		// An open for an older generation must not close the one already serving, nor replace it when
+		// it finishes. The caller is handed that live session instead, since its target is healthy.
+		if (before && before.generation > lease.generation) return before;
+		if (before) {
+			// Deregistered before it is closed: a closed session left registered is still advertised by
+			// hello() and still passes the publish fence.
+			this.sessions.delete(target.targetId);
+			before.client.close();
+		}
 		const session = await buildSession(target, lease);
-		if (session) this.sessions.set(target.targetId, session);
+		if (!session) return null;
+		const current = this.sessions.get(target.targetId);
+		if (current && current.generation > session.generation) {
+			session.client.close();
+			return current;
+		}
+		this.sessions.set(target.targetId, session);
 		return session;
 	}
 
