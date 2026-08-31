@@ -451,14 +451,23 @@ A session can delegate a self-contained task to a logged-in Copilot CLI through 
 `gitPull` after every push. A non-empty `git log main..origin/main` is a hard stop. Scripted edits
 must assert their match before writing.
 
+### A `Bun.serve` server cannot be behavior-tested
+
+Vitest workers run under node, production runs under bun, so starting one in a test dies on
+`ReferenceError: Bun is not defined`. The Gateway is `Bun.serve` and its suites never start it; the
+Router is `node:https` + `ws` for exactly this reason. A new server that needs tests around its
+socket takes the Router's stack.
+
 ### Verify locally before pushing, especially Android
 
 CI does not compile Kotlin before merge. Run:
 
 ```bash
-source ~/android-dev/env.sh
-cd android && ./gradlew :app:testDebugUnitTest --console=plain
+./scripts/kotlin-gate.sh
 ```
+
+It resolves the repo root and sources the SDK env itself, so it runs from any directory. Half this
+gate's runs once failed on `cd: android: No such file or directory` from a shell left elsewhere.
 
 `testDebugUnitTest` is un-minified. Both debug and release are R8-minified, so verify reflective
 Android and JavaScript bridge entry points with `assembleRelease` or on-device. The

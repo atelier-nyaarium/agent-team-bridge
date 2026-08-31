@@ -31,7 +31,7 @@ type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
 
 const ALLOWLIST_FILE = "federation-allowlist.json";
 
-/** The mirrored Domain allowlist on a Gateway (audit R3): the owner root plus the
+/** The mirrored Domain allowlist on a Gateway: the owner root plus the
  * owner-signed admissions / revocations, persisted to the Gateway's volume so a
  * revocation bites even while the Router is unreachable. Resolution maps a Gateway id to
  * its admitted keys for sealing, and a sender key to its admission for unsealing. */
@@ -93,7 +93,7 @@ export class Allowlist {
 		this.persist();
 	}
 
-	/** Mirror the Domain state the Router pushed (audit R3). Idempotent: replaces the
+	/** Mirror the Domain state the Router pushed. Idempotent: replaces the
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
 	 * rather than accumulating duplicates. The first snapshot roots the Gateway
 	 * (trust-on-first-enroll); a later snapshot rooted at a different owner key is

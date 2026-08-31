@@ -470,6 +470,9 @@ fun SessionsScreen(
 							}
 							for (sp in spawnPoints) {
 								val proj = localName(sp)
+								// Same exclusion the orphan loop below makes: a catalog project literally named
+								// "host" would otherwise render a second header under the key already used above.
+								if (showCreate && proj == "host") continue
 								renderProject(proj) {
 									SpawnPointHeader(
 										project = proj,

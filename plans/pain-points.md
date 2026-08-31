@@ -27,6 +27,8 @@ SEPARATE triggers" subsection and is closed. What follows is what stayed open.
 A coverage pass mapped the plan's own checklist to named tests: 41 requirements are covered, these
 are not.
 
+WILL NOT DO. Test-coverage debt and a module split, not defects. Nothing below misbehaves today.
+
 - [medium] No large-history test. Exchanges, operations and turns are uncapped and unpaginated by
   design. Nothing builds an agent with hundreds of entries and checks that persistence, restore and
   the list projection still behave. A cost that only appears at scale would land on a long-lived
@@ -206,7 +208,8 @@ on the scouting agents' tone alone.
   Phase C's `postRouterDirect` redaction fix only covers the 9 router-direct ops; `relay()` (Phase D's
   target) logs nothing today, but several of the ~21 ops it serves carry genuine plaintext secrets
   once `unsealReply()` decrypts them. A future trace line placed on the decoded result (rather than
-  the still-sealed raw response) would leak. Not a live issue - nothing logs there yet.
+  the still-sealed raw response) would leak. WILL NOT DO: nothing logs there, so there is no defect
+  to fix. Kept as the warning to whoever adds the first trace line.
 
 **Low:**
 - [low] `android/.../FederationManager.kt : consoleAdmission` vs `admitConsole` - **naming trap** -
@@ -299,13 +302,15 @@ their existing entries.
   silently" escape gives a confused agent a sanctioned path to drop the report. Fix set: name all
   four tiers, use `full`, delegate fullSpoken authoring to the relaying agent explicitly, stop
   passing urgent, update the schema mirror-claim comment and the test pins in the same commit.
+  WILL NOT DO HERE: the defect and its fix live in `../nyaaskills`, a different repository.
 - [medium] `src/mcp/devcontainer/reloadPlugins.ts : spawnReloadPlugins` (+ `routes.ts : health`) -
   **framework-first** - the load-bearing rollout order (gateway rebuild BEFORE the version-bump
   push) is enforced by nothing mechanical; reload_plugins has no gateway pre-flight and /health
   carries no version signal. Half the handshake exists (plugins report packageJson.version at
   register, surfaced in teams()), but nothing gates on it and the reverse direction (gateway
   advertising its version) does not exist. Guard candidates: stamp the gateway version on /health
-  + a reload_plugins pre-flight, or a register-time skew warning.
+  + a reload_plugins pre-flight, or a register-time skew warning. WILL NOT DO: a version handshake
+  is a new protocol surface, not a defect fix.
 ## Announce chip (`plans/announce-chip.md`, deleted, shipped - 2026-07-11)
 
 Migrated from `plans/announce-chip.md` (deleted, shipped - the attachment-chip decoration seam +
@@ -404,7 +409,8 @@ not lost.
 - [medium] `shared/host-op.ts : HostOp : createSession` (+ `hostDaemon.ts : hostOpRunner.createSession`)
   - the `create_session` op carries no `resumeSessionId`, so tapping "New Session" on a host name the
   gateway already has a resume id for starts fresh and abandons the saved transcript. Only the wake
-  path resumes. Decide whether create_session should offer resume.
+  path resumes. WILL NOT DO: the entry itself says "decide whether create_session should offer
+  resume", so this is an unmade product decision, not a defect.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
@@ -445,6 +451,11 @@ crust-collection sweep.
   promotes unsolicited cold-contact to normal, encouraged use (not just a tolerated edge case),
   which makes this gap more likely to matter under ordinary use rather than only adversarial use -
   it doesn't add a new capability, so it's noted here rather than fixed there.
+
+  The SIZE half is closed: `SessionStore.sweep` now takes an entry ceiling alongside the TTL and
+  evicts least-recently-seen, never a live record, so the store and `session-resume.json` are
+  bounded. The RATE half and the wake dispatches it drives are WILL NOT DO here: both need the
+  LAN-facing gate, which is an owner decision.
 
 ### Phase F crust-collection sweep
 
@@ -491,34 +502,31 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   `domainId` entirely in arming mode, while every actual address-building path elsewhere in the file
   treats arming mode as domain `"local"`. `bridgeDiscover.ts` falls back to a bare unqualified team
   name in this case - inconsistent with the rest of the system's arming-mode convention, though
-  still locally resolvable. Fix: stamp `domainId: localDomainId ?? LOCAL_DOMAIN_SENTINEL`
-  unconditionally in `commonFields`.
-- [medium] `src/gateway/routes.ts : send` - **bug-class** - the channel-mode branch's two
-  local-participant `mirrorPeer` calls are unguarded sequential statements; if the first throws, the
-  second (the recipient's own mirror copy) never runs, and the enclosing catch misreports the whole
-  request as a 500 even though the real message already delivered - a caller retrying after seeing
-  this would duplicate the actual channel_push too, not just its mirror copy. No shared dedupeKey
-  links the mirror calls of one exchange, so there's no way to reconcile a one-sided mirror after the
-  fact.
+  still locally resolvable. WILL NOT DO: omitting an absent optional field is the intended arming-mode
+  behaviour and the result stays locally resolvable, so there is no defect here.
 - [medium] `android/.../ChatRepository.kt : ChatState` - **framework-first** - flag-soup trending
   real: 4 of its 8 team-keyed collections are plain per-team scalars manually enumerated together at
   3 separate lifecycle boundaries, and `forget`'s own comment admits it ("key every field removal
   ... so a non-canonical spelling can't leave a field's entry behind" - a human working around a
   missing type). The same problem has already escaped into `ChatRepository.drafts` and
   `SttsPlayer`'s cache. Proposed fix: a `SessionUiState(closed, unread, working, needsLogin)` value
-  type collapsing the 4-map cluster into one `sessionUi: Map<String, SessionUiState>`.
+  type collapsing the 4-map cluster into one `sessionUi: Map<String, SessionUiState>`. WILL NOT DO:
+  a refactor of working code, not a defect.
 - [medium] `src/gateway/routes.ts : fanOutConsolePush` - no caching/coalescing of the `list_gateways`
   roster fetch and no fan-out concurrency cap: a hot loop of local `send`/`respond` traffic or
   repeated `notify_human` calls each independently re-fetches the roster and re-fires the full
   fan-out. Per-destination retry/backoff is sane and bounded; a robustness gap, not a security hole.
-  Worth a roster TTL-cache or fan-out debounce if Domain sizes grow.
+  WILL NOT DO: the entry says it itself, a robustness gap and not a security hole. A roster TTL-cache
+  is an optimization, worth revisiting only if Domain sizes grow.
 - [medium] `src/shared/device-mailbox.ts : DeviceMailboxStore.sweepExpired` - a pure time-based scan
   with no concept of "a relay is currently targeting this key," while `relayWithRetry` can keep a
   delivery in flight for up to ~10.5 minutes. An ordinary transient relay retry straddling a sweep
   tick near the 1-hour idle TTL tears the mailbox down mid-flight; the compound case - an earlier
   attempt landed but its ack was lost, and eviction lands between that silent success and the retry's
   redelivery - produces a genuine user-visible duplicate with no coordination anywhere to prevent it.
-  Same class as the `ChatRepository.forget` race above; cosmetic-only consequence.
+  WILL NOT DO: not reachable under the shipped timings. `append` refreshes `lastActivity`, so the
+  first landing restarts the 1-hour idle TTL, and the whole retry window is ~10.5 minutes inside it.
+  Only a deployment configuring a TTL below the retry window could reach it.
 - [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is ~1400 lines
   (refreshed 2026-07-11 by the fullSpoken framework audit; the original ~1290 figure went stale in
   two days), the largest file in `src/gateway/`. The console mailbox delivery concern is now FIVE
@@ -912,13 +920,11 @@ live there or in residue tests. What follows is what stayed open.
 
 ### Two known gaps, deliberate
 
-- [medium] **The `/task-board` route's replay record is in memory.** An MCP operation id outlives the
-  gateway process, so a restart between committing a write and flushing its reply loses the record
-  and the caller's retry re-applies an absolute set. `create` is unaffected - its replay is
-  structural, derived from `(from, operationId)` and stored in the board file. Closing it wants this
-  route's own durable file: `DurableOpStore` is typed to `ConsoleOpResult` and keyed by conversation,
-  so it cannot be borrowed. The comment on `boardOperationReplies` says so rather than claiming
-  safety.
+- [low] **A board write and its replay record are two durable files, so a crash between them still
+  loses the record** and the retry re-applies an absolute set. The always-loses case is closed
+  (`DurableOpStore` is generic over its result, and the board holds its own instance and file), and
+  this residual needs both writes in one atomic snapshot. `markInFlight` is NOT the fix: a replayed
+  in-flight record re-executes by design, which is the regression itself.
 
 ## Task board holes the awareness push surfaced (2026-08-07)
 
@@ -954,20 +960,26 @@ the strength of an audit finding.
 
 ### Structural, not board-specific
 
+WILL NOT DO, all of them: refactors, tooling and ergonomics on working code. Kept for whoever picks
+up the next structural pass.
+
 - [high] **Nothing in the type system separates a qualified address from a bare local field.** Both
   are `String`, and the phase-2 blocker was exactly that confusion: the console sent one where the
   Gateway indexes by the other, so every assign was refused. The follow-on collision (a bare key is
   unique only per Gateway) was the same class again. `shared/session-id.ts` already owns `Address`
   and `SpawnPoint`; a value type for the local field, or a Kotlin value class, would have made both
-  rounds compile errors. The single highest-value type change in this codebase.
-- [medium] **Idempotency is re-invented per surface.** Console ops have `opCache` plus
-  `DurableOpStore`; Codex mints a private operation id; the board route now has a third mechanism,
-  keyed differently from both. All three exist because the same fact is true of all three, and each
-  was built separately after somebody noticed. A gateway-wide "settled reply for an operation id"
-  primitive would have made this phase's record two lines instead of a judgement call.
+  rounds compile errors. The single highest-value type change in this codebase. WILL NOT DO here: a
+  cross-language type migration, not a defect fix. Kept because it is the one worth doing next.
+- [low] **Idempotency is re-invented per surface.** The board's third mechanism is gone: it holds a
+  `DurableOpStore` of its own, the store being generic over its result type. What remains is the
+  console's `opCache` in front of that store, which is deliberate (the cache holds a live promise for
+  a concurrent same-process retry, which a settled-record store cannot), and Codex's private
+  operation id. WILL NOT DO further: no duplicated mechanism is left to merge.
 - [medium] **The Kotlin gate is local-only and bites every lap.** `ci.yml` never compiles Kotlin, so
-  a green TS suite reads as done. It cost time twice more this run despite being documented. A CI job
-  that merely COMPILES Kotlin on a PR closes the whole class; it does not need the unit tests.
+  a green TS suite reads as done. A CI job that merely COMPILES Kotlin on a PR closes the whole
+  class; it does not need the unit tests. WILL NOT DO here: standing up an Android SDK in CI is
+  infrastructure work, not a defect fix. `./scripts/kotlin-gate.sh` now runs it locally from any
+  directory, which removed the half of the failures that were a wrong working directory.
 - [low] **`src/gateway/routes.ts` is past 2000 lines** and `taskBoard` joined it as another fat
   function. The real problem is `createRoutes`' closure-over-forty-deps shape, so extracting one
   route without deciding the family's contract makes the file less uniform, not smaller.
@@ -980,11 +992,6 @@ the strength of an audit finding.
 - [low] **`codegen-kotlin.ts` reports a conversion-root `$ref` problem as a `.meta` id collision**,
   which reads as a naming accident rather than the real rule (a recursive schema may appear in
   exactly one place in the conversion graph).
-- [low] **`MainActivity.kt:renderProject` has a pre-existing unguarded double-render path** for a
-  project literally named "host" - the duplicate-key crash class. Still open.
-- [low] **`gradlew` needs the repo root resolved for it.** Half my Kotlin gate runs failed with
-  `cd: android: No such file or directory` because a previous command had left the shell there. A
-  `scripts/kotlin-gate.sh` would remove it.
 
 ### The lesson worth keeping
 
@@ -996,18 +1003,9 @@ does and cannot go stale; `board-refusal-residue.test.ts` is the pattern.
 
 ## Self-hosted federation Router, Phase 1 (`plans/self-hosted-federation.md`, 2026-08-15)
 
-- [high] **Nothing in the repo reveals that a `Bun.serve` server cannot be behavior-tested.** The
-  gateway is written on `Bun.serve` and its own suites never start it, so the constraint is
-  invisible until you try. I only learned it when the Router's socket suites died on
-  `ReferenceError: Bun is not defined` - vitest workers run under node, production runs under bun.
-  The Router now uses `node:https` + `ws` for exactly this reason, which means the two servers in
-  this repo are built on different stacks and neither file says why. Anyone adding a third server
-  will pick wrong. A line in CLAUDE.md would fix it; a shared listener helper would fix it better.
-- [high] **Ported comments carry the old system's audit ids.** evie's bridge annotates security
-  branches with bare finding references (`(P1)`, `(P2)`, `(P3)`, `(audit R3)`) that mean nothing
-  outside evie's review history. They survived the port and read as authoritative. Worse, one test
-  heading claimed `shouldVivifyCoordinator` guarded "unbounded coordinators" while nothing ever
-  called it. The lesson from the last plan repeats: prose asserting an invariant nobody wired.
+Both of this section's highs are now closed: CLAUDE.md states the `Bun.serve` testing constraint and
+which stack a new server takes, and the last two ported `(audit R3)` markers are out of
+`allowlist.ts`. What follows is WILL NOT DO: shared helpers and porting technique, not defects.
 - [med] **Comment volume is the real porting cost.** Roughly 130 comment blocks came across as
   multi-paragraph narrative and needed deleting - `gatewayBridge.ts` alone had a running prose
   walkthrough inside `handleGatewayRegister`. The reasoning is genuinely valuable and genuinely
