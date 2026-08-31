@@ -220,6 +220,13 @@ Poll-based, keyed by per-install `conversationId`. Device Name is display-only. 
 - Plugin actions use one generic `kind: "plugin_action"` entry. `threadAddr` comes only from the request's `from`.
 - `consolePushOps.deliverToOwner` is the sole mailbox writer, enforced by a residue test. `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain only and deduplicated by `dedupeKey`.
 
+**Do not sanitize invisible characters in display strings.** `oneLine` collapses ASCII whitespace and
+that is all that is wanted. A hand-listed strip drew four audit findings in one round, in both
+directions at once, and the owner ruled the class out: an agent titling something with only
+zero-width characters is not a real case, nor is one spaced with U+2028 or U+00A0. Do not
+reintroduce a category strip, a bidi rule, or a Unicode whitespace set on the strength of an audit
+finding.
+
 ### Console terminal view
 
 Terminal operations reach the host through correlated `host_op` RPCs. `hostOpRunner.ts` owns peek single-flight, cadence and concurrency limits, and mutating-op deduplication.
