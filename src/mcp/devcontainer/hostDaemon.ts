@@ -139,6 +139,12 @@ export function stopSupervisedChildren(): void {
 	}
 }
 
+/** Stops the reconnect timer as well as the children, so shutdown leaves nothing scheduled. */
+export function stopHostDaemon(): void {
+	reconnector.cancel();
+	stopSupervisedChildren();
+}
+
 export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
 	if (dirs && dirs.length > 0) {
 		setProjectDirs(dirs);

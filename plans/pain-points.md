@@ -357,15 +357,9 @@ deferred follow-ups its audits surfaced, verbatim at migration time.
 
 ### Graceful-shutdown reconnector cleanup
 
-The shared `Reconnector` exposes `cancel()`; routerClient and `closeRouter` use it, but two shutdown
-paths still leak a pending reconnect timer. Cosmetic on a process that is exiting, but inconsistent.
-
-- [low] `src/mcp/devcontainer/hostDaemon.ts : reconnector` - module-scoped, never cancelled;
-  `main-host-daemon.ts` registers no SIGTERM/SIGINT handler. Needs an exported `stopHostDaemon()`
-  calling `reconnector.cancel()` + signal handlers.
-- [low] `src/gateway/index.ts : startGateway` - the SIGTERM handler calls `routerClient.stop()`
-  but SIGINT does not, so a Ctrl-C leaks routerClient's reconnector + heartbeat timers. Consolidate
-  SIGTERM/SIGINT into one shutdown handler.
+Both paths are closed. `main-host-daemon.ts` now calls an exported `stopHostDaemon()` that cancels
+the module-scoped reconnector alongside the children, and `startGateway` registers ONE shutdown
+handler for SIGTERM and SIGINT alike, so neither Ctrl-C nor a stop leaves a timer scheduled.
 
 ### Coordinator / timeout pattern consolidation (large-defer)
 
@@ -418,12 +412,13 @@ not lost.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
-LIVE DEFECTS, deferred by owner decision rather than closed. Every item below is the same gap: a
-name with no active binding stays claimable by anyone, and `handshakeConfirmed` is not an
-authentication signal (a squatter answers its own handshake with no credential). Closing them needs
-a way to tell a legitimate hand-launched `host.*` session from a squatter, which nothing today
-provides, and reserving the prefix would lock out the hand-launch the owner requires. Verified still
-present: the gate matches the bare string `host`, and `RESERVED_TEAM_NAMES` holds only `"host"`.
+WILL NOT DO without an owner decision, and these are LIVE DEFECTS rather than closed ones. Every
+item below is the same gap: a name with no active binding stays claimable by anyone, and
+`handshakeConfirmed` is not an authentication signal (a squatter answers its own handshake with no
+credential). Closing them needs a way to tell a legitimate hand-launched `host.*` session from a
+squatter, which nothing today provides, and reserving the prefix would lock out the hand-launch the
+owner requires. Verified still present: the gate matches the bare string `host`, and
+`RESERVED_TEAM_NAMES` holds only `"host"`.
 
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
   match the bare `host` exactly, so a composite `host.foo` bypasses both.
