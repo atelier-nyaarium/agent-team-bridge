@@ -29,7 +29,7 @@ What the app server does, measured:
 
 ## Step 1 - Structured transport failures
 
-Shipped. `createJsonlTransport` in `src/mcp/devcontainer/codexAppServer.ts` rejects every failed
+✅ Shipped. `createJsonlTransport` in `src/mcp/devcontainer/codexAppServer.ts` rejects every failed
 request with an `AppServerFailure`: an `Error` carrying `kind: "refused" | "timeout" | "unreadable" |
 "closed"`, and for `refused` the JSON-RPC `code` and `data`. The messages are the ones the transport
 always sent, so `describe`, `errorText` and every existing catch keep their words. A reply arriving
@@ -209,4 +209,19 @@ evict while active, first-turn, parking and unknown threads stay visible.
 - The pain-points file recorded `settlePending` as a known hang before this plan; it ships in Step 3.
 - A Codex sandbox cannot bind loopback and lacks a dependency the transport tests import, so an
   auditor reporting those tests as failing is reporting its own sandbox. Every auditor proves its
-  sandbox on a named file first.
+  sandbox on a named file first. This lap every auditor could run the named files.
+- `src/__tests__/ref-end-to-end.test.ts` drives a live lexicon daemon and fails inside
+  `awaitIndexed` when the machine is loaded: the full suite went red once while a red-team sandbox
+  ran vitest beside it, and green alone and again once the machine was quiet. The commit gate runs
+  the whole suite only after the auditors have finished.
+- The two JSONL-over-stdio transports, `createJsonlTransport` in `codexAppServer.ts` and
+  `createAcpTransport` in `copilotAcp.ts`, implement the same operation: id minting, a pending map,
+  a timeout, server-request refusal, exit rejection, framing and buffering. The failure class and its
+  one minter landed on the Codex side only, so "the transport is the only minter" is true of one
+  transport. A shared core with backend policy injected (per-method timeouts, the exit reasons, the
+  refusal table) is the unification; it is outside this plan's goal and filed as the owner's call.
+- The cycle tool refuses a plan outside the session's project root, by absolute path and by symlink,
+  so a plan for a sibling repository is driven from an excluded copy that has to be re-copied after
+  every edit to the real one. Filed against nyaaskills.
+- An auditor generalized "avoid lazy dash-joins" into a no-semicolons rule and filed four findings
+  under it. A finding that cites a rule is vetted against the rule's own text before it is applied.
