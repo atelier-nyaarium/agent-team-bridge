@@ -137,6 +137,8 @@ code does not belong here; rationale lives in `git log`.
       is refused, a model is checked against `model/list` at each point of use, not just at open, and
       a failed request rejects with the `AppServerFailure` only this module mints, classified by
       `kind` (see Codex delegation below)
+    - `codexThreadLifecycle.ts` - a thread's life after the App Server loads it: one queue per thread,
+      and a settled turn published then archived so its MCP servers die (see Codex delegation below)
     - `codexTurnTracker.ts` - what a turn produced. `answerOf` is the SOLE reader of "does this turn
       have an answer yet", so the hold decision and the reported outcome cannot disagree
     - `codexDaemonService.ts` - the daemon's half of the relay: commands in, receipts and events out,
@@ -889,6 +891,18 @@ so is anything added beside them.
 **`thread/read` needs `includeTurns: true`** or it answers successfully with an empty `turns` array.
 Nothing catches that but a live server.
 
+**A thread that finished a turn is parked, and `ThreadLifecycle` is the one owner of that.**
+`codex app-server` starts every MCP server in the user's `~/.codex/config.toml` as a child of itself
+on `thread/start`, so a thread nobody unloads holds those servers for the app server's whole life.
+`thread/archive` unloads a thread and kills them; a follow-up unarchives and resumes it. The owner
+keeps one queue per thread, so two operations on one thread never interleave on the wire, publishes
+a terminal through `onTerminal` before anything is unloaded, and parks. An archive the server refuses
+runs a read and either adopts the running turn it names or, after two quiet reads prove the thread
+empty, deletes it; anything else is budgeted and retried, and exhausting the budget poisons the
+generation. So does a request whose fate is unknown, a timeout or an unreadable reply, since it may
+still land after a later activation and no local epoch can recall it: the consumer retires that
+generation rather than reusing it. Design record: `plans/codex-thread-lifecycle.md`.
+
 **A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
 request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,
 `unreadable`, `closed`), minted by that module alone: the class is module-private, symbol-minted and
@@ -972,8 +986,8 @@ survives a Gatewayless setup. Installing the CLI is the whole opt-in on both pat
   `activeTurnId` guards the child. `applyTerminal` stamps the idle clock itself, since a terminal
   arrives on the event stream and reaches no lease - without it a long turn is reapable the instant
   it ends.
-- **Codex resumes a thread before any follow-up turn**, the way the daemon does. App Server may unload
-  an idle thread, and starting a turn on an unloaded one fails.
+- **Codex loads a thread before any follow-up turn**, the way the daemon does; `ThreadLifecycle` owns
+  that, so a thread already loaded costs no request and a parked one is unarchived and resumed.
 - The child is reaped when stdin closes. Nothing else ever will, since no daemon supervises it.
 
 **Residual risk, stated plainly:** a Codex thread holds workspace-write and network access for its
