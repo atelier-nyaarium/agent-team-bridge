@@ -16,12 +16,13 @@ export interface AppServerSession {
 	 * Start a turn, registering for it in `onStarted`.
 	 *
 	 * That callback runs before any terminal buffered for the new turn is published, and it is where
-	 * a caller must record the turn. Required: registering after this resolves loses the race.
+	 * a caller must record the turn. Required, but the type cannot make a double CALL it: a start
+	 * whose callback never ran is refused, and `app-server-double-residue.test.ts` holds the doubles.
 	 */
 	startTurn(threadId: string, text: string, onStarted: (turnId: string) => void): Promise<string>;
 	steerTurn(threadId: string, turnId: string, text: string): Promise<void>;
 	interruptTurn(threadId: string, turnId: string): Promise<void>;
-	/** The one entry for a terminal, whichever observer saw it; the thread parks behind it. */
+	/** The one place a terminal SETTLES, whichever observer produced it; the thread parks behind it. */
 	settleTurn(threadId: string, turnId: string, terminal: TerminalOutcome): Promise<void>;
 	/** What the owner believes about a thread, which is what says whether a child is reapable. */
 	stateOf(threadId: string): ThreadPhase | undefined;

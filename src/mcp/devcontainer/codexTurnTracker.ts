@@ -38,7 +38,8 @@ function byteLength(text: string): number {
 //  Class
 
 /**
- * What a turn produced. Deltas are ignored, so nothing partial reaches storage.
+ * What a turn produced, not its lifecycle: parking is `ThreadLifecycle` and liveness is
+ * `CodexLiveTurns`. Deltas are ignored, so nothing partial reaches storage.
  *
  * A terminal arriving before its own final item is held until that item lands or the caller gives
  * up. That hold is the only reason this needs state.

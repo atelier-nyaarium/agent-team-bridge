@@ -1,5 +1,6 @@
 import type { LifecycleHooks } from "./codexAppServer.js";
 import type { AppServerSession } from "./codexAppServerSession.js";
+import type { CodexLiveTurns } from "./codexLiveTurns.js";
 import type { CodexChild, TargetSupervisor } from "./codexTargets.js";
 import type { CodexTurnTracker } from "./codexTurnTracker.js";
 
@@ -35,12 +36,10 @@ export interface TargetSession {
 	client: AppServerSession;
 	tracker: CodexTurnTracker;
 	nextEventId: number;
-	turns: Map<string, TurnBinding>;
+	turns: CodexLiveTurns;
 	threads: Map<string, TurnBinding>;
 	/** A terminal the tracker holds for its final item, and the deadline that settles it regardless. */
 	held: Map<string, ReturnType<typeof setTimeout>>;
-	/** Per turn: when it last made progress, and how many times the watchdog has acted on it. */
-	watch: Map<string, { at: number; strikes: number }>;
-	/** Stamped on a command and on a server event, which is what the reaper's quiet period measures. */
+	/** This session's own quiet, which a server event refreshes. Not the daemon's; never merge them. */
 	usedAt: number;
 }

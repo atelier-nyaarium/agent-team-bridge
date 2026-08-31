@@ -17,6 +17,7 @@ import { resolveAgentTarget } from "./agentTargetResolve.js";
 import type { AppServerSession } from "./codexAppServerSession.js";
 import { defaultOpenClient } from "./codexAppServerSession.js";
 import type { CodexDaemonDeps, TargetSession, TurnBinding } from "./codexDaemonTypes.js";
+import { CodexLiveTurns } from "./codexLiveTurns.js";
 import type { TargetLease } from "./codexTargets.js";
 import { inspectRead, type PoisonReason } from "./codexThreadLifecycle.js";
 import type { ReadOutcome, TerminalOutcome } from "./codexTurnOutcome.js";
@@ -92,6 +93,7 @@ export class CodexDaemonService {
 	private sweeper?: ReturnType<typeof setInterval>;
 	private inFlight = 0;
 	private sweeping = false;
+	/** The DAEMON's quiet, stamped by commands alone. Not a session's `usedAt`; never merge them. */
 	private quietSince = 0;
 
 	constructor(private readonly deps: CodexDaemonDeps) {
@@ -236,14 +238,14 @@ export class CodexDaemonService {
 			// Bound from inside the start, before a terminal buffered for this turn can be published.
 			return await session.client.startTurn(binding.threadId, prompt, (turnId) => {
 				bound = turnId;
-				this.bindTurn(session, turnId, binding);
+				session.turns.bind(turnId, binding);
 			});
 		} catch {
 			// A start that failed after binding holds a turn that is not ours; whatever runs is below.
-			if (bound !== undefined) session.turns.delete(bound);
+			if (bound !== undefined) session.turns.forget(bound);
 			const running = await this.runningTurn(session, binding.threadId);
 			if (running.known !== "running") return undefined;
-			this.bindTurn(session, running.turnId, binding);
+			session.turns.bind(running.turnId, binding);
 			return running.turnId;
 		}
 	}
@@ -306,7 +308,7 @@ export class CodexDaemonService {
 				// run twice concurrently, with write and network access.
 				const running = await this.runningTurn(session, command.threadId);
 				if (running.known !== "none") return this.reject(command, describe(error));
-				session.turns.delete(expectedTurnId);
+				session.turns.forget(expectedTurnId);
 			}
 		}
 
@@ -377,7 +379,7 @@ export class CodexDaemonService {
 			}
 		}
 		// Rebound, so its events correlate under the new generation.
-		if (observed.known === "running" && command.turnId) this.bindTurn(session, command.turnId, binding);
+		if (observed.known === "running" && command.turnId) session.turns.bind(command.turnId, binding);
 
 		// The receipt installs the fence FIRST, so the terminal after it is measured against this
 		// generation, not the dead one.
@@ -467,10 +469,9 @@ export class CodexDaemonService {
 			}),
 			// Restarts from zero with the child, hence the generation on every fence.
 			nextEventId: 0,
-			turns: new Map(),
+			turns: new CodexLiveTurns(() => this.now()),
 			threads: new Map(),
 			held: new Map(),
-			watch: new Map(),
 			usedAt: this.now(),
 		};
 		const opening = session;
@@ -492,17 +493,13 @@ export class CodexDaemonService {
 		session.usedAt = this.now();
 		const outcome = session.tracker.accept(message);
 		if (outcome) {
-			session.watch.delete(outcome.turnId);
 			this.dropDeadline(session, outcome.turnId);
 			this.settle(session, outcome.threadId, outcome.turnId, terminalOf(outcome));
 			return;
 		}
-		// Any frame this turn produced is the progress the watchdog measures against, and only its own
-		// thread's: a turn id carried by another thread's frame says nothing about this one.
+		// Any frame this turn produced is the progress the watchdog measures against.
 		const named = framedTurn(message);
-		if (named && session.turns.get(named.turnId)?.threadId === named.threadId) {
-			session.watch.set(named.turnId, { at: session.usedAt, strikes: 0 });
-		}
+		if (named) session.turns.saw(named.threadId, named.turnId);
 		const held = heldTurn(message);
 		// Only a terminal actually waiting here; a redelivered one is already settled.
 		if (held && session.tracker.holding(held.threadId, held.turnId)) {
@@ -575,14 +572,7 @@ export class CodexDaemonService {
 	 * that hangs reports it forever, which is exactly the case this exists to end.
 	 */
 	private async watchTurns(session: TargetSession): Promise<void> {
-		for (const [turnId, binding] of [...session.turns]) {
-			const seen = session.watch.get(turnId);
-			// Seeded rather than measured from the session, whose clock another turn's frames refresh.
-			if (!seen) {
-				session.watch.set(turnId, { at: this.now(), strikes: 0 });
-				continue;
-			}
-			if (this.now() - seen.at < NO_PROGRESS_MS) continue;
+		for (const { turnId, binding, warned } of session.turns.overdue(NO_PROGRESS_MS)) {
 			const observed = await this.readOutcome(session, binding.threadId, turnId);
 			if (!this.core.live(session) || !session.turns.has(turnId)) return;
 			if (observed.known === "settled") {
@@ -590,8 +580,8 @@ export class CodexDaemonService {
 				this.settle(session, binding.threadId, turnId, observed.outcome);
 				continue;
 			}
-			if (seen.strikes === 0) {
-				session.watch.set(turnId, { at: this.now(), strikes: 1 });
+			if (!warned) {
+				session.turns.warn(turnId);
 				void this.lease(() => session.client.interruptTurn(binding.threadId, turnId)).catch(() => undefined);
 				continue;
 			}
@@ -635,40 +625,31 @@ export class CodexDaemonService {
 	}
 
 	private settle(session: TargetSession, threadId: string, turnId: string, terminal: TerminalOutcome): void {
-		session.watch.delete(turnId);
 		void this.lease(() => session.client.settleTurn(threadId, turnId, terminal)).catch((error) => {
 			console.error(`[codex-daemon] settling ${turnId} on ${threadId}: ${describe(error)}`);
 		});
-	}
-
-	/** A turn and the clock the watchdog measures it by, so neither can exist without the other. */
-	private bindTurn(session: TargetSession, turnId: string, binding: TurnBinding): void {
-		session.turns.set(turnId, binding);
-		// Rebinding is the gateway asking again, not the turn working, so it keeps the strikes it has.
-		if (!session.watch.has(turnId)) session.watch.set(turnId, { at: this.now(), strikes: 0 });
 	}
 
 	/**
 	 * The turn's own binding when its thread agrees, the thread's otherwise.
 	 *
 	 * A binding whose thread disagrees belongs to another thread's turn, so neither its agent nor its
-	 * entry in `turns` is this terminal's to take.
+	 * place among the live turns is this terminal's to take.
 	 */
 	private bindingFor(
 		session: TargetSession,
 		threadId: string,
 		turnId: string,
 	): { binding: TurnBinding | undefined; owned: boolean } {
-		const bound = session.turns.get(turnId);
-		const owned = bound !== undefined && bound.threadId === threadId;
-		return { binding: owned ? bound : session.threads.get(threadId), owned };
+		const bound = session.turns.bindingOn(threadId, turnId);
+		return { binding: bound ?? session.threads.get(threadId), owned: bound !== undefined };
 	}
 
 	/** Retained before the lifecycle unloads anything. */
 	private publishTerminal(session: TargetSession, threadId: string, turnId: string, terminal: TerminalOutcome): void {
 		if (!this.core.live(session)) return;
 		const { binding, owned } = this.bindingFor(session, threadId, turnId);
-		if (owned) session.turns.delete(turnId);
+		if (owned) session.turns.forget(turnId);
 		if (!binding) return;
 		this.emitTerminal(session, binding, turnId, terminal);
 	}

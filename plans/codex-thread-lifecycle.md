@@ -385,13 +385,13 @@ to end. A read proving settlement goes through `settle` like any other terminal.
 running, or one that could not be had, interrupts the turn once; a second sweep in the same state
 retires the generation.
 
-A turn's clock is bound with the turn itself, in one `bindTurn`, and only its OWN thread's frames
-refresh it. Falling back to the session's own `usedAt` for a turn with no entry reads as harmless and
-is not: any frame on any other turn refreshes that stamp, so one hung turn beside one chatty turn is
-never overdue and never watched. Matching the turn id alone has the same shape, since a frame from
-another thread carrying that id says nothing about this turn. Rebinding keeps the strikes a turn has
-already earned: a reconcile is the gateway asking, not the turn working, so one arriving every
-interval would otherwise buy a hung turn an unlimited number of second chances.
+`CodexLiveTurns` owns which turns a generation holds and whether each is moving, in ONE record per
+turn carrying its binding, its clock and whether the watchdog has warned it. That is the whole fix
+for the class below: a clock cannot exist apart from the turn it measures, a frame refreshes a turn
+only from that turn's own thread, and a rebind keeps the warning already given, because the gateway
+asking again is not the turn working. The daemon is handed `overdue` entries saying whether each was
+already `warned`, never a counter, and `live-turns-residue.test.ts` fails the build if any other
+module in `devcontainer/` keeps a turn's watchdog state.
 
 The first interrupt lands around 120s, inside the 240s caller wait budget, which is deliberate.
 Retirement is nominally 240s but the sweep cadence can carry it to roughly 270s, so it is NOT
@@ -462,10 +462,14 @@ counted as this turn working. A fourth of the same shape sat next to them: rebin
 count, so a reconcile arriving each interval bought a hung turn unlimited second chances.
 
 Every one of these is the same trade: a cheaper key than the full identity of the thing being
-measured. The turn's identity is its thread AND its id, its clock belongs to the turn and not to
-anything above it, and the strikes belong to the turn rather than to the last thing that touched it.
-The fix that finally held was to say so once, in `bindTurn` and in the one place a frame refreshes a
-clock, rather than to widen the proxy again.
+measured. Identity lived in one map and liveness in another, both keyed by turn id, which is half of
+what a turn is. Two maps that must agree, keyed by half an identity, is a shape in which every one of
+those mistakes stays expressible however carefully each site is written.
+
+The redesign is `CodexLiveTurns`: one record per turn holding its binding, its clock and its warning,
+so none of them can drift from the others or be reached without the thread that owns them. A residue
+test fails the build if any other module in `devcontainer/` keeps a turn's watchdog state, since a
+single-owner invariant that is not gated is a convention.
 
 The same trade showed up once more in the reaper's quiet clock and was caught before it shipped:
 stamping it from ANY leased work reads as thorough, and the sweep leases its own reads, so it would
