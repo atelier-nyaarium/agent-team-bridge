@@ -272,7 +272,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		expect(consolePushCalls).toEqual([{ entry: consolePushOp.entry, dedupeKey: "dk-1" }]);
 	});
 
-	it("the wire schema rejects an entry.kind outside the relayable set, and a title over the notice-contract bound", () => {
+	it("the wire schema rejects an entry.kind outside the relayable set, and truncates an over-long title", () => {
 		for (const smuggledKind of ["bogus", "board", ""]) {
 			expect(
 				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: smuggledKind } })
@@ -288,13 +288,15 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 					.success,
 			).toBe(true);
 		}
-		expect(
-			FederatedOpSchema.safeParse({
-				...consolePushOp,
-				entry: { ...consolePushOp.entry, title: "x".repeat(201) },
-			}).success,
-		).toBe(false);
-		// 200 chars (the notice contract's own bound) still parses.
+		// An over-long title TRUNCATES rather than rejecting. Intake caps no title, so rejecting here
+		// would strand on one gateway an entry that already landed there.
+		const overlong = FederatedOpSchema.safeParse({
+			...consolePushOp,
+			entry: { ...consolePushOp.entry, title: "x".repeat(201) },
+		});
+		expect(overlong.success).toBe(true);
+		expect((overlong.data as { entry: { title: string } }).entry.title).toHaveLength(200);
+		// 200 chars (the notice contract's own bound) passes through unchanged.
 		expect(
 			FederatedOpSchema.safeParse({
 				...consolePushOp,

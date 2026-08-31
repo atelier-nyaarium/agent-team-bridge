@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
 import { sign, verify } from "./crypto.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
-import { NoticeTierWireFields, NoticeTitle } from "./notice.js";
+import { NOTICE_TITLE_MAX, NoticeTierWireFields } from "./notice.js";
 import { BLOB_CHUNK_BYTES } from "./router-protocol.js";
 import { isSlug } from "./session-id.js";
 
@@ -134,13 +134,21 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			...NoticeTierWireFields,
-			// The title override tightens the spread field to the notice contract's own bound
+			// The title override holds the spread field to the notice contract's own bound
 			// (notice.ts) - the notification-bar headline, never a long-winded body. summary/body
 			// are deliberately NOT length-capped here, matching NoticeSummary/NoticeFull's own
 			// established design (the notice contract has never bounded these) and HumanNotifySchema's
 			// identical posture; this op does not introduce a new text-size policy, only relays what
 			// those already-accepted contracts allow.
-			title: NoticeTitle.optional(),
+			//
+			// TRUNCATES rather than rejects: intake (RespondBodySchema) caps no title, so rejecting
+			// here would strand an entry that landed locally on this one gateway forever, burning the
+			// relay's retries as "unseal failed". Mid-mesh validation must not be stricter than intake.
+			title: z
+				.string()
+				.min(1)
+				.transform((value) => value.slice(0, NOTICE_TITLE_MAX))
+				.optional(),
 			body: z.string().optional(),
 			status: z.string().optional(),
 			// A `sent` echo only. Without it a zod parse strips the field and the sending device

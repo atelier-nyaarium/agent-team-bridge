@@ -1,10 +1,16 @@
 # Pain points
 
-Every defect recorded here has been fixed or verified already fixed. What remains is marked
-WILL NOT DO with the reason: refactors, test-coverage debt, optimizations, infrastructure, unmade
-product decisions, another repository's bug, and the LAN-facing auth gate, which is an owner
-decision rather than a defect. Standing prohibitions are kept because losing one invites the
-mistake back.
+Every `[high]` and `[medium]` entry has been fixed, verified already fixed, or marked WILL NOT DO
+with its reason: refactors, test-coverage debt, optimizations, infrastructure, unmade product
+decisions, and another repository's bug.
+
+Two things this file does NOT claim. The composite `host.*` bypass is a LIVE defect, not a
+non-defect: a name with no active binding stays claimable, so `host.foo` clears both the host-token
+gate and the reserved-name set. It is unfixed because the only fix locks out the hand-launched host
+window the owner requires, which makes it an owner decision, not a closed one. And the `[low]`
+residuals below were never triaged in this pass; they are recorded, not cleared.
+
+Standing prohibitions are kept because losing one invites the mistake back.
 
 ## A hand-launched host session is deaf and misnamed (2026-08-07)
 
@@ -286,13 +292,6 @@ Shipped as PRs #115/#116 (7.7.0). Collected by the close-out crust sweep; alread
 (the consolePeer dead branch, the routes.ts extraction + conservation-harness deferral) stayed in
 their existing entries.
 
-- [low] `src/shared/federation-protocol.ts : console_push entry.title override` - **bug-class** -
-  the relay hop tightens title to NoticeTitle (max 200) while the intake that feeds it
-  (RespondBodySchema -> mirrorPeer) is uncapped, so a >200-char title from a raw /respond caller
-  lands locally but the sibling gateway's FederatedOpSchema.parse rejects the whole relayed entry
-  ("unseal failed", 5 burned retries) - validation mid-mesh instead of at intake makes an accepted
-  entry permanently one-gateway. Multi-gateway Domains only. Fix: cap at intake or truncate at the
-  relay hop.
 - [low] `src/mcp/designer/designerTools.ts : PushCardSchema : message` (also
   `src/mcp/bridge/bridgeSend.ts : displayLabel`) - **framework-first** - the escaped-newline
   guard's halves drifted in the direction the lint-conformance suite cannot see: both fields are
@@ -422,11 +421,12 @@ not lost.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
-WILL NOT DO without an owner decision. Every item below is the same gap: a name with no active
-binding stays claimable by anyone, and `handshakeConfirmed` is not an authentication signal (a
-squatter answers its own handshake with no credential). Closing them needs a way to tell a
-legitimate hand-launched `host.*` session from a squatter, which nothing today provides, and
-reserving the prefix would lock out the hand-launch the owner requires.
+LIVE DEFECTS, deferred by owner decision rather than closed. Every item below is the same gap: a
+name with no active binding stays claimable by anyone, and `handshakeConfirmed` is not an
+authentication signal (a squatter answers its own handshake with no credential). Closing them needs
+a way to tell a legitimate hand-launched `host.*` session from a squatter, which nothing today
+provides, and reserving the prefix would lock out the hand-launch the owner requires. Verified still
+present: the gate matches the bare string `host`, and `RESERVED_TEAM_NAMES` holds only `"host"`.
 
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
   match the bare `host` exactly, so a composite `host.foo` bypasses both.
@@ -524,8 +524,10 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   roster fetch and no fan-out concurrency cap: a hot loop of local `send`/`respond` traffic or
   repeated `notify_human` calls each independently re-fetches the roster and re-fires the full
   fan-out. Per-destination retry/backoff is sane and bounded; a robustness gap, not a security hole.
-  WILL NOT DO: the entry says it itself, a robustness gap and not a security hole. A roster TTL-cache
-  is an optimization, worth revisiting only if Domain sizes grow.
+  WILL NOT DO: an optimization. The fan-out itself is bounded, one relay per admitted gateway per
+  message, with per-destination retry limits; only the roster fetch is redundant. A TTL cache would
+  remove it but delays a newly-admitted gateway's first push by the TTL, which is a behaviour
+  trade rather than a fix. Revisit if Domain sizes grow.
 - [medium] `src/shared/device-mailbox.ts : DeviceMailboxStore.sweepExpired` - a pure time-based scan
   with no concept of "a relay is currently targeting this key," while `relayWithRetry` can keep a
   delivery in flight for up to ~10.5 minutes. An ordinary transient relay retry straddling a sweep
@@ -535,25 +537,10 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   WILL NOT DO: not reachable under the shipped timings. `append` refreshes `lastActivity`, so the
   first landing restarts the 1-hour idle TTL, and the whole retry window is ~10.5 minutes inside it.
   Only a deployment configuring a TTL below the retry window could reach it.
-- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is ~1400 lines
-  (refreshed 2026-07-11 by the fullSpoken framework audit; the original ~1290 figure went stale in
-  two days), the largest file in `src/gateway/`. The console mailbox delivery concern is now FIVE
-  functions - `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`/`pluginAction` (plus
-  `PluginActionRequestSchema` and `HumanNotifySchema`) - and passes the ownership test as a
-  genuinely separable sub-concern from core session routing. Worth extracting into its own module
-  (natural home: `src/gateway/console/`), taking `mailboxStore`/`ownerId`/`routerClient`/
-  `localGatewayId`/`resolvesLocalGateway`/`relayWithRetry` as explicit injected deps, matching the
-  precedent `gatewayRelay.ts`'s narrow `FederationRoutes` dependency already sets. If picked up,
-  bundle with hoisting `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat
-  `send()`/`respond()` (262/233 lines) as a separate, likely higher-priority target in the same
-  file. Negative result worth recording: the fullSpoken commit would NOT have been smaller or
-  safer with the extraction done - most of its routes.ts hunks landed in `respond()`, outside the
-  would-be module. The honest trigger is the next console-bound mailbox kind or the next wire tier
-  field, and the extraction should then land with a test-helper dedup (`makeCtx`/`fakeEvie`/
-  `gateRoutes` exist as divergent copies in routes.test.ts and federation.test.ts) plus a
-  table-driven tier-conservation harness over every mailbox-writing hop (deferred from the
-  fullSpoken framework audit - the spread-once `NoticeTierWireFields` + `pickTiers` shipped
-  instead and covers the declaration/compose halves of that bug class).
+DONE, not deferred: the console mailbox delivery concern was extracted. All five functions
+(`mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`/`pluginAction`) live in
+`consolePushOps.ts` on the injected deps this entry proposed. What is left of the entry is the
+`send()`/`respond()` split inside `routes.ts`, WILL NOT DO as a refactor of working code.
 
 ## Cross-domain presence (`plans/cross-domain-presence.md`, deleted, shipped - 2026-07-23)
 
