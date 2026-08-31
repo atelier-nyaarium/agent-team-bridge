@@ -11,8 +11,13 @@ export interface AppServerSession {
 	startThread(settings: { cwd: string; model?: string }): Promise<string>;
 	resumeThread(threadId: string): Promise<void>;
 	readThread(threadId: string): Promise<unknown>;
-	/** `onStarted` runs before any terminal buffered for the new turn is published. */
-	startTurn(threadId: string, text: string, onStarted?: (turnId: string) => void): Promise<string>;
+	/**
+	 * Start a turn, registering for it in `onStarted`.
+	 *
+	 * That callback runs before any terminal buffered for the new turn is published, and it is where
+	 * a caller must record the turn. Required: registering after this resolves loses the race.
+	 */
+	startTurn(threadId: string, text: string, onStarted: (turnId: string) => void): Promise<string>;
 	steerTurn(threadId: string, turnId: string, text: string): Promise<void>;
 	interruptTurn(threadId: string, turnId: string): Promise<void>;
 	/** The one entry for a terminal, whichever observer saw it; the thread parks behind it. */

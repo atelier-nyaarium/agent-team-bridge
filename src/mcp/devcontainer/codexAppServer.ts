@@ -332,7 +332,7 @@ export class CodexAppServerClient {
 		return this.lifecycle.read(threadId, { threadId, includeTurns: true });
 	}
 
-	async startTurn(threadId: string, text: string, onStarted?: (turnId: string) => void): Promise<string> {
+	async startTurn(threadId: string, text: string, onStarted: (turnId: string) => void): Promise<string> {
 		return this.lifecycle.startTurn(threadId, { threadId, input: [{ type: "text", text }] }, onStarted);
 	}
 

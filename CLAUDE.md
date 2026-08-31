@@ -929,7 +929,9 @@ whose target is healthy is the wrong answer to losing a race.
 consumer registering after `startTurn` resolves would miss it and leave its caller waiting a whole
 budget. The callback orders registration ahead of publication by construction; the local session
 parks there and the daemon binds there. Ordering it by scheduling does NOT work: a caller resumes an
-unknowable number of microtasks later, the client's `async` wrapper alone adding two.
+unknowable number of microtasks later, the client's `async` wrapper alone adding two. It is required
+rather than optional, since omitting it inherits that losing race silently, and a residue test holds
+every `AppServerSession` double to taking it and calling it, which the type cannot.
 
 **A request failure is a `kind`, never a sentence.** `createJsonlTransport` rejects every failed
 request with an `AppServerFailure` (`refused` with the JSON-RPC code and data, `timeout`,

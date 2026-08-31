@@ -19,6 +19,9 @@ import { CodexTurnTracker } from "../mcp/devcontainer/codexTurnTracker.js";
 const THREAD = "thread-1";
 const TURN = "turn-1";
 
+/** These cases drive the wire, not a consumer, so they register nothing for the turn they start. */
+const noteTurn = () => {};
+
 let itemSeq = 0;
 
 function itemCompleted(text: string, phase?: string, ids: { threadId?: string; turnId?: string } = {}) {
@@ -572,7 +575,7 @@ describe("the client's own guarantees", () => {
 		await client.startThread({ cwd: "/tmp" });
 		await client.resumeThread("t");
 		await client.readThread("t");
-		const turnId = await client.startTurn("t", "hi");
+		const turnId = await client.startTurn("t", "hi", noteTurn);
 		await client.steerTurn("t", turnId, "more");
 		await client.interruptTurn("t", turnId);
 
@@ -642,7 +645,7 @@ describe("the thread lifecycle", () => {
 	/** A thread with one settled turn, parked. */
 	async function parked(hooks: LifecycleHooks = {}) {
 		const opened = await openLifecycle(hooks);
-		const turn = opened.client.startTurn(THREAD, "go");
+		const turn = opened.client.startTurn(THREAD, "go", noteTurn);
 		await answer(opened.f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 		expect(await turn).toBe(TURN);
 		const settling = opened.client.settleTurn(THREAD, TURN, DONE);
@@ -659,7 +662,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const terminals: unknown[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await requested(f, "turn/start");
 			await client.settleTurn(THREAD, TURN, DONE);
 			expect(terminals).toEqual([]);
@@ -681,7 +684,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const seen: string[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: () => seen.push("terminal") });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 
@@ -703,13 +706,13 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
 			await requested(f, "thread/archive");
 
-			const followup = client.startTurn(THREAD, "again");
+			const followup = client.startTurn(THREAD, "again", noteTurn);
 			await tick();
 			expect(methods(f).filter((m) => m === "thread/resume")).toHaveLength(0);
 			await answer(f, "thread/archive", {});
@@ -730,7 +733,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const poisoned: unknown[] = [];
 			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE).catch((error) => error);
@@ -741,7 +744,7 @@ describe("the thread lifecycle", () => {
 			expect(poisoned).toEqual([
 				[THREAD, { kind: "failure", failure: expect.objectContaining({ kind: "timeout" }) }],
 			]);
-			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("poisoned");
+			await expect(client.startTurn(THREAD, "more", noteTurn)).rejects.toThrow("poisoned");
 			expect(methods(f).filter((m) => m === "thread/resume" || m === "turn/start")).toHaveLength(1);
 		} finally {
 			vi.useRealTimers();
@@ -752,7 +755,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -772,7 +775,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -786,7 +789,7 @@ describe("the thread lifecycle", () => {
 
 			expect((await requested(f, "thread/delete")).params).toEqual({ threadId: THREAD });
 			expect(client.stateOf(THREAD)).toMatchObject({ phase: "disposed" });
-			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("disposed");
+			await expect(client.startTurn(THREAD, "more", noteTurn)).rejects.toThrow("disposed");
 		} finally {
 			vi.useRealTimers();
 		}
@@ -797,7 +800,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const poisoned: unknown[] = [];
 			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -825,7 +828,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -835,7 +838,7 @@ describe("the thread lifecycle", () => {
 			expect(client.stateOf(THREAD)).toMatchObject({ phase: "parking" });
 
 			// Still loaded while parking, so the follow-up needs no resume, only the retry dropped.
-			const followup = client.startTurn(THREAD, "again");
+			const followup = client.startTurn(THREAD, "again", noteTurn);
 			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
 			expect(await followup).toBe("turn-2");
 			await vi.advanceTimersByTimeAsync(PARK_RETRY_MS * 2);
@@ -852,7 +855,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await parked();
-			const followup = client.startTurn(THREAD, "again");
+			const followup = client.startTurn(THREAD, "again", noteTurn);
 			await refuse(f, "thread/resume", "session is archived. Run `codex unarchive` first.");
 			await answer(f, "thread/unarchive", {});
 			await answer(f, "thread/resume", {}, 1);
@@ -870,7 +873,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await parked();
-			const followup = client.startTurn(THREAD, "again").catch((error) => error);
+			const followup = client.startTurn(THREAD, "again", noteTurn).catch((error) => error);
 			await refuse(f, "thread/resume", "resume said no");
 			await refuse(f, "thread/unarchive", "unarchive said no");
 
@@ -895,7 +898,7 @@ describe("the thread lifecycle", () => {
 			const inherited = client.interruptTurn("thread-inherited", "turn-old");
 			await answer(f, "turn/interrupt", {});
 			await inherited;
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 
@@ -924,7 +927,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const terminals: unknown[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 
@@ -965,7 +968,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await requested(f, "turn/start");
 			const reading = client.readThread(THREAD);
 			await tick();
@@ -985,7 +988,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const { f, client } = await openLifecycle();
 			await client.resumeThread(THREAD);
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			await client.resumeThread(THREAD);
@@ -1007,7 +1010,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const terminals: unknown[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go").catch((error) => error);
+			const turn = client.startTurn(THREAD, "go", noteTurn).catch((error) => error);
 			await requested(f, "turn/start");
 			await client.settleTurn(THREAD, "turn-other", DONE);
 			await refuse(f, "turn/start", "no capacity");
@@ -1026,7 +1029,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const { f, client } = await openLifecycle();
 			// Left parking with a retry pending, which must not reach the thread the server starts next.
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -1044,7 +1047,7 @@ describe("the thread lifecycle", () => {
 			expect(methods(f).filter((m) => m === "thread/archive")).toHaveLength(1);
 
 			// Loaded, so its first turn needs no resume.
-			const next = client.startTurn(THREAD, "again");
+			const next = client.startTurn(THREAD, "again", noteTurn);
 			await answer(f, "turn/start", { turn: { id: "turn-2", status: "inProgress", items: [] } }, 1);
 			expect(await next).toBe("turn-2");
 			expect(methods(f)).not.toContain("thread/resume");
@@ -1057,7 +1060,7 @@ describe("the thread lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const { f, client } = await openLifecycle();
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			// Paused between the two reads of the dispose rule when the server hands the id back.
@@ -1120,7 +1123,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const poisoned: unknown[] = [];
 			const { f, client } = await openLifecycle({ onPoisoned: (...args) => poisoned.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
 			await turn;
 			const settling = client.settleTurn(THREAD, TURN, DONE);
@@ -1167,7 +1170,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const terminals: unknown[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await requested(f, "turn/start");
 			await client.settleTurn(THREAD, "turn-other", DONE);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
@@ -1186,7 +1189,7 @@ describe("the thread lifecycle", () => {
 		try {
 			const terminals: unknown[] = [];
 			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
-			const turn = client.startTurn(THREAD, "go");
+			const turn = client.startTurn(THREAD, "go", noteTurn);
 			await requested(f, "turn/start");
 			await client.settleTurn(THREAD, TURN, DONE);
 			await answer(f, "turn/start", { turn: { id: TURN, status: "inProgress", items: [] } });
@@ -1307,7 +1310,7 @@ describe("the thread lifecycle", () => {
 			await answer(f, "thread/read", readOf(THREAD, []), 2);
 			await answer(f, "thread/delete", {});
 			expect(await empty).toEqual({ known: "empty" });
-			await expect(client.startTurn(THREAD, "more")).rejects.toThrow("disposed");
+			await expect(client.startTurn(THREAD, "more", noteTurn)).rejects.toThrow("disposed");
 			expect(methods(f).filter((m) => m === "turn/start")).toHaveLength(0);
 		} finally {
 			vi.useRealTimers();

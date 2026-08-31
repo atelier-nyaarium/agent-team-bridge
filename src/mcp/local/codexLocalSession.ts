@@ -71,12 +71,13 @@ export class CodexLocalSession implements LocalBackendSession {
 
 	/** The owner loads a parked or inherited thread; one it just started is already loaded. */
 	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
-		let settled: Promise<LocalTerminal> | undefined;
-		// Parked from inside the start, which is where the owner guarantees nothing has published yet.
+		// Built from inside the start, which is where the owner guarantees nothing has published yet.
+		// The whole handle, so its id and its promise name one turn whatever the start goes on to return.
+		let handle: LocalTurnHandle | undefined;
 		const turnId = await this.client.startTurn(threadId, prompt, (id) => {
-			settled = this.park(threadId, id);
+			handle = { turnId: id, settled: this.park(threadId, id) };
 		});
-		return { turnId, settled: settled ?? this.park(threadId, turnId) };
+		return handle ?? { turnId, settled: this.park(threadId, turnId) };
 	}
 
 	/** A steer keeps the running turn's id, so the caller's existing handle still describes it. */

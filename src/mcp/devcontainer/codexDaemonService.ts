@@ -169,12 +169,16 @@ export class CodexDaemonService {
 	 * apart. Reporting a live turn as a refusal strands it: a refused start is never reconciled.
 	 */
 	private async beginTurn(session: TargetSession, binding: TurnBinding, prompt: string): Promise<string | undefined> {
+		let bound: string | undefined;
 		try {
 			// Bound from inside the start, before a terminal buffered for this turn can be published.
 			return await session.client.startTurn(binding.threadId, prompt, (turnId) => {
+				bound = turnId;
 				session.turns.set(turnId, binding);
 			});
 		} catch {
+			// A start that failed after binding holds a turn that is not ours; whatever runs is below.
+			if (bound !== undefined) session.turns.delete(bound);
 			const running = await this.runningTurn(session, binding.threadId);
 			if (running.known !== "running") return undefined;
 			session.turns.set(running.turnId, binding);

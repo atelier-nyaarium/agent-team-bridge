@@ -31,6 +31,8 @@ class FakeSession implements AppServerSession {
 	archiveGate?: Promise<void>;
 	/** Held open to land a turn's terminal while its steer is still in flight. */
 	steerGate?: Promise<void>;
+	/** Runs where the owner drains a buffered terminal: after the caller registered, before the return. */
+	afterStarted?: (threadId: string, turnId: string) => void;
 	/** The snapshot `thread/read` answers with. Tests reassign it per scenario. */
 	threadReadResult: unknown = { thread: { id: "thread-1", turns: [] } };
 	/** What the real client hands its lifecycle; the daemon's terminals reach the gateway through them. */
@@ -72,13 +74,14 @@ class FakeSession implements AppServerSession {
 		return this.threadReadResult;
 	}
 	/** The owner hands the id back before publishing anything for it, so the double must too. */
-	async startTurn(threadId: string, _text: string, onStarted?: (turnId: string) => void) {
+	async startTurn(threadId: string, _text: string, onStarted: (turnId: string) => void) {
 		this.calls.push("startTurn");
 		if (this.startTurnFails) throw this.startTurnFails;
 		this.turnCounter += 1;
 		const turnId = `turn-${this.turnCounter}`;
 		this.active.set(threadId, turnId);
-		onStarted?.(turnId);
+		onStarted(turnId);
+		this.afterStarted?.(threadId, turnId);
 		return turnId;
 	}
 	async steerTurn() {
@@ -300,6 +303,22 @@ describe("Codex terminals through the thread lifecycle", () => {
 		unblock();
 		await settle();
 		expect(context.session.calls).toEqual(["settleTurn", "archive"]);
+	});
+
+	it("reports a terminal drained during its own start to the agent that asked for it", async () => {
+		const context = setup();
+		// The owner publishes mid-start, before beginTurn has returned. The thread binding runStart
+		// installed is what catches it, since the turn binding is being written in the same breath.
+		context.session.afterStarted = (threadId, turnId) => {
+			context.session.hooks.onTerminal?.(threadId, turnId, { status: "completed", finalResponse: "beat it" });
+		};
+
+		context.service.handleCommand(startCommand());
+		await settle();
+
+		expect(terminalsOf(context.sent)).toMatchObject([
+			{ agentId: AGENT_ID, turnId: "turn-1", finalResponse: "beat it" },
+		]);
 	});
 
 	it("publishes a terminal for a turn the thread does not own without unloading it", async () => {

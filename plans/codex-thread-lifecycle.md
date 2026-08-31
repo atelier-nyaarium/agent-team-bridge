@@ -317,11 +317,24 @@ which is the hang this plan opened to remove, one layer down.
 
 `startTurn` now takes an `onStarted` callback and hands the id to it BEFORE draining. Registration is
 ordered ahead of publication by construction, so neither consumer needs machinery of its own: the
-local session parks there, the daemon binds there, and the caller-side hold each would otherwise
-carry does not exist. Ordering it by SCHEDULING was tried first and is why the callback exists.
-Queueing the drain behind the start reads as sufficient and is not: a caller resumes an unknowable
-number of microtasks after `startTurn` resolves, since the client's own `async` wrapper adds two, so
-the drain still beat it. A guarantee that depends on counting microtask hops is not a guarantee.
+local session parks there, the daemon binds there, and the caller-side hold does not exist. Ordering
+it by SCHEDULING was tried first and is why the callback exists. Queueing the drain behind the start
+reads as sufficient and is not: a caller resumes an unknowable number of microtasks after `startTurn`
+resolves, since the client's own `async` wrapper adds two, so the drain still beat it. A guarantee
+that depends on counting microtask hops is not a guarantee.
+
+The callback is REQUIRED, which is what stops the next consumer from silently inheriting that losing
+race by omitting it, and every call site that registers nothing now says so with a no-op instead of
+by absence. TypeScript alone does not finish the job, since a double with fewer parameters still
+satisfies the port, so `src/__tests__/app-server-double-residue.test.ts` requires every
+`AppServerSession` double to take the callback and CALL it.
+
+Only the local path was ever hurt by the ordering. The daemon binds the thread before it starts a
+turn, so `publishTerminal` finds that binding when the turn's own is still being written, and a
+terminal drained mid-start reaches the right agent either way. Its callback is correctness for
+`session.turns`, not a repair, and no test claims otherwise; a start that fails after binding drops
+the binding it made, since that turn is not the daemon's to hold. A consumer callback that THROWS
+does not strand the terminals it was to receive: the drain runs in a `finally` and the error follows.
 
 Child exit, `close` and `retire` settle parked turns directly rather than through the owner. There is
 no owner to ask when the child is gone: the terminals become `failed`, and nothing is parked.

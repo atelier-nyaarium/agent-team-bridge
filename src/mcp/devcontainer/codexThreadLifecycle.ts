@@ -121,9 +121,10 @@ export class ThreadLifecycle {
 	 * `onStarted` is handed the id before any terminal buffered for it is published, which is the only
 	 * point at which a caller can register for a turn whose id it has just been given. Ordering that
 	 * by scheduling instead was tried: the caller resumes an unknowable number of microtasks after
-	 * this resolves, so a drain queued behind the start still beat it.
+	 * this resolves, so a drain queued behind the start still beat it. Required, since a caller that
+	 * omits it silently gets that losing race back.
 	 */
-	startTurn(threadId: string, params: unknown, onStarted?: (turnId: string) => void): Promise<string> {
+	startTurn(threadId: string, params: unknown, onStarted: (turnId: string) => void): Promise<string> {
 		this.track(threadId);
 		return this.run(threadId, async (record) => {
 			this.refuseEnded(threadId, record);
@@ -148,8 +149,12 @@ export class ThreadLifecycle {
 			record.epoch += 1;
 			record.state = { phase: "active", turnId, epoch: record.epoch };
 			record.parkAttempts = 0;
-			onStarted?.(turnId);
-			await this.drain(threadId, record);
+			try {
+				onStarted(turnId);
+			} finally {
+				// A consumer that threw while registering does not strand the terminals it was to receive.
+				await this.drain(threadId, record);
+			}
 			return turnId;
 		});
 	}
