@@ -89,7 +89,7 @@ fun MainTabsScreen(
 	// save. The pager state lives here, so the board cannot reach it any other way.
 	board: @Composable (Modifier, () -> Unit) -> Unit,
 ) {
-	val tabs = if (boardEnabled) listOf("Sessions", "Task Board") else listOf("Sessions")
+	val tabs = if (boardEnabled) listOf("Sessions", "Backlog") else listOf("Sessions")
 	val pagerState = rememberPagerState(pageCount = { tabs.size })
 	val scope = rememberCoroutineScope()
 

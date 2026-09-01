@@ -1,6 +1,6 @@
 package com.atelier_nyaarium.switchboard.board
 
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,11 +25,9 @@ import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -42,26 +40,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.ChatRepository
-import com.atelier_nyaarium.switchboard.ChatState
 
 ////////////////////////////////
-//  The Task Board tab
+//  The Backlog tab
 
-/** Which sheet is open: a long-pressed entry's action sheet, or its assign picker. */
-private sealed class BoardSheet {
-	data class Actions(val row: BoardRow) : BoardSheet()
-	data class Assign(val row: BoardRow) : BoardSheet()
-}
-
+/**
+ * What nobody has claimed, and the trash.
+ *
+ * Entries a session holds are NOT drawn here; they live on that session's thread strip. So this is a
+ * backlog rather than the whole board, and an entry leaves it by being assigned.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BoardScreen(
-	state: ChatState,
 	repo: ChatRepository,
 	onOpenEntry: (String, String) -> Unit,
 	// Where a saved entry leaves the owner. Saving is the end of a thought, and the session list is
@@ -74,7 +69,7 @@ fun BoardScreen(
 
 	// The revision read is what re-derives rows when the cache, queue or a plane snapshot moves.
 	val revision by repo.boardOps.boardRevision
-	val rows = remember(revision, state.teams) {
+	val rows = remember(revision) {
 		val sessionGateway = { sessionKey: String -> repo.boardOps.boardGatewayOfKey(sessionKey) }
 		val sources = repo.boardOps.boardSourceGatewayIds().map { gw -> BoardSource(gw, repo.boardOps.boardEntriesOn(gw)) }
 		flattenBoard(sources, sessionGateway)
@@ -95,7 +90,6 @@ fun BoardScreen(
 	// Gateway in many attempts is worth saying out loud, even though it is still retrying.
 	val struggling = remember(revision) { repo.boardOps.boardStrugglingEntries() }
 
-	var sheet by remember { mutableStateOf<BoardSheet?>(null) }
 	var trashOpen by rememberSaveable { mutableStateOf(false) }
 	// The compose form REPLACES the list rather than floating over it, so the owner can leave for the
 	// session list, copy something, and come back to it still filled in. All three are saveable
@@ -140,7 +134,7 @@ fun BoardScreen(
 				Row(
 					Modifier
 						.fillMaxWidth()
-						.combinedClickable(onClick = { repo.boardOps.boardDismissRefusal(refusal) })
+						.clickable { repo.boardOps.boardDismissRefusal(refusal) }
 						.padding(vertical = 6.dp),
 					horizontalArrangement = Arrangement.spacedBy(8.dp),
 					verticalAlignment = Alignment.CenterVertically,
@@ -184,9 +178,9 @@ fun BoardScreen(
 		}
 
 		item(key = "sect:backlog") {
-			// The button rides the Backlog header rather than a row of its own: a new entry lands on the
-			// backlog, so this is where it belongs, and a lone button over empty space read as a mistake.
-			BoardSectionLabel("Backlog") {
+			// No section label: the tab is already called Backlog, and repeating it directly under the
+			// tab bar says nothing.
+			BoardSectionLabel {
 				// Says "Resume" when a draft is waiting: the button is the only trace of it once the form
 				// is closed, and a bare "New" would read as discarding what is still there.
 				Button(
@@ -203,26 +197,19 @@ fun BoardScreen(
 				}
 			}
 		}
-		boardGroupItems(
-			this,
-			rows.unassigned,
-			onOpen = onOpenEntry,
-			onLongPress = { sheet = BoardSheet.Actions(it) },
-			struggling = struggling,
-		)
-
-		for (group in rows.sessions) {
-			val gk = group.key ?: continue
-			val sid = "${gk.gatewayId}/${gk.sessionId}"
-			item(key = "sess:$sid") { SessionGroupHeader(state, gk) }
-			boardGroupItems(
-				this,
-				group,
-				onOpen = onOpenEntry,
-				onLongPress = { sheet = BoardSheet.Actions(it) },
-				struggling = struggling,
-			)
+		if (rows.unassigned.rows.isEmpty()) {
+			// Or the tab is a lone button over a blank screen, which reads as a surface that failed to load
+			// rather than one with nothing on it.
+			item(key = "sect:empty") {
+				Text(
+					"Nothing waiting. New captures a thought; a session's own tasks live on its thread.",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+				)
+			}
 		}
+		boardGroupItems(this, rows.unassigned, onOpen = onOpenEntry, struggling = struggling)
 
 		if (rows.trash.isNotEmpty()) {
 			item(key = "sect:trash") {
@@ -233,74 +220,17 @@ fun BoardScreen(
 				)
 			}
 			if (trashOpen) {
+				// Never draggable: a trashed entry has no live tree position, so a drop would re-parent
+				// something the board is not drawing.
 				for (row in rows.trash) {
 					item(key = row.entry.id) {
-						BoardEntryRow(
-							row,
-							onClick = { onOpenEntry(row.gatewayId, row.entry.id) },
-							onLongPress = { sheet = BoardSheet.Actions(row) },
-						)
+						BoardEntryRow(row, onClick = { onOpenEntry(row.gatewayId, row.entry.id) })
 					}
 				}
 			}
 		}
 	}
 
-	when (val open = sheet) {
-		is BoardSheet.Actions -> {
-			val entry = open.row.entry
-			val gw = open.row.gatewayId
-			ModalBottomSheet(onDismissRequest = { sheet = null }) {
-				Column(Modifier.padding(bottom = 24.dp)) {
-					if (entry.trashedAt != null) {
-						SheetAction("Restore") {
-							repo.boardOps.boardSetTrashed(gw, entry.id, false)
-							sheet = null
-						}
-					} else {
-						SheetAction("Assign to a session") { sheet = BoardSheet.Assign(open.row) }
-						for (state2 in listOf("open", "in_progress", "paused", "done", "cancelled")) {
-							if (state2 == entry.state) continue
-							SheetAction("Mark ${stateLabel(state2)}") {
-								repo.boardOps.boardSetState(gw, entry.id, state2)
-								sheet = null
-							}
-						}
-						if (entry.sessionId != null) {
-							SheetAction("Back to the backlog") {
-								repo.boardOps.boardAssign(gw, entry.id, null)
-								sheet = null
-							}
-						}
-						SheetAction("Trash") {
-							repo.boardOps.boardSetTrashed(gw, entry.id, true)
-							sheet = null
-						}
-					}
-				}
-			}
-		}
-		is BoardSheet.Assign -> {
-			val entry = open.row.entry
-			ModalBottomSheet(onDismissRequest = { sheet = null }) {
-				Column(Modifier.padding(bottom = 24.dp)) {
-					Text(
-						"Assign to",
-						style = MaterialTheme.typography.labelLarge,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-						modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-					)
-					for (team in repo.boardOps.boardAssignTargets()) {
-						SheetAction(state.label(team.name)) {
-							repo.boardOps.boardAssign(open.row.gatewayId, entry.id, team.name)
-							sheet = null
-						}
-					}
-				}
-			}
-		}
-		null -> {}
-	}
 }
 
 ////////////////////////////////
@@ -313,7 +243,6 @@ private fun boardGroupItems(
 	scope: androidx.compose.foundation.lazy.LazyListScope,
 	group: BoardGroup,
 	onOpen: (String, String) -> Unit,
-	onLongPress: (BoardRow) -> Unit,
 	struggling: Set<String>,
 ) {
 	with(scope) {
@@ -322,7 +251,6 @@ private fun boardGroupItems(
 				BoardEntryRow(
 					row,
 					onClick = { onOpen(row.gatewayId, row.entry.id) },
-					onLongPress = { onLongPress(row) },
 					struggling = row.entry.id in struggling,
 				)
 			}
@@ -330,15 +258,14 @@ private fun boardGroupItems(
 	}
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, onLongPress: () -> Unit, struggling: Boolean = false) {
+private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, struggling: Boolean = false) {
 	val entry = row.entry
 	val finished = entry.state == "done" || entry.state == "cancelled"
 	Row(
 		Modifier
 			.fillMaxWidth()
-			.combinedClickable(onClick = onClick, onLongClick = onLongPress)
+			.clickable(onClick = onClick)
 			.padding(start = (row.depth * 16).dp, top = 4.dp, bottom = 4.dp),
 		horizontalArrangement = Arrangement.spacedBy(9.dp),
 		verticalAlignment = Alignment.CenterVertically,
@@ -398,35 +325,10 @@ fun StateMark(state: String) {
 }
 
 @Composable
-private fun BoardSectionLabel(label: String, trailing: (@Composable () -> Unit)? = null) {
+private fun BoardSectionLabel(trailing: @Composable () -> Unit) {
 	Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-		Text(
-			label.uppercase(),
-			style = MaterialTheme.typography.labelSmall,
-			color = MaterialTheme.colorScheme.onSurfaceVariant,
-		)
 		Spacer(Modifier.weight(1f))
-		trailing?.let { it() }
-	}
-}
-
-@Composable
-private fun SessionGroupHeader(state: ChatState, key: GroupKey) {
-	// No team in the roster means the session ended or the roster is between refreshes; the stored
-	// key's own leaf is the honest label then, never a guess at some other machine's session.
-	val label = state.teamForSessionKey(key.gatewayId, key.sessionId)
-		?.let { state.label(it) }
-		?: key.sessionId.substringAfterLast('.')
-	Card(Modifier.fillMaxWidth()) {
-		Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-			Text(
-				label,
-				style = MaterialTheme.typography.titleSmall,
-				fontFamily = FontFamily.Monospace,
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-			)
-		}
+		trailing()
 	}
 }
 
@@ -480,7 +382,7 @@ private fun BoardComposeForm(
 @Composable
 private fun BoardFoldRow(label: String, expanded: Boolean, onToggle: () -> Unit) {
 	Row(
-		Modifier.fillMaxWidth().combinedClickable(onClick = onToggle).padding(vertical = 6.dp),
+		Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 6.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		Icon(
@@ -491,20 +393,6 @@ private fun BoardFoldRow(label: String, expanded: Boolean, onToggle: () -> Unit)
 		)
 		Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 	}
-}
-
-@Composable
-private fun SheetAction(label: String, onClick: () -> Unit) {
-	Text(
-		label,
-		style = MaterialTheme.typography.bodyLarge,
-		modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 14.dp),
-	)
-}
-
-private fun stateLabel(state: String): String = when (state) {
-	"in_progress" -> "in progress"
-	else -> state
 }
 
 /** Matches the row's text line, so a mark never sets the row height. */

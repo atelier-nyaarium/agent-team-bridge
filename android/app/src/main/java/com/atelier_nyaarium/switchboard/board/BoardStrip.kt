@@ -118,7 +118,8 @@ fun BoardStrip(
 					modifier = Modifier.size(18.dp),
 				)
 				if (expanded || liveLine == null) {
-					Text("Task Board", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+					// Not "Backlog": that tab is what nobody has claimed, and this is what this session has.
+					Text("Tasks", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
 				} else {
 					StateMark(liveLine.state)
 					Text(

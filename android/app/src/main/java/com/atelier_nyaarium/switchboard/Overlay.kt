@@ -21,8 +21,6 @@ sealed interface Overlay {
 
 	data object HostHelp : Overlay
 
-	data class BoardEdit(val gatewayId: String, val entryId: String) : Overlay
-
 	data object Users : Overlay
 
 	data object LinkWizard : Overlay

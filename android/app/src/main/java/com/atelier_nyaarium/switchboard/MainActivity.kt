@@ -531,9 +531,8 @@ fun App(
 				onQueue = { openQueueRequest.value = true },
 				board = { modifier, goToSessions ->
 					BoardScreen(
-						state = state,
 						repo = repo,
-						onOpenEntry = { gw, id -> openOverlay(Overlay.BoardEdit(gw, id)) },
+						onOpenEntry = { gw, id -> boardModal = gw to id },
 						onSaved = goToSessions,
 						modifier = modifier,
 					)
@@ -606,7 +605,7 @@ fun App(
 	// Here rather than in the overlay stack: that one REPLACES the screen it is called from, so a
 	// dialog hosted there dims an empty window instead of the conversation.
 	boardModal?.let { (gatewayId, entryId) ->
-		BoardEntryDialog(repo, gatewayId, entryId) { boardModal = null }
+		BoardEntryDialog(state, repo, gatewayId, entryId) { boardModal = null }
 	}
 }
 

@@ -4,31 +4,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,101 +31,30 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.atelier_nyaarium.switchboard.AttachmentViewer
 import com.atelier_nyaarium.switchboard.ChatRepository
+import com.atelier_nyaarium.switchboard.ChatState
 import com.atelier_nyaarium.switchboard.OpenAttachment
 
 private val STATES = listOf("open", "in_progress", "paused", "done", "cancelled")
 
 /**
- * One entry, full screen (the body is multiline; a dialog would fight the keyboard).
+ * One entry as a modal over whatever opened it. The only editor: both the thread's strip and the
+ * Backlog tab open this one.
  *
- * State and placement commit on TAP - they carry no draft, so making them wait would only add a
- * step. Title and body wait for Save, because they are the only fields a refused write has to hand
- * back to a composer.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun BoardEditScreen(
-	repo: ChatRepository,
-	gatewayId: String,
-	entryId: String,
-	onClose: () -> Unit,
-) {
-	val revision by repo.boardOps.boardRevision
-	val entry = remember(revision, entryId) { repo.boardOps.boardEntriesOn(gatewayId).firstOrNull { it.id == entryId } }
-	if (entry == null) {
-		onClose()
-		return
-	}
-
-	// What the editor opened with. Save compares against THIS, not the live entry: an agent's write
-	// landing mid-edit would otherwise make an untouched field look changed and revert their edit.
-	val baseline = remember(entryId) { entry.title to entry.body.orEmpty() }
-	var title by remember(entryId) { mutableStateOf(baseline.first) }
-	var body by remember(entryId) { mutableStateOf(baseline.second) }
-	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
-	val changedElsewhere = entry.title != baseline.first || entry.body.orEmpty() != baseline.second
-	val children = remember(revision, entryId) {
-		repo.boardOps.boardEntriesOn(gatewayId).filter { it.parent == entryId && it.trashedAt == null }.sortedBy { it.rank }
-	}
-
-	Scaffold(
-		topBar = {
-			TopAppBar(
-				title = { Text("Edit entry") },
-				navigationIcon = {
-					IconButton(onClick = onClose) {
-						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-					}
-				},
-				actions = {
-					// Filled, like the form's own Save: a bare word in a bar reads as a title, not a control.
-					Button(
-						onClick = {
-							saveEntryFields(repo, gatewayId, entryId, title, body, baseline)
-							onClose()
-						},
-						contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
-						modifier = Modifier.padding(end = 8.dp).height(36.dp),
-					) { Text("Save") }
-				},
-			)
-		},
-	) { pad ->
-		Column(
-			Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp),
-			verticalArrangement = Arrangement.spacedBy(16.dp),
-		) {
-			BoardEntryEditor(
-				repo = repo,
-				gatewayId = gatewayId,
-				entry = entry,
-				title = title,
-				onTitle = { title = it },
-				body = body,
-				onBody = { body = it },
-				changedElsewhere = changedElsewhere,
-				children = children,
-				onOpenAttachment = { viewer = it },
-				onClose = onClose,
-			)
-		}
-	}
-
-	// After the Scaffold, so it overlays the screen and its own back handler wins. Composed inside the
-	// scrolling column instead, it lays out inline and shows a strip of controls with no picture.
-	viewer?.let { att ->
-		AttachmentViewer(att = att, onOpenWith = { viewer = null }, onDismiss = { viewer = null })
-	}
-}
-
-/**
- * One entry as a modal over whatever opened it, for the thread's board strip.
+ * Everything but title and body commits on TAP - those fields carry no draft, so making them wait
+ * would only add a step. Title and body wait for Save, being the only ones a refused write has to
+ * hand back to a composer.
  *
  * Tap-away is off: the body is a text field, and a stray touch beside the dialog must not discard a
  * half-typed edit. Back still dismisses, being deliberate.
  */
 @Composable
-fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, onClose: () -> Unit) {
+fun BoardEntryDialog(
+	state: ChatState,
+	repo: ChatRepository,
+	gatewayId: String,
+	entryId: String,
+	onClose: () -> Unit,
+) {
 	val revision by repo.boardOps.boardRevision
 	val entry = remember(revision, entryId) { repo.boardOps.boardEntriesOn(gatewayId).firstOrNull { it.id == entryId } }
 	if (entry == null) {
@@ -169,6 +88,7 @@ fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, o
 					verticalArrangement = Arrangement.spacedBy(14.dp),
 				) {
 					BoardEntryEditor(
+					state = state,
 					repo = repo,
 					gatewayId = gatewayId,
 					entry = entry,
@@ -200,10 +120,10 @@ fun BoardEntryDialog(repo: ChatRepository, gatewayId: String, entryId: String, o
 	}
 }
 
-/** Title and body commit on Save; everything else commits on tap. Shared by the full-screen route and
- * the thread's modal so the two cannot drift into different editors. */
+/** The editor's fields, split out so the dialog's scroll can hold them while its buttons stay pinned. */
 @Composable
 private fun BoardEntryEditor(
+	state: ChatState,
 	repo: ChatRepository,
 	gatewayId: String,
 	entry: com.atelier_nyaarium.switchboard.proto.BoardEntry,
@@ -241,6 +161,25 @@ private fun BoardEntryEditor(
 				label = { Text("Body") },
 				modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
 			)
+
+			// Commits on tap, like State. Assigning to a session takes the entry off the Backlog tab, so
+			// the chip moving is the only confirmation the owner gets that it landed.
+			FieldLabel("Session")
+			FlowRow(
+				horizontalArrangement = Arrangement.spacedBy(7.dp),
+				verticalArrangement = Arrangement.spacedBy(7.dp),
+				modifier = Modifier.fillMaxWidth(),
+			) {
+				SessionChip("Backlog", entry.sessionId == null) {
+					repo.boardOps.boardAssign(gatewayId, entryId, null)
+				}
+				for (team in repo.boardOps.boardAssignTargets()) {
+					val held = repo.boardOps.boardSessionKeyOf(team.name) == entry.sessionId
+					SessionChip(state.label(team.name), held) {
+						repo.boardOps.boardAssign(gatewayId, entryId, team.name)
+					}
+				}
+			}
 
 			FieldLabel("State")
 			// Wraps: five chips do not fit one row in a dialog, and a plain Row squeezes the last one
@@ -331,6 +270,20 @@ private fun saveEntryFields(
 ) {
 	if (title.isNotBlank() && title != baseline.first) repo.boardOps.boardSetTitle(gatewayId, entryId, title.trim())
 	if (body != baseline.second) repo.boardOps.boardSetBody(gatewayId, entryId, body.ifBlank { null })
+}
+
+/** One selectable chip, styled the same as the state chips so the two rows read as one control. */
+@Composable
+private fun SessionChip(label: String, held: Boolean, onClick: () -> Unit) {
+	AssistChip(
+		onClick = onClick,
+		label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+		colors = if (held) {
+			AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+		} else {
+			AssistChipDefaults.assistChipColors()
+		},
+	)
 }
 
 @Composable

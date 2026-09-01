@@ -441,7 +441,15 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			BoardEntry(id = "1".repeat(32), title = "Child 4 - not started", state = "open", rank = "d", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 			BoardEntry(id = "2".repeat(32), title = "Child 5 - set aside", state = "paused", rank = "e", parent = "c".repeat(32), sessionId = localFieldOrSelf(SESSION)),
 		)
-		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch)))
+		// No session, so these are the only entries the Backlog tab draws. Two levels deep, because the
+		// tab's drag has to be exercised against a real tree and not a flat list.
+		val backlog = listOf(
+			BoardEntry(id = "3".repeat(32), title = "Unclaimed root", state = "open", rank = "b"),
+			BoardEntry(id = "4".repeat(32), title = "Nested under the root", state = "open", rank = "a", parent = "3".repeat(32)),
+			BoardEntry(id = "5".repeat(32), title = "Nested deeper", state = "paused", rank = "a", parent = "4".repeat(32)),
+			BoardEntry(id = "6".repeat(32), title = "A second unclaimed root", state = "open", rank = "c"),
+		)
+		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch + backlog)))
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
 	}
 
