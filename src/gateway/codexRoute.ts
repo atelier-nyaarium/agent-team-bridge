@@ -60,6 +60,11 @@ function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexSt
 	return turnId ? agent.turns.find((turn) => turn.id === turnId) : undefined;
 }
 
+/** The model the thread runs, held only by the start exchange. Absent means the target's own default. */
+function startModelOf(agent: CodexPersistedAgent): string | undefined {
+	return agent.exchanges.find((exchange) => exchange.kind === "start")?.model;
+}
+
 /**
  * What one call should report about an agent, given the turn it was waiting on.
  *
@@ -224,6 +229,7 @@ export class CodexRoute {
 			// The model travelled straight to the daemon and never reached the persisted identity, so
 			// the record could not tell two starts apart that differed only by it.
 			model: request.model,
+			serviceTier: request.serviceTier,
 			at: this.now(),
 		});
 		let dispatched = true;
@@ -236,6 +242,7 @@ export class CodexRoute {
 				target,
 				prompt: request.prompt,
 				model: request.model,
+				...(request.serviceTier === undefined ? {} : { serviceTier: request.serviceTier }),
 			});
 		}
 		return this.settle(owner, agentId, request.operationId, dispatched);
@@ -250,6 +257,7 @@ export class CodexRoute {
 			agentId: request.agentId,
 			operationId: request.operationId,
 			prompt: request.prompt,
+			serviceTier: request.serviceTier,
 			at: this.now(),
 		});
 		let dispatched = true;
@@ -264,6 +272,9 @@ export class CodexRoute {
 				threadId: agent.threadId!,
 				expectedTurnId: committed.operation.expectedTurnId,
 				prompt: request.prompt,
+				// Read back from the committed record, so an unchanged tier still travels.
+				...(agent.serviceTier === undefined ? {} : { serviceTier: agent.serviceTier }),
+				...(startModelOf(agent) === undefined ? {} : { model: startModelOf(agent) }),
 			});
 		}
 		return this.settle(owner, request.agentId, request.operationId, dispatched);

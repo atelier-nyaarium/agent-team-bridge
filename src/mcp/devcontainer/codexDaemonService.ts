@@ -9,6 +9,7 @@ import {
 	CodexDaemonHelloSchema,
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
+	type CodexServiceTier,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-agent.js";
@@ -208,10 +209,15 @@ export class CodexDaemonService {
 		const session = await this.session(resolved);
 		if (!session) return this.reject(command, `execution target is unavailable`);
 
-		// startThread checks the model against the server's own list.
-		const threadId = await session.client.startThread({ cwd: resolved.cwd, model: command.model });
+		// startThread checks both against the server's own list.
+		const threadId = await session.client.startThread({
+			cwd: resolved.cwd,
+			model: command.model,
+			serviceTier: command.serviceTier,
+		});
 		const binding: TurnBinding = { ownerKey: command.ownerKey, agentId: command.agentId, threadId };
 		this.bindThread(session, threadId, binding);
+		// The thread already carries the tier, so its first turn does not restate it.
 		const turnId = await this.beginTurn(session, binding, command.prompt);
 		// A refusal marks the agent unavailable with nothing to reconcile, so it is only reached after
 		// asking App Server whether a turn exists.
@@ -235,14 +241,24 @@ export class CodexDaemonService {
 	 * A lost reply looks identical to a write that never landed, and only the server can tell them
 	 * apart. Reporting a live turn as a refusal strands it: a refused start is never reconciled.
 	 */
-	private async beginTurn(session: TargetSession, binding: TurnBinding, prompt: string): Promise<string | undefined> {
+	private async beginTurn(
+		session: TargetSession,
+		binding: TurnBinding,
+		prompt: string,
+		turn: { model?: string; serviceTier?: CodexServiceTier } = {},
+	): Promise<string | undefined> {
 		let bound: string | undefined;
 		try {
 			// Bound from inside the start, before a terminal buffered for this turn can be published.
-			return await session.client.startTurn(binding.threadId, prompt, (turnId) => {
-				bound = turnId;
-				session.turns.bind(turnId, binding);
-			});
+			return await session.client.startTurn(
+				binding.threadId,
+				prompt,
+				(turnId) => {
+					bound = turnId;
+					session.turns.bind(turnId, binding);
+				},
+				turn,
+			);
 		} catch {
 			// A start that failed after binding holds a turn that is not ours; whatever runs is below.
 			if (bound !== undefined) session.turns.forget(bound);
@@ -316,7 +332,10 @@ export class CodexDaemonService {
 		}
 
 		await session.client.resumeThread(command.threadId);
-		const turnId = await this.beginTurn(session, binding, command.prompt);
+		const turnId = await this.beginTurn(session, binding, command.prompt, {
+			model: command.model,
+			serviceTier: command.serviceTier,
+		});
 		if (!turnId) return this.reject(command, `codex thread produced no turn`);
 		this.emitReceipt(session, command, {
 			kind: "accepted",

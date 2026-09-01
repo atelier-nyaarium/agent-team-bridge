@@ -569,6 +569,73 @@ describe("the client's own guarantees", () => {
 		expect(f.calls.find((c) => c.method === "thread/start")?.params).not.toHaveProperty("reasoningEffort");
 	});
 
+	it("sends a tier the model advertises, on the thread and on a later turn", async () => {
+		const f = fakeTransport([
+			{
+				id: "gpt-5.6-luna",
+				supportedReasoningEfforts: [{ reasoningEffort: "max" }],
+				serviceTiers: [{ id: "priority" }],
+			},
+		]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+		const threadId = await client.startThread({ cwd: "/tmp", serviceTier: "priority" });
+		await client.startTurn(threadId, "hi", noteTurn, { serviceTier: "priority" });
+
+		expect(f.calls.find((c) => c.method === "thread/start")?.params).toMatchObject({ serviceTier: "priority" });
+		expect(f.calls.find((c) => c.method === "turn/start")?.params).toMatchObject({ serviceTier: "priority" });
+	});
+
+	it("omits the tier entirely when none is asked for", async () => {
+		const f = fakeTransport([{ id: "gpt-5.6-luna", serviceTiers: [{ id: "priority" }] }]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+		const threadId = await client.startThread({ cwd: "/tmp" });
+		await client.startTurn(threadId, "hi", noteTurn);
+
+		expect(f.calls.find((c) => c.method === "thread/start")?.params).not.toHaveProperty("serviceTier");
+		expect(f.calls.find((c) => c.method === "turn/start")?.params).not.toHaveProperty("serviceTier");
+	});
+
+	it("refuses a tier the model does not advertise rather than running at standard", async () => {
+		// The App Server accepts an unoffered id and quietly runs at standard.
+		const f = fakeTransport([{ id: "gpt-5.6-luna" }]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+
+		await expect(client.startThread({ cwd: "/tmp", serviceTier: "priority" })).rejects.toThrow(
+			"service tier not offered",
+		);
+		expect(f.methods()).not.toContain("thread/start");
+	});
+
+	it("sends standard as an explicit null, which is what reverts a thread already at priority", async () => {
+		const f = fakeTransport([{ id: "gpt-5.6-luna", serviceTiers: [{ id: "priority" }] }]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+		const threadId = await client.startThread({ cwd: "/tmp", serviceTier: "priority" });
+		await client.startTurn(threadId, "hi", noteTurn, { serviceTier: "standard" });
+
+		// Omitting the field would leave the thread on priority, since a tier holds for later turns.
+		expect(f.calls.find((c) => c.method === "turn/start")?.params).toMatchObject({ serviceTier: null });
+	});
+
+	it("checks standard against no model, since it is not a tier the server offers", async () => {
+		const f = fakeTransport([{ id: "gpt-5.6-luna" }]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+
+		// luna advertises no tiers here, yet standard still resolves: it is an absence, not an id.
+		await expect(client.startThread({ cwd: "/tmp", serviceTier: "standard" })).resolves.toBeTruthy();
+	});
+
+	it("checks a turn's tier against the model the caller names, not the client's default", async () => {
+		const f = fakeTransport([{ id: "gpt-5.6-luna", serviceTiers: [{ id: "priority" }] }, { id: "gpt-5.4-mini" }]);
+		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");
+		const mini = await client.startThread({ cwd: "/tmp", model: "gpt-5.4-mini" });
+
+		// Named per call rather than remembered, so a daemon that restarted and never saw this start
+		// still checks against mini, which advertises no tier.
+		await expect(
+			client.startTurn(mini, "hi", noteTurn, { model: "gpt-5.4-mini", serviceTier: "priority" }),
+		).rejects.toThrow("service tier not offered");
+	});
+
 	it("uses only the stable thread and turn operations", async () => {
 		const f = fakeTransport();
 		const client = await CodexAppServerClient.open(f.transport, "gpt-5.6-luna");

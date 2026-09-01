@@ -3,6 +3,7 @@ import type {
 	CodexPersistedAgent,
 	CodexReconciliationFence,
 	CodexResolvedTarget,
+	CodexServiceTier,
 	CodexStoredOperation,
 } from "../shared/codex-agent.js";
 import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/session-store.js";
@@ -43,10 +44,15 @@ export interface CodexStartIntentInput extends CodexIntentInput {
 	 * dispatched command must not name different ones. It reached the daemon without ever reaching
 	 * the persisted identity, so a retry that changed the model replayed the original silently. */
 	model?: string;
+	/** Recorded on the agent so every later dispatch carries it, rather than trusting the App Server
+	 * to hold it across a resume. */
+	serviceTier?: CodexServiceTier;
 }
 
 export interface CodexExistingAgentIntentInput extends CodexIntentInput {
 	agentId: string;
+	/** Absent leaves the agent on the tier it already has. */
+	serviceTier?: CodexServiceTier;
 }
 
 export interface CodexStopIntentInput {

@@ -2,9 +2,13 @@ import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { agentHttpPath } from "../../shared/agent-backend.js";
 import {
+	CODEX_DEFAULT_MODEL,
+	CODEX_PRIORITY_SERVICE_TIER,
+	CODEX_STANDARD_SERVICE_TIER,
 	CodexAwaitAgentInputSchema,
 	CodexListAgentsInputSchema,
 	CodexMessageAgentInputSchema,
+	type CodexServiceTier,
 	CodexStartAgentInputSchema,
 	CodexStopAgentInputSchema,
 } from "../../shared/codex-agent.js";
@@ -34,6 +38,11 @@ State allowed writes, network access, and completion criteria.
 
 - \`model\` - optional and fixed for the agent's lifetime
 - \`cwd\` - host-session working directory, fixed for the agent's lifetime
+- \`serviceTier\` - \`${CODEX_PRIORITY_SERVICE_TIER}\` runs faster and spends more usage. \`${CODEX_STANDARD_SERVICE_TIER}\` does not.
+
+Naming neither \`model\` nor \`serviceTier\` starts ${CODEX_DEFAULT_MODEL} at \`${CODEX_PRIORITY_SERVICE_TIER}\`. Naming a model leaves the tier standard, so a heavier model does not also cost the faster one.
+
+The tier holds until \`codexMessageAgent\` changes it.
 
 \`cwd\` does not grant write access. Agents can write only this session's project and the temp directory. An unresolved \`cwd\` falls back to the home directory.
 
@@ -54,6 +63,12 @@ A follow-up keeps the agent's history. Repeat any guardrails that still apply.
 A running turn is steered. An idle agent starts a new turn.
 
 Waits for the turn. A turn beyond the wait budget keeps running and is returned later.
+
+## Options
+
+- \`serviceTier\` - \`${CODEX_PRIORITY_SERVICE_TIER}\` runs faster and spends more usage, \`${CODEX_STANDARD_SERVICE_TIER}\` goes back to not. Omit to keep the agent's current tier.
+
+A steered turn keeps the tier it started with, so a change lands on the next turn.
 `.trim();
 
 const AWAIT_DESCRIPTION = `
@@ -90,19 +105,33 @@ function operationId(): string {
 	return crypto.randomUUID();
 }
 
+/** A start naming neither gets the efficient model at priority. Naming either is deliberate, so a
+ * heavier model does not also buy the tier it charges extra for. */
+export function codexStartDefaults(args: { model?: string; serviceTier?: CodexServiceTier }): {
+	model?: string;
+	serviceTier?: CodexServiceTier;
+} {
+	if (args.model !== undefined || args.serviceTier !== undefined) return args;
+	return { model: CODEX_DEFAULT_MODEL, serviceTier: CODEX_PRIORITY_SERVICE_TIER };
+}
+
 /** Absent is OMITTED, since the gateway's schemas are strict. */
 export function codexRequestBody(
 	kind: "start" | "message" | "await" | "stop" | "list",
-	args: { agentId?: string; prompt?: string; model?: string; cwd?: string } = {},
+	args: { agentId?: string; prompt?: string; model?: string; cwd?: string; serviceTier?: CodexServiceTier } = {},
 ): Record<string, unknown> {
 	const mutating = kind === "start" || kind === "message" || kind === "stop";
+	const chosen = kind === "start" ? codexStartDefaults(args) : { serviceTier: args.serviceTier };
 	return {
 		kind,
 		...(mutating ? { operationId: operationId() } : {}),
 		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
 		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
-		...(kind === "start" && args.model !== undefined ? { model: args.model } : {}),
+		...(kind === "start" && chosen.model !== undefined ? { model: chosen.model } : {}),
 		...(kind === "start" && args.cwd !== undefined ? { cwd: args.cwd } : {}),
+		...((kind === "start" || kind === "message") && chosen.serviceTier !== undefined
+			? { serviceTier: chosen.serviceTier }
+			: {}),
 	};
 }
 
@@ -139,14 +168,15 @@ export function registerCodexTools(mcpServer: McpServer, dispatch: AgentDispatch
 	mcpServer.registerTool(
 		"codexStartAgent",
 		{ title: `Codex Start Agent`, description: START_DESCRIPTION, inputSchema: startSchema },
-		async (args: { prompt: string; model?: string; cwd?: string }) =>
+		async (args: { prompt: string; model?: string; cwd?: string; serviceTier?: CodexServiceTier }) =>
 			post(dispatch, codexRequestBody("start", args)),
 	);
 
 	mcpServer.registerTool(
 		"codexMessageAgent",
 		{ title: `Codex Message Agent`, description: MESSAGE_DESCRIPTION, inputSchema: messageSchema },
-		async (args: { agentId: string; prompt: string }) => post(dispatch, codexRequestBody("message", args)),
+		async (args: { agentId: string; prompt: string; serviceTier?: CodexServiceTier }) =>
+			post(dispatch, codexRequestBody("message", args)),
 	);
 
 	mcpServer.registerTool(

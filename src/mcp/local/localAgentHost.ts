@@ -18,6 +18,8 @@ import {
 	CodexGatewayRequestSchema,
 	CodexListAgentsResultSchema,
 	CodexRequestErrorSchema,
+	type CodexServiceTier,
+	CodexServiceTierSchema,
 } from "../../shared/codex-agent.js";
 import {
 	COPILOT_ACTIVITY_MAX_ITEMS,
@@ -60,6 +62,12 @@ export interface LocalAgentBackend {
  */
 export function resolveLocalCwd(requested: string | undefined, home: string = os.homedir()): string {
 	return workdirOrFallback(resolveWorkdir(requested, "agentCwd", { roots: [path.join(home, "projects")], home }));
+}
+
+/** Only the Codex half of the request union declares a tier, so the schema does the narrowing. */
+function serviceTierOf(request: object): { serviceTier?: CodexServiceTier } {
+	const parsed = CodexServiceTierSchema.safeParse((request as { serviceTier?: unknown }).serviceTier);
+	return parsed.success ? { serviceTier: parsed.data } : {};
 }
 
 function unavailable(errorClass: string, backend: AgentBackendDescriptor): Error {
@@ -168,6 +176,8 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 				...("prompt" in request ? { prompt: request.prompt } : {}),
 				...("model" in request && request.model !== undefined ? { model: request.model } : {}),
 				...("cwd" in request && request.cwd !== undefined ? { cwd: resolveLocalCwd(request.cwd) } : {}),
+				// Narrowed by the schema itself: only the Codex half of this union declares the field.
+				...serviceTierOf(request),
 			});
 			return "refused" in answer ? refuse(answer.refused) : resultSchema.parse(answer);
 		},

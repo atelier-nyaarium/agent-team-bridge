@@ -7,6 +7,7 @@ import {
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
 	CodexPromptSchema,
+	CodexServiceTierSchema,
 	OpaqueIdSchema,
 	OperationIdSchema,
 } from "./codexAgentIdentity.js";
@@ -269,6 +270,8 @@ export const CodexStartAgentInputSchema = z
 		/** Host-only, and on start alone: a thread's working directory is fixed for its life. Resolved
 		 * by the daemon's `resolveHostWorkdir`, which falls back to home rather than trusting a path. */
 		cwd: z.string().min(1).max(512).optional(),
+		/** Unlike a model, a tier holds until changed rather than for the thread's life. */
+		serviceTier: CodexServiceTierSchema.optional(),
 	})
 	.strict();
 
@@ -276,6 +279,9 @@ export const CodexMessageAgentInputSchema = z
 	.object({
 		agentId: CodexAgentIdSchema,
 		prompt: CodexPromptSchema,
+		/** Changes the agent's tier from here on. `turn/steer` carries no tier, so a change asked for
+		 * while a turn runs lands on the next one. */
+		serviceTier: CodexServiceTierSchema.optional(),
 	})
 	.strict();
 

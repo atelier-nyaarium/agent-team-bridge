@@ -1,4 +1,9 @@
-import { CodexAppServerResponseSchema, CodexAppServerThreadStartResultSchema } from "../../shared/codex-agent.js";
+import {
+	CODEX_STANDARD_SERVICE_TIER,
+	CodexAppServerResponseSchema,
+	CodexAppServerThreadStartResultSchema,
+	type CodexServiceTier,
+} from "../../shared/codex-agent.js";
 import type { CodexChild } from "./codexTargets.js";
 import {
 	type LifecycleDeps,
@@ -11,8 +16,13 @@ import type { TerminalOutcome } from "./codexTurnOutcome.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** Each offered model id, mapped to the strongest reasoning tier it advertises. */
-type OfferedModels = Map<string, string | undefined>;
+/** What one offered model advertises. */
+interface OfferedModel {
+	effort?: string;
+	serviceTiers: string[];
+}
+
+type OfferedModels = Map<string, OfferedModel>;
 
 export interface AppServerTransport {
 	/** Rejects only with an `AppServerFailure`; a double rejecting with anything else is not a transport. */
@@ -26,6 +36,7 @@ export interface ThreadSettings {
 	cwd: string;
 	/** Optional override. Verified against `model/list` like the default, never taken on trust. */
 	model?: string;
+	serviceTier?: CodexServiceTier;
 }
 
 /** What the lifecycle tells its consumer; both default to nothing so a caller that only reads needs neither. */
@@ -244,6 +255,12 @@ export function strongestEffort(model: {
 		.pop();
 }
 
+/** A model's advertised tier ids. Never the deprecated `additionalSpeedTiers`, which spells the
+ * same tier `fast` where the id is `priority`. */
+export function offeredServiceTiers(model: { serviceTiers?: Array<{ id?: unknown }> }): string[] {
+	return (model.serviceTiers ?? []).map((tier) => tier.id).filter((id): id is string => typeof id === "string");
+}
+
 ////////////////////////////////
 //  Class
 
@@ -287,11 +304,17 @@ export class CodexAppServerClient {
 		transport.notify("initialized", {});
 
 		const listed = (await transport.request("model/list", {})) as {
-			data?: Array<{ id?: string; supportedReasoningEfforts?: Array<{ reasoningEffort?: unknown }> }>;
+			data?: Array<{
+				id?: string;
+				supportedReasoningEfforts?: Array<{ reasoningEffort?: unknown }>;
+				serviceTiers?: Array<{ id?: unknown }>;
+			}>;
 		};
-		const offered = new Map<string, string | undefined>();
+		const offered: OfferedModels = new Map();
 		for (const model of listed.data ?? []) {
-			if (typeof model.id === "string") offered.set(model.id, strongestEffort(model));
+			if (typeof model.id === "string") {
+				offered.set(model.id, { effort: strongestEffort(model), serviceTiers: offeredServiceTiers(model) });
+			}
 		}
 		if (!offered.has(requestedModel)) throw new Error(`model not offered: ${requestedModel}`);
 
@@ -306,19 +329,40 @@ export class CodexAppServerClient {
 	async startThread(settings: ThreadSettings): Promise<string> {
 		const model = settings.model ?? this.defaultModel;
 		// An override is checked against the same list the default was.
-		if (!this.offered.has(model)) throw new Error(`model not offered: ${model}`);
+		const offered = this.offered.get(model);
+		if (!offered) throw new Error(`model not offered: ${model}`);
+		const serviceTier = this.checkedTier(model, settings.serviceTier);
 
 		const result = await this.transport.request("thread/start", {
 			cwd: settings.cwd,
 			model,
 			// Absent when the model advertises no tiers.
-			...(this.offered.get(model) ? { reasoningEffort: this.offered.get(model) } : {}),
+			...(offered.effort ? { reasoningEffort: offered.effort } : {}),
+			...(serviceTier === undefined ? {} : { serviceTier }),
 			approvalPolicy: "never",
 			sandbox: "workspace-write",
 		});
 		const threadId = CodexAppServerThreadStartResultSchema.parse(result).thread.id;
 		this.lifecycle.started(threadId);
 		return threadId;
+	}
+
+	/**
+	 * Our two values as the wire wants them: an id, an explicit null, or nothing.
+	 *
+	 * `standard` sends null, which the App Server answers as its `default` tier. Absent leaves the
+	 * thread as it is. The model is named per call rather than remembered, so a thread this client
+	 * never started is checked as exactly as one it did. This is the only check there is: the App
+	 * Server accepts an unoffered id and quietly runs at standard.
+	 */
+	private checkedTier(model: string | undefined, tier: CodexServiceTier | undefined): string | null | undefined {
+		if (tier === undefined) return undefined;
+		if (tier === CODEX_STANDARD_SERVICE_TIER) return null;
+		const named = model ?? this.defaultModel;
+		if (!this.offered.get(named)?.serviceTiers.includes(tier)) {
+			throw new Error(`service tier not offered: ${tier}`);
+		}
+		return tier;
 	}
 
 	/** Loads the thread whatever its state: a parked one is unarchived first. */
@@ -332,8 +376,19 @@ export class CodexAppServerClient {
 		return this.lifecycle.read(threadId, { threadId, includeTurns: true });
 	}
 
-	async startTurn(threadId: string, text: string, onStarted: (turnId: string) => void): Promise<string> {
-		return this.lifecycle.startTurn(threadId, { threadId, input: [{ type: "text", text }] }, onStarted);
+	/** A tier holds for this turn and every later one. `model` is the thread's, for the tier check. */
+	async startTurn(
+		threadId: string,
+		text: string,
+		onStarted: (turnId: string) => void,
+		turn: { model?: string; serviceTier?: CodexServiceTier } = {},
+	): Promise<string> {
+		const tier = this.checkedTier(turn.model, turn.serviceTier);
+		return this.lifecycle.startTurn(
+			threadId,
+			{ threadId, input: [{ type: "text", text }], ...(tier === undefined ? {} : { serviceTier: tier }) },
+			onStarted,
+		);
 	}
 
 	/** The wire field is `expectedTurnId`; `turn/interrupt` names the same value `turnId`. */

@@ -154,6 +154,7 @@ export class CodexAgentService {
 			agentId,
 			agentState: "creating",
 			requestedTarget: target,
+			...(input.serviceTier === undefined ? {} : { serviceTier: input.serviceTier }),
 			exchanges: [
 				{
 					exchangeId: operationId,
@@ -212,6 +213,8 @@ export class CodexAgentService {
 		const timestamp = Math.max(at, current.updatedAt);
 		const next = CodexPersistedAgentSchema.parse({
 			...current,
+			// Absent leaves the agent on the tier it already has.
+			...(input.serviceTier === undefined ? {} : { serviceTier: input.serviceTier }),
 			exchanges: [
 				...current.exchanges,
 				{

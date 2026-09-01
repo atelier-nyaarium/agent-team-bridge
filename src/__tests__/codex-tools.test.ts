@@ -3,7 +3,13 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initBridge, routerErrorText, routerPost } from "../mcp/bridge/helpers.js";
 import { codexRequestBody } from "../mcp/codex/codexTools.js";
-import { CodexGatewayRequestSchema, CodexRequestErrorSchema, sanitizeCodexErrorText } from "../shared/codex-agent.js";
+import {
+	CODEX_DEFAULT_MODEL,
+	CODEX_PRIORITY_SERVICE_TIER,
+	CodexGatewayRequestSchema,
+	CodexRequestErrorSchema,
+	sanitizeCodexErrorText,
+} from "../shared/codex-agent.js";
 
 describe("what a tool actually sends", () => {
 	it("builds a request the gateway's own schema accepts, for every kind", () => {
@@ -32,9 +38,9 @@ describe("what a tool actually sends", () => {
 		expect(codexRequestBody("list")).not.toHaveProperty("operationId");
 	});
 
-	it("omits an absent model rather than sending it undefined", () => {
+	it("omits an absent field rather than sending it undefined", () => {
 		// A strict schema rejects a key that is present and undefined, so this is not cosmetic.
-		expect(codexRequestBody("start", { prompt: "Audit" })).not.toHaveProperty("model");
+		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");
 		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).toMatchObject({
 			model: "gpt-5.6-sol",
 		});
@@ -42,6 +48,32 @@ describe("what a tool actually sends", () => {
 		expect(
 			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x", model: "s" }),
 		).not.toHaveProperty("model");
+	});
+
+	it("pairs the default model with priority only when the caller chose neither", () => {
+		// Naming a heavier model must not silently also buy the tier it charges extra for.
+		expect(codexRequestBody("start", { prompt: "Audit" })).toMatchObject({
+			model: CODEX_DEFAULT_MODEL,
+			serviceTier: CODEX_PRIORITY_SERVICE_TIER,
+		});
+		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");
+		// A tier alone leaves the model to the target's own default rather than pinning one.
+		expect(codexRequestBody("start", { prompt: "Audit", serviceTier: "priority" })).not.toHaveProperty("model");
+	});
+
+	it("carries a tier on message, where a model is not allowed", () => {
+		const message = codexRequestBody("message", {
+			agentId: "codex_0123456789abcdef0123456789abcdef",
+			prompt: "x",
+			serviceTier: "priority",
+		});
+
+		expect(message).toMatchObject({ serviceTier: "priority" });
+		expect(CodexGatewayRequestSchema.safeParse(message).success).toBe(true);
+		// A message names no model, so the start-only default must not leak onto it.
+		expect(
+			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x" }),
+		).not.toHaveProperty("serviceTier");
 	});
 
 	it("keeps model and cwd on start only", () => {

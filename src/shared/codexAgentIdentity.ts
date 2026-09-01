@@ -40,6 +40,12 @@ export const CODEX_WAIT_BUDGET_MS = CODEX_BACKEND.waitBudgetMs;
 /** Deliberately not the App Server's own default: a thread runs whatever tier this names, so leaving
  * the choice to the server would silently change what a delegated sub-task is worth. */
 export const CODEX_DEFAULT_MODEL = "gpt-5.6-luna";
+/** The faster tier's id, as `serviceTiers` names it. The deprecated spelling `fast` is not it. */
+export const CODEX_PRIORITY_SERVICE_TIER = "priority";
+/** Not a server id. It travels as a null override, which the App Server answers as its `default`
+ * tier. Absent means keep the agent's current tier. */
+export const CODEX_STANDARD_SERVICE_TIER = "standard";
+export const CodexServiceTierSchema = z.enum([CODEX_PRIORITY_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER]);
 
 /** Opaque identifier shape shared by every App Server / daemon-minted id field across every domain
  * file below. */
@@ -113,3 +119,4 @@ export function codexOperationIdentity(
 }
 
 export type CodexAgentId = z.infer<typeof CodexAgentIdSchema>;
+export type CodexServiceTier = z.infer<typeof CodexServiceTierSchema>;

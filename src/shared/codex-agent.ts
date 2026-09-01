@@ -7,20 +7,23 @@
 export * from "./codexAgentActivities.js";
 export * from "./codexAgentAppServer.js";
 export * from "./codexAgentCatalog.js";
-export type { CodexAgentId } from "./codexAgentIdentity.js";
+export type { CodexAgentId, CodexServiceTier } from "./codexAgentIdentity.js";
 export {
 	CODEX_ACTIVITY_MAX_BYTES,
 	CODEX_ACTIVITY_MAX_ITEMS,
 	CODEX_AGENT_ID_RE,
 	CODEX_DEFAULT_MODEL,
 	CODEX_ERROR_MAX_BYTES,
+	CODEX_PRIORITY_SERVICE_TIER,
 	CODEX_PROMPT_MAX_BYTES,
+	CODEX_STANDARD_SERVICE_TIER,
 	CODEX_WAIT_BUDGET_MS,
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
 	CodexOperationIdSchema,
 	CodexOwnerKeySchema,
 	CodexPromptSchema,
+	CodexServiceTierSchema,
 	codexAgentIdForOperation,
 	codexOperationFingerprint,
 	codexOperationIdentity,

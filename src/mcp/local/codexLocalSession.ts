@@ -1,6 +1,6 @@
 // The daemon's own App Server client and turn tracker, wired to turn handles instead of a relay.
 
-import { CODEX_DEFAULT_MODEL } from "../../shared/codex-agent.js";
+import { CODEX_DEFAULT_MODEL, type CodexServiceTier } from "../../shared/codex-agent.js";
 import type { AppServerSession } from "../devcontainer/codexAppServerSession.js";
 import { defaultOpenClient } from "../devcontainer/codexAppServerSession.js";
 import type { AgentChild } from "../devcontainer/codexTargets.js";
@@ -65,18 +65,27 @@ export class CodexLocalSession implements LocalBackendSession {
 		this.closedListener = listener;
 	}
 
-	async openThread(options: { cwd: string; model?: string }): Promise<string> {
-		return this.client.startThread({ cwd: options.cwd, model: options.model });
+	async openThread(options: { cwd: string; model?: string; serviceTier?: CodexServiceTier }): Promise<string> {
+		return this.client.startThread({ cwd: options.cwd, model: options.model, serviceTier: options.serviceTier });
 	}
 
 	/** The owner loads a parked or inherited thread; one it just started is already loaded. */
-	async startTurn(threadId: string, prompt: string): Promise<LocalTurnHandle> {
+	async startTurn(
+		threadId: string,
+		prompt: string,
+		turn?: { model?: string; serviceTier?: CodexServiceTier },
+	): Promise<LocalTurnHandle> {
 		// Built from inside the start, which is where the owner guarantees nothing has published yet.
 		// The whole handle, so its id and its promise name one turn whatever the start goes on to return.
 		let handle: LocalTurnHandle | undefined;
-		const turnId = await this.client.startTurn(threadId, prompt, (id) => {
-			handle = { turnId: id, settled: this.park(threadId, id) };
-		});
+		const turnId = await this.client.startTurn(
+			threadId,
+			prompt,
+			(id) => {
+				handle = { turnId: id, settled: this.park(threadId, id) };
+			},
+			turn,
+		);
 		// Parking after the fact would race the drain, so a client that skipped the callback is refused
 		// rather than handed a promise its terminal may already have passed.
 		if (!handle) throw new Error(`codex app-server started turn ${turnId} without registering it`);

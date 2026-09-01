@@ -10,6 +10,7 @@ import {
 	CodexAgentIdSchema,
 	CodexErrorTextSchema,
 	CodexPromptSchema,
+	CodexServiceTierSchema,
 	codexOperationIdentity,
 	OpaqueIdSchema,
 	OperationIdSchema,
@@ -291,6 +292,9 @@ export const CodexPersistedAgentSchema = z
 		resolvedTarget: CodexResolvedTargetSchema.optional(),
 		threadId: OpaqueIdSchema.optional(),
 		activeTurnId: OpaqueIdSchema.optional(),
+		/** The tier this agent is set to, carried on every later dispatch. Outside the operation
+		 * fingerprint: a tier changes between turns rather than identifying an operation. */
+		serviceTier: CodexServiceTierSchema.optional(),
 		pendingInterrupt: z
 			.object({
 				operationId: OperationIdSchema,

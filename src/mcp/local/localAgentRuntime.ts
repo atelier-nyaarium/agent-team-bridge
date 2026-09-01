@@ -11,6 +11,7 @@ import {
 	agentOperationFingerprintOf,
 	sanitizeAgentErrorText,
 } from "../../shared/agent-record.js";
+import type { CodexServiceTier } from "../../shared/codex-agent.js";
 import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./localAgentSession.js";
 
 ////////////////////////////////
@@ -67,6 +68,8 @@ export interface LocalRequest {
 	prompt?: string;
 	model?: string;
 	cwd?: string;
+	/** Ignored by a backend with no service tiers. */
+	serviceTier?: CodexServiceTier;
 }
 
 /** Opened lazily, so an unused CLI never spawns a child. */
@@ -139,6 +142,10 @@ interface LocalAgentRecord {
 	createdAt: number;
 	updatedAt: number;
 	activeTurnId?: string;
+	/** The tier this agent is currently set to, applied to each new turn. */
+	serviceTier?: CodexServiceTier;
+	/** The thread's model, kept so a later turn's tier is checked against it. */
+	model?: string;
 	turns: LocalTurnRecord[];
 	exchanges: LocalExchangeRecord[];
 	settled?: Promise<LocalTerminal>;
@@ -373,7 +380,11 @@ export class LocalAgentRuntime {
 		const createdAt = this.now();
 		let threadId: string;
 		try {
-			threadId = await session.openThread({ cwd: request.cwd ?? this.spec.defaultCwd(), model: request.model });
+			threadId = await session.openThread({
+				cwd: request.cwd ?? this.spec.defaultCwd(),
+				model: request.model,
+				serviceTier: request.serviceTier,
+			});
 		} catch (error) {
 			// Nothing was recorded, so no record is invented and `list` stays honest.
 			return this.fail(agentId, "app_server_unavailable", errorText(error), true);
@@ -384,6 +395,8 @@ export class LocalAgentRuntime {
 			threadId,
 			createdAt,
 			updatedAt: createdAt,
+			...(request.serviceTier === undefined ? {} : { serviceTier: request.serviceTier }),
+			...(request.model === undefined ? {} : { model: request.model }),
 			turns: [],
 			exchanges: [],
 		};
@@ -395,7 +408,6 @@ export class LocalAgentRuntime {
 		const agent = this.agents.get(request.agentId ?? "");
 		if (!agent) return this.notFound(request.agentId ?? "");
 		const prompt = request.prompt ?? "";
-
 		let session: LocalBackendSession;
 		try {
 			session = await this.open();
@@ -422,10 +434,16 @@ export class LocalAgentRuntime {
 				createdAt: at,
 				acceptedAt: at,
 			});
+			// A steer carries no tier, so a change asked for here lands on the next turn.
+			if (request.serviceTier !== undefined) agent.serviceTier = request.serviceTier;
 			return this.waitFor(agent, active.id, "steered");
 		}
 
-		return this.dispatchTurn(session, agent, prompt, "message");
+		const serviceTier = request.serviceTier ?? agent.serviceTier;
+		const answer = await this.dispatchTurn(session, agent, prompt, "message", { model: agent.model, serviceTier });
+		// Remembered only once a turn started. A refused tier would otherwise ride every later message.
+		if (serviceTier !== undefined && answer.observation !== "unavailable") agent.serviceTier = serviceTier;
+		return answer;
 	}
 
 	private async awaitTurn(request: LocalRequest): Promise<LocalAgentAnswer> {
@@ -470,10 +488,11 @@ export class LocalAgentRuntime {
 		agent: LocalAgentRecord,
 		prompt: string,
 		kind: "start" | "message",
+		settings: { model?: string; serviceTier?: CodexServiceTier } = {},
 	): Promise<LocalAgentAnswer> {
 		let handle: LocalTurnHandle;
 		try {
-			handle = await session.startTurn(agent.threadId, prompt);
+			handle = await session.startTurn(agent.threadId, prompt, settings);
 		} catch (error) {
 			return this.fail(agent.agentId, "app_server_unavailable", errorText(error), true);
 		}

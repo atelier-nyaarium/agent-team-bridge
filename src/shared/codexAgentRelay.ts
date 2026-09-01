@@ -13,6 +13,7 @@ import {
 	CodexErrorTextSchema,
 	CodexOwnerKeySchema,
 	CodexPromptSchema,
+	CodexServiceTierSchema,
 	OpaqueIdSchema,
 	OperationIdSchema,
 } from "./codexAgentIdentity.js";
@@ -44,6 +45,7 @@ export const CodexDaemonCommandSchema = z.discriminatedUnion("kind", [
 			target: CodexExecutionTargetSchema,
 			prompt: CodexPromptSchema,
 			model: z.string().min(1).max(128).optional(),
+			serviceTier: CodexServiceTierSchema.optional(),
 		})
 		.strict(),
 	z
@@ -55,6 +57,11 @@ export const CodexDaemonCommandSchema = z.discriminatedUnion("kind", [
 			threadId: OpaqueIdSchema,
 			expectedTurnId: OpaqueIdSchema.optional(),
 			prompt: CodexPromptSchema,
+			/** The tier the gateway remembers, so a resumed thread keeps the pace it was set to. */
+			serviceTier: CodexServiceTierSchema.optional(),
+			/** The thread's model, carried only for the tier check. A restarted daemon never saw the
+			 * start that chose it. */
+			model: z.string().min(1).max(128).optional(),
 		})
 		.strict(),
 	z
