@@ -94,7 +94,7 @@ This adds `switchboard-network` to your `.devcontainer/compose.yml`.
 
 ### Optional: Android console app and cross-machine federation
 
-The steps above are everything you need for local crosstalk between devcontainers on one machine - a gateway that is never enrolled still boots in "arming mode" and routes that traffic fine. If you also want the native Android console app, or to link multiple machines' gateways together, the gateway's owner (a one-time action per gateway, not something each devcontainer does) runs `./setup.sh` - see the "Deploying the federation" section of `CLAUDE.md` for the full enrollment flow.
+The steps above are everything you need for local crosstalk between devcontainers on one machine - a gateway that is never enrolled still boots in "arming mode" and routes that traffic fine. If you also want the native Android console app, or to link multiple machines' gateways together, the gateway's owner (a one-time action per gateway, not something each devcontainer does) runs `./setup.sh` - see the "Deploying the federation" section of `AGENTS.md` for the full enrollment flow.
 
 ## MCP Tools
 

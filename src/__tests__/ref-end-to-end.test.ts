@@ -141,7 +141,7 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 			const texts = [
 				path.join(REPO, "android", "app", "src", "main", "assets", "plugins", "references", "manifest.json"),
 				path.join(REPO, "skills", "crosstalk", "SKILL.md"),
-				path.join(REPO, "CLAUDE.md"),
+				path.join(REPO, "AGENTS.md"),
 				path.join(REPO, "src", "mcp", "capabilities.ts"),
 			].map((file) => fs.readFileSync(file, "utf8"));
 			// Link destinations and backticked forms, so a `]` inside an ordinal stays part of the ref.

@@ -14,7 +14,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 
 /** How recently a Domain's cross-Domain-presence entry was confirmed accurate by the Gateway (a
  * landed push OR a successful backstop pull - either refreshes `lastRefreshedAt` identically, see
- * CLAUDE.md's own doc on the wire field). Computed client-side against a threshold, never shipped as
+ * AGENTS.md's own doc on the wire field). Computed client-side against a threshold, never shipped as
  * a boolean on the wire. */
 enum class CrossDomainFreshness {
 	/** Refreshed within the threshold - shown as the friend's live state. */

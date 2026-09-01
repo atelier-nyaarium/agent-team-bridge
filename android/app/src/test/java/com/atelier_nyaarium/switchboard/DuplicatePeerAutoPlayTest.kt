@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * The gateway mirrors one agent-to-agent exchange into BOTH local participants' own threads as
- * separate `"peer"` mailbox entries (see CLAUDE.md's Agent-to-agent mirroring). Both copies reach
+ * separate `"peer"` mailbox entries (see AGENTS.md's Agent-to-agent mirroring). Both copies reach
  * the poll loop's burst map as `fromMe = false`, so without `isDuplicatePeerAutoPlay` the same
  * exchange gets auto-played twice over whenever both threads are simultaneously followed. These
  * tests pin the dedup decision in isolation, no Android context (no Robolectric).
