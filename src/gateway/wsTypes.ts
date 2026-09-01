@@ -35,6 +35,9 @@ export interface WebSocketDeps {
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
+	// The receiver confirming it emitted a held message. The team is the acknowledging socket's own,
+	// so a delivery id cannot be used to retire somebody else's mail.
+	onDeliveryAck?: (team: string, deliveryId: string) => void;
 	// Fired when the host daemon's catalog scan replaces offlineCatalog's contents - a presence-read
 	// input with no method boundary of its own (a plain Map, mutated in place) to wrap.
 	onCatalogChange?: () => void;

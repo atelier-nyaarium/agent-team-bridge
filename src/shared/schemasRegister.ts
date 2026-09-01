@@ -30,6 +30,10 @@ export const WsRegisterSchema = z.object({
 	// The plugin version (package.json) the MCP process is running. Absent for
 	// non-plugin registrants (e.g. the host daemon); the plugin always reports it.
 	version: z.string().optional(),
+	// Which delivery contract this plugin speaks. 1 means it acknowledges every channel_push, which
+	// is what lets the gateway hold a message for a session that was not ready. Absent for a plugin
+	// predating the acknowledgement, whose messages are retired on the write as they always were.
+	deliveryProtocol: z.number().int().min(0).max(1_000).optional(),
 	// The Claude Code harness session id, reported so the gateway can persist a
 	// `team -> claudeSessionId` map and `claude --resume <id>` the session on a later wake.
 	claudeSessionId: z.string().optional(),

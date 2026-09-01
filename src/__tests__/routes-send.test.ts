@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAwarenessBank } from "../gateway/awarenessBank.js";
+import { ChannelDeliveryCoordinator } from "../gateway/channelDelivery.js";
 import { SendRequestSchema } from "../gateway/routeSchemas.js";
 import { createRoutes } from "../gateway/routes.js";
+import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { SessionStore } from "../shared/session-store.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
 
@@ -338,6 +340,51 @@ describe("routes", () => {
 					createOpts: { displayLabel: undefined, mintedFrom: "conv-1:proj-a.newsession" },
 				},
 			]);
+		});
+
+		it("holds the message for a session that is not there, instead of losing it", async () => {
+			// The whole point: a valid wakeable session being absent is a wait, not a failure. The owner
+			// is told it landed because it did - on disk, for the session to collect.
+			const store = new PendingDeliveryStore();
+			const deliveries = new ChannelDeliveryCoordinator({ store, registry: new Map() });
+			const tryWakeTeam = () => Promise.resolve({ ok: true });
+			const ctx = makeCtx({ tryWakeTeam, deliveries });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.sleepy",
+				body: "do not lose me",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(200);
+			const held = store.listForTeam("proj-a.sleepy");
+			expect(held).toHaveLength(1);
+			expect(held[0].body).toBe("do not lose me");
+			// And the reply anchor exists already, so an answer has somewhere to land the moment it comes.
+			expect(ctx.store.has(held[0].channelJobId)).toBe(true);
+		});
+
+		it("refuses honestly when it cannot hold the message, rather than claiming it landed", async () => {
+			const store = new PendingDeliveryStore(undefined, undefined, 1);
+			const deliveries = new ChannelDeliveryCoordinator({ store, registry: new Map() });
+			const tryWakeTeam = () => Promise.resolve({ ok: true });
+			const { send } = createRoutes(makeCtx({ tryWakeTeam, deliveries }));
+
+			const body = (to: string) => ({
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to,
+				body: "hi",
+				channelOnly: true,
+			});
+			// The SAME team twice, since the cap under test is per team.
+			expect(
+				(await send(new Request("http://localhost/send", { method: "POST" }), body("proj-a.one"))).status,
+			).toBe(200);
+			const full = await send(new Request("http://localhost/send", { method: "POST" }), body("proj-a.one"));
+			expect(full.status).toBe(503);
 		});
 
 		it("names the MACHINE when its daemon never took the wake, rather than blaming the session", async () => {

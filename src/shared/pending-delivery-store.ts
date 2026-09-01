@@ -1,4 +1,4 @@
-import type { ChannelFile } from "./types.js";
+import type { ChannelFile, RidingAwareness } from "./types.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -24,7 +24,7 @@ export interface PendingDelivery {
 	disposition?: string;
 	/** Reserved at enqueue rather than taken at delivery. Awareness is destructive to read, so
 	 * taking it at delivery would drop it on a crash and re-take it on a replay. */
-	awareness?: string;
+	awareness?: RidingAwareness;
 	/** The file-materialization bucket key, minted with the message and not at delivery. */
 	messageId?: string;
 	enqueuedAt: number;

@@ -39,6 +39,7 @@ import {
 	mayWrite,
 	visibleTo,
 } from "./boardStore.js";
+import type { ChannelDeliveryCoordinator } from "./channelDelivery.js";
 import type { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsolePushOps } from "./consolePushOps.js";
 import { sealTargetFor } from "./federation/sealTarget.js";
@@ -160,6 +161,10 @@ export interface RoutesDeps {
 	// the route table once and never rebuild it.
 	carryOver?: RoutesCarryOver;
 	awareness?: { takeFor(sessionKey: string): RidingAwareness | null };
+	// Holds a channel message for a session that could not take it, and hands it over when the
+	// session arrives. Absent in test harnesses and on a gateway built before it, which then keep the
+	// deliver-or-refuse behaviour this replaced.
+	deliveries?: ChannelDeliveryCoordinator;
 }
 
 /**
@@ -224,6 +229,7 @@ export function createRoutes({
 	auth,
 	findPendingHandshake,
 	repushHandshake,
+	deliveries,
 	ownerId,
 	boardStore,
 	boardReplays,
@@ -969,7 +975,9 @@ export function createRoutes({
 		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the
 		// alias team for a re-incarnation).
 		const subs = targetWs ? registry.get(targetWs.data.teamName ?? localName) : undefined;
-		if (!targetWs || !subs) {
+		// Nothing is listening. Without somewhere to hold the message this is the end of the road, so
+		// the caller is told plainly rather than promised a delivery that will not happen.
+		if ((!targetWs || !subs) && !deliveries) {
 			return jsonResponse(
 				{
 					error: `Team "${qualifiedTo}" is not connected`,
@@ -982,7 +990,9 @@ export function createRoutes({
 			);
 		}
 
-		const targetMode = getTeamMode(subs);
+		// An absent session is taken as channel mode: every bridge connection registers as one (see
+		// websocket.ts), so there is no CLI registrant left for a hold to mis-serve.
+		const targetMode = subs ? getTeamMode(subs) : "channel";
 
 		// channelOnly senders (the console) must never reach the CLI branch below:
 		// it mints a fresh random session id that can never join the sender's
@@ -1025,46 +1035,70 @@ export function createRoutes({
 					dstDomainId: inboundDstDomainId,
 				});
 
-				const channelPayload: Record<string, unknown> = {
-					type: "channel_push",
-					from,
-					body: msgBody || "",
-					session_id: channelJobId,
-				};
 				// message_id is the file-materialization bucket key, read only when files are present.
 				// Mint it (and send it) only then; a fileless send carries no message_id.
 				const hasFiles = files !== undefined && files.length > 0;
 				const messageId = hasFiles ? crypto.randomUUID() : undefined;
-				if (hasFiles) {
-					channelPayload.message_id = messageId;
-					channelPayload.files = files;
-				}
-				const activeWs = getAllActiveWs(subs);
-				if (activeWs.length === 0) {
-					throw new Error(`Team "${qualifiedTo}" has no active connections`);
-				}
-				const riding = awareness?.takeFor(localName);
-				if (riding) channelPayload.awareness = riding;
-				if (disposition) channelPayload.disposition = disposition;
-				const payload = JSON.stringify(channelPayload);
+				// Taken once, HERE, and carried on the row. Reading it at delivery would drop it on a
+				// crash and take it twice on a replay, since taking is destructive.
+				const riding = awareness?.takeFor(localName) ?? undefined;
 
-				for (const ws of activeWs) {
-					// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the
-					// message, so the agent answers the handshake first and its reply never burns a turn
-					// on the reply gate's 409. Delivery itself is never gated on confirmation - the nudge
-					// rides alongside. repushHandshake's own dedupe window keeps a freshly-minted
-					// handshake (a just-woken session) from being duplicated here - which requires that
-					// window to stay well ABOVE the post-wake settle delay below, since a wake registers
-					// the session (minting the handshake) and then lands here one settle later.
-					if (!ws.data.handshakeConfirmed && ws.data.teamName) {
-						repushHandshake?.(ws.data.teamName, ws.data.subId);
+				if (deliveries) {
+					const outcome = deliveries.accept({
+						// Minted per send. The console's own op store already collapses its retries before
+						// they reach here, so this identifies the message rather than the attempt.
+						deliveryId: crypto.randomUUID(),
+						team: targetWs?.data.teamName ?? localName,
+						channelJobId,
+						from,
+						body: msgBody || "",
+						...(hasFiles ? { files, messageId } : {}),
+						...(riding ? { awareness: riding } : {}),
+						...(disposition ? { disposition } : {}),
+						enqueuedAt: Date.now(),
+					});
+					if (outcome === "refused") {
+						return jsonResponse(
+							{ error: `"${qualifiedTo}" has too many messages waiting; nothing was accepted` },
+							503,
+						);
 					}
-					ws.send(payload);
-				}
+					console.log(`[send] channel_push ${outcome} for ${qualifiedTo} [${channelJobId}] from ${from}`);
+				} else {
+					const channelPayload: Record<string, unknown> = {
+						type: "channel_push",
+						from,
+						body: msgBody || "",
+						session_id: channelJobId,
+					};
+					if (hasFiles) {
+						channelPayload.message_id = messageId;
+						channelPayload.files = files;
+					}
+					const activeWs = subs ? getAllActiveWs(subs) : [];
+					if (activeWs.length === 0) {
+						throw new Error(`Team "${qualifiedTo}" has no active connections`);
+					}
+					if (riding) channelPayload.awareness = riding;
+					if (disposition) channelPayload.disposition = disposition;
+					const payload = JSON.stringify(channelPayload);
 
-				console.log(
-					`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
-				);
+					for (const ws of activeWs) {
+						// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the
+						// message, so the agent answers the handshake first and its reply never burns a turn
+						// on the reply gate's 409. Delivery itself is never gated on confirmation - the nudge
+						// rides alongside. repushHandshake's own dedupe window keeps a freshly-minted
+						// handshake (a just-woken session) from being duplicated here.
+						if (!ws.data.handshakeConfirmed && ws.data.teamName) {
+							repushHandshake?.(ws.data.teamName, ws.data.subId);
+						}
+						ws.send(payload);
+					}
+
+					console.log(
+						`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
+					);
+				}
 
 				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL
 				// participant's own thread. Never for a console sender (opts.consoleSender). The

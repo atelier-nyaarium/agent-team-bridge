@@ -237,14 +237,25 @@ export async function routerGet(
 
 /** Rebuilt on every reconnect. The gateway records nothing until the handshake confirms, so a
  * channel-less session never becomes a durable card. Exported for tests. */
-export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string | boolean> {
-	const registerMsg: Record<string, string | boolean> = {
+/** The delivery contract this plugin speaks. Bumped only when the acknowledgement's meaning changes,
+ * never for an ordinary release. */
+export const DELIVERY_PROTOCOL = 1;
+
+export function buildRegisterMsg(
+	subId: string,
+	mode: ConnectionMode = "channel",
+): Record<string, string | boolean | number> {
+	const registerMsg: Record<string, string | boolean | number> = {
 		type: "register",
 		team: PROJECT_NAME,
 		mode,
 		subId,
 		conversationId: CONVERSATION_ID,
 		version: packageJson.version,
+		// Tells the gateway this plugin acknowledges each channel_push, which is what lets it hold a
+		// message for a session that was not ready instead of losing it. A gateway that has never heard
+		// of this keeps its old behaviour, and so does an older plugin that never sends it.
+		deliveryProtocol: DELIVERY_PROTOCOL,
 	};
 	if (process.env.PROJECT_HOST_PATH) {
 		registerMsg.projectPath = process.env.PROJECT_HOST_PATH;
@@ -323,9 +334,19 @@ export function connectToRouter(): void {
 		}
 
 		if (msg.type === "channel_push" && isChannel && channelServer) {
-			emitChannelNotification(channelServer, msg as unknown as ChannelPushPayload).catch((err: Error) => {
-				console.error(`[channel] notification error: ${err.message}`);
-			});
+			const deliveryId = typeof msg.delivery_id === "string" ? msg.delivery_id : undefined;
+			emitChannelNotification(channelServer, msg as unknown as ChannelPushPayload)
+				.then(() => {
+					// Only once the notification is actually out. The gateway holds this message until it
+					// hears this, so acknowledging on arrival rather than on emission would give away the
+					// one guarantee the acknowledgement exists to carry.
+					if (deliveryId)
+						routerWs?.send(JSON.stringify({ type: "channel_delivery_ack", delivery_id: deliveryId }));
+				})
+				.catch((err: Error) => {
+					// Deliberately no acknowledgement: the gateway keeps it and offers it again.
+					console.error(`[channel] notification error: ${err.message}`);
+				});
 		}
 
 		if (msg.type === "response_push" && isChannel && channelServer) {

@@ -41,6 +41,7 @@ export function createWebSocketHandlers({
 	config,
 	onTeamConnect,
 	onTeamDisconnect,
+	onDeliveryAck,
 	onVirtualPeerEvicted,
 	onCatalogChange,
 	onDaemonCapabilities,
@@ -288,6 +289,7 @@ export function createWebSocketHandlers({
 			ws.data.conversationId = conversationId;
 			ws.data.mode = mode;
 			ws.data.version = reg.data.version;
+			ws.data.deliveryProtocol = reg.data.deliveryProtocol;
 			// Stashed for the handshake confirm to establish the record; no store write at register.
 			ws.data.claudeSessionId = reg.data.claudeSessionId;
 			ws.data.cwdName = reg.data.cwdName;
@@ -369,6 +371,13 @@ export function createWebSocketHandlers({
 			} else {
 				wakeCoordinator.ackReceived(msg.team, REGISTER_WINDOW_MS);
 			}
+		}
+
+		// The receiver confirming it emitted a held message, which is the only thing that retires one.
+		// Scoped to the socket's OWN team: a delivery id is not a secret, and nothing else should be
+		// able to retire another session's mail by naming it.
+		if (msg.type === "channel_delivery_ack" && typeof msg.delivery_id === "string" && ws.data.teamName) {
+			onDeliveryAck?.(ws.data.teamName, msg.delivery_id);
 		}
 
 		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the

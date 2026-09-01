@@ -14,6 +14,7 @@ import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import { ownerKeyId } from "../shared/owner-id.js";
+import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
@@ -33,6 +34,7 @@ import {
 	federationOf,
 	type RouterHandlers,
 } from "./boot.js";
+import { ChannelDeliveryCoordinator } from "./channelDelivery.js";
 import { CodexAgentService } from "./codexAgentService.js";
 import { CodexRelay } from "./codexRelay.js";
 import { CodexRoute } from "./codexRoute.js";
@@ -212,6 +214,9 @@ export async function startGateway(): Promise<void> {
 	// file's usual periodic tick, so it holds its own DurableStore instead of sharing a tick-driven
 	// snapshot.
 	const durableOpStore = openDurable(DATA_DIR, "op-idempotency", (d) => new DurableOpStore(d));
+	// Messages accepted for a session that could not take them. Persisted on every transition for the
+	// same reason as the op store: the sender has already been told its message landed.
+	const pendingDeliveries = openDurable(DATA_DIR, "pending-deliveries", (d) => new PendingDeliveryStore(d));
 	// The same mechanism for the board's ABSOLUTE writes, in its own file: a shared one would let a
 	// coincidental opId collision replay a console result as a board reply.
 	const boardReplays = openDurable(DATA_DIR, "board-idempotency", (d) =>
@@ -956,6 +961,14 @@ export async function startGateway(): Promise<void> {
 		}
 	}
 
+	// Built here rather than inside the handlers: both the send path and the register hook drive it,
+	// so it has to outlive either one's construction.
+	const channelDeliveries = new ChannelDeliveryCoordinator({
+		store: pendingDeliveries,
+		registry,
+		repushHandshake: (team, subId) => wsHandlers.repushHandshake(team, subId),
+	});
+
 	const wsHandlers = createWebSocketHandlers({
 		registry,
 		conversationRegistry,
@@ -973,6 +986,15 @@ export async function startGateway(): Promise<void> {
 		// connection (a `force` push, not a diffed one).
 		onTeamConnect: (team) => {
 			if (team === "host") pushPresenceWatch(true);
+			// The session arriving is what clears its backlog. Anything accepted while it was away goes
+			// out now, in the order it was accepted.
+			const handed = channelDeliveries.drain(team);
+			if (handed > 0) console.log(`[delivery] handed ${handed} held message(s) to ${team}`);
+		},
+		onDeliveryAck: (team, deliveryId) => {
+			if (channelDeliveries.acknowledge(deliveryId)) {
+				console.log(`[delivery] ${team} confirmed ${deliveryId.slice(0, 8)}`);
+			}
 		},
 		onTeamDisconnect: (team) => {
 			if (team === "host") {
@@ -1048,6 +1070,7 @@ export async function startGateway(): Promise<void> {
 			resolveHandshake: wsHandlers.resolveHandshake,
 			findPendingHandshake: wsHandlers.findPendingHandshakeId,
 			repushHandshake: wsHandlers.repushHandshake,
+			deliveries: channelDeliveries,
 			// This Gateway's own Domain owner id, for the mirror-tap's console-bound entries.
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: f ? () => (f.allowlist.ownerSignPub ? ownerKeyId(f.allowlist.ownerSignPub) : null) : null,

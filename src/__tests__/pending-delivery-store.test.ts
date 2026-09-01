@@ -124,10 +124,11 @@ describe("PendingDeliveryStore", () => {
 		// delivery time, would not survive the restart this store exists for.
 		const d = fakeDurable();
 		const first = new PendingDeliveryStore(d.store);
-		first.enqueue({ ...delivery("d1"), awareness: "board changed", messageId: "bucket-1" });
+		const riding = { from: "task-board", body: "an entry changed", act: "no_act" as const };
+		first.enqueue({ ...delivery("d1"), awareness: riding, messageId: "bucket-1" });
 		const restored = new PendingDeliveryStore(d.store).listForTeam("proj.alpha")[0];
 		expect(restored.channelJobId).toBe("job-proj.alpha");
-		expect(restored.awareness).toBe("board changed");
+		expect(restored.awareness).toEqual(riding);
 		expect(restored.messageId).toBe("bucket-1");
 	});
 });
