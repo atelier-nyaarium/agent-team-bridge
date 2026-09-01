@@ -38,7 +38,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../SettingsSections.kt` / `SettingsSystem.kt` / `SettingsVoice.kt` - settings leaf screens
 - `android/.../MainTabsScreen.kt` / `SessionsHeaders.kt` / `SessionCard.kt` / `SessionCardPreview.kt` / `SessionsEmptyState.kt` - sessions tab shell, cards, rules, and empty-state machine
 - `android/.../board/` - board reducers and durable `BoardManager`
-- `android/.../federation/` - cross-Gateway routing, identity, allowlist, sealing, replay, and presence
+- `android/.../Federation.kt` / `FederationManager.kt` / `CrossDomainLink.kt` / `ConsoleClientCrossDomain.kt` / `CrossDomainPresenceUi.kt` - cross-Gateway routing, identity, allowlist, sealing, replay, and presence
 - `src/mcp/` - Claude Code tools
 - `src/mcp/bridge/` / `channel/` / `references/` / `board/` / `designer/` / `connector/` - bridge, channel, reference, board, designer, and connector tools
 - `src/mcp/devcontainer/` - host daemon plumbing and per-session tools
@@ -193,6 +193,9 @@ CI enforces the `SYNC-HASH` and the copy. Always use `sync-leaf.ts`: format, res
 ### Code style
 
 Biome: tabs, double quotes, semicolons, 120-character width.
+
+**Do not sanitize invisible characters in display strings.** `oneLine` collapses ASCII whitespace,
+which is the whole of it. No category strip, no bidi rule, no Unicode whitespace set.
 
 ### Testing
 

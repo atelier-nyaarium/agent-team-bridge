@@ -43,7 +43,7 @@ Stored by `gateway/boardStore.ts`. Entries use parent pointers and fractional ra
 
 ## Attachments
 
-Attachment bytes belong to entries in `shared/board-attachment-store.ts`, separate from the evicting
+Attachment bytes belong to entries in `src/shared/board-attachment-store.ts`, separate from the evicting
 blob cache.
 
 - **`board_set_attachments` is the sole field committer.** `upsert` ignores incoming `attachments`.
