@@ -49,24 +49,23 @@ import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.oneLine
 import kotlin.math.roundToInt
 
-/** One indent level, shared by the row padding and the drag's pixels-to-levels conversion so a row
- * lands where its indent says it will. */
+/** The row's own left margin, before any indent. */
+private val ROW_INSET = 14.dp
+
+/** One indent level, shared by the row and the insertion line so a drop lands where the line said. */
 private val INDENT = 16.dp
 
 /**
- * How far sideways one level costs. Deliberately NOT [INDENT].
- *
- * Tying the gesture to the visual indent meant half an indent, about 8dp, flipped a level, so an
- * ordinary vertical drag re-parented on thumb drift alone. A level should take a movement the owner
- * meant to make.
+ * How far sideways one level costs. Deliberately NOT [INDENT]: at one indent per level, half an
+ * indent of thumb drift re-parented a row during an ordinary vertical drag.
  */
 private val DEPTH_STEP = 56.dp
 
 /**
  * The in-thread board strip, pinned under the top bar: this session's tree.
  *
- * Read-only for the ops that need the backlog beside them (add, assign), interactive for the ones
- * that do not. Tap a mark to set state, tap a label to open the entry, long press to move it.
+ * Tap a row to open its editor, long press to move it and its subtree. Adding and assigning need the
+ * backlog beside them, so they stay on the board tab.
  */
 @Composable
 fun BoardStrip(
@@ -91,7 +90,6 @@ fun BoardStrip(
 	val latestHeight by rememberUpdatedState(heightDp)
 
 	val density = LocalDensity.current
-	val indentPx = with(density) { INDENT.toPx() }
 	val depthStepPx = with(density) { DEPTH_STEP.toPx() }
 	val ordered = remember(spans.size, spans.values.toList()) { spans.values.sortedBy { it.top } }
 	val drop = draggingId?.let {
@@ -223,17 +221,21 @@ private fun StripRow(
 	// The drop is recomputed every frame, so the gesture must read the latest rather than the one
 	// captured when its pointerInput was installed.
 	val latestDrop by rememberUpdatedState(drop)
-	Column {
+	// The span is read HERE, on the wrapper, not on the row inside it. `positionInParent` answers
+	// relative to the nearest enclosing layout, so reading it on the row gave every row a top of 0 and
+	// left the drop target resolving against a pile of identical spans.
+	Column(
+		Modifier.onGloballyPositioned {
+			// Only while nothing is in flight. Every row carries a drag offset once one starts, so
+			// recording then would feed each row's own displacement back in as its resting position.
+			if (!anyDragging) onSpan(RowSpan(entry.id, it.positionInParent().y.roundToInt(), it.size.height))
+		},
+	) {
 	Row(
 		Modifier
 			.fillMaxWidth()
 			// Marks what is being carried. No elevation: it has not left the list.
 			.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
-			// Only while nothing is in flight. Every row carries a drag offset once one starts, so
-			// recording then would feed each row's own displacement back in as its resting position.
-			.onGloballyPositioned {
-				if (!anyDragging) onSpan(RowSpan(entry.id, it.positionInParent().y.roundToInt(), it.size.height))
-			}
 			.pointerInput(entry.id) {
 				detectDragGesturesAfterLongPress(
 					onDragStart = { onDragStart() },
@@ -245,7 +247,7 @@ private fun StripRow(
 			// The whole row, not the label alone: with no second target on the row there is no reason to
 			// make the owner hit the text.
 			.clickable(onClick = onOpen)
-			.padding(start = (14 + depth * 16).dp, end = 14.dp, top = 3.dp, bottom = 3.dp),
+			.padding(start = ROW_INSET + INDENT * depth, end = ROW_INSET, top = 3.dp, bottom = 3.dp),
 		horizontalArrangement = Arrangement.spacedBy(9.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
@@ -266,7 +268,7 @@ private fun StripRow(
 	insertionDepth?.let { d ->
 		Box(
 			Modifier
-				.padding(start = (14 + d * 16).dp, end = 14.dp)
+				.padding(start = ROW_INSET + INDENT * d, end = ROW_INSET)
 				.fillMaxWidth()
 				.height(2.dp)
 				.clip(RoundedCornerShape(1.dp))
@@ -275,6 +277,3 @@ private fun StripRow(
 	}
 	}
 }
-
-private fun stateLabel(state: String): String =
-	if (state == "in_progress") "In progress" else state.replaceFirstChar { it.uppercase() }
