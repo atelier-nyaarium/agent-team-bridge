@@ -110,6 +110,10 @@ export interface WsData {
 	// DeviceMailbox instead of writing a wire. Liveness comes from the console<->Router
 	// connection, so it is excluded from the ping/pong heartbeat.
 	virtual?: boolean;
+	// Which delivery contract this peer's plugin speaks, as reported at register. 1 means it
+	// acknowledges each channel_push, which is what lets a message be held until it truly lands.
+	// Absent for a plugin predating the ack, whose messages are therefore retired on the write.
+	deliveryProtocol?: number;
 }
 
 ////////////////////////////////
