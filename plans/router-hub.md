@@ -3,6 +3,15 @@
 Total restructure: the Router becomes the hub, gateways become symmetric leaves. Supersedes the
 route-gateway model. `plans/vault.md` is parked until this lands; the board holds plugin ideas.
 
+## Status
+
+Questionaire complete. Rough plan written, not yet refined and not started. Next step is the
+nyaaskills `plan-refinement` cycle over this file, then Phase 1, which gates every later phase.
+
+The measurements behind this plan live in board entry `bd_36caa212`, not here: the 120s relay
+timeout against the phone's 35s read timeout, the missing single-flight on `discoverFull`, and the
+37-of-120 commit evidence. This file states the decisions; that entry states the evidence.
+
 > "Currently it's all centralized and revolved around an arbitrary Gateway. True Sync is impossible
 > and shimmed here and there. TBH I didn't come up with it, it just sort of happened with Opus."
 
