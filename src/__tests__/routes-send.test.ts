@@ -340,6 +340,44 @@ describe("routes", () => {
 			]);
 		});
 
+		it("names the MACHINE when its daemon never took the wake, rather than blaming the session", async () => {
+			// The host link was down, so nothing was ever launched. Reporting the session as not connected
+			// sends the owner hunting for a handshake that was never coming.
+			const tryWakeTeam = () => Promise.resolve({ ok: false, errorKind: "disconnected" as const });
+			const ctx = makeCtx({ tryWakeTeam });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.sleepy",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(404);
+			const body = (await res.json()) as { error: string };
+			expect(body.error).toContain("is not reachable");
+			expect(body.error).not.toContain("is not connected");
+		});
+
+		it("says a timed-out wake is still coming, since the launch may yet land", async () => {
+			// Ambiguous by WakeResult's own contract: the waiter gave up, the launch did not necessarily.
+			const tryWakeTeam = () => Promise.resolve({ ok: false, errorKind: "timeout" as const });
+			const ctx = makeCtx({ tryWakeTeam });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.sleepy",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(404);
+			const body = (await res.json()) as { error: string };
+			expect(body.error).toContain("still starting");
+		});
+
 		it("a not-yet-existing composite with a displayLabel mints and switches to the resolved address for everything downstream", async () => {
 			vi.useFakeTimers();
 			try {

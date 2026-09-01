@@ -929,8 +929,24 @@ export function createRoutes({
 			const mintedFrom =
 				inboundSessionId ?? (fromConversationId ? `${fromConversationId}:${localName}` : undefined);
 			const woken = await tryWakeTeam(localName, { displayLabel, mintedFrom });
-			if (!woken.ok && woken.error) {
-				return jsonResponse({ error: woken.error }, 404);
+			if (!woken.ok) {
+				// Say WHICH failure this was. All three used to fall through to the "is not connected"
+				// below, which names the SESSION - so a machine whose daemon was never up, and a launch
+				// still on its way, both read as a session that answered and refused.
+				if (woken.error) return jsonResponse({ error: woken.error }, 404);
+				if (woken.errorKind === "disconnected") {
+					return jsonResponse(
+						{
+							error: `machine "${target.address.gateway}" is not reachable, so "${qualifiedTo}" was never woken`,
+						},
+						404,
+					);
+				}
+				if (woken.errorKind === "timeout") {
+					// Ambiguous by contract: the waiter gave up and the launch may still be coming. Calling
+					// that a failure would be a guess.
+					return jsonResponse({ error: `"${qualifiedTo}" is still starting; try again shortly` }, 404);
+				}
 			}
 			if (woken.ok) {
 				// Minting (no existing record, a displayLabel was set) lands on a fresh id, never the

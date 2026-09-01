@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { decideWakeCreate, WakeCoordinator } from "../gateway/wake.js";
 
 describe("WakeCoordinator", () => {
@@ -75,6 +75,29 @@ describe("WakeCoordinator", () => {
 		coord.ackReceived("alpha", 10);
 		await expect(a1).resolves.toEqual({ ok: false, errorKind: "timeout" });
 		await expect(a2).resolves.toEqual({ ok: false, errorKind: "timeout" });
+	});
+
+	it("ackReceived can only bring the deadline in, never push it out", async () => {
+		// Asserted on TIMING, not on the value: both the clamped and the unclamped path resolve to the
+		// same timeout result, so only the clock tells them apart.
+		vi.useFakeTimers();
+		try {
+			const coord = new WakeCoordinator();
+			// A window wider than what the wait has left. Re-arming to it hands the team another 10s past
+			// a deadline 5s away, which is the opposite of this method's purpose.
+			const p = coord.waitFor("alpha", 5_000);
+			let settled = false;
+			void p.then(() => {
+				settled = true;
+			});
+			coord.ackReceived("alpha", 10_000);
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(settled).toBe(true);
+			await expect(p).resolves.toEqual({ ok: false, errorKind: "timeout" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
