@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.board
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +14,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandMore
@@ -29,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -39,38 +37,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.oneLine
 import kotlin.math.roundToInt
 
-/** The row's own left margin, before any indent. */
-private val ROW_INSET = 14.dp
-
-/** One indent level, shared by the row and the insertion line so a drop lands where the line said. */
-private val INDENT = 16.dp
-
-/**
- * How far sideways one level costs. Deliberately NOT [INDENT]: at one indent per level, half an
- * indent of thumb drift re-parented a row during an ordinary vertical drag.
- */
-private val DEPTH_STEP = 56.dp
+/** What the strip puts between its edge and a row's start, which the landing line matches. */
+private val STRIP_INSET = 14.dp
 
 /**
  * The in-thread board strip, pinned under the top bar: this session's tree.
  *
- * Tap a row to open its editor, long press to move it and its subtree. Adding and assigning need the
- * backlog beside them, so they stay on the board tab.
+ * Tap a row to open its editor, long press to move it and its subtree. Capturing a new entry needs
+ * the backlog beside it and stays on the Backlog tab.
  */
 @Composable
 fun BoardStrip(
 	group: BoardGroup?,
 	liveLine: BoardLiveLine?,
+	revision: Long = 0L,
 	heightDp: Int = AppStateStore.BOARD_STRIP_DEFAULT_DP,
 	onHeightDp: (Int) -> Unit = {},
 	onOpenEntry: (BoardRow) -> Unit = {},
@@ -79,28 +65,18 @@ fun BoardStrip(
 	if (group == null || group.rows.isEmpty()) return
 	var expanded by rememberSaveable { mutableStateOf(true) }
 
-	var draggingId by remember { mutableStateOf<String?>(null) }
-	var dragY by remember { mutableFloatStateOf(0f) }
-	var dragX by remember { mutableFloatStateOf(0f) }
-	val spans = remember { mutableStateMapOf<String, RowSpan>() }
 	// The gesture reads the stored height once at drag start, so a slow resize is not fighting its own
 	// writes frame by frame.
 	var resizeBase by remember { mutableIntStateOf(heightDp) }
 	var resizeAcc by remember { mutableFloatStateOf(0f) }
 	val latestHeight by rememberUpdatedState(heightDp)
 
-	val density = LocalDensity.current
-	val depthStepPx = with(density) { DEPTH_STEP.toPx() }
-	val ordered = remember(spans.size, spans.values.toList()) { spans.values.sortedBy { it.top } }
-	val drop = draggingId?.let {
-		boardDropTarget(it, dragY.roundToInt(), ordered, group.rows, (dragX / depthStepPx).roundToInt())
-	}
-	// The dragged row and everything under it travel as one block.
-	val carried = draggingId?.let { boardSubtreeIds(it, group.rows) } ?: emptySet()
-	// Only the grabber writes the stored height. A drag expands the strip so a row can reach the far
-	// end of a long board, and it settles back untouched.
+	val listState = rememberLazyListState()
+	val drag = rememberBoardDragController(listState, revision, group.rows, onMove)
+	// Comfort, not correctness: auto-scroll is what actually reaches a long board, and this just puts
+	// more of it under the finger while a drag is running.
 	val bodyHeight by animateDpAsState(
-		if (draggingId != null) AppStateStore.BOARD_STRIP_MAX_DP.dp else heightDp.dp,
+		if (drag.ui.dragging) AppStateStore.BOARD_STRIP_MAX_DP.dp else heightDp.dp,
 		label = "stripHeight",
 	)
 
@@ -139,37 +115,22 @@ fun BoardStrip(
 				}
 			}
 			if (expanded) {
-				Column(
-					Modifier
+				Box {
+					LazyColumn(
+						state = listState,
 						// A cap, not a fixed height: a short board should not reserve empty space above the
 						// transcript just because the grabber was dragged low once.
-						.heightIn(max = bodyHeight)
-						.verticalScroll(rememberScrollState(), enabled = draggingId == null)
-						.padding(bottom = 8.dp),
-				) {
-					// Nothing moves during a drag, neither the carried rows nor the ones it passes. Moving the
-					// row under the finger made it overlap its neighbours, since the list does not open a gap
-					// for it; the insertion line is the feedback instead, and it can show depth too.
-					for (row in group.rows) {
-						val inBlock = row.entry.id in carried
-						StripRow(
-							row = row,
-							dragging = inBlock,
-							anyDragging = draggingId != null,
-							depth = row.depth,
-							insertionDepth = if (drop != null && drop.afterId == row.entry.id) drop.depth else null,
-							onSpan = { spans[row.entry.id] = it },
-							onOpen = { onOpenEntry(row) },
-							onDragStart = {
-								draggingId = row.entry.id
-								dragY = (spans[row.entry.id]?.center ?: 0).toFloat()
-								dragX = 0f
-							},
-							onDrag = { dx, dy -> dragX += dx; dragY += dy },
-							onDragEnd = { landed -> draggingId = null; landed?.let { onMove(row, it) } },
-							drop = drop,
-						)
+						modifier = Modifier
+							.heightIn(max = bodyHeight)
+							.padding(bottom = 8.dp)
+							.boardDragInput(drag),
+						// The finger is placing a row, not scrolling. The list still moves, but under the
+						// drag's own control.
+						userScrollEnabled = !drag.ui.dragging,
+					) {
+						boardRowItems(group.rows, drag, BoardRowPresentation.Strip, onOpen = onOpenEntry)
 					}
+					BoardDropOverlay(drag, STRIP_INSET)
 				}
 				// Grabber. Sets the resting height, and is the only thing that stores one.
 				Box(
@@ -200,81 +161,5 @@ fun BoardStrip(
 				}
 			}
 		}
-	}
-}
-
-@Composable
-private fun StripRow(
-	row: BoardRow,
-	dragging: Boolean,
-	anyDragging: Boolean,
-	depth: Int,
-	/** Draw the landing indicator under this row, indented to that depth. Null for no indicator. */
-	insertionDepth: Int?,
-	onSpan: (RowSpan) -> Unit,
-	onOpen: () -> Unit,
-	onDragStart: () -> Unit,
-	onDrag: (Float, Float) -> Unit,
-	onDragEnd: (BoardDrop?) -> Unit,
-	drop: BoardDrop?,
-) {
-	val entry = row.entry
-	// The drop is recomputed every frame, so the gesture must read the latest rather than the one
-	// captured when its pointerInput was installed.
-	val latestDrop by rememberUpdatedState(drop)
-	// The span is read HERE, on the wrapper, not on the row inside it. `positionInParent` answers
-	// relative to the nearest enclosing layout, so reading it on the row gave every row a top of 0 and
-	// left the drop target resolving against a pile of identical spans.
-	Column(
-		Modifier.onGloballyPositioned {
-			// Only while nothing is in flight. Every row carries a drag offset once one starts, so
-			// recording then would feed each row's own displacement back in as its resting position.
-			if (!anyDragging) onSpan(RowSpan(entry.id, it.positionInParent().y.roundToInt(), it.size.height))
-		},
-	) {
-	Row(
-		Modifier
-			.fillMaxWidth()
-			// Marks what is being carried. No elevation: it has not left the list.
-			.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
-			.pointerInput(entry.id) {
-				detectDragGesturesAfterLongPress(
-					onDragStart = { onDragStart() },
-					onDrag = { change, amount -> change.consume(); onDrag(amount.x, amount.y) },
-					onDragEnd = { onDragEnd(latestDrop) },
-					onDragCancel = { onDragEnd(null) },
-				)
-			}
-			// The whole row, not the label alone: with no second target on the row there is no reason to
-			// make the owner hit the text.
-			.clickable(onClick = onOpen)
-			.padding(start = ROW_INSET + INDENT * depth, end = ROW_INSET, top = 3.dp, bottom = 3.dp),
-		horizontalArrangement = Arrangement.spacedBy(9.dp),
-		verticalAlignment = Alignment.CenterVertically,
-	) {
-		StateMark(entry.state)
-		Text(
-			// Collapsed because this row cannot show a second line. The board tab renders the same title
-			// at maxLines = 2 and leaves it alone, since there it has somewhere to go.
-			oneLine(entry.title).orEmpty(),
-			style = MaterialTheme.typography.bodySmall,
-			textDecoration = if (entry.state == "cancelled") TextDecoration.LineThrough else null,
-			maxLines = 1,
-			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f),
-		)
-	}
-	// Where it lands, drawn at the target depth. This is the only feedback for the sideways axis, so
-	// it is indented rather than a plain full-width rule.
-	insertionDepth?.let { d ->
-		Box(
-			Modifier
-				.padding(start = ROW_INSET + INDENT * d, end = ROW_INSET)
-				.fillMaxWidth()
-				.height(2.dp)
-				.clip(RoundedCornerShape(1.dp))
-				.background(MaterialTheme.colorScheme.primary),
-		)
-	}
 	}
 }

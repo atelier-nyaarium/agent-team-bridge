@@ -106,6 +106,8 @@ fun ThreadScreen(
 	// Null hides the strip entirely (plugin off, or no board entries for this session).
 	boardStrip: BoardGroup? = null,
 	boardLiveLine: BoardLiveLine? = null,
+	/** The board's own revision, which abandons a drag when a write lands mid-gesture. */
+	boardRevision: Long = 0L,
 	boardStripHeight: Int = AppStateStore.BOARD_STRIP_DEFAULT_DP,
 	onBoardStripHeight: (Int) -> Unit = {},
 	onOpenBoardEntry: (BoardRow) -> Unit = {},
@@ -395,6 +397,7 @@ fun ThreadScreen(
 				com.atelier_nyaarium.switchboard.board.BoardStrip(
 					group = boardStrip,
 					liveLine = boardLiveLine,
+					revision = boardRevision,
 					heightDp = boardStripHeight,
 					onHeightDp = onBoardStripHeight,
 					onOpenEntry = onOpenBoardEntry,

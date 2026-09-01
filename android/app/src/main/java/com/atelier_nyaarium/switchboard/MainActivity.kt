@@ -379,6 +379,7 @@ fun App(
 				openNonce = openNonce,
 				boardStrip = boardStripFor,
 				boardLiveLine = boardLiveLineFor,
+				boardRevision = boardRevision,
 				boardStripHeight = boardStripHeight,
 				onBoardStripHeight = { boardStripHeight = it; repo.store.boardStripHeight = it },
 				onOpenBoardEntry = { boardModal = it.gatewayId to it.entry.id },
@@ -533,6 +534,9 @@ fun App(
 					BoardScreen(
 						repo = repo,
 						onOpenEntry = { gw, id -> boardModal = gw to id },
+						onMoveEntry = { row, drop ->
+							repo.boardOps.boardSetParent(row.gatewayId, row.entry.id, drop.parent, drop.rank)
+						},
 						onSaved = goToSessions,
 						modifier = modifier,
 					)

@@ -448,7 +448,15 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			BoardEntry(id = "4".repeat(32), title = "Nested under the root", state = "open", rank = "a", parent = "3".repeat(32)),
 			BoardEntry(id = "5".repeat(32), title = "Nested deeper", state = "paused", rank = "a", parent = "4".repeat(32)),
 			BoardEntry(id = "6".repeat(32), title = "A second unclaimed root", state = "open", rank = "c"),
-		)
+		) + (1..14).map {
+			// Enough to overflow a screen, which is the only way the drag's auto-scroll is reachable at all.
+			// Letter suffixes, not numbers: a rank may not end in "0", so "d10" is not a rank at all. The
+			// id is padded to a fixed width for the same reason - "71" and "710" pad to the same string,
+			// and the board union then drops one of them.
+			val suffix = "%02d".format(it)
+			val rank = "d" + ('a' + (it - 1))
+			BoardEntry(id = "7$suffix".padEnd(32, 'f'), title = "Filler $it, so the backlog scrolls", state = "open", rank = rank)
+		}
 		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch + backlog)))
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
 	}

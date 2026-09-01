@@ -65,9 +65,42 @@ class BoardDragMathTest {
 	}
 
 	@Test
-	fun aRowCannotBeDroppedInsideItsOwnSubtree() {
-		// Dragging b onto its own child resolves to nothing rather than making b its own ancestor.
-		assertNull(boardDropTarget("b", pointerY = 260, visible = visible, rows = rows, depthDelta = 1))
+	fun noDropEverNamesAParentInsideTheDraggedSubtree() {
+		// The carried rows are skipped rather than blocking, so the pointer passing over b's own child
+		// still resolves - just never to a parent that would make b its own ancestor.
+		val carried = boardSubtreeIds("b", rows)
+		for (y in -100..500 step 20) {
+			for (delta in -2..2) {
+				val drop = boardDropTarget("b", pointerY = y, visible = visible, rows = rows, depthDelta = delta)
+				assertTrue("y=$y delta=$delta", drop?.parent !in carried)
+			}
+		}
+	}
+
+	@Test
+	fun aPointerInAGapBetweenRowsTakesTheNearestSlotNotTheLastRow() {
+		// A spaced list leaves the pointer inside no row at all. Resolving by containment fell through
+		// to the last visible row, so a drop near the top landed at the bottom.
+		val spaced = listOf(RowSpan("a", 0, 60), RowSpan("b", 100, 60), RowSpan("b1", 200, 60), RowSpan("c", 300, 60))
+		// y=80 sits in the gap between a and b, above b's centre, so it lands between them.
+		val drop = boardDropTarget("c", pointerY = 80, visible = spaced, rows = rows)!!
+		assertTrue(drop.rank > "a")
+		assertTrue(drop.rank < "m")
+	}
+
+	@Test
+	fun theInsertionLineFollowsWhatIsVisible() {
+		// Scrolled so only the last two rows are on screen. The drop's logical predecessor is offscreen,
+		// but the line still has somewhere to go: the top of the first row that is rendered.
+		val onScreen = listOf(RowSpan("b1", 0, 100), RowSpan("c", 100, 100))
+		assertEquals(0, boardDropBoundary(-20, onScreen, setOf("a")))
+		// Below everything on screen, the line sits at the bottom edge of the last one.
+		assertEquals(200, boardDropBoundary(9999, onScreen, setOf("a")))
+		// A carried row is never a landing edge: with b1 carried, a pointer over it resolves against c
+		// instead of going dead.
+		assertEquals(100, boardDropBoundary(50, onScreen, setOf("b1")))
+		assertEquals(200, boardDropBoundary(180, onScreen, setOf("b1")))
+		assertNull(boardDropBoundary(50, onScreen, setOf("b1", "c")))
 	}
 
 	@Test
@@ -88,41 +121,15 @@ class BoardDragMathTest {
 	}
 
 	@Test
-	fun rowsBetweenTheOriginAndThePointerShiftByTheDraggedRowsOwnHeight() {
-		// Dragging "c" (span 300..400, centre 350) upward to y=120 opens a gap: b and b1 move down.
-		val shifts = boardRowShift("c", pointerY = 120, visible = visible)
-		assertEquals(100, shifts["b"])
-		assertEquals(100, shifts["b1"])
-		assertNull(shifts["a"])
-		assertNull(shifts["c"])
-
-		// Dragging "a" downward moves the passed rows up instead.
-		val down = boardRowShift("a", pointerY = 260, visible = visible)
-		assertEquals(-100, down["b"])
-		assertEquals(-100, down["b1"])
-	}
-
-	@Test
 	fun aDraggedRowCarriesItsChildren() {
 		assertEquals(setOf("b", "b1"), boardSubtreeIds("b", rows))
 		assertEquals(setOf("a"), boardSubtreeIds("a", rows))
 	}
 
 	@Test
-	fun theGapOpenedIsTheWholeSubtreesHeight() {
-		// Dragging b (100px) with its child b1 (100px) upward must open 200px, or the rows it passes
-		// slide back under the block being carried.
-		val shifts = boardRowShift("b", pointerY = 20, visible = visible, moving = setOf("b", "b1"))
-		assertEquals(200, shifts["a"])
-		// Nothing in the block shifts against itself.
-		assertNull(shifts["b"])
-		assertNull(shifts["b1"])
-	}
-
-	@Test
 	fun anUnknownOrOffscreenDragResolvesToNothingRatherThanGuessing() {
 		assertNull(boardDropTarget("ghost", pointerY = 100, visible = visible, rows = rows))
 		assertNull(boardDropTarget("a", pointerY = 100, visible = emptyList(), rows = rows))
-		assertTrue(boardRowShift("ghost", pointerY = 100, visible = visible).isEmpty())
+		assertNull(boardDropBoundary(100, emptyList(), emptySet()))
 	}
 }

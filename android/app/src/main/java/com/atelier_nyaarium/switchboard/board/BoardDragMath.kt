@@ -8,17 +8,43 @@ data class RowSpan(val id: String, val top: Int, val height: Int) {
 }
 
 /** Where a drag would land: the new parent (null = top level), the rank to mint between the resolved
- * siblings, and the depth it lands at, which the caller draws its insertion line at. Null when the
- * drop is a no-op or the target cannot be resolved. */
+ * siblings, and the depth it lands at. No pixels: where the line is drawn is [boardDropBoundary]. */
 data class BoardDrop(
 	val id: String,
 	val parent: String?,
 	val rank: String,
 	val depth: Int,
-	/** The visible row the insertion sits directly below, or null for the very top. The caller draws
-	 * its indicator from this rather than re-deriving the slot from pointer coordinates. */
-	val afterId: String?,
 )
+
+/**
+ * The visible row an insertion at [pointerY] sits above, or null to sit below the last one.
+ *
+ * Sole owner of the pointer-to-slot rule, so a drop and the line drawn for it cannot disagree.
+ *
+ * Chosen by CENTRE rather than by containment. A list with gaps between its items - the board tab
+ * spaces them - leaves a pointer in a gap inside no row at all, and the containment form then fell
+ * through to whichever row happened to be last.
+ */
+private fun slotAbove(pointerY: Int, eligible: List<RowSpan>): RowSpan? =
+	eligible.firstOrNull { pointerY < it.center }
+
+/** Rows a drop may sit against: everything on screen that is not being carried. */
+private fun eligibleSpans(visible: List<RowSpan>, moving: Set<String>): List<RowSpan> =
+	visible.filter { it.id !in moving }
+
+/**
+ * Where the insertion line goes, in the same coordinates as the spans it was given.
+ *
+ * Answers from what is VISIBLE, never from the dragged row's logical neighbour, which can be
+ * scrolled off. A drop resolved against an offscreen predecessor still has a line, drawn at the edge
+ * of the last row that is actually rendered.
+ */
+fun boardDropBoundary(pointerY: Int, visible: List<RowSpan>, moving: Set<String>): Int? {
+	val eligible = eligibleSpans(visible, moving)
+	if (eligible.isEmpty()) return null
+	val above = slotAbove(pointerY, eligible)
+	return above?.top ?: eligible.last().let { it.top + it.height }
+}
 
 /**
  * The drop target for a row dragged to `pointerY`, `depthDelta` levels sideways.
@@ -47,23 +73,24 @@ fun boardDropTarget(
 	val candidates = rows.filter { it.entry.id !in moving && it.entry.trashedAt == null }
 	if (candidates.isEmpty()) return null
 
-	// The row whose span contains the pointer, else the nearest edge row.
-	val over = visible.firstOrNull { pointerY >= it.top && pointerY < it.top + it.height }
-		?: if (pointerY < visible.first().top) visible.first() else visible.last()
-	if (over.id in moving) return null
-	val overIndex = candidates.indexOfFirst { it.entry.id == over.id }
-	if (overIndex < 0) return null
-	val insertAt = if (pointerY < over.center) overIndex else overIndex + 1
+	val eligible = eligibleSpans(visible, moving)
+	if (eligible.isEmpty()) return null
+	val slot = slotAbove(pointerY, eligible)
+	// The row the insertion sits above, or the last one when it sits below everything.
+	val anchor = slot ?: eligible.last()
+	val anchorIndex = candidates.indexOfFirst { it.entry.id == anchor.id }
+	if (anchorIndex < 0) return null
+	val insertAt = if (slot != null) anchorIndex else anchorIndex + 1
 
-	val above = candidates.getOrNull(insertAt - 1)
+	val rowAbove = candidates.getOrNull(insertAt - 1)
 	val below = candidates.getOrNull(insertAt)
 	// No deeper than one below the row above, and no shallower than the row below, which would
 	// otherwise be left without its parent.
-	val maxDepth = (above?.depth ?: -1) + 1
+	val maxDepth = (rowAbove?.depth ?: -1) + 1
 	val minDepth = (below?.depth ?: 0).coerceAtMost(maxDepth)
 	val depth = (dragged.depth + depthDelta).coerceIn(minDepth, maxDepth)
 
-	var ancestor = above
+	var ancestor = rowAbove
 	while (ancestor != null && ancestor.depth > depth - 1) ancestor = byId[ancestor.entry.parent]
 	val parent = if (depth == 0) null else ancestor?.entry?.id ?: return null
 
@@ -81,13 +108,7 @@ fun boardDropTarget(
 	) {
 		return null
 	}
-	return BoardDrop(
-		draggedId,
-		parent,
-		BoardRank.between(prev?.entry?.rank, next?.entry?.rank),
-		depth,
-		above?.entry?.id,
-	)
+	return BoardDrop(draggedId, parent, BoardRank.between(prev?.entry?.rank, next?.entry?.rank), depth)
 }
 
 /** Whether `candidate` sits at or below `ancestor` in the tree. Walks with a visited set so bad
@@ -100,37 +121,6 @@ private fun isDescendantOf(candidate: String, ancestor: String, byId: Map<String
 		cur = byId[cur]?.entry?.parent
 	}
 	return false
-}
-
-/**
- * How far each row shifts while a drag is in flight: rows between the dragged subtree's origin and
- * the pointer move by the whole subtree's height, so the gap that opens is the size of what is
- * actually being carried.
- *
- * `moving` is the dragged row and its descendants. They travel together and are never shifted
- * against each other, so the caller offsets them as one block.
- */
-fun boardRowShift(
-	draggedId: String,
-	pointerY: Int,
-	visible: List<RowSpan>,
-	moving: Set<String> = setOf(draggedId),
-): Map<String, Int> {
-	val dragged = visible.firstOrNull { it.id == draggedId } ?: return emptyMap()
-	val carried = visible.filter { it.id in moving }
-	val blockHeight = carried.sumOf { it.height }.takeIf { it > 0 } ?: dragged.height
-	val out = mutableMapOf<String, Int>()
-	for (row in visible) {
-		if (row.id in moving) continue
-		val movingUp = pointerY < dragged.center
-		val inRange = if (movingUp) {
-			row.center in pointerY until dragged.center
-		} else {
-			row.center in (dragged.center + 1)..pointerY
-		}
-		if (inRange) out[row.id] = if (movingUp) blockHeight else -blockHeight
-	}
-	return out
 }
 
 /** The dragged row plus everything under it, which a move carries along. */

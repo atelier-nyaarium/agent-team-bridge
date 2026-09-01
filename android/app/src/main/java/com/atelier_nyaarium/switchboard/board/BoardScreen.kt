@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard.board
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -40,7 +42,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.ChatRepository
@@ -59,6 +60,7 @@ import com.atelier_nyaarium.switchboard.ChatRepository
 fun BoardScreen(
 	repo: ChatRepository,
 	onOpenEntry: (String, String) -> Unit,
+	onMoveEntry: (BoardRow, BoardDrop) -> Unit = { _, _ -> },
 	// Where a saved entry leaves the owner. Saving is the end of a thought, and the session list is
 	// where they act on it, so the board tab is the one place they do NOT want to land.
 	onSaved: () -> Unit = {},
@@ -118,7 +120,16 @@ fun BoardScreen(
 		return
 	}
 
-	LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+	val listState = rememberLazyListState()
+	val drag = rememberBoardDragController(listState, revision, rows.unassigned.rows, onMoveEntry)
+
+	Box(modifier.fillMaxSize()) {
+	LazyColumn(
+		state = listState,
+		modifier = Modifier.fillMaxSize().padding(horizontal = LIST_INSET).boardDragInput(drag),
+		userScrollEnabled = !drag.ui.dragging,
+		verticalArrangement = Arrangement.spacedBy(10.dp),
+	) {
 		// Silence here reads as success, so each gets its own dismissable line. The two kinds are
 		// OPPOSITE outcomes and must not share wording: a refusal never landed and can simply be redone,
 		// while a drop landed and took the pictures with it for good.
@@ -209,7 +220,9 @@ fun BoardScreen(
 				)
 			}
 		}
-		boardGroupItems(this, rows.unassigned, onOpen = onOpenEntry, struggling = struggling)
+		boardRowItems(rows.unassigned.rows, drag, BoardRowPresentation.Board, struggling) {
+			onOpenEntry(it.gatewayId, it.entry.id)
+		}
 
 		if (rows.trash.isNotEmpty()) {
 			item(key = "sect:trash") {
@@ -220,87 +233,23 @@ fun BoardScreen(
 				)
 			}
 			if (trashOpen) {
-				// Never draggable: a trashed entry has no live tree position, so a drop would re-parent
-				// something the board is not drawing.
+				// A plain key, not a row key: a trashed entry has no live tree position, and the drag finds
+				// its rows by that key alone, so this is what keeps trash out of it.
 				for (row in rows.trash) {
-					item(key = row.entry.id) {
-						BoardEntryRow(row, onClick = { onOpenEntry(row.gatewayId, row.entry.id) })
+					item(key = "trash:${row.entry.id}", contentType = BoardListContentType.Chrome) {
+						BoardEntryRow(
+							row = row,
+							presentation = BoardRowPresentation.Board,
+							carried = false,
+							struggling = false,
+							onClick = { onOpenEntry(row.gatewayId, row.entry.id) },
+						)
 					}
 				}
 			}
 		}
 	}
-
-}
-
-////////////////////////////////
-//  Rows
-
-/** Emit one group's rows. Every LazyColumn key is an entry id (unique by flattenBoard's
- * construction) or a static section key. */
-@OptIn(ExperimentalMaterial3Api::class)
-private fun boardGroupItems(
-	scope: androidx.compose.foundation.lazy.LazyListScope,
-	group: BoardGroup,
-	onOpen: (String, String) -> Unit,
-	struggling: Set<String>,
-) {
-	with(scope) {
-		for (row in group.rows) {
-			item(key = row.entry.id) {
-				BoardEntryRow(
-					row,
-					onClick = { onOpen(row.gatewayId, row.entry.id) },
-					struggling = row.entry.id in struggling,
-				)
-			}
-		}
-	}
-}
-
-@Composable
-private fun BoardEntryRow(row: BoardRow, onClick: () -> Unit, struggling: Boolean = false) {
-	val entry = row.entry
-	val finished = entry.state == "done" || entry.state == "cancelled"
-	Row(
-		Modifier
-			.fillMaxWidth()
-			.clickable(onClick = onClick)
-			.padding(start = (row.depth * 16).dp, top = 4.dp, bottom = 4.dp),
-		horizontalArrangement = Arrangement.spacedBy(9.dp),
-		verticalAlignment = Alignment.CenterVertically,
-	) {
-		StateMark(entry.state)
-		Text(
-			entry.title,
-			style = MaterialTheme.typography.bodyMedium,
-			color = if (finished) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-			textDecoration = if (entry.state == "cancelled") TextDecoration.LineThrough else null,
-			maxLines = 2,
-			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f),
-		)
-		if (!entry.attachments.isNullOrEmpty()) {
-			Text(
-				"📎",
-				style = MaterialTheme.typography.labelSmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
-		}
-		if (struggling) {
-			Text(
-				"not synced",
-				style = MaterialTheme.typography.labelSmall,
-				color = MaterialTheme.colorScheme.error,
-			)
-		}
-		entry.trashedAt?.let {
-			Text(
-				"${daysLeftInTrash(it)}d left",
-				style = MaterialTheme.typography.labelSmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
-		}
+	BoardDropOverlay(drag, LIST_INSET)
 	}
 }
 
@@ -398,6 +347,9 @@ private fun BoardFoldRow(label: String, expanded: Boolean, onToggle: () -> Unit)
 /** Matches the row's text line, so a mark never sets the row height. */
 private val STATE_MARK_SIZE = 16.dp
 
+/** What the tab puts between the screen edge and a row's start, which the landing line matches. */
+private val LIST_INSET = 12.dp
+
 /** A non-route column older than this reads as stale; below it the cadence is working as intended. */
 private const val STALE_AFTER_MS = 5 * 60 * 1000L
 
@@ -413,7 +365,7 @@ private fun relativeAge(at: Long): String {
 }
 
 /** Days left before the trash sweep takes an entry, so the 30-day window is legible per row. */
-private fun daysLeftInTrash(trashedAt: Long): Int {
+internal fun daysLeftInTrash(trashedAt: Long): Int {
 	val remaining = TRASH_WINDOW_MS - (System.currentTimeMillis() - trashedAt)
 	return ((remaining + 86_399_999) / 86_400_000).coerceAtLeast(0).toInt()
 }
