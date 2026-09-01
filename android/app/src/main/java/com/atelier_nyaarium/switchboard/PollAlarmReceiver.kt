@@ -18,7 +18,7 @@ class PollAlarmReceiver : BroadcastReceiver() {
 		// service process. Bridge with the timeout'd pass lock BEFORE returning - the SAME
 		// companion-object lock SwitchboardService.holdPass/enterDeepSleep operate on, not a
 		// second one (a distinct instance here would never be released by the service side).
-		SwitchboardService.acquirePassLock(context, PASS_TIMEOUT_MS) // see IdlePushbackManager.kt
+		SwitchboardService.acquirePassLock(context, PassOwner.POLL, PASS_TIMEOUT_MS) // see IdlePushbackManager.kt
 		// A dead-process revival's startForegroundService can be refused (ForegroundServiceStart-
 		// NotAllowedException, API 31+) if this alarm ever fired inexactly - only reachable on an
 		// OEM that revokes USE_EXACT_ALARM despite it being auto-granted at minSdk 33. Caught so a

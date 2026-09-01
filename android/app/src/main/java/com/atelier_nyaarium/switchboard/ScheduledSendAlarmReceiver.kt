@@ -54,7 +54,7 @@ class ScheduledSendAlarmReceiver : BroadcastReceiver() {
 		// PollAlarmReceiver/SwitchboardService already share - a generic "keep the CPU up for a
 		// bounded async pass" primitive, not something this feature needs its own copy of - just
 		// with a larger timeout sized for this caller's own worst case (see the constant above).
-		SwitchboardService.acquirePassLock(context, SCHEDULED_SEND_PASS_TIMEOUT_MS)
+		SwitchboardService.acquirePassLock(context, PassOwner.SCHEDULED_SEND, SCHEDULED_SEND_PASS_TIMEOUT_MS)
 		// A dead-process revival's startForegroundService can be refused (ForegroundServiceStart-
 		// NotAllowedException, API 31+) if this alarm ever fired inexactly - only reachable on an
 		// OEM that revokes USE_EXACT_ALARM despite it being auto-granted at minSdk 33. Caught so a

@@ -25,6 +25,19 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
+ * Who holds the deep-tier pass lock. One lock, several independent owners.
+ *
+ * A release names its owner, so the poll pass ending cannot drop the lock a scheduled send is still
+ * working under. Reference counting cannot serve here: every acquire is a TIMED one, and an expired
+ * timed acquire never decrements, so the count would leak and the lock would be held for the
+ * process's life.
+ */
+internal enum class PassOwner {
+	POLL,
+	SCHEDULED_SEND,
+}
+
+/**
  * Foreground service owning the bridge connection and poll loop, so messages keep
  * arriving while the Activity is backgrounded or the screen is off. The Activity
  * only observes shared Repo state. The poll cadence is governed by [IdlePushbackManager]:
@@ -113,7 +126,8 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 			DebugLog.log("Service", "deep sleep alarm failed: ${e.message}")
 		} finally {
 			releaseWakeLock()
-			releasePassLock()
+			// Only the poll pass is done here. A scheduled send mid-flight keeps its own hold.
+			releasePassLock(PassOwner.POLL)
 		}
 		postIdleStatus(wakeAtMillis)
 	}
@@ -123,7 +137,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	 * deadline rather than stacking). */
 	override fun holdPass(ms: Long) {
 		if (destroyed) return
-		acquirePassLock(this, ms)
+		acquirePassLock(this, PassOwner.POLL, ms)
 	}
 
 	/** Foreground or MINUTE: cancel any pending alarm and re-acquire the active lock (idempotent -
@@ -456,7 +470,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		alarmManager().cancel(pollAlarmPi())
 		alarmManager().cancel(scheduledSendAlarmPi())
 		releaseWakeLock()
-		releasePassLock()
+		releaseAllPassLocks()
 		scope.cancel()
 		super.onDestroy()
 	}
@@ -552,6 +566,16 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// this).
 		@Volatile private var passLock: PowerManager.WakeLock? = null
 
+		/** Who needs the pass lock, and until when. Deadlines are elapsed-realtime, as the lock's are. */
+		private val passHolders = java.util.concurrent.ConcurrentHashMap<PassOwner, Long>()
+
+		/** The remaining need across live holders, and 0 when nobody needs it. Expired holders are dropped. */
+		private fun passNeeded(): Long {
+			val now = android.os.SystemClock.elapsedRealtime()
+			passHolders.entries.removeIf { it.value <= now }
+			return passHolders.values.maxOfOrNull { it - now } ?: 0L
+		}
+
 		private fun passLock(context: Context): PowerManager.WakeLock =
 			passLock ?: synchronized(this) {
 				passLock ?: (context.applicationContext.getSystemService(POWER_SERVICE) as PowerManager)
@@ -565,13 +589,34 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 
 		/** Acquired by the alarm receiver BEFORE it returns, bridging AlarmManager's own
 		 * onReceive-scoped wakeup into the async pass that follows - possibly before a live
-		 * service instance exists at all. */
-		fun acquirePassLock(context: Context, timeoutMs: Long) {
-			passLock(context).acquire(timeoutMs)
+		 * service instance exists at all. The owner is named so another owner's release cannot
+		 * drop this one's lock while its work is still running. */
+		internal fun acquirePassLock(context: Context, owner: PassOwner, timeoutMs: Long) {
+			// Held across the map write AND the acquire: apart, a release deciding "nobody needs it"
+			// can land its release() after this acquire, dropping the lock this owner just took.
+			synchronized(this) {
+				passHolders[owner] = android.os.SystemClock.elapsedRealtime() + timeoutMs
+				// Reference counting is off, so a fresh timed acquire RESETS the deadline rather than
+				// stacking: it is re-taken for the longest need across every live holder.
+				passLock(context).acquire(passNeeded())
+			}
 		}
 
-		private fun releasePassLock() {
-			passLock?.let { if (it.isHeld) it.release() }
+		/** One owner is done. The lock drops only once no live owner still needs it. */
+		private fun releasePassLock(owner: PassOwner) {
+			synchronized(this) {
+				passHolders.remove(owner)
+				if (passNeeded() > 0L) return
+				passLock?.let { if (it.isHeld) it.release() }
+			}
+		}
+
+		/** The process is going away, so nobody's work survives to need it. */
+		private fun releaseAllPassLocks() {
+			synchronized(this) {
+				passHolders.clear()
+				passLock?.let { if (it.isHeld) it.release() }
+			}
 		}
 	}
 }
