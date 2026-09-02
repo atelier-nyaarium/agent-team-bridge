@@ -162,6 +162,18 @@ export class BoardStore {
 		return this.owners.get(ownerId)?.entries.get(id);
 	}
 
+	/** Every owner holding a board. */
+	ownerIds(): string[] {
+		return [...this.owners.keys()];
+	}
+
+	/** The whole board, never truncated. `projection` bounds itself for a wire answer, which an
+	 * export must not do: a migration that silently dropped the tail would lose the entries it was
+	 * run to carry. */
+	allEntries(ownerId: string): BoardEntry[] {
+		return [...(this.owners.get(ownerId)?.entries.values() ?? [])];
+	}
+
 	/** Insert-or-replace whole entries (creation, and the write half of a cross-Gateway move). A
 	 * parent must exist among the surviving entries or the batch itself, and must be writable by
 	 * this actor - an existing entry it does not hold cannot be adopted as a parent. */
