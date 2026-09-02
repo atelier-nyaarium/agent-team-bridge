@@ -22,8 +22,9 @@ export function mergeReadAnchor(
 	const cur = owner[team];
 	if (!cur && Object.keys(owner).length >= MAX_TEAMS_PER_OWNER) return { state, advanced: false };
 	// Mailbox epochs are random per instance and never ordered, so they compare for equality only.
-	// Same epoch, the seq decides. A different epoch means the reporter is reading a live mailbox and
-	// the stored anchor names a dead instance, so the later report wins on its own timestamp.
+	// Same epoch, the seq decides. Across a re-mint no order exists at all: the gateway holds no
+	// thread to position the two rows against, and either side may be the dead instance. Last writer
+	// wins is the least-bad answer, and a stale anchor only over-counts until the next real advance.
 	const advanced = !cur || (entry.epoch === cur.epoch ? entry.seq > cur.seq : entry.at > cur.at);
 	if (!advanced) return { state, advanced: false };
 	return { state: { ...state, [ownerId]: { ...owner, [team]: entry } }, advanced: true };

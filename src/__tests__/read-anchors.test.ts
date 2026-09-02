@@ -35,11 +35,12 @@ describe("ReadAnchors", () => {
 		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 50, at: 9000 })).toBe(false);
 	});
 
-	it("a newer epoch always wins outright, regardless of seq (the mailbox was reset)", () => {
+	// A re-mint restarts seq numbering, so a seq from the previous instance does not outrank it
+	// however large. The epoch decides nothing here; only that it CHANGED.
+	it("a re-minted mailbox wins with a low seq against a huge one", () => {
 		const registry = new PlaneRegistry();
 		const anchors = new ReadAnchors(registry, undefined);
 		anchors.report("alice", "team-a", { epoch: 1, seq: 999, at: 5000 });
-		// A fresh mailbox epoch starts its own seq numbering from scratch - even seq:1 there wins.
 		expect(anchors.report("alice", "team-a", { epoch: 2, seq: 1, at: 6000 })).toBe(true);
 		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 2, seq: 1, at: 6000 });
 	});

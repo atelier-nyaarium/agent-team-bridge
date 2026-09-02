@@ -86,10 +86,10 @@ export class ReadAnchors {
 		);
 	}
 
-	/** Report one device's read position for a team. Monotonic: only accepted if strictly ahead of
-	 * what is stored (a newer epoch entirely, or the same epoch with a higher seq) - a stale report
-	 * from a device still catching up on an old position can never regress what another of the same
-	 * owner's devices already confirmed read. Registers the owner's plane first (see
+	/** Report one device's read position for a team. Within one mailbox instance this is monotonic:
+	 * a higher seq only, so a device still catching up can never regress what another of the same
+	 * owner's devices confirmed read. Across a re-mint the epochs are unordered and the later report
+	 * wins instead (see mergeReadAnchor). Registers the owner's plane first (see
 	 * ensureRegistered) if this is the very first thing ever reported or polled for them, so a
 	 * caller can never forget the registration step and have this silently no-op. Returns true iff
 	 * the stored anchor actually advanced (the caller's cue to markDirty the owner's plane). */

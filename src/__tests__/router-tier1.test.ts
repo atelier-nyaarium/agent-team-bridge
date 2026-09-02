@@ -142,6 +142,35 @@ describe("Router tier 1 services", () => {
 		registry.close();
 	});
 
+	// `at` decides every cross-epoch merge, so a device with a fast clock would otherwise pin the
+	// anchor against every later report.
+	it("stamps the report time itself rather than trusting the reporter", async () => {
+		const { registry, setNow } = make();
+		const anchors = createReadAnchorsService({ registry });
+		const { hooks, ownerOps } = makeHooks();
+		anchors.register(hooks);
+		const op = { domainId: "a", conversationId: "phone" } as Parameters<OwnerOpHandler>[0];
+
+		await ownerOps.get("report_read")?.(op, {
+			kind: "report_read",
+			team: "team",
+			epoch: 1,
+			seq: 1,
+			at: Number.MAX_SAFE_INTEGER,
+		});
+		setNow(2000);
+		const advanced = await ownerOps.get("report_read")?.(op, {
+			kind: "report_read",
+			team: "team",
+			epoch: 2,
+			seq: 1,
+			at: 1,
+		});
+
+		expect(advanced).toMatchObject({ advanced: true });
+		registry.close();
+	});
+
 	it("registers tier 1 owner operations and gateway frames", async () => {
 		const { registry } = make();
 		const capabilities = createCapabilitiesService({ registry });

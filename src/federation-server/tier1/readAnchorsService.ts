@@ -81,7 +81,10 @@ export function createReadAnchorsService(deps: ReadAnchorsServiceDeps) {
 			hooks.ownerOp("report_read", async (op, value) => {
 				const parsed = ReportReadSchema.safeParse(value);
 				if (!parsed.success) throw new OwnerOpRefused("malformed");
-				return { advanced: report(op.domainId, parsed.data.team, parsed.data) };
+				// Stamped here, never taken from the reporter. It decides every cross-epoch merge, so a
+				// device with a fast clock would otherwise pin the anchor against every later report.
+				const at = deps.registry.now();
+				return { advanced: report(op.domainId, parsed.data.team, { ...parsed.data, at }) };
 			});
 			hooks.ownerOp("read_anchors_read", async (op, value) => {
 				if (!ReadAnchorsReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");

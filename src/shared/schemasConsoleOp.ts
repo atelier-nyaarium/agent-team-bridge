@@ -128,21 +128,18 @@ export const ConsoleOpSchema = z
 			knownCrossDomainPresenceVersions: z.array(CrossDomainPresenceKnownVersionSchema).optional(),
 		}),
 		// Report this device's own read position for one team, so another of the SAME owner's
-		// devices can learn "already read up to here" - see readAnchors.ts's monotonic merge (a
-		// stale report can never regress what a different device already confirmed read). `epoch`/
-		// `seq` are the device's own local ReadAnchor coordinate (device-mailbox.ts's journal),
-		// meaningful across the owner's whole device fleet since the mailbox itself is shared per
-		// owner. Idempotent by construction (report() is monotonic, not a one-shot side effect), so
-		// this is deliberately NOT in isMutatingOp's opId-cache list - a retried report just
-		// re-applies the same (harmless, idempotent) comparison.
+		// devices can learn "already read up to here" - see readAnchors.ts's merge (within one
+		// mailbox instance a stale report can never regress what another device confirmed read).
+		// `epoch`/`seq` are the device's own local ReadAnchor coordinate (device-mailbox.ts's
+		// journal), meaningful across the owner's whole device fleet since the mailbox itself is
+		// shared per owner. Outcome-idempotent, a replay landing on the equality branch and being
+		// refused, so this is deliberately NOT in isMutatingOp's opId-cache list.
 		z.object({
 			kind: z.literal("report_read"),
 			team: z.string().min(1).max(128),
 			// Bounded to the signed-32-bit range a genuine mailbox epoch is minted within
-			// (plane-registry.ts's mintEpoch) - unbounded would let a single malformed or malicious
-			// report permanently outrank every legitimate epoch this owner's real devices could ever
-			// mint, since the merge rule (readAnchors.ts) has no ceiling of its own and no way to
-			// reset a poisoned value once stored.
+			// (plane-registry.ts's mintEpoch). The merge compares epochs for equality only, so the
+			// bound keeps the field to plausible values rather than guarding an ordering.
 			epoch: z.number().int().nonnegative().max(0x7fffffff),
 			seq: z.number().int().nonnegative(),
 		}),
