@@ -778,14 +778,35 @@ Deferred from Phase 5:
 - A board write reads and decrypts the WHOLE board, up to the CAS retry count per write. Bounded by
   `MAX_ENTRIES_PER_OWNER`; a partial read is a design change, not a fix.
 
-### Open question: sealing a blob
+### Settled: sealing a blob
 
-Answer C says the Router cache is SEALED, and nothing yet says how. Both Router stores are
-`BlobStore` instances that verify a blob against the plaintext digest its own id asserts, which
-ciphertext cannot satisfy, and `blob_fetch` serves arbitrary ranges, which a whole-file envelope
-cannot. Per-chunk sealing keeps ranges but makes the framing something the Router must understand,
-so the store stops being opaque. Until that is decided the Router holds no bytes: the uploader
-exists and is tested, its send-path caller is not wired, and both upload frames are refused.
+Answer C stands. The Router holds ciphertext, and what gets dropped instead is the rule that the
+Router verifies a plaintext digest.
+
+**Per-chunk AEAD on the boundary the upload already uses.** `blob_chunk` carries `offset` and
+`final` today and the uploader already splits at `BLOB_CHUNK_BYTES`, so sealing rides that boundary
+rather than inventing framing. Each chunk is sealed on its own; its AAD binds the domain, the owner
+root key, the epoch, kind `blob`, the blob id, the chunk index, and the final flag. Binding the
+index stops a splice, the blob id stops a swap between files, and the final flag stops a truncation.
+
+**Verification moves end to end.** The blob id stays `sha256-<plaintext digest>`. The Router verifies
+only a ciphertext digest carried on `blob_begin`, which is what it can actually check, and the phone
+verifies the plaintext digest after opening. That is stronger than the Router vouching for bytes,
+not a concession to get sealing in.
+
+**Ranges stay arithmetic.** Ciphertext offset is `index * (BLOB_CHUNK_BYTES + TAG_BYTES)`. The Router
+serves whole covering chunks and the reader trims after opening. The store learns the framing
+constants, never a key, so it stays opaque to content.
+
+Work: `blob_begin` gains the ciphertext digest and a ciphertext size; `BlobStore` verifies that
+digest instead of the id; `blob_fetch` rounds a requested range out to chunk boundaries; the reader
+opens, trims, and checks the plaintext digest. Then wire the uploader's send-path caller and stop
+refusing both frames.
+
+Rejected: a cleartext cache. It would make attachments the one content category the Router can read,
+against every other decision here, and it is the option that cannot be walked back once phones
+depend on the Router serving those bytes. If the Router is ever to be trusted with content, answer C
+changes first and says so.
 
 ### Bug Classes
 
