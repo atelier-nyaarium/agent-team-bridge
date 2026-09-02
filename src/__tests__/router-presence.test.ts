@@ -19,7 +19,7 @@ const row = (team: string, lastActive = 1, status: "online" | "verifying" | "ava
 		queue_depth: 1,
 		lastActive,
 	});
-const make = (pokeOwner?: (domainId: string, version: number) => void) => {
+const make = (pokeOwner?: (domainId: string, version: number, projection: unknown) => void) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-presence-"));
 	roots.push(dataDir);
 	const registry = new OwnerStoreRegistry({
@@ -70,11 +70,13 @@ describe("router presence slice", () => {
 		registry.close();
 	});
 
-	// A poke is what lets the phone drop its bounded-interval discovery pull, so it has to fire on a
-	// real change and stay quiet otherwise, or the pull comes back as a push that cries wolf.
-	it("pokes the owner only when the projection actually changed", () => {
-		const pokes: Array<{ domainId: string; version: number }> = [];
-		const { registry, service } = make((domainId, version) => pokes.push({ domainId, version }));
+	// This push is what lets the phone drop its bounded-interval discovery pull, so it has to fire on
+	// a real change, stay quiet otherwise, and carry the rows rather than a bare version.
+	it("pushes the whole projection to the owner only when it actually changed", () => {
+		const pokes: Array<{ domainId: string; version: number; teams: number }> = [];
+		const { registry, service } = make((domainId, version, projection) =>
+			pokes.push({ domainId, version, teams: ((projection as { rows: unknown[] }).rows ?? []).length }),
+		);
 		service.applyBaseline(reg, {
 			incarnation: 1,
 			seq: 0,
@@ -83,7 +85,7 @@ describe("router presence slice", () => {
 		});
 
 		service.ownerProjection("domain", projectionDeps);
-		expect(pokes).toEqual([{ domainId: "domain", version: 0 }]);
+		expect(pokes).toEqual([{ domainId: "domain", version: 0, teams: 1 }]);
 		// Same projection read twice: no change, so no second poke.
 		service.ownerProjection("domain", projectionDeps);
 		expect(pokes).toHaveLength(1);
@@ -96,8 +98,8 @@ describe("router presence slice", () => {
 		});
 		service.ownerProjection("domain", projectionDeps);
 		expect(pokes).toEqual([
-			{ domainId: "domain", version: 0 },
-			{ domainId: "domain", version: 1 },
+			{ domainId: "domain", version: 0, teams: 1 },
+			{ domainId: "domain", version: 1, teams: 1 },
 		]);
 		registry.close();
 	});

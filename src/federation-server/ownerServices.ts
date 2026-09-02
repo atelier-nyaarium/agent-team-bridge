@@ -141,7 +141,8 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		projection: { admittedGateways, linkedDomains, isShared, connected },
 		friend: { isShared },
 		touch: (domainId, sessionTarget) => share.touch(domainId, sessionTarget),
-		pokeOwner: (domainId, version) => deps.consoleSockets?.pushPlane(domainId, "presence", version, undefined),
+		pokeOwner: (domainId, version, projection) =>
+			deps.consoleSockets?.pushPlane(domainId, "presence", version, projection),
 	});
 
 	const board = createBoardService({

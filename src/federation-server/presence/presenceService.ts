@@ -42,11 +42,13 @@ export function createPresenceService(deps: {
 	friend?: FriendDeps;
 	/** Keep cross-Domain shares alive for a live session. */
 	touch?: (domainId: string, sessionTarget: string) => void;
-	/** A POKE carrying the new version, never the projection: a console re-reads, and the owner
-	 * audience can be large. Fires only when the projection actually changed. */
-	pokeOwner?: (domainId: string, version: number) => void;
+	/** The whole projection, pushed only when it actually changed. It replaces a bounded-interval
+	 * pull, so a console that had to re-read after the signal would gain nothing. */
+	pokeOwner?: (domainId: string, version: number, projection: unknown) => void;
 }) {
 	const now = deps.now ?? (() => deps.registry.now());
+	// Set when the version moves, consumed once the projection around it is assembled.
+	let pokePending = false;
 
 	const write = (domainId: string, id: string, clear: Record<string, unknown>): void => {
 		const store = deps.registry.for(domainId);
@@ -87,7 +89,7 @@ export function createPresenceService(deps: {
 				versions: { ...versions, [key]: version },
 				identities: { ...identities, [key]: identity },
 			});
-			if (key === "owner") deps.pokeOwner?.(domainId, version);
+			if (key === "owner") pokePending = true;
 		}
 		return { epoch, version };
 	};
@@ -235,13 +237,21 @@ export function createPresenceService(deps: {
 			roster: rosterData.roster,
 			spawnPoints,
 		});
-		return OwnerPresenceProjectionSchema.parse({
-			plane: projectionPlane(domainId, "owner", identity),
+		const plane = projectionPlane(domainId, "owner", identity);
+		const projection = OwnerPresenceProjectionSchema.parse({
+			plane,
 			rows,
 			linked,
 			...rosterData,
 			spawnPoints,
 		});
+		// Pushed WHOLE, unlike the board's poke: a roster is small and a console that had to re-read it
+		// would still need the interval pull this replaces.
+		if (pokePending) {
+			pokePending = false;
+			deps.pokeOwner?.(domainId, plane.version, projection);
+		}
+		return projection;
 	};
 
 	const register = (hooks: OwnerServiceHooks): void => {
