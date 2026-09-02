@@ -9,6 +9,7 @@ import {
 	unmappedRows,
 	verifyCounts,
 } from "../src/federation-server/migration/importVerify.js";
+import { beginImport, declaredDigest, finishImport, parseSums } from "../src/federation-server/migration/serveGate.js";
 import { DomainQuota } from "../src/federation-server/owner/domainQuota.js";
 import { OwnerStateStore } from "../src/federation-server/owner/ownerStateStore.js";
 import { ownerKeyId } from "../src/shared/owner-id.js";
@@ -31,6 +32,13 @@ function main(): void {
 	if (!parsed.success) throw new Error(`invalid migration export: ${parsed.error.message}`);
 	const snapshot = parsed.data;
 	const digest = createHash("sha256").update(bytes).digest("hex");
+	// The cut's own record of what it wrote. An export the sums do not name, or one whose bytes
+	// disagree with them, is not a snapshot anyone can verify.
+	const sumsFile = path.join(path.dirname(file), "SHA256SUMS");
+	if (!fs.existsSync(sumsFile)) throw new Error(`no SHA256SUMS beside ${path.basename(file)}`);
+	const declared = declaredDigest(parseSums(fs.readFileSync(sumsFile, "utf8")), path.basename(file));
+	if (!declared) throw new Error(`SHA256SUMS does not name ${path.basename(file)}`);
+	if (declared !== digest) throw new Error(`digest mismatch: declared ${declared}, found ${digest}`);
 	const markers = fs.existsSync(markerFile)
 		? (JSON.parse(fs.readFileSync(markerFile, "utf8")) as Record<string, ImportMarker>)
 		: {};
@@ -44,6 +52,9 @@ function main(): void {
 	const missing = unmappedRows(snapshot);
 	if (missing.length)
 		throw new Error(`unmapped rows: ${missing.map((row) => `${row.conversationId}/${row.oldSeq}`).join(", ")}`);
+	// Claimed before the first write and dropped only once counts verify, so a crash in between
+	// leaves the Router refusing to serve rather than answering from a half-written tree.
+	beginImport(dataDir, `${snapshot.gatewayId}/${snapshot.epoch}`);
 	const federation = JSON.parse(fs.readFileSync(path.join(dataDir, "federation.json"), "utf8")) as {
 		enrollment?: Record<string, { ownerSignPub?: string | null }>;
 	};
@@ -115,6 +126,7 @@ function main(): void {
 	if (changed.length) throw new Error(`preserved files changed: ${changed.join(", ")}`);
 	markers[key] = { digest, epoch: snapshot.epoch, gatewayId: snapshot.gatewayId, counts: declaredCounts(snapshot) };
 	fs.writeFileSync(markerFile, JSON.stringify(markers, null, "\t"), { mode: 0o600 });
+	finishImport(dataDir);
 	console.log(JSON.stringify(markers[key]));
 }
 

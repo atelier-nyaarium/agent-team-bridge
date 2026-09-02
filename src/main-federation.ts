@@ -1,5 +1,6 @@
 import path from "node:path";
 import { FileSecretStore } from "./federation-server/fileSecretStore.js";
+import { decideServe } from "./federation-server/migration/serveGate.js";
 import { RouterServer } from "./federation-server/routerServer.js";
 import { loadRouterTls } from "./federation-server/routerTls.js";
 import { installRejectionGuard } from "./shared/process-guards.js";
@@ -31,6 +32,14 @@ const lanAddresses = (process.env.FEDERATION_LAN_ADDRESSES ?? "")
 	.split(",")
 	.map((a) => a.trim())
 	.filter((a) => a && a !== "127.0.0.1" && a !== "0.0.0.0" && a !== "localhost");
+
+// Before the identity is even read: an import that began and never verified leaves a half-written
+// owner tree, and answering from it is worse than not answering at all.
+const serve = decideServe(dataDir);
+if (serve.kind === "refuse") {
+	console.error(`[router] refusing to serve: ${serve.reason}. Re-run the import and let it verify.`);
+	process.exit(1);
+}
 
 const store = new FileSecretStore(dataDir);
 const identity = await store.init();

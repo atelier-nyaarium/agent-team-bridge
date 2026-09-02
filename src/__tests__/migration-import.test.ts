@@ -1,10 +1,18 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { decideImport, type ImportMarker, markerKey } from "../federation-server/migration/importDecision.js";
 import { IMPORTED, isPreserved, PRESERVED, violations } from "../federation-server/migration/importLayout.js";
 import { declaredCounts, dedupeRows, unmappedRows, verifyCounts } from "../federation-server/migration/importVerify.js";
+import {
+	beginImport,
+	decideServe,
+	declaredDigest,
+	finishImport,
+	parseSums,
+} from "../federation-server/migration/serveGate.js";
 import type { MailboxEntry } from "../shared/console-protocol.js";
 import type { MigrationExport } from "../shared/schemasMigration.js";
 
@@ -46,6 +54,12 @@ const owner = (rows: MailboxEntry[], cursorMap: Array<{ oldSeq: number }>) => ({
 	],
 	pending: [],
 	readAnchors: {},
+});
+
+const roots: string[] = [];
+
+afterEach(() => {
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("migration import", () => {
@@ -135,6 +149,28 @@ describe("migration import", () => {
 		);
 
 		expect(unclassified).toEqual([]);
+	});
+
+	// An import that began and never verified leaves a half-written tree. Answering from it is worse
+	// than not answering.
+	it("refuses to serve while an import is unverified", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "serve-gate-"));
+		roots.push(dir);
+
+		expect(decideServe(dir)).toEqual({ kind: "serve" });
+
+		beginImport(dir, "hosta/7");
+		expect(decideServe(dir)).toEqual({ kind: "refuse", reason: "import_unverified" });
+
+		finishImport(dir);
+		expect(decideServe(dir)).toEqual({ kind: "serve" });
+	});
+
+	it("reads a declared digest and refuses a file the sums do not name", () => {
+		const sums = parseSums(`${"a".repeat(64)}  export-7.json\nnot a sums line\n`);
+
+		expect(declaredDigest(sums, "export-7.json")).toBe("a".repeat(64));
+		expect(declaredDigest(sums, "export-8.json")).toBeNull();
 	});
 
 	// A late export carries rows the Router already took by another path.
