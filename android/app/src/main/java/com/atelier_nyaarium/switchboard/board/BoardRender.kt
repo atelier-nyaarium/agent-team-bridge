@@ -22,8 +22,9 @@ data class BoardRendered(
 	val cache: Map<String, BoardCachedText>,
 )
 
-/** Placeholder title for an entry sealed at an epoch this device never held. */
-const val BOARD_TEXT_UNAVAILABLE = ""
+/** Shown for an entry sealed at an epoch this device never held. Deliberately not blank: an empty
+ * title is indistinguishable from one the owner left empty, and this state is not the owner's doing. */
+const val BOARD_TEXT_UNAVAILABLE = "Unavailable on this device"
 
 /**
  * Opens every stored entry into the UI model.

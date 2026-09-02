@@ -502,6 +502,7 @@ export function createRoutes({
 		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
+		cacheBlobs: blobUploader ? (blobIds) => void blobUploader.uploadAll(blobIds, "cache") : null,
 		refuseImpersonation,
 		relayWithRetry,
 	});

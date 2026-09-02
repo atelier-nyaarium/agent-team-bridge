@@ -154,12 +154,37 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	}
 
 	/**
+	 * Render the last projection the Router sent, so a cold start shows the roster it had rather than
+	 * an empty list until the socket connects. Absent before the first push, which is a fresh install.
+	 */
+	suspend fun restoreLastProjection() {
+		val slot = runCatching { repo.store.loadRouterState("presence") }.getOrNull() ?: return
+		val projection = runCatching {
+			wireJson.decodeFromJsonElement(OwnerPresenceProjection.serializer(), slot.payload)
+		}.getOrNull() ?: return
+		applyOwnerProjection(projection)
+	}
+
+	/**
 	 * Land the Router's pushed owner projection.
 	 *
 	 * It carries what discovery used to be pulled for, so it goes through the same merge path: the
 	 * unreachable holds, the tombstones and the absence streaks all apply regardless of source.
 	 */
 	suspend fun applyOwnerProjection(projection: OwnerPresenceProjection) {
+		// Kept as a versioned envelope of what the Router last said, so a cold start renders the last
+		// roster instead of an empty list while the socket is still connecting. An older version is
+		// ignored, which is what stops a slow answer overwriting a newer one.
+		runCatching {
+			val slot = RouterStateSlot(
+				epoch = projection.plane.epoch,
+				version = projection.plane.version,
+				payload = wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), projection),
+			)
+			if (newerRouterState(slot, repo.store.loadRouterState("presence"))) {
+				repo.store.saveRouterState("presence", slot)
+			}
+		}
 		applyDiscovery(
 			TeamsAnswer(
 				projection.rows.map { teamInfoToTeam(it, repo.localGatewayId) },

@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.board.BoardIntent
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardReadResult
+import com.atelier_nyaarium.switchboard.proto.BoardSession
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
@@ -455,42 +456,18 @@ internal class BoardOps(private val repo: ChatRepository) {
 	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
 	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
 	fun boardAssign(fromGateway: String, id: String, team: String?) {
-		val target = boardGatewayOf(team)
-		// The stored value is the bare local field, never the address the chat tab is keyed by; the
-		// optimistic row has to group the same way the gateway will store it.
-		val sessionId = team?.let { repo.board.sessionKeyOf(it) }
-		if (sessionId == null || target == fromGateway) {
-			enqueue(ConsoleOp.BoardSetSession(id, sessionId), fromGateway)
-			return
+		// One Router board, so assigning to a session on another Gateway is a field change rather than
+		// a move: there is no second copy to upsert and no first copy to delete. The session carries
+		// its own gateway, because a bare session id is unique only within one.
+		val session = team?.let { name ->
+			val row = repo._state.value.teams.firstOrNull { it.name == name }
+			BoardSession(
+				domainId = row?.domainId ?: repo.localDomain(),
+				gatewayId = boardGatewayOf(name),
+				sessionId = repo.board.sessionKeyOf(name),
+			)
 		}
-		val entries = repo.board.mergedEntries(fromGateway)
-		val children = entries.groupBy { it.parent }
-		val subtree = mutableListOf<com.atelier_nyaarium.switchboard.proto.BoardEntry>()
-		// Visited set, like every other walk over this tree: a self-parent from bad data would
-		// otherwise grow the list forever on the main thread.
-		val seen = mutableSetOf<String>()
-		val stack = ArrayDeque(listOf(id))
-		while (stack.isNotEmpty()) {
-			val cur = stack.removeLast()
-			if (!seen.add(cur)) continue
-			val e = entries.firstOrNull { it.id == cur } ?: continue
-			subtree.add(e.copy(sessionId = sessionId))
-			for (kid in children[cur] ?: emptyList()) stack.addLast(kid.id)
-		}
-		if (subtree.isEmpty()) return
-		// The moved root joins the destination at top level: its old parent stays behind.
-		subtree[0] = subtree[0].copy(parent = null)
-		// A moved picture lands under the SAME name in the destination's bucket, since the bucket is
-		// keyed by entry and the entry keeps its id across a move.
-		enqueueMove(subtree, fromGateway, target) { entryId, blobId ->
-			Attachments.boardFile(repo.filesDir, entryId, blobId).absolutePath
-		}
-		// Pull anything this device never opened. The queued write retries until the bytes are here,
-		// rather than abandoning, because for a move a missing local file is normal.
-		for (entry in subtree) {
-			for (a in entry.attachments.orEmpty()) {
-				if (!Attachments.boardFile(repo.filesDir, entry.id, a.blobId).isFile) kickBoardDownload(entry.id, a)
-			}
-		}
+		intend(BoardIntent.SetSession(id, session))
 	}
+
 }

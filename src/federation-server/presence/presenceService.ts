@@ -254,10 +254,30 @@ export function createPresenceService(deps: {
 		return projection;
 	};
 
+	/**
+	 * Recompute the owner projection so a change PUSHES.
+	 *
+	 * Called from every path that WRITES presence rows. Leaving it to the read handlers would mean the
+	 * push never fires until something else happened to pull, which is the pull it replaces. Building
+	 * the projection is what moves the version, and the version is what decides whether to push at all.
+	 */
+	const pushIfChanged = (domainId: string): void => {
+		if (!deps.pokeOwner || !deps.projection) return;
+		// A projection that cannot be built is not a reason to fail the write that triggered it.
+		try {
+			ownerProjection(domainId, deps.projection);
+		} catch {}
+	};
+
 	const register = (hooks: OwnerServiceHooks): void => {
-		hooks.gatewayFrame("presence_baseline", (reg, params) => applyBaseline(reg, params as Baseline));
+		hooks.gatewayFrame("presence_baseline", (reg, params) => {
+			const result = applyBaseline(reg, params as Baseline);
+			pushIfChanged(reg.domainId);
+			return result;
+		});
 		hooks.gatewayFrame("presence_delta", (reg, params) => {
 			const result = applyDelta(reg, params as Delta);
+			pushIfChanged(reg.domainId);
 			if (result.resync)
 				hooks.pushFrameTo(reg.domainId, reg.gatewayId, {
 					type: "presence_resync",
@@ -274,8 +294,14 @@ export function createPresenceService(deps: {
 				lastRegisteredAt: now(),
 			});
 		});
-		hooks.onGatewayDropped(onGatewayDropped);
-		hooks.onSessionForgotten(forgetSession);
+		hooks.onGatewayDropped((reg) => {
+			onGatewayDropped(reg);
+			pushIfChanged(reg.domainId);
+		});
+		hooks.onSessionForgotten((reg, sessionId) => {
+			forgetSession(reg, sessionId);
+			pushIfChanged(reg.domainId);
+		});
 		// Registration supplies the gateway's Domain.
 		hooks.gatewayFrame("presence_read", (reg) => {
 			if (!deps.projection) return { ok: false, error: "projection unavailable" };

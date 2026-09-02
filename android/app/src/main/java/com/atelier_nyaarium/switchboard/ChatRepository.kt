@@ -221,6 +221,7 @@ class ChatRepository(
 		domainId: String,
 		blobId: String,
 		offset: Long,
+		originGateway: String? = null,
 	): Pair<ByteArray, Boolean>? {
 		val op = buildJsonObject {
 			put("kind", JsonPrimitive("blob_fetch"))
@@ -233,6 +234,17 @@ class ChatRepository(
 					put("length", JsonPrimitive(Protocol.BLOB_CHUNK_BYTES))
 				},
 			)
+			// Without this the Router can only answer from its cache, so a miss is absent rather than a
+			// forward to the machine that actually holds the bytes.
+			if (originGateway != null) {
+				put(
+					"origin",
+					buildJsonObject {
+						put("domainId", JsonPrimitive(domainId))
+						put("gatewayId", JsonPrimitive(originGateway))
+					},
+				)
+			}
 		}
 		val signed = ownerOps.sign(op) ?: return null
 		val answer = runCatching { client().postOwnerOp(signed).jsonObject }.getOrNull() ?: return null

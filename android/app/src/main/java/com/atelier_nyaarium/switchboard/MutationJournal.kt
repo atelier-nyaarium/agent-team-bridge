@@ -90,20 +90,31 @@ internal class MutationJournal(
 		}
 	}
 
+	/**
+	 * Replays the file, dropping a line that will not parse.
+	 *
+	 * A kill between the append and its fsync leaves a truncated final line, and this runs from the
+	 * constructor, so throwing on it would take the whole app down at launch and keep doing so until
+	 * the file was cleared by hand. Every complete line before the torn one is still recovered.
+	 */
 	private fun recover() {
 		if (!file.isFile) return
+		var torn = 0
 		file.forEachLine(Charsets.UTF_8) { raw ->
 			if (raw.isBlank()) return@forEachLine
-			val json = JSONObject(raw)
-			val entry = MutationEntry(
-				json.getString("opId"),
-				json.getString("kind"),
-				json.getJSONObject("payload"),
-				json.getLong("createdAt"),
-				MutationState.valueOf(json.getString("state").uppercase()),
-			)
-			entries[entry.opId] = entry
+			val entry = runCatching {
+				val json = JSONObject(raw)
+				MutationEntry(
+					json.getString("opId"),
+					json.getString("kind"),
+					json.getJSONObject("payload"),
+					json.getLong("createdAt"),
+					MutationState.valueOf(json.getString("state").uppercase()),
+				)
+			}.getOrNull()
+			if (entry == null) torn++ else entries[entry.opId] = entry
 		}
+		if (torn > 0) DebugLog.log("Journal", "dropped $torn unreadable line(s) on recover")
 	}
 
 	private fun transitionWithoutCompaction(prior: MutationEntry, state: MutationState) {

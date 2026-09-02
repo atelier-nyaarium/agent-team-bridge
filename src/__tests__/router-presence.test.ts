@@ -34,7 +34,11 @@ const make = (pokeOwner?: (domainId: string, version: number, projection: unknow
 			}),
 		now: () => 100,
 	});
-	return { registry, service: createPresenceService({ registry, pokeOwner }) };
+	// projection is what pushIfChanged builds from, so a poking service needs it the way production does.
+	return {
+		registry,
+		service: createPresenceService({ registry, pokeOwner, ...(pokeOwner ? { projection: projectionDeps } : {}) }),
+	};
 };
 const reg: GatewayRegistration = { domainId: "domain", gatewayId: "gw", signPub: "pub", incarnation: 1 };
 const projectionDeps = {
@@ -326,6 +330,45 @@ describe("router presence slice", () => {
 			answered: 1,
 			unreachable: ["offline"],
 		});
+		registry.close();
+	});
+
+	// The push has to fire from the WRITE. Computing the projection only inside the read handlers
+	// would mean nothing reaches a console until something else happened to pull, which is the pull
+	// this replaces.
+	it("pushes to the owner when a gateway frame changes presence", () => {
+		const pokes: number[] = [];
+		const { registry, service } = make((_domainId, version) => pokes.push(version));
+		const frames = new Map<string, GatewayFrameHandler>();
+		service.register({
+			ownerOp: () => undefined,
+			gatewayFrame: (name: string, handler: GatewayFrameHandler) => frames.set(name, handler),
+			onGatewayRegistered: () => undefined,
+			onGatewayDropped: () => undefined,
+			onSessionForgotten: () => undefined,
+			pushFrameTo: () => true,
+			gatewayIncarnation: () => 1,
+			connectedGateways: () => ["gw"],
+		});
+
+		frames.get("presence_baseline")!(reg, {
+			incarnation: 1,
+			seq: 0,
+			rows: [row("proj.main")],
+			spawnPoints: { gatewayId: "gw", hostSpawns: [] },
+		});
+
+		expect(pokes).toEqual([0]);
+		// A delta that changes nothing observable must not push again.
+		frames.get("presence_delta")!(reg, { incarnation: 1, seq: 1, upserts: [row("proj.main")], tombstones: [] });
+		expect(pokes).toEqual([0]);
+		frames.get("presence_delta")!(reg, {
+			incarnation: 1,
+			seq: 2,
+			upserts: [row("proj.main", 2, "available")],
+			tombstones: [],
+		});
+		expect(pokes).toEqual([0, 1]);
 		registry.close();
 	});
 

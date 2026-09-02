@@ -47,6 +47,9 @@ export interface ConsolePushOpsDeps {
 	localGatewayId: string;
 	/** The ONE producer of a local session's canonical Address (routes.ts's own). */
 	localAddress: (name: string) => Address;
+	/** Copies an entry's blobs into the Router cache, so a console can read them while this machine
+	 * is asleep. Best effort and fire-and-forget: delivery never waits on it. */
+	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
 	relayWithRetry: (
 		dstGateway: string,
@@ -66,6 +69,7 @@ export function createConsolePushOps({
 	resolvesLocalGateway,
 	localGatewayId,
 	localAddress,
+	cacheBlobs,
 	refuseImpersonation,
 	relayWithRetry,
 }: ConsolePushOpsDeps) {
@@ -114,6 +118,10 @@ export function createConsolePushOps({
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
+		// After the append, never before: the entry is what names these blobs, so caching bytes for one
+		// that failed to land would put copies on the Router nothing references.
+		const blobIds = [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))];
+		if (blobIds.length > 0) cacheBlobs?.(blobIds);
 		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
 		return true;
 	}

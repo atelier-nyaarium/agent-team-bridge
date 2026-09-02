@@ -1002,6 +1002,33 @@ per process, before any live send.
 
 **The Router's attachment record carries no filename**, so the blob id stands in until it does.
 
+### What this phase narrowed, and why
+
+Three bullets were built smaller than written. An alignment audit found that leaving that
+unreconciled is what let two real regressions read as authorized deferrals, so the narrowing is
+recorded here rather than left implied.
+
+**The socket is PLANES-ONLY, and the poll keeps the rows.** The socket carries the Router's owner
+inbox; the poll drains the Gateway's mailbox. Those are separate sources with their own cursors, and
+the owner inbox does not carry incoming agent messages at all. It carries this device's own sends
+echoed for its other devices, board pokes, and scheduled-send results. Agent messages are
+session-addressed and reach the phone through its Gateway. Moving them is Phase 8's mailbox
+migration, so "one drain for one source" lands in Phase 8, not here. A planes-only console registers
+no consumer, because a cursor at zero would pin the owner inbox's compaction floor forever.
+
+**`refreshDiscovery` is retained for the background.** The socket is foreground-only, so while the
+app is backgrounded the interval pull is the only source of discovery. It is gone from the
+foreground, where presence now pushes.
+
+**`routeGateway` is retained.** It is what sealing resolves its target Gateway through, and
+`send`/`respond` still have to reach an agent on a specific machine. Deleting it means every console
+op becomes an OwnerOp, which is the same Phase 8 migration. The gateway board path survives with it,
+because board attachments stay there while reference-held blob sealing is unresolved.
+
+**The scheduled-send journal covers a failed FIRE, not composition.** Composing offline never needed
+the Router: the record is local and the alarm is local. What was missing is a send that fired into an
+outage outliving its one-shot retry, and that is what the journal now holds.
+
 - Console WS per its spec: framing, authentication with the existing console credentials, cursor
   and ack semantics matching Phase 3, `newWebSocket` on the pinned client, `wss` only, reconnect
   with a generation fence.

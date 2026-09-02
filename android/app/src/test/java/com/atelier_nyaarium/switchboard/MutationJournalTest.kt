@@ -32,6 +32,21 @@ class MutationJournalTest {
 		assertTrue(thrown)
 	}
 
+	// A kill between the append and its fsync leaves a truncated final line. recover() runs from the
+	// constructor, so throwing on it would take the app down at launch and keep doing so.
+	@Test
+	fun aTornFinalLineIsDroppedRatherThanFatal() {
+		val dir = Files.createTempDirectory("journal").toFile()
+		val journal = MutationJournal(dir)
+		journal.append("intact", "send", JSONObject())
+		val file = java.io.File(dir, "mutation-journal.jsonl")
+		file.appendText("""{"opId":"torn","kind":"send","payl""")
+
+		val reopened = MutationJournal(dir)
+
+		assertEquals(listOf("intact"), reopened.pending().map { it.opId })
+	}
+
 	@Test
 	fun replayClaimIsOncePerProcess() {
 		val dir = Files.createTempDirectory("journal").toFile()

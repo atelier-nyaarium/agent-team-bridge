@@ -20,12 +20,12 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 	 * through the Router is not, and the bytes do not say which. Written through the same store the
 	 * Gateway path uses, so the plaintext digest is verified exactly once and in one place.
 	 */
-	private suspend fun fromRouterCache(blobId: String): java.io.File? {
+	private suspend fun fromRouterCache(blobId: String, originGateway: String?): java.io.File? {
 		val domain = repo.ownerOps.domainId() ?: return null
 		val client = repo.client()
 		var offset = client.blobs.stat(blobId).have
 		while (true) {
-			val answer = repo.routerBlobRange(domain, blobId, offset) ?: return null
+			val answer = repo.routerBlobRange(domain, blobId, offset, originGateway) ?: return null
 			val written = client.blobs.write(blobId, offset, answer.first, answer.second)
 			if (answer.second) return if (written.complete) client.blobs.path(blobId) else null
 			if (written.have <= offset) return null
@@ -160,7 +160,7 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 					// stays readable while the machine that produced it is asleep. A miss of any kind
 					// falls through to the Gateway that holds the origin.
 					val source = runCatchingCancellable {
-						fromRouterCache(blobId) ?: client.downloadBlob(blobId, file.blobGateway)
+						fromRouterCache(blobId, file.blobGateway) ?: client.downloadBlob(blobId, file.blobGateway)
 					}
 						.onFailure {
 							// Count against the blob, not the row: the same reference on several rows is

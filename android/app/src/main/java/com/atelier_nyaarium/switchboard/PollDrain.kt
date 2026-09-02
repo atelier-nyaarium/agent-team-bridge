@@ -297,6 +297,10 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					// The board comes from the Router now, so the poll only decides WHEN to look. A
 					// foregrounded app is poked instead; this is what covers the backgrounded one.
 					launch { runCatching { repo.boardOps.refreshBoard() } }
+					// The gateway-side queue still carries board attachments and cross-Gateway moves,
+					// which the Router does not take yet. Drained here rather than only from a chat send,
+					// or a queued attachment waits on unrelated traffic.
+					launch { runCatching { repo.boardOps.drainBoard() } }
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
