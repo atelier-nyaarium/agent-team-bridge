@@ -1,8 +1,14 @@
 package com.atelier_nyaarium.switchboard.board
 
 import com.atelier_nyaarium.switchboard.BoardRefused
+import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
+import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import com.atelier_nyaarium.switchboard.proto.BoardEntryClear
+import com.atelier_nyaarium.switchboard.proto.BoardEntrySealed
+import com.atelier_nyaarium.switchboard.proto.BoardSession
+import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -28,6 +34,31 @@ class BoardManagerTest {
 
 	private fun entry(id: String, sessionId: String? = null, state: String = "open", trashedAt: Long? = null) =
 		BoardEntry(id = id, title = "t-$id", state = state, rank = "m", sessionId = sessionId, trashedAt = trashedAt)
+
+	/** Seeds the Router board, which is what the session-scoped reads answer from. */
+	private fun seedRouter(board: BoardManager, entries: List<BoardEntry>) {
+		val keyring = ContentKeyring(store = null)
+		keyring.deriveOwned(Crypto.generateIdentity(), "domain", 1)
+		val sealing = BoardSealing(keyring, "domain", "owner")
+		board.sealing = { sealing }
+		board.applyRouterBoard(
+			1L,
+			entries.map { e ->
+				BoardStoredEntry(
+					clear = BoardEntryClear(
+						id = e.id,
+						state = e.state,
+						parent = e.parent,
+						rank = e.rank,
+						session = e.sessionId?.let { BoardSession("domain", "gw-route", it) },
+						trashedAt = e.trashedAt,
+						version = 1L,
+					),
+					sealed = BoardEntrySealed(title = sealing.seal(e.title, BOARD_KIND_TITLE)!!),
+				)
+			},
+		)
+	}
 
 	@Test
 	fun anEditIsVisibleImmediatelyAndSurvivesAStaleSnapshot() {
@@ -79,23 +110,21 @@ class BoardManagerTest {
 	@Test
 	fun theLiveLinePicksInProgressFirstAndCountsFinished() {
 		val board = BoardManager(storeStub())
-		board.applySnapshot(
-			"gw-route",
+		seedRouter(
+			board,
 			listOf(
 				entry("done1", sessionId = "s1", state = "done"),
 				entry("open1", sessionId = "s1", state = "open"),
 				entry("busy", sessionId = "s1", state = "in_progress"),
 				entry("theirs", sessionId = "s2"),
 			),
-			null,
-			false,
 		)
-		val line = board.liveLine("gw-route", "s1")!!
+		val line = board.liveLine("s1")!!
 		assertEquals("t-busy", line.title)
 		assertEquals("in_progress", line.state)
 		assertEquals(1, line.finished)
 		assertEquals(3, line.total)
-		assertNull(board.liveLine("gw-route", "nobody"))
+		assertNull(board.liveLine("nobody"))
 	}
 
 	@Test

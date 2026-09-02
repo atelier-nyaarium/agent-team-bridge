@@ -4,8 +4,10 @@ import android.net.Uri
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
 import com.atelier_nyaarium.switchboard.board.BoardRefusal
 import com.atelier_nyaarium.switchboard.board.CardBranch
+import com.atelier_nyaarium.switchboard.board.BoardIntent
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import com.atelier_nyaarium.switchboard.proto.BoardReadResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
@@ -42,10 +44,19 @@ internal class BoardOps(private val repo: ChatRepository) {
 	 * the plane). Fired on board-tab open, pull-refresh, and entering a non-route session's thread;
 	 * a down Gateway just leaves its column stale. Same-Domain only: a linked friend's Gateway is
 	 * not this owner's board. */
+	/** Re-reads the Router's board. One board, so there is nothing to gather per Gateway. */
 	fun refreshBoard() {
-		repo.repoScope.launch {
-			for (gw in repo.sessions.otherKeyringGateways(repo.localGatewayId)) runCatchingCancellable { repo.board.read(repo.client(), gw) }
-		}
+		repo.repoScope.launch { readRouterBoard() }
+	}
+
+	private suspend fun readRouterBoard() {
+		val sealing = repo.boardSealing() ?: return
+		runCatchingCancellable {
+			repo.boardRouter.read(java.util.UUID.randomUUID().toString()) {
+				wireJson.decodeFromJsonElement(BoardReadResult.serializer(), it)
+			}
+			repo.boardRouter.drain(sealing)
+		}.onFailure { DebugLog.log("Board", "router read/drain failed: ${it.message?.take(80)}") }
 	}
 
 	/** Sessions an entry may be assigned to: a live session (never a spawn-point, which has no record
@@ -106,21 +117,21 @@ internal class BoardOps(private val repo: ChatRepository) {
 	//  The only door to BoardManager: a resolver answer, the query it feeds and the revision Compose
 	//  invalidates on all come from one object.
 
-	fun boardEntriesFor(team: String?): List<BoardEntry> = repo.board.mergedEntries(boardGatewayOf(team))
+	fun boardEntriesFor(team: String?): List<BoardEntry> = repo.board.routerEntries()
 
-	fun boardLiveLineFor(team: String): BoardLiveLine? = repo.board.liveLine(boardGatewayOf(team), team)
+	fun boardLiveLineFor(team: String): BoardLiveLine? = repo.board.liveLine(team)
 
-	fun boardUndoneCountFor(team: String): Int = repo.board.undoneCount(boardGatewayOf(team), team)
+	fun boardUndoneCountFor(team: String): Int = repo.board.undoneCount(team)
 
 	fun boardCardBranchFor(team: String, currentId: String?): CardBranch =
 		repo.board.cardBranch(boardGatewayOf(team), team, currentId)
 
 	fun boardSessionKeyOf(team: String): String = repo.board.sessionKeyOf(team)
 
-	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = repo.board.mergedEntries(gatewayId)
+	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = repo.board.routerEntries()
 
 	/** The whole board. One Router board means one list, grouped by each entry's own session. */
-	fun boardEntries(): List<BoardEntry> = repo.board.mergedEntries(boardGatewayOf(null))
+	fun boardEntries(): List<BoardEntry> = repo.board.routerEntries()
 
 	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds()
 
@@ -150,37 +161,40 @@ internal class BoardOps(private val repo: ChatRepository) {
 	////////////////////////////////
 	//  Ops
 
-	/** Capture a thought onto the route Gateway's backlog: root level, after the last root. */
-	fun boardCapture(title: String, body: String?) {
-		val gw = repo.localGatewayId
-		val last = repo.board.mergedEntries(gw)
-			.filter { it.parent == null && it.trashedAt == null }
-			.maxOfOrNull { it.rank }
-		val entry = com.atelier_nyaarium.switchboard.proto.BoardEntry(
-			id = UUID.randomUUID().toString().replace("-", "").take(32),
-			title = title,
-			body = body,
-			state = "open",
-			rank = com.atelier_nyaarium.switchboard.board.BoardRank.between(last, null),
-		)
-		enqueue(ConsoleOp.BoardUpsert(listOf(entry)), gw)
+	/** Queues one intent and kicks the drain. The row shows immediately through the pending overlay. */
+	private fun intend(vararg intents: BoardIntent) {
+		repo.board.enqueueWrite(intents.toList())
+		repo.repoScope.launch { readRouterBoard() }
 	}
 
-	fun boardSetState(gatewayId: String, id: String, state: String) =
-		enqueue(ConsoleOp.BoardSetState(id, state), gatewayId)
+	/** Capture a thought at root level, after the last root. */
+	fun boardCapture(title: String, body: String?) {
+		val last = repo.board.routerEntries()
+			.filter { it.parent == null && it.trashedAt == null }
+			.maxOfOrNull { it.rank }
+		intend(
+			BoardIntent.Create(
+				id = UUID.randomUUID().toString().replace("-", "").take(32),
+				title = title,
+				body = body,
+				state = "open",
+				rank = com.atelier_nyaarium.switchboard.board.BoardRank.between(last, null),
+			),
+		)
+	}
 
-	fun boardSetTitle(gatewayId: String, id: String, title: String) =
-		enqueue(ConsoleOp.BoardSetTitle(id, title), gatewayId)
+	fun boardSetState(gatewayId: String, id: String, state: String) = intend(BoardIntent.SetState(id, state))
 
-	fun boardSetBody(gatewayId: String, id: String, body: String?) =
-		enqueue(ConsoleOp.BoardSetBody(id, body), gatewayId)
+	fun boardSetTitle(gatewayId: String, id: String, title: String) = intend(BoardIntent.SetTitle(id, title))
+
+	fun boardSetBody(gatewayId: String, id: String, body: String?) = intend(BoardIntent.SetBody(id, body))
 
 	/** Re-parent and re-rank in one op, which is what a drag resolves to. */
 	fun boardSetParent(gatewayId: String, id: String, parent: String?, rank: String) =
-		enqueue(ConsoleOp.BoardSetParent(id, parent, rank), gatewayId)
+		intend(BoardIntent.SetParent(id, parent, rank))
 
 	fun boardSetTrashed(gatewayId: String, id: String, trashed: Boolean) =
-		enqueue(ConsoleOp.BoardSetTrashed(id, trashed), gatewayId)
+		intend(if (trashed) BoardIntent.Trash(id) else BoardIntent.Restore(id))
 
 	/**
 	 * Set an entry's attachments to exactly this list, staging any newly picked file first.

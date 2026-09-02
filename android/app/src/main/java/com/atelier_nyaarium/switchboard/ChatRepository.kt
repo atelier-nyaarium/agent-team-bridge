@@ -193,6 +193,11 @@ class ChatRepository(
 	)
 
 	private fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?) {
+		// The board plane is a POKE: it carries a revision, never the board, so this re-reads.
+		if (name == "taskBoard") {
+			boardOps.refreshBoard()
+			return
+		}
 		if (name != "presence" || payload == null) return
 		val projection = runCatching {
 			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)

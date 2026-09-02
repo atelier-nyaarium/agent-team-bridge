@@ -294,21 +294,9 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					// resolve).
 					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
 					val pendingReadAnchors = mb.readAnchors
-					// Task-board plane: same generalized shape, one plane per owner. The route Gateway's
-					// half only - a non-route Gateway's entries arrive through board_read. Applying the
-					// snapshot never clobbers a pending local edit; mergedEntries re-applies the queue.
-					if (mb.taskBoard != null || mb.taskBoardVersion != null) {
-						mb.taskBoard?.let { entries ->
-							DebugLog.log("Plane", "taskBoard settled=${mb.settled} rows=${entries.size}")
-							repo.boardOps.applyBoardSnapshot(
-								repo.localGatewayId, entries, mb.taskBoardVersion, mb.taskBoardTruncated == true,
-							)
-						}
-					}
-					// Drain the board's pending actions on the poll cadence - the loop already runs at
-					// the right rate foreground and follows the pushback ladder backgrounded, and each
-					// action is its own relay carrying its own targetGateway.
-					launch { runCatching { repo.boardOps.drainBoard() } }
+					// The board comes from the Router now, so the poll only decides WHEN to look. A
+					// foregrounded app is poked instead; this is what covers the backgrounded one.
+					launch { runCatching { repo.boardOps.refreshBoard() } }
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()

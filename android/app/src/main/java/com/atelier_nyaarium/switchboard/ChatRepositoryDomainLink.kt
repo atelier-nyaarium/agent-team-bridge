@@ -1,9 +1,14 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.json.JSONObject
 
 ////////////////////////////////
@@ -26,23 +31,22 @@ suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) 
 	runCatchingCancellable { client().register(enabledPlugins?.invoke()) }
 		.onSuccess { pluginReportPending = false }
 		.onFailure { DebugLog.log("Plugins", "re-register after toggle failed, retrying: ${it.message?.take(120)}") }
-	reportPluginsToOtherGateways()
+	reportCapabilitiesToRouter()
 	Unit
 }
 
-/** The same plugin list to every OTHER Gateway this owner has. A capability store is per
- * Gateway and only the route one hears a register, so a session homed elsewhere would otherwise
- * never get the tools at all. Best-effort per Gateway; an offline one keeps its last report. */
-private suspend fun ChatRepository.reportPluginsToOtherGateways() {
+/** The plugin list to the Router's fold, which every Gateway reads. Reported once rather than to
+ * each Gateway in turn: a machine that was offline for the fan-out used to keep a stale list until
+ * the next toggle, and a Gateway admitted afterwards never heard one at all. */
+private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 	val plugins = enabledPlugins?.invoke() ?: return
-	val route = localGatewayId
-	// From the KEYRING, not the session roster: a Gateway with no sessions listed still needs
-	// the report, and the first session created there would otherwise start with no tools.
-	val others = sessions.otherKeyringGateways(route)
-	for (gw in others) {
-		runCatchingCancellable { client().reportPluginsTo(gw, plugins) }
-			.onFailure { DebugLog.log("Plugins", "report to $gw failed (keeps its last): ${it.message?.take(80)}") }
+	val op = buildJsonObject {
+		put("kind", JsonPrimitive("capabilities_report"))
+		put("capabilities", wireJson.encodeToJsonElement(ListSerializer(EnabledPlugin.serializer()), plugins))
 	}
+	val signed = ownerOps.sign(op) ?: return
+	runCatchingCancellable { client().postOwnerOp(signed) }
+		.onFailure { DebugLog.log("Plugins", "capability report failed, retrying next toggle: ${it.message?.take(80)}") }
 }
 
 suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO) {
@@ -218,9 +222,8 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		val reg = client().register(enabledPlugins?.invoke())
 		pluginReportPending = false
 		DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
-		// Every OTHER Gateway needs the same list, or its sessions never learn this console's
-		// capabilities. Fired after the roster exists, so it runs off the poll loop's first pass.
-		repoScope.launch { reportPluginsToOtherGateways() }
+		// The Router's fold is what every other Gateway reads, so one report covers them all.
+		repoScope.launch { reportCapabilitiesToRouter() }
 		val id = reg.gatewayId
 		if (id.isNotEmpty() && id != localGatewayId) {
 			localGatewayId = id

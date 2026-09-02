@@ -590,9 +590,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	/** How many of a session's live entries are still unfinished - what the forget prompt asks
 	 * about, and what decides whether it appears at all. */
-	fun undoneCount(gatewayId: String, team: String): Int {
+	fun undoneCount(team: String): Int {
 		val key = sessionKeyOf(team)
-		return mergedEntries(gatewayId).count {
+		return routerEntries().count {
 			it.sessionId == key && it.trashedAt == null && it.state != "done" && it.state != "cancelled"
 		}
 	}
@@ -600,9 +600,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	/** One session's live line for the session card and thread strip: the task it is on (first
 	 * in-progress by rank, else first open), plus its finished-over-total count. Null when the
 	 * session has no live entries at all, so the card keeps its ordinary preview ladder. */
-	fun liveLine(gatewayId: String, team: String, now: Long = System.currentTimeMillis()): BoardLiveLine? {
+	fun liveLine(team: String): BoardLiveLine? {
 		val key = sessionKeyOf(team)
-		val mine = mergedEntries(gatewayId, now).filter { it.sessionId == key && it.trashedAt == null }
+		val mine = routerEntries().filter { it.sessionId == key && it.trashedAt == null }
 		if (mine.isEmpty()) return null
 		val finished = mine.count { it.state == "done" || it.state == "cancelled" }
 		val current = mine.filter { it.state == "in_progress" }.minByOrNull { it.rank }
@@ -615,7 +615,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	 * everything under it. Empty when the session has no live board work. */
 	fun cardBranch(gatewayId: String, team: String, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
 		val key = GroupKey(gatewayId, sessionKeyOf(team))
-		val group = flattenBoard(mergedEntries(gatewayId))
+		val group = flattenBoard(routerEntries())
 			.sessions.firstOrNull { it.key == key }
 			?: return CardBranch(emptyList(), 0)
 		return cardBranchOf(group.rows, currentId, max)

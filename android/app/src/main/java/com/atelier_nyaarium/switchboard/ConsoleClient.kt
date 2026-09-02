@@ -128,21 +128,6 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 		"register",
 	)
 
-	/** Report this device's plugin list to a NON-route Gateway. A capability store is per Gateway
-	 * and only the route Gateway ever hears a plain register, so without this a session homed
-	 * anywhere else would never learn what this console can render - permanently, not as a rollout
-	 * window. Best-effort: an offline Gateway just keeps its previous report. */
-	suspend fun reportPluginsTo(gatewayId: String, enabledPlugins: List<EnabledPlugin>) {
-		transport.relay(
-			ConsoleOp.Register(
-				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
-				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
-				enabledPlugins = enabledPlugins,
-			),
-			targetGateway = gatewayId,
-		)
-	}
-
 	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
 	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
 	 * back to `localGatewayId` (this connection's Gateway, learned at register). Carries the answer's
