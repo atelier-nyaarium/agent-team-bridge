@@ -1107,7 +1107,7 @@ Found by the phase's red team.
   release it. Verdict, landed: every previous state releases the diff, a repeat release being a
   no-op against a reference already gone.
 
-## Phase 7 - MCP plugin and host daemon
+## Phase 7 - MCP plugin and host daemon ✅ Done
 
 A compatibility checklist plus one wire change. The MCP plugin keeps its local gateway base URL.
 `send` and `respond` gain a producer-issued `opId`, minted once per invocation and reused on every
