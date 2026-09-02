@@ -207,6 +207,11 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
+				// Shared cursor ownership prevents polling during socket drain.
+				if (!repo.transportCoordinator.mayPoll()) {
+					withTimeoutOrNull(SOCKET_PARK_MS) { kick.receive() }
+					continue@pollLoop
+				}
 				try {
 					// Mesh-wide discovery (see DISCOVERY_REFRESH_MS's own doc): the one thing left with
 					// no push mechanism, so it still needs its own bounded-interval pull, independent of
@@ -580,7 +585,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				// session tiles and the thread chip use, so the cadence cannot disagree with what the
 				// owner is being shown.
 				val watchedWorking = repo._state.value.let { s -> s.openTabs.any { tab -> s.working(tab) } }
-				when (val wait = repo.pushback.decide(System.currentTimeMillis(), repo.isVisible, failed, watchedWorking)) {
+				when (val wait = repo.transportCoordinator.nextWait(repo.isVisible, failed, watchedWorking)) {
 					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
 					// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below

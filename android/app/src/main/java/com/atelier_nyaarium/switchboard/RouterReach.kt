@@ -76,6 +76,16 @@ fun reachCandidates(reach: RouterReach, blobRouterUrl: String, routerPort: Int):
 	}.distinct()
 }
 
+/** The next candidate after an unreachable base, or null when there is nowhere to go. A base that is
+ * no longer the current one means a concurrent attempt already moved the ring, so the answer is that
+ * attempt's choice rather than a second advance past it. Wrapping is what carries a phone off a LAN
+ * address it can no longer see and back again once it can. */
+fun nextReachIndex(candidates: List<String>, current: Int, base: String): Int? = when {
+	base != candidates.getOrNull(current) -> current.takeIf { candidates.isNotEmpty() }
+	candidates.size < 2 -> null
+	else -> (current + 1) % candidates.size
+}
+
 /** An address worth dialing, trimmed, or null. Blank is dropped rather than trimmed to nothing and
  * dialed: an address made only of whitespace names no host, and building a URL from it spends a
  * whole connect timeout proving it. Padding is stripped rather than rejected, since a padded address

@@ -85,4 +85,27 @@ class RouterReachTest {
 		// A record written before the field existed decodes with none, never a default number.
 		assertEquals(null, RouterReach.decode("""{"publicHost":"a","lanAddresses":[]}""").publicPort)
 	}
+
+	private val lan = "https://192.168.1.238:20001"
+	private val public = "https://switchboard.example.com:20001"
+
+	@Test
+	fun walkingOffTheLanReachesThePublicHostAndComesBack() {
+		val ring = listOf(lan, public)
+		val away = nextReachIndex(ring, 0, lan)
+		assertEquals(1, away)
+		// Wrap to retry LAN after returning home.
+		assertEquals(0, nextReachIndex(ring, away!!, public))
+	}
+
+	@Test
+	fun aBaseThatIsNoLongerCurrentDoesNotAdvancePastTheMove() {
+		assertEquals(1, nextReachIndex(listOf(lan, public), 1, lan))
+	}
+
+	@Test
+	fun aSoleCandidateHasNowhereToFailOver() {
+		assertEquals(null, nextReachIndex(listOf(lan), 0, lan))
+		assertEquals(null, nextReachIndex(emptyList(), 0, lan))
+	}
 }

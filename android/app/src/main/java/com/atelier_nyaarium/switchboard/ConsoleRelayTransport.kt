@@ -33,6 +33,9 @@ internal interface ConsoleSocketTransport {
 	val proxyBase: String
 	val appToken: String
 	fun clientFor(base: String): okhttp3.OkHttpClient
+
+	/** Advances the shared address ring so socket and ops use one Router address. */
+	fun unreachable(base: String): Boolean = false
 }
 
 internal class ConsoleRelayTransport(internal val prov: Provisioning, internal val store: AppStateStore) : ConsoleSocketTransport {
@@ -82,6 +85,8 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 		)
 	}
 
+	override fun unreachable(base: String): Boolean = failedToReach(base)
+
 	/**
 	 * A connection to [proxyBase] could not be made at all (a thrown IOException, never an HTTP
 	 * status: a status means the Router was reached and said something). Advance to the next candidate
@@ -90,9 +95,8 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	 */
 	@Synchronized
 	internal fun failedToReach(base: String): Boolean {
-		if (base != proxyBase) return true // a concurrent op already moved on; the retry uses its choice
-		if (candidates.size < 2) return false
-		val next = (current + 1) % candidates.size
+		val next = nextReachIndex(candidates, current, base) ?: return false
+		if (next == current) return true // Concurrent move already selected the retry base.
 		DebugLog.log("Relay", "unreachable ${runCatching { java.net.URI(base).host }.getOrNull()}, trying ${runCatching { java.net.URI(candidates[next]).host }.getOrNull()}")
 		current = next
 		return true

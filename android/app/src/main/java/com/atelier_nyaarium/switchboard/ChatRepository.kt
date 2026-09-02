@@ -158,6 +158,9 @@ class ChatRepository(
 	// same pattern as onInbound below.
 	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
 
+	// Arbitrates socket and poll ownership, sole pushback.decide caller.
+	internal val transportCoordinator = ConsoleTransportCoordinator(pushback)
+
 	// Always available from construction, independent of the drain's scope (null until the loop
 	// starts) and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be
 	// a silent no-op the way scheduleAttachmentDelete's best-effort drain.scope?.launch is allowed to be
