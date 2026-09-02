@@ -5,7 +5,8 @@ internal class ConsoleSocketDriver(
 	private val coordinator: ConsoleTransportCoordinator,
 	private val newClient: (ConsoleSocketListener) -> ConsoleSocketClient,
 	private val onRows: (List<com.atelier_nyaarium.switchboard.proto.InboxRow>, Long) -> Unit,
-	private val onPlane: (String, Long) -> Unit = { _, _ -> },
+	/** Payload is null for a plane that pokes rather than pushes; the reader re-reads on those. */
+	private val onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 	private val onGap: (Long) -> Unit = {},
 	private val kick: () -> Unit = {},
 	/** Fires only for a socket that died before it was ever welcomed, the one signal meaning the
@@ -74,7 +75,7 @@ internal class ConsoleSocketDriver(
 				}
 				is ConsoleSocketFrame.Plane -> {
 					if (!coordinator.owns(gen)) return
-					onPlane(frame.value.name, frame.value.version)
+					onPlane(frame.value.name, frame.value.version, frame.value.payload)
 				}
 				is ConsoleSocketFrame.Refused -> onClosed(null, frame.value.reason, null)
 				is ConsoleSocketFrame.Pong -> Unit

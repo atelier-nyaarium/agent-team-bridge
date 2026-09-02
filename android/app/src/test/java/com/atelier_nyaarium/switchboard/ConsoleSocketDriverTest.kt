@@ -82,7 +82,7 @@ class ConsoleSocketDriverTest {
 	fun planeIsDeliveredAndSupersededPlaneIsDropped() {
 		val coordinator = newCoordinator()
 		val planes = mutableListOf<Pair<String, Long>>()
-		val h = harness(coordinator, onPlane = { name, version -> planes += name to version })
+		val h = harness(coordinator, onPlane = { name, version, _ -> planes += name to version })
 		h.driver.connect()
 		val first = h.listenerListeners.single()
 		h.driver.connect()
@@ -221,6 +221,21 @@ class ConsoleSocketDriverTest {
 		assertEquals(1, h.closeCalls[0])
 	}
 
+	// A plane that pokes carries no payload, so the frame arrives with the key absent. Without a
+	// default on that field the whole frame fails to decode and the poke is lost silently.
+	@Test
+	fun aPokeShapedPlaneDecodesWithoutAPayload() {
+		val coordinator = newCoordinator()
+		val seen = mutableListOf<Triple<String, Long, Boolean>>()
+		val h = harness(coordinator, onPlane = { name, version, payload -> seen += Triple(name, version, payload == null) })
+		h.driver.connect()
+		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 0L, epoch = 1L, floor = 1L))
+
+		h.wireListeners.single().onMessage(h.socket, """{"type":"plane","incarnation":8,"name":"taskBoard","version":4}""")
+
+		assertEquals(listOf(Triple("taskBoard", 4L, true)), seen)
+	}
+
 	private data class Harness(
 		val driver: ConsoleSocketDriver,
 		val listenerListeners: MutableList<ConsoleSocketListener>,
@@ -232,7 +247,7 @@ class ConsoleSocketDriverTest {
 	private fun harness(
 		coordinator: ConsoleTransportCoordinator,
 		onRows: (List<InboxRow>, Long) -> Unit = { _, _ -> },
-		onPlane: (String, Long) -> Unit = { _, _ -> },
+		onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 		onGap: (Long) -> Unit = {},
 		onAck: () -> Unit = {},
 		kick: () -> Unit = {},

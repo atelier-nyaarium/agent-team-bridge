@@ -59,7 +59,8 @@ export const ConsolePlaneFrameSchema = z
 		incarnation: z.number().int().positive(),
 		name: z.string().min(1).max(64),
 		version: z.number().int().nonnegative(),
-		payload: z.unknown(),
+		/** Absent for a plane that pokes rather than pushes, so the reader re-reads instead. */
+		payload: z.unknown().optional(),
 	})
 	.meta({ id: "ConsolePlaneFrame" });
 

@@ -558,7 +558,7 @@ data class ConsolePlaneFrame(
 	val incarnation: Long,
 	val name: String,
 	val version: Long,
-	val payload: JsonElement,
+	val payload: JsonElement? = null,
 )
 
 @Serializable
