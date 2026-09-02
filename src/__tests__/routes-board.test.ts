@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BoardStore, isBoardReply, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway/routes.js";
 import { boardRequestBody } from "../mcp/board/boardTools.js";
+import { isBoardReply } from "../shared/board-structure.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -16,7 +17,7 @@ describe("routes", () => {
 		function makeBoardCtx(): { ctx: RoutesDeps; board: BoardStore } {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-route-"));
 			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
-			// The real composition root owns this and hands the same instance to every rebuild.
+			// Rebuilds share the durable board instance.
 			const ctx = makeCtx({ boardStore: board, ownerId: () => "owner-1", carryOver: createRoutesCarryOver() });
 			return { ctx, board };
 		}
@@ -50,8 +51,7 @@ describe("routes", () => {
 		});
 
 		it("a rebuilt route table still replays a settled mutation instead of re-applying it", async () => {
-			// Activating federation mid-session rebuilds the route table. The reply record has to be
-			// the caller's, not the table's, or the rebuild turns the next retry into a second write.
+			// Rebuilds preserve the caller's reply record.
 			const { ctx, board } = makeBoardCtx();
 			const created = await call(createRoutes(ctx).taskBoard, {
 				from: "recipe-app",
@@ -69,8 +69,7 @@ describe("routes", () => {
 				title: "Renamed once",
 			};
 			await call(createRoutes(ctx).taskBoard, rename);
-			// The owner edits between the write and its retry. A replay must not undo that; a second
-			// write would, because the body carries an absolute title.
+			// Replay must not overwrite a newer owner edit.
 			board.setTitle("owner-1", id, "Owner's later edit", OWNER_ACTOR);
 			await call(createRoutes(ctx).taskBoard, rename);
 
@@ -80,8 +79,7 @@ describe("routes", () => {
 		});
 
 		it("every tool's request body is one the route accepts", async () => {
-			// The tools build their bodies and the route validates them strictly, but nothing else
-			// holds the two together - a field renamed on either side would only show on a device.
+			// Keep tool and route schemas aligned.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -106,17 +104,14 @@ describe("routes", () => {
 		});
 
 		it("a fetch mints no operation id, so it is never recorded for replay", () => {
-			// The route replays a recorded reply BEFORE it consults the store, so an operation id here
-			// would hand back blobIds for pictures the owner has since swapped. Nothing in the route
-			// scopes replay to writes; this one Set is the whole protection.
+			// Replay keys cover writes that return attachment ids.
 			expect(boardRequestBody("attachments", { id: "bd_x" }).operationId).toBeUndefined();
 			expect(boardRequestBody("list").operationId).toBeUndefined();
 			expect(boardRequestBody("update", { id: "bd_x" }).operationId).toBeDefined();
 		});
 
 		it("the agent's list carries attachment names and never the ids that fetch them", async () => {
-			// A blobId is a bearer token and the list is the only place an agent could otherwise get
-			// one. Stripping happens ROUTE-side, so an older plugin cannot leak them during a deploy.
+			// Strip blob ids at the route boundary. They are bearer tokens.
 			const { ctx, board } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -137,15 +132,12 @@ describe("routes", () => {
 			expect(entry?.attachments).toEqual([{ filename: "shot.png", mime: "image/png", size: 3 }]);
 			expect(JSON.stringify(listed.body)).not.toContain(blobId);
 
-			// The plumbing lives on its own action, which the tool handler calls and the model never sees.
 			const fetched = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("attachments", { id }) });
 			expect(fetched.body.attachments).toMatchObject([{ blobId, blobGateway: "gw-1" }]);
 		});
 
 		it("a retried backlog create replays instead of refusing the caller its own entry", async () => {
-			// The id derives from the operation id, so the second POST finds the entry already there.
-			// A backlog create leaves it UNASSIGNED, which a scope check would refuse - telling the
-			// caller a create that landed will never apply, whose only recovery is a duplicate.
+			// Derive the entry id from the operation id for retry idempotence.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const body = { from: "recipe-app", ...boardRequestBody("create", { title: "later", assignTo: "backlog" }) };
@@ -158,7 +150,7 @@ describe("routes", () => {
 		});
 
 		it("a retried update replays its recorded reply instead of re-applying an absolute set", async () => {
-			// These writes are absolute, so re-running one after a newer write regresses the field.
+			// Absolute writes must not regress newer state.
 			const { ctx, board } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -169,16 +161,13 @@ describe("routes", () => {
 			const update = { from: "recipe-app", ...boardRequestBody("update", { id, state: "paused" }) };
 			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
 
-			// The reply was lost; meanwhile the owner moved it on from their console. The retry must
-			// not revert that.
 			board.setState("owner-1", id, "done", OWNER_ACTOR);
 			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
 			expect(board.entry("owner-1", id)?.state).toBe("done");
 		});
 
 		it("an update naming no changed field still refuses an entry this session cannot see", async () => {
-			// Otherwise applied:true for a held entry and entry_missing for an unknown one is an
-			// oracle telling a session which ids exist - the one thing list is built never to leak.
+			// Unknown and unauthorized ids share one response.
 			const { ctx, board } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			board.upsert("owner-1", [{ id: "theirs", title: "t", state: "open", rank: "m", sessionId: "other" }], {
@@ -239,7 +228,6 @@ describe("routes", () => {
 					makeCtx({
 						boardStore: board,
 						ownerId: () => "owner-1",
-						// A fresh carry-over each boot: only the durable file crosses the restart.
 						carryOver: createRoutesCarryOver(),
 						boardReplays: DurableOpStore.withValidator(replayDurable, isBoardReply),
 					}),
@@ -258,7 +246,6 @@ describe("routes", () => {
 			const update = { from: "recipe-app", action: "update", id, operationId: "op-u", state: "done" };
 			await call(before.taskBoard, update);
 
-			// Someone else moves it on, then the gateway restarts and the original update retries.
 			await call(before.taskBoard, { from: "recipe-app", action: "update", id, state: "in_progress" });
 			await call(boot().taskBoard, update);
 
@@ -272,8 +259,7 @@ describe("routes", () => {
 		});
 
 		it("one operation id reused across two actions replays neither into the other", async () => {
-			// Operation ids arrive on the wire, so nothing stops a caller reusing one. Without the
-			// action in the replay key, the claim below would be answered with the create's reply.
+			// Include the action in replay keys.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -347,7 +333,6 @@ describe("routes", () => {
 			expect((await call(taskBoard, { from: "recipe-app", action: "release", id })).body).toEqual({
 				applied: true,
 			});
-			// A lost-reply retry of the release stays a no-op success, never a refusal.
 			expect((await call(taskBoard, { from: "recipe-app", action: "release", id })).body).toEqual({
 				applied: true,
 			});
@@ -417,14 +402,7 @@ describe("routes", () => {
 			);
 		});
 
-		////////////////////////////////
-		//  Who may reach the owner's board
-		//
-		//  The port is published on every interface, and naming a session proves nothing on its own:
-		//  an unregistered name resolves to UNBOUND, which anything satisfies. So the board asks the
-		//  owner-data question instead, and these pin that it actually refuses.
-
-		/** A board context whose gateway has one bound session, the ordinary deployment. */
+		/** Board context with one bound session. */
 		function makeGuardedCtx(): { ctx: RoutesDeps; token: string; boundTeam: string } {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-guard-"));
 			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
@@ -438,8 +416,6 @@ describe("routes", () => {
 				ownerId: () => "owner-1",
 				carryOver: createRoutesCarryOver(),
 			});
-			// The minted session id, not the bare spawn: a bare name resolves to that spawn's DEFAULT
-			// session, which holds no record and so would be unbound like any invented name.
 			return { ctx, token, boundTeam: sessionStore.teamOf(record) };
 		}
 
@@ -459,11 +435,9 @@ describe("routes", () => {
 		it("refuses a caller that proves nothing, whatever name it invents", async () => {
 			const { ctx, boundTeam } = makeGuardedCtx();
 			const { taskBoard } = createRoutes(ctx);
-			// An invented slug used to resolve to UNBOUND and be admitted, which listed the backlog.
 			const invented = await callAs(taskBoard, { from: "not-a-real-session", action: "list", scope: "all" });
 			expect(invented.status).toBe(403);
 			expect(invented.body.entries).toBeUndefined();
-			// Naming the session that really is bound is no better: the name was never the proof.
 			expect((await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" })).status).toBe(403);
 		});
 
@@ -472,7 +446,7 @@ describe("routes", () => {
 			const { taskBoard } = createRoutes(ctx);
 			const real = await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" });
 			const invented = await callAs(taskBoard, { from: "not-a-real-session", action: "list", scope: "all" });
-			// Answering these two differently would tell a scanner which names exist.
+			// Unknown and unbound targets must not reveal board existence.
 			expect(invented.status).toBe(real.status);
 			expect(invented.body.error).toBe(real.body.error);
 		});
@@ -486,8 +460,7 @@ describe("routes", () => {
 		});
 
 		it("stays open where nothing is bound at all, the hand-launched deployment", async () => {
-			// Same posture the byte plane already takes: a gateway with no bound session has no
-			// credential to demand, so demanding one would refuse every legitimate caller it has.
+			// A gateway without a bound session has no credential to check.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			expect((await callAs(taskBoard, { from: "recipe-app", action: "list", scope: "all" })).status).toBe(200);

@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import type { SignedAdmission, SignedRevocation } from "../../shared/admission.js";
 import { REGISTER_MAX_SKEW_MS, resolveAdmittedConsole } from "../../shared/admission.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
@@ -23,12 +24,33 @@ export interface OwnerOpIntakeParams {
 	now?: () => number;
 }
 
+/** Verified, admitted, fresh operation. */
+export type OwnerOpHandler = (op: OwnerOp, value: Record<string, unknown>) => unknown | Promise<unknown>;
+
+const BUILT_IN_KINDS = new Set(["deliver", "consumer_register", "inbox_read", "inbox_advance", "op_result"]);
+
+/** Handler error for a `refused` result. */
+export class OwnerOpRefused extends Error {
+	constructor(readonly reason: string) {
+		super(reason);
+		this.name = "OwnerOpRefused";
+	}
+}
+
 export class OwnerOpIntake {
 	private readonly nonces = new Map<string, number>();
+	private readonly handlers = new Map<string, OwnerOpHandler>();
 	private readonly now: () => number;
 
 	constructor(private readonly params: OwnerOpIntakeParams) {
 		this.now = params.now ?? Date.now;
+	}
+
+	/** Register one non-built-in handler per operation kind. */
+	register(kind: string, handler: OwnerOpHandler): void {
+		if (this.handlers.has(kind) || BUILT_IN_KINDS.has(kind))
+			throw new Error(`owner op "${kind}" already registered`);
+		this.handlers.set(kind, handler);
 	}
 
 	async handle(raw: unknown): Promise<unknown> {
@@ -52,16 +74,21 @@ export class OwnerOpIntake {
 		if (this.nonces.has(op.nonce)) return refused("replay");
 		this.nonces.set(op.nonce, op.at);
 		try {
-			return this.dispatch(op, refused);
+			return await this.dispatch(op, refused);
 		} catch (error) {
 			if (error instanceof OwnerQuarantined)
 				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
+			// Parse failures and refused errors are operation results, not Router faults.
+			if (error instanceof ZodError) return refused("malformed");
+			if (error instanceof OwnerOpRefused) return refused(error.reason);
 			throw error;
 		}
 	}
 
-	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown {
+	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown | Promise<unknown> {
 		const value = op.op;
+		const handler = this.handlers.get(String(value.kind));
+		if (handler) return handler(op, value);
 		switch (value.kind) {
 			case "deliver":
 				return this.deliver(op, value, refused);
@@ -96,7 +123,7 @@ export class OwnerOpIntake {
 		}
 	}
 
-	/** Console writes stay in its Domain and use its opKey. */
+	/** Console writes stay in their Domain and use their opKey. */
 	private deliver(op: OwnerOp, value: Record<string, unknown>, refused: (reason: string) => OpResultEnvelope) {
 		const address = parseInboxAddress(String(value.address));
 		if (!address || address.domainId !== op.domainId) return refused("domain");

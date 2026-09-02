@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BOARD_REFUSED_PREFIX, refusalError } from "../gateway/boardAuthority.js";
-
-////////////////////////////////
-//  Constants
+import { BOARD_REFUSED_PREFIX, refusalError } from "../shared/board-authority.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -21,27 +18,24 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** The one sanctioned home of the marker; the positive control below proves the exemption works. */
-const OWNER = path.join(REPO_ROOT, "src", "gateway", "boardAuthority.ts");
+/** Sanctioned marker location. */
+const OWNER = path.join(REPO_ROOT, "src", "shared", "board-authority.ts");
 
-/** The wire marker itself, spelled out rather than imported: a test that builds its needle from the
- * value under test cannot notice that value changing. */
+/** Keep the marker independent from the value under test. */
 const MARKER = /["'`]refused:\s/;
 
 function read(file: string): string {
 	return fs.readFileSync(file, "utf8");
 }
 
-/** Source with comments removed. The marker must be nameable in prose - these modules explain the
- * contract at length - so only what the runtime sees is what the guard may judge. */
+/** Remove comments before scanning runtime source. */
 function code(file: string): string {
 	return read(file)
 		.replace(/\/\*[\s\S]*?\*\//g, "")
 		.replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
-/** Every TypeScript source under src/ except the owner, so no module anywhere in the tree can grow
- * a marker of its own unnoticed. */
+/** Scan every TypeScript source except the marker owner. */
 function sweptSources(): string[] {
 	const out: string[] = [];
 	const walk = (dir: string): void => {
@@ -55,13 +49,8 @@ function sweptSources(): string[] {
 	return out;
 }
 
-////////////////////////////////
-//  Tests
-
 describe("the refusal marker has exactly one producer", () => {
-	// A refusal is the only signal that retires a queued console action, which permanently discards
-	// the owner's edit. Any other throw whose message happens to start with the marker would do the
-	// same, silently.
+	// Only the refusal marker retires a queued console action.
 	it("no module under src/ writes a refusal marker of its own", () => {
 		const offenders = sweptSources().filter((file) => MARKER.test(code(file)));
 		expect(offenders.map((file) => path.relative(REPO_ROOT, file))).toEqual([]);
@@ -72,8 +61,7 @@ describe("the refusal marker has exactly one producer", () => {
 	});
 
 	it("the console reads the same marker the gateway writes", () => {
-		// The two halves ship on separate triggers, so a drift here is a silent capability outage:
-		// every refusal would read as a retryable error and no queued action would ever retire.
+		// Keep the marker in sync with the console's refusal classifier.
 		const kotlin = read(path.join(ANDROID_SRC, "ConsoleClientTypes.kt"));
 		const declared = /BOARD_REFUSED_PREFIX\s*=\s*"([^"]+)"/.exec(kotlin);
 

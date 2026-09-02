@@ -1,54 +1,22 @@
 import crypto from "node:crypto";
+import type { AwarenessObservation, AwarenessSubscriber, Change } from "../shared/awareness-types.js";
 import type { ActAxis, ChannelPushPayload, RidingAwareness } from "../shared/types.js";
-
-////////////////////////////////
-//  Interfaces & Types
 
 export type { ActAxis, RidingAwareness } from "../shared/types.js";
 
-/** Three values on purpose. A session that is still coming up is not gone, and folding the two
- * together drops a notice for a wake that goes on to succeed. */
+/** Waking sessions remain eligible for delivery. */
 export type SessionLiveness = "live" | "waking" | "gone";
-
-/** One identity's net change since the bank was last drained: the first pre seen and the last post.
- * Everything in between is folded away, so a run of edits and moves is one pair. */
-export interface Change<S> {
-	identity: string;
-	pre: S | undefined;
-	post: S | undefined;
-}
-
-export interface AwarenessObservation<S> {
-	sessionKey: string;
-	identity: string;
-	pre: S | undefined;
-	post: S | undefined;
-}
-
-/** A source of changes. It owns what an identity is, what a pair means, and how a batch reads. The
- * bank and the delivery never look inside a pair. */
-export interface AwarenessSubscriber<S> {
-	readonly source: string;
-	/** Asked per observation to decide whether a deadline is armed, and again per net pair at flush to
-	 * stamp the push. */
-	act(sessionKey: string, pre: S | undefined, post: S | undefined): ActAxis;
-	/** Empty string means nothing worth saying, and the bank sends nothing for it. */
-	render(sessionKey: string, changes: readonly Change<S>[]): string;
-}
 
 export interface AwarenessBank {
 	register<S>(subscriber: AwarenessSubscriber<S>): (observations: readonly AwarenessObservation<S>[]) => void;
-	/** The piggyback. Drains everything banked for the session, rendered, and cancels its deadline. */
 	takeFor(sessionKey: string): RidingAwareness | null;
 	dropFor(sessionKey: string): void;
-	/** Fires deadlines only. A bank with no deadline waits for `takeFor`. */
 	tick(now?: number): void;
 	stop(): void;
 }
 
 export interface AwarenessBankDeps {
 	liveness(sessionKey: string): SessionLiveness;
-	/** False when the socket went away between the liveness read and this call. */
 	deliver(sessionKey: string, payload: ChannelPushPayload): boolean;
 	now?: () => number;
 }
@@ -58,30 +26,20 @@ type Entry = {
 	changes: Map<string, Change<unknown>>;
 };
 
-/** `heldSince` is when the first act_now landed and `dueAt` is when the bank pushes on its own.
- * Both stay unset for a bank holding only no_act content. */
 type SessionBank = {
 	entries: Map<string, Entry>;
 	heldSince?: number;
 	dueAt?: number;
 };
 
-////////////////////////////////
-//  Constants
-
-/** A no_ack session id names no job, so `respond()` absorbs a reply to one instead of 404ing. */
+/** No-ack replies are absorbed by `respond()`. */
 const NO_ACK_SESSION_PREFIX = "na-";
 
-/** How long an act_now bank waits for a message to ride before pushing on its own. A message inside
- * the window carries the content for free; the push is the fallback. */
+/** Hold window for riding an act-now message. */
 export const ACT_NOW_HOLD_MS = 60_000;
 
-/** How long a due push waits on a waking session. Matches WAKE_TIMEOUT_MS, the gateway's own budget
- * for a wake to finish. Shorter drops notices for wakes that succeed. */
+/** Maximum wait for a waking session. */
 export const MAX_HOLD_MS = 600_000;
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function isNoAckSessionId(sessionId: string): boolean {
 	return sessionId.startsWith(NO_ACK_SESSION_PREFIX);
@@ -108,8 +66,7 @@ export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 		return bank;
 	}
 
-	/** Renders every subscriber with something to say. The act is read from the NET pairs, not from
-	 * whichever observation armed the deadline, so a take-away the owner undid is not urgent. */
+	/** Renders current net changes. */
 	function content(sessionKey: string, bank: SessionBank): RidingAwareness | null {
 		const rendered: { from: string; body: string; act: ActAxis }[] = [];
 		for (const entry of bank.entries.values()) {
@@ -121,7 +78,6 @@ export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 		}
 		if (rendered.length === 0) return null;
 		return {
-			// One source speaks under its own name. Several share a neutral one.
 			from: rendered.length === 1 ? rendered[0].from : "awareness",
 			body: rendered.map((item) => item.body).join("\n\n"),
 			act: rendered.some((item) => item.act === "act_now") ? "act_now" : "no_act",
@@ -135,8 +91,7 @@ export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 		return content(sessionKey, bank);
 	}
 
-	/** The fallback push, once a deadline is due. A waking session is re-checked every tick rather
-	 * than dropped, up to MAX_HOLD_MS. */
+	/** Pushes when a deadline is due. */
 	function deadline(sessionKey: string, bank: SessionBank, now: number): void {
 		const liveness = deps.liveness(sessionKey);
 		if (liveness === "gone") {
@@ -183,8 +138,6 @@ export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 						pre: previous?.pre ?? observation.pre,
 						post: observation.post,
 					});
-					// The deadline is set once, by the first act_now, and later ones do not push it out.
-					// Otherwise a steady stream of take-aways could hold the push off indefinitely.
 					if (
 						subscriber.act(observation.sessionKey, observation.pre as S, observation.post as S) ===
 						"act_now"

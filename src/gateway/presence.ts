@@ -1,8 +1,9 @@
 import type { ServerWebSocket } from "bun";
-import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
+import type { PlanePersistedState, PlaneRegistry } from "../shared/plane-registry.js";
+import type { PresenceRow } from "../shared/presence-identity.js";
+import { presenceIdentityOf } from "../shared/presence-identity.js";
 import { isComposite, isSlug, parseSessionName } from "../shared/session-id.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
-import type { TeamInfo } from "../shared/types.js";
 import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./websocket.js";
 
 ////////////////////////////////
@@ -18,7 +19,7 @@ export interface WorkingState {
 /** The gateway-internal name for a presence-plane row. TeamInfo's wire schema already carries
  * `working`/`needsLogin`/`presenceFresh` as optional fields, so this is a semantic alias, not a
  * structural extension - kept distinct so a presence-plane callsite reads as what it is. */
-export type PresenceRow = TeamInfo & WorkingState & { presenceFresh?: "fresh" | "quiet" | "unreachable" };
+export type { PresenceRow } from "../shared/presence-identity.js";
 
 export interface PresenceFacadeDeps {
 	sessionStore: SessionStore;
@@ -32,13 +33,6 @@ export interface PresenceFacadeDeps {
 
 ////////////////////////////////
 //  Functions & Helpers
-
-/** The identity hash of a presence snapshot: every field except `lastActive` (a per-second-churn
- * timestamp that must never gate a bump - see plan ruling 2's ambient-field exclusion). Rows are
- * pre-sorted by team in `snapshot()`, so this needs no further ordering work. */
-function presenceIdentityOf(rows: PresenceRow[]): string {
-	return stableHash(rows.map(({ lastActive: _lastActive, ...rest }) => rest));
-}
 
 ////////////////////////////////
 //  Class

@@ -5,24 +5,19 @@ import {
 	type FederatedOp,
 	MAX_CROSSDOMAIN_PRESENCE_SESSIONS,
 } from "../shared/federation-protocol.js";
+import {
+	presenceForDomain as projectPresenceForDomain,
+	toCrossDomainPresenceSession,
+} from "../shared/presence-projection.js";
 import { GatewaySpawnPointsSchema, TeamInfoSchema } from "../shared/schemas.js";
 import type { Address } from "../shared/session-id.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../shared/types.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface PresenceExchangeDeps {
-	/** The presence facade. Optional so a harness with no presence wiring shares nothing rather than
-	 * throwing. */
 	presence?: { snapshot(): TeamInfo[] };
-	/** The session targets currently shared to a friend Domain. Absent when federation sharing is not
-	 * wired. */
 	sharesFor?: ((domainId: string) => string[]) | null;
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	/** The cross-Domain-presence landing store. Absent when federation is not wired. */
 	crossDomainPresenceConsumer?: import("./federation/crossDomainPresence.js").CrossDomainPresenceConsumer | null;
-	/** Null instead of throwing for a registry key that is not a session name (routes.ts's own). */
 	tryLocalAddress: (name: string) => Address | null;
 	relayToGateway: (
 		dstGateway: string,
@@ -31,21 +26,11 @@ export interface PresenceExchangeDeps {
 	) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
 }
 
-////////////////////////////////
-//  Schemas
-
-/** The shape every `{kind:"list_teams"}` relay reply must match before any caller trusts it as
- * typed content - capped at `MAX_CROSSDOMAIN_PRESENCE_SESSIONS` as a blanket sanity bound on how
- * much one reply can cost to process, matching the push path's own wire-level `.max()`. */
+/** Validated and bounded relay reply. */
 const ListTeamsRelayResultSchema = z.object({
 	teams: z.array(TeamInfoSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS).optional(),
-	// Same-Domain peers only; a cross-Domain reply never carries it. Optional, so an older peer that
-	// omits it lands as "not advertised" rather than failing the whole reply and contributing nothing.
 	spawnPoints: z.array(GatewaySpawnPointsSchema).max(64).optional(),
 });
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function createPresenceExchange({
 	presence,
@@ -79,58 +64,18 @@ export function createPresenceExchange({
 		presenceSnapshotCache.invalidate();
 	}
 
-	/** Land a linked friend's presence_push - the cross-Domain-presence landing side (mirrors
-	 * consolePushOps.ts's consolePush shape and posture: local-append only, never fans out further).
-	 * `srcDomainId` is the sealer-VERIFIED sender (see gatewayRelay.ts's presence_push case),
-	 * never a payload-supplied value. A no-op pre-enrollment or when federation is not wired. */
+	/** Lands verified peer presence locally without forwarding it. */
 	function landCrossDomainPresence(srcDomainId: string, sessions: CrossDomainPresenceSession[]): void {
 		crossDomainPresenceConsumer?.land(srcDomainId, sessions);
 	}
 
-	/** Kind-filter + slug-validate + field-slice one TeamInfo row down to a CrossDomainPresenceSession
-	 * - shared by `presenceForDomain` (this Gateway's own outbound rows, still needing its own
-	 * `sharesFor` gate on top) and the backstop-pull reconciler (a linked peer's OWN already-shared-
-	 * filtered `list_teams` response, needing no further gate). Only devcontainer/loose sessions are
-	 * ever shareable (matching `gateCrossDomainTarget`'s own kind check); free-text fields are
-	 * truncated - this crosses a cross-Domain trust boundary TeamInfo itself was never scoped for.
-	 * `tryLocalAddress`, not the throwing `localAddress`: a row's team name is not always
-	 * slug-validated at intake (an ordinary devcontainer directory name can be uppercase, contain an
-	 * underscore/space, or exceed 64 chars), so an invalid one is skipped here, never an uncaught
-	 * throw. Returns null for a row that fails either check. */
-	function toCrossDomainPresenceSession(t: TeamInfo): CrossDomainPresenceSession | null {
-		if (t.kind !== "devcontainer" && t.kind !== "loose") return null;
-		if (!tryLocalAddress(t.team)) return null;
-		return {
-			team: t.team,
-			gatewayId: t.gatewayId,
-			status: t.status,
-			kind: t.kind,
-			sessionLabel: t.sessionLabel?.slice(0, 64),
-			description: t.description?.slice(0, 120),
-			lastActive: t.lastActive,
-			queueDepth: t.queue_depth,
-			working: t.working,
-			needsLogin: t.needsLogin,
-		};
-	}
-
-	/** What Domain `toDomainId` currently sees of this Gateway's own sessions - the exact
-	 * `sharesFor` filter gatewayRelay.ts's list_teams case already applies for a PULL, reused
-	 * here for the cross-Domain-presence PUSH (see crossDomainPresence.ts's source side). The
-	 * underlying local snapshot is cached for the current synchronous tick only (see
-	 * presenceSnapshotForThisTick) - never across ticks. */
 	function presenceForDomain(toDomainId: string): CrossDomainPresenceSession[] {
-		const local = presenceSnapshotForThisTick();
-		const shared = new Set(sharesFor?.(toDomainId) ?? []);
-		const out: CrossDomainPresenceSession[] = [];
-		for (const t of local) {
-			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
-			const addr = tryLocalAddress(t.team);
-			if (!addr || !shared.has(addr.canonical)) continue;
-			const session = toCrossDomainPresenceSession(t);
-			if (session) out.push(session);
-		}
-		return out;
+		return projectPresenceForDomain(
+			toDomainId,
+			presenceSnapshotForThisTick(),
+			sharesFor ?? (() => []),
+			tryLocalAddress,
+		);
 	}
 
 	/** Push this Gateway's current presenceForDomain(toDomainId) content to EVERY gateway linked
@@ -176,9 +121,7 @@ export function createPresenceExchange({
 			console.warn(`[relay] ${error}`);
 			return { ok: false, error };
 		}
-		// A peer names its OWN gatewayId in each row, so a peer claiming to speak for a third machine
-		// is dropped rather than merged. Discovery asked THIS gateway a question; only its answer
-		// about itself is evidence.
+		// A peer may report only its own gateway rows.
 		const spawnPoints = (parsed.data.spawnPoints ?? []).filter((s) => s.gatewayId === dstGateway);
 		return { ok: true, teams: parsed.data.teams ?? [], spawnPoints };
 	}
@@ -215,7 +158,7 @@ export function createPresenceExchange({
 		const out: CrossDomainPresenceSession[] = [];
 		for (const t of rows) {
 			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
-			const session = toCrossDomainPresenceSession(t);
+			const session = toCrossDomainPresenceSession(t, tryLocalAddress);
 			if (session) out.push(session);
 		}
 		return out;

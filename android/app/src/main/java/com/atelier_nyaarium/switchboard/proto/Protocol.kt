@@ -14,9 +14,11 @@
 // op-only envelope {device, conversationId, opId, op}; the Router composes the
 // full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
+@file:OptIn(ExperimentalSerializationApi::class)
 
 package com.atelier_nyaarium.switchboard.proto
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -432,6 +434,7 @@ data class ConsoleOpEnvelope(
 
 @Serializable
 data class ConsoleRelayFrame(
+	@EncodeDefault
 	val type: String = "console_relay",
 	val v: Long,
 	val opId: String,
@@ -442,6 +445,7 @@ data class ConsoleRelayFrame(
 
 @Serializable
 data class ConsoleRelayReply(
+	@EncodeDefault
 	val type: String = "console_relay_reply",
 	val v: Long,
 	val opId: String,
@@ -960,6 +964,237 @@ data class OpResultEnvelope(
 	val outcome: String,
 	val seq: Long? = null,
 	val reason: String? = null,
+)
+
+@Serializable
+data class OwnerPresenceProjection(
+	val plane: PresencePlane,
+	val rows: List<TeamInfo>,
+	val linked: List<CrossDomainPresenceEntry>,
+	val roster: List<RosterEntry>,
+	val coverage: DiscoverCoverage,
+	val spawnPoints: List<GatewaySpawnPoints>,
+)
+
+@Serializable
+data class FriendPresenceProjection(
+	val plane: PresencePlane,
+	val sessions: List<CrossDomainPresenceSession>,
+)
+
+@Serializable
+data class RosterEntry(
+	val gatewayId: String,
+	val connected: Boolean,
+	val incarnation: Long,
+	val lastRegisteredAt: Long,
+)
+
+@Serializable
+data class CrossDomainShareValue(
+	val sessionTarget: String,
+	val target: CrossDomainShareTarget,
+)
+
+@Serializable
+data class CrossDomainUnshareValue(
+	val sessionTarget: String,
+	val target: CrossDomainShareTarget,
+)
+
+@Serializable
+data class CrossDomainUnlinkValue(
+	val domainId: String,
+)
+
+@Serializable
+data class BoardStoredEntry(
+	val clear: BoardEntryClear,
+	val sealed: BoardEntrySealed,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class BoardActor {
+	@Serializable
+	@SerialName("owner")
+	data object Owner : BoardActor()
+
+	@Serializable
+	@SerialName("session")
+	data class Session(
+		val session: BoardSession,
+	) : BoardActor()
+}
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class BoardOp {
+	@Serializable
+	@SerialName("upsert")
+	data class Upsert(
+		val id: String,
+		val state: String,
+		val parent: String? = null,
+		val rank: String,
+		val session: BoardSession? = null,
+		val trashedAt: Long? = null,
+		val attachments: List<BoardStateAttachment>? = null,
+		val title: ContentEnvelope,
+		val body: ContentEnvelope? = null,
+		val names: JsonObject? = null,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("remove")
+	data class Remove(
+		val id: String,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("set_state")
+	data class SetState(
+		val id: String,
+		val state: String,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("set_parent")
+	data class SetParent(
+		val id: String,
+		val parent: String? = null,
+		val rank: String,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("set_rank")
+	data class SetRank(
+		val id: String,
+		val rank: String,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("set_attachments")
+	data class SetAttachments(
+		val id: String,
+		val attachments: List<BoardStateAttachment>,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("trash")
+	data class Trash(
+		val id: String,
+	) : BoardOp()
+
+	@Serializable
+	@SerialName("restore")
+	data class Restore(
+		val id: String,
+	) : BoardOp()
+}
+
+@Serializable
+data class BoardWrite(
+	val ops: List<BoardOp>,
+	val expectedRevision: Long,
+	val actor: BoardActor,
+)
+
+@Serializable
+data class BoardWriteResult(
+	val outcome: String,
+	val revision: Long,
+	val entries: List<BoardStoredEntry>,
+	val cascaded: List<BoardCascaded>? = null,
+	val refusal: String? = null,
+)
+
+@Serializable
+data class BoardReadResult(
+	val revision: Long,
+	val entries: List<BoardStoredEntry>,
+)
+
+@Serializable
+data class BoardObservationRow(
+	val identity: String,
+	val pre: BoardStoredEntry? = null,
+	val post: BoardStoredEntry? = null,
+)
+
+@Serializable
+data class ScheduledRecord(
+	val target: ScheduledTarget,
+	val fireAt: Long,
+	val createdAt: Long,
+	val opId: String,
+	val sender: ScheduledSender,
+	val files: List<String>,
+	val body: ContentEnvelope,
+	val state: String,
+	val attempts: Long,
+	val version: Long,
+)
+
+@Serializable
+data class ScheduleSendValue(
+	@EncodeDefault
+	val kind: String = "schedule_send",
+	val target: ScheduledTarget,
+	val fireAt: Long,
+	val opId: String,
+	val files: List<String>,
+	val body: ContentEnvelope,
+	val expectedVersion: Long? = null,
+)
+
+@Serializable
+data class ScheduleCancelValue(
+	@EncodeDefault
+	val kind: String = "schedule_cancel",
+	val target: ScheduledTarget,
+	val expectedVersion: Long,
+)
+
+@Serializable
+data class ScheduledResultRow(
+	val opId: String,
+	val outcome: String,
+	val seq: Long? = null,
+	val body: ContentEnvelope,
+)
+
+@Serializable
+data class CapabilitiesReport(
+	@EncodeDefault
+	val kind: String = "capabilities_report",
+	val capabilities: List<EnabledPlugin>? = null,
+	val clientVersion: String? = null,
+)
+
+@Serializable
+data class CapabilitySnapshot(
+	val known: Boolean,
+	val capabilities: List<EnabledPlugin>,
+	val clientVersions: List<String>,
+)
+
+@Serializable
+data class ReportRead(
+	@EncodeDefault
+	val kind: String = "report_read",
+	val team: String,
+	val epoch: Long,
+	val seq: Long,
+	val at: Long,
+)
+
+@Serializable
+data class ReadAnchorsResult(
+	val version: ReadAnchorsVersion,
+	val anchors: List<ReadAnchorWireEntry>,
 )
 
 @Serializable
@@ -1489,4 +1724,65 @@ data class RosterMember(
 data class TrustPendingEntry(
 	val initiatorOwnerSignPub: String,
 	val rendezvousId: String,
+)
+
+@Serializable
+data class PresencePlane(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class BoardEntryClear(
+	val id: String,
+	val state: String,
+	val parent: String? = null,
+	val rank: String,
+	val session: BoardSession? = null,
+	val trashedAt: Long? = null,
+	val attachments: List<BoardStateAttachment>? = null,
+	val version: Long,
+)
+
+@Serializable
+data class BoardSession(
+	val domainId: String,
+	val gatewayId: String,
+	val sessionId: String,
+)
+
+@Serializable
+data class BoardStateAttachment(
+	val blobId: String,
+	val size: Long,
+	val mime: String,
+	val blobGateway: String,
+)
+
+@Serializable
+data class BoardEntrySealed(
+	val title: ContentEnvelope,
+	val body: ContentEnvelope? = null,
+	val names: JsonObject? = null,
+)
+
+@Serializable
+data class BoardCascaded(
+	val id: String,
+	val from: String,
+	val to: String,
+	val reason: String,
+)
+
+@Serializable
+data class ScheduledTarget(
+	val domainId: String,
+	val gatewayId: String,
+	val sessionId: String,
+)
+
+@Serializable
+data class ScheduledSender(
+	val conversationId: String,
+	val device: String,
 )

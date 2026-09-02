@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BOARD_TRASH_TTL_MS, type BoardActor, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { type BoardActor, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { BOARD_TRASH_TTL_MS } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -27,9 +28,6 @@ afterEach(() => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// These cases are about the STORE's rules, which the owner is never scoped out of, so they write as
-// the owner. Session scope has its own describe block below. Arrow functions rather than a captured
-// object, because beforeEach installs a fresh store for every case.
 const upsert = (entries: BoardEntry[]) => store.upsert(OWNER, entries, OWNER_ACTOR);
 const setState = (id: string, state: BoardEntry["state"]) => store.setState(OWNER, id, state, OWNER_ACTOR);
 const setBody = (id: string, body: string | undefined) => store.setBody(OWNER, id, body, OWNER_ACTOR);
@@ -82,14 +80,12 @@ describe("write scope", () => {
 	it("a session writes what it holds and nothing else", () => {
 		expect(store.setTitle(OWNER, "mine", "renamed", MINE)).toEqual({ applied: true });
 		expect(store.setTitle(OWNER, "theirs", "renamed", MINE)).toEqual({ applied: false, refused: "held" });
-		// Unassigned is not the same as unowned - the backlog is the owner's, not up for grabs.
 		expect(store.setState(OWNER, "loose", "done", MINE)).toEqual({ applied: false, refused: "held" });
 		expect(store.entry(OWNER, "theirs")?.title).toBe("t-theirs");
 	});
 
 	it("a session cannot graft its subtree under another session's entry", () => {
-		// The OBJECT of the write is scope-checked, not just the subject. Without this, holding one
-		// entry was enough to attach it anywhere on the owner's board.
+		// Scope-check the destination, not only the subject.
 		expect(store.setParentAtEnd(OWNER, "mine", "theirs", MINE)).toEqual({ applied: false, refused: "held" });
 		expect(store.entry(OWNER, "mine")?.parent).toBeUndefined();
 	});
@@ -101,8 +97,6 @@ describe("write scope", () => {
 	});
 
 	it("a session reaches the backlog through claim, which is the whole point of the backlog", () => {
-		// Scope is not a wall around the backlog: a session puts follow-ups there and takes work from
-		// there. It just cannot edit what it has not taken.
 		expect(store.createAtEnd(OWNER, { id: "note", title: "for later", state: "open" }, MINE)).toEqual({
 			applied: true,
 		});
@@ -112,9 +106,7 @@ describe("write scope", () => {
 	});
 
 	it("the trash is the owner's alone: a session can neither claim nor edit what is in it", () => {
-		// A session holds ids from before the owner trashed them. Without this it could take and
-		// rewrite something no list will ever show it again, and the owner's restore would return
-		// somebody else's title.
+		// Trashed entries cannot be claimed from stale session state.
 		store.setTrashed(OWNER, "mine", true, 1000);
 		expect(store.claim(OWNER, "mine", "sess-1")).toEqual({ applied: false, refused: "entry_missing" });
 		expect(store.setTitle(OWNER, "mine", "rewritten", MINE)).toEqual({
@@ -125,8 +117,7 @@ describe("write scope", () => {
 	});
 
 	it("nesting follows the same rule as writing, so a backlog entry cannot be locked out from under a claim", () => {
-		// Allowing this left the parent advertised as unclaimed while claim's subtree rule refused
-		// every other session, with nothing in any list saying why.
+		// A claimed child requires a claimed parent.
 		const created = store.createAtEnd(OWNER, { id: "sub", title: "s", state: "open", parent: "loose" }, MINE);
 		expect(created).toEqual({ applied: false, refused: "held" });
 		expect(store.claim(OWNER, "loose", "sess-2")).toEqual({ applied: true });
@@ -193,8 +184,7 @@ describe("trash and sweeps", () => {
 			entry("done1", { sessionId: "s", state: "done" }),
 		]);
 		store.sessionEnded("s", "cancel", 5000);
-		// Cancelled, and therefore trashed by the same rule that trashes an already-finished entry -
-		// one pass, so a crash cannot leave the two halves disagreeing.
+		// Cancellation and trash are one durable transition.
 		for (const id of ["open1", "busy"]) {
 			expect(store.entry(OWNER, id)).toMatchObject({ state: "cancelled", trashedAt: 5000 });
 		}
@@ -203,8 +193,6 @@ describe("trash and sweeps", () => {
 	});
 
 	it("cancel leaves an already-trashed entry's state alone, matching what the prompt counted", () => {
-		// The forget prompt counts live unfinished work. An entry the owner trashed earlier was never
-		// in that count, so restating it would change something they were not asked about.
 		upsert([entry("binned", { sessionId: "s", state: "in_progress" })]);
 		store.setTrashed(OWNER, "binned", true);
 		store.sessionEnded("s", "cancel", 5000);
@@ -213,8 +201,7 @@ describe("trash and sweeps", () => {
 	});
 
 	it("clear leaves a finished entry that still has live children, so no pointer dangles", () => {
-		// The list drops trashed entries, so trashing the parent alone hands a reader a parent id
-		// that is not in the result - the invariant every other trash path here maintains.
+		// Trashing a parent also removes its children from listings.
 		upsert([
 			entry("p", { sessionId: "s", state: "done" }),
 			entry("kid", { parent: "p", sessionId: "s", state: "open" }),
@@ -224,14 +211,12 @@ describe("trash and sweeps", () => {
 		expect(store.entry(OWNER, "solo")?.trashedAt).toBe(5000);
 		expect(store.entry(OWNER, "p")?.trashedAt).toBeUndefined();
 
-		// Once the child is finished, the parent's turn comes.
 		setState("kid", "done");
 		expect(store.clearDone(OWNER, "s", 6000)).toBe(2);
 		expect(store.entry(OWNER, "p")?.trashedAt).toBe(6000);
 	});
 
 	it("the disposition covers every entry the STORE holds, not a set a client enumerated", () => {
-		// The console can only name entries it has polled. The gateway sees all of them.
 		upsert([entry("seen", { sessionId: "s" }), entry("unpolled", { sessionId: "s" })]);
 		expect(store.sessionEnded("s", "cancel", 5000)).toBe(2);
 		expect(store.entry(OWNER, "unpolled")?.state).toBe("cancelled");
@@ -250,8 +235,7 @@ describe("trash and sweeps", () => {
 	});
 
 	it("clearDone keeps a done parent whose child is another session's, so the tree stays whole", () => {
-		// The survivor is finished, so an unfinished-children guard misses it entirely, and trashing the
-		// parent would leave it under an entry no list returns.
+		// Finished children still prevent parent trashing.
 		upsert([
 			entry("p", { sessionId: "s1", state: "done" }),
 			entry("c", { parent: "p", sessionId: "s2", state: "done" }),
@@ -339,15 +323,12 @@ describe("durability and the plane", () => {
 			refused: "bad_rank",
 		});
 
-		// A full-width tail of MAX digits is the one shape whose end-mint OVERFLOWS: midpoint consumes
-		// every digit and appends one more. A 63-digit tail still mints inside the bound and would
-		// never reach the rebalance this asserts.
+		// A full-width tail forces rank rebalance.
 		const overflowing = "z".repeat(64);
 		upsert([entry("tail", { rank: overflowing })]);
 		expect(store.createAtEnd(OWNER, { id: "fresh", title: "t", state: "open" }, OWNER_ACTOR)).toEqual({
 			applied: true,
 		});
-		// The rebalance ran: the existing sibling was renumbered, not left at its old rank.
 		const tail = store.entry(OWNER, "tail")!.rank;
 		const minted = store.entry(OWNER, "fresh")!.rank;
 		expect(minted.length).toBeLessThanOrEqual(64);
@@ -356,8 +337,7 @@ describe("durability and the plane", () => {
 	});
 
 	it("a refused create leaves no rebalance behind it", () => {
-		// Placement mints INSIDE the write, so a refusal cannot commit a rank rewrite the caller then
-		// believes did not happen. Naming a parent that does not exist is the cheapest refusal.
+		// Refusal must not commit a rank rewrite.
 		upsert([entry("tail", { rank: `${"z".repeat(64)}` })]);
 		expect(
 			store.createAtEnd(OWNER, { id: "fresh", title: "t", state: "open", parent: "ghost" }, OWNER_ACTOR),

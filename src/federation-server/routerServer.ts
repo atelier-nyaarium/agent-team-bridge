@@ -32,6 +32,7 @@ import { InboxService } from "./inbox/inboxService.js";
 import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "./owner/domainQuota.js";
+import { createOwnerServices } from "./ownerServices.js";
 import { PublicApproval } from "./publicApproval.js";
 import { buildRoster, type RosterDomain } from "./roster.js";
 import { loadRouterTls, type RouterTls } from "./routerTls.js";
@@ -71,6 +72,7 @@ export class RouterServer {
 	private readonly referenceHeld: ReferenceHeldStore;
 	private readonly sweepTimer: ReturnType<typeof setInterval>;
 	private readonly ownerOps: OwnerOpIntake;
+	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
 
 	public constructor(private readonly params: RouterServerParams) {
 		this.tls = params.tls ?? loadRouterTls(params.dataDir);
@@ -119,6 +121,20 @@ export class RouterServer {
 			inbox: this.inbox,
 			blobCache: this.blobCache,
 		});
+		this.ownerServices = createOwnerServices({
+			registry: this.ownerRegistry,
+			inbox: this.inbox,
+			bridge: this.bridge,
+			intake: this.ownerOps,
+			referenceHeld: this.referenceHeld,
+			routerIdentity: {
+				signPub: params.store.persistedIdentity.sign.pub,
+				signPriv: params.store.persistedIdentity.sign.priv,
+			},
+			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
+			hasLinkEdge: (srcDomainId, dstDomainId) =>
+				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
+		});
 		this.console = new ConsoleSurface({
 			port: params.port,
 			authToken: params.consoleToken,
@@ -160,6 +176,7 @@ export class RouterServer {
 			try {
 				this.inbox.sweep();
 				this.blobCache.sweep();
+				this.ownerServices.sweep();
 			} catch (error) {
 				console.warn(`[router] sweep failed: ${(error as Error).message}`);
 			}
@@ -171,6 +188,7 @@ export class RouterServer {
 
 	public async start(): Promise<void> {
 		this.bridge.attach();
+		this.ownerServices.rearm();
 		const transport = this.bridge.transportAdapter;
 		if (!transport) throw new Error("gateway transport unavailable");
 		this.server = https.createServer({ cert: this.tls.certPem, key: this.tls.keyPem }, (request, response) => {
@@ -200,7 +218,7 @@ export class RouterServer {
 			});
 		});
 		this.server.on("error", (err) => console.error(`[federation-router] server error: ${err.message}`));
-		// Report certificate-pin failures that occur before routing.
+		// Report certificate-pin failures before routing.
 		this.server.on("tlsClientError", (err, socket) => {
 			const peer = (socket as { remoteAddress?: string }).remoteAddress ?? "?";
 			console.log(`[federation-router] TLS handshake failed from ${peer}: ${err.message}`);
@@ -249,7 +267,6 @@ export class RouterServer {
 		return this.console;
 	}
 
-	// Route every response through this adapter.
 	private async serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		try {
 			await this.writeResponse(response, await this.route(request));
@@ -367,7 +384,7 @@ export class RouterServer {
 			if (failed) return failed;
 			this.bridge.broadcastDomainUpdate(domainId);
 		} else if (op.kind === "submit_xdomain_link" || op.kind === "revoke_xdomain_link") {
-			// Persist link changes before ACK.
+			// Persist link changes before acknowledging.
 			const failed = await this.flushOrError(domainId);
 			if (failed) return failed;
 		} else if (op.kind === "set_display_name") {
@@ -410,7 +427,7 @@ export class RouterServer {
 		return buildRoster(req.signerSignPub, domains, this.bridge.onlineDomainIds());
 	}
 
-	/** Return the bearer only to a fresh, non-replayed proof from a Domain root. */
+	/** Return the bearer only for a fresh proof from a Domain root. */
 	private handleTransport(req: TransportRequest): TransportResult {
 		const opaque: TransportResult = { ok: false, error: "not a member of this network" };
 		if (!verifyTransportRequest(req)) return opaque;
@@ -441,7 +458,7 @@ export class RouterServer {
 		};
 	}
 
-	// Invalid or replayed proofs return no enumeration.
+	// Invalid or replayed proofs reveal no state.
 	private handleTrustPending(req: TrustPendingRequest): TrustPendingResult {
 		const opaque: TrustPendingResult = { ok: true, pending: [] };
 		if (!verifyTrustPendingRequest(req)) return opaque;
@@ -467,7 +484,7 @@ function readBody(request: IncomingMessage, maxBytes: number): Promise<BodyResul
 			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 			length += buffer.length;
 			if (length > maxBytes) {
-				// Preserve the socket so the caller can answer 413.
+				// Keep the socket open so the caller can answer 413.
 				resolve({ outcome: "too-large" });
 				request.pause();
 				return;

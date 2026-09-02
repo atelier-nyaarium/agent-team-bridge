@@ -18,22 +18,51 @@ import type { OwnerStoreRegistry } from "./ownerStoreRegistry.js";
 
 type OpKeyInput = OpKey | { conversationId: string; opId: string; hash?: string };
 type AckOutcome = "delivered" | "waking" | "failed";
-type Terminal = "failed" | "expired";
+type Terminal = "failed" | "expired" | "target_revoked";
+/** Current share generation, or null when unshared. */
+export type PeerRowGate = (dstDomainId: string, sessionTarget: string, srcDomainId: string) => number | null;
+
+/** Canonical `domain.gateway.spawn.session` target. */
+export function sessionTargetOf(address: InboxAddress): string | null {
+	return address.kind === "session" ? `${address.domainId}.${address.gatewayId}.${address.sessionId}` : null;
+}
 const recordId = (key: OpKey, owner: string) => `op:${owner}/${key.conversationId}/${key.opId}`;
+const addressOfTarget = (sessionTarget: string): InboxAddress | null => {
+	const [domainId, gatewayId, ...rest] = sessionTarget.split(".");
+	if (!domainId || !gatewayId || rest.length < 2) return null;
+	return { kind: "session", domainId, gatewayId, sessionId: rest.join(".") };
+};
 const CONSUMER_SEEN_REFRESH_MS = 60 * 60 * 1000;
 const JOURNAL_COMPACT_BYTES = 4 * 1024 * 1024;
 
 export class InboxService {
+	private peerGate: PeerRowGate | null = null;
+	private readonly retiredListeners: Array<(domainId: string, address: string, row: InboxRow) => void> = [];
+
+	/** Fires once a row has left its inbox for good, delivered or retired. */
+	onRowRetired(listener: (domainId: string, address: string, row: InboxRow) => void): void {
+		this.retiredListeners.push(listener);
+	}
+	private rowRetired(domainId: string, address: string, row: InboxRow): void {
+		for (const listener of this.retiredListeners) listener(domainId, address, row);
+	}
+
 	constructor(
 		private readonly registry: OwnerStoreRegistry,
 		private readonly routerIdentity: { signPub: string; signPriv: string },
 	) {}
+
+	/** Check share state before releasing a peer row. */
+	setPeerGate(gate: PeerRowGate): void {
+		this.peerGate = gate;
+	}
 
 	appendRow(input: {
 		address: InboxAddress;
 		row: InboxRowInput;
 		producerSignPub: string;
 		opKey?: OpKeyInput;
+		shareGeneration?: number;
 	}): OpResultEnvelope & { row?: InboxRow } {
 		const { address, row } = input;
 		const key = row.envelope.opKey;
@@ -68,13 +97,33 @@ export class InboxService {
 			return { opKey: key, outcome: "durability_uncertain" };
 		}
 		if (refusal) return { opKey: key, outcome: "refused", reason: refusal };
-		return this.appendLedgerTransaction(store, address, row, { state: "accepted", opHash, at: this.now() });
+		return this.appendLedgerTransaction(store, address, row, {
+			state: "accepted",
+			opHash,
+			at: this.now(),
+			...(input.shareGeneration !== undefined ? { shareGeneration: input.shareGeneration } : {}),
+		});
+	}
+
+	/** Retire undelivered rows whose share was revoked. */
+	retireRevokedPeerRows(domainId: string, sessionTarget: string, friendDomainId: string): number {
+		return this.guarded(() => {
+			const address = addressOfTarget(sessionTarget);
+			if (!address || address.domainId !== domainId) return 0;
+			const store = this.registry.for(domainId);
+			let retired = 0;
+			for (const row of this.rows(address, 1, Number.MAX_SAFE_INTEGER)) {
+				if (row.envelope.epoch !== "peer" || row.envelope.origin.domainId !== friendDomainId) continue;
+				if (this.retire(store, domainId, address, row, "target_revoked")) retired++;
+			}
+			return retired;
+		}, 0);
 	}
 
 	ack(input: {
 		address: InboxAddress;
 		seq: number;
-		/** A stale epoch refuses the acknowledgement. */
+		/** Stale epochs reject the acknowledgement. */
 		deliveryEpoch?: number;
 		outcome: AckOutcome;
 		reason?: string;
@@ -114,11 +163,12 @@ export class InboxService {
 			if (ledger) tx.put("op", opId, ledger.version, { clear: { ...ledger.clear, state: input.outcome } });
 			if (input.outcome === "delivered") tx.remove(formatInboxAddress(address), input.seq);
 		});
-		if (write.kind === "ok") return { opKey: row.envelope.opKey, outcome: input.outcome, seq: input.seq };
-		return { opKey: row.envelope.opKey, outcome: this.durabilityOutcome(write.kind) };
+		if (write.kind !== "ok") return { opKey: row.envelope.opKey, outcome: this.durabilityOutcome(write.kind) };
+		if (input.outcome === "delivered") this.rowRetired(address.domainId, formatInboxAddress(address), row);
+		return { opKey: row.envelope.opKey, outcome: input.outcome, seq: input.seq };
 	}
 
-	/** Mark held rows so repeats report that they await the gateway. */
+	/** Mark held rows as waiting for the gateway. */
 	markWaking(domainId: string, opKey: OpKey): void {
 		this.guarded(() => {
 			const store = this.registry.for(domainId);
@@ -136,6 +186,29 @@ export class InboxService {
 			.map((entry) => entry.row as unknown as InboxRow);
 	}
 
+	/** Compose a clear row through the producer ledger and caps. */
+	appendRouterRow(input: {
+		address: InboxAddress;
+		kind: "board_observation" | "scheduled_result" | "op_result";
+		opKey: OpKey;
+		body: Record<string, unknown>;
+		contentRefs?: string[];
+	}): OpResultEnvelope & { row?: InboxRow } {
+		const envelope = {
+			origin: { kind: "router" as const, domainId: input.address.domainId },
+			opKey: input.opKey,
+			epoch: "clear" as const,
+			kind: input.kind,
+			contentRefs: input.contentRefs ?? [],
+		};
+		const row = {
+			envelope,
+			producerSig: signRowEnvelope(envelope, this.routerIdentity.signPriv),
+			body: input.body,
+		};
+		return this.appendRow({ address: input.address, row, producerSignPub: this.routerIdentity.signPub });
+	}
+
 	pendingFor(domainId: string, gatewayId: string): Array<{ address: string; rows: InboxRow[] }> {
 		return this.guarded(() => {
 			const store = this.registry.for(domainId);
@@ -148,10 +221,25 @@ export class InboxService {
 					address,
 					rows: store
 						.rows(address, 1, Number.MAX_SAFE_INTEGER)
-						.map((entry) => entry.row as unknown as InboxRow),
+						.map((entry) => entry.row as unknown as InboxRow)
+						.filter((row) => this.stillShared(store, domainId, address, row)),
 				}))
 				.filter((entry) => entry.rows.length > 0);
 		}, []);
+	}
+
+	/** Retire peer rows revoked since acceptance. */
+	private stillShared(store: OwnerStateStore, domainId: string, addressText: string, row: InboxRow): boolean {
+		if (row.envelope.epoch !== "peer" || !this.peerGate) return true;
+		const address = parseInboxAddress(addressText);
+		const target = address ? sessionTargetOf(address) : null;
+		if (!address || !target) return true;
+		const ledger = store.get("op", recordId(row.envelope.opKey, this.registry.ownerKey(domainId).ownerSignPub));
+		const accepted = Number(ledger?.clear.shareGeneration ?? 0);
+		const current = this.peerGate(domainId, target, row.envelope.origin.domainId);
+		if (current !== null && current <= accepted) return true;
+		this.retire(store, domainId, address, row, "target_revoked");
+		return false;
 	}
 
 	readOwner(
@@ -258,7 +346,7 @@ export class InboxService {
 			store.put("session", id, current?.version ?? null, { clear: { ...value, lastSeen: this.now() } });
 		}, undefined);
 	}
-	/** Fail held rows and advance the delivery epoch. */
+	/** Fail held rows and advance the epoch. */
 	forgetSession(domainId: string, gatewayId: string, sessionId: string): void {
 		this.guarded(() => {
 			const store = this.registry.for(domainId);
@@ -424,7 +512,7 @@ export class InboxService {
 			size: Buffer.byteLength(canonicalJson(result)),
 		};
 	}
-	/** Record the outcome, remove the row, and enqueue its result atomically. Cross-domain results write separately. */
+	/** Atomically record the outcome, remove the row, and enqueue its result. */
 	private retire(
 		store: OwnerStateStore,
 		domainId: string,
@@ -456,6 +544,7 @@ export class InboxService {
 				});
 		});
 		if (write.kind !== "ok") return null;
+		this.rowRetired(domainId, addressText, row);
 		if (sender && resultRow && senderStore && senderStore !== store) {
 			const cross = this.ledgerTransaction(senderStore, (tx) => tx.append(sender.address, resultRow));
 			if (cross.kind !== "ok")
@@ -469,7 +558,7 @@ export class InboxService {
 		store: OwnerStateStore,
 		address: InboxAddress,
 		input: InboxRowInput,
-		ledger: { state: string; opHash: string; at: number },
+		ledger: { state: string; opHash: string; at: number; shareGeneration?: number },
 	): OpResultEnvelope & { row?: InboxRow } {
 		const row = {
 			...input,

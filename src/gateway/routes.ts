@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import type { CascadeChange } from "../shared/board-cascade.js";
+import { type BoardReply, boardEntryIdForOperation } from "../shared/board-structure.js";
 import { sha256Hex } from "../shared/canonical-json.js";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
@@ -31,16 +33,7 @@ import type {
 } from "../shared/types.js";
 import { isNoAckSessionId } from "./awarenessBank.js";
 import { createBlobFetcher } from "./blobFetch.js";
-import type { CascadeChange } from "./boardCascade.js";
-import {
-	type BoardActor,
-	type BoardReply,
-	type BoardResult,
-	type BoardStore,
-	boardEntryIdForOperation,
-	mayWrite,
-	visibleTo,
-} from "./boardStore.js";
+import { type BoardActor, type BoardResult, type BoardStore, mayWrite, visibleTo } from "./boardStore.js";
 import type { ChannelDeliveryCoordinator } from "./channelDelivery.js";
 import type { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsolePushOps } from "./consolePushOps.js";

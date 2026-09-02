@@ -1,11 +1,13 @@
-import { type Capability, type CapabilitySnapshot, UNREPORTED_CAPABILITIES } from "../../shared/capabilities.js";
+import type { Capability, CapabilitySnapshot } from "../../shared/capabilities.js";
+import type { CapabilityFoldRecord } from "../../shared/capability-fold.js";
+import { admit, foldCapabilitySnapshot } from "../../shared/capability-fold.js";
 import type { DurableStore } from "../../shared/durable-store.js";
 import { EnabledPluginSchema } from "../../shared/schemas.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-interface DeviceRecord {
+interface DeviceRecord extends CapabilityFoldRecord {
 	capabilities: Capability[];
 	// Refreshed by ANY authenticated op from this device, so an always-polling tablet or a phone on
 	// the 12-hour idle tier never ages out while it is plainly still here. Drives expiry ONLY.
@@ -36,26 +38,6 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 // some kind the durable value only moves when a register carries plugins, and a device that has
 // polled daily for weeks is deleted by the first sweep after a restart.
 const LAST_SEEN_FLUSH_FLOOR_MS = 60 * 60 * 1000;
-
-/**
- * What survives an entry this schema refuses.
- *
- * Discarding the whole entry is the one outcome that must never happen here. The id is what gates a
- * tool and the instructions are only guidance, so a dropped entry is a capability the owner
- * switched on going missing with no error on either side, which is precisely the silent outage the
- * fail-open rule exists to prevent. A well-formed id is therefore kept without its guidance: the
- * agent is told less, rather than being able to do less.
- */
-function admit(raw: unknown): Capability[] {
-	const parsed = EnabledPluginSchema.safeParse(raw);
-	if (parsed.success) return [parsed.data as Capability];
-
-	const id = EnabledPluginSchema.shape.id.safeParse((raw as { id?: unknown } | null)?.id);
-	if (!id.success) return [];
-
-	console.warn(`[capabilities] ${id.data} kept without its guidance: ${parsed.error.issues[0]?.message}`);
-	return [{ id: id.data }];
-}
 
 ////////////////////////////////
 //  Class
@@ -117,21 +99,7 @@ export class CapabilityStore {
 	 * device that only polls would pin stale guidance forever.
 	 */
 	snapshot(): CapabilitySnapshot {
-		const live = [...this.devices.values()].filter((r) => this.now() - r.lastSeen < this.ttlMs);
-		if (live.length === 0) return UNREPORTED_CAPABILITIES;
-		const best = new Map<string, { cap: Capability; reportedAt: number }>();
-		for (const record of live) {
-			for (const cap of record.capabilities) {
-				const prior = best.get(cap.id);
-				if (!prior || record.reportedAt > prior.reportedAt)
-					best.set(cap.id, { cap, reportedAt: record.reportedAt });
-			}
-		}
-		return {
-			known: true,
-			capabilities: [...best.values()].map((e) => e.cap).sort((a, b) => a.id.localeCompare(b.id)),
-			clientVersions: [...new Set(live.flatMap((r) => (r.clientVersion ? [r.clientVersion] : [])))].sort(),
-		};
+		return foldCapabilitySnapshot([...this.devices.values()], this.now(), this.ttlMs);
 	}
 
 	/** Drop devices that have gone quiet past the TTL, and flush liveness that has drifted past the

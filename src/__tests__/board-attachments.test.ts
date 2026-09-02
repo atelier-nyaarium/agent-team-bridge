@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readBlobRange } from "../gateway/blobOps.js";
-import { BOARD_TRASH_TTL_MS, type BoardAttachmentSink, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { type BoardAttachmentSink, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
+import { BOARD_TRASH_TTL_MS } from "../shared/board-structure.js";
 import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -54,7 +55,6 @@ afterEach(() => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Put bytes under the entry the way the op handler's adopt step does. */
 function hold(bytes: string, entryId = ENTRY): BoardAttachment {
 	const a = attachment(bytes);
 	const source = path.join(dir, `src-${bytes}`);
@@ -130,16 +130,13 @@ describe("upsert and attachments", () => {
 	it("ignores an incoming list, so a move cannot land members nothing ingested", () => {
 		const one = hold("one");
 		setAttachments([one]);
-		// What enqueueMove ships: the entry verbatim, carrying a list it never uploaded.
 		const forged = attachment("never-uploaded");
 		store.upsert(OWNER, [{ ...entry(ENTRY), attachments: [forged] }], OWNER_ACTOR);
 		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId)).toEqual([one.blobId]);
 	});
 
 	it("drops an incoming list on an entry it has NEVER held, which is the move's destination", () => {
-		// With no stored entry, there is nothing to overwrite the incoming attachments field with, so
-		// upsert must drop the incoming list rather than adopt it - adopting it would land members no
-		// Gateway ever received bytes for.
+		// Unknown entries cannot adopt attachment metadata.
 		const fresh = "d".repeat(32);
 		store.upsert(OWNER, [{ ...entry(fresh), attachments: [attachment("never-uploaded")] }], OWNER_ACTOR);
 		expect(store.entry(OWNER, fresh)?.attachments).toBeUndefined();
@@ -158,8 +155,7 @@ describe("upsert and attachments", () => {
 		const one = hold("one");
 		setAttachments([one]);
 		const resent = { ...entry(ENTRY), attachments: [attachment("never-uploaded")] };
-		// Applied because an unchanged write is not a failure; the point is that the forged list is
-		// not what makes it change, so it neither lands nor bumps the plane.
+		// An unchanged write cannot adopt forged attachments.
 		expect(store.upsert(OWNER, [resent], OWNER_ACTOR)).toEqual({ applied: true });
 		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId)).toEqual([one.blobId]);
 	});
@@ -186,9 +182,7 @@ describe("the trash sweep", () => {
 
 describe("the delete half of a move", () => {
 	it("leaves the origin's bytes alone, because the op carries no evidence they landed elsewhere", () => {
-		// The gateway is told ids and nothing else. Reclaiming here would rest on the SENDER being a
-		// console new enough to have written the bytes to the destination first, and the console is the
-		// last of the four components to update.
+		// The receiver owns cleanup after attachment delivery.
 		const one = hold("one");
 		setAttachments([one]);
 		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: true });
@@ -226,7 +220,6 @@ describe("serving bytes after the cache has swept", () => {
 	it("reads through to the durable store, which is what a peer Gateway's door depends on", () => {
 		const blobs = new BlobStore(path.join(dir, "blobs"));
 		const one = hold("one");
-		// The cache never held it, which is where every attachment ends up once the sweep runs.
 		const served = readBlobRange(blobs, attachments, one.blobId, 0, 1024);
 		expect(served.bytes.toString()).toBe("one");
 		expect(served.eof).toBe(true);

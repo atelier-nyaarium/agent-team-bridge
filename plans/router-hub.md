@@ -633,7 +633,7 @@ Deferred from the Phase 3 audit:
   session, `clear` rows are Router-only by schema, and an identity-less registration gets no
   incarnation.
 
-## Phase 4 - Router: owner-scoped state (tiers 1 and 2)
+## Phase 4 - Router: owner-scoped state (tiers 1 and 2) ✅ Done
 
 - The Router state layer per its spec, separate from `fileSecretStore`, which stays the enrollment
   and admin whole-file CAS. Per-Domain, per-owner records keyed `(domainId, ownerId, kind, id)`;
@@ -672,6 +672,37 @@ Deferred from the Phase 3 audit:
 - Capability fold and read anchors as tier-1 state.
 - Access-matrix residue test at the store layer and the public methods.
 - New wire shapes in the shared Zod schemas, Kotlin regenerated.
+
+Deferred from Phase 4:
+- The link edge drop stays the owner-signed `revoke_xdomain_link` enroll op; the `cross_domain_unlink`
+  OwnerOp tears down shares, generations, and rows and pushes `unlink` frames, and does not touch the
+  edge.
+- A scheduled fire is two writes, not one batch: the ledger append through the inbox service, then
+  the record and result row. A crash between them re-arms the record as `firing` and the ledger's
+  opKey dedupe keeps the second fire from appending twice.
+- The gateway opens a scheduled `message` row (Router origin, body sealed under `inbox.body`) in
+  Phase 5; the Phase 3 pump only knows `op.payload`.
+- The owner projection reads a linked Domain's rows to fold its friend projection and records that
+  projection's version in the linked Domain's store; a named cross-Domain read, per the Consequences.
+- Gateway consumers of every frame here (`presence_baseline`, `presence_delta`, `share_job_live`,
+  `board_op`, `capabilities_read`) land in Phase 5.
+
+### Bug Classes
+
+- **Payload-named identity** (`presenceService.ts`, `boardService.ts` `board_op`, `shareService.ts`
+  `attest`): the second phase in a row where a handler trusted a gatewayId, sessionId, or
+  sessionTarget from the payload instead of the registration (Phase 3's origin-binding class).
+  Verdict, landed: every frame handler receives the registration and stamps or checks identity
+  from it. Redesign target for the architecture pass: strip identity fields from frame payload
+  schemas so a handler cannot read them, and residue-test the hook surface for it.
+- **Result rows sharing the op's key** (`scheduledService.ts`): the pending, sent, and failed
+  result rows used the send's own opKey, so the op ledger answered `conflict` to the fire itself
+  and no scheduled send ever landed. Unit tests with a stubbed inbox could not see it. Verdict,
+  landed: result rows key beside the op (`<opId>.pending`), and one test per service runs
+  through the real `InboxService`.
+- **Reference holds outside the batch** (`boardService.ts`): holds and releases moved before the
+  write committed, so a refused write leaked or dropped a hold. Verdict, landed: reference changes
+  are collected and applied after the batch answers ok.
 
 ## Phase 5 - Gateway client
 
@@ -1544,6 +1575,12 @@ What the phone shows, the current producer, and the hub's.
 - A Codex test pass left a stray probe file (`zz-probe-pump.test.ts`) in the tree, found only by
   `git status` before the commit. Every commit step now scans untracked files for names the
   prompt did not ask for.
+- Five services built in parallel each shipped a unit test whose inbox was a stub, and the one
+  blocker of the phase (result rows sharing the op's ledger key) was invisible to all of them.
+  The finders caught it by probing the real store. A service that writes through another
+  service needs one test over the real thing, not a fake that answers accepted.
+- Finders in one workflow and verifiers in a second, capped to the fixes made, kept the audit
+  inside the usage limit this time; the six finders alone cost 1.8M tokens.
 
 - A prose sweep that is told "timeless, no history" strips the failure descriptions out of a
   ledger and the recommendation reasons out of a questionaire, because both read as narration.

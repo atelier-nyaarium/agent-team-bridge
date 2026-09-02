@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
+import { taskBoardPlaneName } from "../../shared/board-structure.js";
 import type {
 	ConsoleOp,
 	ConsolePollResult,
@@ -8,7 +9,7 @@ import type {
 } from "../../shared/console-protocol.js";
 import type { PlaneRegistry, PlaneVersion } from "../../shared/plane-registry.js";
 import type { TeamInfo } from "../../shared/types.js";
-import { type BoardProjection, type BoardStore, taskBoardPlaneName } from "../boardStore.js";
+import type { BoardProjection, BoardStore } from "../boardStore.js";
 import { type CrossDomainPresenceConsumer, crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
 import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 

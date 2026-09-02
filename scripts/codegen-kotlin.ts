@@ -84,6 +84,37 @@ import {
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
 import {
+	BoardActorSchema,
+	BoardObservationRowSchema,
+	BoardOpSchema,
+	BoardReadResultSchema,
+	BoardStoredEntrySchema,
+	BoardWriteResultSchema,
+	BoardWriteSchema,
+} from "../src/shared/schemasBoardState.js";
+import {
+	FriendPresenceProjectionSchema,
+	OwnerPresenceProjectionSchema,
+	RosterEntrySchema,
+} from "../src/shared/schemasRouterPresence.js";
+import {
+	ScheduleCancelValueSchema,
+	ScheduledRecordSchema,
+	ScheduledResultRowSchema,
+	ScheduleSendValueSchema,
+} from "../src/shared/schemasScheduled.js";
+import {
+	CrossDomainShareValueSchema,
+	CrossDomainUnlinkValueSchema,
+	CrossDomainUnshareValueSchema,
+} from "../src/shared/schemasShare.js";
+import {
+	CapabilitiesReportSchema,
+	CapabilitySnapshotWireSchema,
+	ReadAnchorsResultSchema,
+	ReportReadSchema,
+} from "../src/shared/schemasTier1.js";
+import {
 	ADDRESS_SEP,
 	CONV_TAG,
 	DEFAULT_SESSION,
@@ -93,9 +124,6 @@ import {
 	SLUG_RE,
 } from "../src/shared/session-id.js";
 import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
-
-////////////////////////////////
-//  Config
 
 const OUT_PATH = join(
 	import.meta.dir,
@@ -161,6 +189,28 @@ const ROOTS: z.ZodType[] = [
 	RowOriginSchema,
 	OpKeySchema,
 	OpResultEnvelopeSchema,
+	// Owner state the phone reads and the ops it composes.
+	OwnerPresenceProjectionSchema,
+	FriendPresenceProjectionSchema,
+	RosterEntrySchema,
+	CrossDomainShareValueSchema,
+	CrossDomainUnshareValueSchema,
+	CrossDomainUnlinkValueSchema,
+	BoardStoredEntrySchema,
+	BoardActorSchema,
+	BoardOpSchema,
+	BoardWriteSchema,
+	BoardWriteResultSchema,
+	BoardReadResultSchema,
+	BoardObservationRowSchema,
+	ScheduledRecordSchema,
+	ScheduleSendValueSchema,
+	ScheduleCancelValueSchema,
+	ScheduledResultRowSchema,
+	CapabilitiesReportSchema,
+	CapabilitySnapshotWireSchema,
+	ReportReadSchema,
+	ReadAnchorsResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
@@ -174,6 +224,8 @@ const SEALED_ROOTS = new Set([
 	"ConsoleApprovalOp",
 	"TrustHandshakeOp",
 	"CrossDomainShareTarget",
+	"BoardOp",
+	"BoardActor",
 ]);
 
 ////////////////////////////////
@@ -216,9 +268,6 @@ function idOf(schema: z.ZodType): string {
 	if (!id) throw new Error("root schema missing .meta({ id })");
 	return id;
 }
-
-////////////////////////////////
-//  Kotlin emission
 
 const INDENT = "\t";
 
@@ -303,6 +352,8 @@ function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): str
 		const description = prop.description as string | undefined;
 		if (description) lines.push(`${INDENT}/** ${escapeKdoc(description)} */`);
 		if (typeof constValue === "string") {
+			// A required const is a wire field; the console's Json drops defaults unless told to encode them.
+			if (required.has(name)) lines.push(`${INDENT}@EncodeDefault`);
 			lines.push(`${INDENT}val ${name}: ${baseType} = ${kotlinString(constValue)},`);
 		} else if (constValue !== undefined) {
 			if (typeof constValue !== "number") throw new Error(`unsupported const for ${name}`);
@@ -359,9 +410,6 @@ function emitSealedClass(name: string, node: Json, discriminator: string, defs: 
 	out.push(`}`);
 	return out.join("\n");
 }
-
-////////////////////////////////
-//  Main
 
 const defs = new Map<string, Json>();
 const rootIds: string[] = [];
@@ -424,9 +472,11 @@ const header = `// generated from src/shared/schemas.ts + src/shared/console-pro
 // op-only envelope {device, conversationId, opId, op}; the Router composes the
 // full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
+@file:OptIn(ExperimentalSerializationApi::class)
 
 package com.atelier_nyaarium.switchboard.proto
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

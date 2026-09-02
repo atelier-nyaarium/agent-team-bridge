@@ -30,26 +30,61 @@ import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
-import type { InboxService } from "./inbox/inboxService.js";
+import { type InboxService, type PeerRowGate, sessionTargetOf } from "./inbox/inboxService.js";
 import { verifyRegistrationClaim } from "./registrationVerification.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
 
 export interface GatewayBridgeParams {
 	port: number;
 	authToken: string;
-	// Required for registration verification.
+	// Required to verify registrations.
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	getDomainMeta: (domainId: string) => DomainMeta | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	adminDomainId: () => string | null;
-	/** Register replies carry Router addresses because Gateways cannot call the app-token-gated `reach` op. */
+	/** Register replies carry reach data because gateways cannot call the gated `reach` op. */
 	reach?: () => { publicHost?: string | null; publicPort?: number | null; lanAddresses?: string[] };
 	inbox?: InboxService;
 	blobCache?: RouterBlobCache;
 	referenceHeld?: unknown;
 }
 
+/** The authenticated identity behind a gateway frame; the payload never names these. */
+export interface GatewayRegistration {
+	domainId: string;
+	gatewayId: string;
+	signPub: string;
+	incarnation: number;
+}
+export type GatewayFrameHandler = (
+	reg: GatewayRegistration,
+	params: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+const BUILT_IN_FRAMES = new Set([
+	"console_relay_reply",
+	"gateway_register",
+	"inbox_append",
+	"inbox_ack",
+	"session_upsert",
+	"session_forget",
+	"blob_fetch",
+	"blob_fetch_reply",
+	"gateway_relay",
+	"gateway_relay_reply",
+	"cross_domain_handshake",
+	"cross_domain_handshake_reply",
+	"cross_domain_handshake_reveal",
+	"cross_domain_handshake_reveal_reply",
+	"list_gateways",
+]);
+
 export class GatewayBridge implements ToolProvider {
+	private readonly frameHandlers = new Map<string, GatewayFrameHandler>();
+	private readonly sessionForgottenListeners: Array<(reg: GatewayRegistration, sessionId: string) => void> = [];
+	private peerRowGate: PeerRowGate | null = null;
+	private readonly registeredListeners: Array<(reg: GatewayRegistration) => void> = [];
+	private readonly droppedListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private transport: GatewayTransport | null = null;
 	private gatewayConnections = new Map<string, Map<string, ConnectionId>>();
 	// No incarnation means the registration could not claim an inbox.
@@ -143,12 +178,11 @@ export class GatewayBridge implements ToolProvider {
 		return this.transport;
 	}
 
-	/** Router-side count, independent of Gateway socket state. */
 	public get registeredGatewayCount(): number {
 		return this.connGateways.size;
 	}
 
-	/** List gateways only within the requested Domain because the app token is shared across tenants. */
+	/** Scope gateway listings to the requested Domain. */
 	public registeredGateways(domainId: string): { gatewayId: string; signPub: string | null }[] {
 		const out: { gatewayId: string; signPub: string | null }[] = [];
 		for (const reg of this.connGateways.values()) {
@@ -229,6 +263,39 @@ export class GatewayBridge implements ToolProvider {
 			incarnation: reg.incarnation,
 			deliveryEpoch: this.inbox?.deliveryEpoch(address) ?? 1,
 		});
+	}
+
+	/** Handlers receive connection identity, never payload identity. */
+	public registerGatewayFrame(name: string, handler: GatewayFrameHandler): void {
+		if (this.frameHandlers.has(name) || BUILT_IN_FRAMES.has(name))
+			throw new Error(`gateway frame "${name}" already registered`);
+		this.frameHandlers.set(name, handler);
+	}
+
+	public onSessionForgotten(listener: (reg: GatewayRegistration, sessionId: string) => void): void {
+		this.sessionForgottenListeners.push(listener);
+	}
+
+	public onGatewayRegistered(listener: (reg: GatewayRegistration) => void): void {
+		this.registeredListeners.push(listener);
+	}
+
+	/** Fires only for the connection holding the registration. */
+	public onGatewayDropped(listener: (reg: GatewayRegistration) => void): void {
+		this.droppedListeners.push(listener);
+	}
+
+	/** Stamp the registration incarnation so gateways reject stale frames. */
+	public pushFrameTo(domainId: string, gatewayId: string, frame: Record<string, unknown>): boolean {
+		const incarnation = this.gatewayIncarnation(domainId, gatewayId);
+		if (incarnation === null) return false;
+		return this.pushToGatewayInDomain(domainId, gatewayId, { ...frame, incarnation });
+	}
+
+	public gatewayIncarnation(domainId: string, gatewayId: string): number | null {
+		const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
+		if (!connId) return null;
+		return this.connGateways.get(connId)?.incarnation ?? null;
 	}
 
 	private pushToGatewayInDomain(domainId: string, gatewayId: string, frame: Record<string, unknown>): boolean {
@@ -324,6 +391,24 @@ export class GatewayBridge implements ToolProvider {
 			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
 			return this.handleBlobFetchReply(connId, params);
 		}
+		const frameHandler = this.frameHandlers.get(name);
+		if (frameHandler) {
+			const reg = this.connGateways.get(connId);
+			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
+			if (params.incarnation !== reg.incarnation) {
+				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
+				return { ok: false, error: "stale_incarnation" };
+			}
+			return frameHandler(
+				{
+					domainId: reg.domainId,
+					gatewayId: reg.gatewayId,
+					signPub: reg.signPub,
+					incarnation: reg.incarnation,
+				},
+				params,
+			);
+		}
 		if (name === "gateway_relay") return this.handleGatewayRelay(connId, params);
 		if (name === "gateway_relay_reply") return this.handleGatewayRelayReply(connId, params);
 		if (name === "cross_domain_handshake") return this.handleCrossDomainHandshake(connId, params);
@@ -354,6 +439,15 @@ export class GatewayBridge implements ToolProvider {
 		}
 		this.blobFetch?.failConnection(connId);
 		if (reg && wasCurrent) {
+			if (reg.signPub && reg.incarnation !== null) {
+				const dropped = {
+					domainId: reg.domainId,
+					gatewayId: reg.gatewayId,
+					signPub: reg.signPub,
+					incarnation: reg.incarnation,
+				};
+				for (const listener of this.droppedListeners) listener(dropped);
+			}
 			for (const [relayId, pending] of this.pendingRelays) {
 				if (pending.dstDomainId !== reg.domainId || pending.dstGateway !== reg.gatewayId) continue;
 				clearTimeout(pending.timer);
@@ -436,10 +530,14 @@ export class GatewayBridge implements ToolProvider {
 			if (meta.displayName != null) reply.displayName = meta.displayName;
 		}
 		reply.isAdminDomain = domainId === this.adminDomain();
-		// Do not overwrite learned reach with empty values.
+		// Preserve learned reach when the reply is empty.
 		const reach = this.reachGetter?.();
 		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
-		if (incarnation !== null) this.pushRegisteredRows(domainId, gatewayId, incarnation);
+		if (incarnation !== null) {
+			this.pushRegisteredRows(domainId, gatewayId, incarnation);
+			const registered = { domainId, gatewayId, signPub: parsed.data.signPub as string, incarnation };
+			for (const listener of this.registeredListeners) listener(registered);
+		}
 		return reply;
 	}
 
@@ -467,9 +565,21 @@ export class GatewayBridge implements ToolProvider {
 					!!origin.sessionId &&
 					this.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
 		if (!allowedDomain || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
-		const result = this.inbox.appendRow({ address, row: row.data, producerSignPub: reg.signPub });
+		// Share state authorizes friend rows and supplies their generation.
+		let shareGeneration: number | undefined;
+		if (address.domainId !== reg.domainId && this.peerRowGate) {
+			const target = sessionTargetOf(address);
+			const generation = target ? this.peerRowGate(address.domainId, target, reg.domainId) : null;
+			if (generation === null) return { ok: false, error: "refused" };
+			shareGeneration = generation;
+		}
+		const result = this.inbox.appendRow({ address, row: row.data, producerSignPub: reg.signPub, shareGeneration });
 		if (result.row && !this.pushRow(address, result.row)) this.inbox.markWaking(address.domainId, result.opKey);
 		return result;
+	}
+
+	public setPeerRowGate(gate: PeerRowGate): void {
+		this.peerRowGate = gate;
 	}
 
 	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {
@@ -502,6 +612,15 @@ export class GatewayBridge implements ToolProvider {
 		const reg = this.connGateways.get(connId);
 		if (!reg || !parsed.success) return { ok: false, error: "invalid session_forget" };
 		this.inbox?.forgetSession(reg.domainId, reg.gatewayId, parsed.data.sessionId);
+		if (reg.signPub && reg.incarnation !== null) {
+			const identity = {
+				domainId: reg.domainId,
+				gatewayId: reg.gatewayId,
+				signPub: reg.signPub,
+				incarnation: reg.incarnation,
+			};
+			for (const listener of this.sessionForgottenListeners) listener(identity, parsed.data.sessionId);
+		}
 		return { ok: true };
 	}
 
@@ -534,7 +653,7 @@ export class GatewayBridge implements ToolProvider {
 		});
 	}
 
-	/** Redeliver held rows so acknowledgements use the current incarnation. */
+	/** Redeliver held rows under the current incarnation. */
 	private pushRegisteredRows(domainId: string, gatewayId: string, incarnation: number): void {
 		const inbox = this.inbox;
 		if (!inbox) return;

@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { isBoardReply } from "../gateway/boardStore.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
+import { isBoardReply } from "../shared/board-structure.js";
 import type { DurableStore } from "../shared/durable-store.js";
 
-/** An in-memory stand-in for DurableStore - no real disk I/O, just the load()/save() shape
- * DurableOpStore actually depends on. Passing the SAME instance to two separately-constructed
- * DurableOpStores simulates a gateway restart against the same durable file. */
+/** Shared memory simulates the durable file across store instances. */
 function fakeDurable(initial: unknown = null): DurableStore {
 	let state: unknown = initial;
 	return {
@@ -31,9 +29,7 @@ describe("DurableOpStore", () => {
 	});
 
 	it("a failed op never becomes replayable: clearing after in-flight leaves nothing to replay", () => {
-		// Mirrors the real call sequence: markInFlight before dispatch, then clear (never
-		// markComplete) when the op settles as a failure - so a retry sees "unknown" and
-		// re-executes, rather than replaying a stale error.
+		// Failed operations clear in-flight state so retries execute again.
 		const store = new DurableOpStore(fakeDurable());
 		const generation = store.markInFlight("conv-a", "op-1");
 		store.clear("conv-a", "op-1", generation);
@@ -49,17 +45,13 @@ describe("DurableOpStore", () => {
 	});
 
 	it("clear() is a no-op when a NEWER attempt has since taken over the same key (stale generation), even though the record is still in-flight", () => {
-		// The regression this guards against: an opCache-eviction-during-in-flight retry re-marks
-		// the same key in-flight under a fresh generation. If the ORIGINAL (now-stale) attempt's
-		// own deferred failure later calls clear() with its OWN (older) generation, it must not
-		// erase the newer attempt's still-live in-flight marker.
+		// A stale attempt must not clear a newer in-flight generation.
 		const store = new DurableOpStore(fakeDurable());
 		const staleGeneration = store.markInFlight("conv-a", "op-1");
 		const currentGeneration = store.markInFlight("conv-a", "op-1");
 		expect(currentGeneration).not.toBe(staleGeneration);
 		store.clear("conv-a", "op-1", staleGeneration);
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "in-flight" });
-		// The current (newer) attempt's own clear still works normally.
 		store.clear("conv-a", "op-1", currentGeneration);
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 	});
@@ -70,16 +62,13 @@ describe("DurableOpStore", () => {
 		before.markInFlight("conv-a", "op-in-flight");
 		before.markComplete("conv-a", "op-done", { delivered: true });
 
-		// A fresh store instance reading the SAME durable snapshot - the restart-recovery case.
 		const after = new DurableOpStore(durable);
 		expect(after.get("conv-a", "op-in-flight")).toEqual({ state: "in-flight" });
 		expect(after.get("conv-a", "op-done")).toEqual({ state: "complete", result: { delivered: true } });
 	});
 
 	it("an in-flight record left by a crash is still in-flight after restart (re-execute, not replay)", () => {
-		// The crash-mid-work scenario the replay rule exists to recover: markInFlight ran, the
-		// process died before the op ever settled, so the durable record is stuck in-flight. A
-		// restart reading that record must see "in-flight", not silently treat it as done.
+		// Restart preserves in-flight state after a crash before settlement.
 		const durable = fakeDurable();
 		const crashed = new DurableOpStore(durable);
 		crashed.markInFlight("conv-a", "op-crashed");
@@ -189,8 +178,7 @@ describe("DurableOpStore", () => {
 	});
 
 	it("evicts the least-recently-WRITTEN conversation, not the first-created one, when the conversation cap is hit", () => {
-		// conv-a is created first but is touched again (a fresh op) after conv-b and conv-c are
-		// created - it must survive, since a naive creation-order FIFO would wrongly evict it.
+		// Eviction follows activity, not creation order.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 256, 2);
 		store.markInFlight("conv-a", "op-1");
 		store.markInFlight("conv-b", "op-1");
@@ -203,9 +191,7 @@ describe("DurableOpStore", () => {
 	});
 
 	it("evicts the least-recently-WRITTEN op within a conversation, not the first-created one, when the per-conversation cap is hit", () => {
-		// op-1 is written first (markInFlight) but re-written again (markComplete) after op-2 and
-		// op-3 are created and completed - it must survive, since a naive creation-order FIFO on
-		// the inner per-opId map would wrongly evict a just-completed op ahead of stale siblings.
+		// Updates refresh recency within a conversation.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 3, 500);
 		store.markInFlight("conv-a", "op-1");
 		store.markInFlight("conv-a", "op-2");
@@ -248,7 +234,7 @@ describe("DurableOpStore", () => {
 		expect(store.sweep()).toBe(false);
 
 		now += 1001;
-		store.markComplete("conv-b", "op-1", { delivered: true }); // a fresh, non-expired record
+		store.markComplete("conv-b", "op-1", { delivered: true });
 		expect(store.sweep()).toBe(true);
 		expect(store.size).toBe(1);
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
@@ -267,8 +253,7 @@ describe("DurableOpStore", () => {
 				],
 			],
 		]);
-		// A cap of 2 is lower than the 3 rows the snapshot holds - simulating a config rollback or a
-		// hand-restored/foreign snapshot written under a looser bound.
+		// Restore enforces the current cap on older snapshots.
 		const store = new DurableOpStore(durable, 14 * 24 * 60 * 60 * 1000, 2, 500);
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 		expect(store.get("conv-a", "op-2")).toBeDefined();
@@ -293,14 +278,12 @@ describe("DurableOpStore.withValidator", () => {
 		const durable = fakeDurable();
 		DurableOpStore.withValidator(durable, isBoardReply).markComplete("sess-a", "op-1", { applied: true });
 
-		// A second instance over the same file is the restart.
 		const restarted = DurableOpStore.withValidator(durable, isBoardReply);
 		expect(restarted.get("sess-a", "op-1")).toEqual({ state: "complete", result: { applied: true } });
 	});
 
 	it("rejects a restored row its own validator does not accept", () => {
-		// A console result in the board's file: replaying it would answer a board retry with the
-		// wrong-shaped body instead of re-applying nothing.
+		// Ignore rows belonging to another operation store.
 		const durable = fakeDurable([
 			["sess-a", [["op-1", { state: "complete", result: { delivered: true } }, Date.now() + 100_000, 1]]],
 		]);

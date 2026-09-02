@@ -90,6 +90,15 @@ Gateway, so revocation still applies while the Router is unreachable.
 - An undelivered row expires after 30 days with an `expired` result row to its sender.
 - A console reaches the inbox through a signed `OwnerOp` on the op surface: `deliver`, `consumer_register`, `inbox_read`, `inbox_advance`, `op_result`.
 
+## Owner state
+
+- Every owner-scoped record lives in the per-owner store under `DATA_DIR/owner/`, keyed by kind and id with a CAS version. A service answers only the Domain named in the call.
+- Presence: a gateway sends `presence_baseline` after registering and `presence_delta` with a sequence; a gap answers `presence_resync`. A dropped socket marks the gateway's rows unreachable; the next baseline replaces them. The owner projection folds rows, roster, coverage, spawn points, and each linked Domain's friend projection; a friend sees shared sessions only.
+- Shares: records per session target and friend, a generation per pair bumped by unshare and unlink. A peer row is admitted only while shared, stamped with the generation, and retired `target_revoked` when the generation moves before delivery. A gateway attests live cross-Domain jobs with `share_job_live`; the 30-day sweep keeps attested shares.
+- Board: entries with a clear envelope and sealed title, body, and names; writes carry `expectedRevision` and an actor; the same authority and cascade rules the gateway used; observations land as `board_observation` rows in the affected sessions' inboxes. Attachments must be held in the reference-held store.
+- Scheduled sends: one record per target; replace and cancel are versioned; a Router timer fires through the op ledger under the send's own op id and writes a `scheduled_result` row the phones fold.
+- Capabilities and read anchors are tier-1 records with their own OwnerOps.
+
 **A cross-machine answer states how complete it is.** `discover()` returns asked, answered and
 unreachable ids plus `rosterKnown`, so a partial result is not a plain success and an unreadable
 roster is not "no peers". `isRegistered` differs from `isConnected`: a refused registration leaves

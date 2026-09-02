@@ -5,8 +5,10 @@ import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { agentHttpPath } from "../shared/agent-backend.js";
 import { sweepAtomicTemps } from "../shared/atomic-write.js";
+import type { AwarenessObservation } from "../shared/awareness-types.js";
 import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
+import { type BoardReply, isBoardReply } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import type { Identity } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
@@ -23,11 +25,10 @@ import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema, GatewayBootstrapFrameSchema } from "../shared/schemas.js";
 import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
-import type { AwarenessObservation } from "./awarenessBank.js";
 import { type AwarenessBank, createAwarenessBank } from "./awarenessBank.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
 import { boardAwarenessSubscriber } from "./boardAwareness.js";
-import { type BoardDisposition, type BoardReply, BoardStore, isBoardReply } from "./boardStore.js";
+import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import {
 	armingOf,
 	type BootState,

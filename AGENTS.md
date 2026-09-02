@@ -65,6 +65,14 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
 - `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
 - `src/federation-server/blobs/` - Router blob cache with leases and the reference-held store
+- `src/federation-server/ownerServices.ts` / `ownerServiceHooks.ts` - the owner-state services behind one hook surface: OwnerOp kinds, gateway frames, register and drop listeners
+- `src/federation-server/presence/` - presence rows per gateway incarnation, resync, roster, owner and friend projections
+- `src/federation-server/share/` - share records, generations, attestations, sweep, unlink; the peer-row gate
+- `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
+- `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
+- `src/federation-server/tier1/` - capability fold and read anchors
+- `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
+- `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - registration and relay routing; four trust callbacks required
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients

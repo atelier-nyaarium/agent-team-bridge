@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_REFUSED_PREFIX } from "../gateway/boardStore.js";
 import { createConsoleTargets } from "../gateway/console/consoleTargets.js";
+import { BOARD_REFUSED_PREFIX } from "../shared/board-authority.js";
 import { DEFAULT_SESSION } from "../shared/session-id.js";
-
-////////////////////////////////
-//  Tests
-//
-//  The trap shape throughout: a FOREIGN domain with a COLLIDING gateway id. Folded to its bare
-//  field it names the same-named local session, so every local-gated method must refuse it.
 
 const targets = createConsoleTargets({
 	localDomainId: "home",
@@ -34,7 +28,6 @@ describe("createConsoleTargets", () => {
 	it("resolves local names in every accepted spelling to one bare key", () => {
 		expect(targets.boardSessionKey("app.dev")).toBe("app.dev");
 		expect(targets.boardSessionKey("home.gw.app.dev")).toBe("app.dev");
-		// A spawn-point folds to its default session.
 		expect(targets.boardSessionKey("app")).toBe(`app.${DEFAULT_SESSION}`);
 	});
 

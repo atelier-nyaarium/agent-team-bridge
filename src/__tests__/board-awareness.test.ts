@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type AwarenessObservation, createAwarenessBank } from "../gateway/awarenessBank.js";
+import { createAwarenessBank } from "../gateway/awarenessBank.js";
 import { boardAwarenessSubscriber } from "../gateway/boardAwareness.js";
-import { BOARD_TRASH_TTL_MS, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import type { AwarenessObservation } from "../shared/awareness-types.js";
+import { BOARD_TRASH_TTL_MS } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
@@ -94,14 +96,12 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("does not announce a holder's own write", () => {
-		// Self-echo suppression keeps a session from hearing its own route write.
 		observations = [];
 		store.setState(owner, "a", "in_progress", { kind: "session", sessionId: session });
 		expect(observations).toEqual([]);
 	});
 
 	it("renders a backlog release as no_act", () => {
-		// Backlog work needs awareness but no urgent action.
 		store.setSession(owner, "a", undefined);
 		expect(body()).toContain("t-a");
 		expect(body()).toContain("backlog");
@@ -109,7 +109,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("distinguishes trashed, removed, and reassigned as act_now", () => {
-		// Gone work needs an urgent notice with its specific reason.
 		store.setTrashed(owner, "a", true);
 		expect(body()).toContain("trashed");
 		expect(acts()).toEqual(["act_now"]);
@@ -127,7 +126,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("observes every member touched by a subtree write", () => {
-		// A subtree mutation must not leave a child holder stale.
 		store.upsert(owner, [entry("a1", { parent: "a" })], OWNER_ACTOR);
 		store.claim(owner, "a", session);
 		observations = [];
@@ -136,7 +134,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("does not observe refused or unchanged writes", () => {
-		// Only committed changes belong in awareness.
 		store.setTitle(owner, "a", "t-a", OWNER_ACTOR);
 		expect(observations).toEqual([]);
 		expect(store.claim(owner, "a", "other")).toEqual({ applied: false, refused: "held" });
@@ -144,7 +141,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("does not observe unheld entries", () => {
-		// Unheld work has no session addressee.
 		store.upsert(owner, [entry("loose")], OWNER_ACTOR);
 		observations = [];
 		store.setTitle(owner, "loose", "renamed", OWNER_ACTOR);
@@ -152,7 +148,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("does not observe session end or trash sweep", () => {
-		// Lifecycle cleanup should not announce to the session being removed.
 		store.sessionEnded(session, "release");
 		expect(observations).toEqual([]);
 		store.setSession(owner, "a", session);
@@ -164,7 +159,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("renders an untrash as arrived", () => {
-		// Restored work is an arrival, not a generic edit.
 		store.setTrashed(owner, "a", true);
 		observations = [];
 		store.setTrashed(owner, "a", false);
@@ -173,7 +167,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("renders newly assigned work as arrived", () => {
-		// A session must learn the title when an id was not in its list.
 		store.upsert(owner, [entry("fresh")], OWNER_ACTOR);
 		observations = [];
 		store.setSession(owner, "fresh", session);
@@ -182,7 +175,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("renders each side of a reassignment with its own kind", () => {
-		// Both the losing and gaining sessions need different facts.
 		store.setSession(owner, "a", "other");
 		expect(observations.find((item) => item.sessionKey === session)).toBeDefined();
 		expect(
@@ -201,7 +193,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("coalesces edit and trash to the net trashed fact", () => {
-		// Flush-time classification must discard intermediate edits.
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
 		store.setTitle(owner, "a", "edited", OWNER_ACTOR);
@@ -215,7 +206,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("coalesces edit, trash, and untrash to nothing", () => {
-		// Equal first and last snapshots are not awareness.
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
 		store.setTitle(owner, "a", "edited", OWNER_ACTOR);
@@ -233,7 +223,6 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("coalesces a move and edits to one changed line", () => {
-		// A commit burst should produce one fact per entry.
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
 		store.upsert(owner, [entry("p")], OWNER_ACTOR);
@@ -251,7 +240,7 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("flattens a multi-line title so a named fact stays one line", () => {
-		// The rendered line is read one fact per line, by the agent and by the log.
+		// Each fact occupies one rendered line.
 		store.setTitle(owner, "a", "line one\nline two", OWNER_ACTOR);
 		observations = [];
 		store.setSession(owner, "a", undefined);
@@ -260,7 +249,7 @@ describe("board awareness subscriber", () => {
 	});
 
 	it("collapses more than 20 changed ids through the store", () => {
-		// The bounded changed-id line must hold for real store observations.
+		// Changed-id output is bounded.
 		const entries = Array.from({ length: 25 }, (_, i) => entry(`x${i}`));
 		store.upsert(owner, entries, OWNER_ACTOR);
 		observations = [];
