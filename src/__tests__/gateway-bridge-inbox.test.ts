@@ -181,6 +181,45 @@ describe("GatewayBridge inbox", () => {
 		expect(received.at(-1)).toMatchObject({ deliveryEpoch: 1 });
 	});
 
+	// A retried relay re-seals, so only the producer's own hash tells the ledger the two attempts are
+	// one operation. It rides on the ROW's opKey, so a params key disagreeing with the envelope
+	// cannot express anything.
+	it("forwards the producer hash onto the row's own opKey and drops a malformed one", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const { bridge, gateway } = await registered(
+			fakeInbox({
+				appendRow: (input: Record<string, unknown>) => {
+					seen.push(input);
+					return { outcome: "accepted", opKey: { conversationId: "c", opId: "o" }, seq: 1 };
+				},
+			}),
+		);
+		const row = signedRow(
+			{
+				origin: { kind: "session" as const, domainId: "domain", gatewayId: "gateway", sessionId: "session" },
+				opKey: { conversationId: "c", opId: "o" },
+				epoch: 1,
+				kind: "message" as const,
+				contentRefs: [],
+			},
+			gateway.sign.priv,
+			{ v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" },
+		);
+		const address = "session:domain/gateway/session";
+		const hash = "b".repeat(64);
+
+		await bridge.handleCall("c1", "inbox_append", { address, row, incarnation: 1, opKey: { hash } });
+		await bridge.handleCall("c1", "inbox_append", {
+			address,
+			row,
+			incarnation: 1,
+			opKey: { conversationId: "other", opId: "other", hash: "not-a-hash" },
+		});
+
+		expect(seen[0]?.opKey).toEqual({ conversationId: "c", opId: "o", hash });
+		expect(seen[1]?.opKey).toBeUndefined();
+	});
+
 	it("re-delivers held rows after the register reply under the new incarnation", async () => {
 		const held = { seq: 3, acceptedAt: 1, size: 1, envelope: {}, producerSig: "", body: {} };
 		const { ws, reply } = await registered(

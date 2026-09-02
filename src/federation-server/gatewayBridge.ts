@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
 import {
 	BlobBeginParamsSchema,
@@ -63,6 +64,9 @@ export type GatewayFrameHandler = (
 	reg: GatewayRegistration,
 	params: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
+
+/** A producer's stable identity for one operation, so its retries are not read as different ones. */
+const ProducerOpHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 const BUILT_IN_FRAMES = new Set([
 	"console_relay_reply",
@@ -588,7 +592,17 @@ export class GatewayBridge implements ToolProvider {
 			if (generation === null) return { ok: false, error: "refused" };
 			shareGeneration = generation;
 		}
-		const result = this.inbox.appendRow({ address, row: row.data, producerSignPub: reg.signPub, shareGeneration });
+		// The producer's own identity for this operation. Its retries re-seal, so hashing the row would
+		// make each attempt a different operation under one key. Only the hash is taken, carried on the
+		// row's OWN opKey, so a params key disagreeing with the envelope cannot express anything.
+		const hash = ProducerOpHashSchema.safeParse((parsed.data.opKey as { hash?: unknown })?.hash);
+		const result = this.inbox.appendRow({
+			address,
+			row: row.data,
+			producerSignPub: reg.signPub,
+			shareGeneration,
+			...(hash.success ? { opKey: { ...row.data.envelope.opKey, hash: hash.data } } : {}),
+		});
 		if (result.row && !this.pushRow(address, result.row)) this.inbox.markWaking(address.domainId, result.opKey);
 		return result;
 	}

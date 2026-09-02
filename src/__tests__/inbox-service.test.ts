@@ -80,6 +80,25 @@ describe("InboxService", () => {
 		registry.close();
 	});
 
+	// A retried relay re-seals with a fresh ephemeral key, so its bytes differ every attempt. Without
+	// the producer's own hash the second attempt reads as a different operation under one key and is
+	// refused, telling the sender a message that landed had failed.
+	it("replays the recorded result for a retry whose bytes changed but whose producer hash did not", () => {
+		const { service, registry, owner, producer } = make();
+		const address = ownerAddress(owner);
+		const row = rowFor(producer);
+		const resealed = { ...row, body: { outcome: "resealed" } };
+		const opKey = { ...row.envelope.opKey, hash: "a".repeat(64) };
+
+		const first = service.appendRow({ address, row, producerSignPub: producer.sign.pub, opKey });
+		const retry = service.appendRow({ address, row: resealed, producerSignPub: producer.sign.pub, opKey });
+
+		expect(first.outcome).toBe("accepted");
+		expect(retry).toMatchObject({ outcome: "accepted", seq: 1 });
+		expect(service.rows(address, 1, 10)).toHaveLength(1);
+		registry.close();
+	});
+
 	it("refuses a bad signature and enforces the session cap", () => {
 		const { service, registry, producer } = make();
 		const address: InboxAddress = { kind: "session", domainId, gatewayId: "gateway", sessionId: "session" };
