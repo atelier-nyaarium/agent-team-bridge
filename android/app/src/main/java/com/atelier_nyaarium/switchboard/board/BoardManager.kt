@@ -177,9 +177,15 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	/** The Router board by entry id, which is what an intent is materialized against. */
 	fun storedById(): Map<String, BoardStoredEntry> = blob.stored.associateBy { it.clear.id }
 
+	/** Supplies the keyring view, wired after construction the way the scheduler is. Null before this
+	 * device has rooted a Domain, when there is no key to open board text with. */
+	@Volatile var sealing: (() -> BoardSealing?)? = null
+
 	/** The board the owner should see: the Router's entries with everything in flight applied on top. */
-	fun routerEntries(sealing: BoardSealing): List<BoardEntry> =
-		applyPending(renderRouterBoard(sealing).entries, blob.pending)
+	fun routerEntries(): List<BoardEntry> {
+		val open = sealing?.invoke() ?: return applyPending(emptyList(), blob.pending)
+		return applyPending(renderRouterBoard(open).entries, blob.pending)
+	}
 
 	/**
 	 * The durable record of board writes in flight.

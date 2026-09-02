@@ -173,6 +173,10 @@ class ChatRepository(
 		return BoardSealing(federation.contentKeyring(), domain, federation.ownerSignPub())
 	}
 
+	init {
+		board.sealing = { boardSealing() }
+	}
+
 	/** The board's one path to the Router. Signs each write as this console and walks the reach ring. */
 	val boardRouter = BoardRouterWriter(
 		board = board,
