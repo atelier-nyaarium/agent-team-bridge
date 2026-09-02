@@ -1118,6 +1118,12 @@ gateway cannot silently strip the field and accept a retry twice. Verify against
 `registerBridgeDiscover`, Codex and Copilot dispatch, `host_op`, `presence_watch`, and
 `presence_derive`. The agent routes, session authority, and the daemon protocol are unchanged.
 
+**The fail-closed gate has a cold-start window.** `opLedgerProtocol` is learned from the register
+answer and never reset, so it is set for the life of the process after the first successful register.
+A tool call issued before that answer arrives refuses against a current gateway. One round trip at
+startup only, and the alternative (assuming the gateway is current until told otherwise) is the hole
+the gate exists to close.
+
 ### Bug Classes
 
 - **An identity derived from something regenerated per attempt.** Three instances in one phase, all
@@ -2007,3 +2013,8 @@ What the phone shows, the current producer, and the hub's.
 - **The plan grew two sources of truth about the same slice.** Retention notes recorded that
   `routeGateway` and `refreshDiscovery` survive, while the spec bullets above them still said both
   were deleted. A reader hitting the bullets first audits against a phase that never shipped.
+- **The cycle renders a TRUNCATED copy of the phase text, and it is not marked as truncated.** Phase
+  7's step block dropped two sentences requiring a version gate. An audit correctly reported the gate
+  missing and I rejected the finding, having checked it against the rendered copy rather than the
+  plan file. Read the phase from `plans/router-hub.md` before judging any alignment finding; the step
+  block is a convenience, not the spec.
