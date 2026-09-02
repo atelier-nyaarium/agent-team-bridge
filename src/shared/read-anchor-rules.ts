@@ -21,7 +21,10 @@ export function mergeReadAnchor(
 	const owner = state[ownerId] ?? {};
 	const cur = owner[team];
 	if (!cur && Object.keys(owner).length >= MAX_TEAMS_PER_OWNER) return { state, advanced: false };
-	const advanced = !cur || entry.epoch > cur.epoch || (entry.epoch === cur.epoch && entry.seq > cur.seq);
+	// Mailbox epochs are random per instance and never ordered, so they compare for equality only.
+	// Same epoch, the seq decides. A different epoch means the reporter is reading a live mailbox and
+	// the stored anchor names a dead instance, so the later report wins on its own timestamp.
+	const advanced = !cur || (entry.epoch === cur.epoch ? entry.seq > cur.seq : entry.at > cur.at);
 	if (!advanced) return { state, advanced: false };
 	return { state: { ...state, [ownerId]: { ...owner, [team]: entry } }, advanced: true };
 }

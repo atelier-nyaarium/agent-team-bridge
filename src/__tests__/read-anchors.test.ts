@@ -44,12 +44,22 @@ describe("ReadAnchors", () => {
 		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 2, seq: 1, at: 6000 });
 	});
 
-	it("an OLDER epoch never wins, even with a huge seq", () => {
+	// Epochs are minted at random, so a smaller number is not an older mailbox. Across a re-mint the
+	// report time decides, and a seq from a dead instance means nothing however large.
+	it("a numerically smaller epoch wins when its report is later", () => {
 		const registry = new PlaneRegistry();
 		const anchors = new ReadAnchors(registry, undefined);
 		anchors.report("alice", "team-a", { epoch: 2, seq: 5, at: 5000 });
-		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 999_999, at: 6000 })).toBe(false);
-		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 2, seq: 5, at: 5000 });
+		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 999_999, at: 6000 })).toBe(true);
+		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 1, seq: 999_999, at: 6000 });
+	});
+
+	it("a stale report loses across a re-mint whatever its epoch and seq", () => {
+		const registry = new PlaneRegistry();
+		const anchors = new ReadAnchors(registry, undefined);
+		anchors.report("alice", "team-a", { epoch: 2, seq: 5, at: 6000 });
+		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 999_999, at: 5000 })).toBe(false);
+		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 2, seq: 5, at: 6000 });
 	});
 
 	it("different teams and different owners are tracked independently", () => {

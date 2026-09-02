@@ -340,7 +340,11 @@ export function createBoardService(deps: Deps) {
 		// with nothing behind it.
 		const netted = new Map<string, RefChange>();
 		for (const change of refChanges) netted.set(`${change.entryId}|${change.blobId}`, change);
-		for (const change of netted.values()) {
+		// Holds before releases. The key carries the entry, so one blob moving between two entries nets
+		// to two changes, and releasing first would zero its count and delete the bytes before the
+		// receiving entry's hold could name them.
+		const ordered = [...netted.values()].sort((a, b) => (a.action === b.action ? 0 : a.action === "hold" ? -1 : 1));
+		for (const change of ordered) {
 			if (change.action === "hold") deps.referenceHeld.hold(domainId, change.blobId, change.entryId);
 			else deps.referenceHeld.release(domainId, change.blobId, change.entryId);
 		}

@@ -200,6 +200,55 @@ describe("router board service", () => {
 		registry.close();
 	});
 
+	// The netting key carries the entry, so a move is two changes rather than one no-op. Releasing
+	// the losing entry first would take the blob's last reference and delete the bytes.
+	it("keeps attachment bytes when one blob moves between entries in a single write", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-move-"));
+		roots.push(root);
+		const held = new ReferenceHeldStore({ dataDir: root });
+		const wrap: ReferenceHeld = {
+			has: (domainId, blobId) => held.has(domainId, blobId),
+			hold: (domainId, blobId, entryId) => held.hold(domainId, blobId, { kind: "entry", id: entryId }),
+			release: (domainId, blobId, entryId) => held.release(domainId, blobId, { kind: "entry", id: entryId }),
+		};
+		const { service, registry } = make(true, wrap);
+		const bytes = Buffer.from("moved");
+		const blob = blobIdFor(bytes);
+		held.hold("a", blob, { kind: "entry", id: "one" });
+		const ciphertext = sealBlobChunk(
+			bytes,
+			Buffer.alloc(32, 1),
+			{ domainId: "a", ownerSignPub: "owner", epoch: 1, blobId: blob },
+			0,
+			true,
+		);
+		const digest = `sha256-${crypto.createHash("sha256").update(ciphertext).digest("hex")}`;
+		const lease = held.begin("a", blob, bytes.length, ciphertext.length, digest, 1);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		held.commitChunk("a", blob, lease.lease, 0, ciphertext, true);
+		const attachment = { blobId: blob, size: bytes.length, mime: "text/plain", blobGateway: "g" };
+		service.write(
+			"a",
+			{ expectedRevision: 0, ops: [entry("one", { attachments: [attachment] }), entry("two")] },
+			{ kind: "owner" },
+		);
+
+		service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{ kind: "set_attachments", id: "one", attachments: [] },
+					{ kind: "set_attachments", id: "two", attachments: [attachment] },
+				],
+			},
+			{ kind: "owner" },
+		);
+
+		expect(held.has("a", blob)).toBe(true);
+		registry.close();
+	});
+
 	it.each([
 		"durability_failure",
 		"quarantined",
@@ -537,9 +586,10 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		expect(applied.outcome).toBe("applied");
+		// Holds lead, so a blob moving between entries is never briefly unreferenced.
 		expect(referenceCalls.slice(-2)).toEqual([
-			{ action: "release", blobId: "old", entryId: "one" },
 			{ action: "hold", blobId: "new", entryId: "one" },
+			{ action: "release", blobId: "old", entryId: "one" },
 		]);
 		registry.close();
 	});

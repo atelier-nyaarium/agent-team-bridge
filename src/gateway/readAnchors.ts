@@ -26,10 +26,10 @@ const ReadAnchorsFileSchema = z.record(z.string(), z.record(z.string(), ReadAnch
  * Per-owner, per-team read-position sync: "how far has ANY of this owner's own devices read this
  * conversation", merged monotonically - a device reporting a STALE position (it was offline, or
  * simply has not scrolled as far yet) can never regress what another of the SAME owner's devices
- * already confirmed read. Mailbox epoch/seq numbering is meaningful across an owner's whole device
- * fleet because the mailbox itself is already shared per owner (device-mailbox.ts), not per
- * device, so no cross-device epoch reconciliation is needed - only within-epoch seq comparison,
- * and a newer epoch entirely (the mailbox was reset) always wins outright.
+ * already confirmed read. Seq numbering is meaningful across an owner's whole device fleet because
+ * the mailbox itself is already shared per owner (device-mailbox.ts), not per device. The epoch is
+ * a random per-instance tag rather than a counter, so it compares for equality only and a re-minted
+ * mailbox is ordered by report time instead.
  *
  * Read anchors are LOW-STAKES data: losing a few seconds of sync on an unclean crash just means a
  * transient over-count on another device until its next report self-heals it, never a security or
