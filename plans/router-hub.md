@@ -1118,6 +1118,21 @@ gateway cannot silently strip the field and accept a retry twice. Verify against
 `registerBridgeDiscover`, Codex and Copilot dispatch, `host_op`, `presence_watch`, and
 `presence_derive`. The agent routes, session authority, and the daemon protocol are unchanged.
 
+### Bug Classes
+
+- **An identity derived from something regenerated per attempt.** Three instances in one phase, all
+  the same shape: a retry is supposed to be ONE operation, and every part of what identifies it has
+  to survive the retry. The envelope's `opId` was minted per attempt, so a plugin retry became a new
+  ledger operation and delivered the message again. `relayWithRetry` then minted per attempt too, so
+  the gateway duplicated with no plugin involved. And with both stabilised, the ledger's own opHash
+  still covered the SEALED bytes, which every attempt regenerates on purpose to defeat the
+  receiver's replay guard, so a retry became a `conflict` and the sender was told a message that had
+  landed had failed. Verdict, landed: the caller mints one id per invocation, the retry sequence
+  holds one, and the operation is identified by a hash over the CLEAR op that the ledger already had
+  an unused input for. The lesson for the next retry loop is to ask what identifies the operation and
+  check every part of it against regeneration, rather than fixing the one part that is obviously an
+  id.
+
 ## Phase 8 - Migration
 
 After the Router is live and the key backfill has confirmed every member, before any deletion.

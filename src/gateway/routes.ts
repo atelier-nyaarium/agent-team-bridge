@@ -418,10 +418,9 @@ export function createRoutes({
 			const result = await routerClient.callInboxTool("inbox_append", {
 				address,
 				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed },
-				// The ledger's own identity hash covers the SEALED bytes, and every attempt re-seals with
-				// a fresh ephemeral key so the receiver's replay guard sees a new nonce. Without a hash
-				// over the clear operation, a retry would carry the same opKey with different bytes and be
-				// answered `conflict` rather than replaying the result of the attempt that landed.
+				// Identifies the operation by the CLEAR op. The ledger's own hash covers the sealed bytes,
+				// which every attempt regenerates on purpose so the receiver's replay guard sees a new
+				// nonce, and a retry carrying one key with two hashes is refused as a conflict.
 				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ address, op })) },
 			});
 			if (result.error) return { ok: false, error: result.error };

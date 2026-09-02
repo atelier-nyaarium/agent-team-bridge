@@ -592,9 +592,9 @@ export class GatewayBridge implements ToolProvider {
 			if (generation === null) return { ok: false, error: "refused" };
 			shareGeneration = generation;
 		}
-		// The producer's own identity for this operation. Its retries re-seal, so hashing the row would
-		// make each attempt a different operation under one key. Only the hash is taken, carried on the
-		// row's OWN opKey, so a params key disagreeing with the envelope cannot express anything.
+		// The producer's identity for the operation, since its retries re-seal and the row's bytes
+		// differ each time. Only the hash is taken, on the row's OWN key, so a disagreeing params key
+		// expresses nothing.
 		const hash = ProducerOpHashSchema.safeParse((parsed.data.opKey as { hash?: unknown })?.hash);
 		const result = this.inbox.appendRow({
 			address,
