@@ -509,6 +509,75 @@ data class ConsolePollResult(
 )
 
 @Serializable
+data class ConsoleHelloFrame(
+	@EncodeDefault
+	val type: String = "hello",
+	val ownerOp: OwnerOp,
+)
+
+@Serializable
+data class ConsoleAckFrame(
+	@EncodeDefault
+	val type: String = "ack",
+	val incarnation: Long,
+	val cursor: Long,
+	val cursorEpoch: Long,
+)
+
+@Serializable
+data class ConsolePingFrame(
+	@EncodeDefault
+	val type: String = "ping",
+	val incarnation: Long,
+)
+
+@Serializable
+data class ConsoleWelcomeFrame(
+	@EncodeDefault
+	val type: String = "welcome",
+	val incarnation: Long,
+	val cursor: Long,
+	val cursorEpoch: Long,
+	val floor: Long,
+	val versions: JsonObject,
+)
+
+@Serializable
+data class ConsoleInboxRowsFrame(
+	@EncodeDefault
+	val type: String = "inbox_rows",
+	val incarnation: Long,
+	val rows: List<InboxRow>,
+	val cursor: Long,
+)
+
+@Serializable
+data class ConsolePlaneFrame(
+	@EncodeDefault
+	val type: String = "plane",
+	val incarnation: Long,
+	val name: String,
+	val version: Long,
+	val payload: JsonElement,
+)
+
+@Serializable
+data class ConsoleRefusedFrame(
+	@EncodeDefault
+	val type: String = "refused",
+	val reason: String,
+	val floor: Long? = null,
+	val dropped: Long? = null,
+)
+
+@Serializable
+data class ConsolePongFrame(
+	@EncodeDefault
+	val type: String = "pong",
+	val incarnation: Long,
+)
+
+@Serializable
 data class ConsolePeekResult(
 	val ansi: String? = null,
 	val text: String? = null,

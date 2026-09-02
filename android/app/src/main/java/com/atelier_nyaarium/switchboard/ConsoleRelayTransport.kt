@@ -13,6 +13,9 @@ import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -25,7 +28,14 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * file is an extension function and an extension cannot reach a private member. This carries the whole
  * seal/relay path behind one widened ConsoleClient member, leaving `blobs` as the only other.
  */
-internal class ConsoleRelayTransport(internal val prov: Provisioning, internal val store: AppStateStore) {
+/** What a socket needs to dial the Router: where, with which client, and under which token. */
+internal interface ConsoleSocketTransport {
+	val proxyBase: String
+	val appToken: String
+	fun clientFor(base: String): okhttp3.OkHttpClient
+}
+
+internal class ConsoleRelayTransport(internal val prov: Provisioning, internal val store: AppStateStore) : ConsoleSocketTransport {
 	/** Trust is the Router's pinned leaf. */
 	internal val client = ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp)
 
@@ -42,8 +52,11 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	/** Where an op is posted. The Router serves its ops at the root, so there is no proxy path to
 	 * thread through; the same field keeps every call site unchanged. Reads the CURRENT candidate, so
 	 * a failover between two ops is picked up by the second without the caller knowing. */
-	internal val proxyBase: String
+	override val proxyBase: String
 		get() = candidates[current]
+
+	override val appToken: String
+		get() = prov.appToken
 
 	/**
 	 * The client to dial [base] with: the shared one, except a private address gets a short connect
@@ -51,7 +64,7 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	 * one is waiting for something that cannot happen - and that wait is the entire cost of trying
 	 * LAN first while away from home. Everything else (trust, pinning, read timeouts) is inherited.
 	 */
-	internal fun clientFor(base: String): okhttp3.OkHttpClient {
+	override fun clientFor(base: String): okhttp3.OkHttpClient {
 		val host = runCatching { java.net.URI(base).host }.getOrNull() ?: return client
 		if (!isPrivateHost(host)) return client
 		return client.newBuilder()
@@ -287,6 +300,21 @@ internal class ConsoleRelayTransport(internal val prov: Provisioning, internal v
 	): R = withReachFailover { base ->
 		ConsoleHttp.postRouterDirect(clientFor(base), "$base/relay", prov.appToken, tag, describe, body, logBody, fail)
 	}
+
+	internal suspend fun postOwnerOp(ownerOp: com.atelier_nyaarium.switchboard.proto.OwnerOp): JsonElement =
+		withReachFailover { base ->
+			val body = buildJsonObject {
+				put("ownerOp", wireJson.encodeToJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerOp.serializer(), ownerOp))
+			}.toString().toRequestBody(ConsoleHttp.JSON)
+			val req = Request.Builder()
+				.url("$base/console")
+				.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+				.post(body)
+				.build()
+			val resp = ConsoleHttp.executeCancellable(clientFor(base), req)
+			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${resp.text.take(500)}")
+			wireJson.parseToJsonElement(resp.text)
+		}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */
 	internal inline fun <reified T> resultOf(body: ConsoleReplyBody, op: String): T {

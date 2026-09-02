@@ -32,7 +32,7 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** The manager itself, plus the six collaborators the repository hands it to. */
+/** The manager itself, plus the seven collaborators the repository hands it to. */
 const ALLOWED = [
 	"ChatRepository.kt",
 	"DeviceApprovalOps.kt",
@@ -40,6 +40,7 @@ const ALLOWED = [
 	"EnrollCeremonyOps.kt",
 	"GatewayEnrollment.kt",
 	"OwnerFacts.kt",
+	"OwnerOps.kt",
 	"TrustOps.kt",
 ];
 

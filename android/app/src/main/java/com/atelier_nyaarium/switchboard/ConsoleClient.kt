@@ -15,6 +15,7 @@ import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
+import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.Request
@@ -35,6 +36,7 @@ class ConsoleClient(prov: Provisioning, store: AppStateStore) : BoardWriter {
 	/** This device's staging half of the blob plane. Content-addressed, so attaching a file the
 	 * Gateway already holds, or re-opening one already received, moves no bytes at all. */
 	internal val blobs = BlobStore(BlobStore.root(store.filesDir))
+	internal suspend fun postOwnerOp(ownerOp: OwnerOp) = transport.postOwnerOp(ownerOp)
 
 	/** This console's route Gateway id, learned at register and set by ChatRepository. Owned by the
 	 * transport, which is the side that seals against it. */
