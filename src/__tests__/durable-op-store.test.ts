@@ -14,6 +14,13 @@ function fakeDurable(initial: unknown = null): DurableStore {
 	} as unknown as DurableStore;
 }
 
+/** markInFlight answers null under the migration fence, which is never the case here. */
+function mark(store: DurableOpStore, conversationId: string, opId: string): number {
+	const generation = store.markInFlight(conversationId, opId);
+	if (generation === null) throw new Error("unexpectedly fenced");
+	return generation;
+}
+
 describe("DurableOpStore", () => {
 	it("an unknown opId has no record", () => {
 		const store = new DurableOpStore(fakeDurable());
@@ -22,7 +29,7 @@ describe("DurableOpStore", () => {
 
 	it("markInFlight then markComplete replays the stored result on a later get", () => {
 		const store = new DurableOpStore(fakeDurable());
-		store.markInFlight("conv-a", "op-1");
+		mark(store, "conv-a", "op-1");
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "in-flight" });
 		store.markComplete("conv-a", "op-1", { delivered: true });
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "complete", result: { delivered: true } });
@@ -31,14 +38,14 @@ describe("DurableOpStore", () => {
 	it("a failed op never becomes replayable: clearing after in-flight leaves nothing to replay", () => {
 		// Failed operations clear in-flight state so retries execute again.
 		const store = new DurableOpStore(fakeDurable());
-		const generation = store.markInFlight("conv-a", "op-1");
+		const generation = mark(store, "conv-a", "op-1");
 		store.clear("conv-a", "op-1", generation);
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 	});
 
 	it("clear() is a no-op once a record has reached complete: a losing concurrent attempt's failure can never erase a winning attempt's success", () => {
 		const store = new DurableOpStore(fakeDurable());
-		const generation = store.markInFlight("conv-a", "op-1");
+		const generation = mark(store, "conv-a", "op-1");
 		store.markComplete("conv-a", "op-1", { delivered: true });
 		store.clear("conv-a", "op-1", generation);
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "complete", result: { delivered: true } });
@@ -47,8 +54,8 @@ describe("DurableOpStore", () => {
 	it("clear() is a no-op when a NEWER attempt has since taken over the same key (stale generation), even though the record is still in-flight", () => {
 		// A stale attempt must not clear a newer in-flight generation.
 		const store = new DurableOpStore(fakeDurable());
-		const staleGeneration = store.markInFlight("conv-a", "op-1");
-		const currentGeneration = store.markInFlight("conv-a", "op-1");
+		const staleGeneration = mark(store, "conv-a", "op-1");
+		const currentGeneration = mark(store, "conv-a", "op-1");
 		expect(currentGeneration).not.toBe(staleGeneration);
 		store.clear("conv-a", "op-1", staleGeneration);
 		expect(store.get("conv-a", "op-1")).toEqual({ state: "in-flight" });
@@ -99,9 +106,9 @@ describe("DurableOpStore", () => {
 
 	it("caps entries per conversation, evicting the oldest first", () => {
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 2, 500);
-		store.markInFlight("conv-a", "op-1");
-		store.markInFlight("conv-a", "op-2");
-		store.markInFlight("conv-a", "op-3");
+		mark(store, "conv-a", "op-1");
+		mark(store, "conv-a", "op-2");
+		mark(store, "conv-a", "op-3");
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 		expect(store.get("conv-a", "op-2")).toBeDefined();
 		expect(store.get("conv-a", "op-3")).toBeDefined();
@@ -109,9 +116,9 @@ describe("DurableOpStore", () => {
 
 	it("caps the number of distinct conversations tracked, evicting the oldest conversation first", () => {
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 256, 2);
-		store.markInFlight("conv-a", "op-1");
-		store.markInFlight("conv-b", "op-1");
-		store.markInFlight("conv-c", "op-1");
+		mark(store, "conv-a", "op-1");
+		mark(store, "conv-b", "op-1");
+		mark(store, "conv-c", "op-1");
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 		expect(store.get("conv-b", "op-1")).toBeDefined();
 		expect(store.get("conv-c", "op-1")).toBeDefined();
@@ -180,10 +187,10 @@ describe("DurableOpStore", () => {
 	it("evicts the least-recently-WRITTEN conversation, not the first-created one, when the conversation cap is hit", () => {
 		// Eviction follows activity, not creation order.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 256, 2);
-		store.markInFlight("conv-a", "op-1");
-		store.markInFlight("conv-b", "op-1");
-		store.markInFlight("conv-a", "op-2");
-		store.markInFlight("conv-c", "op-1");
+		mark(store, "conv-a", "op-1");
+		mark(store, "conv-b", "op-1");
+		mark(store, "conv-a", "op-2");
+		mark(store, "conv-c", "op-1");
 		expect(store.get("conv-a", "op-1")).toBeDefined();
 		expect(store.get("conv-a", "op-2")).toBeDefined();
 		expect(store.get("conv-b", "op-1")).toBeUndefined();
@@ -193,13 +200,13 @@ describe("DurableOpStore", () => {
 	it("evicts the least-recently-WRITTEN op within a conversation, not the first-created one, when the per-conversation cap is hit", () => {
 		// Updates refresh recency within a conversation.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 3, 500);
-		store.markInFlight("conv-a", "op-1");
-		store.markInFlight("conv-a", "op-2");
+		mark(store, "conv-a", "op-1");
+		mark(store, "conv-a", "op-2");
 		store.markComplete("conv-a", "op-2", { delivered: true });
-		store.markInFlight("conv-a", "op-3");
+		mark(store, "conv-a", "op-3");
 		store.markComplete("conv-a", "op-3", { delivered: true });
 		store.markComplete("conv-a", "op-1", { delivered: true });
-		store.markInFlight("conv-a", "op-4");
+		mark(store, "conv-a", "op-4");
 		expect(store.get("conv-a", "op-1")).toBeDefined();
 		expect(store.get("conv-a", "op-2")).toBeUndefined();
 		expect(store.get("conv-a", "op-3")).toBeDefined();
@@ -219,8 +226,8 @@ describe("DurableOpStore", () => {
 	it("size reports the total tracked records across every conversation", () => {
 		const store = new DurableOpStore(fakeDurable());
 		expect(store.size).toBe(0);
-		store.markInFlight("conv-a", "op-1");
-		store.markInFlight("conv-a", "op-2");
+		mark(store, "conv-a", "op-1");
+		mark(store, "conv-a", "op-2");
 		store.markComplete("conv-b", "op-1", { delivered: true });
 		expect(store.size).toBe(3);
 	});

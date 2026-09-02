@@ -15,6 +15,7 @@ import {
 	isSpawnWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
+import { MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import { DomainStatusSchema } from "../../shared/schemas.js";
 import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
@@ -127,6 +128,8 @@ export function createConsoleDispatcher({
 	}
 
 	function boardWrite(result: BoardResult): { applied: true } {
+		// Not a refusal: the caller retries this one rather than retiring its action.
+		if (!result.applied && "migrating" in result) throw new Error(MIGRATING);
 		if (!result.applied) throw refusalError(result.refused);
 		return { applied: true };
 	}
@@ -1159,7 +1162,10 @@ export function createConsoleDispatcher({
 			// takes fresh ownership of the key, so mint a new generation: the case's own deferred
 			// continuation closes over it, so its eventual clear() can tell itself apart from a
 			// still-newer overlapping attempt that may take over the key later.
-			generation = durableOpStore.markInFlight(conv, key);
+			const marked = durableOpStore.markInFlight(conv, key);
+			// Taking ownership of a key is a durable write, so a fenced dispatch never starts. Retryable.
+			if (marked === null) throw new Error(MIGRATING);
+			generation = marked;
 		}
 
 		const promise = runFrame(frame, generation);

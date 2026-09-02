@@ -1,3 +1,4 @@
+import { fenced, MIGRATING } from "./migration-fence.js";
 import type { ChannelFile, RidingAwareness } from "./types.js";
 
 ////////////////////////////////
@@ -32,7 +33,7 @@ export interface PendingDelivery {
 
 /** Why an enqueue did not add a row. `duplicate` is a success for the caller: that exact message is
  * already queued, which is what a retry should find. */
-export type EnqueueOutcome = "enqueued" | "duplicate" | "refused";
+export type EnqueueOutcome = "enqueued" | "duplicate" | "refused" | "migrating";
 
 interface Snapshot {
 	deliveries: PendingDelivery[];
@@ -96,6 +97,7 @@ export class PendingDeliveryStore {
 	 * newer one would break the same promise this store exists to keep, just more quietly.
 	 */
 	enqueue(delivery: PendingDelivery): EnqueueOutcome {
+		if (fenced()) return MIGRATING;
 		if (this.ids.has(delivery.deliveryId)) return "duplicate";
 		const queue = this.byTeam.get(delivery.team) ?? [];
 		if (queue.length >= this.maxPerTeam) return "refused";

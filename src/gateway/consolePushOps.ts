@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { MailboxProvenance } from "../shared/device-mailbox.js";
 import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
+import { fenced } from "../shared/migration-fence.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
 import { type Address, storeKey } from "../shared/session-id.js";
 import type { ChannelFile } from "../shared/types.js";
@@ -91,6 +92,11 @@ export function createConsolePushOps({
 		resolveMailbox,
 		label = "deliver",
 	}: DeliverToOwnerOptions): boolean {
+		// The sole mailbox writer, so the fence sits here rather than at each of its origins.
+		if (fenced()) {
+			console.warn(`[${label}] refused: migrating`);
+			return false;
+		}
 		// The same caps the landing side holds against a relayed-in entry, held here against every
 		// origin too. Origins pre-validate (send/respond/humanNotify 4xx first), so a trip here is
 		// a producer bug worth a log, never a user-visible path.

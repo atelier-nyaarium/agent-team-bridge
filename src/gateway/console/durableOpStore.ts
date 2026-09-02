@@ -1,6 +1,7 @@
 import { capFifo } from "../../shared/cap-fifo.js";
 import { type ConsoleOpResult, MAX_OPS_PER_CONVERSATION } from "../../shared/console-protocol.js";
 import type { DurableStore } from "../../shared/durable-store.js";
+import { fenced } from "../../shared/migration-fence.js";
 import { ConsoleOpResultSchema } from "../../shared/schemas.js";
 
 ////////////////////////////////
@@ -112,8 +113,10 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 	}
 
 	/** Write `in-flight` before dispatching the op's work, minting a fresh generation token the
-	 * caller must present back to `clear()` at its own eventual settlement. */
-	public markInFlight(conversationId: string, opId: string): number {
+	 * caller must present back to `clear()` at its own eventual settlement. Null while the fence is
+	 * up, since taking ownership of a key is the durable write the migration must not race. */
+	public markInFlight(conversationId: string, opId: string): number | null {
+		if (fenced()) return null;
 		const existing = this.byConversation.get(conversationId)?.get(opId);
 		if (existing?.record.state === "in-flight") {
 			// The crash-mid-work/opCache-eviction-during-in-flight recovery path - exactly the moment a

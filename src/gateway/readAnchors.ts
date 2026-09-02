@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fenced } from "../shared/migration-fence.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { mergeReadAnchor, type ReadAnchorEntry, readAnchorsPlaneName } from "../shared/read-anchor-rules.js";
 
@@ -94,6 +95,8 @@ export class ReadAnchors {
 	 * caller can never forget the registration step and have this silently no-op. Returns true iff
 	 * the stored anchor actually advanced (the caller's cue to markDirty the owner's plane). */
 	report(ownerId: string, team: string, entry: ReadAnchorEntry): boolean {
+		// Never advanced under the fence, so the reporter tries again after the window.
+		if (fenced()) return false;
 		this.ensureRegistered(ownerId);
 		const result = mergeReadAnchor(this.state, ownerId, team, entry);
 		this.state = result.state;

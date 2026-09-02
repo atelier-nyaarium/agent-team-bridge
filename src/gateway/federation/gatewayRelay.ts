@@ -5,6 +5,7 @@ import {
 	FederatedOpSchema,
 	GatewayRelayFrameSchema,
 } from "../../shared/federation-protocol.js";
+import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { pickTiers } from "../../shared/notice.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
 import type { GatewayRelayReplyParams } from "../../shared/router-protocol.js";
@@ -161,6 +162,9 @@ export function createGatewayRelayHandler({
 	}
 
 	async function handleOp(op: FederatedOp, srcGateway: string, srcDomainId: string | null): Promise<unknown> {
+		// Refused whole, before any branch lands anything. The sending gateway retries, and its own
+		// relay holds one opId across that sequence, so the retry stays one operation.
+		if (fenced()) return { ok: false, error: MIGRATING };
 		switch (op.kind) {
 			case "send": {
 				const sender = srcDomainId !== null ? verifiedSender(op.from, srcDomainId, srcGateway) : op.from;

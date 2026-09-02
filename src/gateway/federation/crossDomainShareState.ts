@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { fenced } from "../../shared/migration-fence.js";
 import { CrossDomainShareTargetSchema } from "../../shared/schemas.js";
 import {
 	all as allShares,
@@ -60,6 +61,7 @@ export class CrossDomainShareState {
 
 	/** Re-sharing refreshes `lastSeenAt` without duplicating. */
 	share(sessionTarget: string, target: CrossDomainShareTarget): void {
+		if (fenced()) return;
 		this.state = shareRule(this.state, sessionTarget, target, Date.now());
 		this.persist();
 		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
@@ -67,6 +69,8 @@ export class CrossDomainShareState {
 
 	/** Withdraws a share and reports whether it existed. */
 	unshare(sessionTarget: string, target: CrossDomainShareTarget): boolean {
+		// Answers "nothing removed" under the fence, which is what an unshare of an absent share says.
+		if (fenced()) return false;
 		const result = unshareRule(this.state, sessionTarget, target);
 		this.state = result.state;
 		const removed = result.removed;

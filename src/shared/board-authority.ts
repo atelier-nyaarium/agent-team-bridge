@@ -22,7 +22,10 @@ export type BoardRefusal = (typeof BOARD_REFUSALS)[number];
 /** `cascaded` lists entries changed by the board. */
 export type BoardResult =
 	| { applied: true; cascaded?: readonly CascadeChange[] }
-	| { applied: false; refused: BoardRefusal };
+	| { applied: false; refused: BoardRefusal }
+	// Deliberately NOT a BoardRefusal: a refusal retires a queued action permanently, and the fence
+	// is a window the caller waits out.
+	| { applied: false; migrating: true };
 
 export type BoardDisposition = "release" | "cancel";
 

@@ -22,6 +22,7 @@ import {
 } from "../shared/board-structure.js";
 import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js";
 import { type DurableStore, DurableStoreInstalledError } from "../shared/durable-store.js";
+import { fenced } from "../shared/migration-fence.js";
 import { type PlanePersistedState, type PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { BoardEntrySchema } from "../shared/schemas.js";
 
@@ -682,6 +683,7 @@ export class BoardStore {
 		fn: (board: OwnerBoard, touch: (entryId: string) => void) => BoardRefusal | "unchanged" | undefined,
 		cascade = false,
 	): BoardResult {
+		if (fenced()) return { applied: false, migrating: true };
 		const current = this.owners.get(ownerId) ?? { revision: 0, entries: new Map() };
 		const copy: OwnerBoard = {
 			revision: current.revision,
