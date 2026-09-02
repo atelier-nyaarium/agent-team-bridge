@@ -18,6 +18,9 @@ Two paths, two stores.
 
 - **It is the sole sealer and opener of board text.** Titles seal under `board.title`, bodies under
   `board.body`, filenames under `board.name` keyed by `blobId` so a reorder cannot mislabel a file.
+- **Every board kind binds the entry id into the AAD**, filenames binding the `blobId` after it. One
+  entry's ciphertext moved into another entry's slot fails to authenticate, so a Router that cannot
+  read board text cannot relabel it either. The phone builds the same kind in `BoardSealing`.
 - **It is the sole mapper between a local session key and the Router's triple.** Another gateway's
   session comes back as an opaque joined key, never as a local one.
 - Writes are CAS on `revision`. A conflict answer carries the board that won, so the mutation

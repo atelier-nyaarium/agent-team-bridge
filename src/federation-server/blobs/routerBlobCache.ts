@@ -191,6 +191,7 @@ export class RouterBlobCache {
 		for (const [domainId, domain] of this.domains) {
 			this.reconcile(domainId, domain, now);
 			this.evict(domainId, domain, Math.max(0, this.used(domain) - this.options.quotaBytesPerDomain));
+			this.trimRetainedOrigins(domain);
 			this.persist(domainId, domain.index);
 		}
 	}
@@ -292,6 +293,11 @@ export class RouterBlobCache {
 			remaining -= size;
 			if (remaining <= 0) break;
 		}
+	}
+
+	// Runs every sweep, not from evict. A retained origin holds no bytes, so it never creates the
+	// quota pressure evict needs to be called with, and the bound would never be reached.
+	private trimRetainedOrigins(domain: { store: BlobStore; index: CacheIndex }): void {
 		const retained = Object.entries(domain.index.entries)
 			.filter(
 				([blobId, entry]) => !entry.lease && entry.size === undefined && !domain.store.stat(blobId).complete,

@@ -84,6 +84,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/capabilities.ts` - capability ids, guidance, daemon declarations, and bundle folding
 - `src/shared/schemas.ts` / `schemas*.ts` - sole Zod wire truth; `.meta({id})` names generated Kotlin classes
 - `src/shared/content-envelope.ts` - content key derivation, content envelope, key envelope, join signing bytes
+  - **Board text binds its entry id into the AAD kind.** `boardTextAadKind` is the sole builder, and
+    a bare board kind does not typecheck. `BoardSealing.aad` is its Kotlin twin and must match byte
+    for byte. The revision is deliberately absent: an untouched title or body rides across an edit as
+    its existing envelope, and a device missing the epoch cannot re-seal one.
 - `src/shared/schemasContentKey.ts` - content key wire shapes
 - `src/shared/codex-agent.ts` / `codexAgent*.ts` - Codex delegation wire truth; excluded from Kotlin codegen
 - `src/shared/channel-file.ts` - declared ChannelFile metadata; receivers do not infer it from bytes or position

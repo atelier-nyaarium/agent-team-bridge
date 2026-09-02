@@ -1078,13 +1078,29 @@ Found by the phase's red team.
   dropped the lease and the bytes but kept `size` and the recovery sidecar, and the retained sweep
   only collects entries whose size is gone, so each expired upload left an index entry that
   `MAX_RETAINED_ORIGINS` could never reclaim. Verdict, landed: the expiry path strips exactly what
-  `evict` strips.
+  `evict` strips. The re-audit then found the bound itself unreachable, the trim sitting behind
+  `evict`'s `bytes <= 0` return while a retained origin holds no bytes and so never creates the
+  quota pressure that would call it. The trim now runs every sweep.
+- **A guard that swallowed the case it was restoring** (`PresenceOps`): gating the live apply on the
+  version made `restoreLastProjection` a no-op, since it feeds the stored slot back in and a slot is
+  not newer than itself. The cold-start roster, which is the whole reason the slot is kept, stopped
+  rendering. Caught by re-auditing the fix rather than the original code. Verdict, landed: the
+  restore path lands without the gate, and the check, the save and the apply share one lock because
+  `repoScope` is `Dispatchers.IO` and two frames could otherwise land oldest last.
 - **A missing per-entry binding in an AAD** (`content-envelope.ts`, `boardClient.ts`,
   `BoardSealing.kt`): board text was sealed under a fixed `board.title` or `board.body` kind, so one
   entry's ciphertext authenticated in another entry's slot and the Router could relabel entries it
   cannot read. The blob AAD already bound blob id, index, and final. Verdict, landed: the entry id
   rides in the kind on both runtimes, made structural in TypeScript so a bare board kind will not
-  typecheck. Free to fix now because the kind is a derivation input and not a wire field.
+  typecheck. Free to fix now because the kind is a derivation input and not a wire field. The shared
+  fixture pins only the composed literal, and each runtime's board tests round-trip against
+  themselves, so a one-sided change to the Kotlin composition would have stayed green; a Kotlin test
+  now pins it to that same literal.
+- **A release gated on one lifecycle state** (`scheduledService`): the membership diff above ran only
+  when the previous record was `armed`, but fire and cancel release only the CURRENT set, so a file
+  dropped by an edit landing while the record was `firing` kept its reference with nothing left to
+  release it. Verdict, landed: every previous state releases the diff, a repeat release being a
+  no-op against a reference already gone.
 
 ## Phase 7 - MCP plugin and host daemon
 

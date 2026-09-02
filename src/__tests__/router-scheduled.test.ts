@@ -210,6 +210,39 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
+	// Fire and cancel release only the CURRENT set, so an edit landing mid-fire is the last chance to
+	// let a dropped file go.
+	it("releases dropped files when the edit lands on a firing record", () => {
+		const { service, registry, released } = make();
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: ["kept", "dropped"], body },
+		);
+		const store = registry.for("domain-a");
+		const armed = store.get("scheduled", "domain-a/gateway-a/spawn.session")!;
+		store.put("scheduled", armed.id, armed.version, { clear: { ...armed.clear, state: "firing" } });
+
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-3" },
+			{
+				kind: "schedule_send",
+				target,
+				fireAt: 400,
+				opId: "op-3",
+				files: ["kept"],
+				body,
+				expectedVersion: 2,
+			},
+		);
+
+		expect(released).toEqual([
+			{ blobId: "dropped", ref: { kind: "scheduled", id: "domain-a/gateway-a/spawn.session" } },
+		]);
+		registry.close();
+	});
+
 	it("refuses stale cancellation and cancels the current record with all file references released", () => {
 		const { service, registry, released, timers } = make();
 		service.schedule(

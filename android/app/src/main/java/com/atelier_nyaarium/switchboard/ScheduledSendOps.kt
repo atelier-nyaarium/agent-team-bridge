@@ -270,8 +270,13 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 				"scheduled_send",
 				JSONObject().put("team", team).put("opId", rec.opId).put("domainId", rec.targetDomainId),
 			)
-			// Log append failures for alarm retries.
-		}.onFailure { DebugLog.log("ScheduledSend", "journal append failed for ${rec.opId}") }
+		}.onFailure {
+			// Losing the append leaves the one-shot alarm as the only retry, so it must not be silent.
+			DebugLog.log(
+				"ScheduledSend",
+				"journal append failed for ${rec.opId}: ${it.javaClass.simpleName}: ${it.message}",
+			)
+		}
 	}
 
 	private fun retireJournaledSend(opId: String) {

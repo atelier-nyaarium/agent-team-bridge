@@ -139,7 +139,10 @@ export function createScheduledService(deps: ScheduledDeps) {
 		// A membership diff, never release-then-hold. Both halves name the same reference, so releasing
 		// a kept file takes its last reference and deletes the bytes. Holding first does not help:
 		// hold is idempotent, so the release still finds one reference and zeroes it.
-		if (previous?.success && previous.data.state === "armed") {
+		// Every previous state releases, not just an armed one. Fire and cancel only ever release the
+		// CURRENT file set, so a member dropped while firing would keep its reference with nothing
+		// left to release it. A repeat release is a no-op, the reference already being gone.
+		if (previous?.success) {
 			const kept = new Set(input.files);
 			releaseFiles(domainId, {
 				...previous.data,

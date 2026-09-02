@@ -39,6 +39,23 @@ class BoardRenderTest {
 		sealed = BoardEntrySealed(title, body),
 	)
 
+	// Pins the composed AAD kind against the literal both runtimes share. BoardSealing seals and
+	// opens with itself, so without this a one-sided change to the composition stays green here and
+	// silently stops matching boardTextAadKind in content-envelope.ts.
+	@Test
+	fun composedAadKindMatchesTheCrossRuntimeLiteral() {
+		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "entry-1"))
+		val key = checkNotNull(keyring.keyFor(1))
+
+		val opened = Crypto.openContent(
+			envelope,
+			key,
+			Crypto.ContentAad(domainId, owner.sign.pub, 1, "board.title\nentry-1"),
+		)
+
+		assertEquals("title", opened.toString(Charsets.UTF_8))
+	}
+
 	@Test
 	fun sealThenOpenRoundTripsTitle() {
 		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "id"))

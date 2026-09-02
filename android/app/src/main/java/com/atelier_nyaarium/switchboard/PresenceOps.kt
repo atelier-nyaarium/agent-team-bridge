@@ -14,6 +14,9 @@ import kotlinx.coroutines.withContext
  * last-reported anchors and the rebuild mutex, which is why it is a held delegate rather than
  * extensions the way the voice settings and the drafts are. */
 internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovision {
+	// Serializes the projection version check, its save, and the apply that follows.
+	private val projectionMutex = Mutex()
+
 	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw -
 	// never persisted (a fresh process starts with no cache and full-resyncs on its first poll).
 	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
@@ -162,7 +165,8 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		val projection = runCatching {
 			wireJson.decodeFromJsonElement(OwnerPresenceProjection.serializer(), slot.payload)
 		}.getOrNull() ?: return
-		applyOwnerProjection(projection)
+		// The stored slot is not newer than itself, so it lands without the freshness gate.
+		projectionMutex.withLock { landProjection(projection) }
 	}
 
 	/**
@@ -171,12 +175,11 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * It carries what discovery used to be pulled for, so it goes through the same merge path: the
 	 * unreachable holds, the tombstones and the absence streaks all apply regardless of source.
 	 */
-	suspend fun applyOwnerProjection(projection: OwnerPresenceProjection) {
+	suspend fun applyOwnerProjection(projection: OwnerPresenceProjection) = projectionMutex.withLock {
 		// Kept as a versioned envelope of what the Router last said, so a cold start renders the last
-		// roster instead of an empty list while the socket is still connecting. An older version is
-		// ignored, which is what stops a slow answer overwriting a newer one.
-		// Version gates roster and persistence. Stale projections regress the live roster.
-		// Storage faults do not block presence. Only confirmed staleness blocks apply.
+		// roster instead of an empty list while the socket is still connecting. The version gates the
+		// live roster as well as the slot, and the whole check, save and apply run under one lock:
+		// repoScope is Dispatchers.IO, so two frames racing could otherwise land oldest last.
 		val stale = runCatching {
 			val slot = RouterStateSlot(
 				epoch = projection.plane.epoch,
@@ -186,8 +189,12 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			if (!newerRouterState(slot, repo.store.loadRouterState("presence"))) return@runCatching true
 			repo.store.saveRouterState("presence", slot)
 			false
+			// A storage fault must not block presence, so only a positive older verdict stops the apply.
 		}.getOrDefault(false)
-		if (stale) return
+		if (!stale) landProjection(projection)
+	}
+
+	private suspend fun landProjection(projection: OwnerPresenceProjection) {
 		applyDiscovery(
 			TeamsAnswer(
 				projection.rows.map { teamInfoToTeam(it, repo.localGatewayId) },
