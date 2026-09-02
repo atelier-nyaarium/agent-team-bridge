@@ -92,6 +92,8 @@ export class GatewayBridge implements ToolProvider {
 	private readonly frameHandlers = new Map<string, GatewayFrameHandler>();
 	private readonly sessionForgottenListeners: Array<(reg: GatewayRegistration, sessionId: string) => void> = [];
 	private peerRowGate: PeerRowGate | null = null;
+	/** Answers whether a gateway must reconcile its migration epoch before it may write. */
+	private migrationFenced: ((domainId: string, gatewayId: string) => boolean) | null = null;
 	private readonly registeredListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private readonly droppedListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private transport: GatewayTransport | null = null;
@@ -567,6 +569,9 @@ export class GatewayBridge implements ToolProvider {
 		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
 		const row = parsed.success ? InboxRowInputSchema.safeParse(parsed.data.row) : null;
 		if (!reg || !parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
+		// A gateway that slept through the cut has state the Router has since taken over. It reconciles
+		// its epoch before it may write again, whatever it believes about its own state.
+		if (this.migrationFenced?.(reg.domainId, reg.gatewayId)) return { ok: false, error: "migrating" };
 		const origin = row.data.envelope.origin;
 		// Linked peers reach only registered sessions.
 		const allowedDomain =
@@ -609,6 +614,10 @@ export class GatewayBridge implements ToolProvider {
 
 	public setPeerRowGate(gate: PeerRowGate): void {
 		this.peerRowGate = gate;
+	}
+
+	public setMigrationFence(fenced: (domainId: string, gatewayId: string) => boolean): void {
+		this.migrationFenced = fenced;
 	}
 
 	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {

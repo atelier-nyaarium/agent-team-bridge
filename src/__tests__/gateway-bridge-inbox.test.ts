@@ -181,6 +181,32 @@ describe("GatewayBridge inbox", () => {
 		expect(received.at(-1)).toMatchObject({ deliveryEpoch: 1 });
 	});
 
+	// A gateway that slept through the cut holds state the Router has since taken over. It reconciles
+	// its epoch before it may write again, whatever it believes about its own state.
+	it("refuses a write from a gateway the migration has fenced", async () => {
+		const { bridge, gateway } = await registered(fakeInbox());
+		bridge.setMigrationFence(() => true);
+		const row = signedRow(
+			{
+				origin: { kind: "session" as const, domainId: "domain", gatewayId: "gateway", sessionId: "session" },
+				opKey: { conversationId: "c", opId: "o" },
+				epoch: 1,
+				kind: "message" as const,
+				contentRefs: [],
+			},
+			gateway.sign.priv,
+			{ v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" },
+		);
+
+		const answer = await bridge.handleCall("c1", "inbox_append", {
+			address: "session:domain/gateway/session",
+			row,
+			incarnation: 1,
+		});
+
+		expect(answer).toMatchObject({ ok: false, error: "migrating" });
+	});
+
 	// A retried relay re-seals, so only the producer's own hash tells the ledger the two attempts are
 	// one operation. It rides on the ROW's opKey, so a params key disagreeing with the envelope
 	// cannot express anything.

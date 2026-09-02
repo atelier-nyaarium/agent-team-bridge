@@ -11,6 +11,12 @@ import {
 } from "../../shared/migration-lease.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 
+/** The epoch the fleet is migrating to, from the environment. Zero, and inert, outside a window. */
+export function routerMigrationEpoch(): number {
+	const raw = Number.parseInt(process.env.ROUTER_MIGRATION_EPOCH ?? "", 10);
+	return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
 export interface LeaseDeps {
 	registry: OwnerStoreRegistry;
 	/** The epoch the fleet is migrating to. Zero outside a migration window. */

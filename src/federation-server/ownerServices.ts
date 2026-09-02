@@ -16,6 +16,7 @@ import type { GatewayBridge } from "./gatewayBridge.js";
 import type { InboxService } from "./inbox/inboxService.js";
 import type { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
+import { createLeaseService, routerMigrationEpoch } from "./migration/leaseService.js";
 import type { OwnerServiceHooks } from "./ownerServiceHooks.js";
 import { createPresenceService } from "./presence/presenceService.js";
 import { createScheduledService } from "./scheduled/scheduledService.js";
@@ -120,6 +121,9 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	};
 	inbox.setPeerGate(peerGate);
 	bridge.setPeerRowGate(peerGate);
+	// A gateway that has not completed this migration epoch may not write, whatever it believes.
+	const leases = createLeaseService({ registry, migrationEpoch: () => routerMigrationEpoch() });
+	bridge.setMigrationFence((domainId, gatewayId) => leases.fenced(domainId, gatewayId));
 	// A row that left its inbox no longer holds its files.
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
