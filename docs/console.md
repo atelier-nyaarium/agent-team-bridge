@@ -18,6 +18,21 @@ participates in normal peer registries; its `send()` appends to the mailbox drai
   `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain
   only and deduplicated by `dedupeKey`.
 
+## Router socket
+
+The phone also holds a socket to the Router at `/console`, alongside the poll. The upgrade is
+app-token gated and a hello OwnerOp proves identity; an incarnation fences a superseded connection.
+
+- `ConsoleTransportCoordinator` owns the one Router consumer across both transports and is the sole
+  caller of the idle pushback ladder. It does NOT park the gateway poll: the two carry different
+  sources and different cursors, so a live socket silences nothing.
+- `ConsoleSocketDriver` routes frames under a generation fence. The client is paired with its
+  generation, so a superseded close cannot clear the live one. `onUnreachable` fires pre-welcome only.
+- The console registers NO consumer and takes planes only. A consumer cursor at zero would pin the
+  owner inbox's compaction floor forever, since compaction takes the minimum across consumers.
+- Agent messages are session-addressed and still arrive through the Gateway. One drain for one source
+  waits on the mailbox migration.
+
 ## Add Device
 
 The new device signs `approvalId`, `nonce`, `newSignPub`, and `newBoxPub`. The held device refuses an unsigned or mis-signed join before admitting the device or sealing keys.

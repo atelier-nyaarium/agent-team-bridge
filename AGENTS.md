@@ -45,6 +45,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../SettingsSections.kt` / `SettingsSystem.kt` / `SettingsVoice.kt` - settings leaf screens
 - `android/.../MainTabsScreen.kt` / `SessionsHeaders.kt` / `SessionCard.kt` / `SessionCardPreview.kt` / `SessionsEmptyState.kt` - sessions tab shell, cards, rules, and empty-state machine
 - `android/.../board/` - board reducers and durable `BoardManager`
+- `android/.../board/BoardSealing.kt` / `BoardRender.kt` / `BoardIntent.kt` / `BoardOptimistic.kt` / `BoardRouterWriter.kt` - board text sealing, render with cached fallback, edits held as intent, optimistic apply, and the CAS drain
+- `android/.../ConsoleTransportCoordinator.kt` / `ConsoleSocketDriver.kt` - one Router consumer across two transports, and generation-fenced frame routing
 - `android/.../Federation.kt` / `FederationManager.kt` / `CrossDomainLink.kt` / `ConsoleClientCrossDomain.kt` / `CrossDomainPresenceUi.kt` - cross-Gateway routing, identity, allowlist, sealing, replay, and presence
 - `src/mcp/` - Claude Code tools
 - `src/mcp/bridge/` / `channel/` / `references/` / `board/` / `designer/` / `connector/` - bridge, channel, reference, board, designer, and connector tools
@@ -76,6 +78,11 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
 - `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
+  - **A mailbox epoch is a random tag, never a counter.** `mintEpoch` draws it, so epochs compare for
+    EQUALITY only. Within one epoch the seq orders; across a re-mint nothing does, and the later
+    report wins. `at` is stamped by whoever receives the report, never taken from the reporter, since
+    it decides every cross-epoch merge. `ReadAnchor.kt` is the phone's twin and resolves by row
+    position.
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - registration and relay routing; four trust callbacks required
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
@@ -83,6 +90,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/agent-binary.ts` - uncached backend CLI presence check
 - `src/shared/capabilities.ts` - capability ids, guidance, daemon declarations, and bundle folding
 - `src/shared/schemas.ts` / `schemas*.ts` - sole Zod wire truth; `.meta({id})` names generated Kotlin classes
+- `src/shared/sealed-blob.ts` - per-chunk blob AEAD, twinned by `crypto/SealedBlob.kt` over a shared fixture corpus
 - `src/shared/content-envelope.ts` - content key derivation, content envelope, key envelope, join signing bytes
   - **Board text binds its entry id into the AAD kind.** `boardTextAadKind` is the sole builder, and
     a bare board kind does not typecheck. `BoardSealing.aad` is its Kotlin twin and must match byte

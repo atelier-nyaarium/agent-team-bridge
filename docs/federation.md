@@ -78,6 +78,8 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Gateway re-enrollment validates the merged live and bundle view, requires a newer admission, merges the allowlist, and merges keys without dropping held epochs.
 - First enrollment uses trust on first use for the Domain root.
 - Deploy the Router before the app: an older Router drops the join signature and the held device refuses the join.
+- Blob bytes seal per chunk on the existing 1 MiB boundary, each frame being a nonce, the ciphertext and its tag. The blob id stays the plaintext digest, so the Router verifies the CIPHERTEXT digest it was told and only a reader holding the key can verify the plaintext. Chunk index and the final flag ride in the AAD, so a Router cannot reorder, truncate, or splice chunks. `src/shared/sealed-blob.ts` and `crypto/SealedBlob.kt` are twins over a shared fixture corpus.
+- Board text binds its entry id into the AAD the same way. See `docs/task-board.md`.
 
 ## Inboxes
 
