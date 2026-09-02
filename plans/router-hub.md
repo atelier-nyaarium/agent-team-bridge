@@ -1538,6 +1538,12 @@ What the phone shows, the current producer, and the hub's.
   every verifier, leaving the findings unverified. Triage by hand found about twenty real
   defects among them. Finders and verifiers belong in separate workflows, and a verify stage
   should cap its fan-out by severity rather than refute every minor.
+- A Codex turn that answers only "Ready for the next task." shipped about half of the named test
+  cases and none of its report. The grep of `it(` names caught it; the relay should refuse a
+  reply with no checklist.
+- A Codex test pass left a stray probe file (`zz-probe-pump.test.ts`) in the tree, found only by
+  `git status` before the commit. Every commit step now scans untracked files for names the
+  prompt did not ask for.
 
 - A prose sweep that is told "timeless, no history" strips the failure descriptions out of a
   ledger and the recommendation reasons out of a questionaire, because both read as narration.
