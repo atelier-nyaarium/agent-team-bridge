@@ -2013,6 +2013,16 @@ What the phone shows, the current producer, and the hub's.
 - **The plan grew two sources of truth about the same slice.** Retention notes recorded that
   `routeGateway` and `refreshDiscovery` survive, while the spec bullets above them still said both
   were deleted. A reader hitting the bullets first audits against a phase that never shipped.
+- **A whole-module `vi.mock` factory makes any new export a breaking change across every mocker.**
+  Adding one function to `mcp/bridge/helpers.ts` broke eight test files that mock the whole module and
+  care about none of it, because a factory mock returns exactly what it lists and the new import
+  resolves undefined. Each needed the same one-line addition. `importOriginal` with a partial
+  override would have absorbed it.
+- **Tests that key on call ORDER break whenever a frame is added.** The handshake test threw from
+  `mockImplementationOnce`, meaning "the first `ws.send`", to prove the mint tolerates a send failure.
+  Adding a register answer ahead of the challenge silently retargeted it, and the naive repair made it
+  pass while testing nothing, since the new first send consumed the "once". Keying on the payload
+  rather than the position survives both.
 - **The cycle renders a TRUNCATED copy of the phase text, and it is not marked as truncated.** Phase
   7's step block dropped two sentences requiring a version gate. An audit correctly reported the gate
   missing and I rejected the finding, having checked it against the rendered copy rather than the
