@@ -10,8 +10,8 @@ code, 7 refuted. Phase 1 gates every later phase, and each spec it produces gets
 when written.
 
 Phase 0 on this host: snapshot and operator's note at `volumes/router-hub-phase0/20260901-172058`
-(gitignored). Other gateway hosts take their own per the note. Owner key backup export: pending
-the owner.
+(gitignored). Other gateway hosts take their own per the note. Owner key backup exported
+2026-09-01.
 
 Evidence the plan rests on, verified against the code:
 - Timeouts. The gateway waits 120s for a Router answer (`TOOL_CALL_TIMEOUT_MS`). The Router holds a
@@ -30,7 +30,7 @@ Evidence the plan rests on, verified against the code:
   and makes it unconditional.
 - Board entry `bd_36caa212` holds the route-gateway analysis behind the plan.
 
-Decided by the owner after lap 1:
+Owner decisions:
 - Degraded mode is retracted. No phone-to-gateway path exists: port 20000 is loopback, port 20003
   is enrollment only. Router down means a read-only cache on the phone and "Router unavailable"
   on every action, with one allowance: a scheduled send may be composed offline and journaled
@@ -115,7 +115,7 @@ map of domainId to a map of gatewayId to connection, so one Router hosts many Do
 `EnrollmentCoordinator` holds the signed link edges between them. A friend's gateways are already
 connected to the hub.
 
-Corrected inventory: `crossDomainPeers` is gateway-local. It holds the friend gateway's box and
+`crossDomainPeers` is gateway-local. It holds the friend gateway's box and
 sign keys, and `createSealer` seals cross-Domain traffic gateway to gateway. Nothing at the Router
 can open it. So:
 - Cross-Domain rows are tier 3. The origin gateway seals to the destination gateway's box key, as
@@ -191,7 +191,7 @@ gateway. Gateways must read the board and write bodies; the Router is the one pa
 That matches the trust model: gateways are loopback-only owner machines, the Router is the only
 public port.
 
-Refined against the code: no synced symmetric keyring exists. The keyring is `DomainSnapshot`
+No synced symmetric keyring exists. The keyring is `DomainSnapshot`
 (owner public key, admissions, revocations), `buildConsoleTransport` ships only that, and the
 gateway bootstrap bundle has no key slot. The owner root never leaves the originating phone except
 as the passphrase-encrypted backup. So the key is DERIVED on the owner phone from the root and an
@@ -217,7 +217,7 @@ splits cascade across phone and gateway (the Kotlin-twin pattern the codebase al
 keeps one cascade owner and seals the words; a leaked tree shape says "17 tasks, one has three
 children", not what they are.
 
-Refined against the code: `applyCascade`, the awareness fold, and the MCP cascade prose all read
+`applyCascade`, the awareness fold, and the MCP cascade prose all read
 titles, and the awareness bank hashes complete pre and post entries. So the split is: the Router
 runs cascade on structure and emits observations as complete pre and post projections in which
 title and body are the ciphertext it already holds; the gateway that delivers an awareness row
@@ -249,12 +249,12 @@ acks (the last three commits); the gateway-to-gateway leg is the one synchronous
 is what produced the discovery hang. A extends the model that works to the leg that does not, and
 the failure modes map to one place.
 
-Refined against the code:
+Inbox rules:
 - The inbox is `DeviceMailbox` and `PendingDeliveryStore` semantics hosted at the Router, not a new
   design: producer-issued idempotency keys, epoch-gated per-consumer cursors, compaction to the
   slowest consumer, idle-consumer eviction, durable acceptance before the ack, retirement on the
-  receiver's ack. Dedupe by content hash is dropped. Capacity REFUSES; an accepted row is never
-  evicted.
+  receiver's ack. Not carried: `DeviceMailbox`'s OOM backstop that evicts unacked rows, and
+  dedupe by content hash. Capacity REFUSES before the append; an accepted row is never evicted.
 - A row is a clear envelope plus ciphertext. The producer signs the envelope (origin, destination,
   idempotency key, epoch, content kind); the Router adds sequence, accepted-at, and measured size.
   Body, file manifest, and awareness payload are inside the ciphertext. No title.
@@ -303,12 +303,14 @@ Recommendation reason, chosen: C is B with a floor under eviction. sha256 ids me
 reasons about staleness; the cache is a quota number and a sweep. Closes the asleep-laptop case
 that A leaves open.
 
-Refined against the code: the Router has no blob store at all, and board attachments are kept
+The Router has no blob store, and board attachments are kept
 OUT of the gateway's evicting cache on purpose (`BoardAttachmentStore`, no sweeping). The Router
 gets two stores, both Domain-scoped in path and lookup: a quota-swept cache for message files, and
 a reference-held store for board attachments and scheduled-send files, released when the entry is
-deleted or the fired row reaches a terminal state (receiver ack, expiry, typed failure). Firing
-transfers the reference to the row; it does not drop it. Each cached entry records its origin `(domainId, gatewayId)` so a miss
+deleted, or when the last row that names the file is done with it: the fired session row
+terminal (receiver ack, expiry, typed failure) AND the owner-inbox result row compacted past every
+consumer cursor. A phone-uploaded file has no gateway origin, so the Router copy is the only one
+until both rows are done. Firing transfers the reference to the rows; it does not drop it. Each cached entry records its origin `(domainId, gatewayId)` so a miss
 can be routed and an offline origin told apart from an evicted one. The phone fetches the Router
 first and the origin only on a typed miss.
 
@@ -367,7 +369,7 @@ the mechanism not the behaviour; the Router already runs a WS server for gateway
 tiers are the carefully engineered part and stay untouched. C throws them away for a latency win
 felt only with the app closed.
 
-Refined against the code: the app has no WebSocket client. Every console op is an OkHttp POST
+Every console op is an OkHttp POST
 through `ConsoleRelayTransport.relay`, `ConsoleClient.poll` is an HTTP long poll, and
 `buildLeafPinnedClient` pins HTTPS only. OkHttp's `newWebSocket` on that pinned client runs the
 fingerprint trust manager during TLS, before the upgrade, so pinning carries over; `ws` and `http`
@@ -377,24 +379,24 @@ holds a socket, or takes the wake lock. HTTP polling stays until the socket's te
 
 # Plan
 
-Scale, estimated: about 5,900 lines of gateway modules move to the Router or die. The Router is
-about 3,400 lines and roughly doubles. On the phone, 47 Kotlin files match a route-gateway grep,
-tests included; the executable subset is a Phase 1 output, not a number to plan on. MCP tools and
-the host daemon are near zero in code and non-zero in verification.
+Scale: About 5,900 lines of gateway modules move to the Router or die. The Router is about 3,400
+lines and roughly doubles. On the phone, 47 Kotlin files match a route-gateway grep, tests included.
+The executable subset is a Phase 1 output. MCP tools and the host daemon are near zero in code and
+non-zero in verification.
 
-Ordering: Phase 1 gates everything. Phase 2 gates every phase that writes sealed content, which is
-all of 3 to 6. Phase 3 gates 4. Phase 8 gates 9.
+Ordering: Phase 1 gates everything. Phase 2 gates every phase that writes sealed content, phases 3
+through 6. Phase 3 gates 4. Phase 8 gates 9.
 
 ## Phase 0 - Backup and freeze
 
-- Export the owner key backup from Management. It regenerates every content-key epoch. Owner
-  action, pending.
+- ✅ Export the owner key backup from Management. It regenerates every content-key epoch. Exported
+  by the owner 2026-09-01.
 - ✅ Snapshot every durable store: each gateway's `DurableStore` files and blob roots, and the
   Router's `federation.json`. Hash each. No phone snapshot: drafts and goals stay on the phone,
   and everything else the phone holds is re-derived from the Router or journaled to it. Done on
   this host; other gateway hosts pending the owner, command in the operator's note.
 - ✅ Record the running release by hand: commit, image digests, APK hash, snapshot paths and
-  hashes. An operator's note, not a rollback vehicle; there is no rollback.
+  hashes. An operator's note. No rollback.
 - ✅ `plans/vault.md` stays parked. No code.
 
 ## Phase 1 - Failure-mode ledger, invariants, and specs
@@ -403,18 +405,18 @@ No code. Output is appended to this plan. Gates Phase 2.
 
 ### Ledger
 
-Input, the transport failure-fix set, oldest first: `e6f70cb4`, `12869b9c`, `2ce9938f`,
+Transport failure-fix set, oldest first: `e6f70cb4`, `12869b9c`, `2ce9938f`,
 `66b71d4d`, `0a1a5983`, `21fbd1a8`, `2ead9add`, `5495f624`, `258e1f51`, `0d4ccd6a`, `cb98949d`,
 `ac10e5db`, `f270dcf4`, `cacc8774`, `054368bb`, `d489614f`, `d7fb5a6a`, `b0a51863`, `d1ebf73b`,
 `9ece181c`, `a0d18ad0`, `4bee4c04`, `04046284`, `18dc9910`, `e10af02c`, `f0c2e370`, `efe70a45`,
 `a321772e`, `6ffa04c4`, `bbb29426`, `83301504`, `744f1a59`, `cd1f3df3`, `4e1e0b43`, `4963848d`.
-Plus the failure modes the code carries without a commit of their own:
+Failure modes without a dedicated commit:
 `PendingDeliveryStore.enqueue` refusing at capacity, `PendingDeliveryStore.sweep` expiring rows,
 `DeviceMailbox.sweepIdleConsumers`, the legacy-peer retire-on-write branch of
-`ChannelDeliveryCoordinator.offer`, and every cross-Domain relay gate named in A2. Excluded, and
-why: `d46807e8`, `2de44eef`, `d00c0fa5` (documentation), `9258d185` (test only), `b647b51c` (board
+`ChannelDeliveryCoordinator.offer`, and every cross-Domain relay gate named in A2. Excluded:
+`d46807e8`, `2de44eef`, `d00c0fa5` (documentation), `9258d185` (test only), `b647b51c` (board
 replay validation, not transport), the refactor-only wake and poll extractions, and the Codex
-thread lifecycle cluster (`75442682` through `86cfab91`), which the hub does not touch.
+thread lifecycle cluster (`75442682` through `86cfab91`).
 
 Each row states trigger, wrong outcome, and the invariant the fix imposed, then maps to
 IMPOSSIBLE BY CONSTRUCTION (naming the Router invariant and its residue test) or CARRIED OVER
@@ -438,8 +440,8 @@ Every in-memory map in `federation-server`, enumerated by grep, marked "delibera
 "becomes durable", with how inbox delivery resumes without duplicating or losing accepted rows.
 Includes `gatewayConnections`, `connGateways`, `pendingRelays`, `pendingHandshakes`,
 `handshakeAttempts`, `seenRegisterNonces`, `ConsoleSurface.pending`, and every coordinator's
-windows, rendezvous, `byTarget`, nonces and cleanups. States the named-offline contract that
-replaces today's 503.
+  windows, rendezvous, `byTarget`, nonces and cleanups. States the named-offline contract replacing
+  the current 503.
 
 ### Inventories
 
@@ -453,8 +455,7 @@ replaces today's 503.
 
 ### Specs
 
-One section each, appended here, each with its residue test named. Later phases implement them
-and add nothing the spec did not say.
+One section per spec. Name its residue test. Later phases implement only these specs.
 - Content envelope and key delivery (Phase 2).
 - Router state layer: record format, segment and snapshot generations, fsync order, boot replay,
   compaction commit, corruption quarantine (its own, `durable-store`'s `load` returns null and does
@@ -485,7 +486,7 @@ and add nothing the spec did not say.
   - to a new console inside the `ConsoleTransport` sealed at Add Device;
   - to a new gateway as a new field in the bootstrap bundle. Install is staged: every artifact
     written, then one commit marker, then activation; boot recovery completes or rolls back the
-    whole bundle. Today's install and Add Device are separate writes, so this is new;
+    whole bundle. Install and Add Device use one staged bundle commit.
   - to an already-enrolled member by a re-delivery op: signed by the member's admitted signing
     key, box key resolved from the Router's admission record, never from the request; the
     response sealed to that box key; operation nonce persisted for idempotency and expiry.
@@ -495,13 +496,13 @@ and add nothing the spec did not say.
   once with bounded retry. Distinct from malformed ciphertext and from a revoked target.
 - Rotation: bump the epoch, re-deliver to current members. Old content is not re-encrypted.
   Documented, not automated.
-- Revocation is authorization-only and the plan says so.
+- Revocation is authorization-only.
 - Residue test: the key never appears in a log line or a debug ingest.
 
 ## Phase 3 - Router: inboxes, op ledger, blob stores
 
-Additive; old surfaces untouched.
-- Inboxes per the Question 3 refinement, addressed by owner or by `(domainId, gatewayId,
+Additive. Old surfaces untouched.
+- Inboxes per Question 3, addressed by owner or by `(domainId, gatewayId,
   sessionId)`. Consumer registry keyed by console installation identity with incarnation, last
   seen, forget on revoke. Capacity refuses; per-Domain and per-owner quotas. Recovery of
   accepted-but-undelivered rows on restart. One writer, residue-tested.
@@ -518,10 +519,12 @@ Additive; old surfaces untouched.
   append, never merely deleted.
 - `blob_fetch` stays request-response with an operation id, the 70s Router hold and 120s gateway
   wait named in a constants test, typed outcomes, and late-result rejection by id.
-- Blob cache: content-addressed, sealed, Domain-scoped, streaming upload with a lease, generation-
-  checked chunk commits, atomic partial-to-final promotion, durable index or scan-and-rebuild on
-  boot, per-Domain quota, LRU sweep that skips active transfers, origin `(domainId, gatewayId)`
-  per entry, typed miss.
+- Blob cache: content-addressed, sealed, Domain-scoped, streaming upload with a lease that
+  carries a generation and expires 10 minutes after its last renewal (an expired lease's partial
+  is reclaimed by the sweep and a chunk commit under it is refused; boot reclaims partials with
+  no live lease), generation-checked chunk commits, atomic partial-to-final promotion, durable
+  index or scan-and-rebuild on boot, per-Domain quota, LRU sweep that skips live transfers,
+  origin `(domainId, gatewayId)` per entry, typed miss.
 - Reference-held store: Domain-scoped, released with the entry or the fired send, boot-time orphan
   reconciliation.
 
@@ -531,8 +534,10 @@ Additive; old surfaces untouched.
   and admin whole-file CAS. Per-Domain, per-owner records keyed `(domainId, ownerId, kind, id)`;
   keyed versions with CAS.
 - Presence: each gateway sends a baseline snapshot on registration, then deltas with a sequence,
-  its incarnation, and tombstones; the Router expires a gateway's rows when its socket drops and
-  reconciles on reconnect. Signing is not needed; the authenticated connection is the boundary.
+  its incarnation, and tombstones. A socket drop marks the gateway's rows
+  `presenceFresh: unreachable` and keeps them; the reconnect baseline under a new incarnation
+  replaces them; only `session_forget` removes a row. Signing is not needed; the authenticated
+  connection is the boundary.
   Two projections, separately versioned: session presence (the `TeamInfo` fields) and gateway
   spawn points. The fold is per audience: the owner sees everything; a friend Domain sees the
   `presenceForDomain` projection (shared sessions only, the same field filter).
@@ -580,7 +585,7 @@ gateway code imports it.
   `consolePushOps`, the `list_teams` and `presence_push` legs of `presenceExchange`, the plane
   registry and `pollPlanes`, `capabilityStore` (phones re-report on first connect), awareness
   generation, `sendCrossGateway`, `relayWithRetry`.
-- Delete only after Phase 8 has imported and verified them, since they are its sources: the
+- Delete after Phase 8 imports and verifies these source stores: the
   device mailbox and `consoleDevices`, `pendingDeliveries`, `boardStore` and the board modules
   except the awareness adapter, board attachment bytes, `durableOpStore` and `boardReplays`,
   `crossDomainShareState`, the read-anchor projection.
@@ -598,8 +603,8 @@ gateway code imports it.
   start, Service destruction, process revival, and simultaneous reconnects.
 - `RouterReach` gains socket-aware candidates and a failover state machine with LAN-to-public
   transition tests.
-- `ConsoleClient` targets the Router only; `routeGateway` is deleted, and with it the non-route
-  capability re-report and the per-gateway board pull.
+- `ConsoleClient` targets the Router only. Delete `routeGateway`, the non-route capability re-report,
+  and the per-gateway board pull with it.
 - `PollDrain` becomes the one drain for one source. `PresenceOps.refreshDiscovery` and every
   refresh trigger in `TrustOps` and `SessionOps` are deleted once presence is pushed.
 - `BoardManager` and `BoardOps` rewritten together around Router versions: the Router payload is
@@ -618,7 +623,10 @@ gateway code imports it.
 
 A compatibility checklist plus one wire change. The MCP plugin keeps its local gateway base URL.
 `send` and `respond` gain a producer-issued `opId`, minted once per invocation and reused on every
-retry. Verify against the new gateway: `fetchCapabilities`, `postBoard` and `fetchAttachments`,
+retry. The gateway's registration answer advertises an op-ledger protocol version. A plugin that
+sends `opId` fails closed with a named error when the version is absent or too old, so an old
+gateway cannot silently strip the field and accept a retry twice. Verify against the new gateway:
+`fetchCapabilities`, `postBoard` and `fetchAttachments`,
 `registerBridgeDiscover`, Codex and Copilot dispatch, `host_op`, `presence_watch`, and
 `presence_derive`. The agent routes, session authority, and the daemon protocol are unchanged.
 
@@ -629,10 +637,9 @@ After the Router is live and the key backfill has confirmed every member, before
   on every mutation; in-flight console ops settle or are failed typed; no in-flight op is
   imported, because `DurableOpStore` keeps only a marker, not the request.
 - Cut: with zero writers, immutable hashed snapshots of every gateway store and blob root at one
-  epoch. Restore is an offline import mode, new in this phase: it keeps the Router's identity and
-  enrollment state, restores every owner store and blob root, and refuses to serve until
-  verification passes. Never into a live process. Today the Router started without its file mints
-  a fresh identity, which would break every pin.
+  epoch. Restore uses offline import mode. It keeps the Router's identity and enrollment state,
+  restores every owner store and blob root, and refuses to serve until verification passes. Never
+  into a live process. Preserve the Router identity and enrollment state to preserve every pin.
 - Import: board envelopes and attachment bytes; mailbox rows, cursors, and epochs with an explicit
   old-to-new mapping; pending deliveries; read anchors; share state with its TTLs. Verify counts,
   hashes, parent and rank invariants, attachment manifests.
@@ -650,9 +657,723 @@ After the Router is live and the key backfill has confirmed every member, before
 Order: Router (both surfaces live), then every gateway, then every phone, then the plugin bump.
 The bump is pushed only after `setup.sh --verify` passes on every gateway host, and it learns to
 check the running gateway and Router versions and the protocol version alongside registration.
-That is the gate; marketplace auto-update then cannot install a plugin ahead of its gateway. No
-pin.
+This gates marketplace auto-update from installing a plugin ahead of its gateway. No pin.
 - No rollback. Fix forward; Phase 0's snapshots are the only safety net. Once the gate has passed
   everywhere, delete the old Router console surface and every old gateway path in one commit. Any
   shim that let the two coexist carries a remove-by comment.
 - Vault questionaire resumes on the new substrate.
+
+# Specs
+
+Phase 1 output. Each names its residue test. Wire shapes land in `src/shared/schemas*.ts` with
+`.meta({id})` for Kotlin; nothing below is a schema yet. Canonical signing bytes follow
+`admission.ts`: versioned tag, fixed-order fields, newline-joined, every field newline-free.
+
+## S1 - Content envelope and key delivery
+
+Key. `contentKey(epoch) = HKDF-SHA256(ikm = owner sign.priv raw 32 bytes, salt =
+"switchboard-content-salt-v1", info = "switchboard-content-v1\n" + epoch, length 32)`. Epoch is an
+integer from 1. Derived on the owner phone only; every other holder receives bytes.
+
+Envelope. `ContentEnvelope { v: 1, epoch, nonce (12 bytes b64), ciphertext (ct || 16-byte tag,
+b64) }`. AES-256-GCM. AAD = `"switchboard-content-v1\n" + domainId + "\n" + ownerSignPub + "\n" +
+epoch + "\n" + kind`, kind a slug naming the field: `board.title`, `board.body`, `board.name`,
+`inbox.body`, `op.payload`, `op.result`. A scheduled send's body is `inbox.body`, so the same
+ciphertext serves the record, the delivered row, and the echo. A ciphertext opened under another
+kind fails.
+
+Key envelope. `KeyEnvelope { epoch, sealed: SealedEnvelope }`, the existing seal of the 32 key
+bytes to the recipient's admitted box key, signed by an admitted console's signing key (the owner
+phone at first, any key-holding phone later). The recipient resolves the signer to an admission of
+kind `console` through a kind-checking wrapper, as `resolveConsoleBoxPub` does, never bare
+`resolveAdmitted`, then stores `epoch -> key`. A gateway key is refused as a signer.
+
+Delivery.
+- New console: `ConsoleTransport.contentKeys: KeyEnvelope[]`, every current epoch, at Add Device.
+- New gateway: `GatewayBootstrapBundle.contentKeys: KeyEnvelope[]`. Install is staged: admission,
+  transport, Domain id, and keys written under `federation/staging/`, then one `INSTALLED` marker
+  renamed into place, then activation; boot with a staging dir and no marker rolls it back.
+- Enrolled member: inbox rows (S3). `key_request` to the owner inbox: from a console as an
+  OwnerOp, from a gateway as a `key_request` frame over its authenticated WS, either way carrying
+  the requester's admitted signing key, `at`, and nonce. The console-only rule above is for
+  GRANTS, which only a key holder mints; a request may come from either kind. A key-holding
+  phone answers `key_grant`,
+  a `KeyEnvelope` to the box key the Router's admission record names for that signer, addressed to
+  the gateway inbox `(domainId, gatewayId)` or the console's owner-inbox consumer. The request is
+  idempotent by nonce. Confirmation is a `keyReceipt` record (S2), written by the Router only on
+  a signed receipt from the recipient naming the installed epoch, sent after the recipient's
+  keyring write is fsync'd; the grant row's delivery ack retires the row and confirms nothing.
+- Backfill at cutover: the owner phone enumerates admissions and sends one `key_grant` per
+  member per epoch; Phase 8 starts when every member has a `keyReceipt` for every epoch.
+
+Keyrings. Phone: `AppStateStore` slot `contentKeys`, Keystore-backed beside the identity, wiped
+with `PROVISIONING_KEYS`; a restored owner backup regenerates every epoch from the root. Gateway:
+`DATA_DIR/federation/content-keys.json`, 0600, atomic write.
+
+Reader state `missing_epoch`: the row or record is retained and not acked; one `key_request`
+now, then every 10 minutes for 24 hours; then reported as an error row to the owner. Distinct from
+a bad tag (tamper, dropped and logged) and from a revoked target.
+
+Rotation: derive epoch+1, grant to current members, keep old epochs; nothing re-encrypted.
+Revocation is authorization-only.
+
+Residue tests: `tests/fixtures/content-envelope.json` (seed, epoch, key, envelope) opened by both
+runtimes; a canary key never appears in any log line the key path emits; a staged install
+interrupted after any artifact leaves no active partial state; a recipient that acks a grant and
+crashes before its keyring fsync leaves the Phase 8 gate unsatisfied.
+
+## S2 - Router state layer
+
+Layout: `DATA_DIR/owner/<domainId>/<ownerFingerprint>/` holding `MANIFEST.json`,
+`snapshot-<gen>.json`, `journal-<gen>.log`. One owner, one writer queue, one manifest.
+
+Record: `{ kind, id, version, clear: object, sealed?: { [field]: ContentEnvelope } }`. Kinds:
+`board.entry`, `board.meta`, `scheduled`, `share`, `readAnchor`, `capabilities`, `presence.row`,
+`consumer`, `session`, `op`, `inbox.row`, `keyReceipt`.
+
+Write: `put(kind, id, expectedVersion, record)` and `append(address, row)`. A mismatch answers
+`conflict` with the current record. Version is per record, monotonic. A write is one journal line,
+fsync'd, before its result leaves the Router. Batches share one fsync.
+
+Compaction: write `snapshot-<gen+1>.json` and then `MANIFEST.json` (naming the snapshot and the
+journal it continues from), each through `writeFileAtomic` with `fsyncFile` and `fsyncDirectory`,
+and delete older segments only after the manifest's directory fsync returns. Premise, stated: the
+mounted filesystem honours POSIX fsync. Boot: manifest, snapshot, replay journals after the
+snapshot's seq; a torn last line is truncated and logged.
+
+Quarantine: a snapshot or segment that fails to parse is renamed `.quarantine-<ts>`, bytes kept.
+The owner enters `quarantined`: reads of the affected kinds answer `durability_uncertain`, appends
+are refused with the same, Router health names the owner and the missing seq range. Service
+resumes only through an operator command that either repairs the segment or accepts the loss,
+recording the discarded seq range; every op in that range gets a durable `durability_failure`
+result row so a sender holding `accepted` is told. Never a Router that answers as if the rows
+had not existed.
+
+Single writer: `owner.lock` holding a pid, a lock generation, and a heartbeat the writer queue
+refreshes every 5 seconds. A second process takes the lock when the pid is dead or the heartbeat
+is older than 30 seconds, bumping the generation; every journal write presents the generation and
+a stale holder's write is refused. Same pid liveness test as `atomic-write.ts` temps.
+
+Quota: bytes per Domain across owners, configured, accounted by one Domain-level counter the
+Router process owns (the per-owner lock is not it). A write refused by quota or by ENOSPC before
+the journal line lands answers `durability_failure`; an fsync failure after the line landed
+answers `durability_uncertain` (S3). Either flips Router health to `degraded`. A metadata reserve
+of 64 MB keeps manifests, locks, and `federation.json` writable; `fileSecretStore` writes count
+against the reserve, not the quota. Reads never fail on quota.
+
+Residue tests: crash injected between journal append and manifest rename replays to the same
+state; a second process on the directory is refused; CAS conflict returns the live version;
+quarantine keeps every byte and the store keeps accepting writes.
+
+## S3 - Inbox, op ledger, registries, delivery, capacity, results
+
+Addresses: `owner:<domainId>/<ownerSignPub>`, `session:<domainId>/<gatewayId>/<sessionId>`,
+`gateway:<domainId>/<gatewayId>`.
+
+Console-to-Router op (the signed request that replaces the console seal for tier-1 and tier-2
+writes): `OwnerOp { v: 1, domainId, signerSignPub, conversationId, device, opId, at, nonce, op,
+signature }`, signature over `["OWNEROP_V1", domainId, signerSignPub, conversationId, device,
+opId, String(at), nonce, sha256Hex(canonicalJson(op))].join("\n")`, every field newline-free by
+schema. The Router resolves the signer to an admission of kind `console` (kind-checking wrapper,
+never bare `resolveAdmitted`), `at` within `REGISTER_MAX_SKEW_MS`, nonce unseen. Every op from an
+admitted console is an OwnerOp; `first_root` keeps its own Router intake, authorized by the invite
+nonce and the pending tenant, and the gateway-side variant stays a defensive reject.
+
+Two op classes, decided by what the answer is. A DELIVERY op (send, respond, peek, tmux, rename,
+close, forget, wake) carries its payload as a `ContentEnvelope` of kind `op.payload`, becomes a
+row in the gateway's or session's inbox, and is answered by an `op_result` row from the gateway
+with a `ContentEnvelope` body; against a disconnected gateway it is held and reported `waking`. A
+VALUE op (`blob_fetch`, `list_dirs`, `create_session`) is Router-forwarded request-response with
+a typed `unreachable` at once when the gateway is disconnected. The gateway box seal survives
+only for cross-Domain `peer` rows. One ciphertext per message: the row the session receives and
+the `sent` echo in the owner inbox are the same bytes, readable by every key holder; the file
+materialization id (`messageId`, minted by the gateway in `routes.send`) is producer-issued
+and lives inside that ciphertext beside the file manifest, with `contentRefs` as its clear
+counterpart.
+
+Row: `{ seq, acceptedAt, size, envelope, producerSig, body }`. `envelope = { origin: { kind:
+console|session|gateway|router, domainId, gatewayId?, sessionId?, device? }, opKey: {
+conversationId, opId }, epoch: number | "peer" | "clear", kind, contentRefs: blobId[] }`. `kind` is
+the current `MailboxEntry.kind` plus `awareness`, `key_request`, `key_grant`, `scheduled_result`,
+`board_observation`, `op_result`. `producerSig` signs the envelope bytes with the producer's
+signing key; the Router adds `seq`, `acceptedAt`, `size`. `body` is a `ContentEnvelope` (epoch
+numeric), a `SealedEnvelope` to a gateway box key (`peer`), or Router-composed clear JSON
+(`clear`, only for `board_observation`, `scheduled_result`, and the ledger's own `op_result`
+outcomes; a gateway's `op_result` answer carries a `ContentEnvelope`).
+
+Op ledger: record `op:<domainId>/<ownerSignPub>/<conversationId>/<opId> -> { state: accepted |
+waking | delivered | failed | expired | complete, opHash, result?, seq?, at }` written in the same
+journal batch as the row. `opHash` is the signed `sha256Hex(canonicalJson(op))`: a repeat of an
+opKey with the same hash answers the recorded result; a repeat with a different hash answers
+`conflict` and is never executed. Retention is a terminal transition: the sweep writes `expired`
+in the batch that retires the row, a `waking` row sweeps on the same clock, and a later ack for a
+retired seq answers `gone`. Agent `send` and `respond` carry a producer-issued `opId` (Phase 7).
+`deliveryId` and `channelJobId` are never the key.
+
+Consumer registry, per owner: `consumer:<signerSignPub> -> { cursor, cursorEpoch, lastSeen,
+incarnation }`. Compaction of the owner inbox to the minimum cursor; a consumer idle 30 days is
+forgotten and its `cursorEpoch` retired; a revoked console is forgotten at revocation. A cursor
+presented under a retired epoch, or below the compaction floor, is answered `cursor_stale` with
+the floor and the dropped count, never silently advanced; the phone shows the gap.
+
+Session registry: `session:<domainId>/<gatewayId>/<sessionId> -> { kind, label, lastSeen,
+recordExists }` from gateway frames `session_upsert` and `session_forget`. Not expired by
+presence; removed only by `session_forget`.
+
+Gateway frames name only themselves. On any frame from a gateway connection the Router takes
+`domainId` and `gatewayId` from the authenticated connection; a payload tuple naming another
+Domain or gateway is refused, and a `sessionId` is accepted only if the session registry holds it
+under that gateway. S5 attestations, S6 session actors, and S8 board ops all pass through this
+rule.
+
+Gateway incarnation: `gateway_register` reply carries `incarnation`, Router-assigned, monotonic
+per `(domainId, gatewayId)`, persisted. Every frame either way carries it; a frame with another
+incarnation is dropped and logged; disconnect cleanup runs only for the incarnation that
+disconnected.
+
+Delivery to a gateway: Router push `inbox_deliver { address, rows, incarnation, deliveryEpoch }`;
+gateway answer `inbox_ack { address, seq, incarnation, deliveryEpoch, outcome: delivered | waking |
+failed, reason? }`. `deliveryEpoch` is per address and bumps when the address is recreated. The
+gateway offers a row to the session as `ChannelDeliveryCoordinator` does and acks `delivered` on
+the receiver's `channel_delivery_ack`; a `deliveryProtocol < 1` peer is refused at registration
+after cutover. A row for a session with no live socket runs `tryWakeTeam`; `wakeStart` reports
+`waking`; `WakeResult` timeout and disconnected keep `waking`; a definitive `ok: false` reports
+`failed`. Only the gateway named in the address may ack it. The gateway's dedupe is a durable
+claim record under `DATA_DIR`, `deliveryId -> { offeredAt, outcome }` per address, fsync'd before
+the row is offered to the session and cleared on ack or on a `deliveryEpoch` bump; a redelivery
+whose `deliveryId` holds a claim is re-acked, not re-offered.
+
+Delivery to a phone: WS push (S9) or poll; ack by cursor per consumer.
+
+Capacity: owner inbox 10,000 rows or 64 MB of row text; session inbox 200 rows; gateway inbox 200;
+Domain total from the S2 quota. The row cap is checked first and answers `refused`; the S2
+storage quota is checked next and answers `durability_failure`; both leave every prior row
+intact. Nothing evicts an accepted row; the `DeviceMailbox` OOM backstop is not carried. Retention: an undelivered row expires after 30 days with an `expired`
+result row to the sender; a delivered row is compacted by cursor.
+
+Result envelope for every append and every OwnerOp: `{ opKey, outcome: accepted | refused |
+expired | target_revoked | failed | durability_failure | durability_uncertain | conflict, seq?,
+reason? }`. `refused` is a logical cap (inbox rows, per-session count), checked first; `failed` is
+a definitive delivery failure reported by the destination gateway or by S7 after its retry;
+`durability_failure` is storage: Domain quota or ENOSPC before the journal line lands;
+`durability_uncertain` is answered when the journal line was written but its fsync failed.
+
+Cross-Domain rows: the origin gateway seals to the destination gateway's box key; the
+Router authorizes by link edge (`hasLinkEdge`) and share state (S5); the row is `peer` in the
+destination session's inbox; `response_push` is the same in reverse. The relay gates in A2 stay
+at the gateway on open.
+
+Blob fetch: `blob_fetch { opId, blobId, range }` forwarded to the origin gateway with
+`GATEWAY_RELAY_TIMEOUT_MS`; late replies dropped by `opId`; outcomes `fetched | absent |
+unreachable | timeout`.
+
+Residue tests: every append site in `federation-server` is the ledger transaction; the same
+opKey through two gateway connections yields one row; an ack with a stale incarnation is
+rejected; a cap refuses without evicting; a row accepted before a crash is delivered after it;
+an owner-scoped read without `domainId` does not compile (typed key) and the public methods
+reject a Domain the caller is not admitted to.
+
+## S4 - Presence deltas, roster, projections
+
+Gateway frames: `presence_baseline { incarnation, seq: 0, rows: TeamInfo[], spawnPoints }` after
+registration; `presence_delta { incarnation, seq, upserts: TeamInfo[], tombstones: sessionId[] }`
+on `markDirty`, debounced 250 ms. The Router keeps `(incarnation, seq)` per gateway; a gap or a
+foreign incarnation answers `presence_resync` and the gateway sends a baseline.
+
+Socket drop: the gateway's rows get `presenceFresh: "unreachable"` and stay; reconnect brings a
+new incarnation and a baseline that replaces them. Rows never expire on their own; `session_forget`
+removes a session.
+
+Roster, per Domain: admitted gateways (kind `gateway` in the snapshot) with `{ connected,
+incarnation, lastRegisteredAt }`. `rosterKnown` is always true; `asked` = admitted, `answered` =
+connected, `unreachable` = admitted minus connected; `spawnPoints` from the baselines.
+
+Projections: owner = every row of the Domain plus each linked Domain's projection as
+`CrossDomainPresenceEntry`; friend Domain D = shared sessions only, the `presenceForDomain` field
+set (status, queueDepth, working, needsLogin, lastActive, labels). Each projection is a plane with
+`{ epoch, version }`, so the poll piggyback and the WS push share one shape.
+
+Residue tests: a seq gap triggers resync; a drop marks unreachable and deletes nothing; a friend
+projection fixture never contains an unshared session or a filtered field.
+
+## S5 - Share state and attestation
+
+Record per owner: `share:<sessionTarget>|<targetKey> -> { sessionTarget, target: domain |
+everyone_trusted, lastSeenAt, version }`, the `ShareRecord` shape.
+
+Ops (OwnerOp): `cross_domain_share`, `cross_domain_unshare`, `cross_domain_unlink`, `cross_domain_list_shares`,
+result shapes unchanged. `touch` is derived: a session `online` or `verifying` in its gateway's
+rows refreshes `lastSeenAt`, and so does every permitted cross-Domain delivery to it, the two
+sites `teams()` and `gateCrossDomainTarget` touch.
+
+Attestation from a gateway: `share_job_live { sessionTarget, jobIds, observedAt, incarnation }`
+on change and each sweep interval; a live job suppresses the sweep for that session, as
+`hasLiveCrossDomainThread` does. Stale incarnation is dropped.
+
+Sweep: the TTL `startShareSweep` runs at the Router.
+
+Unlink, everything `unlinkDomain` does, split by owner: at the Router, drop explicit shares
+to D, tear down D's projection and the owner's projection of D, drop the link edge; at each
+gateway, on the Router's `unlink` frame, `crossDomainPeers.removeByDomain`, `expireByDomain` on
+pending jobs, both presence teardowns, and `reconciler.cancel`. Everyone-trusted shares stop
+matching (`isLinked` false); relink starts from nothing.
+
+Revocation reaches accepted rows. Every `peer` row's clear envelope carries the share generation
+of `(sessionTarget, D)` at acceptance; unshare and unlink bump the generation and, in the same
+journal batch, retire every undelivered `peer` row bound to the revoked pair with a terminal
+`target_revoked` result to the sender. Delivery re-checks the generation before a row leaves the
+Router. This is the one stated exception to S3's "nothing evicts an accepted row": the row is not
+lost, its sender is told.
+
+Residue tests: after unshare, a `peer` row from D to that session is refused at the Router, and
+an accepted-but-undelivered one is retired with `target_revoked`, never delivered; a sweep never
+drops a share with a fresh live-job attestation; an attestation with a stale incarnation changes
+nothing.
+
+## S6 - Board
+
+Records: `board.meta -> { revision }`; `board.entry:<id> -> { clear: { id, state, parent, rank,
+session?: { domainId, gatewayId, sessionId }, trashedAt?, attachments?: [{ blobId, size, mime,
+blobGateway }], version }, sealed: { title: ContentEnvelope, body?: ContentEnvelope, names?: {
+[blobId]: ContentEnvelope } } }`. `blobGateway` is the origin a typed cache miss falls back to.
+Filenames are sealed under `board.name`, keyed by `blobId` so a reorder cannot mislabel a file.
+
+Writes (OwnerOp, or a gateway op for a session actor): the current op set (upsert, remove, set_state,
+set_parent, set_rank, set_attachments, trash, restore) with `expectedRevision`. Authority is
+`boardAuthority.mayWrite` with the actor `{ kind: owner } | { kind: session, session: (domainId,
+gatewayId, sessionId) }`. Cascade is `applyCascade` on clear state; `CascadeChange` drops `title`
+and the answering gateway fills it from the returned entries. `set_attachments` requires every
+blob to be present in the reference-held store.
+
+Observations: for each touched id, parties = pre and post sessions minus the writer; a
+`board_observation` row (clear, Router-composed) `{ identity, pre: Entry | null, post: Entry |
+null }` with the sealed fields copied as stored, to `session:<party>`. The gateway's adapter
+derives `sessionKey` from the row address, maps `null` to `undefined`, opens titles, and hands
+`{ sessionKey, identity, pre, post }` to the bank as `observationsFor` does; the bank folds
+first pre and last post, classifies, holds for a waking session, drops at `MAX_HOLD_MS`, rides
+the next message or pushes. The row is acked on receipt into the bank; a crash between receipt
+and ride loses it.
+
+Phone: `BoardManager` holds `{ revision, entries }` from the Router, decrypts title, body, and
+names into the existing UI model, journals an edit as `{ opId, ops, expectedRevision }`, and on
+`conflict` re-fetches and re-applies the ops on the new revision (ops are absolute sets; a parent
+cycle answers refusal). A `missing_epoch` entry renders its cached text or an unavailable marker.
+No per-gateway lanes; `knownVersion` is `revision`.
+
+Residue tests: `federation-server` imports no content-key symbol; `applyCascade` fixtures pass on
+clear entries; an observation row lands in the gateway the session registry names, including a
+sleeping session's; a phone conflict rebase produces the same board as a serial apply.
+
+## S7 - Scheduled sends
+
+Record per owner: `scheduled:<domainId>/<gatewayId>/<sessionId> -> { target, fireAt, createdAt,
+opId, sender: { conversationId, device }, files: blobId[], body: ContentEnvelope (kind
+`inbox.body`, holding text, the file manifest, and the producer-issued `messageId`), state:
+armed | firing | fired | error | cancelled, attempts, version }`. Based on `ScheduledSend`:
+`text` and `fileRefs` seal into `body` after the files upload, `fireAtMillis` is `fireAt`,
+`targetDomainId` plus the map key resolve to `target`, `opId` and `createdAt` carry over;
+`sender`, `state`, `attempts`, and `version` are new. One per target; a second schedule is a
+replace with `expectedVersion`; cancel is a tombstone with `expectedVersion`. A spawn point is
+refused as a target, as `routes.send` refuses it. Files are uploaded to the reference-held
+store before the record is accepted.
+
+Firing: a Router timer per record. `armed -> firing` is a `put` with `expectedVersion` on the
+version the timer read; a `conflict` (a cancel or replace landed first) aborts the fire with no
+append and no result row. Then in one journal batch: the op ledger accepts `opId`, the `message`
+row is appended to the session inbox with the record's `body` and
+the file references transferred, the record turns `fired`, and a `scheduled_result { opId,
+outcome, seq, body }` row goes to the owner inbox carrying the same `body` ciphertext, which the
+phones open into the `Message` that `reconcileSent` settles the pending row with. One ciphertext,
+as S3 requires. A refused or failed append retries once after 60 seconds (`attempts`), then
+`error` with the same result row and outcome `failed` after one bounded retry. A fired row for an
+absent session takes the S3 waking path.
+
+Offline: the phone journals the schedule op and its file upload; nothing local fires. Migration:
+existing local records upload with their `opId`; the Router answers the existing state for a
+known `opId`; the local record is tombstoned and the alarm cancelled after `accepted` or
+`already fired`.
+
+Residue tests: two phones scheduling one target produce one record; a Router crash after the
+batch does not fire twice; a cancel with a stale version is refused; a fire whose read version
+lost to a cancel appends nothing; a reference survives the receiver ack while an owner consumer
+cursor still sits behind the result row.
+
+## S8 - Retained gateway endpoints
+
+`/capabilities`: the Router `capabilities` record for the owner composed with
+`daemonCapabilityStore`; shape unchanged.
+
+`/task-board` and `/task-board/attachments`: `sessionAuthority` validates the session token
+locally; the gateway sends the board op to the Router as `{ actor: session (domainId, gatewayId,
+sessionId) }` over its WS; the reply's entries have titles, bodies, names, and cascaded titles
+opened by the gateway; `from` is stamped by the gateway, never read from the request. The entry
+shape gains `session: { domainId, gatewayId, sessionId }` beside the bare `sessionId`, which is
+kept for the plugin build in the field until the Phase 9 removal commit drops it; Kotlin is
+regenerated in the same change. Attachment
+reads are authorized by `visibleTo` on the clear entry and served from the origin copy or the
+reference-held store.
+
+`/discover`: both shapes exactly. A plain call answers `TeamInfo[]`; `?coverage=1`
+answers `{ teams, coverage, localGatewayId, localDomainId }`, the roster deriving `coverage`.
+`spawnPoints` stays OFF this route, as `routes.discover` strips it: it is a plain HTTP
+surface, and a machine's shell list reaches the phone only through the authenticated console
+path backed by the S4 spawn-point projection.
+
+Residue tests: per endpoint, the response validates against the schema; a request with a
+forged `from` produces a board entry attributed to the token's session.
+
+## S9 - Console WS, transport coordinator, persistence journal
+
+Socket: `wss://<router>/console`, opened on the pinned client from `buildLeafPinnedClient`;
+`ws` and `http` refused. First frame: an OwnerOp with `op: { kind: "hello" }` and its own `opId`,
+verified by the one OwnerOp routine; the Router answers `welcome { incarnation, cursor,
+versions, cursorMap? }`. Router frames: `inbox_rows { rows, cursor }`, `plane { name, version,
+payload }`, `presence_delta`. Phone frames: `ack { cursor }`, `ping`. Ops stay HTTP POST, always
+an OwnerOp with any gateway payload inside `op` as a `ContentEnvelope` of kind `op.payload`, so
+reach failover stays per call and there is one wire form. Reconnect carries a generation; frames
+from an older generation are dropped.
+
+Coordinator: the one client of `DeepIdleScheduler` and the one owner of `PollDrain`'s cursor.
+States `foreground-socket`, `background-poll`, `offline`. Activity start opens the socket with the
+cursor; Activity stop closes it and arms the tiers; socket activity resets the tiers' silence
+clock; one drain at a time under a mutex; a row is acked after the drain-gate subscribers ran,
+Consumer identity is `signerSignPub` in both modes.
+
+Journal: an append-only file under `filesDir`, one JSON line per entry `{ opId, kind, payload,
+createdAt, state: pending | sent | acked | refused | conflict }`, fsync'd before the mutation's
+state transition returns; a launch-time recovery pass reads it before any drain. Not a
+`SharedPreferences` slot: `apply()` returns before the bytes land and reports no failure, which
+the owner's offline scheduled send cannot survive. A failed commit is reported to the caller,
+never swallowed as `ChatPersistence` does for its slots. Replayed on connect in order; the ledger
+answers a known `opId` with its recorded result. Router-sourced state lives in per-kind
+`AppStateStore` slots `{ version, payload }`; every reducer compares `(epoch, version)` with the
+applied slot and discards a payload that is not strictly newer, whichever transport carried it,
+and socket and poll payloads apply through the drain mutex. Existing unversioned slots are
+wrapped as version 0 on first launch; scheduled sends and read anchors become journal entries.
+
+Residue tests (Kotlin): Activity stop during a held socket leaves one consumer and one cursor;
+process kill with pending journal entries replays them once; the cursor never regresses; a
+frame from an old generation is ignored; a poll response older than an applied socket push
+changes no slot.
+
+## S10 - Migration fence, snapshot cut, offline import
+
+Fence: `DATA_DIR/migration-epoch` on the gateway. When present, every writer of MIGRATED state
+answers `migrating` (retryable), guarded at the writer rather than its callers: `deliverToOwner`
+(reached from the console dispatcher, `routes.respond`, `routes.humanNotify`,
+`routes.pluginAction`, and `mirrorPeer` under `routes.send`), `PendingDeliveryStore.enqueue`,
+`BoardStore.mutate`, `DurableOpStore.markInFlight`, `ReadAnchors.report`,
+`CrossDomainShareState.share` and `unshare`, and `gatewayRelay.handleOp` inbound.
+`capabilityStore` is not fenced: capabilities are not migrated, phones re-report on first hub
+connect. One guard function, called at each. In-flight console ops settle or are failed typed
+after 60 seconds; the persist timer, the trash sweep, and the share sweep stop; every store
+`saveChecked`. The residue test enumerates writers, not routes, so a new caller cannot bypass
+the fence.
+
+Cut: tar of `DATA_DIR` plus `SHA256SUMS` at epoch E, taken with the fence up.
+
+Export, at the gateway (it holds the key): `switchboard export --epoch E` writes
+`export-E.json`: board entries with titles, bodies, and names sealed under epoch 1, each bare
+`sessionId` stamped with the exporting gateway's own `(domainId, gatewayId)`, and an entry whose
+session is not in that gateway's session store listed in a named refusal list rather than
+guessed; mailbox rows with bodies sealed and a `cursorMap` from the owner inbox's `(oldEpoch,
+oldSeq)` to the new `(epoch, seq)`, the shape the phone's `SyncCursor` holds; pending deliveries
+as session rows; read anchors; shares; consumer cursors.
+
+Import, at the Router, offline: `bun run router:import --from export-E.json`. Keeps
+`federation.json`, the identity, and the TLS files; writes the owner directories; refuses to
+serve until `SHA256SUMS` and record counts verify. An import marker beside the owner directories
+records the accepted export's digest, epoch, gateway, and counts: a second run with the same
+digest is a no-op answering the same seqs; a different digest under the same epoch is refused
+naming the recorded one. A late export from an offline gateway is imported the same way, its rows
+deduped by `dedupeKey` against existing rows.
+
+Lease: record `migration:<domainId>/<gatewayId> -> { state: active | offline | retired |
+excluded, epoch }`. Authority turns on when every `active` lease is `complete`; an `offline`
+gateway is fenced at reconnect until it exports and imports.
+
+Phone: translation is a repeatable handshake, not a one-shot. The Router keeps the `cursorMap`
+for the whole migration window and answers any old-epoch cursor with it again; the phone commits
+the translated cursor through the S9 journal and accepts no `inbox_rows` and sends no `ack`
+until that commit returns.
+
+Residue tests: a test enumerates the migrated writers and asserts each answers `migrating` under
+the fence; import twice yields identical state and a changed export under the same epoch is
+refused; every old mailbox has a `cursorMap` entry; a process kill between `welcome` and the
+cursor commit replays to the same cursor.
+
+## S11 - Cutover verification gate
+
+`setup.sh --verify` checks per gateway host: Router version and
+`FEDERATION_PROTOCOL_VERSION` match, and this host's `(gatewayId, incarnation)` registered, read
+from an authenticated Router op and compared with the running gateway's own report;
+`/capabilities` and `/discover` asserted against the retained shapes in S8 over the local HTTP
+route; the op-ledger protocol version present in the gateway's registration answer; the console
+WS opened by a Bun probe through the same pinned dial `pinnedSocket` uses, not `curl`. Prints
+PASS or FAIL per check. The plugin bump is pushed only after PASS on every host.
+
+Residue test: the verify script fails against a gateway still running the route-gateway build.
+
+# Phase 1 outputs
+
+## Ledger
+
+Invariant names are the S1 to S11 mechanisms: ONE-WRITER (S3 op ledger), INCARNATION (S3),
+HOLD-UNTIL-ACK (S3), ROSTER (S4), SESSION-REGISTRY (S3), PIN-BEFORE-BEARER (carried),
+PRESENCE-DELTAS (S4), NO-SYNC-RELAY (S3 wake states), REACH (carried), BOUNDED-HOLDS (carried at
+the gateway). IMPOSSIBLE means the trigger cannot occur under the hub; CARRIED means the failure
+mode survives and the named code keeps guarding it.
+
+- `e6f70cb4` gateway. A poll hold judged retained rows, not the caller's cursor; a stale sibling
+  consumer made the live console busy-loop. Today: `consoleHandler.nothingNew`. CARRIED: S3
+  consumer registry, hold decided per consumer cursor. Test: a held poll stays pending while rows
+  are pinned only by another consumer.
+- `12869b9c` mixed. Verify trusted the gateway's socket state; a half-open link passed as
+  healthy. Today: `GatewayBridge.registeredGatewayCount`, `setup-verify awaitGatewayLink`.
+  IMPOSSIBLE: INCARNATION, the Router's registration is the only truth. Test: S11.
+- `2ce9938f` phone. One Router endpoint; a network change stranded the phone. Today:
+  `RouterReach.reachCandidates`, `withReachFailover`. CARRIED: REACH unchanged, socket-aware in
+  S9. Test: the reach vector fixtures on both twins.
+- `66b71d4d` gateway. Self-signed Router leaf could not use CA validation. Today:
+  `pinnedSocket.pinnedDial`. CARRIED: PIN-BEFORE-BEARER. Test: `router-cert-pinning.test.ts`.
+- `0a1a5983` mixed. Reach addresses needed an authenticated path, not `/health`. Today:
+  `consoleSurface.handleReach`. CARRIED: REACH. Test: `/health` omits reach; the reach op
+  returns it.
+- `21fbd1a8` mixed. Relay frames lacked `v`; every relay was rejected and read as empty. Today:
+  `handleGatewayRelay` stamps `v`. CARRIED for `blob_fetch`, the one relay left; the discovery
+  path that hid it is gone. Test: an invalid relay frame is rejected with a diagnostic.
+- `2ead9add` mixed. Reconcile guards, proxy dials, handshake state, wake notices held forever.
+  Today: `CodexRelay.reconciling`, `CONNECT_DEADLINE_MS`, `HandshakeGate.expired`,
+  `ChatState.awaitingWake`. CARRIED: BOUNDED-HOLDS at the gateway and phone. Test: injected
+  clocks past each bound release each hold.
+- `5495f624` mixed. An unanswered handshake challenge blocked a socket for life. Today:
+  `HandshakeGate.expirePending`, `HANDSHAKE_PENDING_TTL_MS`. CARRIED: BOUNDED-HOLDS. Test:
+  pre-TTL blocks, post-TTL does not.
+- `258e1f51` gateway. Several producers appended to mailboxes; one missed the fan-out. Today:
+  `consolePushOps.deliverToOwner`. IMPOSSIBLE: ONE-WRITER, the op ledger transaction is the only
+  append. Test: residue scan finds no append outside it.
+- `0d4ccd6a` mixed. A send sealed to gateway B echoed only into B's mailbox; a phone polling A
+  never saw it. Today: `ConsoleDevices.appendIfLive` relays the echo. IMPOSSIBLE: ONE-WRITER, one
+  owner inbox. Test: a send through any gateway yields one `sent` row keyed by `opId`.
+- `cb98949d` gateway. `routes.respond` appended locally; the reply was stranded when the phone
+  polled elsewhere. IMPOSSIBLE: ONE-WRITER. Test: a reply through any gateway reaches every
+  consumer.
+- `ac10e5db` mixed. A conversation held on gateway B was invisible to the phone polling A. Today:
+  `consolePeer.deliver`, `relayWithRetry`. IMPOSSIBLE: ONE-WRITER. Test: message and reply
+  converge with distinct keys.
+- `f270dcf4` mixed. Bare addresses routed to the route gateway; capability tools advertised
+  without a binding. Today: `Team.gatewayOf`, `sessionAuthority.presentedByRequest`,
+  `registerAgentBackend`. CARRIED: session identity is `(domainId, gatewayId, sessionId)`
+  everywhere (S3 registry); local authority unchanged. Test: `codex-route.test.ts` unbound
+  caller; `MergePresenceTest` routing.
+- `cacc8774` mixed. Discovery omitted peers whose relay failed; the phone swept their sessions.
+  Today: `discoverFull` coverage, `Team.unreachableKeys`. IMPOSSIBLE: ROSTER, completeness is
+  derived from admissions. Test: a disconnected gateway's rows show unreachable, never vanish.
+- `054368bb` gateway. The bearer left before the leaf was checked. Today: `pinnedDial`. CARRIED:
+  PIN-BEFORE-BEARER, and S9 for the console WS. Test: `never sends the bearer`.
+- `d489614f` phone. A stale discovery row passed as current: blank terminals, wrong wake gating.
+  Today: `Presence.authority`, `PresenceOps.foldReceipt`. IMPOSSIBLE cause: PRESENCE-DELTAS
+  with incarnation and unreachable marks; the phone's authority rules stay. Test:
+  `presence-authority-residue.test.ts` and a delta-gap resync test.
+- `d7fb5a6a` gateway. A Bun that ignores `createConnection` cannot pin. Today: `assertBunFloor`,
+  `check-pinning-runtime.ts`. CARRIED: PIN-BEFORE-BEARER. Test: `bun run check:pinning`.
+- `b0a51863` mixed. Awareness pushed too early or was lost across a wake. Today:
+  `awarenessBank.takeFor`, `tick`. CARRIED: the bank stays at the gateway as the adapter (S6).
+  Test: `awareness-bank.test.ts`, `board-awareness.test.ts`.
+- `d1ebf73b` mixed. Phone and gateway disagreed on blank hosts and bad ports. Today:
+  `router-reach.ts reachCandidates` and its Kotlin twin. CARRIED: REACH. Test: the shared
+  vectors.
+- `9ece181c` phone. Background cadence backed off while a watched session worked. Today:
+  `IdlePushbackManager.tierFor`, `PollDrain.watchedWorking`. CARRIED: the tiers are untouched
+  (S9). Test: `IdlePushbackManagerTest`.
+- `a0d18ad0` mixed. Cancellation read as failure; duplicate init; an alarm exception leaked the
+  wake lock. Today: `runCatchingCancellable`, `DebugLog.init`, `enterDeepSleep`. CARRIED:
+  phone-local. Test: cancellation rethrown; locks released in `finally`.
+- `4bee4c04` mixed. Mailbox capacity miscounted, eviction keyed on wire kind, a stale Router
+  socket close nulled the live one. Today: `DeviceMailbox.drain`, `trimToMinCursor`, socket
+  identity guard in `startRouterClient`. IMPOSSIBLE: HOLD-UNTIL-ACK (no eviction of accepted
+  rows) and INCARNATION (stale cleanup rejected). Test: capacity refuses; a stale incarnation's
+  close changes nothing.
+- `04046284` gateway. A session confirmed before its record existed; a dead holder could not
+  hand over. Today: `SessionStore.establishOnConfirm`, `HandshakeGate.expirePending`. CARRIED:
+  gateway confirm and handover unchanged; the Router registry mirrors records (S3). Test:
+  confirmation needs a record; a live holder rejects a competing claim.
+- `18dc9910` mixed. Transient notices overwrote each other; a gap latched; trashed subtrees
+  accepted writes. Today: `ChatState.transientMessages`, `PollDrain` gap, `BoardStore`
+  `entry_missing`. CARRIED: phone presentation unchanged; `entry_missing` survives in S6. Test:
+  FIFO transients; trashed-subtree writes answer `entry_missing`.
+- `e10af02c` mixed. Forged cross-Domain origin, revoked consoles lingering in capabilities, wake
+  returning before readiness. Today: `verifiedSender`, `gateCrossDomainTarget`,
+  `assertCrossDomainReturnRoute`, `ConsoleDevices.removePeer`, `awaitReady`. CARRIED at the
+  gateway (open-side gates); revocation cleanup moves to the S3 consumer registry. Test: forged
+  origin rejected; revoked console absent from capabilities.
+- `f0c2e370` mixed. Resume records grew unbounded; `start-gateway.sh` left the daemon down.
+  Today: `SessionStore.sweep`, `MAX_SESSION_RESUME_ENTRIES`, `start-all.sh`. CARRIED: the
+  gateway store keeps its cap; the Router registry follows `session_forget`. Test:
+  `session-store.test.ts` cap eviction.
+- `efe70a45` mixed. A failed mirror failed a delivered send; spoken tiers dropped; a reused
+  WebView kept an abandoned load. Today: `mirrorPeer`, `pickTiers`, `DesignerThumbs.renderOn`.
+  Mirror half IMPOSSIBLE (ONE-WRITER); the rest CARRIED. Test: `reply-payloads.test.ts`.
+- `a321772e` gateway. Relay parsing rejected a title intake accepted; the entry burned retries.
+  Today: `NOTICE_TITLE_MAX` at both. IMPOSSIBLE: one intake parser, no relay re-parse of notices.
+  Test: a 201-character title truncates once at intake.
+- `6ffa04c4` daemon. Shutdown left the reconnector armed. Today: `stopHostDaemon`. CARRIED:
+  daemon-local. Test: none today; add one.
+- `bbb29426` phone. Poll completion released a pass lock a scheduled send still held. Today:
+  `PassOwner`, `passHolders`. IMPOSSIBLE: the phone no longer fires scheduled sends (S7); one
+  lock owner remains. Test: the scheduled-send owner no longer exists.
+- `83301504` gateway. A wake ack re-armed a deadline; machine and session failures read alike.
+  Today: `WakeCoordinator.ackReceived`, `WakeResult.errorKind`. CARRIED at the gateway;
+  surfaced as S3 row states. Test: `wake.test.ts` deadline clamp.
+- `744f1a59` gateway. Messages evaporated after acceptance; capacity evicted accepted rows.
+  Today: `PendingDeliveryStore`. IMPOSSIBLE: HOLD-UNTIL-ACK. Test:
+  `pending-delivery-store.test.ts`, then the S3 equivalents.
+- `cd1f3df3` gateway. A row retired on socket write, not on the receiver's word. Today:
+  `ChannelDeliveryCoordinator.offer`, `channel_delivery_ack`. IMPOSSIBLE: HOLD-UNTIL-ACK,
+  unconditional after `deliveryProtocol < 1` is refused. Test: write does not retire; only the
+  ack does.
+- `4e1e0b43` mixed. A send to an absent session was refused instead of held. Today:
+  `routes.send` accepts into `PendingDeliveryStore`; `onTeamConnect` drains. IMPOSSIBLE:
+  HOLD-UNTIL-ACK with S3 wake states. Test: an absent-session send is accepted and delivered on
+  registration.
+- `4963848d` mixed. Every push read as a question. Today: `ReplyDisposition` through
+  `SendRequestSchema`, `FederatedOpSchema`, `emitChannelNotification`. CARRIED: disposition
+  rides inside the sealed body. Test: `channel-notify.test.ts`.
+- `PendingDeliveryStore.enqueue` capacity refusal. IMPOSSIBLE to evict: S3 refuses at the caps.
+  Test: refusal, no eviction.
+- `PendingDeliveryStore.sweep` expiry. CARRIED: S3 retention emits `expired` to the sender. Test:
+  an expired row produces a result row.
+- `DeviceMailbox.sweepIdleConsumers`. CARRIED: S3 consumer registry forgets at 30 days idle.
+  Test: forget precedes compaction.
+- `ChannelDeliveryCoordinator.offer` legacy retire-on-write. IMPOSSIBLE: `deliveryProtocol < 1`
+  refused at registration after cutover. Test: a legacy peer cannot register.
+- `verifiedSender`. IMPOSSIBLE: `envelope.origin` is stamped by the Router from the
+  authenticated connection; no gateway reads a sender field from a payload. Test: a forged
+  `op.from` never reaches the projection.
+- `createGatewayRelayPump` source verification. CARRIED: the destination gateway verifies the
+  seal against `crossDomainPeers` on open. Test: a bad signature never reaches `handleOp`.
+- `gateCrossDomainTarget`. IMPOSSIBLE at the Router for unshared targets (S5 filters appends);
+  CARRIED at the gateway for session kind. Test: unknown, agent-kind, and unshared targets get
+  one indistinguishable refusal.
+- `assertCrossDomainReturnRoute`. IMPOSSIBLE: the return route is the Router-stamped origin;
+  a payload naming another gateway is ignored. Test: a third-gateway route is refused.
+- `handleOp` job binding. CARRIED at the gateway: `PendingJobStore` binding of Domain and
+  gateway to a job. Test: wrong Domain, wrong gateway, missing binding all refused.
+- `routes.send` forged `dstDomainId` and `sessionId`. IMPOSSIBLE: only Router-stamped origin
+  fields reach the job ledger; `trustedInbound` remains the gateway's own marker. Test:
+  `routes-send.test.ts` trusted-inbound plus a forged-field case.
+- `routes.send` ambiguous Domain. IMPOSSIBLE: ROSTER resolves `(domainId, gatewayId)` from
+  admissions and refuses ambiguity. Test: `federation-seal-target.test.ts` collisions.
+
+## Restart matrix
+
+Router fields, by disposition under the hub.
+
+RESTARTS, flows re-arm: `GatewayBridge.gatewayConnections`, `connGateways`,
+`pendingHandshakes`, `handshakeAttempts`, `seenRegisterNonces`; `GatewayTransport.connections`,
+`reverseConnections`; `RouterServer.sockets`, `rosterNonces`, `transportNonces`,
+`trustPendingNonces`; `DeviceApprovalCoordinator.windows`; `EnrollHandshakeCoordinator.windows`;
+`TrustRendezvousCoordinator.rendezvous`, `byTarget`; `EnrollmentCoordinator.nonces`,
+`nonceCleanups`; `PublicApproval.perId`, `windowStartedAt`, `globalCount`. A registration
+after restart gets a new incarnation; every gateway re-registers and resends its presence
+baseline; approval, enrollment, and trust ceremonies restart from the phone.
+
+RESTARTS, typed failure: `GatewayBridge.pendingRelays`, which after Phase 5 holds only
+`blob_fetch`; an in-flight fetch answers `unreachable`.
+
+REPLACED: `ConsoleSurface.pending` (console ops become ledger records with results, S3);
+`RouterServer.coordinators` cache (reads the S2 layer); `FileSecretStore.resourceVersion`,
+`writeChain`, `pendingWrites` (S2 owns versions and the writer queue for owner state;
+`fileSecretStore` keeps them for enrollment).
+
+DURABLE: `EnrollmentCoordinator.state`, `FileSecretStore.domains`, `seenAdminNonces`,
+`identity`. New durable state is all of S2 and S3.
+
+Inbox delivery across a restart: rows and ledger records are on disk before their result is
+answered; a gateway reconnects with a new incarnation and the Router redelivers every row with
+no `delivered` ack, which the gateway dedupes by `deliveryId`; phones resume from their cursor.
+
+Named-offline contract: `ConsoleSurface.handleRequest` answers 503 for a named gateway
+absent from `gatewayIds()`. Under the hub a gateway-bound op (send, respond, peek, tmux, session
+controls) to a disconnected gateway is accepted as a row addressed to it and reported `waking`
+or held; a request-response op (`blob_fetch`, `create_session`, `list_dirs`) answers a typed
+`unreachable` at once, never 503.
+
+## Inventory
+
+Phone symbols that assume a route gateway, by file. Action per Phase 6.
+
+- `ConsoleClient.kt`: `routeGateway` delete; `apiReachable`, `fetchReach` keep;
+  `reportPluginsTo`, `teams`, `listTeams`, `boardRead` delete; `send`, `poll`, `boardWrite`,
+  `boardBytesReady`, `fetchConnectedGateways` rewrite.
+- `ConsoleRelayTransport.kt`: `routeGateway`, `resolveGatewayId` delete; `relay`,
+  `gatewayOfTarget`, `targetGatewayOf`, `buildSealedFrame` rewrite.
+- `ConsoleClientSessions.kt`: `peek`, `tmuxSend`, `forget`, `closeSession`, `createSession`,
+  `listDirs`, `renameSession` rewrite to Router-routed ops with a qualified target;
+  `reportRead` rewrite to an OwnerOp.
+- `ConsoleClientBlobs.kt`: `blobStat`, `blobPut`, `blobGet`, `uploadBlob`, `downloadBlob`
+  rewrite to the Router cache with typed origin miss.
+- `ChatRepositoryDomainLink.kt`: `reportEnabledPlugins` delete; `connect`, `displayName`,
+  `localDisplayName` rewrite; the `routeGateway` assignment delete.
+- `ChatRepository.kt`: `DISCOVERY_REFRESH_MS` delete.
+- `PresenceOps.kt`: `refreshDiscovery`, `applyDiscovery`, `refreshAfterAction` delete;
+  `refreshTeams`, `applyPlanePresence`, `refreshConnectedGateways`, `reportLocalReadAdvances`
+  rewrite.
+- `PollDrain.kt`: `start` and the discovery timer rewrite to the S9 coordinator's drain.
+- `TrustOps.kt`: `linkedDomains`, `untrust` rewrite; `untrustOwner` refresh delete.
+- `SessionOps.kt`: `rememberProject`, `spawnSession`, `listDirs`, `wakeSession`,
+  `relaunchSession`, `forget` rewrite; `otherKeyringGateways` delete.
+- `AttachmentOps.kt`: `fetchPendingAttachments` rewrite.
+- `ChatState.kt`: `gatewaySpawnPoints`, `localGatewayId`, `connectedGateways`,
+  `linkedPeerOwners` rewrite; `admittedGateways`, `lastProjectByGateway` keep.
+- `Team.kt`: `TeamsAnswer`, `unreachableKeys`, `rowOnUnreachable` delete; `spawnTargetKey`,
+  `mergePresence`, `teamInfoToTeam` rewrite; `gatewayId` keep.
+- `MessageFile.kt`, `Attachments.kt`, `proto/Protocol.kt` (`ChannelFile.blobGateway`,
+  `BoardAttachment.blobGateway`, `DiscoverCoverage`, `ConsoleListTeamsResult.coverage`): the
+  wire changes land through the shared schemas; regenerated.
+- `BoardOps.kt`: `refreshBoard`, `isNonRouteSession` delete; `boardAssignTargets`,
+  `boardGatewayOf`, `boardGatewayOfKey`, `boardCapture`, `kickBoardDownload`,
+  `kickBoardUpload`, `boardAssign`, `enqueueMove`, `forgetWithBoardDisposition` rewrite.
+- `board/BoardManager.kt`: `routeGatewayId`, `drainLane`, `read` delete; `knownVersion`,
+  `sourceGatewayIds`, `applySnapshot`, `enqueueMove`, `drain`, `attachmentBuckets`,
+  `blobSources`, `refusals`, `notice`, `dismissRefusal` rewrite, a refusal keyed by the S6
+  `conflict` or refusal result and its `opId` once lanes are gone; `BoardOps.boardRefusals`,
+  `boardDismissRefusal` follow. `board/BoardState.kt`: lanes and `eligibleActions` delete.
+  `board/BoardRows.kt`: `BoardSource` rewrite. `BoardScreen.kt`, `BoardEntryDialog.kt` keep.
+- `SessionsScreen.kt`: `CreateDialogTarget.targetFor` rewrite; `groupByGateway` keep.
+  `SettingsSections.kt`: `domainResolving` rewrite. `MainActivity.kt`, `TerminalView.kt` keep.
+- Comments naming the route gateway: `ConnError.kt`, `Team.kt`, `board/BoardRows.kt`,
+  `OwnerFacts.kt`, `DeviceApprovalOps.kt`, `CrossDomainLink.kt`, `ConsoleClientCrossDomain.kt`,
+  `AppStateStore.kt`, `Management.kt`, `CrossDomainPresenceUi.kt`: rewrite or delete with
+  their code.
+
+Tests, `android/app/src/test`:
+- Delete with the mechanism: `MergePresenceTest` coverage cases, `PresenceTest`
+  `theBoundOutlastsADiscoveryInterval`, `GroupByGatewayTest.theRouteGatewaySortsFirst`,
+  `BoardStateTest.perGatewayLanes...`.
+- Rewrite against the Router contract: the rest of `MergePresenceTest`, `PresenceTest`,
+  `GroupByGatewayTest`, `HostSpawnChoicesTest`, `FriendOnboardingTest`, `CrossDomainLinkTest`,
+  `BoardManagerTest`, `MessageFileRoundTripTest`, `DirListingTest`.
+- Keep: `PeerMirrorAttributionTest`, `SttsVoiceTest`, `SigningVectorsManifestTest`,
+  `PluginCatalogAgreementTest`, `ZoomMathTest`.
+
+## Connectivity states
+
+What the phone shows, the current producer, and the hub's.
+
+- Connection banner `connected`: current `ChatRepositoryDomainLink.connect` and `Health.ONLINE`;
+  hub: the S9 socket is open or the last poll succeeded.
+- Gateway row `connected` / `offline`: current `PresenceOps.refreshConnectedGateways` from the
+  route gateway; hub: the S4 roster (`connected`, `incarnation`).
+- Session row `available` (asleep): current `TeamInfo.status`; hub: unchanged field, from the
+  gateway's presence delta.
+- Session row `unreachable`: current discovery coverage; hub: `presenceFresh: unreachable` set by
+  the Router on socket drop.
+- Session row `accepted` and `waking`: current phone `ActionReceipt` and
+  `ChatState.awaitingWake`; hub: the S3 op ledger state for the wake or send `opId`, pushed as
+  an `op_result` row; the phone's receipt becomes a cache of it.
+- Message row `delivered`: current `sent` echo reconciled by `opId`; hub: unchanged, the echo
+  is an owner-inbox row.
+- Message row `failed`: current `deliver.fail` on a refusal or transport failure; hub: the S3
+  result envelope (`refused`, `expired`, `target_revoked`, `durability_failure`) as an
+  `op_result` row, plus local transport failure.
