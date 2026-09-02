@@ -24,6 +24,7 @@ export type RecordKind =
 	| "op"
 	| "inbox.row"
 	| "inbox.address"
+	| "migration"
 	| "keyReceipt"
 	| "gateway";
 export interface StateRecord {
