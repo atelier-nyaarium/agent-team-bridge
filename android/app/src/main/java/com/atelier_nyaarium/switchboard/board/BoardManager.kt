@@ -116,6 +116,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { it.copy(notices = it.notices + entry) }
 	}
 
+	/** A refused write snaps the row back to Router truth, so the owner is told why it did. */
+	fun noticeRefusal(entryId: String?, reason: String) {
+		notice(BoardRefusal(entryId, reason, BoardNoticeKind.REFUSED))
+	}
+
 	/** In memory only, the durable key having been wiped first. [mutate] persists a transform of
 	 * [blob], so a board left here is re-committed by the next owner's first write. */
 	override suspend fun clearInMemory() {

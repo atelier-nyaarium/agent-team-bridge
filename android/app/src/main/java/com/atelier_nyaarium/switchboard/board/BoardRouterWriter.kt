@@ -62,8 +62,12 @@ class BoardRouterWriter(
 					return BoardWriteOutcome.Applied
 				}
 				"refused" -> {
+					val reason = result.refusal ?: "refused"
 					board.settleWrite(opId, result.revision, result.entries)
-					return BoardWriteOutcome.Refused(result.refusal ?: "refused")
+					// The row has just snapped back to Router truth, so say why rather than leaving the
+					// owner to notice their edit undid itself.
+					board.noticeRefusal(intents.singleOrNull()?.id, reason)
+					return BoardWriteOutcome.Refused(reason)
 				}
 				else -> board.applyRouterBoard(result.revision, result.entries)
 			}
