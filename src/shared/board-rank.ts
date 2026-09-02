@@ -67,6 +67,24 @@ export function rebalanceRanks(count: number): string[] {
 	return out;
 }
 
+/** The rank for a fresh member at the end of a sibling group, with the ranks that group must be
+ * rewritten to when the mint would breach the bound. An oversized rank stored once poisons the
+ * record against the wire schema on later reads, so rebalance rides the same write. */
+export function placeAtEnd(siblings: readonly { id: string; rank: string }[]): {
+	rank: string;
+	rebalanced: { id: string; rank: string }[];
+} {
+	let last: string | undefined;
+	for (const s of siblings) if (last === undefined || s.rank > last) last = s.rank;
+	const minted = rankBetween(last, undefined);
+	if (isValidRank(minted)) return { rank: minted, rebalanced: [] };
+	const ordered = [...siblings].sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+	const fresh = rebalanceRanks(ordered.length);
+	const tail = rankBetween(fresh[fresh.length - 1], undefined);
+	if (!fresh.every(isValidRank) || !isValidRank(tail)) throw new Error("rank rebalance produced invalid ranks");
+	return { rank: tail, rebalanced: ordered.map((s, i) => ({ id: s.id, rank: fresh[i] })) };
+}
+
 /** The classic fractional-indexing midpoint: a strictly-between key with no trailing MIN digit,
  * where `b === undefined` is positive infinity. */
 function midpoint(a: string, b: string | undefined): string {

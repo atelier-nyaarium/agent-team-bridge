@@ -130,4 +130,46 @@ describe("RouterClient console relay", () => {
 		expect(result.error).toContain("Disconnected");
 		expect(Date.now() - started).toBeLessThan(5_000);
 	});
+
+	it("drops inbound frames from a foreign incarnation", async () => {
+		const presence: unknown[] = [];
+		const unlinks: unknown[] = [];
+		const blobs: unknown[] = [];
+		router = await startFakeRouter((sock, msg) => {
+			if (msg.type === "tool_call" && msg.action === "gateway_register") {
+				sock.send(
+					JSON.stringify({ type: "tool_result", callId: msg.callId, result: { ok: true, incarnation: 7 } }),
+				);
+			}
+		});
+		client = startRouterClient({
+			url: `ws://localhost:${router.port}`,
+			headers: { Authorization: "Bearer test-token" },
+			gatewayId: "test-host",
+			domainId: "alice",
+			onPresenceResync: (frame) => presence.push(frame),
+			onUnlink: (frame) => unlinks.push(frame),
+			onBlobFetch: (frame) => blobs.push(frame),
+		});
+
+		await new Promise<void>((resolve) => {
+			const t = setInterval(() => {
+				if (client?.isRegistered()) {
+					clearInterval(t);
+					resolve();
+				}
+			}, 10);
+		});
+		router.sockets[0].send(JSON.stringify({ type: "presence_resync", incarnation: 6 }));
+		router.sockets[0].send(JSON.stringify({ type: "unlink", domainId: "alice", incarnation: 6 }));
+		router.sockets[0].send(JSON.stringify({ type: "blob_fetch", opId: "op", blobId: "blob", incarnation: 6 }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(presence).toEqual([]);
+		expect(unlinks).toEqual([]);
+		expect(blobs).toEqual([]);
+		router.sockets[0].send(JSON.stringify({ type: "presence_resync", incarnation: 7 }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(presence).toHaveLength(1);
+	});
 });

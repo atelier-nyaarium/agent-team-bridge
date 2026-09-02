@@ -1,3 +1,4 @@
+import { refusalError } from "../../shared/board-authority.js";
 import { isReservedHostSession, isShellSafeName, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { isHostSpawn } from "../../shared/host-spawn.js";
 import {
@@ -9,7 +10,6 @@ import {
 	parseTarget,
 	SpawnPoint,
 } from "../../shared/session-id.js";
-import { refusalError } from "../boardStore.js";
 import type { TrustedCatalogProject } from "./consoleTypes.js";
 
 ////////////////////////////////

@@ -56,8 +56,10 @@ export class ReferenceHeldStore {
 		return [...(this.domain(domainId).index.entries[blobId]?.refs ?? [])];
 	}
 
+	/** References require complete blobs. */
 	has(domainId: string, blobId: string): boolean {
-		return this.refs(domainId, blobId).length > 0;
+		if (this.refs(domainId, blobId).length === 0) return false;
+		return this.domain(domainId).store.stat(blobId).complete;
 	}
 
 	begin(domainId: string, blobId: string): HeldBegin {

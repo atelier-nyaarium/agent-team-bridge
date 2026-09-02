@@ -13,6 +13,7 @@ export interface OwnerKey {
 export type RecordKind =
 	| "board.entry"
 	| "board.meta"
+	| "board.op"
 	| "scheduled"
 	| "share"
 	| "readAnchor"

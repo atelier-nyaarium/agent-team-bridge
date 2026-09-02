@@ -21,13 +21,6 @@ export const ShareJobLiveParamsSchema = z
 	})
 	.meta({ id: "ShareJobLiveParams" });
 
-export const UnlinkFrameSchema = z
-	.object({
-		type: z.literal("unlink"),
-		domainId,
-	})
-	.meta({ id: "UnlinkFrame" });
-
 export const CrossDomainShareValueSchema = z
 	.object({ sessionTarget, target: CrossDomainShareTargetSchema })
 	.meta({ id: "CrossDomainShareValue" });
@@ -41,4 +34,3 @@ export const CrossDomainUnlinkValueSchema = z.object({ domainId }).meta({ id: "C
 export const CrossDomainListSharesValueSchema = z.object({}).meta({ id: "CrossDomainListSharesValue" });
 
 export type ShareJobLiveParams = z.infer<typeof ShareJobLiveParamsSchema>;
-export type UnlinkFrame = z.infer<typeof UnlinkFrameSchema>;

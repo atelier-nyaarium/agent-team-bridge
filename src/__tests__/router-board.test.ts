@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
 import { createBoardService } from "../federation-server/board/boardService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { InboxAddress, InboxRow } from "../shared/schemasInbox.js";
 
@@ -16,7 +18,12 @@ const envelope = (kind: "board.title" | "board.body" | "board.name" = "board.tit
 	ciphertext: Buffer.alloc(16).toString("base64"),
 	kind,
 });
-const make = (sessionExists = true) => {
+type ReferenceHeld = {
+	has(domainId: string, blobId: string): boolean;
+	hold(domainId: string, blobId: string, entryId: string): void;
+	release(domainId: string, blobId: string, entryId: string): void;
+};
+const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-"));
 	roots.push(dataDir);
 	const owners = new Map([
@@ -55,7 +62,7 @@ const make = (sessionExists = true) => {
 			},
 		},
 		deliver: (domainId, address, row) => delivered.push({ address: { ...address, domainId }, row }),
-		referenceHeld: {
+		referenceHeld: referenceHeld ?? {
 			has: (_domainId, blobId) => blobId !== "missing" && references.has(blobId),
 			hold: (domainId, blobId, entryId) => {
 				references.add(blobId);
@@ -85,93 +92,360 @@ afterEach(() => {
 describe("router board service", () => {
 	it("persists owner writes and rejects stale revisions", () => {
 		const { service, registry } = make();
-		const first = service.write("a", { expectedRevision: 0, actor: { kind: "owner" }, ops: [entry("one")] });
+		const first = service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
 		expect(first.outcome).toBe("applied");
 		expect(first.revision).toBe(1);
-		expect(service.write("a", { expectedRevision: 0, actor: { kind: "owner" }, ops: [entry("two")] }).outcome).toBe(
+		expect(service.write("a", { expectedRevision: 0, ops: [entry("two")] }, { kind: "owner" }).outcome).toBe(
 			"conflict",
 		);
 		registry.close();
 	});
 
+	it("replays an applied write once per session actor", () => {
+		const { service, registry } = make();
+		const write = { expectedRevision: 0, ops: [entry("one")] };
+		const first = service.write("a", write, { kind: "owner" }, "op-1");
+		const second = service.write("a", write, { kind: "owner" }, "op-1");
+		expect(second).toMatchObject({ outcome: "applied", revision: first.revision });
+		expect(service.read("a").revision).toBe(1);
+		registry.close();
+	});
+
+	it("replays a refusal and leaves conflicts retryable", () => {
+		const { service, registry } = make();
+		const refused = { expectedRevision: 0, ops: [{ kind: "remove" as const, id: "missing" }] };
+		const firstRefusal = service.write("a", refused, { kind: "owner" }, "op-refused");
+		const secondRefusal = service.write("a", refused, { kind: "owner" }, "op-refused");
+		expect(secondRefusal).toMatchObject(firstRefusal);
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		const conflict = service.write(
+			"a",
+			{ expectedRevision: 0, ops: [entry("two")] },
+			{ kind: "owner" },
+			"op-conflict",
+		);
+		expect(conflict.outcome).toBe("conflict");
+		const retry = service.write(
+			"a",
+			{ expectedRevision: 1, ops: [entry("two")] },
+			{ kind: "owner" },
+			"op-conflict",
+		);
+		expect(retry.outcome).toBe("applied");
+		registry.close();
+	});
+
+	it("rejects a different write under a settled operation id", () => {
+		const { service, registry } = make();
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" }, "op-1");
+		const result = service.write(
+			"a",
+			{ expectedRevision: 1, ops: [{ kind: "set_state", id: "one", state: "done" }] },
+			{ kind: "owner" },
+			"op-1",
+		);
+		expect(result).toMatchObject({ outcome: "refused", refusal: "operation_id_reused" });
+		expect(service.read("a").entries[0]?.clear.state).toBe("open");
+		registry.close();
+	});
+
+	it("keeps attachment bytes when membership overlaps", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-held-"));
+		roots.push(root);
+		const held = new ReferenceHeldStore({ dataDir: root });
+		const wrap: ReferenceHeld = {
+			has: (domainId, blobId) => held.has(domainId, blobId),
+			hold: (domainId, blobId, entryId) => held.hold(domainId, blobId, { kind: "entry", id: entryId }),
+			release: (domainId, blobId, entryId) => held.release(domainId, blobId, { kind: "entry", id: entryId }),
+		};
+		const { service, registry } = make(true, wrap);
+		const bytesA = Buffer.from("A");
+		const bytesB = Buffer.from("B");
+		const blobA = blobIdFor(bytesA);
+		const blobB = blobIdFor(bytesB);
+		for (const [blobId, bytes] of [
+			[blobA, bytesA],
+			[blobB, bytesB],
+		] as const) {
+			held.hold("a", blobId, { kind: "entry", id: "one" });
+			const lease = held.begin("a", blobId);
+			if (lease.kind !== "lease") throw new Error("expected lease");
+			held.commitChunk("a", blobId, lease.lease, 0, bytes, true);
+		}
+		const attachment = (blobId: string) => ({ blobId, size: 1, mime: "text/plain", blobGateway: "g" });
+		service.write(
+			"a",
+			{ expectedRevision: 0, ops: [entry("one", { attachments: [attachment(blobA)] })] },
+			{ kind: "owner" },
+		);
+		service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_attachments", id: "one", attachments: [attachment(blobA), attachment(blobB)] }],
+			},
+			{ kind: "owner" },
+		);
+		expect(held.has("a", blobA)).toBe(true);
+		registry.close();
+	});
+
+	it.each([
+		"durability_failure",
+		"quarantined",
+	])("refuses storage outcome %s without reporting a conflict", (kind) => {
+		const { service, registry } = make();
+		const store = registry.for("a");
+		vi.spyOn(store, "batch").mockReturnValue({ kind } as never);
+		const result = service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		expect(result).toMatchObject({ outcome: "refused", refusal: "durability_failure" });
+		registry.close();
+	});
+
+	it("answers applied when only the fsync was in doubt, since the batch was already applied", () => {
+		// Refusing would contradict the board this very call advanced.
+		const { service, registry } = make();
+		const store = registry.for("a");
+		vi.spyOn(store, "batch").mockReturnValue({ kind: "durability_uncertain" } as never);
+		const result = service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		expect(result).toMatchObject({ outcome: "applied" });
+		registry.close();
+	});
+
 	it("allows a session to write its held entry", () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
-		});
-		const result = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
-			ops: [{ kind: "set_state", id: "one", state: "done" }],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_state", id: "one", state: "done" }],
+			},
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
+		);
 		expect(result.outcome).toBe("applied");
+		registry.close();
+	});
+
+	it("allows a session to claim an unheld entry", () => {
+		const { service, registry } = make();
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_session", id: "one", session: { domainId: "a", gatewayId: "g", sessionId: "s" } }],
+			},
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
+		);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries[0]?.clear.session).toEqual({ domainId: "a", gatewayId: "g", sessionId: "s" });
+		registry.close();
+	});
+
+	it("allows a session to release its entry to the backlog", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{ expectedRevision: 1, ops: [{ kind: "set_session", id: "one" }] },
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
+		);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries[0]?.clear.session).toBeUndefined();
+		registry.close();
+	});
+
+	it("refuses a session claim on another session's entry", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "held" } })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{ kind: "set_session", id: "one", session: { domainId: "a", gatewayId: "g", sessionId: "other" } },
+				],
+			},
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "other" } },
+		);
+		expect(result).toMatchObject({ outcome: "refused", refusal: "held" });
+		registry.close();
+	});
+
+	it("refuses invalid ranks on rank and parent updates", () => {
+		const { service, registry } = make();
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		expect(
+			service.write(
+				"a",
+				{ expectedRevision: 1, ops: [{ kind: "set_rank", id: "one", rank: "0" }] },
+				{ kind: "owner" },
+			),
+		).toMatchObject({ outcome: "refused", refusal: "bad_rank" });
+		expect(
+			service.write(
+				"a",
+				{ expectedRevision: 1, ops: [{ kind: "set_parent", id: "one", parent: undefined, rank: "!" }] },
+				{ kind: "owner" },
+			),
+		).toMatchObject({ outcome: "refused", refusal: "bad_rank" });
+		registry.close();
+	});
+
+	it("refuses assignments to missing sessions", () => {
+		const { service, registry } = make(false);
+		const assigned = { domainId: "a", gatewayId: "g", sessionId: "missing" };
+		expect(
+			service.write("a", { expectedRevision: 0, ops: [entry("one", { session: assigned })] }, { kind: "owner" }),
+		).toMatchObject({
+			outcome: "refused",
+			refusal: "session_missing",
+		});
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
+		expect(
+			service.write(
+				"a",
+				{ expectedRevision: 1, ops: [{ kind: "set_session", id: "one", session: assigned }] },
+				{ kind: "owner" },
+			),
+		).toMatchObject({ outcome: "refused", refusal: "session_missing" });
+		registry.close();
+	});
+
+	it("allows the owner to reassign an entry", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "first" } })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{ kind: "set_session", id: "one", session: { domainId: "a", gatewayId: "g", sessionId: "second" } },
+				],
+			},
+			{ kind: "owner" },
+		);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries[0]?.clear.session).toEqual({
+			domainId: "a",
+			gatewayId: "g",
+			sessionId: "second",
+		});
 		registry.close();
 	});
 
 	it("keeps Domains isolated", () => {
 		const { service, registry } = make();
-		service.write("a", { expectedRevision: 0, actor: { kind: "owner" }, ops: [entry("one")] });
+		service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
 		expect(service.read("b").entries).toHaveLength(0);
 		registry.close();
 	});
 
 	it("refuses a session write to another session's entry and parent cycles", () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
 		expect(
-			service.write("a", {
-				expectedRevision: 1,
-				actor: { kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "other" } },
-				ops: [{ kind: "set_state", id: "one", state: "done" }],
-			}).outcome,
+			service.write(
+				"a",
+				{
+					expectedRevision: 1,
+					ops: [{ kind: "set_state", id: "one", state: "done" }],
+				},
+				{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "other" } },
+			).outcome,
 		).toBe("refused");
-		const cycle = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [
-				{ ...entry("two"), parent: "one" },
-				{ kind: "set_parent", id: "one", parent: "two", rank: "B" },
-			],
-		});
+		const cycle = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{ ...entry("two"), parent: "one" },
+					{ kind: "set_parent", id: "one", parent: "two", rank: "B" },
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(cycle.outcome).toBe("refused");
 		registry.close();
 	});
 
 	it("cascades the parent when its last child finishes", () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("parent"), entry("child", { parent: "parent", rank: "B" })],
-		});
-		const result = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [{ kind: "set_state", id: "child", state: "done" }],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("parent"), entry("child", { parent: "parent", rank: "B" })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_state", id: "child", state: "done" }],
+			},
+			{ kind: "owner" },
+		);
 		expect(result.cascaded).toEqual([{ id: "parent", from: "open", to: "done", reason: "children_finished" }]);
 		registry.close();
 	});
 
 	it("records sealed pre and post observations for another holder only", () => {
 		const { service, registry, rows } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
 		rows.length = 0;
-		const result = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [{ kind: "set_state", id: "one", state: "done" }],
-		});
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_state", id: "one", state: "done" }],
+			},
+			{ kind: "owner" },
+		);
 		expect(result.outcome).toBe("applied");
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.address).toEqual({ kind: "session", domainId: "a", gatewayId: "g", sessionId: "s" });
@@ -179,11 +453,14 @@ describe("router board service", () => {
 		expect((rows[0]?.row.body as { pre: { sealed: unknown } }).pre.sealed).toEqual({ title: envelope() });
 		expect((rows[0]?.row.body as { post: { sealed: unknown } }).post.sealed).toEqual({ title: envelope() });
 		rows.length = 0;
-		const self = service.write("a", {
-			expectedRevision: 2,
-			actor: { kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
-			ops: [{ kind: "set_state", id: "one", state: "in_progress" }],
-		});
+		const self = service.write(
+			"a",
+			{
+				expectedRevision: 2,
+				ops: [{ kind: "set_state", id: "one", state: "in_progress" }],
+			},
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
+		);
 		expect(self.outcome).toBe("applied");
 		expect(rows).toHaveLength(0);
 		registry.close();
@@ -194,11 +471,14 @@ describe("router board service", () => {
 		const title = envelope();
 		const body = envelope("board.body");
 		const names = { alice: envelope("board.name"), bob: envelope("board.name") };
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { title, body, names })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { title, body, names })],
+			},
+			{ kind: "owner" },
+		);
 		expect(service.read("a").entries[0]?.sealed).toEqual({ title, body, names });
 		registry.close();
 	});
@@ -206,35 +486,46 @@ describe("router board service", () => {
 	it("requires held attachments and replaces their entry references", () => {
 		const { service, registry, references, referenceCalls } = make();
 		references.add("old");
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { attachments: [{ blobId: "old", size: 1, mime: "text/plain", blobGateway: "g" }] })],
-		});
-		const refused = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [
-				{
-					kind: "set_attachments",
-					id: "one",
-					attachments: [{ blobId: "missing", size: 1, mime: "text/plain", blobGateway: "g" }],
-				},
-			],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("one", { attachments: [{ blobId: "old", size: 1, mime: "text/plain", blobGateway: "g" }] }),
+				],
+			},
+			{ kind: "owner" },
+		);
+		const refused = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{
+						kind: "set_attachments",
+						id: "one",
+						attachments: [{ blobId: "missing", size: 1, mime: "text/plain", blobGateway: "g" }],
+					},
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(refused.outcome).toBe("refused");
 		references.add("new");
-		const applied = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [
-				{
-					kind: "set_attachments",
-					id: "one",
-					attachments: [{ blobId: "new", size: 2, mime: "text/plain", blobGateway: "g" }],
-				},
-			],
-		});
+		const applied = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{
+						kind: "set_attachments",
+						id: "one",
+						attachments: [{ blobId: "new", size: 2, mime: "text/plain", blobGateway: "g" }],
+					},
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(applied.outcome).toBe("applied");
 		expect(referenceCalls.slice(-2)).toEqual([
 			{ action: "release", blobId: "old", entryId: "one" },
@@ -246,14 +537,17 @@ describe("router board service", () => {
 	it("does not move references for a refused write", () => {
 		const { service, registry, references, referenceCalls } = make();
 		references.add("blob");
-		const result = service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [
-				entry("one", { attachments: [{ blobId: "blob", size: 1, mime: "text/plain", blobGateway: "g" }] }),
-				{ kind: "remove", id: "missing" },
-			],
-		});
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("one", { attachments: [{ blobId: "blob", size: 1, mime: "text/plain", blobGateway: "g" }] }),
+					{ kind: "remove", id: "missing" },
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(result.outcome).toBe("refused");
 		expect(referenceCalls).toEqual([]);
 		expect(references.has("blob")).toBe(true);
@@ -264,18 +558,21 @@ describe("router board service", () => {
 		const { service, registry, references, referenceCalls } = make();
 		references.add("one");
 		references.add("two");
-		const result = service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [
-				entry("one", {
-					attachments: [
-						{ blobId: "one", size: 1, mime: "text/plain", blobGateway: "g" },
-						{ blobId: "two", size: 2, mime: "text/plain", blobGateway: "g" },
-					],
-				}),
-			],
-		});
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("one", {
+						attachments: [
+							{ blobId: "one", size: 1, mime: "text/plain", blobGateway: "g" },
+							{ blobId: "two", size: 2, mime: "text/plain", blobGateway: "g" },
+						],
+					}),
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(result.outcome).toBe("applied");
 		expect(referenceCalls).toEqual([
 			{ action: "hold", blobId: "one", entryId: "one" },
@@ -286,55 +583,93 @@ describe("router board service", () => {
 
 	it("refuses set_parent under a parent the session cannot write", () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [
-				entry("parent", { session: { domainId: "a", gatewayId: "g", sessionId: "other" } }),
-				entry("child", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } }),
-			],
-		});
-		const result = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
-			ops: [{ kind: "set_parent", id: "child", parent: "parent", rank: "A" }],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("parent", { session: { domainId: "a", gatewayId: "g", sessionId: "other" } }),
+					entry("child", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } }),
+				],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "set_parent", id: "child", parent: "parent", rank: "A" }],
+			},
+			{ kind: "session", session: { domainId: "a", gatewayId: "g", sessionId: "s" } },
+		);
 		expect(result.outcome).toBe("refused");
 		registry.close();
 	});
 
-	it("removes a parent and promotes its children", () => {
+	it("refuses removing a parent with live children", () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("parent"), entry("child", { parent: "parent", rank: "B" })],
-		});
-		const result = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [{ kind: "remove", id: "parent" }],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("parent"), entry("child", { parent: "parent", rank: "B" })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "remove", id: "parent" }],
+			},
+			{ kind: "owner" },
+		);
+		expect(result).toMatchObject({ outcome: "refused", refusal: "would_orphan" });
+		registry.close();
+	});
+
+	it("removes a parent with its whole subtree", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{ expectedRevision: 0, ops: [entry("parent"), entry("child", { parent: "parent", rank: "B" })] },
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [
+					{ kind: "remove", id: "parent" },
+					{ kind: "remove", id: "child" },
+				],
+			},
+			{ kind: "owner" },
+		);
 		expect(result.outcome).toBe("applied");
-		const child = service.read("a").entries.find((stored) => stored.clear.id === "child");
-		expect(child?.clear.parent).toBeUndefined();
-		expect(child?.clear.version).toBe(2);
+		expect(service.read("a").entries).toHaveLength(0);
 		registry.close();
 	});
 
 	it("observes one row for each of two parties", () => {
 		const { service, registry, rows } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "first" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "first" } })],
+			},
+			{ kind: "owner" },
+		);
 		rows.length = 0;
-		service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "second" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "second" } })],
+			},
+			{ kind: "owner" },
+		);
 		expect(rows).toHaveLength(2);
 		expect(new Set(rows.map(({ row }) => row.envelope.opKey.opId)).size).toBe(2);
 		registry.close();
@@ -342,11 +677,14 @@ describe("router board service", () => {
 
 	it("delivers every accepted observation row", () => {
 		const { service, registry, rows, delivered } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
 		expect(delivered).toHaveLength(rows.length);
 		expect(delivered[0]?.row.envelope.opKey).toEqual(rows[0]?.row.envelope.opKey);
 		registry.close();
@@ -355,16 +693,24 @@ describe("router board service", () => {
 	it("sweeps expired trash and releases its blobs", () => {
 		const { service, registry, references, referenceCalls } = make();
 		references.add("blob");
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { attachments: [{ blobId: "blob", size: 1, mime: "text/plain", blobGateway: "g" }] })],
-		});
-		const trashed = service.write("a", {
-			expectedRevision: 1,
-			actor: { kind: "owner" },
-			ops: [{ kind: "trash", id: "one" }],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("one", { attachments: [{ blobId: "blob", size: 1, mime: "text/plain", blobGateway: "g" }] }),
+				],
+			},
+			{ kind: "owner" },
+		);
+		const trashed = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [{ kind: "trash", id: "one" }],
+			},
+			{ kind: "owner" },
+		);
 		expect(trashed.outcome).toBe("applied");
 		expect(service.sweepTrash("a", 100 + 30 * 24 * 60 * 60 * 1000 + 1)).toBe(1);
 		expect(service.read("a").entries).toHaveLength(0);
@@ -374,16 +720,19 @@ describe("router board service", () => {
 
 	it("uses registration and frame session identity for board operations", async () => {
 		const { service, registry } = make();
-		service.write("a", {
-			expectedRevision: 0,
-			actor: { kind: "owner" },
-			ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
-		});
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (_name, registered) => {
-				handler = registered as typeof handler;
+			gatewayFrame: (name, registered) => {
+				if (name === "board_op") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
@@ -399,7 +748,6 @@ describe("router board service", () => {
 				sessionId: "other",
 				write: {
 					expectedRevision: 1,
-					actor: { kind: "owner" },
 					ops: [{ kind: "set_state", id: "one", state: "done" }],
 				},
 			},
@@ -413,8 +761,8 @@ describe("router board service", () => {
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (_name, registered) => {
-				handler = registered as typeof handler;
+			gatewayFrame: (name, registered) => {
+				if (name === "board_op") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
@@ -429,7 +777,7 @@ describe("router board service", () => {
 				{
 					incarnation: 1,
 					sessionId: "unknown",
-					write: { expectedRevision: 0, actor: { kind: "owner" }, ops: [entry("one")] },
+					write: { expectedRevision: 0, ops: [entry("one")] },
 				},
 			),
 		).toThrow();

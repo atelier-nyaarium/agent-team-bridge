@@ -46,7 +46,8 @@ owns the check.
 ## Trust
 
 The Router routes opaque sealed payloads by `dstGateway` and `relayId`. It cannot read or forge E2E
-payloads. Presence discovery is local merging of `list_teams` responses.
+payloads. Presence rows are not sealed: the Router folds the owner projection, and a gateway keeps
+only its own rows authoritative.
 
 The owner device is the trust root. Owner-signed admissions are mirrored on the Router and every
 Gateway, so revocation still applies while the Router is unreachable.
@@ -96,9 +97,10 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Services register their ops and frames through `ownerServiceHooks.ts`. A frame handler receives the authenticated registration; the bridge deletes `domainId` and `gatewayId` from the payload first, so no handler can read one.
 - Presence: a gateway sends `presence_baseline` after registering and `presence_delta` with a sequence; a gap answers `presence_resync`. A dropped socket marks the gateway's rows unreachable; the next baseline replaces them. The owner projection folds rows, roster, coverage, spawn points, and each linked Domain's friend projection; a friend sees shared sessions only.
 - Shares: records per session target and friend, a generation per pair bumped by unshare and unlink. A peer row is admitted only while shared, stamped with the generation, and retired `target_revoked` when the generation moves before delivery. A gateway attests live cross-Domain jobs with `share_job_live`; the 30-day sweep keeps attested shares.
-- Board: entries with a clear envelope and sealed title, body, and names; writes carry `expectedRevision` and an actor; the same authority and cascade rules the gateway used; observations land as `board_observation` rows in the affected sessions' inboxes. Attachments must be held in the reference-held store.
+- Board: entries with a clear envelope and sealed title, body, and names; writes carry `expectedRevision` and no actor, because the receiver names the writer from the authenticated channel; the same authority and cascade rules the gateway used, plus `mayTake` for claim and release; observations land as `board_observation` rows in the affected sessions' inboxes. Attachments must be held in the reference-held store.
 - Scheduled sends: one record per target; replace and cancel are versioned; a Router timer fires through the op ledger under the send's own op id and writes a `scheduled_result` row the phones fold.
 - Capabilities and read anchors are tier-1 records with their own OwnerOps.
+- Blobs: `blob_begin` and `blob_chunk` are refused until blob sealing is designed, so the Router holds no gateway-uploaded bytes. A `blob_fetch` reads the cache first and forwards to the origin gateway only on a miss.
 
 **A cross-machine answer states how complete it is.** `discover()` returns asked, answered and
 unreachable ids plus `rosterKnown`, so a partial result is not a plain success and an unreadable

@@ -1,6 +1,13 @@
 import crypto from "node:crypto";
-import type { CascadeChange } from "../shared/board-cascade.js";
-import { type BoardReply, boardEntryIdForOperation } from "../shared/board-structure.js";
+import { type BoardActor, mayWrite, visibleTo } from "../shared/board-authority.js";
+import {
+	type BoardReply,
+	boardEntryIdForOperation,
+	MAX_ENTRIES_PER_OWNER,
+	MAX_PROJECTION_BYTES,
+	prunableSubtrees,
+	subtreeIds,
+} from "../shared/board-structure.js";
 import { sha256Hex } from "../shared/canonical-json.js";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
@@ -10,7 +17,9 @@ import type { FederatedOp } from "../shared/federation-protocol.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { CapabilitySnapshotSchema } from "../shared/schemasCapability.js";
 import { signRowEnvelope } from "../shared/schemasInbox.js";
+import { OwnerPresenceProjectionSchema } from "../shared/schemasRouterPresence.js";
 import {
 	Address,
 	composeSessionName,
@@ -33,12 +42,12 @@ import type {
 } from "../shared/types.js";
 import { isNoAckSessionId } from "./awarenessBank.js";
 import { createBlobFetcher } from "./blobFetch.js";
-import { type BoardActor, type BoardResult, type BoardStore, mayWrite, visibleTo } from "./boardStore.js";
 import type { ChannelDeliveryCoordinator } from "./channelDelivery.js";
 import type { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsolePushOps } from "./consolePushOps.js";
 import { sealTargetFor } from "./federation/sealTarget.js";
 import { createPresenceExchange } from "./presenceExchange.js";
+import type { BoardView, BoardWriteAnswer, ClearBoardOp, createBoardClient } from "./router/boardClient.js";
 import {
 	type AgentBoardEntry,
 	BoardRouteRequestSchema,
@@ -137,8 +146,8 @@ export interface RoutesDeps {
 	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do
 	// not exercise the identity gates, which then behave as an ungated gateway does.
 	auth?: SessionAuthority;
-	// The owner's task board (boardStore.ts). Absent when not wired; the board route then 503s.
-	boardStore?: BoardStore;
+	// Router-held owner board. Unavailable before enrollment.
+	boardClient?: ReturnType<typeof createBoardClient>;
 	// Restart-proof replay for the board's ABSOLUTE writes. Absent only in tests, which then fall
 	// back to the in-memory carry-over map.
 	boardReplays?: DurableOpStore<BoardReply>;
@@ -172,6 +181,27 @@ export interface RoutesDeps {
  * compile error until someone decides which it is, instead of silently taking the weaker one.
  */
 export type CallerScope = "session" | "owner-data";
+
+/** Bounds the remote wait below the caller's timeout. */
+const CAPABILITIES_ROUTER_DEADLINE_MS = 1_000;
+
+/** Returns the remote answer or fallback. */
+function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+	return new Promise<T>((resolve) => {
+		const timer = setTimeout(() => resolve(fallback), ms);
+		timer.unref?.();
+		void work.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve(fallback);
+			},
+		);
+	});
+}
 
 export interface RoutesCarryOver {
 	/** Settled replies for the board route's mutating operations. Losing this turns a retried
@@ -217,7 +247,7 @@ export function createRoutes({
 	repushHandshake,
 	deliveries,
 	ownerId,
-	boardStore,
+	boardClient,
 	boardReplays,
 	awareness,
 	carryOver = createRoutesCarryOver(),
@@ -351,6 +381,8 @@ export function createRoutes({
 			return { ok: false, error: (err as Error).message };
 		}
 		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
+			// Blob sealing is required before cache upload.
+			const contentRefs: string[] = [];
 			// The gateway is the producer: it signs the envelope and seals the body to the peer.
 			const envelope = {
 				origin: { kind: "gateway" as const, domainId: localDomain, gatewayId: localGatewayId },
@@ -361,7 +393,7 @@ export function createRoutes({
 				},
 				epoch: "peer" as const,
 				kind: op.kind === "send" ? ("message" as const) : ("reply" as const),
-				contentRefs: [],
+				contentRefs,
 			};
 			const targetParts = parseSessionName(op.kind === "send" ? op.to : op.session_id);
 			const address = `session:${target.domainId}/${target.gatewayId}/${targetParts.project}.${targetParts.session}`;
@@ -469,7 +501,6 @@ export function createRoutes({
 		presenceForDomain,
 		pushPresenceToDomain,
 		pullPresenceFromDomain,
-		relayListTeams,
 		landCrossDomainPresence,
 		invalidatePresenceSnapshotCache,
 	} = createPresenceExchange({
@@ -569,10 +600,20 @@ export function createRoutes({
 
 	/** Ungated on purpose: it serves non-secret capability ids and their own instruction text, and the
 	 * hand-launched host window this exists to serve carries no credential to present. */
-	function capabilities(): Response {
+	async function capabilities(): Promise<Response> {
 		// Kept apart rather than merged here: only the caller knows what it already holds, and a
 		// merged list cannot say which source spoke this round.
-		const consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
+		let consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
+		if (routerClient?.isRegistered()) {
+			const result = await withDeadline(
+				routerClient.callInboxTool("capabilities_read", { kind: "capabilities_read" }),
+				CAPABILITIES_ROUTER_DEADLINE_MS,
+				{ callId: "", error: "Router did not answer in time" },
+			);
+			const parsed = CapabilitySnapshotSchema.safeParse(result.result);
+			// Unknown snapshots do not displace local capabilities.
+			if (!result.error && parsed.success && parsed.data.known) consoleSnapshot = parsed.data;
+		}
 		return jsonResponse({
 			// LEGACY, remove after 2026-11-01. A session started by a plugin from before the split reads
 			// these flat fields and nothing else, so they carry exactly what it would have been served then.
@@ -616,90 +657,38 @@ export function createRoutes({
 		return jsonResponse(rows);
 	}
 
-	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
-	 * Gateway (the Router's roster is Domain-scoped), and a fan-out to every LINKED cross-Domain
-	 * peer. The Router supplies only the presence roster (content-blind); each peer's team list is
-	 * fetched directly via a gateway_relay list_teams, so the Router never sees who runs what. A
-	 * cross-Domain peer returns ONLY the sessions it has shared to this Domain (its own
-	 * relay handler applies the share filter), so an unshared friend session never appears.
-	 * A peer that errors or times out is simply omitted. */
-	/** Mesh discovery, WITH its own completeness. A partial answer must say so: a peer that could
-	 * not be asked is otherwise indistinguishable from one with nothing to say, and its sessions get
-	 * swept as absent. That ambiguity hid a total relay outage for a day. */
+	/** Folds the Router projection. Coverage rides along because a peer that could not be asked and
+	 * one with nothing to say are otherwise the same answer, and its sessions get swept as absent. */
 	async function discoverFull(): Promise<{
 		teams: TeamInfo[];
 		coverage: DiscoverCoverage;
 		spawnPoints: GatewaySpawnPoints[];
 	}> {
 		const local = (await teams().json()) as TeamInfo[];
-		const spawnPoints: GatewaySpawnPoints[] = [...localSpawnPoints()];
-		const unreachable: string[] = [];
-		const unreachablePeers: string[] = [];
-		// isRegistered, not isConnected: a REFUSED registration leaves the socket open, and reading
+		const offlineCoverage: DiscoverCoverage = { rosterKnown: false, asked: 0, answered: 0 };
+		// isRegistered, not isConnected: a refused registration leaves the socket open, and reading
 		// that as "no peers" reports a revoked Gateway as an empty mesh.
 		if (!routerClient?.isRegistered()) {
-			if (routerClient?.isConnected()) console.warn(`[discover] roster unknown: not registered with the Router`);
-			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 }, spawnPoints };
+			return { teams: local, coverage: offlineCoverage, spawnPoints: localSpawnPoints() };
 		}
-		const rosterCall = await routerClient.callTool("list_gateways", {});
-		// callTool never rejects; a timeout or refusal arrives as `error`. Without this read, a
-		// failed roster and an empty one are the same value.
-		if (rosterCall.error) {
-			console.warn(`[discover] roster unknown: ${rosterCall.error}`);
-			return { teams: local, coverage: { rosterKnown: false, asked: 0, answered: 0 }, spawnPoints };
-		}
-		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
-		const sameDomain = await Promise.all(
-			roster.map(async (h) => {
-				const r = await relayListTeams(h.gatewayId);
-				if (!r.ok) {
-					console.warn(`[discover] "${h.gatewayId}" contributed nothing: ${r.error}`);
-					unreachable.push(h.gatewayId);
-					return [];
-				}
-				// Same-Domain leg only. A peer speaks for its own machine, and relayListTeams already
-				// dropped any row naming a different gateway.
-				spawnPoints.push(...r.spawnPoints);
-				return r.teams;
-			}),
+		const result = await routerClient.callInboxTool("presence_read", {});
+		const parsed = !result.error ? OwnerPresenceProjectionSchema.safeParse(result.result) : null;
+		if (!parsed?.success) return { teams: local, coverage: offlineCoverage, spawnPoints: localSpawnPoints() };
+		const linkedTeams = parsed.data.linked.flatMap((entry) =>
+			entry.sessions.map(({ queueDepth, ...session }) => ({
+				...session,
+				domainId: entry.domainId,
+				queue_depth: queueDepth,
+			})),
 		);
-		// Cross-Domain leg: query each linked peer for its shared sessions. The returned
-		// TeamInfo carries the peer's own gatewayId, which the send path resolves back to the
-		// peer's Domain via crossDomainPeers (the SealTarget's separate domainId field, per the
-		// Addressing decision - the Domain is resolved from the peer's gatewayId, not parsed from the session address). One
-		// gateway is queried once even if a Domain runs several gateways, keyed by its
-		// (domainId, gatewayId) pair (a gateway id is unique within a Domain).
-		const peers = crossDomainPeers?.all() ?? [];
-		const seenPeerGateways = new Set<string>();
-		const crossDomain = await Promise.all(
-			peers.map(async (peer) => {
-				const key = `${peer.friendDomainId}/${peer.friendGatewayId}`;
-				if (seenPeerGateways.has(key)) return [] as TeamInfo[];
-				seenPeerGateways.add(key);
-				const r = await relayListTeams(peer.friendGatewayId);
-				if (!r.ok) {
-					console.warn(`[discover] linked peer "${key}" contributed nothing: ${r.error}`);
-					unreachablePeers.push(key);
-					return [] as TeamInfo[];
-				}
-				// Tag each shared session with the peer's Domain id (authoritative HERE: this
-				// Gateway knows which Domain it linked, while a friend on an older build might
-				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
-				// the send path resolves the seal target from, since a gateway id collides
-				// across Domains. The peer's own displayName rides through the spread, so Peers
-				// display the friend's name.
-				return r.teams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
-			}),
-		);
-		const asked = roster.length + seenPeerGateways.size;
-		const coverage: DiscoverCoverage = {
-			rosterKnown: true,
-			asked,
-			answered: asked - unreachable.length - unreachablePeers.length,
-			...(unreachable.length ? { unreachable } : {}),
-			...(unreachablePeers.length ? { unreachablePeers } : {}),
+		// Keep local sessions authoritative after a lost presence write.
+		const remoteRows = parsed.data.rows.filter((row) => row.gatewayId !== localGatewayId);
+		const remoteSpawns = parsed.data.spawnPoints.filter((point) => point.gatewayId !== localGatewayId);
+		return {
+			teams: [...local, ...remoteRows, ...linkedTeams],
+			coverage: parsed.data.coverage,
+			spawnPoints: [...localSpawnPoints(), ...remoteSpawns],
 		};
-		return { teams: [...local, ...sameDomain.flat(), ...crossDomain.flat()], coverage, spawnPoints };
 	}
 
 	/** HTTP wrapper. The bare array is the legacy shape older plugins parse; `?coverage=1` opts into
@@ -1532,7 +1521,24 @@ export function createRoutes({
 		return { ...entry, attachments };
 	}
 
-	function taskBoard(req: Request, body: Record<string, unknown>): Response {
+	/** Returns live descendants; trashed members are skipped. */
+	function liveSubtree(view: BoardView, rootId: string): BoardEntry[] {
+		return subtreeIds(view.entries, rootId)
+			.map((id) => view.entry(id))
+			.filter((entry): entry is BoardEntry => entry !== undefined && entry.trashedAt === undefined);
+	}
+
+	/** The list's byte budget, cut rather than failing the read. */
+	function cutToBudget(entries: BoardEntry[]): { entries: BoardEntry[]; truncated: boolean } {
+		let bytes = 0;
+		for (let i = 0; i < entries.length; i++) {
+			bytes += JSON.stringify(entries[i]).length + 1;
+			if (bytes > MAX_PROJECTION_BYTES) return { entries: entries.slice(0, i), truncated: true };
+		}
+		return { entries, truncated: false };
+	}
+
+	async function taskBoard(req: Request, body: Record<string, unknown>): Promise<Response> {
 		const parsed = BoardRouteRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
@@ -1546,15 +1552,13 @@ export function createRoutes({
 		// and only after impersonation is refused, or an unauthenticated caller could read a reply.
 		const recorded = r.operationId ? recallBoardReply(r.from, r.action, r.operationId) : undefined;
 		if (recorded) return jsonResponse(recorded);
-		if (!boardStore) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
-		const owner = ownerId?.();
-		if (!owner) return jsonResponse({ error: "not yet enrolled; no owner board exists" }, 503);
+		if (!boardClient) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
+		const client = boardClient;
 		// refuseImpersonation already resolved the name when auth is wired; the bare fallback only
 		// exists for authless harnesses.
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
-		// A session's authority, carried into every write so the STORE decides scope. An agent is
-		// never the owner here: reassigning and untrashing stay owner-only, through the console.
+		// Mirror authority for local refusal. Reassign and restore stay owner-only.
 		const actor: BoardActor = { kind: "session", sessionId: sessionKey };
 
 		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes
@@ -1564,27 +1568,33 @@ export function createRoutes({
 			return jsonResponse(bodyOut);
 		};
 
-		// BoardResult, not a widened `refused: string`: the refusal vocabulary is the one signal that
-		// discards an owner's edit, so a route may only relay a member of it.
-		const answer = (result: BoardResult, extra?: Record<string, unknown>) =>
-			result.applied
-				? done({ applied: true, ...extra, ...(result.cascaded ? { cascaded: result.cascaded } : {}) })
-				: done({ applied: false, refused: result.refused });
+		// Transport faults do not retire writes.
+		const answer = (result: BoardWriteAnswer, extra?: Record<string, unknown>): Response => {
+			if (result.kind === "unavailable") return jsonResponse({ error: result.error }, 503);
+			if (result.kind === "refused") return done({ applied: false, refused: result.refused });
+			const cascaded = result.kind === "applied" ? result.cascaded : [];
+			return done({ applied: true, ...extra, ...(cascaded.length > 0 ? { cascaded } : {}) });
+		};
 
 		switch (r.action) {
 			case "list": {
 				const scope = r.scope ?? "all";
-				const projection = boardStore.projection(owner);
-				const entries = projection.entries
+				const board = await client.read();
+				if (board.kind !== "ok") return jsonResponse({ error: board.error }, 503);
+				const visible = board.entries
 					.filter((e) => {
 						if (!visibleTo(e, sessionKey)) return false;
 						if (scope === "unclaimed") return e.sessionId === undefined;
 						if (scope === "session") return e.sessionId === sessionKey;
 						return true;
 					})
-					.map(projectForAgent);
+					.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+				const cut = cutToBudget(visible);
 				// Reads are not recorded: a list re-run is a fresher answer, not a replayed one.
-				return jsonResponse({ entries, ...(projection.truncated ? { truncated: true } : {}) });
+				return jsonResponse({
+					entries: cut.entries.map(projectForAgent),
+					...(cut.truncated ? { truncated: true } : {}),
+				});
 			}
 			case "attachments": {
 				// Hop one of a fetch: names to blobIds. Its own action because the list deliberately
@@ -1593,7 +1603,9 @@ export function createRoutes({
 				// context. Same `visibleTo` gate the list applies, checked here since that filter lives
 				// per-case rather than at the route.
 				if (!r.id) return jsonResponse({ error: "attachments requires an id" }, 400);
-				const entry = boardStore.projection(owner).entries.find((e) => e.id === r.id);
+				const board = await client.read();
+				if (board.kind !== "ok") return jsonResponse({ error: board.error }, 503);
+				const entry = board.entries.find((e) => e.id === r.id);
 				if (!entry || !visibleTo(entry, sessionKey)) return jsonResponse({ error: "no such entry" }, 404);
 				// A read like the list: never recorded, so a re-run cannot replay blobIds for pictures
 				// the owner has since swapped.
@@ -1601,75 +1613,170 @@ export function createRoutes({
 			}
 			case "claim": {
 				if (!r.id) return jsonResponse({ error: "claim requires an id" }, 400);
-				return answer(boardStore.claim(owner, r.id, sessionKey));
+				const id = r.id;
+				return answer(
+					await client.mutate(
+						sessionKey,
+						(view) => {
+							const target = view.entry(id);
+							// Only the owner restores trashed entries.
+							if (!target || target.trashedAt !== undefined) return "entry_missing";
+							const members = liveSubtree(view, id);
+							for (const member of members) {
+								if (member.sessionId !== undefined && member.sessionId !== sessionKey) return "held";
+							}
+							const ops = members
+								.filter((member) => member.sessionId !== sessionKey)
+								.map((member) => ({ kind: "set_session" as const, id: member.id, sessionKey }));
+							return ops.length > 0 ? ops : "unchanged";
+						},
+						r.operationId ? `${r.action}:${r.operationId}` : undefined,
+					),
+				);
 			}
 			case "release": {
 				if (!r.id) return jsonResponse({ error: "release requires an id" }, 400);
-				return answer(boardStore.release(owner, r.id, sessionKey));
+				const id = r.id;
+				return answer(
+					await client.mutate(
+						sessionKey,
+						(view) => {
+							const target = view.entry(id);
+							if (!target) return "entry_missing";
+							if (target.sessionId !== undefined && target.sessionId !== sessionKey) return "held";
+							const members = liveSubtree(view, id);
+							const ops = members
+								.filter((member) => member.sessionId === sessionKey)
+								.map((member) => ({
+									kind: "set_session" as const,
+									id: member.id,
+									sessionKey: undefined,
+								}));
+							return ops.length > 0 ? ops : "unchanged";
+						},
+						r.operationId ? `${r.action}:${r.operationId}` : undefined,
+					),
+				);
 			}
 			case "create": {
 				if (!r.operationId || !r.title || !r.assignTo) {
 					return jsonResponse({ error: "create requires operationId, title, and assignTo" }, 400);
 				}
 				const id = boardEntryIdForOperation(sessionKey, r.operationId);
-				// createAtEnd is insert-if-absent and mints inside its own write, so a retried POST
-				// neither reverts later edits nor re-ranks, and a refusal cannot leave a rebalance
-				// committed behind it.
+				const create = r;
 				return answer(
-					boardStore.createAtEnd(
-						owner,
-						{
-							id,
-							title: r.title,
-							...(typeof r.body === "string" ? { body: r.body } : {}),
-							state: "open" as const,
-							...(r.parent !== undefined && r.parent !== null ? { parent: r.parent } : {}),
-							...(r.assignTo === "self" ? { sessionId: sessionKey } : {}),
+					await client.mutate(
+						sessionKey,
+						(view) => {
+							// Operation-derived ids make retries idempotent.
+							if (view.entry(id)) return "unchanged";
+							if (view.entries.length >= MAX_ENTRIES_PER_OWNER) return "board_full";
+							const parent = create.parent ?? undefined;
+							if (parent !== undefined) {
+								const target = view.entry(parent);
+								if (!target) return "parent_missing";
+								const denied = mayWrite(target, actor);
+								if (denied) return denied;
+							}
+							// Rebalance rides the same batch as placement.
+							const placed = view.placeAtEnd(parent);
+							return [
+								...placed.rebalanced,
+								{
+									kind: "upsert" as const,
+									id,
+									rank: placed.rank,
+									title: create.title as string,
+									state: "open" as const,
+									...(typeof create.body === "string" ? { body: create.body } : {}),
+									...(parent === undefined ? {} : { parent }),
+									...(create.assignTo === "self" ? { sessionKey } : {}),
+								},
+							];
 						},
-						actor,
+						r.operationId ? `${r.action}:${r.operationId}` : undefined,
 					),
 					{ id },
 				);
 			}
 			case "update": {
 				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
-				// Scope is answered up front, not left to the setters: a request naming no CHANGED
-				// field reaches none of them, and would answer applied:true on an entry this session
-				// cannot see - a true/entry_missing pair that tells it which ids exist.
-				const entry = boardStore.entry(owner, r.id);
-				if (!entry) return answer({ applied: false, refused: "entry_missing" });
-				const denied = mayWrite(entry, actor);
-				if (denied) return answer({ applied: false, refused: denied });
-				// One update is several store writes, and either of the last two can cascade. Collected
-				// across them so the caller is told about every entry the board moved, not just the last.
-				const cascaded: CascadeChange[] = [];
-				if (r.title !== undefined) {
-					const res = boardStore.setTitle(owner, r.id, r.title, actor);
-					if (!res.applied) return answer(res);
-				}
-				if (r.body !== undefined) {
-					const res = boardStore.setBody(owner, r.id, r.body === null ? undefined : r.body, actor);
-					if (!res.applied) return answer(res);
-				}
-				if (r.state !== undefined) {
-					const res = boardStore.setState(owner, r.id, r.state, actor);
-					if (!res.applied) return answer(res);
-					if (res.cascaded) cascaded.push(...res.cascaded);
-				}
-				if (r.parent !== undefined) {
-					const parent = r.parent === null ? undefined : r.parent;
-					// An unchanged parent skips placement entirely - a retried update must not re-rank
-					// the entry to the end of a group it never left.
-					if (parent !== entry.parent) {
-						const res = boardStore.setParentAtEnd(owner, r.id, parent, actor);
-						if (!res.applied) return answer(res);
-						if (res.cascaded) cascaded.push(...res.cascaded);
-					}
-				}
-				return done({ applied: true, ...(cascaded.length > 0 ? { cascaded } : {}) });
+				const id = r.id;
+				const update = r;
+				// Multi-field updates are one batch.
+				return answer(
+					await client.mutate(
+						sessionKey,
+						(view) => {
+							const entry = view.entry(id);
+							// Scope first: an empty update would otherwise answer applied on an entry
+							// this session cannot see, which tells the caller which ids exist.
+							if (!entry) return "entry_missing";
+							const denied = mayWrite(entry, actor);
+							if (denied) return denied;
+							const ops: ClearBoardOp[] = [];
+							if (update.title !== undefined || update.body !== undefined) {
+								// Never write placeholders from unreadable text.
+								if (!view.textIntact(id))
+									return { unavailable: "no content key for this entry's text" };
+								const body = update.body === undefined ? entry.body : (update.body ?? undefined);
+								// Unnamed parent and holder fields retain existing values.
+								ops.push({
+									kind: "upsert",
+									id,
+									rank: entry.rank,
+									state: entry.state,
+									title: update.title ?? entry.title,
+									...(body === undefined ? {} : { body }),
+								});
+							}
+							if (update.state !== undefined) ops.push({ kind: "set_state", id, state: update.state });
+							if (update.parent !== undefined) {
+								const parent = update.parent === null ? undefined : update.parent;
+								// An unchanged parent skips placement: a retried update must not re-rank
+								// the entry to the end of a group it never left.
+								if (parent !== entry.parent) {
+									if (parent !== undefined) {
+										const target = view.entry(parent);
+										if (!target) return "parent_missing";
+										const parentDenied = mayWrite(target, actor);
+										if (parentDenied) return parentDenied;
+									}
+									const placed = view.placeAtEnd(parent, id);
+									ops.push(...placed.rebalanced, {
+										kind: "set_parent",
+										id,
+										parent,
+										rank: placed.rank,
+									});
+								}
+							}
+							return ops.length > 0 ? ops : "unchanged";
+						},
+						r.operationId ? `${r.action}:${r.operationId}` : undefined,
+					),
+				);
 			}
 			case "clear": {
-				return done({ applied: true, cleared: boardStore.clearDone(owner, sessionKey) });
+				let cleared = 0;
+				const result = await client.mutate(
+					sessionKey,
+					(view) => {
+						const entries = new Map(view.entries.map((e) => [e.id, e]));
+						const prunable = prunableSubtrees(
+							entries,
+							(e) => e.sessionId === sessionKey && (e.state === "done" || e.state === "cancelled"),
+						);
+						cleared = prunable.size;
+						return prunable.size > 0
+							? [...prunable].map((id) => ({ kind: "trash" as const, id }))
+							: "unchanged";
+					},
+					r.operationId ? `${r.action}:${r.operationId}` : undefined,
+				);
+				if (result.kind === "unavailable") return jsonResponse({ error: result.error }, 503);
+				if (result.kind === "refused") return done({ applied: false, refused: result.refused });
+				return done({ applied: true, cleared: result.kind === "applied" ? cleared : 0 });
 			}
 		}
 	}

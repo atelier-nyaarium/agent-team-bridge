@@ -23,6 +23,8 @@ import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
 
 const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Attestations expire after a day of silence. */
+const ATTESTATION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ATTESTATIONS_PER_GATEWAY = 500;
 const shareId = (sessionTarget: string, target: CrossDomainShareTarget): string =>
 	`share:${sessionTarget}|${targetKey(target)}`;
@@ -38,7 +40,8 @@ export interface ShareServiceDeps {
 	now: () => number;
 }
 
-type Attestation = { incarnation: number; jobIds: string[]; observedAt: number };
+/** `receivedAt` uses the Router clock. `observedAt` records the gateway observation. */
+type Attestation = { incarnation: number; jobIds: string[]; observedAt: number; receivedAt: number };
 
 export interface ShareService {
 	share(domainId: string, sessionTarget: string, target: CrossDomainShareTarget): { ok: boolean };
@@ -197,6 +200,7 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 				incarnation: reg.incarnation,
 				jobIds: parsed.jobIds,
 				observedAt: parsed.observedAt,
+				receivedAt: deps.now(),
 			});
 		},
 		sweep(domainId, now = deps.now()) {
@@ -204,7 +208,10 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 			const live = (sessionTarget: string) =>
 				[...attestations.entries()].some(
 					([key, value]) =>
-						key.startsWith(`${domainId}|`) && key.endsWith(`|${sessionTarget}`) && value.jobIds.length > 0,
+						key.startsWith(`${domainId}|`) &&
+						key.endsWith(`|${sessionTarget}`) &&
+						value.jobIds.length > 0 &&
+						now - value.receivedAt <= ATTESTATION_TTL_MS,
 				);
 			const result = ruleSweep(state(before), now, SHARE_TTL_MS, live);
 			putState(domainId, before, result.state.shares);

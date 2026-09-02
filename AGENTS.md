@@ -10,8 +10,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
 - `src/gateway/presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence, read anchors, host RPC correlation
 - `src/gateway/boardStore.ts` - durable owner task board
-- `src/gateway/boardAuthority.ts` - board write authority, refusals, and sole `refused: ` producer
-- `src/gateway/boardAwareness.ts` / `boardCascade.ts` - board awareness and parent-child state rules
+- `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
 - `src/gateway/federation/contentKeyStore.ts` - gateway keyring, sole rule owner, sole writer of `content-keys.json`
@@ -19,6 +18,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog, relay folding, authenticated route
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
 - `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting
+- `src/gateway/router/presenceReporter.ts` / `presenceProtocol.ts` - the presence pump, and the pure protocol it obeys; `applyAnswer` cannot reach the sender, so no answer starts a frame
+- `src/gateway/router/shareAttestor.ts` - share liveness attestation, coalesced
+- `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
+- `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
 - `src/gateway/console/` - Android channel, op dispatch, capability store, relay, durable ops
 - `android/.../ChatRepository.kt` - console process singleton and repository facade
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers

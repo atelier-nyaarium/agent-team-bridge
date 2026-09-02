@@ -56,6 +56,8 @@ export interface RouterClientConfig {
 	// Applies display-name updates without reconnecting.
 	onDomainUpdate?: (meta: { displayName?: string | null }) => void;
 	onInboxDeliver?: (frame: unknown) => void;
+	onPresenceResync?: (frame: unknown) => void;
+	onUnlink?: (frame: unknown) => void;
 	onBlobFetch?: (frame: unknown) => void;
 	onDisconnect?: () => void;
 	// Test override for pending-Domain registration retry cadence.
@@ -193,6 +195,18 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				return;
 			}
 			const frame = parsed.data;
+			// A frame from a PREVIOUS registration is stale and is dropped. One that arrives before
+			// this client has read its own register reply is not: the Router pushes the registration
+			// burst immediately, and the reply is resolved a microtask later, so a null incarnation
+			// here means "not yet known", never "wrong". Dropping those strands the held inbox rows
+			// the burst exists to deliver.
+			if ("incarnation" in frame && gatewayIncarnation !== null && frame.incarnation !== gatewayIncarnation) {
+				droppedFrames++;
+				console.warn(
+					`[router-client] dropped foreign incarnation=${frame.incarnation} (${droppedFrames} dropped total)`,
+				);
+				return;
+			}
 			if ((frame as { type?: string }).type === "blob_fetch") {
 				config.onBlobFetch?.(frame);
 				return;
@@ -220,6 +234,14 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				}
 				case "inbox_deliver": {
 					config.onInboxDeliver?.(frame);
+					break;
+				}
+				case "presence_resync": {
+					config.onPresenceResync?.(frame);
+					break;
+				}
+				case "unlink": {
+					config.onUnlink?.(frame);
 					break;
 				}
 				case "tool_result": {

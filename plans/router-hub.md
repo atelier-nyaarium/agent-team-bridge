@@ -387,7 +387,7 @@ non-zero in verification.
 Ordering: Phase 1 gates everything. Phase 2 gates every phase that writes sealed content, phases 3
 through 6. Phase 3 gates 4. Phase 8 gates 9.
 
-## Phase 0 - Backup and freeze
+## Phase 0 - Backup and freeze ✅ Done
 
 - ✅ Export the owner key backup from Management. It regenerates every content-key epoch. Exported
   by the owner 2026-09-01.
@@ -399,9 +399,9 @@ through 6. Phase 3 gates 4. Phase 8 gates 9.
   hashes. An operator's note. No rollback.
 - ✅ `plans/vault.md` stays parked. No code.
 
-## Phase 1 - Failure-mode ledger, invariants, and specs
+## Phase 1 - Failure-mode ledger, invariants, and specs ✅ Done
 
-✅ Done. No code. Output is the `# Specs` and `# Phase 1 outputs` sections. Gates Phase 2.
+No code. Output is the `# Specs` and `# Phase 1 outputs` sections. Gates Phase 2.
 
 ### Ledger
 
@@ -706,7 +706,7 @@ Deferred from Phase 4:
   write committed, so a refused write leaked or dropped a hold. Verdict, landed: reference changes
   are collected and applied after the batch answers ok.
 
-## Phase 5 - Gateway client
+## Phase 5 - Gateway client ✅ Done
 
 Replacement before removal. Each module below has a named removal point: the commit in which no
 gateway code imports it.
@@ -728,6 +728,202 @@ gateway code imports it.
   except the awareness adapter, board attachment bytes, `durableOpStore` and `boardReplays`,
   `crossDomainShareState`, the read-anchor projection.
 - Residue test on the retained-state inventory of the Consequences section.
+
+Slices: 5.0 presence baseline and deltas, `presence_resync`, share attestation, the `unlink` frame;
+5.1 Router-backed `/discover`; 5.2 Router-backed `/task-board` and observations; 5.3 Router-backed
+`/capabilities`; 5.4 blob upload to the cache; 5.5 the deletions and the residue test.
+
+**The deletion list remains in use.** Five analyses, one per target, reported live importers with
+line numbers. Every target still has a consumer in a later phase:
+- `discoverFull` is not a fan-out any more; its body IS the Router-backed replacement. The name is
+  the console `list_teams` seam and the `/discover` producer for `bridgeDiscover`, so it survives to
+  the Phase 9 cutover. Its `DISCOVERY_REFRESH_MS` consumers are all on the phone.
+- `relayListTeams` and `pullPresenceFromDomain` are the cross-Domain presence backstop, on a 10s
+  timer. The Router computes the same content in the owner projection's `linked` array, but nothing
+  folds it into `CrossDomainPresenceConsumer`, and the phone's friend-session map is fed only by the
+  `crossDomainPresence` poll plane. Phase 6.
+- `presence_push` likewise: dropping it degrades the FRIEND Domain's phone freshness, and dropping
+  the schema arm breaks an un-upgraded peer's still-outbound push on a path with no version
+  negotiation. Phase 6, and the arm waits for Phase 9.
+- `sendCrossGateway` is not a transport; it is the origin's bookkeeping, and the sole minter of the
+  `dstDomainId` binding the reply gate reads. `relayWithRetry` still carries every SAME-Domain
+  gateway-to-gateway op, the reply pin, and the `console_push` fan-out. The Router append replaced
+  the cross-Domain transport only.
+- `consolePushOps`, `pollPlanes`, `capabilityStore` and the plane registry are all on the live phone
+  path, because the Router relays console frames rather than handling them. The registry also stays
+  in the Router binary because `presence-identity.ts` imports `stableHash` from it, and Phase 5 board
+  awareness imports it too.
+
+Landed instead: `gateway-retained-state-residue.test.ts`, a ratchet that fails when owner state on
+its way out gains a NEW gateway consumer, and asserts the agent board path is off `boardStore`.
+
+Deferred from Phase 5:
+- The phone still writes the gateway's local board while agents write the Router's. The two boards
+  are separate until Phase 6 moves the phone.
+- `capabilities_report` has no producer, so the Router's capability rows are empty. `/capabilities`
+  therefore prefers a Router snapshot only when it says `known: true`.
+- `presence_read_friend` has no caller; the phone is its audience.
+- The reference-held blob upload has no Phase 5 caller. Board attachments and scheduled sends are
+  written by the console, which moves in Phase 6.
+- `blob_fetch` reads the Router CACHE, never the reference-held store. Board attachment bytes still
+  live on the gateway that holds the entry, so the agent fetch works today. Phase 6 must widen the
+  fetch when the phone starts uploading an attachment the Router alone holds.
+- The entry gains `session` beside the bare `sessionId`; the plugin reads the bare one until Phase 9.
+- S8 says `from` is stamped by the gateway, never read from the request. It is still read, but
+  `refuseImpersonation` proves the caller holds the binding for the name it claims, so a forged
+  `from` is REFUSED rather than reattributed. The property S8's residue test wants holds; the
+  mechanism differs. Stamping instead is a plugin wire change, so it waits for Phase 7.
+- S8 says the board op carries `{ actor: session }`. It does not: the receiver names the writer from
+  the authenticated channel, which is the Phase 4 payload-named-identity fix applied to this frame.
+- A board write reads and decrypts the WHOLE board, up to the CAS retry count per write. Bounded by
+  `MAX_ENTRIES_PER_OWNER`; a partial read is a design change, not a fix.
+
+### Open question: sealing a blob
+
+Answer C says the Router cache is SEALED, and nothing yet says how. Both Router stores are
+`BlobStore` instances that verify a blob against the plaintext digest its own id asserts, which
+ciphertext cannot satisfy, and `blob_fetch` serves arbitrary ranges, which a whole-file envelope
+cannot. Per-chunk sealing keeps ranges but makes the framing something the Router must understand,
+so the store stops being opaque. Until that is decided the Router holds no bytes: the uploader
+exists and is tested, its send-path caller is not wired, and both upload frames are refused.
+
+### Bug Classes
+
+Found by two audits of the completed phase.
+
+- **Success inferred from the absence of a refusal** (`presenceReporter.ts`): a send that never
+  landed advanced the sequence and latched `hasBaseline`, because only the resync flag was read and
+  an error answer looks like an accepted one. On an idle gateway no later delta ever corrects it, so
+  the machine's own sessions and shells vanish from discovery while it is online. Verdict, landed:
+  a send must be positively acknowledged, a failed baseline holds the deltas, and a failed delta
+  keeps its sequence and retries.
+- **The remote copy trusted over the local original** (`routes.ts` `discoverFull`): the Router's
+  projection replaced this gateway's own rows, so a lost presence write hid live sessions on the one
+  machine that cannot be wrong about them. Verdict, landed: own rows and shells come from here, the
+  Router supplies every other gateway's.
+- **A read placeholder written back as truth** (`boardClient.ts`, `routes.ts` update): text that
+  could not be opened rendered as a placeholder, and an edit restated the whole sealed block, so a
+  body-only edit could store the placeholder as the real title. Verdict, landed: the view says
+  whether an entry's text opened, and an edit refuses when it did not.
+- **Restating a field the write did not mean to touch** (`routes.ts` update): the upsert restated
+  the parent, which runs the PARENT's authority check, so a session could not edit a child it
+  legitimately held. Same class as the sealed-names blanking found earlier in the phase. Verdict,
+  landed: an upsert names only what it changes.
+- **Release before hold on the same reference** (`boardService.ts`): replacing `[A]` with `[A, B]`
+  queued a release of A and then a hold of A, and a release that takes the last reference deletes
+  the bytes. Verdict, landed: the batch nets to a membership diff before touching the store.
+- **A reservation counted as a holding** (`referenceHeldStore.ts`): `has()` answered on references
+  alone, and a begin takes the reference before the bytes, so a board entry could name a file whose
+  upload never finished. Verdict, landed: referenced AND whole.
+- **Evidence that never expires** (`shareService.ts`): a job attestation had no age, so one
+  attestation pinned its share for as long as the Router ran. Verdict, landed: attestations age out,
+  against the Router's own clock rather than the value the attester sent.
+- **A local answer made to wait on a remote one** (`routes.ts` `capabilities`): the Router call can
+  hold for its own two-minute timeout while this route's caller gives up in well under two seconds.
+  Verdict, landed: the Router gets a one-second deadline and the local answer stands.
+- **A refusal minted from a storage failure** (`boardService.ts`): every non-ok batch answered
+  `conflict`, so a full disk read as contention and was retried forever. Verdict, landed: only a CAS
+  conflict is a conflict.
+- **One dead child bricking the branch above it** (`routes.ts` claim and release): a trashed
+  descendant refused the whole subtree, permanently. Verdict, landed: trashed members are stepped
+  over, being out of every list already.
+- **A payload naming what it may pin** (`gatewayBridge.ts` `blob_begin`): the held store took its
+  reference from the frame with no check that the record exists, and the cache admitted against a
+  size the caller declared while reserving nothing until the bytes arrived. Verdict, landed: both
+  upload frames are closed until the sealing design, the reservation, and a reference check exist.
+
+A second red team, over the fixes rather than the phase, found six more. Fresh code is where fresh
+bugs live, and four of these were introduced by the first round's own fixes.
+
+- **A doubtful fsync read as a failed write** (`boardService.ts`): `durability_uncertain` means the
+  batch APPLIED and only the sync is unproven, so refusing contradicted the board the same call
+  advanced and skipped the holds and observations for a live entry. Verdict, landed: it answers
+  applied, and a crash that loses the unsynced line loses its ledger record with it.
+- **An idempotency key that included derived state** (`boardService.ts`): the replay hash covered
+  the rank and state the gateway rebuilt from the CURRENT board, so the crash retry the ledger
+  exists to cover answered `operation_id_reused`. Verdict, landed: the hash covers the caller's
+  intent, which ops over which entries, and nothing derived.
+- **A ledger keyed by a value the caller mints** (`boardService.ts`): records had a TTL but no cap,
+  so a caller could grow owner state against the Domain quota. Verdict, landed: a per-owner cap,
+  oldest first, keeping the retries that could still arrive.
+- **"Not yet known" read as "wrong"** (`routerClient.ts`): the new incarnation gate compared against
+  a value set a microtask later, so the registration burst the Router pushes immediately was dropped
+  and its held inbox rows stranded until the next reconnect. Verdict, landed: only a KNOWN and
+  different incarnation is stale.
+- **A retry on the debounce timer** (`presenceReporter.ts`): a failed delta re-armed the 250ms
+  debounce, spinning at four attempts a second for as long as the Router kept failing. Verdict,
+  landed: failures retry on the retry delay, and a landed baseline retires what a failed one armed.
+- **An all-or-nothing sweep meeting a new refusal** (`boardService.ts`): the trash sweep ships one
+  batch, so the `would_orphan` refusal added this phase let one trashed parent stop reclaiming
+  anything for the whole Domain. Verdict, landed: the sweep removes only entries whose live subtree
+  is also dead.
+
+### Two mechanisms patched repeatedly
+
+Both were patched to green here. Neither is fixed. Raise them at the next architecture pass.
+
+**`boardService.write()` is one pass doing seven jobs.** Authority, mutation, cascade, durability,
+reference bookkeeping, observation delivery, and now idempotency all interleave in one function, and
+each round of review found a defect at a seam BETWEEN two of them: holds applied outside the batch,
+release queued before hold, a storage outcome minted as a refusal, an applied batch answered as
+failed, a replay key covering derived state, a ledger with no cap. The pattern will continue while
+the seams are implicit. It needs a written order with each stage's failure answer named, so a new
+stage cannot be inserted into the middle of another one by accident.
+
+**`presenceReporter` is a hand-rolled send state machine.** Three rounds found three defects: a
+baseline that recursed and deltas that raced, success inferred from the absence of a refusal, and a
+retry armed on the debounce timer. Each fix added another latched flag or another timer beside the
+ones already there. Four pieces of state, two timers and three arming sites now decide whether a
+frame may go. It needs one explicit state machine, not more flags.
+
+A fourth defect of the same shape was found by the architecture pass and fixed here: `markDirty`
+armed the debounce with no regard for a pending retry, so a gateway whose rows kept changing still
+hammered a failing Router four times a second. The retry-not-debounce fix had only slowed the SELF
+retry. A `notBefore` floor now bounds every delta, whoever asks.
+
+### The shapes, chosen and not yet built
+
+Five proposals, two judges, each judging on whether the shape makes the class UNEXPRESSIBLE rather
+than less likely.
+
+**The board: a pure decision, then a durable effect.** `decide(before, write, actor, facts)` lives
+in `src/shared/`, answers refused, conflict, or a finished transition, and cannot reach a store
+because `src/shared/` imports nothing upward. The service stamps versions, commits one batch, and
+maps the store's answer once. `stageApplied(tx, ...)` takes the batch's `Tx`, which is constructible
+only inside `batch()`, so a ledger record outside the durable batch is not a statement that can be
+written. References are DERIVED as a membership diff from pre and post state, the way observations
+already are, so there is no ordered log for a release to precede a hold in. Amendments the judge
+required: take the fingerprint over `BoardOp[]` alone, so the parameter type forbids hashing
+`expectedRevision`; add the residue test that `src/shared/` never imports upward, which nothing
+enforces today; pin that a conflict answers PRE-state entries before collapsing the four exits, or
+the client loops on stale entries; fold the three refusal-minting idioms into one total switch.
+Landed separately, not with this: `shareService`, `presenceService`, `capabilitiesService` and
+`readAnchorsService` all throw on a `durability_uncertain` that APPLIED, which is defect 4 living
+one directory over.
+
+**Presence: one union, one pump. BUILT.** `Sync = NeedsBaseline | Parked | Streaming{seq, sent}`
+replaced the three scalars, and two pure functions in `presenceProtocol.ts` answer the whole
+question: `nextFrame` says which frame may go, `applyAnswer` says what a sent one meant. Because
+`applyAnswer` cannot reach `send`, no answer handler can start a frame, which is the recursion
+defect made unwritable. One pump owns all pacing, and a cue arriving mid-send is seen because the
+pump compares the state it sent under against the state it returns to. The `Frame` carries the row
+snapshot it commits, so rows that changed during a send stay pending instead of being recorded as
+delivered. Two invariant tests were written against the OLD implementation first, where they passed,
+then the mechanism was swapped under them.
+
+A red team on the rebuild found two more, both real, both fixed here.
+
+- **One variable carrying two meanings** (`presenceReporter.ts`): `deadline` was written as a retry
+  floor by a failure and as a debounce window by `markDirty`, and `markDirty` took the later of the
+  two. That makes the window extendable, so churn faster than 250ms pushed it past every fire and
+  presence stopped going out entirely. Both meanings actually agree on one rule, which is now the
+  code: never move an ARMED deadline later.
+- **A field that rides only one frame kind, with no cue to send that kind** (`presenceProtocol.ts`):
+  spawn points ride the baseline alone, and the only baseline cues are Router-driven. The gateway
+  registers with the Router before the host daemon's socket opens, so the first baseline always
+  carried an empty list and nothing ever corrected it. A peer gateway then advertised no shells and
+  no session could be launched on it from the console. Predates the rebuild. Fixed: the reporter
+  remembers what its last landed baseline put on the wire, and a change forces a new one.
 
 ## Phase 6 - Phone transport
 
@@ -1590,3 +1786,32 @@ What the phone shows, the current producer, and the hub's.
 - A refuter that reads "the spec says the gateway dedupes by `deliveryId`" as proof that a dedupe
   exists refutes the finding that the mechanism is unspecified. Verification prompts must ask
   "is the mechanism specified" apart from "is the claim stated".
+
+- **An edit put a NUL byte inside a template literal** in `boardService.ts`. Lint passed, the whole
+  suite passed, and the string still worked at runtime, because NUL is a legal string character. But
+  `file` reported the source as binary and every `grep` against it silently answered nothing, which
+  read as "the code you are looking for is not there" for a long stretch of debugging. Worth a
+  residue test: no source file contains a byte outside the printable set the style rules already
+  name. The banned-character grep the rules give does not cover NUL.
+- **The plan disagrees with itself, and an audit against it produces false positives.** S8 says the
+  board op carries `{ actor: session }`; Phase 4's own bug-class entry removed payload-named
+  identity. S6 lists eight board ops; Phase 5 needed a ninth for claim and release. Phase 5's
+  deletion list names `discoverFull` while Phase 5's own second bullet requires `/discover` to keep
+  answering. Three separate alignment agents filed each of these as a gap and three triage agents
+  spent a full pass each proving they were stale spec, not stale code. The S-sections are Phase 1
+  output and were never revised as the phases that implement them made decisions.
+- **A test that stubs a store wholesale cannot see what the real store did.** `vi.spyOn(store,
+  "batch").mockReturnValue({ kind: "durability_uncertain" })` asserts the answer while the real
+  `durability_uncertain` has already applied the batch. That is exactly how "an applied write
+  answered as refused" passed its own test. A durability outcome needs a fault injected under the
+  real store, not a return value substituted for it.
+- **`ReferenceHeldStore.has` answered "is referenced" while both callers wanted "is present".** The
+  name says neither. A predicate on a store that holds bytes should say which question it answers,
+  and this one let a board entry name a file whose upload never finished.
+- **A Luna sandbox failure reads exactly like a code failure.** Twice an agent reported the suite red
+  when it was `EPERM` on a socket listen and `EROFS` on a home write inside its own sandbox, and
+  both cost a verification round. Agent prompts now say to name a sandbox fault as such and move on,
+  which worked the third time.
+- **`ContentKeyStore` shipped open-only and needed `seal` added mid-phase.** A store built with a
+  reader and no writer is a sign the phase that built it had no writer yet, which is fine, but the
+  next phase pays for it at an awkward moment.

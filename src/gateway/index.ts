@@ -45,6 +45,9 @@ import { CopilotAgentService } from "./copilotAgentService.js";
 import { CopilotRelay } from "./copilotRelay.js";
 import { CopilotRoute } from "./copilotRoute.js";
 
+/** Idle shares expire unless a live thread attests them. */
+const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
 	"/blob/stat": BlobStatOpSchema,
@@ -87,10 +90,14 @@ import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
+import { createBlobUploader } from "./router/blobUploader.js";
+import { createBoardClient } from "./router/boardClient.js";
 import { createInboxClaims } from "./router/inboxClaims.js";
 import { createInboxDeliveryPump } from "./router/inboxDeliveryPump.js";
+import { createPresenceReporter } from "./router/presenceReporter.js";
 import { startRouterClient } from "./router/routerClient.js";
 import { createSessionRegistryReporter } from "./router/sessionRegistryReporter.js";
+import { createShareAttestor } from "./router/shareAttestor.js";
 import {
 	loadRouterReach,
 	loadRouterTransport,
@@ -190,7 +197,7 @@ export async function startGateway(): Promise<void> {
 
 	const registry = new Map<string, Map<string, ServerWebSocket<WsData>>>();
 	const conversationRegistry = new Map<string, ServerWebSocket<WsData>>();
-	const store = new PendingJobStore<ResponsePayload>();
+	const store = new PendingJobStore<ResponsePayload>(600_000, () => shareAttestor?.attest());
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
 	// Written by the host daemon's catalog frame, read by discovery. Starts UNKNOWN, not empty: until
@@ -260,6 +267,9 @@ export async function startGateway(): Promise<void> {
 	});
 	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
 	let inboxPeerHandleOp: ReturnType<typeof createGatewayRelayHandler>["handleOp"] | null = null;
+	let presenceReporter: ReturnType<typeof createPresenceReporter> | null = null;
+	let shareAttestor: ReturnType<typeof createShareAttestor> | null = null;
+	let unlinkDomainHandler: ((domainId: string) => unknown) | null = null;
 	const sessionReporter = createSessionRegistryReporter({
 		sessionStore,
 		send: (action, params) => fed()?.routerClient.callInboxTool(action, params) ?? Promise.resolve(),
@@ -690,6 +700,8 @@ export async function startGateway(): Promise<void> {
 		const shareState = new CrossDomainShareState(federationDir, (reason) => {
 			if (reason.kind === "domain") slice.handlers?.presenceSource.recomputeDomain(reason.domainId);
 			else slice.handlers?.presenceSource.recomputeAll();
+			// Attest changed shares before the next sweep.
+			shareAttestor?.attest();
 		});
 		const federationIdentity = identity();
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
@@ -828,7 +840,16 @@ export async function startGateway(): Promise<void> {
 			onDisconnect: () => {
 				console.error(`[router] disconnected from the Router`);
 			},
-			onRegistered: () => sessionReporter.reconcile(),
+			onRegistered: () => {
+				sessionReporter.reconcile();
+				presenceReporter?.baseline();
+				shareAttestor?.attest();
+			},
+			onPresenceResync: () => presenceReporter?.resync(),
+			onUnlink: (frame) => {
+				const domainId = (frame as { domainId?: unknown }).domainId;
+				if (typeof domainId === "string") unlinkDomainHandler?.(domainId);
+			},
 			onInboxDeliver: (frame) =>
 				void inboxPump?.onFrame(
 					frame as { address: string; rows: unknown; incarnation?: number; deliveryEpoch: number },
@@ -854,9 +875,55 @@ export async function startGateway(): Promise<void> {
 				}
 			},
 		});
+		presenceReporter = createPresenceReporter({
+			rows: () => presence.snapshot(),
+			spawnPoints: () => ({
+				gatewayId: localGatewayId,
+				domainId,
+				hostSpawns: hostSpawnPoints.known ? hostSpawnPoints.ids : [],
+			}),
+			send: (action, params) => routerClient.callInboxTool(action, params),
+			incarnation: () => routerClient.incarnation(),
+		});
+		shareAttestor = createShareAttestor({
+			shares: () => [...new Set(shareState.all().map((share) => share.sessionTarget))],
+			// Match the local share sweep's liveness rule.
+			liveJobIds: (sessionTarget) =>
+				store.liveCrossDomainJobIds(
+					sessionTarget,
+					(gatewayId) => crossDomainPeers.all().some((peer) => peer.friendGatewayId === gatewayId),
+					SHARE_TTL_MS,
+				),
+			send: (action, params) => routerClient.callInboxTool(action, params),
+			incarnation: () => routerClient.incarnation(),
+		});
+		shareAttestor.start();
+		// Built unwired; blobUploader.ts owns the reason.
+		const blobUploader = createBlobUploader({
+			call: (action, params) => routerClient.callInboxTool(action, params),
+			blobs: blobStore,
+			incarnation: () => routerClient.incarnation(),
+		});
+		const boardClient = createBoardClient({
+			call: (action, params) => routerClient.callInboxTool(action, params),
+			domainId,
+			gatewayId: localGatewayId,
+			ownerSignPub: () => allowlist.ownerSignPub,
+			keys: contentKeyStore,
+		});
 		inboxPump = createInboxDeliveryPump({
 			claims: inboxClaims,
 			routerClient,
+			// The awareness bank renders board observations.
+			boardObservation: (sessionKey, row) =>
+				boardObserve?.([
+					{
+						sessionKey,
+						identity: row.identity,
+						pre: row.pre ? boardClient.openEntry(row.pre) : undefined,
+						post: row.post ? boardClient.openEntry(row.post) : undefined,
+					},
+				]),
 			incarnation: () => routerClient.incarnation(),
 			domainId,
 			ownerSignPub: () => allowlist.ownerSignPub,
@@ -880,6 +947,8 @@ export async function startGateway(): Promise<void> {
 			consoleSealer,
 			routerClient,
 			contentKeyStore,
+			boardClient,
+			blobUploader,
 			replayPersist: () => replayDurable.save(replayGuard.snapshot()),
 			domainMeta: null,
 			handlers: null,
@@ -1141,7 +1210,7 @@ export async function startGateway(): Promise<void> {
 			// This Gateway's own Domain owner id, for the mirror-tap's console-bound entries.
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: f ? () => (f.allowlist.ownerSignPub ? ownerKeyId(f.allowlist.ownerSignPub) : null) : null,
-			boardStore,
+			boardClient: f?.boardClient,
 			boardReplays,
 			awareness: awareness ?? undefined,
 		});
@@ -1171,7 +1240,10 @@ export async function startGateway(): Promise<void> {
 		// every currently linked-and-shared Domain - the trigger set's first half (see the plan's
 		// Source side section); the second half is CrossDomainPeers'/CrossDomainShareState's own
 		// onChange hooks, wired in buildFederationSlice above.
-		presence.onMarkDirty(() => presenceSource.recomputeAll());
+		presence.onMarkDirty(() => {
+			presenceSource.recomputeAll();
+			presenceReporter?.markDirty();
+		});
 		// Re-register a plane for every Domain already linked-and-shared from a prior run.
 		// reconcileOnBoot()'s own global pass already completed before federation activates (this
 		// runs well after boot), so each plane's own cold-start/restored-state handling in
@@ -1193,6 +1265,18 @@ export async function startGateway(): Promise<void> {
 			land: (domainId, sessions) => crossDomainPresenceConsumer.land(domainId, sessions),
 		});
 		setInterval(() => reconciler.tick(), 10_000);
+		const unlinkDomain = (domainId: string) => {
+			const result = {
+				peersRemoved: federation.crossDomainPeers.removeByDomain(domainId),
+				sharesDropped: federation.shareState.dropDomain(domainId),
+				jobsExpired: store.expireByDomain(domainId),
+			};
+			presenceSource.teardown(domainId);
+			crossDomainPresenceConsumer.teardown(domainId);
+			reconciler.cancel(domainId);
+			return result;
+		};
+		unlinkDomainHandler = unlinkDomain;
 
 		const consoleHandler = createConsoleDispatcher({
 			blobStore,
@@ -1274,17 +1358,7 @@ export async function startGateway(): Promise<void> {
 			// shares makes a re-link start from share-nothing; expiring jobs settles them instead
 			// of stalling to TTL. Idempotent. The phone separately submits the owner-signed
 			// link-edge revocation so the Router drops its relay-affinity edge.
-			unlinkDomain: (domainId) => {
-				const result = {
-					peersRemoved: federation.crossDomainPeers.removeByDomain(domainId),
-					sharesDropped: federation.shareState.dropDomain(domainId),
-					jobsExpired: store.expireByDomain(domainId),
-				};
-				presenceSource.teardown(domainId);
-				crossDomainPresenceConsumer.teardown(domainId);
-				reconciler.cancel(domainId);
-				return result;
-			},
+			unlinkDomain,
 			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across
 			// ALL their Domains, then drop the shares + settle the in-flight jobs for those Domains.
 			// The owner-keyed sibling of unlinkDomain, summed over the owner's Domains. Idempotent.
@@ -1380,7 +1454,7 @@ export async function startGateway(): Promise<void> {
 	// running collaboration must not lose its share mid-stream). teams() touches every live
 	// session's shares so presence keeps a share fresh; this timer reaps the absent ones.
 	function startShareSweep(federation: FederationSlice): void {
-		const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+		const THIRTY_DAYS_MS = SHARE_TTL_MS;
 		// "Live" means RECENTLY ACTIVE, not "ever touched": a persistent anchor refreshes its
 		// createdAt on every create + deliver, so a thread idle past this window stops
 		// suppressing the auto-forget (otherwise a single stale anchor pins a share forever).

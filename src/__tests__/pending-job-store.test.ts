@@ -35,6 +35,22 @@ function sessionTarget(spawn: string, session = "dev"): string {
 //  same-Domain and local jobs alone.
 
 describe("PendingJobStore.expireByDomain", () => {
+	it("notifies only for cross-Domain job lifecycle changes", () => {
+		let changes = 0;
+		const store = new PendingJobStore<string>(600_000, () => changes++);
+		const route = { srcGateway: "alice-gw", srcConversationId: "c1", srcSession: "s1" };
+
+		store.create("local", "a", "b", { persistent: true });
+		store.create("remote", "a", "b", { persistent: true, returnRoute: route, dstDomainId: "alice" });
+		store.create("remote", "a", "b", { persistent: true, returnRoute: route, dstDomainId: "alice" });
+		store.remove("remote");
+
+		store.create("expired", "a", "b", { persistent: true, returnRoute: route, dstDomainId: "alice" });
+		store.expireByDomain("alice");
+
+		expect(changes).toBe(5);
+	});
+
 	it("settles only matching-dstDomainId jobs and returns the count", () => {
 		const store = new PendingJobStore<string>();
 		const carol1 = convKey("c1", "lib");

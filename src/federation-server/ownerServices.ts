@@ -100,7 +100,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	// A row that left its inbox no longer holds its files.
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
-		if (!address || address.kind !== "session") return;
+		if (address?.kind !== "session") return;
 		const id = `${address.domainId}/${address.gatewayId}/${address.sessionId}:${row.seq}`;
 		for (const blobId of row.envelope.contentRefs) {
 			try {
@@ -188,6 +188,20 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		scheduled,
 		capabilities,
 		readAnchors,
+		reconcileReferences(): void {
+			perDomain("reference reconcile", (domainId) => {
+				const store = registry.for(domainId);
+				referenceHeld.reconcile(domainId, (ref) => {
+					if (ref.kind === "entry") return store.get("board.entry", ref.id) !== null;
+					if (ref.kind === "scheduled") return store.get("scheduled", ref.id) !== null;
+					const split = ref.id.lastIndexOf(":");
+					if (split <= 0) return false;
+					const address = `session:${ref.id.slice(0, split)}`;
+					const seq = Number(ref.id.slice(split + 1));
+					return Number.isSafeInteger(seq) && store.rows(address, seq, 1).some((row) => row.seq === seq);
+				});
+			});
+		},
 		sweep(now = registry.now()): void {
 			perDomain("share sweep", (domainId) => share.sweep(domainId, now));
 			perDomain("board sweep", (domainId) => board.sweepTrash(domainId, now));

@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+/** Mirrors board state without a module cycle. */
+const BoardSessionSchema = z
+	.object({ domainId: z.string(), gatewayId: z.string(), sessionId: z.string() })
+	.meta({ id: "BoardSession" });
+
 ////////////////////////////////
 //  Task Board Schemas
 //
@@ -60,6 +65,8 @@ export const BoardEntrySchema = z
 		rank: z.string().min(1).max(BOARD_RANK_MAX),
 		// The session this entry is assigned to; absent means the backlog.
 		sessionId: z.string().min(1).max(128).optional(),
+		// The triple preserves cross-gateway identity.
+		session: BoardSessionSchema.optional(),
 		// Server-stamped when trashed; absent means live. The 30-day trash sweep runs off it.
 		trashedAt: z.number().int().nonnegative().optional(),
 		// Written ONLY by board_set_attachments; every other writer preserves what is stored. See

@@ -169,6 +169,22 @@ describe("ShareService", () => {
 		ctx.registry.close();
 	});
 
+	it("stops honouring an attestation from a gateway that went quiet", () => {
+		// Otherwise one attestation pins its share for as long as the Router runs.
+		const ctx = make();
+		ctx.links.add("a|b");
+		ctx.service.share("a", "a.g.spawn.gone", { kind: "domain", domainId: "b" });
+		ctx.service.attest(
+			{ domainId: "a", gatewayId: "g", signPub: "p", incarnation: 1 },
+			{ sessionTarget: "a.g.spawn.gone", jobIds: ["job"], observedAt: 100, incarnation: 1 },
+		);
+
+		ctx.setNow(100 + 30 * 24 * 60 * 60 * 1000 + 1);
+		expect(ctx.service.sweep("a")).toBe(1);
+		expect(ctx.service.isSharedTo("a", "a.g.spawn.gone", "b")).toBe(false);
+		ctx.registry.close();
+	});
+
 	it("touches, unlinks, retires, and pushes to both Domains", () => {
 		const ctx = make();
 		ctx.links.add("a|b");

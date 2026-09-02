@@ -2,28 +2,216 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
+import { createBoardService } from "../federation-server/board/boardService.js";
+import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
+import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
+import { createBoardClient } from "../gateway/router/boardClient.js";
 import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway/routes.js";
 import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { isBoardReply } from "../shared/board-structure.js";
+import type { BoardAttachment } from "../shared/console-protocol.js";
+import { openContent, sealContent } from "../shared/content-envelope.js";
+import { generateIdentity } from "../shared/crypto.js";
 import { DurableStore } from "../shared/durable-store.js";
-import { PlaneRegistry } from "../shared/plane-registry.js";
+import type { BoardStoredEntry } from "../shared/schemasBoardState.js";
+import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import { SessionStore } from "../shared/session-store.js";
 import { makeCtx } from "./helpers/routes.js";
 
 describe("routes", () => {
 	describe("/task-board", () => {
-		function makeBoardCtx(): { ctx: RoutesDeps; board: BoardStore } {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-route-"));
-			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
-			// Rebuilds share the durable board instance.
-			const ctx = makeCtx({ boardStore: board, ownerId: () => "owner-1", carryOver: createRoutesCarryOver() });
-			return { ctx, board };
+		function makeBoardCtx(): {
+			ctx: RoutesDeps;
+			board: BoardStoredEntry[];
+			ownerWrite: (ops: unknown[]) => void;
+			setTitle: (id: string, title: string) => void;
+			setState: (id: string, state: "open" | "in_progress" | "paused" | "done" | "cancelled") => void;
+			seed: (entry: BoardStoredEntry) => void;
+			seedEntry: (id: string, title: string, sessionId?: string, attachment?: BoardAttachment) => void;
+			dropReply: () => void;
+			calls: string[];
+		} {
+			const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-route-"));
+			const identity = generateIdentity();
+			const key = Buffer.alloc(32, 7);
+			const owners = new Map([["owner-1", identity.sign.pub]]);
+			const registry = new OwnerStoreRegistry({
+				dataDir,
+				ownerOf: (domainId) => owners.get(domainId) ?? null,
+				quotaFor: () =>
+					new DomainQuota({
+						dir: dataDir,
+						limitBytes: 100_000_000,
+						statfs: () => ({ available: 100_000_000 }),
+					}),
+				now: () => 100,
+			});
+			const service = createBoardService({
+				registry,
+				inbox: {
+					hasSession: () => true,
+					appendRouterRow: (input) => ({ outcome: "accepted" as const, opKey: input.opKey }),
+				},
+				referenceHeld: { has: () => true, hold: () => {}, release: () => {} },
+			});
+			const board: BoardStoredEntry[] = [];
+			const calls: string[] = [];
+			let dropNextReply = false;
+			let revision = 0;
+			const call = async (action: string, params: Record<string, unknown>) => {
+				calls.push(action);
+				if (action === "board_read") {
+					const answer = service.read("owner-1");
+					revision = answer.revision;
+					board.splice(0, board.length, ...answer.entries);
+					return { result: answer };
+				}
+				const write = params.write as { expectedRevision: number; ops: never[] };
+				const answer = service.write(
+					"owner-1",
+					write,
+					{
+						kind: "session",
+						session: { domainId: "owner-1", gatewayId: "test-host", sessionId: params.sessionId as string },
+					},
+					params.opId as string | undefined,
+				);
+				revision = answer.revision;
+				board.splice(0, board.length, ...answer.entries);
+				if (dropNextReply) {
+					dropNextReply = false;
+					throw new Error("dropped reply");
+				}
+				return { result: answer };
+			};
+			const keys = {
+				seal: (
+					plaintext: Buffer,
+					aad: { domainId: string; ownerSignPub: string; kind: "board.title" | "board.body" | "board.name" },
+				) => ({
+					kind: "ok" as const,
+					envelope: sealContent(plaintext, key, { ...aad, epoch: 1 }),
+				}),
+				open: (
+					envelope: ContentEnvelope,
+					aad: {
+						domainId: string;
+						ownerSignPub: string;
+						epoch: number;
+						kind: "board.title" | "board.body" | "board.name";
+					},
+				) => {
+					try {
+						return { kind: "ok" as const, plaintext: openContent(envelope, key, aad) };
+					} catch {
+						return { kind: "bad_tag" as const };
+					}
+				},
+			};
+			const boardClient = createBoardClient({
+				call,
+				domainId: "owner-1",
+				gatewayId: "test-host",
+				ownerSignPub: () => identity.sign.pub,
+				keys,
+			});
+			const ownerWrite = (ops: unknown[]) => {
+				const answer = service.write(
+					"owner-1",
+					{ expectedRevision: revision, ops: ops as never[] },
+					{ kind: "owner" },
+				);
+				revision = answer.revision;
+				board.splice(0, board.length, ...answer.entries);
+			};
+			const seal = (text: string, kind: "board.title" | "board.body" | "board.name") =>
+				sealContent(Buffer.from(text), key, {
+					domainId: "owner-1",
+					ownerSignPub: identity.sign.pub,
+					kind,
+					epoch: 1,
+				});
+			const setTitle = (id: string, title: string) => {
+				const entry = board.find((item) => item.clear.id === id)!;
+				ownerWrite([
+					{
+						kind: "upsert",
+						id,
+						rank: entry.clear.rank,
+						state: entry.clear.state,
+						title: seal(title, "board.title"),
+						...(entry.clear.session ? { session: entry.clear.session } : {}),
+						...(entry.clear.parent ? { parent: entry.clear.parent } : {}),
+						...(entry.sealed.body ? { body: entry.sealed.body } : {}),
+						...(entry.sealed.names ? { names: entry.sealed.names } : {}),
+					},
+				]);
+			};
+			const setState = (id: string, state: "open" | "in_progress" | "paused" | "done" | "cancelled") =>
+				ownerWrite([{ kind: "set_state", id, state }]);
+			const seed = (entry: BoardStoredEntry) =>
+				ownerWrite([
+					{
+						kind: "upsert",
+						id: entry.clear.id,
+						rank: entry.clear.rank,
+						state: entry.clear.state,
+						title: entry.sealed.title,
+						...(entry.clear.session ? { session: entry.clear.session } : {}),
+						...(entry.clear.parent ? { parent: entry.clear.parent } : {}),
+						...(entry.sealed.names ? { names: entry.sealed.names } : {}),
+					},
+				]);
+			const seedEntry = (id: string, title: string, sessionId?: string, attachment?: BoardAttachment) => {
+				const sealedTitle = seal(title, "board.title");
+				seed({
+					clear: {
+						id,
+						state: "open",
+						rank: "m",
+						version: 1,
+						...(sessionId ? { session: { domainId: "owner-1", gatewayId: "test-host", sessionId } } : {}),
+					},
+					sealed: {
+						title: sealedTitle,
+						...(attachment
+							? { names: { [attachment.blobId]: seal(attachment.filename, "board.name") } }
+							: {}),
+					},
+				});
+				if (attachment)
+					ownerWrite([
+						{
+							kind: "set_attachments",
+							id,
+							attachments: [
+								{
+									blobId: attachment.blobId,
+									size: attachment.size,
+									mime: attachment.mime,
+									blobGateway: attachment.blobGateway,
+								},
+							],
+						},
+					]);
+			};
+			const ctx = makeCtx({ boardClient, ownerId: () => "owner-1", carryOver: createRoutesCarryOver() });
+			return {
+				ctx,
+				board,
+				ownerWrite,
+				setTitle,
+				setState,
+				seed,
+				seedEntry,
+				dropReply: () => (dropNextReply = true),
+				calls,
+			};
 		}
 
 		async function call(taskBoard: ReturnType<typeof createRoutes>["taskBoard"], body: Record<string, unknown>) {
-			const res = taskBoard(new Request("http://localhost/task-board", { method: "POST" }), body);
+			const res = await taskBoard(new Request("http://localhost/task-board", { method: "POST" }), body);
 			return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 		}
 
@@ -50,9 +238,29 @@ describe("routes", () => {
 			expect(list.body.entries).toHaveLength(1);
 		});
 
+		it("retries a lost Router reply without reverting a newer edit", async () => {
+			const { ctx, dropReply, setTitle } = makeBoardCtx();
+			const { taskBoard } = createRoutes(ctx);
+			const created = await call(taskBoard, {
+				from: "recipe-app",
+				action: "create",
+				operationId: "create-op",
+				title: "Initial",
+				assignTo: "self",
+			});
+			const id = created.body.id as string;
+			const update = { from: "recipe-app", action: "update", operationId: "update-op", id, title: "Old edit" };
+			dropReply();
+			await expect(call(taskBoard, update)).rejects.toThrow("dropped reply");
+			setTitle(id, "New edit");
+			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
+			const listed = await call(taskBoard, { from: "recipe-app", action: "list", scope: "session" });
+			expect((listed.body.entries as Array<{ title: string }>)[0]?.title).toBe("New edit");
+		});
+
 		it("a rebuilt route table still replays a settled mutation instead of re-applying it", async () => {
 			// Rebuilds preserve the caller's reply record.
-			const { ctx, board } = makeBoardCtx();
+			const { ctx, setTitle, calls } = makeBoardCtx();
 			const created = await call(createRoutes(ctx).taskBoard, {
 				from: "recipe-app",
 				action: "create",
@@ -69,9 +277,11 @@ describe("routes", () => {
 				title: "Renamed once",
 			};
 			await call(createRoutes(ctx).taskBoard, rename);
+			const writes = calls.filter((action) => action === "board_op").length;
 			// Replay must not overwrite a newer owner edit.
-			board.setTitle("owner-1", id, "Owner's later edit", OWNER_ACTOR);
+			setTitle(id, "Owner's later edit");
 			await call(createRoutes(ctx).taskBoard, rename);
+			expect(calls.filter((action) => action === "board_op").length).toBe(writes);
 
 			const list = await call(createRoutes(ctx).taskBoard, { from: "recipe-app", action: "list", scope: "all" });
 			const entry = (list.body.entries as Array<Record<string, unknown>>).find((e) => e.id === id);
@@ -112,7 +322,7 @@ describe("routes", () => {
 
 		it("the agent's list carries attachment names and never the ids that fetch them", async () => {
 			// Strip blob ids at the route boundary. They are bearer tokens.
-			const { ctx, board } = makeBoardCtx();
+			const { ctx, board, seedEntry } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
 				from: "recipe-app",
@@ -120,12 +330,13 @@ describe("routes", () => {
 			});
 			const id = created.body.id as string;
 			const blobId = `sha256-${"a".repeat(64)}`;
-			board.setAttachments(
-				"owner-1",
-				id,
-				[{ blobId, blobGateway: "gw-1", filename: "shot.png", mime: "image/png", size: 3 }],
-				OWNER_ACTOR,
-			);
+			seedEntry(id, "With a picture", board.find((entry) => entry.clear.id === id)?.clear.session?.sessionId, {
+				blobId,
+				blobGateway: "gw-1",
+				filename: "shot.png",
+				mime: "image/png",
+				size: 3,
+			});
 
 			const listed = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("list") });
 			const entry = (listed.body.entries as Array<Record<string, unknown>>).find((e) => e.id === id);
@@ -134,6 +345,15 @@ describe("routes", () => {
 
 			const fetched = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("attachments", { id }) });
 			expect(fetched.body.attachments).toMatchObject([{ blobId, blobGateway: "gw-1" }]);
+
+			await call(taskBoard, { from: "recipe-app", ...boardRequestBody("update", { id, title: "Renamed" }) });
+			const renamed = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("list") });
+			expect(
+				(renamed.body.entries as Array<Record<string, unknown>>).find((entry) => entry.id === id),
+			).toMatchObject({
+				title: "Renamed",
+				attachments: [{ filename: "shot.png" }],
+			});
 		});
 
 		it("a retried backlog create replays instead of refusing the caller its own entry", async () => {
@@ -151,7 +371,7 @@ describe("routes", () => {
 
 		it("a retried update replays its recorded reply instead of re-applying an absolute set", async () => {
 			// Absolute writes must not regress newer state.
-			const { ctx, board } = makeBoardCtx();
+			const { ctx, setState, board } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
 				from: "recipe-app",
@@ -161,18 +381,16 @@ describe("routes", () => {
 			const update = { from: "recipe-app", ...boardRequestBody("update", { id, state: "paused" }) };
 			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
 
-			board.setState("owner-1", id, "done", OWNER_ACTOR);
+			setState(id, "done");
 			expect((await call(taskBoard, update)).body).toMatchObject({ applied: true });
-			expect(board.entry("owner-1", id)?.state).toBe("done");
+			expect(board.find((entry) => entry.clear.id === id)?.clear.state).toBe("done");
 		});
 
 		it("an update naming no changed field still refuses an entry this session cannot see", async () => {
 			// Unknown and unauthorized ids share one response.
-			const { ctx, board } = makeBoardCtx();
+			const { ctx, seedEntry } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
-			board.upsert("owner-1", [{ id: "theirs", title: "t", state: "open", rank: "m", sessionId: "other" }], {
-				kind: "owner",
-			});
+			seedEntry("theirs", "t", "other");
 			for (const args of [{ id: "theirs" }, { id: "theirs", parent: null }]) {
 				const res = await call(taskBoard, { from: "recipe-app", ...boardRequestBody("update", args) });
 				expect(res.body).toEqual({ applied: false, refused: "held" });
@@ -180,15 +398,13 @@ describe("routes", () => {
 		});
 
 		it("a session cannot reparent onto another session's entry through the route", async () => {
-			const { ctx, board } = makeBoardCtx();
+			const { ctx, seedEntry } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const mine = await call(taskBoard, {
 				from: "recipe-app",
 				...boardRequestBody("create", { title: "mine", assignTo: "self" }),
 			});
-			board.upsert("owner-1", [{ id: "theirs", title: "t", state: "open", rank: "m", sessionId: "other" }], {
-				kind: "owner",
-			});
+			seedEntry("theirs", "t", "other");
 			const moved = await call(taskBoard, {
 				from: "recipe-app",
 				...boardRequestBody("update", { id: mine.body.id as string, parent: "theirs" }),
@@ -221,15 +437,18 @@ describe("routes", () => {
 
 		it("a durable replay survives a restart, so a retried update cannot regress a newer edit", async () => {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-replay-"));
-			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
-			const replayDurable = new DurableStore(dir, "board-idempotency");
+			const replayDurable = DurableOpStore.withValidator(
+				new DurableStore(dir, "board-idempotency"),
+				isBoardReply,
+			);
+			const { ctx } = makeBoardCtx();
 			const boot = () =>
 				createRoutes(
 					makeCtx({
-						boardStore: board,
+						boardClient: ctx.boardClient,
 						ownerId: () => "owner-1",
 						carryOver: createRoutesCarryOver(),
-						boardReplays: DurableOpStore.withValidator(replayDurable, isBoardReply),
+						boardReplays: replayDurable,
 					}),
 				);
 
@@ -402,16 +621,29 @@ describe("routes", () => {
 			);
 		});
 
+		it("503s when the Router answers an error", async () => {
+			const ctx = makeCtx({
+				boardClient: {
+					read: async () => ({ kind: "unavailable", error: "router offline" }),
+					mutate: async () => ({ kind: "unavailable", error: "router offline" }),
+				} as unknown as RoutesDeps["boardClient"],
+				ownerId: () => "owner-1",
+			});
+			const result = await call(createRoutes(ctx).taskBoard, { from: "recipe-app", action: "list" });
+			expect(result.status).toBe(503);
+			expect(result.body).toEqual({ error: "router offline" });
+			expect(result.body.refused).toBeUndefined();
+		});
+
 		/** Board context with one bound session. */
 		function makeGuardedCtx(): { ctx: RoutesDeps; token: string; boundTeam: string } {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-guard-"));
-			const board = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined);
+			const { ctx: boardCtx } = makeBoardCtx();
 			const sessionStore = new SessionStore();
 			const record = sessionStore.mint({ spawn: "recipe-app" });
 			const token = sessionStore.ensureBindToken(record);
 			sessionStore.activateBinding(record);
 			const ctx = makeCtx({
-				boardStore: board,
+				boardClient: boardCtx.boardClient,
 				sessionStore,
 				ownerId: () => "owner-1",
 				carryOver: createRoutesCarryOver(),
@@ -428,8 +660,10 @@ describe("routes", () => {
 				method: "POST",
 				headers: token ? { "x-session-token": token } : {},
 			});
-			const res = taskBoard(req, body);
-			return res.json().then((b) => ({ status: res.status, body: b as Record<string, unknown> }));
+			return taskBoard(req, body).then(async (res) => ({
+				status: res.status,
+				body: (await res.json()) as Record<string, unknown>,
+			}));
 		}
 
 		it("refuses a caller that proves nothing, whatever name it invents", async () => {

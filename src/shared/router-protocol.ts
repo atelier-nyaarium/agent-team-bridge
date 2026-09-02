@@ -65,6 +65,17 @@ export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 		range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
 		incarnation: z.number().int().positive(),
 	}),
+	// Lost sequence requires a baseline.
+	z.object({
+		type: z.literal("presence_resync"),
+		incarnation: z.number().int().positive(),
+	}),
+	// Link removal drops peer state.
+	z.object({
+		type: z.literal("unlink"),
+		domainId: z.string().min(1),
+		incarnation: z.number().int().positive(),
+	}),
 ]);
 
 /** The one frame the gateway SENDS (besides console_relay_reply, which travels
@@ -111,6 +122,26 @@ export const BlobFetchParamsSchema = z.object({
 	blobId: z.string(),
 	range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
 	origin: z.object({ domainId: z.string().min(1), gatewayId: z.string().min(1) }).optional(),
+	incarnation: z.number().int().positive(),
+});
+
+/** Uploads retain the origin copy. */
+export const BlobBeginParamsSchema = z.object({
+	blobId: z.string().min(1),
+	size: z.number().int().nonnegative().max(MAX_BLOB_BYTES),
+	store: z.enum(["cache", "held"]),
+	/** Held blobs require references. */
+	ref: z.object({ kind: z.enum(["entry", "row", "scheduled"]), id: z.string().min(1).max(256) }).optional(),
+	incarnation: z.number().int().positive(),
+});
+
+export const BlobChunkParamsSchema = z.object({
+	blobId: z.string().min(1),
+	store: z.enum(["cache", "held"]),
+	lease: z.object({ id: z.string().min(1), generation: z.number().int().positive() }),
+	offset: z.number().int().nonnegative(),
+	bytes: z.string().max(BLOB_CHUNK_BYTES * 2),
+	final: z.boolean(),
 	incarnation: z.number().int().positive(),
 });
 

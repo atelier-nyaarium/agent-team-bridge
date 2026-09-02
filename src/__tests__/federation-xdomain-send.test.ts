@@ -17,11 +17,9 @@ import {
 	memShareState,
 	peersOf,
 	registryWith,
-	scratch,
 	soloAllowlist,
 	storeWith,
 	type TeamInfoLite,
-	unknownKindTeam,
 	xdPeer,
 } from "./helpers/federation.js";
 
@@ -168,47 +166,48 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		expect(ctx.store.has("conv.c1.bob.bob-gw.lib.dev")).toBe(false);
 	});
 
-	it("DISCOVERY merges a linked peer's shared sessions (the peer's gate filters them)", async () => {
-		// alice discovers: her local team + bob's shared sessions. The Router's roster (same-Domain)
-		// is empty here; the cross-Domain leg queries bob, whose handler returns only shares.
-		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
-		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
-		const { routes: bobRoutes } = gateRoutes([lib("bob-gw"), scratch("bob-gw"), unknownKindTeam("bob-gw")]);
-		const bobShare = memShareState([["bob.bob-gw.lib.dev", "alice"]]); // only lib shared to alice
-		const bobHandler = createGatewayRelayHandler({
-			routes: bobRoutes as never,
-			tryWakeTeam: () => Promise.resolve({ ok: false }),
-			localGatewayId: "bob-gw",
-			localDomainId: "bob",
-			shareState: bobShare,
-		});
-
+	it("DISCOVERY: folds linked shared sessions from the Router projection", async () => {
 		const router = fakeRouter({
-			onCall: (action, params) => {
-				if (action === "list_gateways") return { gateways: [] }; // no same-Domain peers
-				if (action !== "gateway_relay") return { ok: true };
-				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
-				const opened = bobSealer.openWithSource("alice-gw", sealed, params.srcDomain as string);
-				const op = FederatedOpSchema.parse(opened.body);
-				return (async () => {
-					const result = await bobHandler.handleOp(op, "alice-gw", opened.srcDomainId);
-					return { ok: true, result: bobSealer.seal({ domainId: "alice", gatewayId: "alice-gw" }, result) };
-				})();
-			},
+			onCall: (action) =>
+				action === "presence_read"
+					? {
+							plane: { epoch: 1, version: 1 },
+							rows: [
+								{
+									team: "app.dev",
+									gatewayId: "alice-gw",
+									domainId: "alice",
+									status: "online",
+									kind: "devcontainer",
+									queue_depth: 0,
+								},
+							],
+							linked: [
+								{
+									domainId: "bob",
+									version: { epoch: 1, version: 1 },
+									lastRefreshedAt: 1,
+									sessions: [
+										{
+											team: "lib.dev",
+											gatewayId: "bob-gw",
+											status: "available",
+											kind: "devcontainer",
+											queueDepth: 0,
+										},
+									],
+								},
+							],
+							roster: [],
+							coverage: { rosterKnown: true, asked: 0, answered: 0 },
+							spawnPoints: [],
+						}
+					: { ok: true },
 		});
+		router.client.callInboxTool = router.client.callTool;
 
-		const alicePeers = peersOf(xdPeer(bobOwner, "bob", "bob-gw", bobGw, aliceOwner));
-		const aliceSealer = createSealer(
-			aliceGw,
-			soloAllowlist(aliceOwner, "alice-gw", aliceGw),
-			"alice-gw",
-			alicePeers,
-			"alice",
-		);
 		const ctx = makeCtx("alice-gw", {
 			routerClient: router.client,
-			sealer: aliceSealer,
-			crossDomainPeers: alicePeers,
 			registry: registryWith({ "app.dev": channelWs([]) }),
 			sessionStore: storeWith("app.dev"),
 		});
@@ -216,7 +215,6 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const { discover } = createRoutes(ctx);
 
 		const teams = (await (await discover()).json()) as TeamInfoLite[];
-		// alice's own app (local) + bob's shared lib; bob's scratch + the unknown kind are NOT shared.
 		expect(teams.map((t) => t.team).sort()).toEqual(["app.dev", "lib.dev"]);
 		const libEntry = teams.find((t) => t.team === "lib.dev");
 		expect(libEntry?.gatewayId).toBe("bob-gw");

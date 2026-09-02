@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { resolveAdmittedConsole, type SignedAdmission, type SignedRevocation } from "../../shared/admission.js";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
-import { type ContentAad, openContent, unwrapContentKey } from "../../shared/content-envelope.js";
+import { type ContentAad, openContent, sealContent, unwrapContentKey } from "../../shared/content-envelope.js";
 import {
 	type ContentEnvelope,
 	ContentEnvelopeSchema,
@@ -159,6 +159,17 @@ export class ContentKeyStore {
 		if (result.newEpochs.length === 0) return "already_present";
 		this.commit(result.map);
 		return "installed";
+	}
+
+	/** Seals under the newest held epoch. */
+	seal(
+		plaintext: Buffer,
+		aad: Omit<ContentAad, "epoch">,
+	): { kind: "ok"; envelope: ContentEnvelope } | { kind: "no_key" } {
+		const epoch = this.epochs().at(-1);
+		const key = epoch === undefined ? null : this.keyFor(epoch);
+		if (epoch === undefined || !key) return { kind: "no_key" };
+		return { kind: "ok", envelope: sealContent(plaintext, key, { ...aad, epoch }) };
 	}
 
 	open(

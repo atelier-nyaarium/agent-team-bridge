@@ -6,14 +6,20 @@ export interface BlobLease {
 	id: string;
 	generation: number;
 	expiresAt: number;
+	expectedSize?: number;
 }
 
 export interface LeaseRecord extends BlobLease {
 	lastRenewedAt: number;
 }
 
-export function newLease(generation: number, now: number, expiresAt = now + BLOB_LEASE_MS): LeaseRecord {
-	return { id: crypto.randomUUID(), generation, expiresAt, lastRenewedAt: now };
+export function newLease(
+	generation: number,
+	now: number,
+	expiresAt = now + BLOB_LEASE_MS,
+	expectedSize?: number,
+): LeaseRecord {
+	return { id: crypto.randomUUID(), generation, expiresAt, lastRenewedAt: now, expectedSize };
 }
 
 export function leaseMatches(

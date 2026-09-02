@@ -1,5 +1,6 @@
 import type { SealedEnvelope } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
+import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
 import { type InboxAddress, type InboxRow, InboxRowSchema, parseInboxAddress } from "../../shared/schemasInbox.js";
 import type { ChannelDeliveryCoordinator } from "../channelDelivery.js";
@@ -23,6 +24,14 @@ export interface InboxDeliveryPumpDeps {
 	tryWakeTeam?: (team: string) => Promise<{ ok: boolean; error?: string; errorKind?: string }>;
 	isSessionLive?: (sessionId: string) => boolean;
 	consolePush?: (body: unknown) => void;
+	boardObservation?: (
+		sessionKey: string,
+		row: {
+			identity: string;
+			pre: BoardStoredEntry | null;
+			post: BoardStoredEntry | null;
+		},
+	) => void;
 	/** Runs an op using the seal's verified source Domain. */
 	peerHandler?: (op: FederatedOp, srcGateway: string, srcDomainId: string | null) => Promise<unknown>;
 }
@@ -128,6 +137,13 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			console.log(`[inbox] result for ${parsed.sessionId}: ${JSON.stringify(body)}`);
 			return ack(address, row.seq, deliveryEpoch, "delivered");
 		}
+		if (row.envelope.kind === "board_observation") {
+			const observation = BoardObservationRowSchema.safeParse(body);
+			if (!observation.success) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+			if (!deps.boardObservation) return ack(address, row.seq, deliveryEpoch, "waking", "no_consumer", false);
+			deps.boardObservation(parsed.sessionId, observation.data);
+			return ack(address, row.seq, deliveryEpoch, "delivered");
+		}
 		const payload = (body ?? {}) as DeliveryPayload;
 		if (!payload.to || !payload.from) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
 		if (!deps.coordinator) return ack(address, row.seq, deliveryEpoch, "failed", "delivery_unavailable");
@@ -179,7 +195,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		const match = /^(.+):(\d+):(\d+)$/.exec(deliveryId);
 		if (!match) return false;
 		const address = parseInboxAddress(match[1]);
-		if (!address || address.kind !== "session" || address.sessionId !== team) return false;
+		if (address?.kind !== "session" || address.sessionId !== team) return false;
 		const seq = Number(match[2]);
 		const deliveryEpoch = Number(match[3]);
 		if (!deps.claims.get(match[1], seq, deliveryEpoch)) return false;

@@ -11,7 +11,12 @@ import type { CrossDomainPresenceSource } from "./federation/crossDomainPresence
 import type { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import type { AdmitGatewayPayload } from "./federation/enrollQr.js";
 import type { Sealer } from "./federation/sealer.js";
+import type { createBlobUploader } from "./router/blobUploader.js";
+import type { createBoardClient } from "./router/boardClient.js";
 import type { RouterClient } from "./router/routerClient.js";
+
+type BoardClient = ReturnType<typeof createBoardClient>;
+type BlobUploader = ReturnType<typeof createBlobUploader>;
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -44,6 +49,8 @@ export interface FederationSlice {
 	consoleSealer: ConsoleSealer;
 	routerClient: RouterClient;
 	contentKeyStore: ContentKeyStore;
+	boardClient: BoardClient;
+	blobUploader: BlobUploader;
 	replayPersist: () => void;
 	domainMeta: DomainMeta | null;
 	handlers: RouterHandlers | null;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { blobIdFor } from "../shared/blob-store.js";
+import { BLOB_CHUNK_BYTES, BlobChunkParamsSchema } from "../shared/router-protocol.js";
 
 describe("RouterBlobCache", () => {
 	const roots: string[] = [];
@@ -85,7 +86,7 @@ describe("RouterBlobCache", () => {
 		const next = cache.begin("domain", newId, origin(), newBytes.length);
 		if (next.kind !== "lease") throw new Error("expected lease");
 
-		expect(cache.stat("domain", oldId).kind).toBe("miss");
+		expect(cache.stat("domain", oldId)).toEqual({ kind: "miss", origin: origin() });
 		expect(cache.stat("domain", liveId).kind).toBe("miss");
 		expect(cache.commitChunk("domain", liveId, live.lease, 3, Buffer.from("!"), true)).toEqual({
 			have: 4,
@@ -114,6 +115,33 @@ describe("RouterBlobCache", () => {
 		expect(cache.commitChunk("domain", blobId, lease.lease, 500_000_000, Buffer.from("x"), false)).toEqual({
 			kind: "too_large",
 		});
+	});
+
+	it("refuses a chunk that crosses the declared size", () => {
+		const cache = make();
+		const blobId = blobIdFor(Buffer.from("declared"));
+		const lease = cache.begin("domain", blobId, origin(), 4);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		expect(cache.commitChunk("domain", blobId, lease.lease, 0, Buffer.alloc(5), true)).toEqual({
+			kind: "too_large",
+		});
+	});
+
+	it("bounds encoded chunks at twice the raw limit", () => {
+		const base = {
+			blobId: "blob",
+			store: "cache",
+			lease: { id: "lease", generation: 1 },
+			offset: 0,
+			final: false,
+			incarnation: 1,
+		};
+		expect(BlobChunkParamsSchema.safeParse({ ...base, bytes: "A".repeat(BLOB_CHUNK_BYTES * 2) }).success).toBe(
+			true,
+		);
+		expect(BlobChunkParamsSchema.safeParse({ ...base, bytes: "A".repeat(BLOB_CHUNK_BYTES * 2 + 1) }).success).toBe(
+			false,
+		);
 	});
 
 	it("keeps a complete file whose lease was persisted before a crash", () => {

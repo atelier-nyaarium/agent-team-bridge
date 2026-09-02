@@ -120,6 +120,7 @@ export class RouterServer {
 			reach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
 			inbox: this.inbox,
 			blobCache: this.blobCache,
+			referenceHeld: this.referenceHeld,
 		});
 		this.ownerServices = createOwnerServices({
 			registry: this.ownerRegistry,
@@ -188,6 +189,7 @@ export class RouterServer {
 
 	public async start(): Promise<void> {
 		this.bridge.attach();
+		this.ownerServices.reconcileReferences();
 		this.ownerServices.rearm();
 		const transport = this.bridge.transportAdapter;
 		if (!transport) throw new Error("gateway transport unavailable");

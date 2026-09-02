@@ -32,6 +32,25 @@ describe("ReferenceHeldStore", () => {
 		expect(store.has("domain", blobId)).toBe(false);
 	});
 
+	it("does not answer held for a reference whose bytes never finished arriving", () => {
+		// A begin takes the reference first, so refs alone would let a board entry name a dead file.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const store = new ReferenceHeldStore({ dataDir: root });
+		const bytes = Buffer.from("half a file arrives");
+		const blobId = blobIdFor(bytes);
+		store.hold("domain", blobId, { kind: "entry", id: "entry-1" });
+
+		expect(store.has("domain", blobId)).toBe(false);
+		const lease = store.begin("domain", blobId);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		store.commitChunk("domain", blobId, lease.lease, 0, bytes.subarray(0, 4), false);
+		expect(store.has("domain", blobId)).toBe(false);
+
+		store.commitChunk("domain", blobId, lease.lease, 4, bytes.subarray(4), true);
+		expect(store.has("domain", blobId)).toBe(true);
+	});
+
 	it("reconcile removes dead references and orphaned blobs", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
@@ -48,6 +67,21 @@ describe("ReferenceHeldStore", () => {
 		store.reconcile("domain", (ref) => ref.id === "live");
 		expect(store.refs("domain", blobId)).toEqual([live]);
 		store.reconcile("domain", () => false);
+		expect(store.has("domain", blobId)).toBe(false);
+	});
+
+	it("reconcile removes unfinished uploads with dead references", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const store = new ReferenceHeldStore({ dataDir: root });
+		const blobId = blobIdFor(Buffer.from("unfinished"));
+		store.hold("domain", blobId, { kind: "entry", id: "gone" });
+		const lease = store.begin("domain", blobId);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		store.commitChunk("domain", blobId, lease.lease, 0, Buffer.from("part"), false);
+
+		store.reconcile("domain", () => false);
+		expect(store.refs("domain", blobId)).toEqual([]);
 		expect(store.has("domain", blobId)).toBe(false);
 	});
 });

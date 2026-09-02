@@ -7,6 +7,11 @@ const entryId = z
 	.min(1)
 	.max(64)
 	.regex(/^[^/\r\n]+$/);
+const opId = z
+	.string()
+	.min(1)
+	.max(128)
+	.regex(/^[^/\r\n]+$/);
 const session = z
 	.object({ domainId: z.string(), gatewayId: z.string(), sessionId: z.string() })
 	.meta({ id: "BoardSession" });
@@ -63,12 +68,15 @@ export const BoardOpSchema = z
 		z.object({ kind: z.literal("set_parent"), id: entryId, parent: entryId.optional(), rank: z.string() }),
 		z.object({ kind: z.literal("set_rank"), id: entryId, rank: z.string() }),
 		z.object({ kind: z.literal("set_attachments"), id: entryId, attachments: z.array(attachment) }),
+		// Absent session means backlog.
+		z.object({ kind: z.literal("set_session"), id: entryId, session: session.optional() }),
 		z.object({ kind: z.literal("trash"), id: entryId }),
 		z.object({ kind: z.literal("restore"), id: entryId }),
 	])
 	.meta({ id: "BoardOp" });
+// The receiver identifies the writer from its channel.
 export const BoardWriteSchema = z
-	.object({ ops: z.array(BoardOpSchema), expectedRevision: z.number().int().nonnegative(), actor: BoardActorSchema })
+	.object({ ops: z.array(BoardOpSchema), expectedRevision: z.number().int().nonnegative() })
 	.meta({ id: "BoardWrite" });
 export const BoardWriteResultSchema = z
 	.object({
@@ -90,7 +98,12 @@ export const BoardObservationRowSchema = z
 	.object({ identity: z.string(), pre: BoardStoredEntrySchema.nullable(), post: BoardStoredEntrySchema.nullable() })
 	.meta({ id: "BoardObservationRow" });
 export const BoardOpParamsSchema = z
-	.object({ incarnation: z.number().int().nonnegative(), sessionId: z.string(), write: BoardWriteSchema })
+	.object({
+		incarnation: z.number().int().nonnegative(),
+		sessionId: z.string(),
+		opId: opId.optional(),
+		write: BoardWriteSchema,
+	})
 	.meta({ id: "BoardOpParams" });
 
 export type BoardEntryClear = z.infer<typeof BoardEntryClearSchema>;

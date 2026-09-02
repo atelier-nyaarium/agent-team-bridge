@@ -275,124 +275,114 @@ describe("federation routing (E2E sealed)", () => {
 		}
 	});
 
-	it("DISCOVERY: fans out a sealed list_teams over the router roster and merges", async () => {
+	it("DISCOVERY: folds Router rows and linked sessions into one team list", async () => {
 		const router = fakeRouter({
-			destSealer: sealerB,
-			srcGateway: "hosta",
-			handle: () => ({
-				teams: [
-					{
-						team: "api.dev",
-						gatewayId: "hostb",
-						displayName: "Carol's Lab",
-						status: "online",
-						mode: "channel",
-						kind: "devcontainer",
-						queue_depth: 0,
-					},
-				],
-			}),
 			onCall: (action) =>
-				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
+				action === "presence_read"
+					? {
+							plane: { epoch: 1, version: 1 },
+							rows: [
+								{
+									team: "api.dev",
+									gatewayId: "hostb",
+									status: "online",
+									kind: "devcontainer",
+									queue_depth: 0,
+								},
+							],
+							linked: [
+								{
+									domainId: "bob",
+									version: { epoch: 1, version: 1 },
+									lastRefreshedAt: 1,
+									sessions: [
+										{
+											team: "lib.dev",
+											gatewayId: "bob-gw",
+											status: "available",
+											kind: "loose",
+											queueDepth: 1,
+										},
+									],
+								},
+							],
+							roster: [],
+							coverage: { rosterKnown: true, asked: 1, answered: 1 },
+							spawnPoints: [],
+						}
+					: { ok: true },
 		});
+		router.client.callInboxTool = router.client.callTool;
 		const ctx = makeCtx("hosta", {
 			routerClient: router.client,
-			sealer: sealerA,
-			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
-			sessionStore: storeWith("recipe-app.dev"),
-			displayName: () => "My Lab",
 		});
-		const { discover } = createRoutes(ctx);
-
-		const teams = (await (await discover()).json()) as {
-			team: string;
-			gatewayId?: string;
-			displayName?: string;
-		}[];
-		expect(teams.find((t) => t.team === "recipe-app.dev")?.gatewayId).toBe("hosta");
-		// The local Gateway stamps its own display name on its sessions.
-		expect(teams.find((t) => t.team === "recipe-app.dev")?.displayName).toBe("My Lab");
-		// A peer's display name rides through the merge unchanged (the peer Gateway is the
-		// authoritative source of its own self-set display name).
-		expect(teams.find((t) => t.team === "api.dev")?.gatewayId).toBe("hostb");
-		expect(teams.find((t) => t.team === "api.dev")?.displayName).toBe("Carol's Lab");
+		const { teams } = await createRoutes(ctx).discoverFull();
+		expect(teams.map((team) => team.team)).toEqual(["api.dev", "lib.dev"]);
+		expect(teams.find((team) => team.team === "lib.dev")).toMatchObject({
+			gatewayId: "bob-gw",
+			domainId: "bob",
+			queue_depth: 1,
+		});
 	});
 
-	it("DISCOVERY: a malformed team row in a peer's reply discards that WHOLE gateway's reply, never landing unvalidated data", async () => {
+	it("DISCOVERY: rejects a malformed projection and falls back to local teams", async () => {
 		const router = fakeRouter({
-			destSealer: sealerB,
-			srcGateway: "hosta",
-			handle: () => ({
-				teams: [
-					{
-						team: "api.dev",
-						gatewayId: "hostb",
-						status: "online",
-						mode: "channel",
-						kind: "devcontainer",
-						queue_depth: 0,
-					},
-					// Missing `kind` - a version-skewed or buggy peer, not necessarily malicious. The
-					// whole reply fails validation (matching the push path's own whole-array schema),
-					// so even the otherwise-valid "api.dev" row above must not land either.
-					{ team: "broken.dev", gatewayId: "hostb", status: "online", mode: "channel", queue_depth: 0 },
-				],
-			}),
 			onCall: (action) =>
-				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
+				action === "presence_read"
+					? {
+							plane: { epoch: 1, version: 1 },
+							rows: [{ team: "api.dev", gatewayId: "hostb", status: "online", queue_depth: 0 }],
+							linked: [],
+							roster: [],
+							coverage: { rosterKnown: true, asked: 1, answered: 1 },
+							spawnPoints: [],
+						}
+					: { ok: true },
 		});
+		router.client.callInboxTool = router.client.callTool;
 		const ctx = makeCtx("hosta", {
 			routerClient: router.client,
-			sealer: sealerA,
-			registry: registryWith({}),
-			sessionStore: storeWith(),
+			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
+			sessionStore: storeWith("recipe-app.dev"),
 		});
-		const { discover } = createRoutes(ctx);
-		const teams = (await (await discover()).json()) as { team: string }[];
+		const { teams, coverage } = await createRoutes(ctx).discoverFull();
 		expect(teams.find((t) => t.team === "api.dev")).toBeUndefined();
-		expect(teams.find((t) => t.team === "broken.dev")).toBeUndefined();
+		expect(teams.find((t) => t.team === "recipe-app.dev")).toBeDefined();
+		expect(coverage).toEqual({ rosterKnown: false, asked: 0, answered: 0 });
 	});
 
-	it("DISCOVERY: coverage names an unreachable peer instead of folding it into an empty answer", async () => {
+	it("DISCOVERY: passes Router coverage through unchanged", async () => {
 		const router = fakeRouter({
 			onCall: (action) => {
-				if (action === "list_gateways") return { gateways: [{ gatewayId: "hostb", online: true }] };
-				// The relay itself fails, which is what a dead or refused peer looks like.
-				return { ok: false, error: 'gateway "hostb" is offline' };
+				if (action !== "presence_read") return { ok: true };
+				return {
+					plane: { epoch: 1, version: 1 },
+					rows: [],
+					linked: [],
+					roster: [],
+					coverage: { rosterKnown: true, asked: 1, answered: 0, unreachable: ["hostb"] },
+					spawnPoints: [],
+				};
 			},
 		});
+		router.client.callInboxTool = router.client.callTool;
+		const { coverage } = await createRoutes(makeCtx("hosta", { routerClient: router.client })).discoverFull();
+		expect(coverage).toEqual({ rosterKnown: true, asked: 1, answered: 0, unreachable: ["hostb"] });
+	});
+
+	it("DISCOVERY: an unreadable projection keeps local teams and unknown coverage", async () => {
+		const router = fakeRouter({
+			onCall: () => ({ ok: false, error: "offline" }),
+		});
+		router.client.callInboxTool = router.client.callTool;
 		const ctx = makeCtx("hosta", {
 			routerClient: router.client,
-			sealer: sealerA,
 			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
 			sessionStore: storeWith("recipe-app.dev"),
 		});
-		const { discoverFull } = createRoutes(ctx);
-		const { teams, coverage } = await discoverFull();
-		// The local rows still land; the peer's absence is DECLARED rather than silent.
-		expect(teams.some((t) => t.team === "recipe-app.dev")).toBe(true);
-		expect(coverage).toMatchObject({ rosterKnown: true, asked: 1, answered: 0, unreachable: ["hostb"] });
-	});
-
-	it("DISCOVERY: an unreadable roster is rosterKnown:false, never an empty mesh", async () => {
-		const router = fakeRouter({
-			onCall: (action) => {
-				if (action === "list_gateways") throw new Error("boom");
-				return { ok: true };
-			},
-		});
-		// A refused registration must read the same way: the roster is unknown, not empty.
-		router.client.callTool = async () => ({ callId: "x", error: "not registered" });
-		const ctx = makeCtx("hosta", {
-			routerClient: router.client,
-			sealer: sealerA,
-			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
-			sessionStore: storeWith("recipe-app.dev"),
-		});
-		const { discoverFull } = createRoutes(ctx);
-		const { teams, coverage } = await discoverFull();
-		expect(teams.some((t) => t.team === "recipe-app.dev")).toBe(true);
-		expect(coverage).toMatchObject({ rosterKnown: false, asked: 0, answered: 0 });
+		const { teams, coverage } = await createRoutes(ctx).discoverFull();
+		expect(teams.some((team) => team.team === "recipe-app.dev")).toBe(true);
+		expect(coverage).toEqual({ rosterKnown: false, asked: 0, answered: 0 });
 	});
 });
 

@@ -261,6 +261,11 @@ export function createPresenceService(deps: {
 		});
 		hooks.onGatewayDropped(onGatewayDropped);
 		hooks.onSessionForgotten(forgetSession);
+		// Registration supplies the gateway's Domain.
+		hooks.gatewayFrame("presence_read", (reg) => {
+			if (!deps.projection) return { ok: false, error: "projection unavailable" };
+			return ownerProjection(reg.domainId, deps.projection);
+		});
 		hooks.ownerOp("presence_read", ((op) => {
 			if (!deps.projection) return { outcome: "refused", reason: "projection unavailable" };
 			return ownerProjection(op.domainId, deps.projection);

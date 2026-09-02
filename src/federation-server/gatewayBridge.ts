@@ -1,5 +1,8 @@
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
+import { decodeB64 } from "../shared/crypto.js";
 import {
+	BlobBeginParamsSchema,
+	BlobChunkParamsSchema,
 	BlobFetchParamsSchema,
 	BlobFetchReplyParamsSchema,
 	type CrossDomainHandshakeReplyParams,
@@ -25,6 +28,7 @@ import {
 	InboxRowInputSchema,
 	parseInboxAddress,
 } from "../shared/schemasInbox.js";
+import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
@@ -46,7 +50,7 @@ export interface GatewayBridgeParams {
 	reach?: () => { publicHost?: string | null; publicPort?: number | null; lanAddresses?: string[] };
 	inbox?: InboxService;
 	blobCache?: RouterBlobCache;
-	referenceHeld?: unknown;
+	referenceHeld?: ReferenceHeldStore;
 }
 
 /** The authenticated identity behind a gateway frame; the payload never names these. */
@@ -70,6 +74,8 @@ const BUILT_IN_FRAMES = new Set([
 	"session_forget",
 	"blob_fetch",
 	"blob_fetch_reply",
+	"blob_begin",
+	"blob_chunk",
 	"gateway_relay",
 	"gateway_relay_reply",
 	"cross_domain_handshake",
@@ -93,6 +99,8 @@ export class GatewayBridge implements ToolProvider {
 		{ domainId: string; gatewayId: string; signPub: string | null; incarnation: number | null }
 	>();
 	private readonly inbox: InboxService | null;
+	private readonly blobCache: RouterBlobCache | null;
+	private readonly referenceHeld: ReferenceHeldStore | null;
 	private readonly blobFetch: BlobFetchRoute | null;
 	private pendingRelays = new Map<
 		string,
@@ -133,6 +141,7 @@ export class GatewayBridge implements ToolProvider {
 		reach,
 		inbox,
 		blobCache,
+		referenceHeld,
 	}: GatewayBridgeParams) {
 		this.port = port;
 		this.authToken = authToken;
@@ -142,6 +151,8 @@ export class GatewayBridge implements ToolProvider {
 		this.adminDomainIdGetter = adminDomainId;
 		this.reachGetter = reach;
 		this.inbox = inbox ?? null;
+		this.blobCache = blobCache ?? null;
+		this.referenceHeld = referenceHeld ?? null;
 		this.blobFetch = blobCache
 			? new BlobFetchRoute(blobCache, (domainId, gatewayId) => {
 					const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
@@ -375,6 +386,8 @@ export class GatewayBridge implements ToolProvider {
 				"session_forget",
 				"blob_fetch",
 				"blob_fetch_reply",
+				"blob_begin",
+				"blob_chunk",
 			].includes(name)
 		) {
 			const reg = this.connGateways.get(connId);
@@ -389,6 +402,7 @@ export class GatewayBridge implements ToolProvider {
 			if (name === "session_upsert") return this.handleSessionUpsert(connId, params);
 			if (name === "session_forget") return this.handleSessionForget(connId, params);
 			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
+			if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload();
 			return this.handleBlobFetchReply(connId, params);
 		}
 		const frameHandler = this.frameHandlers.get(name);
@@ -634,6 +648,19 @@ export class GatewayBridge implements ToolProvider {
 		if (origin && origin.domainId !== reg.domainId && !this.hasLinkEdge(reg.domainId, origin.domainId))
 			return { outcome: "unreachable" };
 		return this.blobFetch.fetch(reg.domainId, parsed.data);
+	}
+
+	/**
+	 * Uploads are CLOSED, both stores, and the closure is the security property.
+	 *
+	 * The Router's stores are specified sealed and sealing a blob is unsolved, so nothing may put
+	 * plaintext here. Left open, these would also be the only frames that let an admitted gateway
+	 * name its own quota: the cache admits against a size the caller declares and reserves nothing
+	 * until the bytes land, and the held store takes a reference from the payload with no record
+	 * behind it. Reopen them with the sealing design, the reservation, and a reference check.
+	 */
+	private handleBlobUpload(): unknown {
+		return { ok: false, error: "blob uploads are not enabled" };
 	}
 
 	private handleBlobFetchReply(connId: ConnectionId, params: Record<string, unknown>): unknown {

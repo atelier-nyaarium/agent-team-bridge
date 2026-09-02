@@ -1083,6 +1083,13 @@ sealed class BoardOp {
 	) : BoardOp()
 
 	@Serializable
+	@SerialName("set_session")
+	data class SetSession(
+		val id: String,
+		val session: BoardSession? = null,
+	) : BoardOp()
+
+	@Serializable
 	@SerialName("trash")
 	data class Trash(
 		val id: String,
@@ -1099,7 +1106,6 @@ sealed class BoardOp {
 data class BoardWrite(
 	val ops: List<BoardOp>,
 	val expectedRevision: Long,
-	val actor: BoardActor,
 )
 
 @Serializable
@@ -1301,8 +1307,16 @@ data class BoardEntry(
 	val parent: String? = null,
 	val rank: String,
 	val sessionId: String? = null,
+	val session: BoardSession? = null,
 	val trashedAt: Long? = null,
 	val attachments: List<BoardAttachment>? = null,
+)
+
+@Serializable
+data class BoardSession(
+	val domainId: String,
+	val gatewayId: String,
+	val sessionId: String,
 )
 
 @Serializable
@@ -1742,13 +1756,6 @@ data class BoardEntryClear(
 	val trashedAt: Long? = null,
 	val attachments: List<BoardStateAttachment>? = null,
 	val version: Long,
-)
-
-@Serializable
-data class BoardSession(
-	val domainId: String,
-	val gatewayId: String,
-	val sessionId: String,
 )
 
 @Serializable

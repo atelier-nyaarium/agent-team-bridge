@@ -21,6 +21,8 @@ interface CacheIndex {
 	entries: Record<string, CacheEntry>;
 }
 
+const MAX_RETAINED_ORIGINS = 10_000;
+
 export type CacheBegin = { kind: "lease"; lease: BlobLease } | { kind: "exists" } | { kind: "quota" };
 export type CacheCommit =
 	| { have: number; complete: boolean }
@@ -48,7 +50,7 @@ export class RouterBlobCache {
 			this.evict(domain, used + size - this.options.quotaBytesPerDomain);
 		if (this.used(domain) + size > this.options.quotaBytesPerDomain) return { kind: "quota" };
 		const generation = (entry?.lease?.generation ?? 0) + 1;
-		const lease = newLease(generation, this.now());
+		const lease = newLease(generation, this.now(), undefined, size);
 		domain.index.entries[blobId] = { origin, lastReadAt: entry?.lastReadAt ?? this.now(), lease };
 		this.persist(domainId, domain.index);
 		return { kind: "lease", lease };
@@ -81,6 +83,8 @@ export class RouterBlobCache {
 		const current = domain.store.stat(blobId);
 		if (offset + bytes.length > MAX_BLOB_BYTES) return { kind: "too_large" };
 		if (offset > current.have) return { kind: "gap" };
+		if (entry.lease.expectedSize !== undefined && offset + bytes.length > entry.lease.expectedSize)
+			return { kind: "too_large" };
 		try {
 			const result = domain.store.write(blobId, offset, bytes, final);
 			if (result.complete) {
@@ -191,11 +195,19 @@ export class RouterBlobCache {
 			.sort(([, a], [, b]) => a.lastReadAt - b.lastReadAt);
 		let remaining = bytes;
 		for (const [blobId, entry] of candidates) {
+			const size = entry.size ?? 0;
 			domain.store.remove(blobId);
-			delete domain.index.entries[blobId];
-			remaining -= entry.size ?? 0;
+			delete entry.size;
+			remaining -= size;
 			if (remaining <= 0) break;
 		}
+		const retained = Object.entries(domain.index.entries)
+			.filter(
+				([blobId, entry]) => !entry.lease && entry.size === undefined && !domain.store.stat(blobId).complete,
+			)
+			.sort(([, a], [, b]) => a.lastReadAt - b.lastReadAt);
+		for (const [blobId] of retained.slice(0, Math.max(0, retained.length - MAX_RETAINED_ORIGINS)))
+			delete domain.index.entries[blobId];
 	}
 
 	private used(domain: { store: BlobStore; index: CacheIndex }): number {

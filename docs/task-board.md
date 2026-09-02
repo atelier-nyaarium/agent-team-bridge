@@ -2,7 +2,37 @@
 
 The owner's board, its attachments, and edit awareness.
 
-## Board
+## Where the board lives
+
+Two paths, two stores.
+
+- **Agent path (Router-held).** `/task-board` reads and writes the Router's board over the gateway's
+  own WS. The Router stores clear structure with sealed title, body and attachment filenames. It
+  never opens them.
+- **Console path (gateway-held).** The phone writes `gateway/boardStore.ts`. The two boards are
+  separate stores and do not sync.
+
+## Router-held board
+
+`gateway/router/boardClient.ts` is the gateway's only door to it.
+
+- **It is the sole sealer and opener of board text.** Titles seal under `board.title`, bodies under
+  `board.body`, filenames under `board.name` keyed by `blobId` so a reorder cannot mislabel a file.
+- **It is the sole mapper between a local session key and the Router's triple.** Another gateway's
+  session comes back as an opaque joined key, never as a local one.
+- Writes are CAS on `revision`. A conflict answer carries the board that won, so the mutation
+  rebuilds against it without a second read.
+- **A Router that cannot answer is a transport fault, not a refusal.** The route answers 503. Only a
+  refusal retires the caller's write.
+- Text with no key held opens to a placeholder rather than dropping the entry.
+- An upsert that leaves attachments alone keeps their sealed names. Naming attachments replaces both.
+- `set_session` carries claim and release. Its authority is `mayTake`, not `mayWrite`: a session may
+  take an unheld entry and drop one it holds, and only the owner reassigns.
+- Claim and release act on the whole subtree, as one batch.
+- Observations arrive as `board_observation` inbox rows, opened into the awareness bank by the
+  delivery pump.
+
+## Gateway-held board
 
 Stored by `gateway/boardStore.ts`. Entries use parent pointers and fractional ranks.
 
@@ -35,16 +65,20 @@ Stored by `gateway/boardStore.ts`. Entries use parent pointers and fractional ra
 
 **File map:**
 
+- `src/gateway/router/boardClient.ts` - sealing, opening, key mapping, CAS writes.
+- `src/federation-server/board/boardService.ts` - the Router's board ops, authority and observations.
 - `src/gateway/boardStore.ts` - durable board state and owner plane.
-- `src/gateway/boardAuthority.ts` - actors, authority, refusals, refusal marker.
-- `src/gateway/boardCascade.ts` - post-write state cascade.
-- `src/shared/board-rank.ts` - rank ordering and rank assertions.
+- `src/shared/board-authority.ts` - actors, authority, refusals, refusal marker.
+- `src/shared/board-cascade.ts` - post-write state cascade.
+- `src/shared/board-rank.ts` - rank ordering, rank assertions, end placement with rebalance.
+- `src/shared/board-structure.ts` - subtree walks, prunable subtrees, orphan promotion.
 - `src/mcp/board/boardTools.ts` - six gated task-board tools.
 
 ## Attachments
 
 Attachment bytes belong to entries in `src/shared/board-attachment-store.ts`, separate from the evicting
-blob cache.
+blob cache. A Router-held entry may name only blobs the Router's reference-held store already holds; a
+write naming anything else is refused `attachment_missing`.
 
 - **`board_set_attachments` is the sole field committer.** `upsert` ignores incoming `attachments`.
 - The op declares `supplied`. Durable or cached members are retained, uploading members cause retry,

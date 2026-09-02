@@ -49,6 +49,11 @@ rejects new classification sites.
 discovery metadata, not presence rows, and `/discover` strips them. Unreachable gateways contribute
 no spawn-point offer.
 
+A gateway's own rows and shells come from itself; the Router's projection supplies every other
+gateway's. Taking the Router's copy of its own would hide a live session behind a lost presence
+write. Spawn points ride only the presence baseline, so `presenceReporter` forces a new one when
+they change.
+
 **Windows launch facts**: use `claude.exe`, append to `WSLENV`, encode `-EncodedCommand` as UTF-16LE
 base64, and always use `Set-Location`. `pwsh.exe` is not assumed available.
 

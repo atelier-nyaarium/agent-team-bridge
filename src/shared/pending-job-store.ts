@@ -99,9 +99,15 @@ export class PendingJobStore<T> {
 	private entries = new Map<string, JobEntry<T>>();
 	private ttlMs: number;
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+	private onCrossDomainJobChange: (() => void) | undefined;
 
-	constructor(ttlMs = 600_000) {
+	constructor(ttlMs = 600_000, onCrossDomainJobChange?: () => void) {
 		this.ttlMs = ttlMs;
+		this.onCrossDomainJobChange = onCrossDomainJobChange;
+	}
+
+	private notifyCrossDomainJobChange(entry: JobEntry<T> | undefined): void {
+		if (entry?.persistent && entry.returnRoute) this.onCrossDomainJobChange?.();
 	}
 
 	get size(): number {
@@ -132,6 +138,7 @@ export class PendingJobStore<T> {
 		const { persistent = false, fromConversationId = null, returnRoute = null, dstDomainId } = opts;
 		const existing = this.entries.get(id);
 		if (existing) {
+			const wasCrossDomain = existing.persistent && existing.returnRoute !== null;
 			existing.from = from;
 			existing.to = to;
 			existing.fromConversationId = fromConversationId;
@@ -141,6 +148,7 @@ export class PendingJobStore<T> {
 			if (dstDomainId !== undefined) existing.dstDomainId = dstDomainId;
 			existing.persistent = persistent || existing.persistent;
 			existing.createdAt = Date.now();
+			if (wasCrossDomain || (existing.persistent && existing.returnRoute)) this.onCrossDomainJobChange?.();
 			return;
 		}
 		this.entries.set(id, {
@@ -157,6 +165,7 @@ export class PendingJobStore<T> {
 			resolve: null,
 			storedResult: null,
 		});
+		this.notifyCrossDomainJobChange(this.entries.get(id));
 	}
 
 	waitForResult(id: string, timeoutMs: number): Promise<WaitResult<T>> {
@@ -212,6 +221,7 @@ export class PendingJobStore<T> {
 				entry.storedResult = result;
 				entry.createdAt = Date.now();
 			}
+			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
 
@@ -220,6 +230,7 @@ export class PendingJobStore<T> {
 			entry.state = "stored";
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
+			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
 
@@ -227,6 +238,7 @@ export class PendingJobStore<T> {
 			entry.state = "stored";
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
+			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
 
@@ -234,6 +246,7 @@ export class PendingJobStore<T> {
 			// Re-delivery: channel sessions may receive multiple replies
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
+			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
 
@@ -244,6 +257,7 @@ export class PendingJobStore<T> {
 		const entry = this.entries.get(id);
 		if (entry?.timer) clearTimeout(entry.timer);
 		this.entries.delete(id);
+		this.notifyCrossDomainJobChange(entry);
 	}
 
 	/**
@@ -266,6 +280,7 @@ export class PendingJobStore<T> {
 			entry.resolve = null;
 			resolve?.({ delivered: false, error });
 			this.entries.delete(id);
+			this.notifyCrossDomainJobChange(entry);
 			expired++;
 		}
 		return expired;
@@ -292,6 +307,7 @@ export class PendingJobStore<T> {
 			entry.resolve = null;
 			resolve?.({ delivered: false, error });
 			this.entries.delete(id);
+			this.notifyCrossDomainJobChange(entry);
 			expired++;
 		}
 		return expired;
@@ -307,9 +323,8 @@ export class PendingJobStore<T> {
 
 		if (entry.state === "stored" && entry.storedResult !== null) {
 			const result = entry.storedResult;
-			if (!entry.persistent) {
-				this.entries.delete(id);
-			}
+			// No notify: only a persistent job is cross-Domain, and this branch is the other kind.
+			if (!entry.persistent) this.entries.delete(id);
 			return result;
 		}
 
@@ -348,6 +363,23 @@ export class PendingJobStore<T> {
 	 * (`isCrossDomainPeer`), and it was touched within `maxAgeMs`. The share auto-forget sweep
 	 * uses this to keep a session with live cross-Domain traffic; the recency bound stops a
 	 * long-dead anchor from suppressing the forget forever. */
+	/** Live thread ids for share attestation. */
+	liveCrossDomainJobIds(
+		sessionTarget: string,
+		isCrossDomainPeer: (gatewayId: string) => boolean,
+		maxAgeMs: number,
+		now: number = Date.now(),
+	): string[] {
+		const ids: string[] = [];
+		for (const entry of this.entries.values()) {
+			if (!entry.persistent || !entry.returnRoute) continue;
+			if (now - entry.createdAt > maxAgeMs) continue;
+			if (!isCrossDomainPeer(entry.returnRoute.srcGateway)) continue;
+			if (jobAddress(entry.id)?.canonical === sessionTarget) ids.push(entry.id);
+		}
+		return ids;
+	}
+
 	hasLiveCrossDomainThread(
 		sessionTarget: string,
 		isCrossDomainPeer: (gatewayId: string) => boolean,

@@ -1,4 +1,4 @@
-import { type BoardActor, mayWrite } from "../../shared/board-authority.js";
+import { type BoardActor, mayTake, mayWrite } from "../../shared/board-authority.js";
 import { applyCascade } from "../../shared/board-cascade.js";
 import { observationsFor } from "../../shared/board-observations.js";
 import { isValidRank } from "../../shared/board-rank.js";
@@ -8,9 +8,10 @@ import {
 	orphanedParents,
 	promoteOrphans,
 } from "../../shared/board-structure.js";
-import { sha256Hex } from "../../shared/canonical-json.js";
+import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
 import type { BoardEntry } from "../../shared/console-protocol.js";
 import {
+	type BoardActorState,
 	BoardOpParamsSchema,
 	type BoardStoredEntry,
 	type BoardWrite,
@@ -37,13 +38,24 @@ type Deps = {
 };
 type Board = { revision: number; entries: Map<string, BoardEntry> };
 type RefChange = { action: "hold" | "release"; blobId: string; entryId: string };
+type BoardReplay = {
+	hash: string;
+	createdAt: number;
+	outcome: "applied" | "refused";
+	revision: number;
+	cascaded: { id: string; from: BoardEntry["state"]; to: BoardEntry["state"]; reason: string }[];
+	refusal?: string;
+};
+const BOARD_OP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Ledger records an owner may hold. The id is caller-minted, so the TTL alone bounds nothing. */
+const MAX_BOARD_OPS_PER_OWNER = 5000;
 const key = (s: { domainId: string; gatewayId: string; sessionId: string }) =>
 	`${s.domainId}/${s.gatewayId}/${s.sessionId}`;
 const parseKey = (value: string) => {
 	const [domainId, gatewayId, ...rest] = value.split("/");
 	return { domainId, gatewayId, sessionId: rest.join("/") };
 };
-const actor = (a: BoardWrite["actor"]): BoardActor =>
+const actor = (a: BoardActorState): BoardActor =>
 	a.kind === "owner" ? { kind: "owner" } : { kind: "session", sessionId: key(a.session) };
 const copy = (b: Board): Board => ({
 	revision: b.revision,
@@ -103,16 +115,43 @@ export function createBoardService(deps: Deps) {
 	};
 	const attachmentsHeld = (domainId: string, attachments: { blobId: string }[]): boolean =>
 		attachments.every((x) => deps.referenceHeld.has(domainId, x.blobId));
-	const write = (domainId: string, input: BoardWrite) => {
+	const write = (domainId: string, input: BoardWrite, writer: BoardActorState, opId?: string) => {
+		const store = deps.registry.for(domainId);
 		const before = load(domainId);
 		const answerBefore = () => [...before.entries.values()].map(stored);
+		const a = actor(writer);
+		const replayId = opId ? `${a.kind}:${a.kind === "owner" ? "owner" : a.sessionId}:${opId}` : undefined;
+		// The caller's INTENT only: which ops, over which entries. A retry rebuilds against whatever
+		// the board says now, so a rank, a state or a re-sealed field legitimately differs between
+		// attempts, and hashing those would answer a crash retry with a reuse refusal. Sealed fields
+		// are excluded for the same reason, their nonce being fresh per attempt.
+		const hash = sha256Hex(canonicalJson(input.ops.map((op) => [op.kind, op.id])));
+		const replay = replayId ? store.get("board.op", replayId) : null;
+		if (replay) {
+			const recorded = replay.clear as unknown as BoardReplay;
+			if (recorded.hash !== hash)
+				return {
+					outcome: "refused" as const,
+					revision: before.revision,
+					entries: answerBefore(),
+					cascaded: [],
+					refusal: "operation_id_reused",
+				};
+			return {
+				outcome: recorded.outcome,
+				revision: recorded.revision,
+				entries: answerBefore(),
+				cascaded: recorded.cascaded,
+				...(recorded.refusal ? { refusal: recorded.refusal } : {}),
+			};
+		}
 		if (input.expectedRevision !== before.revision)
 			return { outcome: "conflict" as const, revision: before.revision, entries: answerBefore(), cascaded: [] };
 		const next = copy(before);
 		const touched = new Set<string>();
-		const a = actor(input.actor);
 		// Apply reference changes only after the batch succeeds.
 		const refChanges: RefChange[] = [];
+		const removedIds = new Set(input.ops.filter((op) => op.kind === "remove").map((op) => op.id));
 		const refuse = (reason: string) => ({
 			outcome: "refused" as const,
 			revision: before.revision,
@@ -120,6 +159,21 @@ export function createBoardService(deps: Deps) {
 			cascaded: [],
 			refusal: reason,
 		});
+		const rememberRefusal = (reason: string): ReturnType<typeof refuse> => {
+			const result = refuse(reason);
+			if (replayId)
+				store.put("board.op", replayId, null, {
+					clear: {
+						hash,
+						createdAt: now(),
+						outcome: result.outcome,
+						revision: result.revision,
+						cascaded: [],
+						refusal: reason,
+					},
+				});
+			return result;
+		};
 		const replaceAttachments = (e: BoardEntry, attachments: NonNullable<BoardEntry["attachments"]>) => {
 			for (const x of e.attachments ?? [])
 				refChanges.push({ action: "release", blobId: x.blobId, entryId: e.id });
@@ -129,17 +183,32 @@ export function createBoardService(deps: Deps) {
 		for (const op of input.ops) {
 			const e = next.entries.get(op.id);
 			if (op.kind === "upsert") {
-				if (!e && next.entries.size >= MAX_ENTRIES_PER_OWNER) return refuse("board_full");
+				if (!e && next.entries.size >= MAX_ENTRIES_PER_OWNER) return rememberRefusal("board_full");
 				const denied = e ? mayWrite(e, a) : null;
-				if (denied) return refuse(denied);
+				if (denied) return rememberRefusal(denied);
 				if (op.parent) {
 					const parent = next.entries.get(op.parent);
-					if (!parent) return refuse("parent_missing");
+					if (!parent) return rememberRefusal("parent_missing");
 					const parentDenied = mayWrite(parent, a);
-					if (parentDenied) return refuse(parentDenied);
+					if (parentDenied) return rememberRefusal(parentDenied);
 				}
-				if (!isValidRank(op.rank)) return refuse("bad_rank");
-				if (op.attachments && !attachmentsHeld(domainId, op.attachments)) return refuse("attachment_missing");
+				if (!isValidRank(op.rank)) return rememberRefusal("bad_rank");
+				// Only the owner assigns another holder.
+				if (op.session) {
+					if (
+						op.session.domainId !== domainId ||
+						!deps.inbox.hasSession(domainId, op.session.gatewayId, op.session.sessionId)
+					)
+						return rememberRefusal("session_missing");
+					const takeDenied = e
+						? mayTake(e, a, key(op.session))
+						: a.kind === "owner" || a.sessionId === key(op.session)
+							? undefined
+							: "held";
+					if (takeDenied) return rememberRefusal(takeDenied);
+				}
+				if (op.attachments && !attachmentsHeld(domainId, op.attachments))
+					return rememberRefusal("attachment_missing");
 				const entry = {
 					...(e ?? {}),
 					id: op.id,
@@ -152,7 +221,12 @@ export function createBoardService(deps: Deps) {
 					sealed: {
 						title: op.title,
 						...(op.body ? { body: op.body } : {}),
-						...(op.names ? { names: op.names } : {}),
+						// Unnamed attachments retain their sealed names.
+						...(op.names
+							? { names: op.names }
+							: op.attachments || !(e as Versioned | undefined)?.sealed?.names
+								? {}
+								: { names: (e as Versioned).sealed?.names }),
 					},
 				} as BoardEntry;
 				if (op.attachments)
@@ -160,30 +234,51 @@ export function createBoardService(deps: Deps) {
 				next.entries.set(op.id, entry);
 				touched.add(op.id);
 			} else if (op.kind === "remove") {
-				if (!e) return refuse("entry_missing");
+				if (!e) return rememberRefusal("entry_missing");
 				const denied = mayWrite(e, a);
-				if (denied) return refuse(denied);
+				if (denied) return rememberRefusal(denied);
+				const liveChildren = [...next.entries.values()].filter(
+					(child) => child.parent === op.id && child.trashedAt === undefined,
+				);
+				if (liveChildren.some((child) => !removedIds.has(child.id))) return rememberRefusal("would_orphan");
 				for (const x of e.attachments ?? [])
 					refChanges.push({ action: "release", blobId: x.blobId, entryId: e.id });
 				next.entries.delete(op.id);
 				touched.add(op.id);
+			} else if (op.kind === "set_session") {
+				if (!e) return rememberRefusal("entry_missing");
+				const next = op.session ? key(op.session) : undefined;
+				if (
+					op.session &&
+					(op.session.domainId !== domainId ||
+						!deps.inbox.hasSession(domainId, op.session.gatewayId, op.session.sessionId))
+				)
+					return rememberRefusal("session_missing");
+				const denied = mayTake(e, a, next);
+				if (denied) return rememberRefusal(denied);
+				if (next === undefined) delete e.sessionId;
+				else e.sessionId = next;
+				touched.add(op.id);
 			} else {
-				if (!e) return refuse("entry_missing");
+				if (!e) return rememberRefusal("entry_missing");
 				const denied = mayWrite(e, a);
-				if (denied) return refuse(denied);
+				if (denied) return rememberRefusal(denied);
 				if (op.kind === "set_state") e.state = op.state;
 				else if (op.kind === "set_parent") {
+					if (!isValidRank(op.rank)) return rememberRefusal("bad_rank");
 					if (op.parent) {
 						const parent = next.entries.get(op.parent);
-						if (!parent) return refuse("parent_missing");
+						if (!parent) return rememberRefusal("parent_missing");
 						const parentDenied = mayWrite(parent, a);
-						if (parentDenied) return refuse(parentDenied);
+						if (parentDenied) return rememberRefusal(parentDenied);
 					}
 					e.parent = op.parent;
 					e.rank = op.rank;
-				} else if (op.kind === "set_rank") e.rank = op.rank;
-				else if (op.kind === "set_attachments") {
-					if (!attachmentsHeld(domainId, op.attachments)) return refuse("attachment_missing");
+				} else if (op.kind === "set_rank") {
+					if (!isValidRank(op.rank)) return rememberRefusal("bad_rank");
+					e.rank = op.rank;
+				} else if (op.kind === "set_attachments") {
+					if (!attachmentsHeld(domainId, op.attachments)) return rememberRefusal("attachment_missing");
 					replaceAttachments(e, op.attachments as unknown as NonNullable<BoardEntry["attachments"]>);
 				} else if (op.kind === "trash") e.trashedAt = now();
 				else delete e.trashedAt;
@@ -198,7 +293,7 @@ export function createBoardService(deps: Deps) {
 			let cur: string | undefined = id;
 			const seen = new Set<string>();
 			while (cur) {
-				if (seen.has(cur)) return refuse("cycle");
+				if (seen.has(cur)) return rememberRefusal("cycle");
 				seen.add(cur);
 				cur = next.entries.get(cur)?.parent;
 			}
@@ -206,7 +301,6 @@ export function createBoardService(deps: Deps) {
 		const cascaded = applyCascade(next.entries, [...touched], orphanedParents(before, next, touched));
 		for (const c of cascaded) touched.add(c.id);
 		next.revision++;
-		const store = deps.registry.for(domainId);
 		const meta = store.get("board.meta", "board.meta");
 		for (const id of touched) {
 			const e = next.entries.get(id) as Versioned | undefined;
@@ -220,10 +314,31 @@ export function createBoardService(deps: Deps) {
 				else if (old) tx.del("board.entry", id, old.version);
 			}
 			tx.put("board.meta", "board.meta", meta?.version ?? null, { clear: { revision: next.revision } });
+			if (replayId)
+				tx.put("board.op", replayId, null, {
+					clear: {
+						hash,
+						createdAt: now(),
+						outcome: "applied",
+						revision: next.revision,
+						cascaded: cascaded.map(({ id, from, to, reason }) => ({ id, from, to, reason })),
+					},
+				});
 		});
-		if (result.kind !== "ok")
+		if (result.kind === "conflict")
 			return { outcome: "conflict" as const, revision: before.revision, entries: answerBefore(), cascaded: [] };
-		for (const change of refChanges) {
+		// `durability_uncertain` APPLIED the batch, including its own ledger record; only the fsync is
+		// in doubt. Refusing here would contradict the board this call just advanced, and would skip
+		// the holds and observations below for a write that is live. A crash that loses the unsynced
+		// line loses the ledger record with it, so a replay re-applies.
+		if (result.kind !== "ok" && result.kind !== "durability_uncertain")
+			return rememberRefusal("durability_failure");
+		// Net to a MEMBERSHIP DIFF first. A release that takes the last reference deletes the bytes,
+		// so replacing [A] with [A,B] as release-all then hold-all would delete A and re-hold a name
+		// with nothing behind it.
+		const netted = new Map<string, RefChange>();
+		for (const change of refChanges) netted.set(`${change.entryId}|${change.blobId}`, change);
+		for (const change of netted.values()) {
 			if (change.action === "hold") deps.referenceHeld.hold(domainId, change.blobId, change.entryId);
 			else deps.referenceHeld.release(domainId, change.blobId, change.entryId);
 		}
@@ -253,35 +368,62 @@ export function createBoardService(deps: Deps) {
 		};
 	};
 	const sweepTrash = (domainId: string, at = now()) => {
+		const store = deps.registry.for(domainId);
 		const b = load(domainId);
 		const dead = [...b.entries.values()].filter(
 			(e) => e.trashedAt !== undefined && at - e.trashedAt > BOARD_TRASH_TTL_MS,
 		);
-		if (!dead.length) return 0;
-		const result = write(domainId, {
-			expectedRevision: b.revision,
-			actor: { kind: "owner" },
-			ops: dead.map((e) => ({ kind: "remove", id: e.id })),
-		});
-		return result.outcome === "applied" ? dead.length : 0;
+		// Only entries whose whole live subtree is also dead. A removal that would orphan a survivor
+		// is refused, and the sweep is one batch, so leaving one in would stop reclaiming ANY of them.
+		const doomed = new Set(dead.map((e) => e.id));
+		const removable = dead.filter((e) =>
+			[...b.entries.values()].every((child) => child.parent !== e.id || doomed.has(child.id)),
+		);
+		let removed = 0;
+		if (removable.length) {
+			const result = write(
+				domainId,
+				{ expectedRevision: b.revision, ops: removable.map((e) => ({ kind: "remove", id: e.id })) },
+				{ kind: "owner" },
+			);
+			removed = result.outcome === "applied" ? removable.length : 0;
+		}
+		const records = store.list("board.op");
+		const expired = records.filter((record) => at - Number(record.clear.createdAt) > BOARD_OP_TTL_MS);
+		// A caller mints the operation id, so age alone cannot bound the ledger. Oldest first past
+		// the cap, which keeps the retries that could still arrive.
+		const surplus = records
+			.filter((record) => !expired.includes(record))
+			.sort((x, y) => Number(x.clear.createdAt) - Number(y.clear.createdAt))
+			.slice(0, Math.max(0, records.length - expired.length - MAX_BOARD_OPS_PER_OWNER));
+		const prunable = [...expired, ...surplus];
+		if (prunable.length)
+			store.batch((tx) => {
+				for (const record of prunable) tx.del("board.op", record.id, record.version);
+			});
+		return removed;
 	};
 	const register = (hooks: OwnerServiceHooks) => {
 		hooks.ownerOp("board_write", (op, value) =>
-			write(op.domainId, { ...BoardWriteSchema.parse(value.write ?? value), actor: { kind: "owner" } }),
+			write(op.domainId, BoardWriteSchema.parse(value.write ?? value), { kind: "owner" }),
 		);
 		hooks.ownerOp("board_read", (op) => read(op.domainId));
 		// A gateway may act only for sessions in its registry.
 		hooks.gatewayFrame("board_op", (reg: GatewayRegistration, params) => {
 			const p = BoardOpParamsSchema.parse(params);
 			if (!deps.inbox.hasSession(reg.domainId, reg.gatewayId, p.sessionId)) throw new OwnerOpRefused("session");
-			return write(reg.domainId, {
-				...p.write,
-				actor: {
+			return write(
+				reg.domainId,
+				p.write,
+				{
 					kind: "session",
 					session: { domainId: reg.domainId, gatewayId: reg.gatewayId, sessionId: p.sessionId },
 				},
-			});
+				p.opId,
+			);
 		});
+		// Registration supplies the gateway's Domain.
+		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => read(reg.domainId));
 	};
 	return { read, write, sweepTrash, register };
 }

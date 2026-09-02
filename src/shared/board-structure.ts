@@ -45,6 +45,28 @@ export function boardEntryIdForOperation(from: string, operationId: string): str
  * that is unfinished, or finished but held by another session, and either one has to keep its parent.
  * Bad data with a parent cycle resolves to not-prunable rather than hanging.
  */
+/** Returns a subtree in root-first order. */
+export function subtreeIds(entries: Iterable<BoardEntry>, rootId: string): string[] {
+	const children = new Map<string, string[]>();
+	for (const e of entries) {
+		if (!e.parent) continue;
+		const list = children.get(e.parent);
+		if (list) list.push(e.id);
+		else children.set(e.parent, [e.id]);
+	}
+	const out: string[] = [];
+	const seen = new Set<string>();
+	const queue = [rootId];
+	while (queue.length > 0) {
+		const id = queue.shift() as string;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		out.push(id);
+		queue.push(...(children.get(id) ?? []));
+	}
+	return out;
+}
+
 export function prunableSubtrees(
 	entries: Map<string, BoardEntry>,
 	eligible: (entry: BoardEntry) => boolean,

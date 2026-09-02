@@ -95,7 +95,7 @@ export function makeCtx(overrides: CtxOverrides = {}): RoutesDeps {
 		sharesFor: overrides.sharesFor,
 		crossDomainPresenceConsumer: overrides.crossDomainPresenceConsumer,
 		ownerId: overrides.ownerId,
-		boardStore: overrides.boardStore,
+		boardClient: overrides.boardClient,
 		resolveHandshake: overrides.resolveHandshake,
 		findPendingHandshake: overrides.findPendingHandshake,
 		repushHandshake: overrides.repushHandshake,
