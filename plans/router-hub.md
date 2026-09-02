@@ -6,8 +6,12 @@ route-gateway model. `plans/vault.md` is parked until this lands; the board hold
 ## Status
 
 Questionaire complete. Plan through three refinement laps: 60 findings, 48 verified against the
-code, 7 refuted. Not started. Phase 1 gates every later phase, and each spec it produces gets its
-own audit when written.
+code, 7 refuted. Phase 1 gates every later phase, and each spec it produces gets its own audit
+when written.
+
+Phase 0 on this host: snapshot and operator's note at `volumes/router-hub-phase0/20260901-172058`
+(gitignored). Other gateway hosts take their own per the note. Owner key backup export: pending
+the owner.
 
 Evidence the plan rests on, verified against the code:
 - Timeouts. The gateway waits 120s for a Router answer (`TOOL_CALL_TIMEOUT_MS`). The Router holds a
