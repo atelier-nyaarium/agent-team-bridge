@@ -946,7 +946,7 @@ A red team on the rebuild found two more, both real, both fixed here.
   no session could be launched on it from the console. Predates the rebuild. Fixed: the reporter
   remembers what its last landed baseline put on the wire, and a change forces a new one.
 
-## Phase 6 - Phone transport
+## Phase 6 - Phone transport ✅ Done
 
 Slices: 6.A the Router's console socket and owner delivery; 6.B the Router gaps the phone hits;
 6.0 through 6.7 the phone itself, per the bullets below.
