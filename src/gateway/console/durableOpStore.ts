@@ -202,6 +202,24 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 		return removedAny;
 	}
 
+	/** Drops every still-in-flight record, so the migration carries no op whose outcome nobody knows.
+	 * A record is a marker and not a request, so these cannot be re-run here; dropping one is what
+	 * makes the client's own retry re-execute it, which is the store's rule for a failed op. A
+	 * `complete` record is a real result and survives. Returns how many were dropped. */
+	public failInFlight(): number {
+		let dropped = 0;
+		for (const [conv, perConv] of this.byConversation) {
+			for (const [opId, entry] of perConv) {
+				if (entry.record.state !== "in-flight") continue;
+				perConv.delete(opId);
+				dropped += 1;
+			}
+			if (perConv.size === 0) this.byConversation.delete(conv);
+		}
+		if (dropped > 0) this.persist();
+		return dropped;
+	}
+
 	private write(conversationId: string, opId: string, record: OpRecord<Result>, generation: number): void {
 		const perConv = this.byConversation.get(conversationId) ?? new Map<string, Entry<Result>>();
 		this.touchCapped(this.byConversation, conversationId, perConv, this.maxConversations, "conversation");

@@ -99,6 +99,27 @@ describe("migration fence residue", () => {
 		expect(store.markInFlight("conv", "op-2")).toBeNull();
 	});
 
+	// The cut carries no op whose outcome nobody knows. A record is a marker rather than a request,
+	// so an in-flight one cannot be re-run here and is dropped for the client to re-run instead.
+	it("the settle drops in-flight records and keeps completed ones", () => {
+		const store = new DurableOpStore(fakeDurable());
+		store.markInFlight("conv", "done");
+		store.markComplete("conv", "done", { delivered: true } as never);
+		store.markInFlight("conv", "caught");
+
+		expect(store.failInFlight()).toBe(1);
+
+		expect(store.get("conv", "done")).toMatchObject({ state: "complete" });
+		expect(store.get("conv", "caught")).toBeUndefined();
+	});
+
+	it("the share sweep removes nothing under the fence", () => {
+		const state = new CrossDomainShareState(tempDir());
+		setMigrationEpoch(7);
+
+		expect(state.sweep(Date.now(), 0, () => false)).toBe(0);
+	});
+
 	it("a share is neither taken nor withdrawn under the fence", () => {
 		const state = new CrossDomainShareState(tempDir());
 		const target = { kind: "domain", domainId: "beta" } as never;

@@ -17,6 +17,7 @@ import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
+import { fenced, MIGRATION_SETTLE_MS, useMigrationEpochFile } from "../shared/migration-fence.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
@@ -132,6 +133,8 @@ export async function startGateway(): Promise<void> {
 
 	// Durable identity and delivery state stays separate from logs.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
+	// Before any store is built, so no writer can run an unfenced tick first.
+	useMigrationEpochFile(DATA_DIR);
 	// Attachments share DATA_DIR so log cleanup cannot remove referenced bytes.
 	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
 	// Board attachments are not swept with the cache.
@@ -490,7 +493,27 @@ export async function startGateway(): Promise<void> {
 			{ name: "session-resume", run: () => sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown)) },
 			{ name: "replay-guard", run: () => fed()?.replayPersist() },
 		]);
-	const persistTimer = setInterval(() => persistDelivery(false), 3_000);
+	// Stops under the fence: the cut is a tar of DATA_DIR, and a tick writing into it mid-archive
+	// tears the snapshot. Shutdown still persists, so the final state reaches disk before the cut.
+	//
+	// The settle is the ONE deliberate write the fence allows, and only once: an op the fence caught
+	// mid-flight has an outcome nobody can know, and a record is a marker rather than a request, so
+	// it is dropped for the client to re-run rather than imported.
+	let fencedSince: number | null = null;
+	let settled = false;
+	const persistTimer = setInterval(() => {
+		if (!fenced()) {
+			fencedSince = null;
+			settled = false;
+			persistDelivery(false);
+			return;
+		}
+		fencedSince ??= Date.now();
+		if (settled || Date.now() - fencedSince < MIGRATION_SETTLE_MS) return;
+		settled = true;
+		const dropped = durableOpStore.failInFlight();
+		console.log(`[migration] settled: ${dropped} in-flight op(s) dropped for the client to re-run`);
+	}, 3_000);
 	persistTimer.unref?.();
 	// Registering a signal listener REPLACES the runtime's default terminate, so this has to exit
 	// itself. Without the exit the process persists and then keeps running: a `timeout`-wrapped

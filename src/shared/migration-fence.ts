@@ -13,6 +13,9 @@ export const MIGRATING = "migrating";
 /** How long a filesystem answer is trusted, so a write does not stat. */
 const POLL_MS = 1000;
 
+/** How long an op the fence caught mid-flight is given to reach its own terminal state. */
+export const MIGRATION_SETTLE_MS = 60_000;
+
 let read: () => number | null = () => null;
 let cachedEpoch: number | null = null;
 let cachedAt = -Infinity;

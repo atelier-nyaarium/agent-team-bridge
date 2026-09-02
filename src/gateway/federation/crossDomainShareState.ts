@@ -118,6 +118,8 @@ export class CrossDomainShareState {
 
 	/** Expires unseen shares unless a live thread keeps them alive. */
 	sweep(now: number, ttlMs: number, isLive: (sessionTarget: string) => boolean): number {
+		// Writes its own state, so it stops with the other writers rather than with its timer.
+		if (fenced()) return 0;
 		const result = sweepShares(this.state, now, ttlMs, isLive);
 		this.state = result.state;
 		const removed = result.removed;
