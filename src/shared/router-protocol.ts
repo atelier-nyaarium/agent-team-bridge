@@ -5,8 +5,17 @@ import { z } from "zod";
 /** Chunk size shared by all runtimes and bounded by the phone's transient heap use. */
 export const BLOB_CHUNK_BYTES = 1_048_576;
 
+export const BLOB_NONCE_BYTES = 12;
+export const BLOB_TAG_BYTES = 16;
+/** AES-GCM nonce and tag bytes stored around each plaintext-sized chunk. */
+export const BLOB_FRAME_OVERHEAD_BYTES = BLOB_NONCE_BYTES + BLOB_TAG_BYTES;
+
+export const BLOB_CIPHERTEXT_CHUNK_BYTES = BLOB_CHUNK_BYTES + BLOB_FRAME_OVERHEAD_BYTES;
+
 /** Attachment limit. Enforce it on received bytes, not sender-declared metadata. */
 export const MAX_BLOB_BYTES = 500_000_000;
+export const MAX_BLOB_CIPHERTEXT_BYTES =
+	MAX_BLOB_BYTES + Math.ceil(MAX_BLOB_BYTES / BLOB_CHUNK_BYTES) * BLOB_FRAME_OVERHEAD_BYTES;
 
 /**
  * Ceiling a single sealed relay frame may not cross, asserted in tests against the WebSocket
@@ -139,6 +148,9 @@ export const OwnerBlobFetchParamsSchema = z.object({
 export const BlobBeginParamsSchema = z.object({
 	blobId: z.string().min(1),
 	size: z.number().int().nonnegative().max(MAX_BLOB_BYTES),
+	ciphertextSize: z.number().int().positive().max(MAX_BLOB_CIPHERTEXT_BYTES),
+	ciphertextDigest: z.string().regex(/^sha256-[0-9a-f]{64}$/),
+	epoch: z.number().int().min(1).max(2147483647),
 	store: z.enum(["cache", "held"]),
 	/** Held blobs require references. */
 	ref: z.object({ kind: z.enum(["entry", "row", "scheduled"]), id: z.string().min(1).max(256) }).optional(),
@@ -150,7 +162,7 @@ export const BlobChunkParamsSchema = z.object({
 	store: z.enum(["cache", "held"]),
 	lease: z.object({ id: z.string().min(1), generation: z.number().int().positive() }),
 	offset: z.number().int().nonnegative(),
-	bytes: z.string().max(BLOB_CHUNK_BYTES * 2),
+	bytes: z.string().max(BLOB_CIPHERTEXT_CHUNK_BYTES * 2),
 	final: z.boolean(),
 	incarnation: z.number().int().positive(),
 });
@@ -160,6 +172,7 @@ export const BlobFetchReplyParamsSchema = z.object({
 	outcome: z.enum(["fetched", "absent"]),
 	bytes: z.string().optional(),
 	eof: z.boolean().optional(),
+	sealed: z.literal(false),
 	incarnation: z.number().int().positive(),
 });
 

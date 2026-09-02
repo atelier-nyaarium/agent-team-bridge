@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRoutes, createRoutesCarryOver } from "../gateway/routes.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { makeCtx } from "./helpers/federation.js";
@@ -6,6 +6,8 @@ import { makeCtx } from "./helpers/federation.js";
 describe("cross-Domain inbox append", () => {
 	it("seals one peer row and returns the Router answer", async () => {
 		const identity = generateIdentity();
+		const blobId = `sha256-${"a".repeat(64)}`;
+		const uploadAll = vi.fn().mockResolvedValue([blobId]);
 		const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
 		const router = {
 			isConnected: () => true,
@@ -23,6 +25,7 @@ describe("cross-Domain inbox append", () => {
 			carryOver: createRoutesCarryOver(),
 			routerClient: router,
 			producerSignPriv: identity.sign.priv,
+			blobUploader: { uploadAll } as never,
 			crossDomainPeers: {
 				resolveByGateway: () => ({ friendDomainId: "beta" }),
 				all: () => [{ friendDomainId: "beta", friendGatewayId: "hostb" }],
@@ -33,6 +36,16 @@ describe("cross-Domain inbox append", () => {
 			fromConversationId: "conversation",
 			to: "beta.hostb.target.dev",
 			body: "hello",
+			files: [
+				{
+					filename: "x.txt",
+					mime: "text/plain",
+					size: 1,
+					descriptiveKey: "x",
+					blobId,
+					role: "attachment",
+				},
+			],
 			channelOnly: true,
 		});
 		expect(response.status).toBe(200);
@@ -46,6 +59,10 @@ describe("cross-Domain inbox append", () => {
 			.envelope;
 		expect(envelope.opKey.conversationId).toMatch(/^[a-z0-9][a-z0-9-]*$/);
 		expect(envelope.origin).toMatchObject({ kind: "gateway" });
+		// The blob is cached for this Domain's own devices, but never named to the peer: it holds none
+		// of this Domain's content keys, so advertising the cache would promise a read it cannot do.
+		expect(envelope).toMatchObject({ contentRefs: [] });
+		expect(uploadAll).toHaveBeenCalledWith([blobId], "cache");
 	});
 
 	it("surfaces a refused Router answer as a failed send", async () => {

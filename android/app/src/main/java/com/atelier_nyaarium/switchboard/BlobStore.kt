@@ -26,6 +26,8 @@ data class BlobReadResult(val bytes: ByteArray, val eof: Boolean) {
  * Content-addressed byte store. The Kotlin twin of `src/shared/blob-store.ts`, held equivalent by
  * the shared corpus at `tests/fixtures/blob/_manifest.json` that both runtimes iterate.
  *
+ * This twin stores plaintext only. Sealed bytes stay on the Router, so callers supply no digest.
+ *
  * A blob is named by the digest of its own contents, so the name is its identity, its dedup key,
  * its resume key, and its integrity check at once. Nothing here accepts or returns a whole file:
  * writes are bounded chunks at an offset and reads are bounded ranges, so "hold this entire

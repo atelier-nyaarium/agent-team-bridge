@@ -3,6 +3,7 @@ import path from "node:path";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
 import { BlobStore } from "../../shared/blob-store.js";
 import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
+import { sealedBlobSize } from "../../shared/sealed-blob.js";
 import type { BlobLease } from "./blobLease.js";
 
 export interface BlobReference {
@@ -12,6 +13,10 @@ export interface BlobReference {
 
 interface HeldEntry {
 	refs: BlobReference[];
+	size?: number;
+	ciphertextSize?: number;
+	ciphertextDigest?: string;
+	epoch?: number;
 	leaseId?: string;
 	generation?: number;
 }
@@ -20,13 +25,15 @@ interface HeldIndex {
 	entries: Record<string, HeldEntry>;
 }
 
-export type HeldBegin = { kind: "lease"; lease: BlobLease } | { kind: "exists" };
-export type HeldCommit = { have: number; complete: boolean } | { kind: "generation_mismatch" | "gap" | "too_large" };
+export type HeldBegin = { kind: "lease"; lease: BlobLease } | { kind: "exists" } | { kind: "quota" };
+export type HeldCommit =
+	| { have: number; complete: boolean }
+	| { kind: "generation_mismatch" | "gap" | "too_large" | "size_mismatch" };
 
 export class ReferenceHeldStore {
 	private readonly domains = new Map<string, { store: BlobStore; index: HeldIndex }>();
 
-	constructor(private readonly options: { dataDir: string }) {}
+	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain?: number }) {}
 
 	hold(domainId: string, blobId: string, ref: BlobReference): void {
 		const domain = this.domain(domainId);
@@ -62,15 +69,46 @@ export class ReferenceHeldStore {
 		return this.domain(domainId).store.stat(blobId).complete;
 	}
 
-	begin(domainId: string, blobId: string): HeldBegin {
+	begin(
+		domainId: string,
+		blobId: string,
+		size: number,
+		ciphertextSize: number,
+		ciphertextDigest: string,
+		epoch: number,
+	): HeldBegin {
 		const domain = this.domain(domainId);
-		if (domain.store.stat(blobId).complete) return { kind: "exists" };
+		const entry = domain.index.entries[blobId];
+		if (domain.store.stat(blobId).complete) {
+			if (
+				entry?.size !== undefined &&
+				entry.ciphertextSize !== undefined &&
+				entry.ciphertextDigest !== undefined &&
+				entry.epoch !== undefined
+			)
+				return { kind: "exists" };
+			domain.store.remove(blobId);
+		}
+		if (size < 0 || size > MAX_BLOB_BYTES || ciphertextSize !== sealedBlobSize(size)) {
+			throw new Error("invalid sealed blob size");
+		}
+		const quota = this.options.quotaBytesPerDomain ?? Number.MAX_SAFE_INTEGER;
+		const reserved = Object.entries(domain.index.entries).reduce((sum, [id, value]) => {
+			if (id === blobId) return sum;
+			const have = domain.store.stat(id).have;
+			return sum + Math.max(have, value.leaseId ? (value.ciphertextSize ?? 0) : 0);
+		}, 0);
+		if (reserved + ciphertextSize > quota) return { kind: "quota" };
 		const generation = domain.index.entries[blobId]?.generation ?? 0;
 		const lease = { id: cryptoRandomId(), generation: generation + 1, expiresAt: Number.MAX_SAFE_INTEGER };
-		const entry = domain.index.entries[blobId] ?? { refs: [] };
-		entry.leaseId = lease.id;
-		entry.generation = lease.generation;
-		domain.index.entries[blobId] = entry;
+		const next = domain.index.entries[blobId] ?? { refs: [] };
+		next.leaseId = lease.id;
+		next.generation = lease.generation;
+		next.size = size;
+		next.ciphertextSize = ciphertextSize;
+		next.ciphertextDigest = ciphertextDigest;
+		next.epoch = epoch;
+		domain.index.entries[blobId] = next;
 		this.persist(domainId, domain.index);
 		return { kind: "lease", lease };
 	}
@@ -87,9 +125,13 @@ export class ReferenceHeldStore {
 		const entry = domain.index.entries[blobId];
 		if (!entry || entry.leaseId !== lease.id || entry.generation !== lease.generation)
 			return { kind: "generation_mismatch" };
-		if (offset + bytes.length > MAX_BLOB_BYTES) return { kind: "too_large" };
+		if (offset + bytes.length > sealedBlobSize(MAX_BLOB_BYTES)) return { kind: "too_large" };
 		if (offset > domain.store.stat(blobId).have) return { kind: "gap" };
-		const result = domain.store.write(blobId, offset, bytes, final);
+		if (entry.ciphertextSize !== undefined && offset + bytes.length > entry.ciphertextSize)
+			return { kind: "too_large" };
+		if (final && entry.ciphertextSize !== offset + bytes.length) return { kind: "size_mismatch" };
+		if (!entry.ciphertextDigest) return { kind: "generation_mismatch" };
+		const result = domain.store.write(blobId, offset, bytes, final, entry.ciphertextDigest);
 		if (result.complete) {
 			delete entry.leaseId;
 			delete entry.generation;

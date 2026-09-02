@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
-import { BlobStore } from "../../shared/blob-store.js";
+import { BlobStore, isBlobId } from "../../shared/blob-store.js";
 import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
+import { sealedBlobSize } from "../../shared/sealed-blob.js";
 import { BLOB_LEASE_MS, type BlobLease, type LeaseRecord, leaseMatches, newLease } from "./blobLease.js";
 
 export interface BlobOrigin {
@@ -14,6 +16,9 @@ interface CacheEntry {
 	origin: BlobOrigin;
 	lastReadAt: number;
 	size?: number;
+	ciphertextSize?: number;
+	ciphertextDigest?: string;
+	epoch?: number;
 	lease?: LeaseRecord;
 }
 
@@ -21,14 +26,23 @@ interface CacheIndex {
 	entries: Record<string, CacheEntry>;
 }
 
+type CacheRecoveryEntry = Required<Omit<CacheEntry, "lease">>;
+
 const MAX_RETAINED_ORIGINS = 10_000;
 
 export type CacheBegin = { kind: "lease"; lease: BlobLease } | { kind: "exists" } | { kind: "quota" };
 export type CacheCommit =
 	| { have: number; complete: boolean }
-	| { kind: "lease_expired" | "generation_mismatch" | "gap" | "too_large" };
+	| { kind: "lease_expired" | "generation_mismatch" | "gap" | "too_large" | "size_mismatch" };
 export type CacheStat =
-	| { kind: "complete"; size: number; origin: BlobOrigin; lastReadAt: number }
+	| {
+			kind: "complete";
+			size: number;
+			ciphertextSize: number;
+			epoch: number;
+			origin: BlobOrigin;
+			lastReadAt: number;
+	  }
 	| { kind: "miss"; origin?: BlobOrigin };
 export type CacheRead = Buffer | { kind: "miss"; origin?: BlobOrigin };
 
@@ -40,18 +54,56 @@ export class RouterBlobCache {
 		this.now = options.now ?? (() => Date.now());
 	}
 
-	begin(domainId: string, blobId: string, origin: BlobOrigin, size: number): CacheBegin {
+	begin(
+		domainId: string,
+		blobId: string,
+		origin: BlobOrigin,
+		size: number,
+		ciphertextSize: number,
+		ciphertextDigest: string,
+		epoch: number,
+	): CacheBegin {
 		const domain = this.domain(domainId);
 		const entry = domain.index.entries[blobId];
-		if (domain.store.stat(blobId).complete) return { kind: "exists" };
-		if (size < 0 || size > MAX_BLOB_BYTES || size > this.options.quotaBytesPerDomain) return { kind: "quota" };
-		const used = this.used(domain);
-		if (used + size > this.options.quotaBytesPerDomain)
-			this.evict(domain, used + size - this.options.quotaBytesPerDomain);
-		if (this.used(domain) + size > this.options.quotaBytesPerDomain) return { kind: "quota" };
+		if (domain.store.stat(blobId).complete) {
+			if (
+				entry?.size !== undefined &&
+				entry.ciphertextSize !== undefined &&
+				entry.ciphertextDigest !== undefined &&
+				entry.epoch !== undefined
+			)
+				return { kind: "exists" };
+			domain.store.remove(blobId);
+		}
+		if (
+			size < 0 ||
+			size > MAX_BLOB_BYTES ||
+			ciphertextSize !== sealedBlobSize(size) ||
+			ciphertextSize > this.options.quotaBytesPerDomain
+		)
+			return { kind: "quota" };
+		// Fresh nonces change the ciphertext digest. A stale partial would make every retry fail
+		// final verification because writes at held offsets are no-ops.
+		if (entry?.ciphertextDigest !== undefined && entry.ciphertextDigest !== ciphertextDigest)
+			domain.store.remove(blobId);
+		const heldForBlob = Math.max(domain.store.stat(blobId).have, entry?.lease?.expectedSize ?? 0);
+		const used = this.used(domain) - heldForBlob;
+		if (used + ciphertextSize > this.options.quotaBytesPerDomain)
+			this.evict(domainId, domain, used + ciphertextSize - this.options.quotaBytesPerDomain);
+		if (this.used(domain) - heldForBlob + ciphertextSize > this.options.quotaBytesPerDomain)
+			return { kind: "quota" };
 		const generation = (entry?.lease?.generation ?? 0) + 1;
-		const lease = newLease(generation, this.now(), undefined, size);
-		domain.index.entries[blobId] = { origin, lastReadAt: entry?.lastReadAt ?? this.now(), lease };
+		const lease = newLease(generation, this.now(), undefined, ciphertextSize);
+		domain.index.entries[blobId] = {
+			origin,
+			lastReadAt: entry?.lastReadAt ?? this.now(),
+			size,
+			ciphertextSize,
+			ciphertextDigest,
+			epoch,
+			lease,
+		};
+		this.persistRecovery(domainId, blobId, domain.index.entries[blobId]);
 		this.persist(domainId, domain.index);
 		return { kind: "lease", lease };
 	}
@@ -81,14 +133,16 @@ export class RouterBlobCache {
 		if (entry.lease.generation !== lease.generation) return { kind: "generation_mismatch" };
 		if (!leaseMatches(entry.lease, lease, this.now())) return { kind: "lease_expired" };
 		const current = domain.store.stat(blobId);
-		if (offset + bytes.length > MAX_BLOB_BYTES) return { kind: "too_large" };
+		if (offset + bytes.length > sealedBlobSize(MAX_BLOB_BYTES)) return { kind: "too_large" };
 		if (offset > current.have) return { kind: "gap" };
 		if (entry.lease.expectedSize !== undefined && offset + bytes.length > entry.lease.expectedSize)
 			return { kind: "too_large" };
+		if (final && entry.lease.expectedSize !== offset + bytes.length) return { kind: "size_mismatch" };
 		try {
-			const result = domain.store.write(blobId, offset, bytes, final);
+			if (!entry.ciphertextDigest) return { kind: "generation_mismatch" };
+			const result = domain.store.write(blobId, offset, bytes, final, entry.ciphertextDigest);
 			if (result.complete) {
-				entry.size = result.have;
+				entry.ciphertextSize = result.have;
 				delete entry.lease;
 			}
 			this.persist(domainId, domain.index);
@@ -102,8 +156,20 @@ export class RouterBlobCache {
 	stat(domainId: string, blobId: string): CacheStat {
 		const domain = this.domain(domainId);
 		const entry = domain.index.entries[blobId];
-		if (domain.store.stat(blobId).complete && entry?.size !== undefined) {
-			return { kind: "complete", size: entry.size, origin: entry.origin, lastReadAt: entry.lastReadAt };
+		if (
+			domain.store.stat(blobId).complete &&
+			entry?.size !== undefined &&
+			entry.ciphertextSize !== undefined &&
+			entry.epoch !== undefined
+		) {
+			return {
+				kind: "complete",
+				size: entry.size,
+				ciphertextSize: entry.ciphertextSize,
+				epoch: entry.epoch,
+				origin: entry.origin,
+				lastReadAt: entry.lastReadAt,
+			};
 		}
 		return { kind: "miss", origin: entry?.origin };
 	}
@@ -115,6 +181,7 @@ export class RouterBlobCache {
 		const entry = domain.index.entries[blobId];
 		if (entry) {
 			entry.lastReadAt = this.now();
+			this.persistRecovery(domainId, blobId, entry);
 			this.persist(domainId, domain.index);
 		}
 		return result;
@@ -123,7 +190,7 @@ export class RouterBlobCache {
 	sweep(now = this.now()): void {
 		for (const [domainId, domain] of this.domains) {
 			this.reconcile(domain, now);
-			this.evict(domain, Math.max(0, this.used(domain) - this.options.quotaBytesPerDomain));
+			this.evict(domainId, domain, Math.max(0, this.used(domain) - this.options.quotaBytesPerDomain));
 			this.persist(domainId, domain.index);
 		}
 	}
@@ -133,7 +200,7 @@ export class RouterBlobCache {
 			if (!entry.lease) continue;
 			const stat = domain.store.stat(blobId);
 			if (stat.complete) {
-				entry.size = stat.have;
+				entry.ciphertextSize = stat.have;
 				delete entry.lease;
 			} else if (entry.lease.expiresAt <= now) {
 				// Retain the origin for later misses.
@@ -154,7 +221,7 @@ export class RouterBlobCache {
 			if (!index || typeof index.entries !== "object") throw new Error("invalid index");
 		} catch {
 			index = { entries: {} };
-			this.rebuild(root, index);
+			this.rebuild(domainId, root, index);
 		}
 		const result = { store: new BlobStore(root), index };
 		this.reconcile(result, this.now());
@@ -174,30 +241,48 @@ export class RouterBlobCache {
 		}
 	}
 
-	private rebuild(root: string, index: CacheIndex): void {
+	private rebuild(domainId: string, root: string, index: CacheIndex): void {
 		for (const fanout of readDirectories(root)) {
 			for (const name of readFiles(path.join(root, fanout))) {
 				if (name.endsWith(".part") || name.length !== 64) continue;
 				const blobId = `sha256-${name}`;
-				index.entries[blobId] = {
-					origin: { domainId: "", gatewayId: "" },
-					lastReadAt: 0,
-					size: fs.statSync(path.join(root, fanout, name)).size,
-				};
+				const file = path.join(root, fanout, name);
+				// An unreadable sidecar is transient. Keep ciphertext until the next open. Absent or
+				// invalid metadata condemns the file.
+				let recovery: CacheRecoveryEntry | null;
+				try {
+					recovery = this.readRecovery(domainId, blobId);
+				} catch {
+					continue;
+				}
+				if (
+					recovery &&
+					fs.statSync(file).size === recovery.ciphertextSize &&
+					fileDigest(file) === recovery.ciphertextDigest
+				) {
+					index.entries[blobId] = recovery;
+				} else {
+					fs.rmSync(file, { force: true });
+					this.removeRecovery(domainId, blobId);
+				}
 			}
 		}
 	}
 
-	private evict(domain: { store: BlobStore; index: CacheIndex }, bytes: number): void {
+	private evict(domainId: string, domain: { store: BlobStore; index: CacheIndex }, bytes: number): void {
 		if (bytes <= 0) return;
 		const candidates = Object.entries(domain.index.entries)
 			.filter(([blobId, entry]) => !entry.lease && domain.store.stat(blobId).complete)
 			.sort(([, a], [, b]) => a.lastReadAt - b.lastReadAt);
 		let remaining = bytes;
 		for (const [blobId, entry] of candidates) {
-			const size = entry.size ?? 0;
+			const size = entry.ciphertextSize ?? 0;
 			domain.store.remove(blobId);
 			delete entry.size;
+			delete entry.ciphertextSize;
+			delete entry.ciphertextDigest;
+			delete entry.epoch;
+			this.removeRecovery(domainId, blobId);
 			remaining -= size;
 			if (remaining <= 0) break;
 		}
@@ -211,12 +296,82 @@ export class RouterBlobCache {
 	}
 
 	private used(domain: { store: BlobStore; index: CacheIndex }): number {
-		return Object.keys(domain.index.entries).reduce((sum, blobId) => sum + domain.store.stat(blobId).have, 0);
+		return Object.entries(domain.index.entries).reduce(
+			(sum, [blobId, entry]) => sum + Math.max(domain.store.stat(blobId).have, entry.lease?.expectedSize ?? 0),
+			0,
+		);
 	}
 
 	private persist(domainId: string, index: CacheIndex): void {
 		const file = path.join(this.options.dataDir, "blobs", domainId, "cache", "index.json");
 		writeFileAtomic(file, JSON.stringify(index), { fsyncFile: true, fsyncDirectory: true });
+	}
+
+	private persistRecovery(domainId: string, blobId: string, entry: CacheEntry): void {
+		if (
+			entry.size === undefined ||
+			entry.ciphertextSize === undefined ||
+			entry.ciphertextDigest === undefined ||
+			entry.epoch === undefined
+		)
+			return;
+		writeFileAtomic(
+			this.recoveryPath(domainId, blobId),
+			JSON.stringify({
+				origin: entry.origin,
+				lastReadAt: entry.lastReadAt,
+				size: entry.size,
+				ciphertextSize: entry.ciphertextSize,
+				ciphertextDigest: entry.ciphertextDigest,
+				epoch: entry.epoch,
+			}),
+			{ fsyncFile: true, fsyncDirectory: true },
+		);
+	}
+
+	/** Null means absent or invalid metadata. Other read failures throw to preserve valid ciphertext. */
+	private readRecovery(domainId: string, blobId: string): CacheRecoveryEntry | null {
+		let raw: string;
+		try {
+			raw = fs.readFileSync(this.recoveryPath(domainId, blobId), "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+			throw error;
+		}
+		try {
+			const value = JSON.parse(raw) as Partial<CacheRecoveryEntry>;
+			if (
+				!value.origin ||
+				value.origin.domainId !== domainId ||
+				typeof value.origin.gatewayId !== "string" ||
+				typeof value.lastReadAt !== "number" ||
+				!Number.isFinite(value.lastReadAt) ||
+				typeof value.size !== "number" ||
+				!Number.isSafeInteger(value.size) ||
+				value.size < 0 ||
+				value.size > MAX_BLOB_BYTES ||
+				typeof value.ciphertextSize !== "number" ||
+				!Number.isSafeInteger(value.ciphertextSize) ||
+				value.ciphertextSize !== sealedBlobSize(value.size) ||
+				!isBlobId(value.ciphertextDigest ?? "") ||
+				typeof value.epoch !== "number" ||
+				!Number.isSafeInteger(value.epoch) ||
+				value.epoch < 1
+			)
+				return null;
+			return value as CacheRecoveryEntry;
+		} catch {
+			return null;
+		}
+	}
+
+	private recoveryPath(domainId: string, blobId: string): string {
+		const hash = blobId.slice("sha256-".length);
+		return path.join(this.options.dataDir, "blob-cache-metadata", domainId, hash.slice(0, 2), `${hash}.json`);
+	}
+
+	private removeRecovery(domainId: string, blobId: string): void {
+		fs.rmSync(this.recoveryPath(domainId, blobId), { force: true });
 	}
 }
 
@@ -234,4 +389,20 @@ function readFiles(directory: string): string[] {
 	} catch {
 		return [];
 	}
+}
+
+function fileDigest(file: string): string {
+	const hash = crypto.createHash("sha256");
+	const descriptor = fs.openSync(file, "r");
+	try {
+		const bytes = Buffer.alloc(1 << 20);
+		for (;;) {
+			const count = fs.readSync(descriptor, bytes, 0, bytes.length, null);
+			if (count <= 0) break;
+			hash.update(bytes.subarray(0, count));
+		}
+	} finally {
+		fs.closeSync(descriptor);
+	}
+	return `sha256-${hash.digest("hex")}`;
 }

@@ -31,7 +31,7 @@ export interface ContentAad {
 	domainId: string;
 	ownerSignPub: string;
 	epoch: number;
-	kind: ContentKind;
+	kind: ContentKind | `blob\n${string}\n${number}\n${0 | 1}`;
 }
 
 export function contentAad({ domainId, ownerSignPub, epoch, kind }: ContentAad): Buffer {

@@ -1,8 +1,15 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { GatewayBridge } from "../federation-server/gatewayBridge.js";
 import { signAdmission, signRegister } from "../shared/admission.js";
+import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signRowEnvelope } from "../shared/schemasInbox.js";
+import { sealBlobChunk } from "../shared/sealed-blob.js";
 
 function socket() {
 	const sent: Record<string, unknown>[] = [];
@@ -83,6 +90,47 @@ const signedRow = (envelope: Parameters<typeof signRowEnvelope>[0], signPriv: st
 });
 
 describe("GatewayBridge inbox", () => {
+	it("accepts sealed cache begin and chunk frames", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-blob-"));
+		try {
+			const cache = new RouterBlobCache({ dataDir: root, quotaBytesPerDomain: 1_000 });
+			const { bridge } = await registered(fakeInbox(), false, cache as never);
+			const plain = Buffer.from("bridge blob");
+			const blobId = blobIdFor(plain);
+			const ciphertext = sealBlobChunk(
+				plain,
+				Buffer.alloc(32, 2),
+				{ domainId: "domain", ownerSignPub: "owner", epoch: 1, blobId },
+				0,
+				true,
+			);
+			const ciphertextDigest = `sha256-${crypto.createHash("sha256").update(ciphertext).digest("hex")}`;
+			const begun = (await bridge.handleCall("c1", "blob_begin", {
+				blobId,
+				size: plain.length,
+				ciphertextSize: ciphertext.length,
+				ciphertextDigest,
+				epoch: 1,
+				store: "cache",
+				incarnation: 1,
+			})) as { kind: string; lease: { id: string; generation: number } };
+			expect(begun.kind).toBe("lease");
+			expect(
+				await bridge.handleCall("c1", "blob_chunk", {
+					blobId,
+					store: "cache",
+					lease: begun.lease,
+					offset: 0,
+					bytes: ciphertext.toString("base64"),
+					final: true,
+					incarnation: 1,
+				}),
+			).toMatchObject({ complete: true });
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("registers an incarnation, enforces it, appends a session row, and retires it on ack", async () => {
 		const received: unknown[] = [];
 		const { bridge, gateway, reply } = await registered(

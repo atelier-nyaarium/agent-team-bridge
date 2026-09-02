@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { InboxAddress, InboxRow } from "../shared/schemasInbox.js";
+import { sealBlobChunk } from "../shared/sealed-blob.js";
 
 const roots: string[] = [];
 const envelope = (kind: "board.title" | "board.body" | "board.name" = "board.title") => ({
@@ -168,9 +170,17 @@ describe("router board service", () => {
 			[blobB, bytesB],
 		] as const) {
 			held.hold("a", blobId, { kind: "entry", id: "one" });
-			const lease = held.begin("a", blobId);
+			const ciphertext = sealBlobChunk(
+				bytes,
+				Buffer.alloc(32, 1),
+				{ domainId: "a", ownerSignPub: "owner", epoch: 1, blobId },
+				0,
+				true,
+			);
+			const digest = `sha256-${crypto.createHash("sha256").update(ciphertext).digest("hex")}`;
+			const lease = held.begin("a", blobId, bytes.length, ciphertext.length, digest, 1);
 			if (lease.kind !== "lease") throw new Error("expected lease");
-			held.commitChunk("a", blobId, lease.lease, 0, bytes, true);
+			held.commitChunk("a", blobId, lease.lease, 0, ciphertext, true);
 		}
 		const attachment = (blobId: string) => ({ blobId, size: 1, mime: "text/plain", blobGateway: "g" });
 		service.write(

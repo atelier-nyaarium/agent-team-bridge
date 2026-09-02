@@ -1,9 +1,11 @@
 import type { BlobFetchParams, BlobFetchReplyParams } from "../../shared/router-protocol.js";
+import { ciphertextRangeForPlaintext } from "../../shared/sealed-blob.js";
 import type { RouterBlobCache } from "../blobs/routerBlobCache.js";
 import { GATEWAY_RELAY_TIMEOUT_MS } from "../relayTimeouts.js";
 
 export type BlobFetchAnswer =
-	| { outcome: "fetched"; bytes: string; eof: boolean }
+	| { outcome: "fetched"; bytes: string; eof: boolean; sealed: false }
+	| { outcome: "fetched"; bytes: string; eof: boolean; sealed: true; epoch: number; offset: number; size: number }
 	| { outcome: "absent" | "unreachable" | "timeout" };
 
 export class BlobFetchRoute {
@@ -34,12 +36,22 @@ export class BlobFetchRoute {
 		const range = params.range ?? { offset: 0, length: 1_048_576 };
 		const stat = this.cache.stat(domainId, params.blobId);
 		if (stat.kind === "complete") {
-			const value = this.cache.read(domainId, params.blobId, range.offset, range.length);
+			const covering = ciphertextRangeForPlaintext(range.offset, range.length, stat.size);
+			const value = this.cache.read(
+				domainId,
+				params.blobId,
+				covering.ciphertextOffset,
+				covering.ciphertextLength,
+			);
 			if (Buffer.isBuffer(value))
 				return Promise.resolve({
 					outcome: "fetched",
 					bytes: value.toString("base64"),
-					eof: range.offset + value.length >= stat.size,
+					eof: range.offset + range.length >= stat.size,
+					sealed: true,
+					epoch: stat.epoch,
+					offset: covering.plaintextOffset,
+					size: stat.size,
 				});
 		}
 		const origin = params.origin ?? (stat.kind === "miss" ? stat.origin : undefined);
@@ -74,7 +86,7 @@ export class BlobFetchRoute {
 		clearTimeout(pending.timer);
 		this.pending.delete(reply.opId);
 		if (reply.outcome === "absent") pending.resolve({ outcome: "absent" });
-		else pending.resolve({ outcome: "fetched", bytes: reply.bytes ?? "", eof: reply.eof ?? true });
+		else pending.resolve({ outcome: "fetched", bytes: reply.bytes ?? "", eof: reply.eof ?? true, sealed: false });
 		return true;
 	}
 

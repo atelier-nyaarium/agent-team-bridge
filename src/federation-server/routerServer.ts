@@ -100,7 +100,7 @@ export class RouterServer {
 			dataDir: params.dataDir,
 			quotaBytesPerDomain: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
 		});
-		this.referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir });
+		this.referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir, quotaBytesPerDomain: limit });
 		this.ownerOps = new OwnerOpIntake({
 			inbox: this.inbox,
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,

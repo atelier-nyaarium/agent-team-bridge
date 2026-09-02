@@ -1,14 +1,7 @@
-////////////////////////////////
-//  Uploading blobs to the Router
-//
-//  The origin keeps its copy either way: the cache is a second place to read from, not a handover.
-//
-//  Unwired on purpose. This moves bytes as they are, and the Router's stores are specified sealed.
-//  Sealing a blob is unsolved: the stores verify against the plaintext digest the blob id asserts,
-//  and a range read has to land on a decryptable boundary. Wiring it hands the Router plaintext.
-
+import crypto from "node:crypto";
 import type { BlobStore } from "../../shared/blob-store.js";
-import { BLOB_CHUNK_BYTES } from "../../shared/router-protocol.js";
+import { BLOB_CHUNK_BYTES, BLOB_CIPHERTEXT_CHUNK_BYTES, BLOB_NONCE_BYTES } from "../../shared/router-protocol.js";
+import { sealBlobChunk, sealedBlobChunkCount, sealedBlobSize } from "../../shared/sealed-blob.js";
 
 export type BlobRef = { kind: "entry" | "row" | "scheduled"; id: string };
 
@@ -16,6 +9,12 @@ export interface BlobUploaderDeps {
 	call: (action: string, params: Record<string, unknown>) => Promise<{ error?: string; result?: unknown }>;
 	blobs: Pick<BlobStore, "stat" | "read">;
 	incarnation: () => number | null;
+	domainId: string;
+	ownerSignPub: () => string | null;
+	keys: {
+		epochs(): number[];
+		keyFor(epoch: number): Buffer | null;
+	};
 }
 
 type BeginAnswer =
@@ -37,7 +36,35 @@ export function createBlobUploader(deps: BlobUploaderDeps) {
 		// Copy complete blobs only.
 		if (!stat.complete || stat.size === undefined) return { kind: "absent" };
 		const size = stat.size;
-		const begun = await deps.call("blob_begin", { blobId, size, store, ...(ref ? { ref } : {}) });
+		const ownerSignPub = deps.ownerSignPub();
+		const epoch = deps.keys.epochs().at(-1);
+		const key = epoch === undefined ? null : deps.keys.keyFor(epoch);
+		if (!ownerSignPub || epoch === undefined || !key)
+			return { kind: "failed", error: "Content key is unavailable" };
+		const context = { domainId: deps.domainId, ownerSignPub, epoch, blobId };
+		const nonces: Buffer[] = [];
+		const hash = crypto.createHash("sha256");
+		for (let index = 0; index < sealedBlobChunkCount(size); index++) {
+			const offset = index * BLOB_CHUNK_BYTES;
+			const length = Math.min(BLOB_CHUNK_BYTES, size - offset);
+			const nonce = crypto.randomBytes(BLOB_NONCE_BYTES);
+			nonces.push(nonce);
+			const read = length === 0 ? { bytes: Buffer.alloc(0) } : deps.blobs.read(blobId, offset, length);
+			hash.update(
+				sealBlobChunk(read.bytes, key, context, index, index + 1 === sealedBlobChunkCount(size), nonce),
+			);
+		}
+		const ciphertextSize = sealedBlobSize(size);
+		const ciphertextDigest = `sha256-${hash.digest("hex")}`;
+		const begun = await deps.call("blob_begin", {
+			blobId,
+			size,
+			ciphertextSize,
+			ciphertextDigest,
+			epoch,
+			store,
+			...(ref ? { ref } : {}),
+		});
 		if (begun.error) return { kind: "failed", error: begun.error };
 		const answer = (begun.result ?? {}) as BeginAnswer;
 		// Existing blobs need no bytes.
@@ -45,23 +72,27 @@ export function createBlobUploader(deps: BlobUploaderDeps) {
 		if (!("kind" in answer) || answer.kind !== "lease")
 			return { kind: "failed", error: "error" in answer ? answer.error : "begin refused" };
 		const lease = answer.lease;
-		for (let offset = 0; offset < size; offset += BLOB_CHUNK_BYTES) {
+		for (let index = 0; index < sealedBlobChunkCount(size); index++) {
+			const offset = index * BLOB_CHUNK_BYTES;
 			const length = Math.min(BLOB_CHUNK_BYTES, size - offset);
-			const read = deps.blobs.read(blobId, offset, length);
-			const final = offset + length >= size;
+			const read = length === 0 ? { bytes: Buffer.alloc(0) } : deps.blobs.read(blobId, offset, length);
+			const final = index + 1 === sealedBlobChunkCount(size);
+			const frame = sealBlobChunk(read.bytes, key, context, index, final, nonces[index]);
 			const sent = await deps.call("blob_chunk", {
 				blobId,
 				store,
 				lease,
-				offset,
-				bytes: read.bytes.toString("base64"),
+				offset: index * BLOB_CIPHERTEXT_CHUNK_BYTES,
+				bytes: frame.toString("base64"),
 				final,
 			});
 			if (sent.error) return { kind: "failed", error: sent.error };
-			const chunkAnswer = (sent.result ?? {}) as { kind?: string; error?: string };
+			const chunkAnswer = (sent.result ?? {}) as { kind?: string; error?: string; complete?: boolean };
 			// A kind on the answer names the refusal; success carries none.
 			if (chunkAnswer.error) return { kind: "failed", error: chunkAnswer.error };
 			if (chunkAnswer.kind) return { kind: "failed", error: chunkAnswer.kind };
+			// Final verification may delete the partial. complete:false must not report an uploaded blob.
+			if (final && chunkAnswer.complete !== true) return { kind: "failed", error: "ciphertext_unverified" };
 		}
 		return { kind: "uploaded" };
 	}

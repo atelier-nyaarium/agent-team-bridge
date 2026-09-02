@@ -869,9 +869,14 @@ export async function startGateway(): Promise<void> {
 						outcome: "fetched",
 						bytes: read.bytes.toString("base64"),
 						eof: read.eof,
+						sealed: false,
 					});
 				} catch {
-					void routerClient.callInboxTool("blob_fetch_reply", { opId: request.opId, outcome: "absent" });
+					void routerClient.callInboxTool("blob_fetch_reply", {
+						opId: request.opId,
+						outcome: "absent",
+						sealed: false,
+					});
 				}
 			},
 		});
@@ -903,6 +908,9 @@ export async function startGateway(): Promise<void> {
 			call: (action, params) => routerClient.callInboxTool(action, params),
 			blobs: blobStore,
 			incarnation: () => routerClient.incarnation(),
+			domainId,
+			ownerSignPub: () => allowlist.ownerSignPub,
+			keys: contentKeyStore,
 		});
 		const boardClient = createBoardClient({
 			call: (action, params) => routerClient.callInboxTool(action, params),
@@ -1175,6 +1183,9 @@ export async function startGateway(): Promise<void> {
 			capabilityStore,
 			daemonCapabilityStore,
 			blobStore,
+			blobUploader: f?.blobUploader,
+			contentKeyStore: f?.contentKeyStore,
+			ownerSignPub: f ? () => f.allowlist.ownerSignPub : null,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			producerSignPriv: f ? identity().sign.priv : undefined,

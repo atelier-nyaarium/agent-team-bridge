@@ -10,7 +10,7 @@ export interface BlobStat {
 	have: number;
 	/** Total size once complete; unknown (undefined) while a transfer is still open. */
 	size?: number;
-	/** Written in full AND verified against the digest its own name asserts. */
+	/** Written in full and verified against its caller-supplied digest. */
 	complete: boolean;
 }
 
@@ -51,9 +51,6 @@ export function isBlobId(value: string): boolean {
 }
 
 /**
- * TODO: Re-home to dedicated storage. A blob lives on whichever Gateway received it, so one held by
- * a switched-off machine is unreachable.
- *
  * Content-addressed byte store.
  *
  * Two rules carry the design. A blob is named by the digest of its own contents, so the name is
@@ -89,7 +86,7 @@ export class BlobStore {
 	 * describe and the digest cannot detect. Re-writing an offset already held is a NO-OP rather
 	 * than an error, which is what makes a retried or duplicated chunk free.
 	 */
-	write(blobId: string, offset: number, chunk: Buffer, final: boolean): BlobWriteResult {
+	write(blobId: string, offset: number, chunk: Buffer, final: boolean, expectedDigest = blobId): BlobWriteResult {
 		this.assertId(blobId);
 		const current = this.stat(blobId);
 		if (current.complete) return { have: current.have, complete: true };
@@ -121,7 +118,7 @@ export class BlobStore {
 		// throwing. Sealing here would hash a truncated file, fail the digest, and DESTROY the whole
 		// transfer to punish a lost tail. Report the honest prefix instead and let the sender resume.
 		if (have < offset + chunk.length) return { have, complete: false };
-		return { have, complete: this.seal(blobId) };
+		return { have, complete: this.seal(blobId, expectedDigest) };
 	}
 
 	/** Range read. Never the whole file unless the caller asks for it a chunk at a time. */
@@ -199,12 +196,9 @@ export class BlobStore {
 	 * a durable job result, a thread row on a phone, or a message still in flight, and a counter that
 	 * has to be right in all four places is a counter that will be wrong in one.
 	 *
-	 * Be honest about the cost of being wrong: there is NO re-fetch path today. The sender's staging
-	 * copy has its own sweep and its container may be long gone, so evicting a blob a message still
-	 * names loses it, and the receiver sees a chip that never renders. The ceiling is therefore set
-	 * far above real traffic and eviction is a backstop against a runaway, not a routine event. What
-	 * keeps that honest is the mtime touch on every read, which is what puts a blob still being
-	 * fetched at the BACK of the queue instead of the front.
+	 * Re-fetch is recoverable while the holding Gateway or Router cache retains the bytes. Evicting
+	 * the last copy leaves references unreadable. Reads refresh mtime, keeping active fetches last in
+	 * eviction order.
 	 *
 	 * `.part` and `.ingest-*` files go first regardless of size. They are the debris of a transfer
 	 * that died, nobody can name them (a partial is invisible to [path] until it seals), and an
@@ -282,7 +276,7 @@ export class BlobStore {
 	 * claims. A blob that fails is destroyed rather than left to be re-fetched into the same
 	 * corrupt state, which is why a partial upload is invisible instead of subtly wrong.
 	 */
-	private seal(blobId: string): boolean {
+	private seal(blobId: string, expectedDigest: string): boolean {
 		const part = this.partPath(blobId);
 		const hash = crypto.createHash("sha256");
 		const fd = fs.openSync(part, "r");
@@ -296,7 +290,7 @@ export class BlobStore {
 		} finally {
 			fs.closeSync(fd);
 		}
-		if (`sha256-${hash.digest("hex")}` !== blobId) {
+		if (`sha256-${hash.digest("hex")}` !== expectedDigest) {
 			fs.rmSync(part, { force: true });
 			return false;
 		}

@@ -99,6 +99,9 @@ export interface RoutesDeps {
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
 	 * never move bytes, which makes a cross-Gateway fetch a clean refusal rather than a crash. */
 	blobStore?: import("../shared/blob-store.js").BlobStore;
+	blobUploader?: ReturnType<typeof import("./router/blobUploader.js").createBlobUploader>;
+	contentKeyStore?: Pick<import("./federation/contentKeyStore.js").ContentKeyStore, "keyFor">;
+	ownerSignPub?: (() => string | null) | null;
 	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
@@ -235,6 +238,9 @@ export function createRoutes({
 	routerClient,
 	sealer,
 	blobStore,
+	blobUploader,
+	contentKeyStore,
+	ownerSignPub,
 	crossDomainPeers,
 	resolvesLocalGateway,
 	touchShares,
@@ -380,8 +386,19 @@ export function createRoutes({
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
+		// The cache is sealed to THIS Domain's key, so it serves this Domain's own devices and nobody
+		// else. Uploading regardless of target is what lets a phone read an attachment while this
+		// gateway is asleep; a cross-Domain peer cannot open these bytes and falls back to origin.
+		const cachedRefs =
+			blobUploader && (op.kind === "send" || op.kind === "response_push")
+				? await blobUploader.uploadAll(
+						[...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])],
+						"cache",
+					)
+				: [];
 		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
-			// Blob sealing is required before cache upload.
+			// Not advertised to the peer: it holds none of this Domain's content keys, so naming them
+			// would promise a read it cannot perform.
 			const contentRefs: string[] = [];
 			// The gateway is the producer: it signs the envelope and seals the body to the peer.
 			const envelope = {
@@ -496,6 +513,15 @@ export function createRoutes({
 		localGatewayId,
 		relayToGateway,
 		inFlight: carryOver.blobFetches,
+		routerFetch: routerClient
+			? async (params) => {
+					const answer = await routerClient.callInboxTool("blob_fetch", params);
+					return { ok: !answer.error, result: answer.result, error: answer.error };
+				}
+			: undefined,
+		domainId: localDomainId ?? undefined,
+		ownerSignPub: ownerSignPub ?? undefined,
+		contentKeys: contentKeyStore,
 	});
 	const {
 		presenceForDomain,

@@ -794,14 +794,14 @@ only a ciphertext digest carried on `blob_begin`, which is what it can actually 
 verifies the plaintext digest after opening. That is stronger than the Router vouching for bytes,
 not a concession to get sealing in.
 
-**Ranges stay arithmetic.** Ciphertext offset is `index * (BLOB_CHUNK_BYTES + TAG_BYTES)`. The Router
-serves whole covering chunks and the reader trims after opening. The store learns the framing
-constants, never a key, so it stays opaque to content.
+**Ranges stay arithmetic.** Each frame is `nonce (12) + ciphertext (plaintext length) + tag (16)`.
+The full-chunk stride is `BLOB_CHUNK_BYTES + 28`, or 1,048,604 bytes. The Router serves whole
+covering chunks and the reader trims after opening. The store learns the framing constants, never a
+key, so it stays opaque to content.
 
-Work: `blob_begin` gains the ciphertext digest and a ciphertext size; `BlobStore` verifies that
-digest instead of the id; `blob_fetch` rounds a requested range out to chunk boundaries; the reader
-opens, trims, and checks the plaintext digest. Then wire the uploader's send-path caller and stop
-refusing both frames.
+The Router store callers pass the ciphertext digest to `BlobStore`. Plaintext callers retain id
+verification. `blob_fetch` rounds ranges to chunk boundaries. The reader opens, trims, and checks
+the plaintext digest.
 
 Rejected: a cleartext cache. It would make attachments the one content category the Router can read,
 against every other decision here, and it is the option that cannot be walked back once phones
@@ -851,7 +851,7 @@ Found by two audits of the completed phase.
 - **A payload naming what it may pin** (`gatewayBridge.ts` `blob_begin`): the held store took its
   reference from the frame with no check that the record exists, and the cache admitted against a
   size the caller declared while reserving nothing until the bytes arrived. Verdict, landed: both
-  upload frames are closed until the sealing design, the reservation, and a reference check exist.
+  upload frames require sealing, reservation, and reference validation.
 
 A second red team, over the fixes rather than the phase, found six more. Fresh code is where fresh
 bugs live, and four of these were introduced by the first round's own fixes.

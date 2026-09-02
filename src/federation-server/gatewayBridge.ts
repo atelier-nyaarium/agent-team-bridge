@@ -1,5 +1,4 @@
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
-import { decodeB64 } from "../shared/crypto.js";
 import {
 	BlobBeginParamsSchema,
 	BlobChunkParamsSchema,
@@ -402,7 +401,7 @@ export class GatewayBridge implements ToolProvider {
 			if (name === "session_upsert") return this.handleSessionUpsert(connId, params);
 			if (name === "session_forget") return this.handleSessionForget(connId, params);
 			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
-			if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload();
+			if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload(connId, name, params);
 			return this.handleBlobFetchReply(connId, params);
 		}
 		const frameHandler = this.frameHandlers.get(name);
@@ -663,17 +662,58 @@ export class GatewayBridge implements ToolProvider {
 		return this.blobFetch.fetch(reg.domainId, parsed.data);
 	}
 
-	/**
-	 * Uploads are CLOSED, both stores, and the closure is the security property.
-	 *
-	 * The Router's stores are specified sealed and sealing a blob is unsolved, so nothing may put
-	 * plaintext here. Left open, these would also be the only frames that let an admitted gateway
-	 * name its own quota: the cache admits against a size the caller declares and reserves nothing
-	 * until the bytes land, and the held store takes a reference from the payload with no record
-	 * behind it. Reopen them with the sealing design, the reservation, and a reference check.
-	 */
-	private handleBlobUpload(): unknown {
-		return { ok: false, error: "blob uploads are not enabled" };
+	private handleBlobUpload(connId: ConnectionId, name: string, params: Record<string, unknown>): unknown {
+		const reg = this.connGateways.get(connId);
+		if (!reg) return { ok: false, error: "invalid blob upload" };
+		if (name === "blob_begin") {
+			const parsed = BlobBeginParamsSchema.safeParse(params);
+			if (!parsed.success) return { ok: false, error: "invalid blob_begin" };
+			const value = parsed.data;
+			if (value.store === "cache") {
+				if (!this.blobCache) return { ok: false, error: "blob cache unavailable" };
+				return this.blobCache.begin(
+					reg.domainId,
+					value.blobId,
+					{ domainId: reg.domainId, gatewayId: reg.gatewayId },
+					value.size,
+					value.ciphertextSize,
+					value.ciphertextDigest,
+					value.epoch,
+				);
+			}
+			if (!this.referenceHeld || !value.ref) return { ok: false, error: "held blob requires a reference" };
+			const begun = this.referenceHeld.begin(
+				reg.domainId,
+				value.blobId,
+				value.size,
+				value.ciphertextSize,
+				value.ciphertextDigest,
+				value.epoch,
+			);
+			if (begun.kind !== "quota") this.referenceHeld.hold(reg.domainId, value.blobId, value.ref);
+			return begun;
+		}
+		const parsed = BlobChunkParamsSchema.safeParse(params);
+		if (!parsed.success) return { ok: false, error: "invalid blob_chunk" };
+		const value = parsed.data;
+		const bytes = Buffer.from(value.bytes, "base64");
+		return value.store === "cache"
+			? (this.blobCache?.commitChunk(
+					reg.domainId,
+					value.blobId,
+					value.lease,
+					value.offset,
+					bytes,
+					value.final,
+				) ?? { ok: false, error: "blob cache unavailable" })
+			: (this.referenceHeld?.commitChunk(
+					reg.domainId,
+					value.blobId,
+					value.lease,
+					value.offset,
+					bytes,
+					value.final,
+				) ?? { ok: false, error: "held blob store unavailable" });
 	}
 
 	private handleBlobFetchReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
