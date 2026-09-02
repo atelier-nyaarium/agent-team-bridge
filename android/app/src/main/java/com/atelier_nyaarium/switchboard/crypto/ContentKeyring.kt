@@ -9,6 +9,13 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 	private val load = store?.loadContentKeys() ?: ContentKeysLoad.Loaded(emptyMap())
 	private val keys =
 		(load as? ContentKeysLoad.Loaded)?.keys?.mapValues { it.value.copyOf() }?.toMutableMap() ?: mutableMapOf()
+	// Only the keyring can mint Installed.
+	sealed interface Merge {
+		data class Refused internal constructor(val reason: String) : Merge
+		data object Unchanged : Merge
+		data class Installed internal constructor(val next: Map<Int, ByteArray>, val epochs: List<Int>) : Merge
+	}
+
 	sealed interface InstallOutcome {
 		data object Installed : InstallOutcome
 		data object AlreadyPresent : InstallOutcome
@@ -36,39 +43,46 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 
 	fun deriveOwned(ownerIdentity: Crypto.Identity, domainId: String, upToEpoch: Int) {
 		require(upToEpoch >= 1) { "content epoch must be an integer from 1" }
-		for (epoch in 1..upToEpoch) keys[epoch] = Crypto.deriveContentKey(ownerIdentity.sign.priv, domainId, epoch)
-		persist()
+		val next = keys.toMutableMap()
+		for (epoch in 1..upToEpoch) next[epoch] = Crypto.deriveContentKey(ownerIdentity.sign.priv, domainId, epoch)
+		commit(installed(next))
 	}
 
 	fun install(envelope: KeyEnvelope, keyring: Keyring): InstallOutcome {
-		val before = keys.toMap()
-		val classified = classify(listOf(envelope), keyring) ?: return InstallOutcome.Refused
-		val outcome = if (classified.size == before.size) InstallOutcome.AlreadyPresent else InstallOutcome.Installed
-		if (outcome == InstallOutcome.Installed) commit(classified)
-		return outcome
+		return when (val merge = classify(listOf(envelope), keyring)) {
+			is Merge.Refused -> InstallOutcome.Refused
+			Merge.Unchanged -> InstallOutcome.AlreadyPresent
+			is Merge.Installed -> if (commit(merge)) InstallOutcome.Installed else InstallOutcome.Refused
+		}
 	}
 
-	fun classify(envelopes: List<KeyEnvelope>, keyring: Keyring): Map<Int, ByteArray>? {
-		check(load !is ContentKeysLoad.Corrupt) { "content key slot is corrupt" }
+	fun classify(envelopes: List<KeyEnvelope>, keyring: Keyring): Merge {
+		if (load is ContentKeysLoad.Corrupt) return Merge.Refused("content key slot is corrupt")
 		val merged = keys.mapValues { it.value.copyOf() }.toMutableMap()
 		for (envelope in envelopes) {
-			if (keyring.resolveAdmittedConsole(envelope.signerSignPub) == null) return null
-			val (epoch, key) = runCatching { Crypto.unwrapContentKey(envelope, recipientBoxPrivB64) }.getOrNull() ?: return null
+			if (keyring.resolveAdmittedConsole(envelope.signerSignPub) == null) {
+				return Merge.Refused("key signer is not an admitted console")
+			}
+			val (epoch, key) = runCatching { Crypto.unwrapContentKey(envelope, recipientBoxPrivB64) }.getOrNull()
+				?: return Merge.Refused("content key envelope is invalid")
 			val held = merged[epoch]
 			if (held != null && !held.contentEquals(key)) {
 				DebugLog.log("ContentKeys", "content key mismatch epoch=$epoch")
-				return null
+				return Merge.Refused("content key conflicts with the held epoch")
 			}
 			merged.putIfAbsent(epoch, key.copyOf())
 		}
-		return merged
+		return if (merged.keys == keys.keys) Merge.Unchanged else installed(merged)
 	}
 
-	fun commit(keys: Map<Int, ByteArray>) {
-		check(load !is ContentKeysLoad.Corrupt) { "content key slot is corrupt" }
-		this.keys.clear()
-		this.keys.putAll(keys.mapValues { it.value.copyOf() })
-		persist()
+	fun commit(merge: Merge.Installed): Boolean {
+		val next = merge.next.mapValues { it.value.copyOf() }
+		val saved = store?.saveContentKeys(next) ?: true
+		if (saved) {
+			keys.clear()
+			keys.putAll(next)
+		}
+		return saved
 	}
 
 	fun keyFor(epoch: Int): ByteArray? = keys[epoch]?.copyOf()
@@ -82,7 +96,6 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 		}
 		}
 
-	private fun persist() {
-		store?.saveContentKeys(keys)
-	}
+	private fun installed(next: Map<Int, ByteArray>): Merge.Installed =
+		Merge.Installed(next.mapValues { it.value.copyOf() }, next.keys.sorted())
 }

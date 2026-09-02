@@ -33,35 +33,26 @@ import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapBundle
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
+import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.json.Json
 
-/** One admitted member, for the management board. */
+/** Admitted member shown on the management board. */
 data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
 
-/** Outcome of restoring an owner backup, so the UI can tell a wrong passphrase apart from a
- * backup that belongs to a different owner (which restore refuses). */
+/** Owner backup restore outcome. */
 enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 
-/** Owner public material for the settings cards (no private key). */
+/** Public owner material for settings. */
 data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
 
-/**
- * The Domain trust anchor: the owner root keypair (sole signer of admissions and
- * revocations), the console member identity, and the mirrored keyring the Console
- * resolves peers against. The owner key never leaves the device except as a
- * passphrase-encrypted backup. Admissions and revocations are signed here and submitted
- * to the Router; the Console verifies every Gateway it seals to against this keyring.
- */
+/** Domain trust anchor, console identity, and mirrored keyring. */
 class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }
 
-	/** The owner root identity, generated and persisted on first access. Synchronized because a
-	 * non-atomic generate-then-persist would let two concurrent callers mint different keys and
-	 * orphan one. Mints ONLY on an absent key; a corrupt stored key throws rather than minting
-	 * over it, so a transient decode fault never silently re-roots the device. */
+	/** Generates once and refuses to replace a corrupt stored identity. */
 	@Synchronized
 	private fun ownerIdentity(): Crypto.Identity =
 		when (val load = store.loadOwnerIdentity()) {
@@ -70,8 +61,7 @@ class FederationManager(private val store: AppStateStore) {
 			IdentityLoad.Corrupt -> error("owner key corrupt - the stored owner root key did not decode; restore from backup or recover the Domain")
 		}
 
-	/** The console member identity, generated and persisted on first access (atomic, and
-	 * mint-on-absent-only, for the same reasons as the owner identity). */
+	/** Generates and persists the console identity once. */
 	@Synchronized
 	fun consoleIdentity(): Crypto.Identity =
 		when (val load = store.loadIdentity()) {
@@ -80,23 +70,13 @@ class FederationManager(private val store: AppStateStore) {
 			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run setup.sh")
 		}
 
-	/** Owner public material for display, or null when the stored owner key is corrupt. Never
-	 * throws and never mints over a corrupt key, so a settings card shows a restore prompt
-	 * instead of crashing. An absent key still mints, matching [ownerIdentity]. */
+	/** Returns public owner material, or null for a corrupt stored key. */
 	fun ownerKeysForDisplay(): OwnerKeysView? =
 		runCatching { ownerIdentity() }.getOrNull()?.let {
 			OwnerKeysView(it.sign.pub, it.box.pub, Crypto.fingerprint(it.sign.pub))
 		}
 
-	/** Whether THIS device holds the private key that roots its Domain. Read WITHOUT minting: the
-	 * absent case is exactly an admitted second console, and [ownerIdentity] would seat a throwaway
-	 * root on it. A stored key that does not match the keyring's root (a throwaway already minted)
-	 * is not the holder either, so the comparison is against the Domain's own root, never a bare
-	 * "a key exists". What "Forget this Domain" decides its warning from.
-	 *
-	 * NO stored snapshot with a stored key answers HOLDER. That is the first phone before its first
-	 * keyring sync (a second console is handed its snapshot at approval, so it always has one), and
-	 * the wrong answer there shows the harmless warning over the only copy of the key. */
+	/** Checks ownership without minting a key. */
 	fun holdsDomainOwnerKey(): Boolean {
 		val held = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
 		val root = Keyring.parse(store.loadDomain())?.ownerSignPub ?: return true
@@ -317,6 +297,16 @@ class FederationManager(private val store: AppStateStore) {
 
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
+
+	@Synchronized
+	fun installContentKeys(envelopes: List<KeyEnvelope>, trust: Keyring): ContentKeyring.Merge {
+		val keyring = ContentKeyring(consoleIdentity().box.priv, store)
+		return when (val merge = keyring.classify(envelopes, trust)) {
+			is ContentKeyring.Merge.Installed ->
+				if (keyring.commit(merge)) merge else ContentKeyring.Merge.Refused("content key commit failed")
+			else -> merge
+		}
+	}
 
 	/** Seal transport and content keys for Gateway bootstrap. */
 	fun sealBundle(

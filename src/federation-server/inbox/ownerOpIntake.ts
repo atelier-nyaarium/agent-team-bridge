@@ -1,0 +1,124 @@
+import type { SignedAdmission, SignedRevocation } from "../../shared/admission.js";
+import { REGISTER_MAX_SKEW_MS, resolveAdmittedConsole } from "../../shared/admission.js";
+import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
+import {
+	formatInboxAddress,
+	type InboxRow,
+	InboxRowInputSchema,
+	type OpResultEnvelope,
+	type OwnerOp,
+	OwnerOpSchema,
+	parseInboxAddress,
+	verifyOwnerOp,
+} from "../../shared/schemasInbox.js";
+import { OwnerQuarantined } from "../owner/ownerStateStore.js";
+import type { InboxService } from "./inboxService.js";
+
+export interface OwnerOpIntakeParams {
+	inbox: InboxService;
+	getDomain: (
+		domainId: string,
+	) => { ownerSignPub: string; admissions: SignedAdmission[]; revocations: SignedRevocation[] } | null;
+	push: (domainId: string, address: string, rows: InboxRow[]) => boolean;
+	now?: () => number;
+}
+
+export class OwnerOpIntake {
+	private readonly nonces = new Map<string, number>();
+	private readonly now: () => number;
+
+	constructor(private readonly params: OwnerOpIntakeParams) {
+		this.now = params.now ?? Date.now;
+	}
+
+	async handle(raw: unknown): Promise<unknown> {
+		const parsed = OwnerOpSchema.safeParse(raw);
+		if (!parsed.success) return { malformed: true };
+		const op = parsed.data;
+		const domain = this.params.getDomain(op.domainId);
+		const refused = (reason: string): OpResultEnvelope => ({
+			opKey: { conversationId: op.conversationId, opId: op.opId },
+			outcome: "refused",
+			reason,
+		});
+		if (
+			!domain ||
+			!verifyOwnerOp(op) ||
+			!resolveAdmittedConsole(domain.admissions, domain.revocations, domain.ownerSignPub, op.signerSignPub)
+		)
+			return refused("not admitted");
+		if (Math.abs(this.now() - op.at) > REGISTER_MAX_SKEW_MS) return refused("stale");
+		for (const [nonce, at] of this.nonces) if (this.now() - at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
+		if (this.nonces.has(op.nonce)) return refused("replay");
+		this.nonces.set(op.nonce, op.at);
+		try {
+			return this.dispatch(op, refused);
+		} catch (error) {
+			if (error instanceof OwnerQuarantined)
+				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
+			throw error;
+		}
+	}
+
+	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown {
+		const value = op.op;
+		switch (value.kind) {
+			case "deliver":
+				return this.deliver(op, value, refused);
+			case "consumer_register":
+				return this.params.inbox.registerConsumer(
+					op.domainId,
+					op.signerSignPub,
+					Number(value.incarnation ?? 0),
+				);
+			case "inbox_read":
+				return this.params.inbox.readOwner(
+					op.domainId,
+					op.signerSignPub,
+					Number(value.fromSeq ?? 1),
+					Math.min(Number(value.limit ?? 100), 500),
+					value.cursorEpoch === undefined ? undefined : Number(value.cursorEpoch),
+				);
+			case "inbox_advance":
+				return this.params.inbox.advanceCursor(
+					op.domainId,
+					op.signerSignPub,
+					Number(value.cursor),
+					Number(value.cursorEpoch),
+				);
+			case "op_result":
+				return this.params.inbox.opResult(op.domainId, {
+					conversationId: String(value.conversationId),
+					opId: String(value.opId),
+				});
+			default:
+				return refused("unsupported");
+		}
+	}
+
+	/** Console writes stay in its Domain and use its opKey. */
+	private deliver(op: OwnerOp, value: Record<string, unknown>, refused: (reason: string) => OpResultEnvelope) {
+		const address = parseInboxAddress(String(value.address));
+		if (!address || address.domainId !== op.domainId) return refused("domain");
+		const row = InboxRowInputSchema.safeParse(value.row);
+		if (
+			!row.success ||
+			row.data.envelope.epoch === "clear" ||
+			row.data.envelope.opKey.conversationId !== op.conversationId ||
+			row.data.envelope.opKey.opId !== op.opId ||
+			row.data.envelope.origin.kind !== "console" ||
+			row.data.envelope.origin.domainId !== op.domainId ||
+			row.data.envelope.origin.device !== op.device
+		)
+			return refused("row");
+		const result = this.params.inbox.appendRow({
+			address,
+			row: row.data,
+			producerSignPub: op.signerSignPub,
+			opKey: { conversationId: op.conversationId, opId: op.opId, hash: sha256Hex(canonicalJson(op.op)) },
+		});
+		if (result.row && !this.params.push(op.domainId, formatInboxAddress(address), [result.row]))
+			this.params.inbox.markWaking(op.domainId, result.opKey);
+		return result;
+	}
+}

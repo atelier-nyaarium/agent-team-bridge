@@ -120,14 +120,18 @@ class ContentKeyringTest {
 		val valid = Crypto.wrapContentKey(ByteArray(32) { 7 }, 1, recipient.box.pub, console.sign.pub, console.sign.priv)
 		val refused = Crypto.wrapContentKey(ByteArray(32) { 8 }, 2, recipient.box.pub, owner.sign.pub, owner.sign.priv)
 		val content = ContentKeyring(recipient.box.priv, store)
-		assertEquals(null, content.classify(listOf(valid, refused), keyring))
+		val refusedMerge = content.classify(listOf(valid, refused), keyring)
+		assertTrue(refusedMerge is ContentKeyring.Merge.Refused)
+		assertTrue((refusedMerge as ContentKeyring.Merge.Refused).reason.isNotEmpty())
 		assertEquals(ContentKeysLoad.Absent, store.loadContentKeys())
 
-		val merged = content.classify(listOf(valid, valid), keyring)!!
-		assertArrayEquals(ByteArray(32) { 7 }, merged.getValue(1))
-		content.commit(merged)
+		val merged = content.classify(listOf(valid, valid), keyring) as ContentKeyring.Merge.Installed
+		assertArrayEquals(ByteArray(32) { 7 }, merged.next.getValue(1))
+		assertEquals(listOf(1), merged.epochs)
+		assertTrue(content.commit(merged))
+		assertTrue(content.classify(listOf(valid), keyring) is ContentKeyring.Merge.Unchanged)
 		val mismatch = Crypto.wrapContentKey(ByteArray(32) { 9 }, 1, recipient.box.pub, console.sign.pub, console.sign.priv)
-		assertEquals(null, content.classify(listOf(mismatch), keyring))
+		assertTrue(content.classify(listOf(mismatch), keyring) is ContentKeyring.Merge.Refused)
 
 		val otherRecipient = Crypto.generateIdentity()
 		val wrongRecipient = Crypto.wrapContentKey(
@@ -137,7 +141,7 @@ class ContentKeyringTest {
 			console.sign.pub,
 			console.sign.priv,
 		)
-		assertEquals(null, content.classify(listOf(wrongRecipient), keyring))
+		assertTrue(content.classify(listOf(wrongRecipient), keyring) is ContentKeyring.Merge.Refused)
 	}
 
 	@Test
@@ -148,7 +152,7 @@ class ContentKeyringTest {
 		val content = ContentKeyring(recipient.box.priv, store)
 		val keyring = Keyring(DomainSnapshot(owner.sign.pub, listOf(admission("console", console, 1)), emptyList()))
 		val envelope = Crypto.wrapContentKey(ByteArray(32), 1, recipient.box.pub, console.sign.pub, console.sign.priv)
-		assertThrows(IllegalStateException::class.java) { content.install(envelope, keyring) }
+		assertTrue(content.install(envelope, keyring) == ContentKeyring.InstallOutcome.Refused)
 		assertThrows(IllegalStateException::class.java) {
 			content.wrapAllFor(recipient.box.pub, console.sign.pub, console.sign.priv)
 		}

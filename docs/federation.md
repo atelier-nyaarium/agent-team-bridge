@@ -78,6 +78,18 @@ Gateway, so revocation still applies while the Router is unreachable.
 - First enrollment uses trust on first use for the Domain root.
 - Deploy the Router before the app: an older Router drops the join signature and the held device refuses the join.
 
+## Inboxes
+
+- Addresses: `owner:<domainId>/<ownerSignPub>`, `session:<domainId>/<gatewayId>/<sessionId>`, `gateway:<domainId>/<gatewayId>`.
+- A row is `{ seq, acceptedAt, size, envelope, producerSig, body }`. The producer signs the envelope; the Router adds seq, acceptedAt, and size.
+- The op ledger keys on `(owner, conversationId, opId)`. A repeat with the same hash answers the recorded result; a different hash answers `conflict`.
+- Capacity refuses before storage: the row cap answers `refused`, the Domain quota answers `durability_failure`, a failed fsync answers `durability_uncertain`.
+- Gateway frames name only themselves. The Router takes the Domain and gateway from the connection; a session origin must be in the session registry; a peer row into another Domain needs a link edge.
+- `gateway_register` returns an incarnation. Every inbox frame carries it; a stale one is refused.
+- The Router pushes `inbox_deliver` on append and again after each register. The gateway keeps a durable claim per delivery under `DATA_DIR/inbox-claims/`, offers once, and acks on the receiver's word. A redelivered claimed row is re-acked, never re-offered.
+- An undelivered row expires after 30 days with an `expired` result row to its sender.
+- A console reaches the inbox through a signed `OwnerOp` on the op surface: `deliver`, `consumer_register`, `inbox_read`, `inbox_advance`, `op_result`.
+
 **A cross-machine answer states how complete it is.** `discover()` returns asked, answered and
 unreachable ids plus `rosterKnown`, so a partial result is not a plain success and an unreadable
 roster is not "no peers". `isRegistered` differs from `isConnected`: a refused registration leaves

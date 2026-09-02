@@ -12,6 +12,7 @@ export * from "./schemasContentKey.js";
 export * from "./schemasCore.js";
 export * from "./schemasGatewayBootstrap.js";
 export * from "./schemasGatewayTransport.js";
+export * from "./schemasInbox.js";
 export * from "./schemasPresence.js";
 export * from "./schemasProvisioning.js";
 export * from "./schemasRegister.js";

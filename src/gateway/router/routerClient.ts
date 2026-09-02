@@ -15,13 +15,8 @@ import {
 } from "../../shared/router-reach.js";
 import { pinnedDial, pinRefusal, realWebSocket } from "./pinnedSocket.js";
 
-// One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->Router socket (here and
-// evie-bot's BridgeTransport). 64 MiB clears a max-cap attachment payload's sealed frame (~1.78x
-// the decoded bytes) with headroom; routes.test.ts pins that relationship.
+// Shared relay-frame ceiling. The peer transport and tests use the same value.
 export const ROUTER_WS_MAX_PAYLOAD_BYTES = 67_108_864;
-
-////////////////////////////////
-//  Interfaces & Types
 
 export interface RouterToolCallResult {
 	callId: string;
@@ -30,99 +25,69 @@ export interface RouterToolCallResult {
 }
 
 export interface RouterClientConfig {
-	/** The bootstrap base URL: the docker alias on the Router's own machine, or whatever Gateway
-	 * Setup was told elsewhere. Only the FIRST door - once the Router answers, its advertised
-	 * addresses lead the ring and this falls to last. */
+	/** Bootstrap URL used before the Router advertises reachability. */
 	url: string;
-	/** What the Router last said about itself, restored across restarts. Absent on a first connect. */
+	/** Previously advertised Router reachability. */
 	reach?: RouterReach;
-	/** The Router advertised its addresses on the register reply. Persist them; the next connect
-	 * attempt (and every reconnect) re-derives the ring from them. */
+	/** Persists Router addresses learned during registration. */
 	onReach?: (reach: RouterReach) => void;
-	// WebSocket handshake headers. The bearer the Router gates the upgrade on, so the auth
-	// shape lives with the caller, not here.
+	// WebSocket upgrade headers, including the caller-owned bearer.
 	headers: Record<string, string>;
-	// How TLS is trusted: the Router's leaf fingerprint. A self-signed leaf has no chain,
-	// so pinning it IS the trust.
+	// TLS trusts the pinned Router leaf fingerprint.
 	tls?: { certFp: string };
-	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
-	// can be routed to this Gateway.
+	// Gateway id used for relay routing.
 	gatewayId: string;
-	// This Gateway's Domain id, sent on register so the Router keys the connection by
-	// (domainId, gatewayId). Always set: the client is constructed only when both the
-	// transport and the Domain id are non-null.
+	// Domain id used with the Gateway id as the Router connection key.
 	domainId: string;
-	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
-	// union only routes by type, so the frame travels as unknown.
+	// The console relay pump validates the payload.
 	onConsoleRelay?: (frame: unknown) => void;
-	// A cross-Gateway frame the Router routed to this Gateway; the gateway-relay pump owns
-	// full GatewayRelayFrameSchema validation, so the frame travels as unknown.
+	// The gateway relay pump validates the payload.
 	onGatewayRelay?: (frame: unknown) => void;
-	// A pre-trust cross-Domain handshake frame the Router routed to this Gateway (the
-	// receiver leg); the handshake pump owns full validation, so it travels as unknown.
+	// The handshake pump validates the payload.
 	onCrossDomainHandshake?: (frame: unknown) => void;
-	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub +
-	// owner-signed admission + a fresh possession proof), recomputed at each (re)register
-	// so the proof timestamp is current. Returns null pre-enrollment.
+	// Recomputes the admitted-identity proof for each registration.
 	buildRegisterAuth?: () => Record<string, unknown> | null;
-	// The mirrored Domain (owner root + allowlist) the Router returns in the register
-	// reply; the Gateway applies it so a revocation bites even while the Router is offline.
-	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
+	// Applies the Router's opaque Domain snapshot after consumer validation.
 	onDomainSync?: (domain: unknown) => void;
-	// This Gateway's own Domain lifecycle metadata from the register reply: its status
-	// ("pending"/"rooted"/"unrooted") and display name, surfaced to the console. Re-applied
-	// on every reconnect, so a rename made elsewhere reaches the Gateway at its next register.
+	/** Called after accepted registration. */
+	onRegistered?: () => void;
+	// Domain status and display metadata from registration.
 	onDomainMeta?: (meta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean }) => void;
-	// A live display-name refresh from a domain_update push. Refreshes the held displayName
-	// without a reconnect, so teams()/discover reflect the rename immediately. The snapshot
-	// the push feeds drops displayName, so this is the only path that updates it between registers.
+	// Applies display-name updates without reconnecting.
 	onDomainUpdate?: (meta: { displayName?: string | null }) => void;
+	onInboxDeliver?: (frame: unknown) => void;
+	onBlobFetch?: (frame: unknown) => void;
 	onDisconnect?: () => void;
-	// Override the pending-Domain re-register cadence. Production leaves it unset (the
-	// PENDING_REREGISTER_DELAY_MS default); tests pass a small value to exercise the retry
-	// without waiting out the real interval.
+	// Test override for pending-Domain registration retry cadence.
 	pendingReregisterDelayMs?: number;
-	// Override the reconnect backoff floor, same reason: a test proving the dial ring steps past a
-	// dead address should not hold a socket open for the production 5s between attempts.
+	// Test override for reconnect backoff.
 	reconnectInitialDelayMs?: number;
 }
 
 export interface RouterClient {
 	callTool: (action: string, params: Record<string, unknown>) => Promise<RouterToolCallResult>;
+	callInboxTool: (action: string, params: Record<string, unknown>) => Promise<RouterToolCallResult>;
+	incarnation: () => number | null;
 	isConnected: () => boolean;
-	/** True only while the Router has ACCEPTED this Gateway's registration. */
+	/** True while registration is accepted. */
 	isRegistered: () => boolean;
 	stop: () => void;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 const TOOL_CALL_TIMEOUT_MS = 120_000;
-// When the Router refuses gateway_register because the Domain is still pending (staged but not
-// yet rooted), re-register on this cadence. The open-handler's register fires before the
-// admin's phone first-roots the Domain, and the heartbeat keeps the WS warm so the socket
-// never reconnects to re-register on its own. The cap bounds the spin so a genuinely stuck
-// setup stops re-trying instead of polling the Router indefinitely.
+// Retry pending registration on a bounded cadence.
 const PENDING_REREGISTER_DELAY_MS = 15_000;
 const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
-// Application-level keepalive: a ping detects a silently-dropped path that neither end has
-// noticed, since two missed pongs terminate the socket and trigger a reconnect.
+// Reconnect after two unanswered pings.
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
-// How long a candidate gets to OPEN before the ring steps past it. Without this the socket inherits
-// the OS connect timeout, which for an unroutable address is minutes - so a stale LAN address the
-// Router once advertised would wedge the Gateway offline long past the point the public host would
-// have worked. A private address answers from the same subnet or not at all, so it gets the short
-// budget; anything else may legitimately be slow to reach.
+// Bound candidate connection time before trying the next address.
 const CONNECT_TIMEOUT_MS = 15_000;
 
-// The ws package rather than bun's substitute for it, which cannot pin. Resolved once: the lookup
-// walks the tree, and a failure here means no socket can be opened at all.
+// Use the package implementation because TLS pinning requires its socket hook.
 const RealWebSocket = realWebSocket();
 
-// Where the pinned socket actually connects. ws derives these itself from the URL, but the dial is
-// ours now, so they are read from the same candidate the ring chose.
+// Derive the pinned socket host from the selected candidate.
 function dialHost(target: string): string {
 	return reachHost(target);
 }
@@ -135,13 +100,10 @@ function dialPort(target: string): number {
 export function startRouterClient(config: RouterClientConfig): RouterClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
-	// A refused register leaves the socket open, so "connected" cannot answer "registered".
+	// Registration can be refused while the socket remains open.
 	let registered = false;
-	// The addresses this Gateway knows for its Router, and which one the next connect dials. Unlike
-	// the phone, which fails over per HTTP op, a Gateway holds ONE socket: the ring advances on a
-	// failed connect and resets on a successful open, so a Router that moved is found on the next
-	// backoff rather than never. Before this the client redialed one fixed URL forever, and an
-	// address that stopped working was an outage no amount of reconnecting could clear.
+	let gatewayIncarnation: number | null = null;
+	// One socket fails over through the advertised address ring.
 	let reach: RouterReach = config.reach ?? {};
 	let candidateIndex = 0;
 	const candidatesNow = (): string[] => {
@@ -168,27 +130,21 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		const ring = candidatesNow();
 		const target = ring[candidateIndex % ring.length] ?? config.url;
 		const wsUrl = target.replace(/^http/, "ws");
-		// Whether THIS socket ever opened, so the close handler can tell "that address is shut" from
-		// "the connection we had dropped", which must not walk the ring off a working address.
+		// Distinguish an address that never opened from a dropped connection.
 		let opened = false;
 		console.log(`[router-client] connecting to ${target}...`);
 
-		// The pin is enforced on this socket during its TLS handshake, so a Router that cannot prove
-		// itself never receives the bearer these headers carry.
+		// Pin TLS before sending the bearer headers.
 		const dial = config.tls?.certFp ? pinnedDial(dialHost(target), dialPort(target), config.tls.certFp) : null;
 		ws = new RealWebSocket(wsUrl, {
 			headers: config.headers,
-			// Explicit rather than ws's inherited 100 MiB default: this socket carries every relay
-			// frame for the whole gateway, and an oversized inbound message does not merely fail,
-			// it can close the connection and drop all federation traffic with it. Must stay >= the
-			// matching explicit limit on the Router's own listener, or a frame it accepts kills us.
+			// Keep this at least as large as the Router listener limit.
 			maxPayload: ROUTER_WS_MAX_PAYLOAD_BYTES,
 			// ws types this as node's overloaded net.connect; ours is the one form ws actually calls.
 			...(dial ? { createConnection: dial.createConnection as WebSocket.ClientOptions["createConnection"] } : {}),
 		});
 
-		// Bound the wait on THIS candidate. Terminating routes into the close handler, which is the
-		// one place the ring advances, so a timeout and a refused connection are handled identically.
+		// Route timeouts through the close handler so the ring advances uniformly.
 		const budget = isPrivateHost(reachHost(target)) ? LAN_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
 		const connectTimer = setTimeout(() => {
 			if (opened) return;
@@ -197,9 +153,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		}, budget);
 
 		ws.on("open", () => {
-			// A socket that opened without the pin having run was never authenticated. Nothing else
-			// vouches for a self-signed Router, so this refuses rather than reporting a mismatch it
-			// did not observe.
+			// A self-signed Router is trusted only after the pin runs.
 			if (dial && dial.verdict() !== "match") {
 				console.error(`[router-client] ${pinRefusal(dial.verdict())}; refusing the connection`);
 				ws?.terminate();
@@ -209,12 +163,10 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			missedPongs = 0;
 			opened = true;
 			clearTimeout(connectTimer);
-			// This candidate answered, so the next reconnect starts here rather than walking the ring
-			// again. A LAN address that works stays first, which is the whole point of the order.
+			// Resume from the working candidate.
 			candidateIndex = Math.max(0, ring.indexOf(target));
 			reconnector.reset();
-			// Drop any pending-retry timer left from a prior socket so its cadence does not
-			// double up with the new open-handler's register.
+			// Avoid duplicate registration retry timers.
 			clearPendingRetry();
 			startHeartbeat();
 			registerGateway();
@@ -230,8 +182,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				return;
 			}
 
-			// Boundary parse: unknown frame types and malformed envelopes drop
-			// with a counter instead of being blind-cast (or silently ignored).
+			// Drop malformed or unknown frames at the boundary.
 			const parsed = RouterInboundFrameSchema.safeParse(msg);
 			if (!parsed.success) {
 				droppedFrames++;
@@ -242,6 +193,10 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				return;
 			}
 			const frame = parsed.data;
+			if ((frame as { type?: string }).type === "blob_fetch") {
+				config.onBlobFetch?.(frame);
+				return;
+			}
 
 			switch (frame.type) {
 				case "console_relay": {
@@ -257,12 +212,14 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 					break;
 				}
 				case "domain_update": {
-					// The Router pushed an updated keyring (an owner admit/revoke). Apply it
-					// immediately so a revocation bites without waiting for the next register.
+					// Apply admission and revocation updates immediately.
 					config.onDomainSync?.(frame.domain);
-					// A rename rides the same push: refresh the held displayName so the owner's
-					// own Gateway reflects it in teams()/discover at once (applySnapshot drops it).
+					// Refresh the display name without reconnecting.
 					if (frame.displayName !== undefined) config.onDomainUpdate?.({ displayName: frame.displayName });
+					break;
+				}
+				case "inbox_deliver": {
+					config.onInboxDeliver?.(frame);
 					break;
 				}
 				case "tool_result": {
@@ -275,8 +232,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 					break;
 				}
 				case "tool_error": {
-					// tool_error legitimately carries callId: null (the Router could not
-					// attribute the failure to a call); nothing pends under null.
+					// Null call ids have no pending request.
 					if (frame.callId === null) {
 						console.warn(`[router-client] tool_error with no callId: ${frame.error ?? "unknown"}`);
 						break;
@@ -303,15 +259,12 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			clearTimeout(connectTimer);
 			stopHeartbeat();
 			registered = false;
-			// This candidate did not stay up. Advance so the next attempt tries a different address:
-			// a socket that never opened means this door is shut, and one that opened and dropped is
-			// re-tried from here anyway because the open handler pinned the index to it.
+			gatewayIncarnation = null;
+			// Advance after a failed candidate.
 			if (!opened) candidateIndex = (candidateIndex + 1) % Math.max(1, ring.length);
-			// The reconnect re-registers from the open handler, so cancel the pending-retry
-			// timer rather than fire a register at a dead socket.
+			// Do not register through a dead socket.
 			clearPendingRetry();
-			// Fail in-flight calls now rather than letting each wait out its timeout across
-			// a reconnect; callers see a fast retryable error.
+			// Fail in-flight calls so callers can retry promptly.
 			for (const [callId, pending] of pendingCalls) {
 				clearTimeout(pending.timer);
 				pending.resolve({ callId, error: `Disconnected from the federation Router` });
@@ -326,18 +279,14 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 
 		ws.on("error", (err: Error) => {
 			console.error(`[router-client] error: ${err.message}`);
-			// A runtime that ignores createConnection does its own chain check instead, which a
-			// self-signed leaf can never pass. The message names the certificate, so say what is
-			// actually wrong: the pin never got to run.
+			// Reject runtimes that bypass the pinning hook.
 			if (dial && dial.verdict() === "pending" && /self.signed|SELF_SIGNED|DEPTH_ZERO/i.test(err.message)) {
 				console.error(`[router-client] ${pinRefusal("pending")}`);
 			}
 		});
 	}
 
-	// Register this Gateway with the Router so cross-Gateway frames can find it. Fired from
-	// the open handler (the Router re-keys gateway id -> socket on every reconnect) and
-	// re-fired by the pending-retry timer when the Domain was still pending.
+	// Register on open and while the Domain remains pending.
 	function registerGateway(): void {
 		if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
 		void callTool("gateway_register", {
@@ -358,42 +307,41 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 							displayName?: string | null;
 							isAdminDomain?: boolean;
 							reach?: RouterReach;
+							incarnation?: number;
 					  }
 					| undefined;
 				if (res.error) {
 					registered = false;
+					gatewayIncarnation = null;
 					console.error(`[router-client] gateway_register failed: ${res.error}`);
 					return;
 				}
 				if (r?.ok === false) {
 					registered = false;
-					// A pending-tagged refusal is transient: the Domain is staged but not yet rooted.
-					// Retry on a bounded cadence so registration lands as soon as the root arrives.
-					// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
-					// rather than mask a real denial behind an endless re-register loop.
+					gatewayIncarnation = null;
+					// Pending registration is retried; other refusals are terminal.
 					if (r.pending) schedulePendingRetry(r.error);
 					else console.error(`[router-client] Router rejected registration: ${r.error}`);
 					return;
 				}
-				// A successful register clears any pending-retry left from earlier attempts.
+				// Successful registration clears pending retries.
 				clearPendingRetry();
 				registered = true;
+				gatewayIncarnation = typeof r?.incarnation === "number" ? r.incarnation : null;
 				const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 				console.log(`[router-client] registered as Gateway "${config.gatewayId}"${peers}`);
+				config.onRegistered?.();
 				if (r?.domain) config.onDomainSync?.(r.domain);
 				else
 					console.warn(
 						`[federation] registered but the Router returned no Domain snapshot - the Domain may not be rooted, or the Router is outdated`,
 					);
-				// The Router's own addresses, learned on the reply rather than asked for: the Gateway
-				// authenticates with a WS bearer and cannot call the console-token `reach` op at all.
-				// An older Router sends nothing and the ring keeps what it had.
+				// Use addresses from the registration reply when present.
 				if (r?.reach && (r.reach.publicHost || r.reach.lanAddresses?.length)) {
 					reach = r.reach;
 					config.onReach?.(r.reach);
 				}
-				// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
-				// console register reply / discovery roster.
+				// Surface Domain metadata to the console.
 				if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
 					config.onDomainMeta?.({
 						domainStatus: r.domainStatus,
@@ -440,8 +388,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		stopHeartbeat();
 		heartbeatTimer = setInterval(() => {
 			if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
-			// Increment first, then check (a pong resets the count to 0), so two
-			// consecutive unanswered pings terminate - matching the gateway's team socket.
+			// Two unanswered pings terminate the socket.
 			missedPongs++;
 			if (missedPongs >= MISSED_PONGS_LIMIT) {
 				console.error(`[router-client] no pong for ${missedPongs} beats, terminating to reconnect`);
@@ -482,6 +429,12 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		});
 	}
 
+	async function callInboxTool(action: string, params: Record<string, unknown>): Promise<RouterToolCallResult> {
+		const incarnation = gatewayIncarnation;
+		if (incarnation === null) return { callId: "", error: "Gateway is not registered" };
+		return callTool(action, { ...params, incarnation });
+	}
+
 	function isConnected(): boolean {
 		return ws !== null && ws.readyState === RealWebSocket.OPEN;
 	}
@@ -509,5 +462,5 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		return registered && isConnected();
 	}
 
-	return { callTool, isConnected, isRegistered, stop };
+	return { callTool, callInboxTool, incarnation: () => gatewayIncarnation, isConnected, isRegistered, stop };
 }

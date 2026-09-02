@@ -1,5 +1,7 @@
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
 import {
+	BlobFetchParamsSchema,
+	BlobFetchReplyParamsSchema,
 	type CrossDomainHandshakeReplyParams,
 	CrossDomainHandshakeReplyParamsSchema,
 	type CrossDomainHandshakeRevealReplyParams,
@@ -11,34 +13,52 @@ import {
 	type GatewayRelayReplyParams,
 	GatewayRelayReplyParamsSchema,
 	GatewayRelayRouteSchema,
+	InboxAckParamsSchema,
+	InboxAppendParamsSchema,
+	SessionForgetParamsSchema,
+	SessionUpsertParamsSchema,
 } from "../shared/router-protocol.js";
+import {
+	formatInboxAddress,
+	type InboxAddress,
+	type InboxRow,
+	InboxRowInputSchema,
+	parseInboxAddress,
+} from "../shared/schemasInbox.js";
+import type { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
+import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
+import type { InboxService } from "./inbox/inboxService.js";
 import { verifyRegistrationClaim } from "./registrationVerification.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
-
-////////////////////////////////
-//  Class
 
 export interface GatewayBridgeParams {
 	port: number;
 	authToken: string;
-	// Required: an absent getDomain would skip the whole registration verification block.
+	// Required for registration verification.
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	getDomainMeta: (domainId: string) => DomainMeta | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	adminDomainId: () => string | null;
-	/** The Router's own addresses, put on every register reply so a Gateway learns where else it can
-	 * be reached. The Gateway holds a WS bearer, not the console app token, so it cannot ask the
-	 * `reach` op; this reply is the only channel it has. */
+	/** Register replies carry Router addresses because Gateways cannot call the app-token-gated `reach` op. */
 	reach?: () => { publicHost?: string | null; publicPort?: number | null; lanAddresses?: string[] };
+	inbox?: InboxService;
+	blobCache?: RouterBlobCache;
+	referenceHeld?: unknown;
 }
 
 export class GatewayBridge implements ToolProvider {
 	private transport: GatewayTransport | null = null;
 	private gatewayConnections = new Map<string, Map<string, ConnectionId>>();
-	private connGateways = new Map<ConnectionId, { domainId: string; gatewayId: string; signPub: string | null }>();
+	// No incarnation means the registration could not claim an inbox.
+	private connGateways = new Map<
+		ConnectionId,
+		{ domainId: string; gatewayId: string; signPub: string | null; incarnation: number | null }
+	>();
+	private readonly inbox: InboxService | null;
+	private readonly blobFetch: BlobFetchRoute | null;
 	private pendingRelays = new Map<
 		string,
 		{
@@ -76,6 +96,8 @@ export class GatewayBridge implements ToolProvider {
 		hasLinkEdge,
 		adminDomainId,
 		reach,
+		inbox,
+		blobCache,
 	}: GatewayBridgeParams) {
 		this.port = port;
 		this.authToken = authToken;
@@ -84,6 +106,14 @@ export class GatewayBridge implements ToolProvider {
 		this.hasLinkEdge = hasLinkEdge;
 		this.adminDomainIdGetter = adminDomainId;
 		this.reachGetter = reach;
+		this.inbox = inbox ?? null;
+		this.blobFetch = blobCache
+			? new BlobFetchRoute(blobCache, (domainId, gatewayId) => {
+					const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
+					const ws = connId ? this.transport?.getConnection(connId) : null;
+					return connId && ws ? { connId, send: (frame) => ws.send(JSON.stringify(frame)) } : null;
+				})
+			: null;
 		this.handleCall = this.handleCall.bind(this);
 		this.onConnect = this.onConnect.bind(this);
 		this.onDisconnect = this.onDisconnect.bind(this);
@@ -113,17 +143,12 @@ export class GatewayBridge implements ToolProvider {
 		return this.transport;
 	}
 
-	/** How many Gateways are registered right now. The Router's own count, so an operator can hold
-	 * it against a Gateway's `router_connected`, which is only that Gateway's view of its socket and
-	 * still reads true across a half-open one. */
+	/** Router-side count, independent of Gateway socket state. */
 	public get registeredGatewayCount(): number {
 		return this.connGateways.size;
 	}
 
-	/** The gateways registered into ONE Domain, with the signing key each presented. Scoped by Domain
-	 * because the app token every console holds is shared across tenants, so an unscoped list would
-	 * hand one tenant another's gateway names. `signPub` is null for an identity-less admin-Domain
-	 * registration, which is the only kind that reaches the map without one. */
+	/** List gateways only within the requested Domain because the app token is shared across tenants. */
 	public registeredGateways(domainId: string): { gatewayId: string; signPub: string | null }[] {
 		const out: { gatewayId: string; signPub: string | null }[] = [];
 		for (const reg of this.connGateways.values()) {
@@ -146,6 +171,7 @@ export class GatewayBridge implements ToolProvider {
 		}
 		this.pendingHandshakes.clear();
 		this.handshakeAttempts.clear();
+		this.blobFetch?.stop();
 		this.gatewayConnections.clear();
 		this.connGateways.clear();
 	}
@@ -187,6 +213,22 @@ export class GatewayBridge implements ToolProvider {
 		const dom = this.adminDomain();
 		if (!dom) return false;
 		return this.pushToGatewayInDomain(dom, gatewayId, frame);
+	}
+
+	public pushInboxRows(domainId: string, addressText: string, rows: InboxRow[]): boolean {
+		const address = parseInboxAddress(addressText);
+		if (!address) return false;
+		if (address.kind === "owner") return true;
+		const connId = this.gatewayConnections.get(domainId)?.get(address.gatewayId);
+		const reg = connId ? this.connGateways.get(connId) : undefined;
+		if (!reg || reg.incarnation === null) return false;
+		return this.pushToGatewayInDomain(domainId, address.gatewayId, {
+			type: "inbox_deliver",
+			address: addressText,
+			rows,
+			incarnation: reg.incarnation,
+			deliveryEpoch: this.inbox?.deliveryEpoch(address) ?? 1,
+		});
 	}
 
 	private pushToGatewayInDomain(domainId: string, gatewayId: string, frame: Record<string, unknown>): boolean {
@@ -252,15 +294,36 @@ export class GatewayBridge implements ToolProvider {
 		this.consoleRelaySettler = fn;
 	}
 
-	////////////////////////////////
-	//  ToolProvider implementation
-
 	public async handleCall(connId: ConnectionId, name: string, params: Record<string, unknown>): Promise<unknown> {
 		if (name === "console_relay_reply") {
 			if (typeof params.opId === "string") this.consoleRelaySettler?.(params.opId, params);
 			return { settled: true };
 		}
 		if (name === "gateway_register") return this.handleGatewayRegister(connId, params);
+		if (
+			[
+				"inbox_append",
+				"inbox_ack",
+				"session_upsert",
+				"session_forget",
+				"blob_fetch",
+				"blob_fetch_reply",
+			].includes(name)
+		) {
+			const reg = this.connGateways.get(connId);
+			const incarnation = typeof params.incarnation === "number" ? params.incarnation : null;
+			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
+			if (incarnation !== reg.incarnation) {
+				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
+				return { ok: false, error: "stale_incarnation" };
+			}
+			if (name === "inbox_append") return this.handleInboxAppend(connId, params);
+			if (name === "inbox_ack") return this.handleInboxAck(connId, params);
+			if (name === "session_upsert") return this.handleSessionUpsert(connId, params);
+			if (name === "session_forget") return this.handleSessionForget(connId, params);
+			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
+			return this.handleBlobFetchReply(connId, params);
+		}
 		if (name === "gateway_relay") return this.handleGatewayRelay(connId, params);
 		if (name === "gateway_relay_reply") return this.handleGatewayRelayReply(connId, params);
 		if (name === "cross_domain_handshake") return this.handleCrossDomainHandshake(connId, params);
@@ -278,16 +341,19 @@ export class GatewayBridge implements ToolProvider {
 
 	public onDisconnect(connId: ConnectionId): void {
 		const reg = this.connGateways.get(connId);
+		const wasCurrent = reg ? this.gatewayConnections.get(reg.domainId)?.get(reg.gatewayId) === connId : false;
 		console.log(`[BridgeServer] Client disconnected${reg ? ` (gateway ${reg.domainId}/${reg.gatewayId})` : ""}`);
 		this.connGateways.delete(connId);
 		if (reg) {
 			const domainMap = this.gatewayConnections.get(reg.domainId);
-			if (domainMap?.get(reg.gatewayId) === connId) {
+			const current = domainMap?.get(reg.gatewayId) === connId;
+			if (current) {
 				domainMap.delete(reg.gatewayId);
 				if (domainMap.size === 0) this.gatewayConnections.delete(reg.domainId);
 			}
 		}
-		if (reg) {
+		this.blobFetch?.failConnection(connId);
+		if (reg && wasCurrent) {
 			for (const [relayId, pending] of this.pendingRelays) {
 				if (pending.dstDomainId !== reg.domainId || pending.dstGateway !== reg.gatewayId) continue;
 				clearTimeout(pending.timer);
@@ -303,9 +369,6 @@ export class GatewayBridge implements ToolProvider {
 		}
 	}
 
-	////////////////////////////////
-	//  Internal call handlers
-
 	private handleGatewayRegister(connId: ConnectionId, params: Record<string, unknown>): unknown {
 		const parsed = GatewayRegisterParamsSchema.safeParse(params);
 		if (!parsed.success)
@@ -317,7 +380,6 @@ export class GatewayBridge implements ToolProvider {
 		}
 		const meta = this.getDomainMeta(domainId);
 		if (meta?.status === "pending") {
-			// Reject pending registrations.
 			console.warn(`[BridgeServer] rejected gateway_register into pending domain "${domainId}/${gatewayId}"`);
 			return {
 				ok: false,
@@ -342,7 +404,7 @@ export class GatewayBridge implements ToolProvider {
 					return { ok: false, error: `registration_denied: registration proof replayed` };
 				}
 			} else if (domainId !== this.adminDomain()) {
-				// Leak nothing to unadmitted callers.
+				// Do not disclose unadmitted Domain state.
 				console.warn(
 					`[BridgeServer] rejected identity-less registration into a rooted non-admin domain "${domainId}/${gatewayId}"`,
 				);
@@ -353,7 +415,12 @@ export class GatewayBridge implements ToolProvider {
 			}
 		}
 		this.domainMap(domainId).set(gatewayId, connId);
-		this.connGateways.set(connId, { domainId, gatewayId, signPub: parsed.data.signPub ?? null });
+		// Only admitted identities receive inbox incarnations.
+		const admitted = !!parsed.data.signPub;
+		const incarnation = !admitted ? null : this.inbox ? this.inbox.registerGateway(domainId, gatewayId) : 1;
+		if (admitted && incarnation === null)
+			console.warn(`[BridgeServer] inbox unavailable for ${domainId}/${gatewayId}; registered without it`);
+		this.connGateways.set(connId, { domainId, gatewayId, signPub: parsed.data.signPub ?? null, incarnation });
 		console.log(`[BridgeServer] Gateway registered: ${domainId}/${gatewayId} (v${protocolVersion})`);
 		const peers = [...this.domainMap(domainId).keys()].filter((h) => h !== gatewayId);
 		const reply: Record<string, unknown> = {
@@ -361,6 +428,7 @@ export class GatewayBridge implements ToolProvider {
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
 			domainId,
 			gateways: peers,
+			...(incarnation !== null ? { incarnation } : {}),
 		};
 		if (domain) reply.domain = domain;
 		if (meta) {
@@ -368,11 +436,132 @@ export class GatewayBridge implements ToolProvider {
 			if (meta.displayName != null) reply.displayName = meta.displayName;
 		}
 		reply.isAdminDomain = domainId === this.adminDomain();
-		// Only when there is something to say: an empty reach would overwrite what a Gateway already
-		// learned with nothing, and a Router configured with neither address has nothing to teach.
+		// Do not overwrite learned reach with empty values.
 		const reach = this.reachGetter?.();
 		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
+		if (incarnation !== null) this.pushRegisteredRows(domainId, gatewayId, incarnation);
 		return reply;
+	}
+
+	private handleInboxAppend(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		if (!this.inbox) return { ok: false, error: "inbox unavailable" };
+		const parsed = InboxAppendParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
+		const row = parsed.success ? InboxRowInputSchema.safeParse(parsed.data.row) : null;
+		if (!reg || !parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
+		const origin = row.data.envelope.origin;
+		// Linked peers reach only registered sessions.
+		const allowedDomain =
+			address.domainId === reg.domainId ||
+			(origin.kind === "gateway" &&
+				row.data.envelope.epoch === "peer" &&
+				address.kind === "session" &&
+				this.hasLinkEdge(reg.domainId, address.domainId) &&
+				this.inbox.hasSession(address.domainId, address.gatewayId, address.sessionId));
+		const originAllowed =
+			origin.domainId === reg.domainId &&
+			origin.gatewayId === reg.gatewayId &&
+			(origin.kind === "gateway" ||
+				(origin.kind === "session" &&
+					!!origin.sessionId &&
+					this.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
+		if (!allowedDomain || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
+		const result = this.inbox.appendRow({ address, row: row.data, producerSignPub: reg.signPub });
+		if (result.row && !this.pushRow(address, result.row)) this.inbox.markWaking(address.domainId, result.opKey);
+		return result;
+	}
+
+	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		if (!this.inbox) return { ok: false, error: "inbox unavailable" };
+		const parsed = InboxAckParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
+		if (!reg || reg.incarnation === null || !parsed.success || !address)
+			return { ok: false, error: "invalid inbox_ack" };
+		return this.inbox.ack({
+			address,
+			seq: parsed.data.seq,
+			deliveryEpoch: parsed.data.deliveryEpoch,
+			outcome: parsed.data.outcome,
+			reason: parsed.data.reason,
+			by: { domainId: reg.domainId, gatewayId: reg.gatewayId, incarnation: reg.incarnation },
+		});
+	}
+
+	private handleSessionUpsert(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		const parsed = SessionUpsertParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		if (!reg || !parsed.success) return { ok: false, error: "invalid session_upsert" };
+		this.inbox?.upsertSession(reg.domainId, reg.gatewayId, parsed.data.sessionId, parsed.data);
+		return { ok: true };
+	}
+
+	private handleSessionForget(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		const parsed = SessionForgetParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		if (!reg || !parsed.success) return { ok: false, error: "invalid session_forget" };
+		this.inbox?.forgetSession(reg.domainId, reg.gatewayId, parsed.data.sessionId);
+		return { ok: true };
+	}
+
+	private async handleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): Promise<unknown> {
+		const parsed = BlobFetchParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		if (!reg || !parsed.success || !this.blobFetch) return { ok: false, error: "invalid blob_fetch" };
+		const origin = parsed.data.origin;
+		if (origin && origin.domainId !== reg.domainId && !this.hasLinkEdge(reg.domainId, origin.domainId))
+			return { outcome: "unreachable" };
+		return this.blobFetch.fetch(reg.domainId, parsed.data);
+	}
+
+	private handleBlobFetchReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		const parsed = BlobFetchReplyParamsSchema.safeParse(params);
+		return parsed.success && this.blobFetch?.settle(connId, parsed.data) ? { ok: true } : { ok: false };
+	}
+
+	private pushRow(address: InboxAddress, row: InboxRow): boolean {
+		if (address.kind === "owner") return true;
+		const connId = this.gatewayConnections.get(address.domainId)?.get(address.gatewayId);
+		const reg = connId ? this.connGateways.get(connId) : undefined;
+		if (!reg || reg.incarnation === null) return false;
+		return this.pushToGatewayInDomain(address.domainId, address.gatewayId, {
+			type: "inbox_deliver",
+			address: formatInboxAddress(address),
+			rows: [row],
+			incarnation: reg.incarnation,
+			deliveryEpoch: this.inbox?.deliveryEpoch(address) ?? 1,
+		});
+	}
+
+	/** Redeliver held rows so acknowledgements use the current incarnation. */
+	private pushRegisteredRows(domainId: string, gatewayId: string, incarnation: number): void {
+		const inbox = this.inbox;
+		if (!inbox) return;
+		setTimeout(() => {
+			const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
+			if (!connId || this.connGateways.get(connId)?.incarnation !== incarnation) return;
+			let pending: ReturnType<InboxService["pendingFor"]>;
+			try {
+				pending = inbox.pendingFor(domainId, gatewayId);
+			} catch (err) {
+				console.warn(
+					`[BridgeServer] re-delivery skipped for ${domainId}/${gatewayId}: ${(err as Error).message}`,
+				);
+				return;
+			}
+			for (const entry of pending) {
+				const address = parseInboxAddress(entry.address);
+				if (!address) continue;
+				this.pushToGatewayInDomain(domainId, gatewayId, {
+					type: "inbox_deliver",
+					address: entry.address,
+					rows: entry.rows,
+					incarnation,
+					deliveryEpoch: inbox.deliveryEpoch(address),
+				});
+			}
+		}, 0);
 	}
 
 	private domainMap(domainId: string): Map<string, ConnectionId> {
@@ -411,7 +600,7 @@ export class GatewayBridge implements ToolProvider {
 		let dstDomainId = senderDomainId;
 		let dstConnId = this.gatewayConnections.get(senderDomainId)?.get(dstGateway);
 		if (!dstConnId) {
-			// Link edges gate foreign relays.
+			// Link edges authorize foreign relays.
 			const foreign = this.resolveForeignGateway(senderDomainId, dstGateway);
 			if (foreign === "ambiguous") {
 				return Promise.resolve({
@@ -437,11 +626,7 @@ export class GatewayBridge implements ToolProvider {
 				ws.send(
 					JSON.stringify({
 						type: "gateway_relay",
-						// REQUIRED by the schema every destination parses this with. Omitted here, so every
-						// gateway-to-gateway relay was rejected at the far end as "expected number, received
-						// undefined" - discovery, cross-Gateway send, board and push fan-out, all of it. It
-						// stayed invisible because a Domain with one Gateway never relays to another, and
-						// `discover()` maps a failed relay to an empty list with no log.
+						// The destination schema requires the sender incarnation.
 						v: FEDERATION_PROTOCOL_VERSION,
 						relayId,
 						srcGateway,
@@ -635,9 +820,7 @@ export class GatewayBridge implements ToolProvider {
 
 	private handleListGateways(connId: ConnectionId): unknown {
 		const reg = this.connGateways.get(connId);
-		// Refused, not answered empty: "you are not registered" and "you have no peers" must stay
-		// distinct answers, or a revoked Gateway reads its own refusal as an empty mesh. An older
-		// gateway folds the error to [] exactly as it folded this empty answer.
+		// Keep refusal distinct from an empty peer list.
 		if (!reg) throw new Error("not registered");
 		const { domainId, gatewayId: self } = reg;
 		const gateways = [...(this.gatewayConnections.get(domainId)?.keys() ?? [])]

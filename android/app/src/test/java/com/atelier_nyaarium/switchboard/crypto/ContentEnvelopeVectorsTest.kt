@@ -71,6 +71,46 @@ class ContentEnvelopeVectorsTest {
 	}
 
 	@Test
+	fun keyRequestAndReceiptSigningBytesMatchNode() {
+		val root = vectors()
+		val request = root["keyRequest"]!!.jsonObject
+		val requestValue = request["value"]!!.jsonObject
+		val requestBytes = Crypto.keyRequestSigningBytes(
+			requestValue["domainId"]!!.jsonPrimitive.content,
+			requestValue["requesterSignPub"]!!.jsonPrimitive.content,
+			requestValue["epochs"]!!.jsonArray.map { it.jsonPrimitive.long },
+			requestValue["at"]!!.jsonPrimitive.long,
+			requestValue["nonce"]!!.jsonPrimitive.content,
+		)
+		CanonicalBytes.assertCanonicalBytes(requestBytes, request)
+		org.junit.Assert.assertTrue(
+			Crypto.verify(
+				requestBytes,
+				request["signature"]!!.jsonPrimitive.content,
+				requestValue["requesterSignPub"]!!.jsonPrimitive.content,
+			),
+		)
+
+		val receipt = root["keyReceipt"]!!.jsonObject
+		val receiptValue = receipt["value"]!!.jsonObject
+		val receiptBytes = Crypto.keyReceiptSigningBytes(
+			receiptValue["domainId"]!!.jsonPrimitive.content,
+			receiptValue["recipientSignPub"]!!.jsonPrimitive.content,
+			receiptValue["epoch"]!!.jsonPrimitive.long,
+			receiptValue["at"]!!.jsonPrimitive.long,
+			receiptValue["nonce"]!!.jsonPrimitive.content,
+		)
+		CanonicalBytes.assertCanonicalBytes(receiptBytes, receipt)
+		org.junit.Assert.assertTrue(
+			Crypto.verify(
+				receiptBytes,
+				receipt["signature"]!!.jsonPrimitive.content,
+				receiptValue["recipientSignPub"]!!.jsonPrimitive.content,
+			),
+		)
+	}
+
+	@Test
 	fun keyEnvelopeUnwrapsAndAadKindBindsCiphertext() {
 		val root = vectors()
 		val value = root["keyEnvelope"]!!.jsonObject

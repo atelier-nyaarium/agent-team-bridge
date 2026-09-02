@@ -95,15 +95,7 @@ export function keyRequestSigningBytes(r: KeyRequest): Buffer {
 
 export function keyReceiptSigningBytes(r: KeyReceipt): Buffer {
 	return Buffer.from(
-		[
-			"KEYRECEIPT_V1",
-			r.domainId,
-			r.recipientSignPub,
-			String(r.epoch),
-			String(r.keyringGeneration),
-			String(r.at),
-			r.nonce,
-		].join("\n"),
+		["KEYRECEIPT_V1", r.domainId, r.recipientSignPub, String(r.epoch), String(r.at), r.nonce].join("\n"),
 		"utf8",
 	);
 }

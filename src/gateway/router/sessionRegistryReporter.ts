@@ -1,0 +1,88 @@
+import type { SessionRecord, SessionStore } from "../../shared/session-store.js";
+
+export interface SessionRegistryReporterDeps {
+	sessionStore: SessionStore;
+	send: (action: string, params: Record<string, unknown>) => Promise<unknown>;
+	incarnation: () => number | null;
+	localGatewayId: string;
+}
+
+export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps) {
+	const known = new Set<string>();
+	const sessionIdOf = (record: SessionRecord) => `${record.spawn}.${record.id}`;
+
+	function report(record: SessionRecord): void {
+		const sessionId = sessionIdOf(record);
+		known.add(sessionId);
+		const incarnation = deps.incarnation();
+		if (incarnation === null) return;
+		void deps.send("session_upsert", {
+			sessionId,
+			kind: "session",
+			label: record.sessionLabel,
+			recordExists: true,
+			incarnation,
+		});
+	}
+
+	function forget(record: SessionRecord): void {
+		const sessionId = sessionIdOf(record);
+		known.delete(sessionId);
+		const incarnation = deps.incarnation();
+		if (incarnation === null) return;
+		void deps.send("session_forget", { sessionId, incarnation });
+	}
+
+	function attach(): void {
+		const store = deps.sessionStore as unknown as {
+			create: (id: string, opts: Parameters<SessionStore["mint"]>[0]) => SessionRecord;
+			forget: SessionStore["forget"];
+			sweep: SessionStore["sweep"];
+		};
+		const create = store.create;
+		store.create = (id, opts) => {
+			const record = create.call(deps.sessionStore, id, opts);
+			report(record);
+			return record;
+		};
+		const forgetRecord = store.forget;
+		store.forget = (team) => {
+			const record = deps.sessionStore.getByTeam(team);
+			const removed = forgetRecord.call(deps.sessionStore, team);
+			if (removed && record) forget(record);
+			return removed;
+		};
+		const sweep = store.sweep;
+		store.sweep = (ttlMs, cap) => {
+			const records = new Map(
+				deps.sessionStore.list().map((record) => [deps.sessionStore.teamOf(record), record]),
+			);
+			const removed = sweep.call(deps.sessionStore, ttlMs, cap);
+			for (const team of removed) {
+				const record = records.get(team);
+				if (record) forget(record);
+			}
+			return removed;
+		};
+	}
+
+	function reconcile(): void {
+		const current = new Set<string>();
+		for (const record of deps.sessionStore.list()) {
+			const sessionId = sessionIdOf(record);
+			current.add(sessionId);
+			report(record);
+		}
+		const incarnation = deps.incarnation();
+		if (incarnation !== null) {
+			for (const sessionId of known) {
+				if (current.has(sessionId)) continue;
+				void deps.send("session_forget", { sessionId, incarnation });
+			}
+		}
+		known.clear();
+		for (const sessionId of current) known.add(sessionId);
+	}
+
+	return { attach, report, reconcile };
+}

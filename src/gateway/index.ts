@@ -86,7 +86,10 @@ import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
+import { createInboxClaims } from "./router/inboxClaims.js";
+import { createInboxDeliveryPump } from "./router/inboxDeliveryPump.js";
 import { startRouterClient } from "./router/routerClient.js";
+import { createSessionRegistryReporter } from "./router/sessionRegistryReporter.js";
 import {
 	loadRouterReach,
 	loadRouterTransport,
@@ -101,9 +104,6 @@ import { WakeCoordinator } from "./wake.js";
 import { WakeService } from "./wakeService.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 export function createProjectPredicates(
 	offlineCatalog: ReadonlyMap<string, string>,
 	knownTeamPaths: ReadonlyMap<string, string>,
@@ -117,21 +117,16 @@ export function createProjectPredicates(
 
 export async function startGateway(): Promise<void> {
 	const PORT = parseInt(process.env.PORT || "20000", 10);
-	// The arming-only pinned-TLS listener for the phone's LAN bundle delivery (see the arming block).
+	// Pinned-TLS listener for phone enrollment.
 	const ENROLL_TLS_PORT = parseInt(process.env.ENROLL_TLS_PORT || "20003", 10);
-	// The legacy pre-DATA_DIR durable-state dir, kept only so the one-shot schema wipe below can
-	// drop any old-grammar files left there by the historical legacy->DATA_DIR migration.
+	// Legacy state directory used by the one-shot schema cleanup.
 	const LOG_DIR = path.join("/app", "log");
 
-	// Durable state (federation private keys, pending-jobs, mailboxes, replay-guard, the session
-	// resume map) lives in DATA_DIR, deliberately SEPARATE from the legacy /app/log volume so a
-	// "clear the logs" action can never wipe federation identity.
+	// Durable identity and delivery state stays separate from logs.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
-	// Byte store. Lives under DATA_DIR (a real docker volume) rather than the log volume, so
-	// clearing logs cannot destroy attachments a message still references.
+	// Attachments share DATA_DIR so log cleanup cannot remove referenced bytes.
 	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
-	// Task board attachments, beside the cache but deliberately NOT part of it: nothing sweeps this,
-	// which is what makes an entry's pictures survive the eviction that would otherwise take them.
+	// Board attachments are not swept with the cache.
 	const boardAttachments = new BoardAttachmentStore(`${DATA_DIR}/board-attachments`);
 	// Ceiling for the whole store, swept on the persist tick. A MULTIPLE of the largest single
 	// attachment, deliberately: a store only a few max-size blobs deep starts evicting live
@@ -224,6 +219,7 @@ export async function startGateway(): Promise<void> {
 	// Messages accepted for a session that could not take them. Persisted on every transition for the
 	// same reason as the op store: the sender has already been told its message landed.
 	const pendingDeliveries = openDurable(DATA_DIR, "pending-deliveries", (d) => new PendingDeliveryStore(d));
+	const inboxClaims = createInboxClaims(DATA_DIR);
 	// The same mechanism for the board's ABSOLUTE writes, in its own file: a shared one would let a
 	// coincidental opId collision replay a console result as a board reply.
 	const boardReplays = openDurable(DATA_DIR, "board-idempotency", (d) =>
@@ -261,6 +257,15 @@ export async function startGateway(): Promise<void> {
 			},
 		},
 	});
+	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
+	let inboxPeerHandleOp: ReturnType<typeof createGatewayRelayHandler>["handleOp"] | null = null;
+	const sessionReporter = createSessionRegistryReporter({
+		sessionStore,
+		send: (action, params) => fed()?.routerClient.callInboxTool(action, params) ?? Promise.resolve(),
+		incarnation: () => fed()?.routerClient.incarnation() ?? null,
+		localGatewayId,
+	});
+	sessionReporter.attach();
 	// What plugins the owner's consoles have enabled. Starting empty costs only that tools fail open
 	// until a device re-registers, which is the same posture as a fresh install.
 	const capabilityStore = openDurable(DATA_DIR, "console-capabilities", (d) => new CapabilityStore(d));
@@ -822,6 +827,47 @@ export async function startGateway(): Promise<void> {
 			onDisconnect: () => {
 				console.error(`[router] disconnected from the Router`);
 			},
+			onRegistered: () => sessionReporter.reconcile(),
+			onInboxDeliver: (frame) =>
+				void inboxPump?.onFrame(
+					frame as { address: string; rows: unknown; incarnation?: number; deliveryEpoch: number },
+				),
+			onBlobFetch: (frame) => {
+				const request = frame as { opId: string; blobId: string; range?: { offset: number; length: number } };
+				try {
+					const read = readBlobRange(
+						blobStore,
+						boardAttachments,
+						request.blobId,
+						request.range?.offset ?? 0,
+						request.range?.length ?? MAX_BLOB_BYTES,
+					);
+					void routerClient.callInboxTool("blob_fetch_reply", {
+						opId: request.opId,
+						outcome: "fetched",
+						bytes: read.bytes.toString("base64"),
+						eof: read.eof,
+					});
+				} catch {
+					void routerClient.callInboxTool("blob_fetch_reply", { opId: request.opId, outcome: "absent" });
+				}
+			},
+		});
+		inboxPump = createInboxDeliveryPump({
+			claims: inboxClaims,
+			routerClient,
+			incarnation: () => routerClient.incarnation(),
+			domainId,
+			ownerSignPub: () => allowlist.ownerSignPub,
+			contentKeyStore,
+			sealer,
+			coordinator: channelDeliveries,
+			tryWakeTeam: (team) => wakeService.tryWakeTeam(team),
+			isSessionLive: (sessionId) => !!resolveLiveIncarnation(registry, sessionStore, sessionId),
+			peerHandler: (op, srcGateway, srcDomainId) => {
+				if (!inboxPeerHandleOp) throw new Error("peer handler not ready");
+				return inboxPeerHandleOp(op, srcGateway, srcDomainId);
+			},
 		});
 
 		slice = {
@@ -1010,6 +1056,7 @@ export async function startGateway(): Promise<void> {
 			if (handed > 0) console.log(`[delivery] handed ${handed} held message(s) to ${team}`);
 		},
 		onDeliveryAck: (team, deliveryId) => {
+			void inboxPump?.onChannelDeliveryAck(team, deliveryId);
 			if (channelDeliveries.acknowledge(deliveryId)) {
 				console.log(`[delivery] ${team} confirmed ${deliveryId.slice(0, 8)}`);
 			}
@@ -1060,6 +1107,7 @@ export async function startGateway(): Promise<void> {
 			blobStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
+			producerSignPriv: f ? identity().sign.priv : undefined,
 			tryWakeTeam: (team, createOpts) => wakeService.tryWakeTeam(team, createOpts),
 			sessionStore,
 			presence,
@@ -1291,6 +1339,7 @@ export async function startGateway(): Promise<void> {
 				return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };
 			},
 		});
+		inboxPeerHandleOp = gatewayRelayHandler.handleOp;
 		const gatewayRelay = createGatewayRelayPump({
 			sealer: federation.sealer,
 			handleOp: gatewayRelayHandler.handleOp,

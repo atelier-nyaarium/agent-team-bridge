@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	keyReceiptSigningBytes,
@@ -11,6 +13,25 @@ import { generateIdentity } from "../shared/crypto.js";
 import { KeyGrantSchema, KeyReceiptSchema, KeyRequestSchema } from "../shared/schemasContentKey.js";
 
 const identity = generateIdentity();
+
+const vectors = JSON.parse(
+	fs.readFileSync(path.join(__dirname, "../../tests/fixtures/content-envelope/vectors.json"), "utf8"),
+) as {
+	keyRequest: {
+		value: { v: 1; domainId: string; requesterSignPub: string; epochs: number[]; at: number; nonce: string };
+		signingBytes: string;
+		signingBytesHex: string;
+		signingBytesBase64: string;
+		signature: string;
+	};
+	keyReceipt: {
+		value: { v: 1; domainId: string; recipientSignPub: string; epoch: number; at: number; nonce: string };
+		signingBytes: string;
+		signingBytesHex: string;
+		signingBytesBase64: string;
+		signature: string;
+	};
+};
 
 const request = {
 	v: 1 as const,
@@ -27,7 +48,6 @@ const receipt = {
 	domainId: "domain-a",
 	recipientSignPub: identity.sign.pub,
 	epoch: 3,
-	keyringGeneration: 4,
 	at: 1717171717171,
 	nonce: "cmVjZWlwdC1ub25jZQ==",
 	signature: "",
@@ -60,8 +80,28 @@ describe("content key wire", () => {
 			"KEYREQUEST_V1\ndomain-a\nrequester\n1,3,8\n1717171717171\ncmVxdWVzdC1ub25jZQ==",
 		);
 		expect(keyReceiptSigningBytes({ ...receipt, recipientSignPub: "recipient" }).toString("utf8")).toBe(
-			"KEYRECEIPT_V1\ndomain-a\nrecipient\n3\n4\n1717171717171\ncmVjZWlwdC1ub25jZQ==",
+			"KEYRECEIPT_V1\ndomain-a\nrecipient\n3\n1717171717171\ncmVjZWlwdC1ub25jZQ==",
 		);
+	});
+
+	it("matches the canonical key request and receipt vectors", () => {
+		const requestValue = { ...vectors.keyRequest.value, signature: "" };
+		const requestBytes = keyRequestSigningBytes(requestValue);
+		expect(requestBytes.toString("utf8")).toBe(vectors.keyRequest.signingBytes);
+		expect(requestBytes.toString("hex")).toBe(vectors.keyRequest.signingBytesHex);
+		expect(requestBytes.toString("base64")).toBe(vectors.keyRequest.signingBytesBase64);
+		const signedRequest = signKeyRequest(requestValue, "hv4it8vBajVd4NohKuqkjiVeqvGiZaYkgN940TvrYrM=");
+		expect(signedRequest.signature).toBe(vectors.keyRequest.signature);
+		expect(verifyKeyRequest(signedRequest)).toBe(true);
+
+		const receiptValue = { ...vectors.keyReceipt.value, signature: "" };
+		const receiptBytes = keyReceiptSigningBytes(receiptValue);
+		expect(receiptBytes.toString("utf8")).toBe(vectors.keyReceipt.signingBytes);
+		expect(receiptBytes.toString("hex")).toBe(vectors.keyReceipt.signingBytesHex);
+		expect(receiptBytes.toString("base64")).toBe(vectors.keyReceipt.signingBytesBase64);
+		const signedReceipt = signKeyReceipt(receiptValue, "hv4it8vBajVd4NohKuqkjiVeqvGiZaYkgN940TvrYrM=");
+		expect(signedReceipt.signature).toBe(vectors.keyReceipt.signature);
+		expect(verifyKeyReceipt(signedReceipt)).toBe(true);
 	});
 
 	it("accepts each key grant field shape", () => {

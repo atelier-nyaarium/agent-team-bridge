@@ -1,46 +1,11 @@
 import { z } from "zod";
 
-////////////////////////////////
-//  Router wire protocol
-//
-//  Frames exchanged over the gateway<->Router WebSocket. Imports nothing but
-//  zod so the verbatim copy needs no import surgery; sibling shared modules
-//  import FROM it, never into it.
-//
-//  The console_relay member stays loose so the gateway's relay pump owns the
-//  full ConsoleRelayFrameSchema parse (shared/schemas.ts): the union routes by
-//  type only, avoiding divergent double-validation.
+// Router wire schemas. Relay payloads stay opaque here and are validated by their consumers.
 
-////////////////////////////////
-//  Schemas
-
-/**
- * Raw bytes per chunk of a blob transfer.
- *
- * Exported from the leaf so all four runtimes agree by construction rather than each picking a
- * number. Sized against the phone, not the servers: the console holds several transient copies of
- * a chunk while base64ing, JSON-encoding and sealing it, and its heap is the tightest ceiling in
- * the path. Each of those copies is a JVM String, so each costs two bytes per character, which puts
- * the live peak around 15-20 MB per chunk rather than the ~1.8x the wire figure suggests. That is
- * survivable and, crucially, CONSTANT: it no longer scales with the size of the file being moved,
- * which is the whole reason the plane exists.
- */
+/** Chunk size shared by all runtimes and bounded by the phone's transient heap use. */
 export const BLOB_CHUNK_BYTES = 1_048_576;
 
-/**
- * Largest a single attachment may be, anywhere in the system.
- *
- * THE one size limit. Every other cap derives from this rather than restating it as its own
- * constant: a restated value has nothing tying it back to what actually bounds a transfer, so it can
- * drift stale independent of it. Nothing is held whole at any hop: what bounds a transfer is
- * BLOB_CHUNK_BYTES per hop and disk space in total, and neither scales with the size of the file
- * being moved.
- *
- * Enforced where the bytes land rather than where they are described. A message states a file's
- * `size`, but that is the sender talking and nothing verifies it, so the ceiling lives on the
- * store's own write path, which counts what actually arrived. A sender that under-reports is
- * refused at the chunk that crosses the line, having moved a bounded amount of data to get there.
- */
+/** Attachment limit. Enforce it on received bytes, not sender-declared metadata. */
 export const MAX_BLOB_BYTES = 500_000_000;
 
 /**
@@ -50,8 +15,7 @@ export const MAX_BLOB_BYTES = 500_000_000;
  */
 export const MAX_RELAY_FRAME_BYTES = 8_000_000;
 
-/** Frames the gateway RECEIVES from the Router. Unknown `type` values fail the
- * union; the consumer logs and drops them (observability, not crash). */
+/** Frames received from the Router. Unknown types are logged and dropped. */
 export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("tool_result"),
@@ -60,42 +24,46 @@ export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 	}),
 	z.object({
 		type: z.literal("tool_error"),
-		// Nullable on purpose: the Router sends callId: null for
-		// invalid JSON and malformed envelopes that never carried an id.
+		// Null identifies malformed input that carried no call id.
 		callId: z.string().nullable(),
 		error: z.string().optional(),
 	}),
-	// Loose: the relay pump owns full validation (see module header).
+	// The relay pump validates the full payload.
 	z.looseObject({
 		type: z.literal("console_relay"),
 	}),
-	// Loose: a cross-Gateway frame. The gateway-relay pump runs the full federation
-	// parse (federation-protocol.ts); the Router routes by destination Gateway, never reading payload.
+	// The gateway-relay pump validates the full payload.
 	z.looseObject({
 		type: z.literal("gateway_relay"),
 	}),
-	// Loose: a pre-trust cross-Domain handshake frame (round 1, the requester's
-	// commitment). The handshake pump validates; the Router never reads the payload.
+	// The handshake pump validates this opaque payload.
 	z.looseObject({
 		type: z.literal("cross_domain_handshake"),
 	}),
-	// Loose: the round-2 reveal frame, routed the same way (the requester's revealed keys +
-	// salt). The handshake pump validates and matches it to the round-1 pairing.
+	// The handshake pump validates and pairs the reveal with round one.
 	z.looseObject({
 		type: z.literal("cross_domain_handshake_reveal"),
 	}),
-	// The mirrored Domain pushed live when the owner admits or revokes a member, so a
-	// revocation bites a connected Gateway within seconds rather than at its next register.
-	// `domain` stays opaque here; the Gateway validates it with DomainSnapshotSchema.
-	// `version` is the keyring hash the Gateway can echo to skip a redundant apply.
-	// `displayName` carries the current display name because the allowlist the snapshot
-	// feeds drops it, so a rename would otherwise not reach teams()/discover until a
-	// reconnect. This frame only reaches the renamed Domain's own gateways.
+	// The Gateway validates the opaque snapshot with DomainSnapshotSchema.
 	z.object({
 		type: z.literal("domain_update"),
 		domain: z.unknown(),
 		version: z.string().optional(),
 		displayName: z.string().nullish(),
+	}),
+	z.object({
+		type: z.literal("inbox_deliver"),
+		address: z.string(),
+		rows: z.unknown(),
+		incarnation: z.number().int().positive(),
+		deliveryEpoch: z.number().int().positive(),
+	}),
+	z.object({
+		type: z.literal("blob_fetch"),
+		opId: z.string().min(1),
+		blobId: z.string().min(1),
+		range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
+		incarnation: z.number().int().positive(),
 	}),
 ]);
 
@@ -106,6 +74,52 @@ export const ToolCallFrameSchema = z.object({
 	callId: z.string().min(1),
 	action: z.string().min(1),
 	params: z.record(z.string(), z.unknown()),
+});
+
+export const InboxAppendParamsSchema = z.object({
+	address: z.string(),
+	// Pump parses rows with InboxRowSchema.
+	row: z.unknown(),
+	opKey: z.unknown().optional(),
+	incarnation: z.number().int().positive(),
+});
+
+export const InboxAckParamsSchema = z.object({
+	address: z.string(),
+	seq: z.number().int().min(1),
+	incarnation: z.number().int().positive(),
+	deliveryEpoch: z.number().int().positive(),
+	outcome: z.enum(["delivered", "waking", "failed"]),
+	reason: z.string().optional(),
+});
+
+export const SessionUpsertParamsSchema = z.object({
+	sessionId: z.string(),
+	kind: z.string(),
+	label: z.string(),
+	recordExists: z.boolean(),
+	incarnation: z.number().int().positive(),
+});
+
+export const SessionForgetParamsSchema = z.object({
+	sessionId: z.string(),
+	incarnation: z.number().int().positive(),
+});
+
+export const BlobFetchParamsSchema = z.object({
+	opId: z.string(),
+	blobId: z.string(),
+	range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
+	origin: z.object({ domainId: z.string().min(1), gatewayId: z.string().min(1) }).optional(),
+	incarnation: z.number().int().positive(),
+});
+
+export const BlobFetchReplyParamsSchema = z.object({
+	opId: z.string().min(1),
+	outcome: z.enum(["fetched", "absent"]),
+	bytes: z.string().optional(),
+	eof: z.boolean().optional(),
+	incarnation: z.number().int().positive(),
 });
 
 ////////////////////////////////
@@ -245,6 +259,12 @@ export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
 
 export type RouterInboundFrame = z.infer<typeof RouterInboundFrameSchema>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
+export type InboxAppendParams = z.infer<typeof InboxAppendParamsSchema>;
+export type InboxAckParams = z.infer<typeof InboxAckParamsSchema>;
+export type SessionUpsertParams = z.infer<typeof SessionUpsertParamsSchema>;
+export type SessionForgetParams = z.infer<typeof SessionForgetParamsSchema>;
+export type BlobFetchParams = z.infer<typeof BlobFetchParamsSchema>;
+export type BlobFetchReplyParams = z.infer<typeof BlobFetchReplyParamsSchema>;
 export type GatewayRegisterParams = z.infer<typeof GatewayRegisterParamsSchema>;
 export type GatewayRelayRoute = z.infer<typeof GatewayRelayRouteSchema>;
 export type GatewayRelayReplyParams = z.infer<typeof GatewayRelayReplyParamsSchema>;

@@ -803,7 +803,6 @@ data class KeyReceipt(
 	val domainId: String,
 	val recipientSignPub: String,
 	val epoch: Long,
-	val keyringGeneration: Long,
 	val at: Long,
 	val nonce: String,
 	val signature: String,
@@ -905,6 +904,62 @@ data class TransportResult(
 	val routerCertFp: String? = null,
 	val bearer: String? = null,
 	val error: String? = null,
+)
+
+@Serializable
+data class OwnerOp(
+	val v: Long,
+	val domainId: String,
+	val signerSignPub: String,
+	val conversationId: String,
+	val device: String,
+	val opId: String,
+	val at: Long,
+	val nonce: String,
+	val op: JsonObject,
+	val signature: String,
+)
+
+@Serializable
+data class InboxRow(
+	val envelope: RowEnvelope,
+	val producerSig: String,
+	val body: JsonElement,
+	val seq: Long,
+	val acceptedAt: Long,
+	val size: Long,
+)
+
+@Serializable
+data class RowEnvelope(
+	val origin: RowOrigin,
+	val opKey: OpKey,
+	val epoch: JsonElement,
+	val kind: String,
+	val contentRefs: List<String>,
+)
+
+@Serializable
+data class RowOrigin(
+	val kind: String,
+	val domainId: String,
+	val gatewayId: String? = null,
+	val sessionId: String? = null,
+	val device: String? = null,
+)
+
+@Serializable
+data class OpKey(
+	val conversationId: String,
+	val opId: String,
+)
+
+@Serializable
+data class OpResultEnvelope(
+	val opKey: OpKey,
+	val outcome: String,
+	val seq: Long? = null,
+	val reason: String? = null,
 )
 
 @Serializable

@@ -6,56 +6,42 @@ import { ReplayGuard } from "./replayGuard.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A seal destination: a bare string is the local shorthand (a gatewayId resolved through
- * the allowlist), an object is an explicit cross-Domain target keyed by
- * `(domainId, gatewayId)`, since a gateway id is not globally unique. */
+/** A local gateway id or an explicit `(domainId, gatewayId)` target. */
 export type SealTarget = string | { domainId: string; gatewayId: string };
 
-/** The opened body plus its verified source classification. `srcDomainId` is the resolved
- * cross-Domain peer's Domain (non-null only for a cross-Domain peer, after the signed-in
- * srcDomain was cross-checked against that peer), null for a local peer. The relay handler
- * gates a cross-Domain op on this trustworthy value, never on the cleartext frame field. */
+/** Opened body and verified source Domain. Never use the cleartext relay field for authorization. */
 export interface OpenedFrame {
 	body: unknown;
 	srcDomainId: string | null;
 }
 
-/** Seals an object to a peer Gateway and opens a peer Gateway's sealed object, resolving the
- * peer's keys local-first (the single-owner allowlist) then the disjoint cross-Domain peer
- * set. The seal is E2E (gateway to gateway); the Router never holds either Gateway's private keys.
- * `open`/`openWithSource` take the source Gateway's Domain (the Router stamps it on the relay
- * frame) so a cross-Domain peer resolves by the full `(domainId, gatewayId)` pair; absent, it
- * falls back to a bare-gatewayId scan. `openWithSource` also reports whether the verified
- * sender was a cross-Domain peer, so the relay handler can scope a cross-Domain op. */
+/** Resolves admitted peers, seals end to end, and reports a verified cross-Domain source. */
 export interface Sealer {
 	seal(dst: SealTarget, obj: unknown): SealedEnvelope;
 	open(srcGateway: string, env: SealedEnvelope, srcDomain?: string): unknown;
-	openWithSource(srcGateway: string, env: SealedEnvelope, srcDomain?: string): OpenedFrame;
+	/** Uses courier acceptance time for queued frames. */
+	openWithSource(
+		srcGateway: string,
+		env: SealedEnvelope,
+		srcDomain?: string,
+		opts?: { sealedAt?: number },
+	): OpenedFrame;
 }
 
 ////////////////////////////////
 //  Functions & Helpers
 
-// A sealed envelope older than this is rejected, so a captured authentic frame cannot be
-// re-executed after the in-memory replay-guard window has rolled. Above the Router's
-// gateway_relay hold (70s) plus relay latency.
+// Must exceed the Router's relay hold while bounding replay age.
 const SEAL_MAX_AGE_MS = 120_000;
 
-/** Resolve a cross-Domain peer from the cleartext relay frame. When the frame carries a
- * `srcDomain`, resolve by the full `(domainId, gatewayId)` pair, so two friend Domains
- * sharing a gateway id both open. Without it, fall back to the bare-gatewayId scan: a single
- * match resolves, an id ambiguous across two friend Domains returns null (refuse rather than
- * guess, so a frame is never attributed to the wrong peer). */
+/** Resolves by `(domainId, gatewayId)`; an ambiguous legacy id is refused. */
 function resolveCrossByGateway(crossDomainPeers: CrossDomainPeers, gatewayId: string, srcDomain?: string) {
 	if (srcDomain) return crossDomainPeers.resolveByGateway(srcDomain, gatewayId);
 	const matches = crossDomainPeers.all().filter((p) => p.friendGatewayId === gatewayId);
 	return matches.length === 1 ? matches[0] : null;
 }
 
-/** The local (single-owner, intra-Domain) signed-and-encrypted inner frame. Carrying
- * `src`/`dst`/`at` inside the seal binds them cryptographically (the seal signature covers
- * the ciphertext), so the Router, which controls the cleartext routing fields, cannot relabel the
- * origin/destination or replay a stale frame past the freshness window. */
+/** Signed local frame. The seal binds source, destination, and timestamp. */
 interface SealedBodyV1 {
 	v: 1;
 	src: string;
@@ -64,10 +50,7 @@ interface SealedBodyV1 {
 	body: unknown;
 }
 
-/** The cross-Domain signed-and-encrypted inner frame. Adds the source and destination Domain
- * ids alongside the gateway ids, because a gateway id is not globally unique across Domains:
- * open() cross-checks the full `(domain, gateway)` pair on both ends, so a Router relabel
- * across Domains cannot misattribute an authentic frame. */
+/** Signed cross-Domain frame with both Domain and Gateway identities. */
 interface SealedBodyV2 {
 	v: 2;
 	src: string;
@@ -89,46 +72,40 @@ export function createSealer(
 	replayGuard: ReplayGuard = new ReplayGuard(),
 	now: () => number = Date.now,
 ): Sealer {
-	function openWithSource(srcGateway: string, env: SealedEnvelope, srcDomain?: string): OpenedFrame {
-		// Resolve the verify key local-first (the single-owner allowlist), then the disjoint
-		// cross-Domain set. The cleartext relay frame's `srcDomain` resolves a cross-Domain
-		// peer by the full `(domainId, gatewayId)` pair; otherwise the peer is matched by
-		// gateway id alone. The signed-in srcDomain is still cross-checked against the
-		// resolved peer after unseal (below).
+	function openWithSource(
+		srcGateway: string,
+		env: SealedEnvelope,
+		srcDomain?: string,
+		opts?: { sealedAt?: number },
+	): OpenedFrame {
+		// Resolve local peers first, then cross-Domain peers.
 		const localPeer = allowlist.resolveGateway(srcGateway);
 		const crossPeer = localPeer ? null : resolveCrossByGateway(crossDomainPeers, srcGateway, srcDomain);
 		const verifyKey = localPeer ? localPeer.signPub : crossPeer?.friendSignPub;
 		if (!verifyKey) throw new Error(`Gateway "${srcGateway}" is not admitted to the Domain`);
-		// Verify authenticity first; only then guard against a replay of an
-		// authentic frame (so a forged nonce can never poison the seen-set).
+		// Authenticate before recording the nonce.
 		const plain = unseal(env, identity.box.priv, verifyKey);
 		if (!replayGuard.check(srcGateway, env.nonce)) {
 			throw new Error(`seal: replayed envelope from "${srcGateway}"`);
 		}
 		const wrapped = JSON.parse(plain.toString("utf8")) as SealedBody;
-		// The cleartext srcGateway selected the verify key; cross-check it against the
-		// signed-in src so a Router relabel cannot misattribute an authentic frame.
+		// Bind the cleartext route to the signed source.
 		if (wrapped?.src !== srcGateway) throw new Error(`seal: source mismatch (claimed "${srcGateway}")`);
 		if (wrapped.dst !== localGatewayId) throw new Error(`seal: not addressed to this Gateway`);
-		if (Math.abs(now() - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS) throw new Error(`seal: stale envelope`);
+		if (Math.abs((opts?.sealedAt ?? now()) - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS)
+			throw new Error(`seal: stale envelope`);
 		if (wrapped.v === 1) {
-			// Intra-Domain frame: src/dst/at already checked above. A v1 body must come from a
-			// local peer (symmetric to the v2 guard below): a cross-Domain peer that crafted a
-			// v1 body would otherwise strip the (srcDomain, dstDomain) binding the v2 envelope
-			// exists to enforce.
+			// Local peers must use v1 so Domain bindings cannot be stripped.
 			if (crossPeer) throw new Error(`seal: v1 frame from a cross-Domain Gateway`);
 			return { body: wrapped.body, srcDomainId: null };
 		}
 		if (wrapped.v === 2) {
-			// Cross-Domain frame: the verify key MUST be a cross-Domain peer (a local
-			// peer never emits v2), and the full (domain, gateway) pair must match.
+			// Cross-Domain peers must use v2 with the full identity pair.
 			if (!crossPeer) throw new Error(`seal: v2 frame from a non-cross-Domain Gateway`);
 			if (wrapped.srcDomain !== crossPeer.friendDomainId) {
 				throw new Error(`seal: srcDomain mismatch (claimed "${wrapped.srcDomain}")`);
 			}
 			if (wrapped.dstDomain !== localDomainId) throw new Error(`seal: not addressed to this Domain`);
-			// The Domain is the resolved peer's, already cross-checked against the signed-in
-			// value, so the relay handler can trust it to scope the op.
 			return { body: wrapped.body, srcDomainId: crossPeer.friendDomainId };
 		}
 		throw new Error(`seal: unknown sealed body version`);
@@ -136,10 +113,7 @@ export function createSealer(
 
 	return {
 		seal(dst, obj) {
-			// A bare string is the local shorthand: resolve the local Domain first and emit the
-			// v1 body. Only when the local Domain cannot resolve the target (or the caller named
-			// an explicit cross-Domain target) do we fall through to the disjoint cross-Domain
-			// set and emit v2.
+			// Bare targets resolve locally and use v1.
 			const bareGateway = typeof dst === "string" ? dst : dst.gatewayId;
 			if (typeof dst === "string") {
 				const localPeer = allowlist.resolveGateway(dst);
@@ -148,7 +122,7 @@ export function createSealer(
 					return seal(Buffer.from(JSON.stringify(wrapped)), localPeer.boxPub, identity.sign.priv);
 				}
 			}
-			// Cross-Domain: resolve the friend gateway's keys from the disjoint store.
+			// Explicit targets resolve from the cross-Domain store and use v2.
 			if (typeof dst !== "string") {
 				const peer = crossDomainPeers.resolveByGateway(dst.domainId, dst.gatewayId);
 				if (peer) {
@@ -166,8 +140,6 @@ export function createSealer(
 			}
 			throw new Error(`Gateway "${bareGateway}" is not admitted to the Domain`);
 		},
-		// open returns just the body (the existing callers); openWithSource adds the verified
-		// source Domain for the relay handler's destination gate. Both share one resolver.
 		open(srcGateway, env, srcDomain) {
 			return openWithSource(srcGateway, env, srcDomain).body;
 		},

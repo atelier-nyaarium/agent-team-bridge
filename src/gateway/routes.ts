@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { sha256Hex } from "../shared/canonical-json.js";
 import { capFifo } from "../shared/cap-fifo.js";
 import { UNREPORTED_CAPABILITIES } from "../shared/capabilities.js";
 import type { BoardEntry, DiscoverCoverage } from "../shared/console-protocol.js";
@@ -7,6 +8,7 @@ import type { FederatedOp } from "../shared/federation-protocol.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { signRowEnvelope } from "../shared/schemasInbox.js";
 import {
 	Address,
 	composeSessionName,
@@ -71,34 +73,24 @@ import {
 
 export { MAX_RESPONSE_FILE_BYTES, POST_WAKE_SETTLE_MS };
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface RoutesDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
 	tryWakeTeam: (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => Promise<WakeResult>;
-	// The durable session-record store. Used directly by send/respond's live-incarnation
-	// resolution; teams() itself defers entirely to `presence.snapshot()` below. Optional for
-	// test harnesses with no resume tracking.
+	// Session records support live-incarnation resolution. Optional in test harnesses.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
 	capabilityStore?: Pick<import("./console/capabilityStore.js").CapabilityStore, "snapshot">;
 	daemonCapabilityStore?: Pick<import("./daemonCapabilities.js").DaemonCapabilityStore, "snapshot">;
-	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
-	// to-refresh and the poll response's presence plane can never compute two different answers.
-	// Optional so a harness testing routes with no presence wiring still gets an empty teams list
-	// rather than a throw.
+	// teams() delegates to this snapshot. Optional in test harnesses.
 	presence?: { snapshot(): TeamInfo[] };
-	// The host spawn points this machine's daemon DETECTED, beyond the universal `host`. Read live
-	// rather than captured, since the daemon rewrites it on every catalog frame and clears it on
-	// disconnect. `known` is what keeps "no daemon has spoken" distinct from "the daemon offers
-	// nothing"; without it an older daemon reads as an affirmative empty answer.
+	// Live daemon catalog state. `known` distinguishes no reply from an empty catalog.
 	hostSpawnPoints?: HostSpawnState;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: GatewayConfig;
+	producerSignPriv?: string;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
@@ -216,6 +208,7 @@ export function createRoutes({
 	hostSpawnPoints,
 	mailboxStore,
 	config,
+	producerSignPriv,
 	routerClient,
 	sealer,
 	blobStore,
@@ -363,6 +356,30 @@ export function createRoutes({
 			sealed = sealer.seal(target, op);
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
+		}
+		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
+			// The gateway is the producer: it signs the envelope and seals the body to the peer.
+			const envelope = {
+				origin: { kind: "gateway" as const, domainId: localDomain, gatewayId: localGatewayId },
+				// Hashed: the natural ids carry dots the opKey grammar refuses.
+				opKey: {
+					conversationId: sha256Hex(op.kind === "send" ? op.returnRoute.srcConversationId : op.session_id),
+					opId: crypto.randomUUID(),
+				},
+				epoch: "peer" as const,
+				kind: op.kind === "send" ? ("message" as const) : ("reply" as const),
+				contentRefs: [],
+			};
+			const targetParts = parseSessionName(op.kind === "send" ? op.to : op.session_id);
+			const address = `session:${target.domainId}/${target.gatewayId}/${targetParts.project}.${targetParts.session}`;
+			const result = await routerClient.callInboxTool("inbox_append", {
+				address,
+				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed },
+			});
+			if (result.error) return { ok: false, error: result.error };
+			const accepted = result.result as { outcome?: string } | undefined;
+			if (accepted?.outcome && accepted.outcome !== "accepted") return { ok: false, error: accepted.outcome };
+			return { ok: true, result: accepted };
 		}
 		// The Domain the target actually resolved to (authoritative over the caller's hint),
 		// used to open the destination's v2 reply by the full (domainId, gatewayId) pair.
@@ -1315,6 +1332,7 @@ export function createRoutes({
 					...(files && files.length > 0 ? { files } : {}),
 				},
 				"cross-Gateway reply-pin",
+				deliverResult.dstDomainId ?? undefined,
 			);
 			if (opts.onFederatedSettled) {
 				void relayOutcome.then((r) => opts.onFederatedSettled?.(r.ok));

@@ -61,7 +61,6 @@ export const KeyReceiptSchema = z
 		domainId: slugField(),
 		recipientSignPub: b64Field(),
 		epoch: z.number().int().min(1).max(2147483647),
-		keyringGeneration: z.number().int().nonnegative(),
 		at: z.number().int().nonnegative(),
 		nonce: b64Field(),
 		signature: b64Field(),

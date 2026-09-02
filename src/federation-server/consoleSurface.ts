@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
+import type { RouterBlobCache } from "./blobs/routerBlobCache.js";
+import type { InboxService } from "./inbox/inboxService.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;
@@ -35,14 +38,8 @@ import {
 	type TrustPendingResult,
 } from "../shared/federation-lifecycle.js";
 
-////////////////////////////////
-//  Constants
-
 const MAX_INGEST_LINES = 2000;
 const MAX_INGEST_BYTES = 512 * 1024;
-
-////////////////////////////////
-//  Interfaces & Types
 
 export interface GatewayFrameSink {
 	isConnected(): boolean;
@@ -65,27 +62,23 @@ export interface ConsoleSurfaceParams {
 	onTrustHandshake?: (op: TrustHandshakeOp) => TrustHandshakeResult | Promise<TrustHandshakeResult>;
 	onTrustPending?: (req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>;
 	onTransport?: (req: TransportRequest) => TransportResult | Promise<TransportResult>;
-	/** How a console reaches this Router from either side of a NAT that does not hairpin. Behind the
-	 * app token on purpose: a LAN address on the public /health would tell any scanner this port-forward
-	 * ends on a home network at a specific private address, and only a console that already holds the
-	 * token has any use for it. */
+	/** Keep LAN reach behind the app token. */
 	onReach?: () => RouterReachAnswer;
-	/** The gateways registered into the admin Domain, for the host's own setup screen. Admin Domain
-	 * only, and never every Domain: the app token is shared by every tenant's console. */
+	/** Scope gateway listings to the admin Domain. */
 	onGateways?: () => RouterGatewaysAnswer;
+	onOwnerOp?: (raw: unknown) => unknown | Promise<unknown>;
+	inbox?: InboxService;
+	blobCache?: RouterBlobCache;
+	referenceHeld?: ReferenceHeldStore;
 }
 
-/** What the `reach` op answers. Both fields may be empty on a Router whose owner has not configured
- * them; the console then keeps whatever address it already has. `publicPort` is the port the public
- * host is dialed on, which is not the Router's own port when a forward remaps it; absent means the
- * Router's own. LAN addresses are always on the Router's own port. */
+/** Empty reach fields preserve cached addresses. */
 export interface RouterReachAnswer {
 	publicHost: string | null;
 	publicPort?: number;
 	lanAddresses: string[];
 }
 
-/** What the `gateways` op answers. `signFp` is null for an identity-less registration. */
 export interface RouterGatewaysAnswer {
 	gateways: { gatewayId: string; signFp: string | null }[];
 }
@@ -93,9 +86,6 @@ export interface RouterGatewaysAnswer {
 const CONSOLE_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 55_000;
 const APP_TOKEN_HEADER = "x-console-bridge-token";
-
-////////////////////////////////
-//  Class
 
 export class ConsoleSurface {
 	private readonly authToken: string;
@@ -120,6 +110,7 @@ export class ConsoleSurface {
 	private readonly onTransport: ((req: TransportRequest) => TransportResult | Promise<TransportResult>) | null;
 	private readonly onReach: (() => RouterReachAnswer) | null;
 	private readonly onGateways: (() => RouterGatewaysAnswer) | null;
+	private readonly onOwnerOp: ((raw: unknown) => unknown | Promise<unknown>) | null;
 	private readonly pending = new Map<
 		string,
 		{ resolve: (res: Response) => void; timer: ReturnType<typeof setTimeout> }
@@ -141,6 +132,7 @@ export class ConsoleSurface {
 		onTransport,
 		onReach,
 		onGateways,
+		onOwnerOp,
 	}: ConsoleSurfaceParams) {
 		this.authToken = authToken;
 		this.getBridge = getBridge;
@@ -156,6 +148,7 @@ export class ConsoleSurface {
 		this.onTransport = onTransport ?? null;
 		this.onReach = onReach ?? null;
 		this.onGateways = onGateways ?? null;
+		this.onOwnerOp = onOwnerOp ?? null;
 		this.handleRequest = this.handleRequest.bind(this);
 	}
 
@@ -271,8 +264,6 @@ export class ConsoleSurface {
 		}
 	}
 
-	/** No request payload beyond the discriminator and no signature: the app token that gated this
-	 * request IS the proof, and the answer is configuration, not state a signer could contest. */
 	private handleReach(): Response {
 		if (!this.onReach) return bounce(501, `reach not available`, false);
 		return json(this.onReach(), 200);
@@ -340,7 +331,7 @@ export class ConsoleSurface {
 		for (const line of lines) console.log(`${prefix} ${line}`);
 		if (this.ingestFile) {
 			const batch = lines.map((line) => `${JSON.stringify({ device, conversationId, line })}\n`).join("");
-			// An IO failure here must not reject: the request launch is not awaited.
+			// File logging is best effort because the launch is not awaited.
 			try {
 				mkdirSync(path.dirname(this.ingestFile), { recursive: true });
 				appendFileSync(this.ingestFile, batch);
@@ -362,9 +353,7 @@ export class ConsoleSurface {
 		const url = new URL(req.url, "http://console-bridge");
 		if (req.method !== "POST") return bounce(405, `method not allowed`);
 		if (!constantTimeBearerEquals(req.headers.get(APP_TOKEN_HEADER), this.authToken)) {
-			// Log the refusal, never the token. A silent 401 is indistinguishable from a console
-			// that never arrived, which is the one thing an operator needs to tell apart when a
-			// migrated Router and an already-provisioned console disagree about this secret.
+			// Never log the token.
 			console.log(`[console] rejected ${url.pathname}: app token mismatch`);
 			return new Response(`Unauthorized`, { status: 401 });
 		}
@@ -394,6 +383,13 @@ export class ConsoleSurface {
 		if (body.transport !== undefined) return this.handleTransport(body.transport);
 		if (body.reach !== undefined) return this.handleReach();
 		if (body.gateways !== undefined) return this.handleGateways();
+		if (body.ownerOp !== undefined) {
+			if (!this.onOwnerOp) return bounce(501, `owner op not available`, false);
+			const result = await this.onOwnerOp(body.ownerOp);
+			if (typeof result === "object" && result !== null && "malformed" in result)
+				return bounce(400, `invalid owner op`, false);
+			return json(result, 200);
+		}
 
 		const { opId, signerSignPub, sealed, targetGateway } = body;
 		if (
@@ -414,13 +410,7 @@ export class ConsoleSurface {
 			return bounce(503, `gateway not connected`, true);
 		}
 
-		// A NAMED gateway that is not connected is refused here, never delivered to another one. The
-		// fallback below picks the first connected gateway in the Domain, which is right for a frame
-		// that names none and wrong for a frame that does: the frame is sealed to the named gateway's
-		// box key, so the substitute cannot open it and answers "unseal failed" - a message about
-		// cryptography for what is only a machine being switched off. Unreachable while one gateway
-		// existed; the console began addressing a second one and it became the failure every op on an
-		// offline machine reported.
+		// Do not reroute named gateways; the payload is sealed to the target.
 		const route = (typeof targetGateway === "string" && targetGateway) || "";
 		if (route && !bridge.gatewayIds().includes(route)) {
 			return bounce(503, `gateway "${route}" is not connected`, true);
@@ -443,9 +433,6 @@ export class ConsoleSurface {
 		});
 	}
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 function json(data: unknown, status: number): Response {
 	return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });

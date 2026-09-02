@@ -533,19 +533,36 @@ Commits 41bd6ff6, ce8ddb71, 4ec17784.
   plus `commit` own the rule on the gateway and `stageBootstrap` takes the store; the phone's Add
   Device is one store commit through `ContentKeyring.classify`.
 
-## Phase 3 - Router: inboxes, op ledger, blob stores
+## Phase 3 - Router: inboxes, op ledger, blob stores ✅ Done
+
+Commit 0a42639d.
 
 Additive. Old surfaces untouched.
 
+Slices, in order: 3.0 the opening commits below; 3.1 the S2 owner state layer
+(`src/federation-server/owner/`); 3.2 the S3 wire shapes (`src/shared/schemasInbox.ts`, OwnerOp
+signing bytes, frames) and codegen roots; 3.3 the S3 inbox service (addresses, rows, op ledger,
+consumer and session registries, capacity, retention, results) on 3.1; 3.4 the OwnerOp intake on
+the console surface and the gateway frames on the bridge (`inbox_append`, `inbox_ack`,
+`session_upsert`, `session_forget`, incarnation on register, `inbox_deliver` push); 3.5 the
+gateway drain (`inboxDeliveryPump`: durable claim, offer through `ChannelDeliveryCoordinator`,
+wake path, ack) and the cross-Domain append that replaces `sendCrossGateway` and
+`relayWithRetry`; 3.6 `blob_fetch` by op id with the constants test; 3.7 the Router blob cache
+and reference-held store.
+
 Opening commits, from the Phase 2 architecture pass, before the re-delivery road:
-- A4: decide `keyringGeneration`. Either both keyrings persist a generation that `commit` bumps
-  and the receipt reads from the decision, or the field leaves `KeyReceiptSchema` and its
-  preimage. Decided before any producer exists; after S2 it is Router wire truth.
+- A4, decided: `keyringGeneration` leaves `KeyReceiptSchema` and `keyReceiptSigningBytes`. A
+  receipt names the Domain, the recipient, the epoch, `at`, and a nonce; the nonce makes it
+  idempotent and neither keyring tracks a generation. Protocol.kt regenerated.
 - A10: Kotlin twins of `keyRequestSigningBytes` and `keyReceiptSigningBytes` with canonical-bytes
   vectors in the content-envelope fixture, after A4.
 - A3: the phone's `FederationManager.installContentKeys(envelopes, trust)` as the one road entry,
   `@Synchronized`, returning a typed merge decision; `commit` is the only slot writer and the
   receipt is signed only after a durable commit.
+Phase 3 scope note: the OwnerOp intake lands with `deliver`, `consumer_register`, `inbox_read`,
+`inbox_advance`, and `op_result`; the VALUE ops (`blob_fetch`, `list_dirs`, `create_session`) keep
+riding `console_relay` until the phone transport switches in Phase 6, where the Router forwards
+them with a typed `unreachable`.
 Later in the phase or after it: A5 (a present-but-invalid allowlist fails closed and is set aside),
 A7 (delete the staging directory; `domain-id` folds into the allowlist record; transport written
 last), A8 (residue tests: sole writer of `content-keys.json`, sole derivation site, no key bytes in
@@ -581,6 +598,40 @@ runtimes decode exists, so the Router re-emits rows through its schema before re
   origin `(domainId, gatewayId)` per entry, typed miss.
 - Reference-held store: Domain-scoped, released with the entry or the fired send, boot-time orphan
   reconciliation.
+
+Deferred from the Phase 3 audit:
+- The `sent` echo row in the owner inbox lands with the phone transport (Phase 6), which is its
+  only reader; the deliver op writes one row until then.
+- `ReferenceHeldStore.reconcile` runs at boot once S5 to S7 state (Phase 4) supplies the live
+  references; nothing holds a reference before that.
+- An operator command to accept a quarantined range and write `durability_failure` result rows
+  for it (Phase 4 operations). Until then a quarantined owner stays quarantined across restarts
+  and `/health` names it.
+- A consumer's incarnation comes from the phone's `consumer_register` (Phase 6); the intake
+  stores what the op carries, default 0.
+- Op ledger and session registry ids carry no `domainId`: the per-Domain store directory does.
+- A result row written by a retire batch skips the capacity check on purpose: the retire must
+  land, and a result row is bounded by the rows it answers.
+
+### Bug Classes
+
+- **Journal batch atomicity** (`ownerStateStore.ts`): one journal line per op, replayed
+  independently, let a torn batch replay a ledger record without its row and an fsync failure
+  reuse a seq. Verdict, landed: one line per batch, applied whole or not at all; an fsync failure
+  applies to memory and answers `durability_uncertain`; a short write is cut back to its start.
+- **Quarantine without a record** (`ownerStateStore.ts`): the bad segment was renamed and nothing
+  else, so the next boot opened clean. Verdict, landed: the manifest records the quarantine and
+  a corrupt manifest quarantines in place; `/health` names quarantined owners.
+- **Claim before custody** (`inboxDeliveryPump.ts`): the claim was persisted before the offer and
+  cleared after an ack that may not have landed, so a lost ack re-offered and a `missing_epoch`
+  row was never retried. Verdict, landed: a claim is cleared only on a landed ack, an ack with no
+  local custody drops its claim, and the receiver's ack must name the session and hold a claim.
+- **Origin binding gaps** (`gatewayBridge.ts`, `ownerOpIntake.ts`, `schemasInbox.ts`): the
+  address Domain was never bound to the signer, a linked peer could append to any address kind,
+  a producer could write a `clear` row, and a bearer-only registrant drained an inbox. Verdict,
+  landed: the intake binds the address to the op's Domain, a peer row reaches only a registered
+  session, `clear` rows are Router-only by schema, and an identity-less registration gets no
+  incarnation.
 
 ## Phase 4 - Router: owner-scoped state (tiers 1 and 2)
 
@@ -1483,6 +1534,10 @@ What the phone shows, the current producer, and the hub's.
   values from the start.
 - A session usage limit killed seven verifiers mid-workflow; resume replayed the cached agents and
   re-ran only the failed ones, which worked.
+- The Phase 3 audit fanned 76 findings into 152 verifiers in one workflow and the limit killed
+  every verifier, leaving the findings unverified. Triage by hand found about twenty real
+  defects among them. Finders and verifiers belong in separate workflows, and a verify stage
+  should cap its fan-out by severity rather than refute every minor.
 
 - A prose sweep that is told "timeless, no history" strips the failure descriptions out of a
   ledger and the recommendation reasons out of a questionaire, because both read as narration.

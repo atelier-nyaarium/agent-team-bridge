@@ -36,6 +36,10 @@ export function isAtomicTemp(name: string): boolean {
 	return ATOMIC_TEMP_RE.test(name);
 }
 
+export function renameFileSync(from: string, to: string): void {
+	fs.renameSync(from, to);
+}
+
 /** Whether the process that named this temp is still running. A signal of 0 checks without
  * sending; EPERM means it exists under another user, which is still alive. */
 function writerAlive(name: string): boolean {
@@ -74,7 +78,7 @@ export function writeFileAtomic(file: string, source: AtomicSource, options: Ato
 				fs.closeSync(descriptor);
 			}
 		}
-		fs.renameSync(temp, file);
+		renameFileSync(temp, file);
 		renamed = true;
 		options.afterRename?.(file);
 		if (options.fsyncDirectory && process.platform !== "win32") {

@@ -1,0 +1,192 @@
+import type { SealedEnvelope } from "../../shared/crypto.js";
+import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
+import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
+import { type InboxAddress, type InboxRow, InboxRowSchema, parseInboxAddress } from "../../shared/schemasInbox.js";
+import type { ChannelDeliveryCoordinator } from "../channelDelivery.js";
+import type { ContentKeyStore } from "../federation/contentKeyStore.js";
+import type { Sealer } from "../federation/sealer.js";
+import type { InboxClaims } from "./inboxClaims.js";
+
+type AckOutcome = "delivered" | "waking" | "failed";
+type AckReply = { error?: string; result?: { outcome?: string; error?: string } };
+
+export interface InboxDeliveryPumpDeps {
+	claims: InboxClaims;
+	routerClient: { callInboxTool: (action: string, params: Record<string, unknown>) => Promise<unknown> };
+	/** Drops frames for another registration. */
+	incarnation?: () => number | null;
+	domainId: string;
+	ownerSignPub: () => string | null;
+	contentKeyStore: ContentKeyStore;
+	sealer?: Pick<Sealer, "openWithSource">;
+	coordinator?: Pick<ChannelDeliveryCoordinator, "accept" | "acknowledge">;
+	tryWakeTeam?: (team: string) => Promise<{ ok: boolean; error?: string; errorKind?: string }>;
+	isSessionLive?: (sessionId: string) => boolean;
+	consolePush?: (body: unknown) => void;
+	/** Runs an op using the seal's verified source Domain. */
+	peerHandler?: (op: FederatedOp, srcGateway: string, srcDomainId: string | null) => Promise<unknown>;
+}
+
+interface DeliveryPayload {
+	to?: string;
+	from?: string;
+	body?: string;
+	files?: unknown[];
+	disposition?: string;
+	messageId?: string;
+}
+
+const deliveryIdOf = (address: string, seq: number, deliveryEpoch: number) => `${address}:${seq}:${deliveryEpoch}`;
+
+export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
+	/** Claims survive lost Router acknowledgements; non-custodial outcomes are retried. */
+	async function ack(
+		address: string,
+		seq: number,
+		deliveryEpoch: number,
+		outcome: AckOutcome,
+		reason?: string,
+		custody = true,
+	) {
+		deps.claims.setOutcome(address, seq, deliveryEpoch, outcome);
+		const reply = (await deps.routerClient.callInboxTool("inbox_ack", {
+			address,
+			seq,
+			deliveryEpoch,
+			outcome,
+			...(reason ? { reason } : {}),
+		})) as AckReply | undefined;
+		const answered = reply?.result?.outcome;
+		const landed = !reply?.error && (answered === outcome || answered === "gone");
+		if (!custody || (landed && (outcome !== "waking" || answered === "gone")))
+			deps.claims.ack(address, seq, deliveryEpoch);
+	}
+
+	async function deliver(address: string, row: InboxRow, deliveryEpoch: number): Promise<void> {
+		const claim = deps.claims.claim(address, row.seq, deliveryEpoch);
+		if (claim) return ack(address, row.seq, deliveryEpoch, claim.outcome);
+		const parsed = parseInboxAddress(address);
+		if (!parsed || parsed.kind === "owner")
+			return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_address");
+		if (row.envelope.epoch === "peer") return deliverPeer(address, parsed, row, deliveryEpoch);
+		if (row.envelope.epoch === "clear") {
+			if (row.envelope.origin.kind !== "router")
+				return ack(address, row.seq, deliveryEpoch, "failed", "clear_origin");
+			return land(address, parsed, row, deliveryEpoch, row.body);
+		}
+		const ownerSignPub = deps.ownerSignPub();
+		if (!ownerSignPub) return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		const opened = deps.contentKeyStore.open(row.body as ContentEnvelope, {
+			domainId: deps.domainId,
+			ownerSignPub,
+			epoch: row.envelope.epoch,
+			kind: "op.payload",
+		});
+		if (opened.kind === "missing_epoch")
+			return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		if (opened.kind === "bad_tag") return ack(address, row.seq, deliveryEpoch, "failed", "bad_tag");
+		let body: unknown;
+		try {
+			body = JSON.parse(opened.plaintext.toString("utf8"));
+		} catch {
+			return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+		}
+		return land(address, parsed, row, deliveryEpoch, body);
+	}
+
+	async function deliverPeer(address: string, parsed: InboxAddress, row: InboxRow, deliveryEpoch: number) {
+		const origin = row.envelope.origin;
+		if (!deps.sealer || !deps.peerHandler || parsed.kind !== "session" || !origin.gatewayId)
+			return ack(address, row.seq, deliveryEpoch, "failed", "peer_unavailable");
+		let opened: ReturnType<Sealer["openWithSource"]>;
+		try {
+			opened = deps.sealer.openWithSource(origin.gatewayId, row.body as SealedEnvelope, origin.domainId, {
+				sealedAt: row.acceptedAt,
+			});
+		} catch {
+			return ack(address, row.seq, deliveryEpoch, "failed", "bad_tag");
+		}
+		const op = FederatedOpSchema.safeParse(opened.body);
+		if (!op.success) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+		try {
+			await deps.peerHandler(op.data, origin.gatewayId, opened.srcDomainId);
+		} catch (err) {
+			return ack(address, row.seq, deliveryEpoch, "failed", (err as Error).message);
+		}
+		return ack(address, row.seq, deliveryEpoch, "delivered");
+	}
+
+	async function land(address: string, parsed: InboxAddress, row: InboxRow, deliveryEpoch: number, body: unknown) {
+		if (parsed.kind === "gateway") {
+			if (!deps.consolePush) return ack(address, row.seq, deliveryEpoch, "waking", "no_consumer", false);
+			deps.consolePush(body);
+			return ack(address, row.seq, deliveryEpoch, "delivered");
+		}
+		if (parsed.kind !== "session") return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_address");
+		// No session reader handles this gateway's own result.
+		if (row.envelope.kind === "op_result") {
+			console.log(`[inbox] result for ${parsed.sessionId}: ${JSON.stringify(body)}`);
+			return ack(address, row.seq, deliveryEpoch, "delivered");
+		}
+		const payload = (body ?? {}) as DeliveryPayload;
+		if (!payload.to || !payload.from) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+		if (!deps.coordinator) return ack(address, row.seq, deliveryEpoch, "failed", "delivery_unavailable");
+		const deliveryId = deliveryIdOf(address, row.seq, deliveryEpoch);
+		const outcome = deps.coordinator.accept({
+			deliveryId,
+			team: parsed.sessionId,
+			channelJobId: payload.messageId ?? `${address}:${row.seq}`,
+			from: payload.from,
+			body: payload.body ?? "",
+			...(payload.files ? { files: payload.files as never } : {}),
+			...(payload.disposition ? { disposition: payload.disposition } : {}),
+			enqueuedAt: row.acceptedAt,
+		});
+		if (outcome === "refused") return ack(address, row.seq, deliveryEpoch, "failed", "delivery_refused");
+		// The receiver's channel_delivery_ack retires socket deliveries.
+		if (outcome === "delivered") return;
+		if (deps.isSessionLive?.(parsed.sessionId)) return ack(address, row.seq, deliveryEpoch, "waking");
+		const wake = await deps.tryWakeTeam?.(payload.to);
+		const definitive = wake && !wake.ok && wake.errorKind !== "timeout" && wake.errorKind !== "disconnected";
+		if (definitive) {
+			deps.coordinator.acknowledge(deliveryId);
+			return ack(address, row.seq, deliveryEpoch, "failed", wake.error);
+		}
+		return ack(address, row.seq, deliveryEpoch, "waking");
+	}
+
+	async function onFrame(frame: {
+		address: string;
+		rows: unknown;
+		incarnation?: number;
+		deliveryEpoch: number;
+	}): Promise<void> {
+		// Ignore frames for a previous registration.
+		const current = deps.incarnation?.();
+		if (current !== undefined && frame.incarnation !== current) {
+			console.warn(`[inbox] dropped a frame for incarnation ${frame.incarnation} (current ${current})`);
+			return;
+		}
+		const rows = (Array.isArray(frame.rows) ? frame.rows : [])
+			.map((row) => InboxRowSchema.safeParse(row).data)
+			.filter((row): row is InboxRow => row !== undefined)
+			.sort((a, b) => a.seq - b.seq);
+		for (const row of rows) await deliver(frame.address, row, frame.deliveryEpoch);
+	}
+
+	/** Acknowledges delivery to the addressed session. */
+	async function onChannelDeliveryAck(team: string, deliveryId: string): Promise<boolean> {
+		const match = /^(.+):(\d+):(\d+)$/.exec(deliveryId);
+		if (!match) return false;
+		const address = parseInboxAddress(match[1]);
+		if (!address || address.kind !== "session" || address.sessionId !== team) return false;
+		const seq = Number(match[2]);
+		const deliveryEpoch = Number(match[3]);
+		if (!deps.claims.get(match[1], seq, deliveryEpoch)) return false;
+		await ack(match[1], seq, deliveryEpoch, "delivered");
+		deps.coordinator?.acknowledge(deliveryId);
+		return true;
+	}
+
+	return { onFrame, onChannelDeliveryAck };
+}

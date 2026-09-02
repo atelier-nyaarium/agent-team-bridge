@@ -359,9 +359,9 @@ class AppStateStore internal constructor(
 
 	fun loadOwnerIdentity(): IdentityLoad = readIdentity(KEY_OWNER_IDENTITY)
 
-	fun saveContentKeys(keys: Map<Int, ByteArray>) {
+	fun saveContentKeys(keys: Map<Int, ByteArray>): Boolean {
 		check(encrypted) { "secure storage unavailable; refusing to persist content keys in cleartext" }
-		prefs.edit().putString(KEY_CONTENT_KEYS, encodeContentKeys(keys)).apply()
+		return prefs.edit().putString(KEY_CONTENT_KEYS, encodeContentKeys(keys)).commit()
 	}
 
 	fun loadContentKeys(): ContentKeysLoad {

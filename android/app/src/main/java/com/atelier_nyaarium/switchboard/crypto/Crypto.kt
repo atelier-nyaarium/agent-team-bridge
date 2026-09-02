@@ -21,15 +21,7 @@ import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope as ProtoSealedEnvelope
 
-/**
- * Federation crypto, the byte-exact Kotlin counterpart of switchboard's
- * `src/shared/crypto.ts`. Uses BouncyCastle's LOW-LEVEL API directly (no Security
- * provider registered, so there is no Android BouncyCastle conflict). The wire
- * format - raw 32-byte keys (base64), ephemeral X25519 box -> HKDF-SHA256 ->
- * AES-256-GCM with an Ed25519 signature over ephemeralPub||nonce||ct+tag -
- * matches node:crypto exactly so the two platforms interop. The cross-platform
- * vectors in CryptoTest pin this.
- */
+/** Byte-compatible federation crypto for the TypeScript implementation. */
 object Crypto {
 	data class ContentAad(val domainId: String, val ownerSignPub: String, val epoch: Int, val kind: String) {
 		fun bytes(): ByteArray =
@@ -84,6 +76,28 @@ object Crypto {
 	fun deviceJoinSigningBytes(approvalId: String, nonce: String, newSignPub: String, newBoxPub: String): ByteArray =
 		listOf("DEVICE_JOIN_V1", approvalId, nonce, newSignPub, newBoxPub).joinToString("\n").toByteArray(Charsets.UTF_8)
 
+	fun keyRequestSigningBytes(
+		domainId: String,
+		requesterSignPub: String,
+		epochs: List<Long>,
+		at: Long,
+		nonce: String,
+	): ByteArray =
+		listOf("KEYREQUEST_V1", domainId, requesterSignPub, epochs.joinToString(","), at.toString(), nonce)
+			.joinToString("\n")
+			.toByteArray(Charsets.UTF_8)
+
+	fun keyReceiptSigningBytes(
+		domainId: String,
+		recipientSignPub: String,
+		epoch: Long,
+		at: Long,
+		nonce: String,
+	): ByteArray =
+		listOf("KEYRECEIPT_V1", domainId, recipientSignPub, epoch.toString(), at.toString(), nonce)
+			.joinToString("\n")
+			.toByteArray(Charsets.UTF_8)
+
 	private fun deriveKey(shared: ByteArray, ephemeralPub: ByteArray): ByteArray {
 		val hkdf = HKDFBytesGenerator(SHA256Digest())
 		hkdf.init(HKDFParameters(shared, ephemeralPub, HKDF_INFO))
@@ -108,9 +122,7 @@ object Crypto {
 		return SealedEnvelope(b64(ephPub), b64(nonce), b64(sealed), sign(ephPub + nonce + sealed, senderSignPrivB64))
 	}
 
-	/** Verify the sender's signature (against the EXPECTED sender key the caller
-	 * resolved from the allowlist), then decrypt with the recipient's box private
-	 * key. Throws on tamper / wrong sender / wrong recipient. */
+	/** Verifies the expected sender before decrypting for this recipient. */
 	fun unseal(env: SealedEnvelope, recipientBoxPrivB64: String, senderSignPubB64: String): ByteArray {
 		val ephPub = unb64(env.ephemeralPub)
 		val nonce = unb64(env.nonce)

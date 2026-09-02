@@ -197,9 +197,14 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 
 	/** Install approved transport without self-signing. Mark provisioned last. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
-		val contentKeys = classifyContentKeys(transport) ?: run {
-			repo._state.update { it.copy(error = "content key installation refused", provisioned = false) }
-			error("content key installation refused")
+		val contentMerge = classifyContentKeys(transport)
+		val contentKeys = when (contentMerge) {
+			is ContentKeyring.Merge.Refused -> {
+				repo._state.update { it.copy(error = "content key installation refused", provisioned = false) }
+				error("content key installation refused")
+			}
+			ContentKeyring.Merge.Unchanged -> heldContentKeys()
+			is ContentKeyring.Merge.Installed -> contentMerge.next
 		}
 		// Every transport field is restated: a rebuild that enumerates a subset drops a record on the
 		// way in, and the new device silently provisions against nothing.
@@ -231,12 +236,9 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		repo._state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
 	}
 
-	private fun classifyContentKeys(transport: ConsoleTransport): Map<Int, ByteArray>? {
-		// Empty delivery preserves held keys.
-		val domain = transport.domain ?: return transport.contentKeys.takeIf { it.isEmpty() }?.let { heldContentKeys() }
-		val keyring = Keyring(domain)
-		val contentKeyring = ContentKeyring(repo.federation.consoleIdentity().box.priv, repo.store)
-		return contentKeyring.classify(transport.contentKeys, keyring)
+	private fun classifyContentKeys(transport: ConsoleTransport): ContentKeyring.Merge {
+		val keyring = transport.domain?.let(::Keyring) ?: repo.federation.keyring()
+		return ContentKeyring(repo.federation.consoleIdentity().box.priv, repo.store).classify(transport.contentKeys, keyring)
 	}
 
 	private fun heldContentKeys(): Map<Int, ByteArray> =

@@ -49,7 +49,7 @@ class DeviceInstallCommitTest {
 			keyring(),
 		)
 
-		assertNull(refused)
+		assertTrue(refused is ContentKeyring.Merge.Refused)
 		assertFalse(prefs.contains(AppStateStore.KEY_BLOB))
 		assertFalse(prefs.contains(AppStateStore.KEY_CONTENT_KEYS))
 		assertFalse(prefs.contains(AppStateStore.KEY_CONSOLE_ADMITTED))
@@ -61,7 +61,8 @@ class DeviceInstallCommitTest {
 	fun acceptedInstallCommitsTheCompleteRecord() {
 		val prefs = TestPreferences()
 		val store = AppStateStore(java.io.File("/tmp/switchboard-test"), prefs, encrypted = true)
-		val keys = ContentKeyring(recipient.box.priv, store).classify(listOf(signedEnvelope()), keyring())!!
+		val keys = (ContentKeyring(recipient.box.priv, store).classify(listOf(signedEnvelope()), keyring())
+			as ContentKeyring.Merge.Installed).next
 
 		assertTrue(store.installApprovedDevice("blob", "domain", "version", "gateway", keys))
 

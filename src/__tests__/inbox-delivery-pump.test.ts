@@ -1,0 +1,246 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createInboxClaims } from "../gateway/router/inboxClaims.js";
+import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
+import type { PendingDelivery } from "../shared/pending-delivery-store.js";
+
+const roots: string[] = [];
+const address = "session:domain/gateway/session";
+const envelope = (epoch: number | "peer" | "clear") => ({
+	origin: { kind: "session" as const, domainId: "domain", gatewayId: "origin", sessionId: "source" },
+	opKey: { conversationId: "conversation", opId: "operation" },
+	epoch,
+	kind: "message" as const,
+	contentRefs: [],
+});
+const row = (
+	epoch: number | "peer" = 1,
+	body: unknown = { v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" },
+) => ({
+	seq: 1,
+	acceptedAt: 10,
+	size: 1,
+	envelope: envelope(epoch),
+	producerSig: "c2ln",
+	body,
+});
+const setup = (root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"))) => {
+	if (!roots.includes(root)) roots.push(root);
+	const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
+	const claims = createInboxClaims(root);
+	const coordinator = {
+		accepted: [] as PendingDelivery[],
+		accept(value: PendingDelivery) {
+			this.accepted.push(value);
+			return "delivered" as const;
+		},
+		acknowledge: (_id: string) => {},
+	};
+	const pump = (overrides: Record<string, unknown> = {}) =>
+		createInboxDeliveryPump({
+			claims,
+			routerClient: { callInboxTool: async (action, params) => calls.push({ action, params }) },
+			domainId: "domain",
+			ownerSignPub: () => "owner",
+			contentKeyStore: {
+				open: () => ({
+					kind: "ok",
+					plaintext: Buffer.from('{"to":"session","from":"source","body":"hi"}'),
+				}),
+			} as never,
+			coordinator: coordinator as never,
+			isSessionLive: () => true,
+			...overrides,
+		});
+	return { calls, coordinator, pump };
+};
+
+afterEach(() => {
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("inbox delivery pump", () => {
+	it("offers a live row once and a receiver ack delivers it", async () => {
+		const { calls, coordinator, pump } = setup();
+		const stale = pump({ incarnation: () => 2 });
+		await stale.onFrame({ address, rows: [row()], incarnation: 1, deliveryEpoch: 1 });
+		expect(coordinator.accepted).toHaveLength(0);
+		expect(calls).toHaveLength(0);
+		const deliveryPump = pump();
+		await deliveryPump.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(coordinator.accepted).toHaveLength(1);
+		expect(calls).toHaveLength(0);
+		expect(await deliveryPump.onChannelDeliveryAck("other", `${address}:1:1`)).toBe(false);
+		expect(await deliveryPump.onChannelDeliveryAck("session", `${address}:1:1`)).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(calls.at(-1)).toMatchObject({ action: "inbox_ack", params: { outcome: "delivered", seq: 1 } });
+	});
+
+	it("wakes a sleeping session, keeps a missing epoch claim, and fails a bad tag", async () => {
+		const sleeping = setup();
+		const woken: string[] = [];
+		const wake = async (team: string) => {
+			woken.push(team);
+			return { ok: false, errorKind: "timeout" };
+		};
+		const held = { accept: () => "queued" as const, acknowledge: () => true };
+		await sleeping
+			.pump({ coordinator: held, isSessionLive: () => false, tryWakeTeam: wake })
+			.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(woken).toEqual(["session"]);
+		expect(sleeping.calls.at(-1)).toMatchObject({ action: "inbox_ack", params: { outcome: "waking" } });
+
+		const missingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"));
+		const missing = setup(missingRoot);
+		const missingPump = missing.pump({ ownerSignPub: () => null });
+		await missingPump.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(missing.calls.at(-1)).toMatchObject({
+			action: "inbox_ack",
+			params: { outcome: "waking", reason: "missing_epoch" },
+		});
+		const retry = setup(missingRoot);
+		await retry.pump({ ownerSignPub: () => null }).onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(retry.calls).toHaveLength(1);
+
+		const bad = setup();
+		await bad
+			.pump({ contentKeyStore: { open: () => ({ kind: "bad_tag" }) } })
+			.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(bad.calls.at(-1)).toMatchObject({
+			action: "inbox_ack",
+			params: { outcome: "failed", reason: "bad_tag" },
+		});
+	});
+
+	it("keeps a failed Router ack claim and re-acks without offering again", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"));
+		const first = setup(root);
+		const firstPump = first.pump({
+			routerClient: { callInboxTool: async () => ({ error: "offline" }) },
+			ownerSignPub: () => null,
+		});
+		await firstPump.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		const second = setup(root);
+		await second
+			.pump({
+				routerClient: {
+					callInboxTool: async (_action: string, params: Record<string, unknown>) =>
+						second.calls.push({ action: "ack", params }),
+				},
+				ownerSignPub: () => null,
+			})
+			.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(second.coordinator.accepted).toHaveLength(0);
+		expect(second.calls).toHaveLength(1);
+		expect(second.calls[0]).toMatchObject({ params: { outcome: "waking" } });
+	});
+
+	it("clears a waking claim after a Router gone reply", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"));
+		const first = setup(root);
+		await first
+			.pump({
+				coordinator: { accept: () => "queued", acknowledge: () => undefined } as never,
+				isSessionLive: () => true,
+				routerClient: { callInboxTool: async () => ({ result: { outcome: "gone" } }) },
+			})
+			.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		const second = setup(root);
+		await second.pump().onFrame({
+			address,
+			rows: [row()],
+			deliveryEpoch: 1,
+		});
+		expect(second.coordinator.accepted).toHaveLength(1);
+	});
+
+	it("acknowledges definitive wake failures and coordinator delivery", async () => {
+		const setupResult = setup();
+		const acknowledged: string[] = [];
+		await setupResult
+			.pump({
+				coordinator: {
+					accept: () => "queued",
+					acknowledge: (id: string) => acknowledged.push(id),
+				} as never,
+				isSessionLive: () => false,
+				tryWakeTeam: async () => ({ ok: false, error: "rejected", errorKind: "bad_request" }),
+			})
+			.onFrame({ address, rows: [row()], deliveryEpoch: 1 });
+		expect(acknowledged).toEqual([`${address}:1:1`]);
+		expect(setupResult.calls.at(-1)).toMatchObject({ params: { outcome: "failed", reason: "rejected" } });
+	});
+
+	it("fails peer rows before calling the peer handler", async () => {
+		const opened = setup();
+		const handled: unknown[] = [];
+		const sealedBody = { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" };
+		await opened
+			.pump({
+				sealer: {
+					openWithSource: () => {
+						throw new Error("bad");
+					},
+				},
+				peerHandler: async (op: unknown) => handled.push(op),
+			})
+			.onFrame({ address, rows: [row("peer", sealedBody)], deliveryEpoch: 1 });
+		expect(opened.calls.at(-1)).toMatchObject({ params: { outcome: "failed", reason: "bad_tag" } });
+
+		const malformed = setup();
+		await malformed
+			.pump({
+				sealer: { openWithSource: () => ({ body: { nope: true }, srcDomainId: "friend" }) },
+				peerHandler: async (op: unknown) => handled.push(op),
+			})
+			.onFrame({ address, rows: [row("peer", sealedBody)], deliveryEpoch: 1 });
+		expect(malformed.calls.at(-1)).toMatchObject({ params: { outcome: "failed", reason: "malformed_body" } });
+		expect(handled).toHaveLength(0);
+	});
+
+	it("fails producer clear rows and delivers Router results", async () => {
+		const result = setup();
+		await result.pump().onFrame({
+			address,
+			rows: [
+				{
+					...row(1, { result: true }),
+					envelope: {
+						...envelope("clear"),
+						kind: "op_result",
+						origin: { kind: "router", domainId: "domain" },
+					},
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		expect(result.calls.at(-1)).toMatchObject({ params: { outcome: "delivered" } });
+		expect(result.coordinator.accepted).toHaveLength(0);
+	});
+
+	it("rejects receiver acks for other teams and unclaimed rows", async () => {
+		const setupResult = setup();
+		const deliveryPump = setupResult.pump();
+		expect(await deliveryPump.onChannelDeliveryAck("other", `${address}:1:1`)).toBe(false);
+		expect(await deliveryPump.onChannelDeliveryAck("session", `${address}:1:1`)).toBe(false);
+		expect(setupResult.calls).toHaveLength(0);
+
+		const peer = setup();
+		const handled: unknown[] = [];
+		await peer
+			.pump({
+				sealer: { openWithSource: () => ({ body: { kind: "list_teams" }, srcDomainId: "friend" }) },
+				peerHandler: async (op: unknown, srcGateway: string, srcDomainId: string | null) =>
+					handled.push([op, srcGateway, srcDomainId]),
+			})
+			.onFrame({
+				address,
+				rows: [row("peer", { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" })],
+				deliveryEpoch: 1,
+			});
+		expect(handled).toEqual([[{ kind: "list_teams" }, "origin", "friend"]]);
+		expect(peer.calls.at(-1)).toMatchObject({ action: "inbox_ack", params: { outcome: "delivered" } });
+	});
+});

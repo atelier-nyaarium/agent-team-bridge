@@ -19,6 +19,8 @@ import {
 	verifyTransportRequest,
 	verifyTrustPendingRequest,
 } from "../shared/federation-proofs.js";
+import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
+import { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
 import { DeviceApprovalCoordinator } from "./deviceApprovalCoordinator.js";
 import { EnrollHandshakeCoordinator } from "./enrollHandshakeCoordinator.js";
@@ -26,14 +28,15 @@ import { dispatchEnrollOp, EnrollmentCoordinator, resolveEnrollRoute } from "./e
 import type { FileSecretStore } from "./fileSecretStore.js";
 import { GatewayBridge } from "./gatewayBridge.js";
 import { WS_MAX_PAYLOAD_BYTES } from "./gatewayTransport.js";
+import { InboxService } from "./inbox/inboxService.js";
+import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
+import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
+import { DomainQuota } from "./owner/domainQuota.js";
 import { PublicApproval } from "./publicApproval.js";
 import { buildRoster, type RosterDomain } from "./roster.js";
 import { loadRouterTls, type RouterTls } from "./routerTls.js";
 import { TenantAdmin } from "./tenantAdmin.js";
 import { TrustRendezvousCoordinator } from "./trustRendezvousCoordinator.js";
-
-////////////////////////////////
-//  Interfaces & Types
 
 export interface RouterServerParams {
 	port: number;
@@ -42,13 +45,9 @@ export interface RouterServerParams {
 	federationToken: string;
 	store: FileSecretStore;
 	tls?: RouterTls;
-	/** How a console reaches this Router from either side of a NAT that does not hairpin. Served
-	 * by the app-token-gated `reach` op, never by the public /health. */
+	/** Reach data is served by the app-token-gated `reach` op, not public `/health`. */
 	reach?: RouterReachAnswer;
 }
-
-////////////////////////////////
-//  Class
 
 export class RouterServer {
 	private server: https.Server | null = null;
@@ -66,6 +65,12 @@ export class RouterServer {
 	private readonly transportNonces = new Map<string, number>();
 	private readonly trustPendingNonces = new Map<string, number>();
 	private readonly tls: RouterTls;
+	private readonly ownerRegistry: OwnerStoreRegistry;
+	private readonly inbox: InboxService;
+	private readonly blobCache: RouterBlobCache;
+	private readonly referenceHeld: ReferenceHeldStore;
+	private readonly sweepTimer: ReturnType<typeof setInterval>;
+	private readonly ownerOps: OwnerOpIntake;
 
 	public constructor(private readonly params: RouterServerParams) {
 		this.tls = params.tls ?? loadRouterTls(params.dataDir);
@@ -76,6 +81,26 @@ export class RouterServer {
 		this.tenantAdmin = new TenantAdmin(params.store, () => {
 			const id = params.store.adminDomainId();
 			return id ? (params.store.loadDomain(id)?.ownerSignPub ?? null) : null;
+		});
+		const limit = Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024);
+		this.ownerRegistry = new OwnerStoreRegistry({
+			dataDir: params.dataDir,
+			ownerOf: (domainId) => params.store.loadDomain(domainId)?.ownerSignPub ?? null,
+			quotaFor: () => new DomainQuota({ dir: params.dataDir, limitBytes: limit }),
+		});
+		this.inbox = new InboxService(this.ownerRegistry, {
+			signPub: params.store.persistedIdentity.sign.pub,
+			signPriv: params.store.persistedIdentity.sign.priv,
+		});
+		this.blobCache = new RouterBlobCache({
+			dataDir: params.dataDir,
+			quotaBytesPerDomain: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
+		});
+		this.referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir });
+		this.ownerOps = new OwnerOpIntake({
+			inbox: this.inbox,
+			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
+			push: (domainId, address, rows) => this.bridge.pushInboxRows(domainId, address, rows),
 		});
 		this.bridge = new GatewayBridge({
 			port: params.port,
@@ -91,6 +116,8 @@ export class RouterServer {
 			hasLinkEdge: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
 			reach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
+			inbox: this.inbox,
+			blobCache: this.blobCache,
 		});
 		this.console = new ConsoleSurface({
 			port: params.port,
@@ -124,7 +151,20 @@ export class RouterServer {
 					})),
 				};
 			},
+			onOwnerOp: (raw) => this.ownerOps.handle(raw),
+			inbox: this.inbox,
+			blobCache: this.blobCache,
+			referenceHeld: this.referenceHeld,
 		});
+		this.sweepTimer = setInterval(() => {
+			try {
+				this.inbox.sweep();
+				this.blobCache.sweep();
+			} catch (error) {
+				console.warn(`[router] sweep failed: ${(error as Error).message}`);
+			}
+		}, 60_000);
+		this.sweepTimer.unref?.();
 		this.bridge.setConsoleRelaySettler((opId, reply) => this.console.settleConsoleRelay(opId, reply));
 		this.approval = new PublicApproval({ port: params.port, onApproval: (op) => this.deviceApproval.handle(op) });
 	}
@@ -159,11 +199,8 @@ export class RouterServer {
 				});
 			});
 		});
-		// Permanent listener: a one-shot is spent by the bind and leaves later errors uncaught.
 		this.server.on("error", (err) => console.error(`[federation-router] server error: ${err.message}`));
-		// A client whose pin does not match aborts DURING the handshake, so it reaches no route and
-		// no status code. Without this, a mismatched console is indistinguishable from one that
-		// never dialed, which is the same thing twice over on a self-signed leaf.
+		// Report certificate-pin failures that occur before routing.
 		this.server.on("tlsClientError", (err, socket) => {
 			const peer = (socket as { remoteAddress?: string }).remoteAddress ?? "?";
 			console.log(`[federation-router] TLS handshake failed from ${peer}: ${err.message}`);
@@ -191,6 +228,7 @@ export class RouterServer {
 	}
 
 	public async stop(): Promise<void> {
+		clearInterval(this.sweepTimer);
 		this.console.stop();
 		this.approval.stop();
 		this.bridge.stop();
@@ -200,6 +238,7 @@ export class RouterServer {
 		const server = this.server;
 		this.server = null;
 		if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+		this.ownerRegistry.close();
 	}
 
 	public get gatewayBridge(): GatewayBridge {
@@ -210,8 +249,7 @@ export class RouterServer {
 		return this.console;
 	}
 
-	// The ONE seam every request passes through. Nothing else may touch ServerResponse, so a
-	// handler cannot launch unobserved work: it returns a Response or throws into this catch.
+	// Route every response through this adapter.
 	private async serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		try {
 			await this.writeResponse(response, await this.route(request));
@@ -226,9 +264,6 @@ export class RouterServer {
 
 	private async route(request: IncomingMessage): Promise<Response> {
 		const answer = await this.resolve(request);
-		// Every request, with what it resolved to. The console surface only ever logged its own
-		// refusals, so a request turned away by the gate BELOW - or one that never matched a route
-		// at all - looked exactly like a console that never dialed.
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 		if (url.pathname !== "/health") {
 			const peer = request.socket.remoteAddress ?? "?";
@@ -240,21 +275,13 @@ export class RouterServer {
 	private async resolve(request: IncomingMessage): Promise<Response> {
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 		if (url.pathname === "/health" && request.method === "GET") {
-			// The fingerprint rides the health answer so clients can confirm the pin they hold
-			// without root access to the cert file or a boot line that log rotation discards.
-			// `gateways` is the Router's OWN count, which is what makes it worth having: a Gateway
-			// reports `router_connected` from its own socket state and reads true across a half-open
-			// one, so only the far side can contradict it.
-			// The Router's reach (public host, LAN addresses) is deliberately NOT here: this answer is
-			// public by necessity, and a LAN address on it tells any scanner this port-forward ends on a
-			// home network at a specific private address. It rides the app-token-gated `reach` op on
-			// /console instead. No chicken-and-egg: this answer works from whichever address a console
-			// can reach, and the token it already holds is what lets it ask for the other one.
+			// Public health omits LAN reach.
 			return new Response(
 				JSON.stringify({
 					ok: true,
 					certFingerprint: this.tls.certFp,
 					gateways: this.bridge.registeredGatewayCount,
+					...this.ownerRegistry.health(),
 				}),
 			);
 		}
@@ -277,7 +304,6 @@ export class RouterServer {
 		}
 		const body = await readBody(request, maxBody);
 		if (body.outcome === "too-large") return new Response("Payload Too Large", { status: 413 });
-		// An abandoned request has no client left to answer; anything written is discarded.
 		if (body.outcome === "aborted") return new Response(null, { status: 499 });
 		const headers = new Headers();
 		for (const [key, value] of Object.entries(request.headers)) {
@@ -335,12 +361,13 @@ export class RouterServer {
 		if (!coordinator) return { ok: false, error: "admin Domain unavailable" };
 		const result = await dispatchEnrollOp(coordinator, op, this.tenantAdmin);
 		if (!result.ok) return result;
+		if (op.kind === "submit_revocation") this.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
 		if (op.kind === "submit_admission" || op.kind === "submit_revocation") {
 			const failed = await this.flushOrError(domainId);
 			if (failed) return failed;
 			this.bridge.broadcastDomainUpdate(domainId);
 		} else if (op.kind === "submit_xdomain_link" || op.kind === "revoke_xdomain_link") {
-			// Link edges gate cross-Domain relay; never ACK before the write lands.
+			// Persist link changes before ACK.
 			const failed = await this.flushOrError(domainId);
 			if (failed) return failed;
 		} else if (op.kind === "set_display_name") {
@@ -383,17 +410,7 @@ export class RouterServer {
 		return buildRoster(req.signerSignPub, domains, this.bridge.onlineDomainIds());
 	}
 
-	/**
-	 * Hand a Gateway what it needs to dial this Router and pin it: the address, the leaf fingerprint,
-	 * and the WS bearer. Gated on an owner-signed, fresh, non-replayed proof that the signer roots a
-	 * Domain here, the same posture as the roster - this reply carries the bearer, so an unverified
-	 * caller getting one would be handing out the key to the gateway plane.
-	 *
-	 * The address is the PUBLIC host when configured, else the LAN bind. Never the docker alias: that
-	 * resolves only in this machine's compose project, and a bundle carrying it strands every other
-	 * machine. Whichever it is, it is only the FIRST door - the Gateway re-learns both sides from its
-	 * register reply and orders them by the shared reach rule from then on.
-	 */
+	/** Return the bearer only to a fresh, non-replayed proof from a Domain root. */
 	private handleTransport(req: TransportRequest): TransportResult {
 		const opaque: TransportResult = { ok: false, error: "not a member of this network" };
 		if (!verifyTransportRequest(req)) return opaque;
@@ -403,8 +420,7 @@ export class RouterServer {
 			if (Math.abs(now - at) > TRANSPORT_MAX_SKEW_MS) this.transportNonces.delete(nonce);
 		}
 		if (this.transportNonces.has(req.nonce)) return opaque;
-		// Only an owner who ROOTS a Domain on this Router may pull it, so a member of someone else's
-		// network, or a revoked key, gets the same opaque answer as a bad signature.
+		// Only a Domain root may receive the bearer.
 		const roots = this.params.store
 			.listDomains()
 			.some(({ state }) => state.ownerSignPub && state.ownerSignPub === req.signerSignPub);
@@ -425,7 +441,7 @@ export class RouterServer {
 		};
 	}
 
-	// An unverifiable, stale or replayed proof answers empty, never an enumeration.
+	// Invalid or replayed proofs return no enumeration.
 	private handleTrustPending(req: TrustPendingRequest): TrustPendingResult {
 		const opaque: TrustPendingResult = { ok: true, pending: [] };
 		if (!verifyTrustPendingRequest(req)) return opaque;
@@ -440,7 +456,6 @@ export class RouterServer {
 	}
 }
 
-// Three-valued: too-large and aborted are different answers and get different replies.
 type BodyResult = { outcome: "ok"; bytes: Buffer } | { outcome: "too-large" } | { outcome: "aborted" };
 
 function readBody(request: IncomingMessage, maxBytes: number): Promise<BodyResult> {
@@ -452,8 +467,7 @@ function readBody(request: IncomingMessage, maxBytes: number): Promise<BodyResul
 			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 			length += buffer.length;
 			if (length > maxBytes) {
-				// Pause rather than drain or destroy: backpressure stops the sender, and the
-				// socket stays writable long enough to answer 413.
+				// Preserve the socket so the caller can answer 413.
 				resolve({ outcome: "too-large" });
 				request.pause();
 				return;

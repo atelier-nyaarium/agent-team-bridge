@@ -69,12 +69,18 @@ import {
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 	GatewayTransportSchema,
+	InboxRowSchema,
 	KeyEnvelopeSchema,
 	KeyGrantSchema,
 	KeyReceiptSchema,
 	KeyRequestSchema,
 	MailboxEntrySchema,
+	OpKeySchema,
+	OpResultEnvelopeSchema,
+	OwnerOpSchema,
 	ProvisioningSchema,
+	RowEnvelopeSchema,
+	RowOriginSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
 import {
@@ -149,6 +155,12 @@ const ROOTS: z.ZodType[] = [
 	// An owner pulling its network's gateway-bridge transport (proof-of-possession + the Router's reply).
 	TransportRequestSchema,
 	TransportResultSchema,
+	OwnerOpSchema,
+	InboxRowSchema,
+	RowEnvelopeSchema,
+	RowOriginSchema,
+	OpKeySchema,
+	OpResultEnvelopeSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

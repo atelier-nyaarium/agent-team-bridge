@@ -18,6 +18,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/federation/bootstrapInstall.ts` - staged bootstrap install and re-enrollment merge
 - `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog, relay folding, authenticated route
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
+- `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting
 - `src/gateway/console/` - Android channel, op dispatch, capability store, relay, durable ops
 - `android/.../ChatRepository.kt` - console process singleton and repository facade
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers
@@ -61,6 +62,9 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/` - live self-hosted federation Router
 - `src/federation-server/routerServer.ts` - guarded `route()` seam and sole `serve()` adapter; residue-tested
 - `src/federation-server/fileSecretStore.ts` - durable federation state and bounded atomic CAS
+- `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
+- `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
+- `src/federation-server/blobs/` - Router blob cache with leases and the reference-held store
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - registration and relay routing; four trust callbacks required
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
