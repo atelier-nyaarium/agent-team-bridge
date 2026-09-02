@@ -13,6 +13,26 @@ import kotlinx.coroutines.withContext
  * single-flight latch, the per-blob failure counts and the given-up set, which is why it is a held
  * delegate rather than extensions the way the voice settings and the drafts are. */
 internal class AttachmentOps(private val repo: ChatRepository) {
+	/**
+	 * Pull a whole blob from the Router's cache, or null so the caller falls back to the origin.
+	 *
+	 * The answer DECLARES whether it is sealed, because a cache hit is and an origin fallback relayed
+	 * through the Router is not, and the bytes do not say which. Written through the same store the
+	 * Gateway path uses, so the plaintext digest is verified exactly once and in one place.
+	 */
+	private suspend fun fromRouterCache(blobId: String): java.io.File? {
+		val domain = repo.ownerOps.domainId() ?: return null
+		val client = repo.client()
+		var offset = client.blobs.stat(blobId).have
+		while (true) {
+			val answer = repo.routerBlobRange(domain, blobId, offset) ?: return null
+			val written = client.blobs.write(blobId, offset, answer.first, answer.second)
+			if (answer.second) return if (written.complete) client.blobs.path(blobId) else null
+			if (written.have <= offset) return null
+			offset = written.have
+		}
+	}
+
 	// Single-flight latch for fetchPendingAttachments, which the poll loop fires once per pass while
 	// a transfer routinely spans several. Not a Mutex: an overlapping pass has nothing to add, since
 	// the in-flight run re-derives the same pending set, so it should be dropped rather than queued.
@@ -136,7 +156,12 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 				for ((team, message, file) in pending) {
 					val blobId = file.blobId ?: continue
 					if (attachmentFetchFailures.getOrDefault(blobId, 0) >= ChatRepository.MAX_ATTACHMENT_FETCH_TRIES) continue
-					val source = runCatchingCancellable { client.downloadBlob(blobId, file.blobGateway) }
+					// Router cache first: it holds a copy sealed to this Domain's key, so an attachment
+					// stays readable while the machine that produced it is asleep. A miss of any kind
+					// falls through to the Gateway that holds the origin.
+					val source = runCatchingCancellable {
+						fromRouterCache(blobId) ?: client.downloadBlob(blobId, file.blobGateway)
+					}
 						.onFailure {
 							// Count against the blob, not the row: the same reference on several rows is
 							// one unfetchable thing, and a bounded count is what stops a blob no Gateway

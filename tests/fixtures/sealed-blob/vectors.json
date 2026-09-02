@@ -1,0 +1,30 @@
+{
+	"_comment": "Cross-runtime vectors for sealed blob framing. Read by BOTH src/__tests__/sealed-blob.test.ts and android/.../SealedBlobTest.kt, so the hand-authored Kotlin twin cannot drift from src/shared/sealed-blob.ts. The AAD binds the blob id, the chunk index and the final flag; a single character of difference means nothing decrypts, and a test inside one runtime cannot catch that because both its halves would share the mistake.",
+	"key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+	"context": {
+		"domainId": "domain-a",
+		"ownerSignPub": "owner-pub",
+		"epoch": 3,
+		"blobId": "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	},
+	"aadSample": "c3dpdGNoYm9hcmQtY29udGVudC12MQpkb21haW4tYQpvd25lci1wdWIKMwpibG9iCnNoYTI1Ni1hYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCjAKMQ==",
+	"cases": [
+		{
+			"size": 0,
+			"ciphertextSize": 28,
+			"frames": ["AQEBAQEBAQEBAQEBnbYOh+3H9d+GPcXV+wj1lQ=="]
+		},
+		{
+			"size": 1,
+			"ciphertextSize": 29,
+			"frames": ["AQEBAQEBAQEBAQEBN+kp+FYUXB32cbjXj01o65g="]
+		},
+		{
+			"size": 100,
+			"ciphertextSize": 128,
+			"frames": [
+				"AQEBAQEBAQEBAQEBN6DI9tH+rU+QlZ1gMXYxcOm6VbVZ1npSGXACIyf1d/qD80nx3VLEwR8zCUqAP6/Yz1qoQxz/vh7jA+ZJl2PE1OimH3FPjXdsIhlYIeplQNkSziJ2QotabG1wWLD52Z5PTJ1e1lGKiA/5BKf/o+BXvI2UMZg="
+			]
+		}
+	]
+}

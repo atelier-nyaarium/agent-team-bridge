@@ -13,6 +13,7 @@
 		"provision-ops",
 		"refs",
 		"router-reach",
+		"sealed-blob",
 		"session-id",
 		"sync-cursor",
 		"transport-request",

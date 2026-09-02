@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBlobFetcher } from "../gateway/blobFetch.js";
 import { BlobStore, blobIdFor } from "../shared/blob-store.js";
+import { contentAad } from "../shared/content-envelope.js";
 import { BLOB_CHUNK_BYTES } from "../shared/router-protocol.js";
-import { openSealedBlobRange, sealBlobChunk } from "../shared/sealed-blob.js";
+import { blobChunkAad, openSealedBlobRange, sealBlobChunk, sealedBlobSize } from "../shared/sealed-blob.js";
 
 const key = Buffer.alloc(32, 6);
 const roots: string[] = [];
@@ -124,5 +125,35 @@ describe("sealed blob framing", () => {
 		});
 		expect(await fetcher.fetchBlobFromGateway(claimed, "origin")).toBe("unreachable");
 		expect(store.path(claimed)).toBeNull();
+	});
+
+	// The Kotlin twin reads the same corpus. Regenerate with scripts/gen-sealed-blob-vectors.ts when
+	// the framing legitimately changes, which is what makes an accidental change fail here first.
+	it("matches the shared corpus the Kotlin twin reads", () => {
+		const vectors = JSON.parse(
+			fs.readFileSync(
+				path.join(import.meta.dirname, "..", "..", "tests", "fixtures", "sealed-blob", "vectors.json"),
+				"utf8",
+			),
+		) as {
+			key: string;
+			context: { domainId: string; ownerSignPub: string; epoch: number; blobId: string };
+			aadSample: string;
+			cases: Array<{ size: number; ciphertextSize: number; frames: string[] }>;
+		};
+		const key = Buffer.from(vectors.key, "base64");
+		expect(contentAad(blobChunkAad(vectors.context, 0, true)).toString("base64")).toBe(vectors.aadSample);
+		for (const value of vectors.cases) {
+			expect(sealedBlobSize(value.size)).toBe(value.ciphertextSize);
+			const ciphertext = Buffer.concat(value.frames.map((frame) => Buffer.from(frame, "base64")));
+			const opened = openSealedBlobRange(
+				{ bytes: ciphertext, offset: 0, size: value.size, epoch: vectors.context.epoch },
+				0,
+				value.size,
+				key,
+				vectors.context,
+			);
+			expect(opened.bytes).toEqual(Buffer.alloc(value.size, 65));
+		}
 	});
 });

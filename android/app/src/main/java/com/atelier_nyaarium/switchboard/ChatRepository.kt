@@ -3,6 +3,12 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
 import com.atelier_nyaarium.switchboard.board.BoardSealing
+import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
@@ -203,6 +209,56 @@ class ChatRepository(
 			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
 		}.getOrNull() ?: return
 		repoScope.launch { presence.applyOwnerProjection(projection) }
+	}
+
+	/**
+	 * One chunk of a blob from the Router's cache, already opened, with its end-of-file flag.
+	 *
+	 * Null on any miss so the caller falls back to the Gateway holding the origin. A sealed answer is
+	 * opened here; an unsealed one is the Router relaying an origin's plaintext and passes through.
+	 */
+	internal suspend fun routerBlobRange(
+		domainId: String,
+		blobId: String,
+		offset: Long,
+	): Pair<ByteArray, Boolean>? {
+		val op = buildJsonObject {
+			put("kind", JsonPrimitive("blob_fetch"))
+			put("opId", JsonPrimitive(java.util.UUID.randomUUID().toString()))
+			put("blobId", JsonPrimitive(blobId))
+			put(
+				"range",
+				buildJsonObject {
+					put("offset", JsonPrimitive(offset))
+					put("length", JsonPrimitive(Protocol.BLOB_CHUNK_BYTES))
+				},
+			)
+		}
+		val signed = ownerOps.sign(op) ?: return null
+		val answer = runCatching { client().postOwnerOp(signed).jsonObject }.getOrNull() ?: return null
+		if (answer["outcome"]?.jsonPrimitive?.content != "fetched") return null
+		val bytes = answer["bytes"]?.jsonPrimitive?.content
+			?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: return null
+		val eof = answer["eof"]?.jsonPrimitive?.content == "true"
+		if (answer["sealed"]?.jsonPrimitive?.content != "true") return bytes to eof
+		val epoch = answer["epoch"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null
+		val size = answer["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
+		val at = answer["offset"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
+		val key = federation.contentKeyring().keyFor(epoch) ?: return null
+		return runCatching {
+			openSealedBlobRange(
+				bytes,
+				at,
+				size,
+				epoch,
+				offset,
+				Protocol.BLOB_CHUNK_BYTES.toLong(),
+				key,
+				domainId,
+				federation.ownerSignPub(),
+				blobId,
+			)
+		}.getOrNull()
 	}
 
 	/** The board's one path to the Router. Signs each write as this console and walks the reach ring. */
