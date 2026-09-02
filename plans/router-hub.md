@@ -387,13 +387,15 @@ all of 3 to 6. Phase 3 gates 4. Phase 8 gates 9.
 
 ## Phase 0 - Backup and freeze
 
-- Export the owner key backup from Management. It regenerates every content-key epoch.
-- Snapshot every durable store: each gateway's `DurableStore` files and blob roots, and the
+- Export the owner key backup from Management. It regenerates every content-key epoch. Owner
+  action, pending.
+- ✅ Snapshot every durable store: each gateway's `DurableStore` files and blob roots, and the
   Router's `federation.json`. Hash each. No phone snapshot: drafts and goals stay on the phone,
-  and everything else the phone holds is re-derived from the Router or journaled to it.
-- Record the running release by hand: commit, image digests, APK hash, snapshot paths and hashes.
-  An operator's note, not a rollback vehicle; there is no rollback.
-- `plans/vault.md` stays parked. No code.
+  and everything else the phone holds is re-derived from the Router or journaled to it. Done on
+  this host; other gateway hosts pending the owner, command in the operator's note.
+- ✅ Record the running release by hand: commit, image digests, APK hash, snapshot paths and
+  hashes. An operator's note, not a rollback vehicle; there is no rollback.
+- ✅ `plans/vault.md` stays parked. No code.
 
 ## Phase 1 - Failure-mode ledger, invariants, and specs
 
