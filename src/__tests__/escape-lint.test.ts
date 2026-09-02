@@ -5,6 +5,7 @@ import { handleChannelReply } from "../mcp/channel/channelReply.js";
 import { ChannelReplySchema } from "../shared/schemas.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: () => null,
 	routerPost: vi.fn(),
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",

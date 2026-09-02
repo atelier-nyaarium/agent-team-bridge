@@ -20,6 +20,7 @@ import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js
 const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: () => null,
 	routerPost: async (route: string, body: unknown) => {
 		if (!isBlobRoute(route) || !h.wire) throw new Error(`unexpected post to ${route}`);
 		return h.wire.answer(route, body);

@@ -20,6 +20,7 @@ const wire = vi.hoisted(() => ({
 }));
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: () => null,
 	routerPost: async (route: string, body: Record<string, unknown>) => {
 		const { answerBlobOp } = await import("../gateway/blobOps.js");
 		const { BlobStore: Store } = await import("../shared/blob-store.js");

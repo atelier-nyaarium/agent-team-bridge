@@ -11,6 +11,11 @@ import { ADDRESS_SEP, isSlug } from "./session-id.js";
 //  mode stays an open string; the handler normalizes it (every connection is
 //  channel mode).
 
+/** The gateway answers this on a successful register. A producer that issues its own operation ids
+ * needs it: a gateway below this version drops the field and mints one per attempt, which accepts a
+ * retry as a second operation. */
+export const OP_LEDGER_PROTOCOL = 1;
+
 export const WsRegisterSchema = z.object({
 	type: z.literal("register"),
 	// A bare slug (host, a devcontainer project, a loose hex name) or a composite `project.session`.

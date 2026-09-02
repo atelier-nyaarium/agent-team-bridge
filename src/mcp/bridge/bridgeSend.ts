@@ -4,7 +4,7 @@ import { z } from "zod";
 import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
 import type { ChannelFile, ResponsePayload } from "../../shared/types.js";
 import { dropReferenceArtifacts } from "../channel/channelFiles.js";
-import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.js";
+import { bridgeConversationId, bridgeProjectName, opLedgerRefusal, routerPost } from "./helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "./replyTool.js";
 
 ////////////////////////////////
@@ -211,6 +211,9 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 						return toolError(`Attachment error: ${(err as Error).message}`);
 					}
 				}
+
+				const refusal = opLedgerRefusal();
+				if (refusal) return toolError(`Cannot send: ${refusal}`);
 
 				// Minted here rather than inside routerPost, so its retries share one id.
 				const result = (await routerPost("/send", {

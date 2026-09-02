@@ -7,6 +7,7 @@ import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js
 import { captureTools } from "./helpers/replyTool.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: () => null,
 	routerPost: vi.fn(),
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",

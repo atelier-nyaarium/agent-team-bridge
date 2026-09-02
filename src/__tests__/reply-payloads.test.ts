@@ -16,6 +16,7 @@ import { ChannelReplySchema, ChannelReplyStructuredSchema } from "../shared/sche
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: () => null,
 	routerPost: vi.fn(),
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",

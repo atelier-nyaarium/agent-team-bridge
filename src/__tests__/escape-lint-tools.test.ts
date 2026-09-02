@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { routerPost } from "../mcp/bridge/helpers.js";
+import { opLedgerRefusal, routerPost } from "../mcp/bridge/helpers.js";
 import { handleChannelReply } from "../mcp/channel/channelReply.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { ChannelReplySchema, REAL_NEWLINES_GUIDANCE } from "../shared/schemas.js";
@@ -10,6 +10,7 @@ import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js
 import { captureTools } from "./helpers/replyTool.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
+	opLedgerRefusal: vi.fn(() => null),
 	routerPost: vi.fn(),
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",
@@ -118,6 +119,19 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		const hazardousBody = await tools.crosstalk_send({ to: "a.b.c.d", body: `task:${bs}n- item` } as never);
 		expect(hazardousBody.isError).toBeUndefined();
 		expect(mockRouterPost).toHaveBeenCalledWith("/send", expect.objectContaining({ body: `task:${bs}n- item` }));
+	});
+
+	// A gateway that drops the opId mints one per attempt, so a retry lands as a second operation.
+	// Refusing to send is the only way the plugin can tell, since the drop is silent.
+	it("crosstalk_send refuses rather than sending an opId the gateway cannot honour", async () => {
+		vi.mocked(opLedgerRefusal).mockReturnValueOnce("gateway too old");
+		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
+		const tools = captureTools(registerBridgeSend);
+
+		const refused = await tools.crosstalk_send({ to: "a.b.c.d", body: "hi" } as never);
+
+		expect(refused.isError).toBe(true);
+		expect(mockRouterPost).not.toHaveBeenCalled();
 	});
 
 	it("crosstalk_send carries attachments to /send as blob references", async () => {

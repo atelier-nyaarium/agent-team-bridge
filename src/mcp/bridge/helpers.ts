@@ -4,6 +4,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import WebSocket from "ws";
 import packageJson from "../../../package.json";
 import { createReconnector } from "../../shared/reconnect.js";
+import { OP_LEDGER_PROTOCOL } from "../../shared/schemas.js";
 import type { ChannelPushPayload, ConnectionMode, ResponsePushPayload } from "../../shared/types.js";
 import { emitChannelNotification, emitResponseNotification } from "../channel/channelNotify.js";
 
@@ -241,6 +242,18 @@ export async function routerGet(
  * never for an ordinary release. */
 export const DELIVERY_PROTOCOL = 1;
 
+/** What the connected gateway last advertised, 0 until it says. */
+let opLedgerProtocol = 0;
+
+/** The refusal reason when the gateway cannot honour a producer-issued opId, or null when it can.
+ * Sending anyway would let a gateway that drops the field accept a retry as a second operation. */
+export function opLedgerRefusal(): string | null {
+	if (opLedgerProtocol >= OP_LEDGER_PROTOCOL) return null;
+	return opLedgerProtocol === 0
+		? `The gateway has not advertised an op-ledger version. Update the gateway before the plugin.`
+		: `The gateway's op-ledger version ${opLedgerProtocol} is older than this plugin's ${OP_LEDGER_PROTOCOL}.`;
+}
+
 export function buildRegisterMsg(
 	subId: string,
 	mode: ConnectionMode = "channel",
@@ -313,6 +326,12 @@ export function connectToRouter(): void {
 			handshakeRole.noteReceived(hsSessionId);
 			const role = handshakeRole.get();
 			if (role !== null) {
+				// No tool result to refuse into, so the refusal is a log and no send.
+				const refusal = opLedgerRefusal();
+				if (refusal) {
+					console.error(`[bridge] handshake reply withheld: ${refusal}`);
+					return;
+				}
 				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${role}`);
 				routerPost("/respond", {
 					opId: crypto.randomUUID(),
@@ -325,6 +344,11 @@ export function connectToRouter(): void {
 				return;
 			}
 			// role === null falls through, so the LLM decides.
+		}
+
+		if (msg.type === "register_ok") {
+			opLedgerProtocol = typeof msg.opLedgerProtocol === "number" ? msg.opLedgerProtocol : 0;
+			return;
 		}
 
 		if (msg.type === "handshake_reject") {

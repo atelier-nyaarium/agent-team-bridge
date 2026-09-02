@@ -6,7 +6,7 @@ import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBlob } from "../blobTransfer.js";
 import { parseDsCard } from "../designer/dsCard.js";
-import { routerPost, unansweredHandshakeId } from "./helpers.js";
+import { opLedgerRefusal, routerPost, unansweredHandshakeId } from "./helpers.js";
 
 // Advisory and derived; the gateway holds the real backstop.
 const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
@@ -188,6 +188,8 @@ export async function postReply(
 			return toolError(literalEscapeReject(toolName, label, hazard));
 		}
 	}
+	const refusal = opLedgerRefusal();
+	if (refusal) return toolError(`Cannot reply: ${refusal}`);
 	try {
 		const staged = await files?.();
 		// Minted here rather than inside routerPost, so its retries share one id.

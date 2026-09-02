@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { agentInboundFrameTypes } from "../shared/agent-backend.js";
 import { isHostSpawnSession } from "../shared/host-spawn.js";
-import { WsRegisterSchema } from "../shared/schemas.js";
+import { OP_LEDGER_PROTOCOL, WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode } from "../shared/types.js";
 import { HandshakeGate } from "./handshakeGate.js";
@@ -355,6 +355,13 @@ export function createWebSocketHandlers({
 			} else {
 				ws.data.handshakeConfirmed = true;
 			}
+
+			// Tells the plugin the ledger honours a producer-issued opId. A plugin that sends one and
+			// hears no version refuses to send, since a gateway that drops it accepts a retry twice.
+			// Last, and never fatal: a socket too dead to hear this has already failed to register.
+			try {
+				ws.send(JSON.stringify({ type: "register_ok", opLedgerProtocol: OP_LEDGER_PROTOCOL }));
+			} catch {}
 
 			onTeamConnect?.(team, ws);
 		}
