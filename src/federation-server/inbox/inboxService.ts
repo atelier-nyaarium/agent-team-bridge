@@ -454,6 +454,11 @@ export class InboxService {
 			throw error;
 		}
 	}
+	/** The lowest seq the owner inbox still holds. A consumer below it has lost rows. */
+	ownerFloor(domainId: string): number {
+		return this.floorOf(this.registry.for(domainId), domainId);
+	}
+
 	private floorOf(store: OwnerStateStore, domainId: string): number {
 		return Number(store.get("inbox.address", formatInboxAddress(this.ownerAddress(domainId)))?.clear.floor ?? 1);
 	}

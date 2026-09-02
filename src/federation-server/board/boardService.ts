@@ -34,6 +34,8 @@ type Deps = {
 	referenceHeld: RefHeld;
 	/** Deliver accepted observations or mark them waking. */
 	deliver?: (domainId: string, address: InboxAddress, row: InboxRow) => void;
+	/** Tells the owner's consoles the revision moved, so they re-read. */
+	pokeOwner?: (domainId: string, revision: number) => void;
 	now?: () => number;
 };
 type Board = { revision: number; entries: Map<string, BoardEntry> };
@@ -360,6 +362,10 @@ export function createBoardService(deps: Deps) {
 			else if (appended.outcome !== "accepted")
 				console.warn(`[board] observation for ${o.sessionKey} not written: ${appended.outcome}`);
 		}
+		// A POKE, not the board: a writer already holds the entries it just wrote, and every other
+		// console re-reads. Pushing 5000 entries per write to every socket would cost far more than
+		// the read it saves.
+		deps.pokeOwner?.(domainId, next.revision);
 		return {
 			outcome: "applied" as const,
 			revision: next.revision,
@@ -404,8 +410,10 @@ export function createBoardService(deps: Deps) {
 		return removed;
 	};
 	const register = (hooks: OwnerServiceHooks) => {
+		// The OwnerOp's own id is the idempotency key: a phone journals a write and replays it after a
+		// crash, and the ledger must answer the recorded outcome rather than apply it twice.
 		hooks.ownerOp("board_write", (op, value) =>
-			write(op.domainId, BoardWriteSchema.parse(value.write ?? value), { kind: "owner" }),
+			write(op.domainId, BoardWriteSchema.parse(value.write ?? value), { kind: "owner" }, op.opId),
 		);
 		hooks.ownerOp("board_read", (op) => read(op.domainId));
 		// A gateway may act only for sessions in its registry.

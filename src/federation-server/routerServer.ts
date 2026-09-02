@@ -21,7 +21,8 @@ import {
 } from "../shared/federation-proofs.js";
 import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "./blobs/routerBlobCache.js";
-import { ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
+import { type ConsoleSockets, createConsoleSockets } from "./console/consoleSockets.js";
+import { APP_TOKEN_HEADER, ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
 import { DeviceApprovalCoordinator } from "./deviceApprovalCoordinator.js";
 import { EnrollHandshakeCoordinator } from "./enrollHandshakeCoordinator.js";
 import { dispatchEnrollOp, EnrollmentCoordinator, resolveEnrollRoute } from "./enrollmentCoordinator.js";
@@ -72,6 +73,7 @@ export class RouterServer {
 	private readonly referenceHeld: ReferenceHeldStore;
 	private readonly sweepTimer: ReturnType<typeof setInterval>;
 	private readonly ownerOps: OwnerOpIntake;
+	private readonly consoleSockets: ConsoleSockets;
 	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
 
 	public constructor(private readonly params: RouterServerParams) {
@@ -122,12 +124,23 @@ export class RouterServer {
 			blobCache: this.blobCache,
 			referenceHeld: this.referenceHeld,
 		});
+		this.consoleSockets = createConsoleSockets({
+			handleOwnerOp: (raw) => this.ownerOps.handle(raw),
+			registerConsumer: (domainId, signerSignPub, incarnation) =>
+				this.inbox.registerConsumer(domainId, signerSignPub, incarnation),
+			readOwner: (domainId, signerSignPub, fromSeq, limit, cursorEpoch) =>
+				this.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch),
+			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
+				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
+			ownerFloor: (domainId) => this.inbox.ownerFloor(domainId),
+		});
 		this.ownerServices = createOwnerServices({
 			registry: this.ownerRegistry,
 			inbox: this.inbox,
 			bridge: this.bridge,
 			intake: this.ownerOps,
 			referenceHeld: this.referenceHeld,
+			consoleSockets: this.consoleSockets,
 			routerIdentity: {
 				signPub: params.store.persistedIdentity.sign.pub,
 				signPriv: params.store.persistedIdentity.sign.priv,
@@ -198,12 +211,19 @@ export class RouterServer {
 		});
 		this.server.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
-			if (url.pathname !== "/" && url.pathname !== "/gateway") {
+			const console = url.pathname === "/console";
+			if (!console && url.pathname !== "/" && url.pathname !== "/gateway") {
 				socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
 				socket.destroy();
 				return;
 			}
-			if (!transport.authorizeUpgrade(request.headers.authorization)) {
+			// A console proves itself by SIGNATURE in its first frame, which no header can carry. The
+			// app token still gates the upgrade, so an unsigned socket cannot be held open by anyone
+			// who merely reached the port.
+			const authorized = console
+				? this.console.authorizeToken(request.headers[APP_TOKEN_HEADER])
+				: transport.authorizeUpgrade(request.headers.authorization);
+			if (!authorized) {
 				socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 				socket.destroy();
 				return;
@@ -211,11 +231,17 @@ export class RouterServer {
 			this.wsServer.handleUpgrade(request, socket, head, (ws) => {
 				this.sockets.add(ws);
 				ws.on("error", () => {});
-				transport.handleOpen(ws);
-				ws.on("message", (data) => transport.handleMessage(ws, data));
+				const adapter = console ? { send: (data: string) => ws.send(data), close: () => ws.close() } : null;
+				if (adapter) this.consoleSockets.open(adapter);
+				else transport.handleOpen(ws);
+				ws.on("message", (data) => {
+					if (adapter) void this.consoleSockets.message(adapter, String(data));
+					else transport.handleMessage(ws, data);
+				});
 				ws.on("close", () => {
 					this.sockets.delete(ws);
-					transport.handleClose(ws);
+					if (adapter) this.consoleSockets.close(adapter);
+					else transport.handleClose(ws);
 				});
 			});
 		});
@@ -380,7 +406,11 @@ export class RouterServer {
 		if (!coordinator) return { ok: false, error: "admin Domain unavailable" };
 		const result = await dispatchEnrollOp(coordinator, op, this.tenantAdmin);
 		if (!result.ok) return result;
-		if (op.kind === "submit_revocation") this.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
+		if (op.kind === "submit_revocation") {
+			this.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
+			// A revoked console keeps no socket either; its cursor is already gone.
+			this.consoleSockets.forget(domainId, op.revocation.revocation.signPub);
+		}
 		if (op.kind === "submit_admission" || op.kind === "submit_revocation") {
 			const failed = await this.flushOrError(domainId);
 			if (failed) return failed;

@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../shared/admission.js";
+import { OwnerBlobFetchParamsSchema } from "../shared/router-protocol.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import {
 	formatInboxAddress,
@@ -10,6 +11,7 @@ import {
 } from "../shared/schemasInbox.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { createBoardService } from "./board/boardService.js";
+import type { ConsoleSockets } from "./console/consoleSockets.js";
 import type { GatewayBridge } from "./gatewayBridge.js";
 import type { InboxService } from "./inbox/inboxService.js";
 import type { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
@@ -30,6 +32,8 @@ export interface OwnerServicesDeps {
 	routerIdentity: { signPub: string; signPriv: string };
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
+	/** Where an owner row goes. Absent leaves owner rows waiting on their consumer's next read. */
+	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget">;
 }
 
 // Longer waits are chained because setTimeout has a maximum delay.
@@ -72,11 +76,30 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		gatewayIncarnation: (domainId, gatewayId) => bridge.gatewayIncarnation(domainId, gatewayId),
 		connectedGateways: connected,
 	};
-	/** Deliver accepted rows or mark them waking. */
+	/** Deliver accepted rows or mark them waking. An OWNER row is never waking: its consumer reads
+	 * from a durable cursor on connect, so a push it missed costs nothing. */
 	const deliver = (domainId: string, address: InboxAddress, row: InboxRow): void => {
+		if (address.kind === "owner") {
+			deps.consoleSockets?.pushOwnerRow(domainId, null, row);
+			return;
+		}
 		if (!bridge.pushInboxRows(domainId, formatInboxAddress(address), [row]))
 			inbox.markWaking(domainId, row.envelope.opKey);
 	};
+
+	// The console's own door onto the one OwnerOp routine. Answering the identity is the whole job:
+	// the intake already proved it, and the socket may not prove it a second way.
+	deps.intake.register("hello", (op) => ({
+		opKey: { conversationId: op.conversationId, opId: op.opId },
+		outcome: "complete" as const,
+		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
+	}));
+
+	// A VALUE op: the Router answers from its cache or forwards to the origin gateway, and a
+	// disconnected origin is unreachable at once rather than held.
+	deps.intake.register("blob_fetch", (op, value) =>
+		bridge.fetchBlobForOwner(op.domainId, OwnerBlobFetchParamsSchema.parse(value)),
+	);
 
 	const share = createShareService({
 		registry,
@@ -129,6 +152,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			release: (domainId, blobId, id) => referenceHeld.release(domainId, blobId, { kind: "entry", id }),
 		},
 		deliver,
+		pokeOwner: (domainId, revision) => deps.consoleSockets?.pushPlane(domainId, "taskBoard", revision, undefined),
 	});
 
 	const appendScheduledMessage = (

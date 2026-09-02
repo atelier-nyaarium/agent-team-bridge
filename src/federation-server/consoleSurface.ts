@@ -85,7 +85,7 @@ export interface RouterGatewaysAnswer {
 
 const CONSOLE_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 55_000;
-const APP_TOKEN_HEADER = "x-console-bridge-token";
+export const APP_TOKEN_HEADER = "x-console-bridge-token";
 
 export class ConsoleSurface {
 	private readonly authToken: string;
@@ -347,6 +347,11 @@ export class ConsoleSurface {
 		console.log(`[console-ingest] received ${lines.length} lines from ${conversationId}`);
 
 		return json({ ok: true, received: lines.length }, 200);
+	}
+
+	/** The same app-token check the HTTP surface runs, for the socket upgrade. */
+	public authorizeToken(provided: string | string[] | undefined): boolean {
+		return constantTimeBearerEquals(typeof provided === "string" ? provided : null, this.authToken);
 	}
 
 	public async handleRequest(req: Request): Promise<Response> {

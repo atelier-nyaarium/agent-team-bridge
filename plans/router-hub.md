@@ -927,6 +927,30 @@ A red team on the rebuild found two more, both real, both fixed here.
 
 ## Phase 6 - Phone transport
 
+Slices: 6.A the Router's console socket and owner delivery; 6.B the Router gaps the phone hits;
+6.0 through 6.7 the phone itself, per the bullets below.
+
+The survey found two things that reorder the phase. There is no `/console` WebSocket at all: the
+Router's upgrade handler accepted only `/` and `/gateway`, both gated by the federation bearer. And
+nothing consumed the owner inbox, because `pushInboxRows` answered `true` for an `owner:` address
+without sending, so rows accumulated until the 30-day sweep. The console socket is the first owner
+consumer, which is what makes an owner-addressed row mean anything. Both ends are this phase.
+
+A console proves itself by SIGNATURE in its first frame, which no header can carry, so the upgrade
+takes the app token and the hello OwnerOp proves the identity through the one intake routine. A push
+on that socket is an OPTIMIZATION: the cursor in the consumer registry is the durable part, so an
+owner row is never marked waking the way a session row is.
+
+Decided while building: the board's push to the owner is a POKE carrying the revision, not the
+board. A writer already holds what it wrote, every other console re-reads, and pushing 5000 entries
+per write to every socket would cost more than the read it saves.
+
+**Attachments stay off the Router this phase.** `attachmentsHeld` refuses unless the reference-held
+store holds every member, and its only writer is the uploader Phase 5 left unwired because sealing a
+blob is unsolved. So the phone's board attachment writes keep the gateway path until sealing is
+settled. The READ half is fixed: `blob_fetch` is now an OwnerOp, so a console can pull bytes from the
+Router cache or the origin without a gateway.
+
 - Console WS per its spec: framing, authentication with the existing console credentials, cursor
   and ack semantics matching Phase 3, `newWebSocket` on the pinned client, `wss` only, reconnect
   with a generation fence.

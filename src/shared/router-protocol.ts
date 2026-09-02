@@ -125,6 +125,16 @@ export const BlobFetchParamsSchema = z.object({
 	incarnation: z.number().int().positive(),
 });
 
+/** The console's own blob read. No incarnation: a console has no gateway registration, and the
+ * OwnerOp that carries this already proved which Domain is asking. */
+export const OwnerBlobFetchParamsSchema = z.object({
+	kind: z.literal("blob_fetch"),
+	opId: z.string().min(1),
+	blobId: z.string().min(1),
+	range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
+	origin: z.object({ domainId: z.string().min(1), gatewayId: z.string().min(1) }).optional(),
+});
+
 /** Uploads retain the origin copy. */
 export const BlobBeginParamsSchema = z.object({
 	blobId: z.string().min(1),

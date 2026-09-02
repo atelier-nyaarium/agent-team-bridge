@@ -29,7 +29,7 @@ import {
 	parseInboxAddress,
 } from "../shared/schemasInbox.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
-import type { RouterBlobCache } from "./blobs/routerBlobCache.js";
+import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
@@ -638,6 +638,19 @@ export class GatewayBridge implements ToolProvider {
 			for (const listener of this.sessionForgottenListeners) listener(identity, parsed.data.sessionId);
 		}
 		return { ok: true };
+	}
+
+	/** The console's read, whose Domain its OwnerOp already proved. Same cross-Domain gate as a
+	 * gateway's, because the origin is a routing hint the caller supplies either way. */
+	public fetchBlobForOwner(
+		domainId: string,
+		params: { opId: string; blobId: string; range?: { offset: number; length: number }; origin?: BlobOrigin },
+	): Promise<unknown> {
+		if (!this.blobFetch) return Promise.resolve({ outcome: "unreachable" });
+		const origin = params.origin;
+		if (origin && origin.domainId !== domainId && !this.hasLinkEdge(domainId, origin.domainId))
+			return Promise.resolve({ outcome: "unreachable" });
+		return this.blobFetch.fetch(domainId, { ...params, incarnation: 1 });
 	}
 
 	private async handleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): Promise<unknown> {
