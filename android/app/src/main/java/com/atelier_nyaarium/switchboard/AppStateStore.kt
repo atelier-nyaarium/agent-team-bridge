@@ -78,6 +78,28 @@ class AppStateStore internal constructor(
 
 	fun load(): String? = prefs.getString(KEY_BLOB, null)
 
+	fun installApprovedDevice(
+		blob: String,
+		domainJson: String?,
+		domainVersion: String?,
+		gatewayId: String?,
+		contentKeys: Map<Int, ByteArray>,
+	): Boolean {
+		check(encrypted) { "secure storage unavailable; refusing to persist content keys in cleartext" }
+		return prefs.edit().apply {
+			putString(KEY_BLOB, blob)
+			putBoolean(KEY_CONSOLE_ADMITTED, true)
+			putBoolean(KEY_FIRST_ROOTED, true)
+			putBoolean(KEY_ENROLL_CEREMONY_DONE, true)
+			if (domainJson != null) {
+				putString(KEY_DOMAIN, domainJson)
+				if (domainVersion != null) putString(KEY_DOMAIN_VERSION, domainVersion)
+			}
+			if (gatewayId != null) putString(KEY_GATEWAY_ID, gatewayId)
+			putString(KEY_CONTENT_KEYS, encodeContentKeys(contentKeys))
+		}.commit()
+	}
+
 	/** What this device LEARNED about how to reach its Router (from the Router itself), kept apart from
 	 * the blob it was handed: the blob is imported, this is discovered, and a re-provision wipes both. */
 	fun saveRouterReach(json: String) = prefs.edit().putString(KEY_ROUTER_REACH, json).apply()
@@ -339,9 +361,7 @@ class AppStateStore internal constructor(
 
 	fun saveContentKeys(keys: Map<Int, ByteArray>) {
 		check(encrypted) { "secure storage unavailable; refusing to persist content keys in cleartext" }
-		val json = JSONObject()
-		keys.toSortedMap().forEach { (epoch, key) -> json.put(epoch.toString(), Base64.getEncoder().encodeToString(key)) }
-		prefs.edit().putString(KEY_CONTENT_KEYS, json.toString()).apply()
+		prefs.edit().putString(KEY_CONTENT_KEYS, encodeContentKeys(keys)).apply()
 	}
 
 	fun loadContentKeys(): ContentKeysLoad {
@@ -362,6 +382,16 @@ class AppStateStore internal constructor(
 
 	internal fun saveContentKeysCorrupt(raw: String) {
 		prefs.edit().putString(KEY_CONTENT_KEYS_CORRUPT, raw).apply()
+	}
+
+	internal fun saveContentKeysCorrupt(keys: Map<Int, ByteArray>) {
+		saveContentKeysCorrupt(encodeContentKeys(keys))
+	}
+
+	private fun encodeContentKeys(keys: Map<Int, ByteArray>): String {
+		val json = JSONObject()
+		keys.toSortedMap().forEach { (epoch, key) -> json.put(epoch.toString(), Base64.getEncoder().encodeToString(key)) }
+		return json.toString()
 	}
 
 	/** Read a persisted identity into the [IdentityLoad] tri-state, keeping the corrupt case

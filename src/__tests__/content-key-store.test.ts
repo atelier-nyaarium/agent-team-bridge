@@ -270,6 +270,33 @@ describe("ContentKeyStore", () => {
 		expect(fs.readFileSync(path.join(dir, aside), "utf8")).toBe(contents);
 	});
 
+	it("classifies a batch all or nothing and skips the signer rule only without trust", () => {
+		const dir = tempDir();
+		const owner = generateIdentity();
+		const console_ = generateIdentity();
+		const gateway = generateIdentity();
+		const admission = signAdmission(
+			{ kind: "console", signPub: console_.sign.pub, boxPub: console_.box.pub, issuedAt: 1, nonce: "admission" },
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
+		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const good = wrapContentKey(Buffer.alloc(32, 1), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv);
+		const unsigned = wrapContentKey(Buffer.alloc(32, 2), 2, gateway.box.pub, gateway.sign.pub, gateway.sign.priv);
+
+		expect(store.classify([good, unsigned], trust).kind).toBe("refused");
+		expect(store.epochs()).toEqual([]);
+		expect(fs.existsSync(path.join(dir, "content-keys.json"))).toBe(false);
+
+		const accepted = store.classify([good, unsigned], null);
+		expect(accepted.kind).toBe("accepted");
+		if (accepted.kind !== "accepted") return;
+		expect(accepted.newEpochs).toEqual([1, 2]);
+		store.commit(accepted.map);
+		expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1, 2]);
+	});
+
 	it("does not load identity during standalone-style store construction", () => {
 		const dir = tempDir();
 		fs.writeFileSync(path.join(dir, "federation-identity.json"), "garbage");

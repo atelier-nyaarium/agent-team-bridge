@@ -195,13 +195,9 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		}
 	}
 
-	/** NEW device: install the unsealed transport. Writes the provisioning blob through the EXISTING
-	 * provisioning store write, adopts the owner's synced keyring + route Gateway, and marks this device
-	 * admitted - the held device already owner-signed + submitted its admission, and this device holds
-	 * no owner key, so it must NEVER self-sign. provisioned flips LAST so the poll loop starts only
-	 * after consoleAdmitted is set, never racing a self-admission with a throwaway owner key. */
+	/** Install approved transport without self-signing. Mark provisioned last. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
-		if (!installContentKeys(transport)) {
+		val contentKeys = classifyContentKeys(transport) ?: run {
 			repo._state.update { it.copy(error = "content key installation refused", provisioned = false) }
 			error("content key installation refused")
 		}
@@ -213,45 +209,40 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			appToken = transport.appToken,
 		)
 		val blob = wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.Provisioning.serializer(), prov)
-		repo.store.save(blob)
-		repo.store.consoleAdmitted = true
-		repo.store.firstRooted = true
-		repo.store.enrollCeremonyDone = true
-		transport.domain?.let { snap ->
-			repo.store.saveDomain(
-				wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.DomainSnapshot.serializer(), snap),
-				transport.domainVersion ?: "",
-			)
+		val domainJson = transport.domain?.let {
+			wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.DomainSnapshot.serializer(), it)
 		}
-		transport.gatewayId?.takeIf { it.isNotEmpty() }?.let {
-			repo.store.saveGatewayId(it)
-			repo.localGatewayId = it
+		val gatewayId = transport.gatewayId?.takeIf { it.isNotEmpty() }
+		check(repo.store.installApprovedDevice(blob, domainJson, transport.domainVersion, gatewayId, contentKeys)) {
+			"approved-device install could not be committed"
 		}
-		// The one keyring write that is not a fold, so nothing else would publish the machines this
-		// device just adopted until a connect succeeds. AFTER the route id above: the board names a
-		// machine relative to the route Gateway, so refreshing first publishes a roster read against
-		// the id this device is replacing.
+		gatewayId?.let { repo.localGatewayId = it }
+		repo.client = null
+		repo.sttsClient = null
+		// Refresh after route assignment.
 		if (transport.domain != null) repo.refreshAdmittedGateways()
-		// This is the ONE path besides a real first-root that sets firstRooted=true - it never
-		// calls the Router's first-root intake (the held device already rooted), so trace the latch
-		// origin explicitly or a stuck-latch investigation cannot tell the two apart.
+		// Preserve first-root provenance.
 		DebugLog.log(
 			"AddDevice",
 			"installed approved-device transport; consoleAdmitted+firstRooted set, " +
 				"keyring=${if (transport.domain != null) "adopted" else "absent"} gateway=${transport.gatewayId ?: "none"}",
 		)
-		repo.client = null
-		repo.sttsClient = null
 		val parsed = Provisioning.parse(blob)
 		repo._state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
 	}
 
-	private fun installContentKeys(transport: ConsoleTransport): Boolean {
-		val domain = transport.domain ?: return transport.contentKeys.isEmpty()
+	private fun classifyContentKeys(transport: ConsoleTransport): Map<Int, ByteArray>? {
+		// Empty delivery preserves held keys.
+		val domain = transport.domain ?: return transport.contentKeys.takeIf { it.isEmpty() }?.let { heldContentKeys() }
 		val keyring = Keyring(domain)
 		val contentKeyring = ContentKeyring(repo.federation.consoleIdentity().box.priv, repo.store)
-		val classified = contentKeyring.classify(transport.contentKeys, keyring) ?: return false
-		contentKeyring.commit(classified)
-		return true
+		return contentKeyring.classify(transport.contentKeys, keyring)
 	}
+
+	private fun heldContentKeys(): Map<Int, ByteArray> =
+		when (val load = repo.store.loadContentKeys()) {
+			is ContentKeysLoad.Loaded -> load.keys
+			ContentKeysLoad.Absent -> emptyMap()
+			is ContentKeysLoad.Corrupt -> error("content key slot is corrupt")
+		}
 }

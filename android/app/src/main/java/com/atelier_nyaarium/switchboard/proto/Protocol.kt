@@ -9,8 +9,8 @@
 // omits null-defaulted optionals, which is exactly what the gateway's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
-// it MUST pair with explicitNulls = false. A required const on an encode-side
-// shape is a required parameter. Note the console's POST body is the
+// it MUST pair with explicitNulls = false. Required consts become parameters. Note
+// the console's POST body is the
 // op-only envelope {device, conversationId, opId, op}; the Router composes the
 // full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")

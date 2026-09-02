@@ -67,7 +67,7 @@ describe("federation router routing", () => {
 			relayId: "r1",
 			srcGateway: "laptop",
 			dstGateway: "other",
-			payload: { sealed: { ephemeralPub: "e", nonce: "n", ciphertext: "c", signature: "s" } },
+			payload: { sealed: { ephemeralPub: "ZQ==", nonce: "bg==", ciphertext: "Yw==", signature: "cw==" } },
 		});
 		const parsed = GatewayRelayFrameSchema.safeParse(await arriving);
 		expect(parsed.success, parsed.error?.issues[0]?.message).toBe(true);

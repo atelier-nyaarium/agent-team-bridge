@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { b64Field, displayField } from "./crypto.js";
+import { b64Field, displayField, SealedEnvelopeSchema } from "./crypto.js";
 
 ////////////////////////////////
 //  Device self-enroll approval (the "Add a device" rendezvous)
@@ -15,16 +15,6 @@ import { b64Field, displayField } from "./crypto.js";
 
 ////////////////////////////////
 //  Schemas
-
-/** A sealed envelope matching the shared crypto wire shape. */
-const SealedEnvelopeSchema = z
-	.object({
-		ephemeralPub: b64Field(),
-		nonce: b64Field(),
-		ciphertext: b64Field(),
-		signature: b64Field(),
-	})
-	.meta({ id: "SealedEnvelope" });
 
 /** N's fresh console keys as H sees them on a poll: the new device's signing + box publics
  * and an optional human device label. H derives the fingerprint it shows from newSignPub. */

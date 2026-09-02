@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
-import { sign, verify } from "./crypto.js";
+import { SealedEnvelopeSchema, sign, verify } from "./crypto.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NOTICE_TITLE_MAX, NoticeTierWireFields } from "./notice.js";
 import { BLOB_CHUNK_BYTES } from "./router-protocol.js";
@@ -189,16 +189,6 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		sessions: z.array(CrossDomainPresenceSessionSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS),
 	}),
 ]);
-
-/** A sealed envelope (shared/crypto.ts): an ephemeral X25519 box + Ed25519
- * signature. Carries the sealed FederatedOp on the request leg and a sealed
- * op-result on the reply leg. */
-export const SealedEnvelopeSchema = z.object({
-	ephemeralPub: z.string(),
-	nonce: z.string(),
-	ciphertext: z.string(),
-	signature: z.string(),
-});
 
 /** The gateway_relay payload. Cross-Gateway traffic is ALWAYS E2E-sealed, so the Router sees
  * only this opaque sealed blob and cannot read or forge the op. */

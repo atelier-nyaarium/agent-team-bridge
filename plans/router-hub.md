@@ -475,22 +475,32 @@ One section per spec. Name its residue test. Later phases implement only these s
 
 ## Phase 2 - Owner content key
 
-- Derivation, on the owner phone only: `HKDF-SHA256(root, salt = fixed, info = "switchboard-content"
-  || epoch)`. Deterministic, so the owner backup regenerates every epoch. Epoch 1 at first root or
-  backup restore on the owner phone; cutover backfills it to every member.
+- Derivation, on the owner phone only, per S1: `HKDF-SHA256(root, salt = fixed, info =
+  "switchboard-content-v1\n" + domainId + "\n" + epoch)`. Deterministic, so the owner backup
+  regenerates epoch 1 once the Domain id is known. Epoch 1 at first root and when a restored owner
+  learns its Domain id; cutover backfills it to every member. The owner path verifies every held
+  epoch against the derivation.
 - A standalone symmetric envelope beside the X25519 seal: AES-256-GCM, random nonce, AAD binding
-  `(domainId, ownerId, epoch, content kind)`. Node and Kotlin both already hold HKDF-SHA256 and
-  AES-256-GCM; `deriveKey` is private on both and stays so. Shared fixture in `tests/fixtures/`.
+  `(domainId, ownerId, epoch, content kind)`. `deriveKey` is private on both runtimes. Shared
+  fixtures in `tests/fixtures/content-envelope` and `tests/fixtures/device-join`, opened by both.
 - Keyrings: the phone persists epochs in the Keystore-backed store beside the identity, cleared
-  with it on re-provision; the gateway persists them under `DATA_DIR`.
-- Delivery as sealed key envelopes, one per recipient box key, versioned by epoch:
-  - to a new console inside the `ConsoleTransport` sealed at Add Device;
-  - to a new gateway as a new field in the bootstrap bundle. Install is staged: every artifact
-    written, then one commit marker, then activation; boot recovery completes or rolls back the
-    whole bundle. Install and Add Device use one staged bundle commit.
+  with it on re-provision; the gateway persists them under `DATA_DIR/federation`. A corrupt slot
+  or file is set aside, never read as empty and overwritten. One rule owner per runtime
+  (`ContentKeyStore.classify` and `ContentKeyring.classify`): always unwrap, equal bytes for a
+  held epoch pass, different bytes refuse the whole batch.
+- Delivery as sealed key envelopes, one per recipient box key, the epoch inside the sealed body:
+  - to a new console inside the `ConsoleTransport` sealed at Add Device. The join is signed by the
+    new device's console key so the Router cannot swap the box key; the phone installs the
+    transport, latches, snapshot, and keys in one store commit;
+  - to a new gateway in the bootstrap bundle beside the signing console's admission. Install is
+    staged under `federation/staging/`, then one `INSTALLED` marker, then activation copies each
+    artifact into place with transport last; boot recovery re-runs activation, rolls back
+    corruption, and fails the boot on any other activation error. Re-enrollment merges over the
+    live plus bundle trust view and merges keys; first enrollment keeps trust on first use;
   - to an already-enrolled member by a re-delivery op: signed by the member's admitted signing
     key, box key resolved from the Router's admission record, never from the request; the
-    response sealed to that box key; operation nonce persisted for idempotency and expiry.
+    response sealed to that box key; operation nonce persisted for idempotency and expiry (Phase
+    3).
 - Backfill at cutover: enumerate every admitted console and gateway, deliver every epoch, require
   per-recipient confirmation before Phase 8 may start.
 - Reader state `missing_epoch`: retain the row, do not ack, do not compact, request re-delivery
@@ -509,17 +519,36 @@ One section per spec. Name its residue test. Later phases implement only these s
   the allowlist write to the atomic writer and made activation require all four artifacts. Round
   two replaced rename-by-artifact with copy-then-remove so recovery re-runs. Round three split
   corruption from activation errors and added the owner check on the recovery road. Defect class:
-  a multi-file install with no single commit point. Candidate for architecture: a per-generation
-  live directory plus one pointer rename.
+  a multi-file install with no single commit point. Architecture verdict: fold `domain-id` into
+  the allowlist record, write transport last, and delete the staging directory, after the keyring
+  writer below and once Phase 3's re-delivery road can heal a lost transport rename (deferred item
+  A7 under Phase 3). A per-generation directory with a pointer rename was rejected: it moves the
+  invariant into every reader and both incremental writers.
 - **Held-epoch rule** (`contentKeyStore.ts`, `ContentKeyring.kt`, `bootstrapInstall.ts`):
   patched twice. Round one made the outcome three-way. Round two made every road unwrap first and
   byte-compare, and made re-enrollment merge instead of replace. Defect class: three roads into
-  one keyring, each with its own rule. Candidate for architecture: one keyring writer that every
-  road calls.
+  one keyring, each with its own rule. Architecture verdict, landed: `ContentKeyStore.classify`
+  plus `commit` own the rule on the gateway and `stageBootstrap` takes the store; the phone's Add
+  Device is one store commit through `ContentKeyring.classify`.
 
 ## Phase 3 - Router: inboxes, op ledger, blob stores
 
 Additive. Old surfaces untouched.
+
+Opening commits, from the Phase 2 architecture pass, before the re-delivery road:
+- A4: decide `keyringGeneration`. Either both keyrings persist a generation that `commit` bumps
+  and the receipt reads from the decision, or the field leaves `KeyReceiptSchema` and its
+  preimage. Decided before any producer exists; after S2 it is Router wire truth.
+- A10: Kotlin twins of `keyRequestSigningBytes` and `keyReceiptSigningBytes` with canonical-bytes
+  vectors in the content-envelope fixture, after A4.
+- A3: the phone's `FederationManager.installContentKeys(envelopes, trust)` as the one road entry,
+  `@Synchronized`, returning a typed merge decision; `commit` is the only slot writer and the
+  receipt is signed only after a durable commit.
+Later in the phase or after it: A5 (a present-but-invalid allowlist fails closed and is set aside),
+A7 (delete the staging directory; `domain-id` folds into the allowlist record; transport written
+last), A8 (residue tests: sole writer of `content-keys.json`, sole derivation site, no key bytes in
+any log the roads emit, on both runtimes), A9 (a cross-runtime merge decision table in a shared
+fixture), A11 (a residue test that every shared `_V1` preimage tag has a Kotlin twin and a fixture).
 - Inboxes per Question 3, addressed by owner or by `(domainId, gatewayId,
   sessionId)`. Consumer registry keyed by console installation identity with incarnation, last
   seen, forget on revoke. Capacity refuses; per-Domain and per-owner quotas. Recovery of

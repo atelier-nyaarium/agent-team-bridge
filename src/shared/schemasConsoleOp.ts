@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
-import { b64Field } from "./crypto.js";
+import { SealedEnvelopeSchema } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
@@ -22,6 +22,8 @@ import {
 	ReadAnchorsVersionSchema,
 	TaskBoardVersionSchema,
 } from "./schemasPresence.js";
+
+export { SealedEnvelopeSchema } from "./crypto.js";
 
 ////////////////////////////////
 //  Console Relay Frame Schema
@@ -421,19 +423,7 @@ export const ConsoleOpSchema = z
 	.meta({ id: "ConsoleOp" });
 
 ////////////////////////////////
-//  Sealed envelope (the E2E crypto wrapper - shared/crypto.ts)
-//
-//  Confidentiality (ephemeral X25519 box) + authenticity (Ed25519 signature).
-//  Codegen'd to Kotlin so the console seals/opens with the byte-identical Crypto.kt.
-
-export const SealedEnvelopeSchema = z
-	.object({
-		ephemeralPub: b64Field(),
-		nonce: b64Field(),
-		ciphertext: b64Field(),
-		signature: b64Field(),
-	})
-	.meta({ id: "SealedEnvelope" });
+//  Console relay frame schema
 
 export const ConsoleRelayFrameSchema = z
 	.object({

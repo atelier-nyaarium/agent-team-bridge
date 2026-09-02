@@ -30,6 +30,12 @@ export interface ContentKeyTrust {
 	revocations: SignedRevocation[];
 }
 
+export type ContentKeyRefusalReason = "malformed_envelope" | "untrusted_signer" | "unwrap_failed" | "different_key";
+
+export type ContentKeyClassification =
+	| { kind: "accepted"; map: Map<number, Buffer>; newEpochs: number[] }
+	| { kind: "refused"; reason: ContentKeyRefusalReason; epoch?: number };
+
 export class ContentKeyStore {
 	private readonly file: string;
 	private readonly recipientBoxPriv: string | (() => string);
@@ -82,6 +88,16 @@ export class ContentKeyStore {
 		return new Map();
 	}
 
+	// Commits preserve held epochs.
+	commit(map: Map<number, Buffer>): void {
+		for (const epoch of this.keys.keys()) {
+			if (!map.has(epoch)) throw new Error("content key commit would drop a held epoch");
+		}
+		this.keys.clear();
+		for (const [epoch, key] of map) this.keys.set(epoch, Buffer.from(key));
+		this.persist();
+	}
+
 	private persist(): void {
 		ContentKeyStore.writeFile(this.file, this.keys);
 	}
@@ -104,33 +120,44 @@ export class ContentKeyStore {
 		return this.keys.get(epoch) ?? null;
 	}
 
-	// Already-present keys pass.
-	install(envelope: KeyEnvelope, trust: ContentKeyTrust): "installed" | "already_present" | "refused" {
-		const parsed = KeyEnvelopeSchema.safeParse(envelope);
-		if (!parsed.success) return "refused";
+	classify(envelopes: KeyEnvelope[], trust: ContentKeyTrust | null): ContentKeyClassification {
+		const parsed = z.array(KeyEnvelopeSchema).safeParse(envelopes);
+		if (!parsed.success) return { kind: "refused", reason: "malformed_envelope" };
 		const recipientBoxPriv =
 			typeof this.recipientBoxPriv === "function" ? this.recipientBoxPriv() : this.recipientBoxPriv;
 		if (!recipientBoxPriv) throw new Error("content key recipient box key is unavailable");
-		let unwrapped: { epoch: number; key: Buffer };
-		try {
-			unwrapped = unwrapContentKey(parsed.data, recipientBoxPriv);
-		} catch {
-			return "refused";
+		const merged = this.snapshot();
+		const newEpochs: number[] = [];
+		for (const envelope of parsed.data) {
+			if (
+				trust &&
+				!resolveAdmittedConsole(trust.admissions, trust.revocations, trust.ownerSignPub, envelope.signerSignPub)
+			)
+				return { kind: "refused", reason: "untrusted_signer", epoch: envelope.epoch };
+			let unwrapped: { epoch: number; key: Buffer };
+			try {
+				unwrapped = unwrapContentKey(envelope, recipientBoxPriv);
+			} catch {
+				return { kind: "refused", reason: "unwrap_failed", epoch: envelope.epoch };
+			}
+			const held = merged.get(unwrapped.epoch);
+			if (held && !held.equals(unwrapped.key)) {
+				return { kind: "refused", reason: "different_key", epoch: unwrapped.epoch };
+			}
+			if (!held) {
+				merged.set(unwrapped.epoch, unwrapped.key);
+				if (!this.keys.has(unwrapped.epoch)) newEpochs.push(unwrapped.epoch);
+			}
 		}
-		if (
-			!resolveAdmittedConsole(trust.admissions, trust.revocations, trust.ownerSignPub, parsed.data.signerSignPub)
-		) {
-			return "refused";
-		}
-		const { epoch, key } = unwrapped;
-		const held = this.keys.get(epoch);
-		if (held) {
-			if (held.equals(key)) return "already_present";
-			console.warn(`[content-key-store] refused different key for epoch ${epoch}`);
-			return "refused";
-		}
-		this.keys.set(epoch, key);
-		this.persist();
+		return { kind: "accepted", map: merged, newEpochs };
+	}
+
+	// Existing keys remain unchanged.
+	install(envelope: KeyEnvelope, trust: ContentKeyTrust): "installed" | "already_present" | "refused" {
+		const result = this.classify([envelope], trust);
+		if (result.kind === "refused") return "refused";
+		if (result.newEpochs.length === 0) return "already_present";
+		this.commit(result.map);
 		return "installed";
 	}
 

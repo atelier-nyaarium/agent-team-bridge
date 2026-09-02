@@ -32,18 +32,6 @@ export interface Identity {
 	box: KeyPairRaw;
 }
 
-/** The sealed envelope: confidentiality (ephemeral box) + authenticity (sig). */
-export interface SealedEnvelope {
-	/** Ephemeral X25519 public key for this message (raw 32 bytes, base64). */
-	ephemeralPub: string;
-	/** AES-256-GCM nonce / IV (12 bytes, base64). */
-	nonce: string;
-	/** Ciphertext || 16-byte auth tag (base64). */
-	ciphertext: string;
-	/** Ed25519 signature over ephemeralPub||nonce||ciphertext (base64). */
-	signature: string;
-}
-
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -179,6 +167,18 @@ export function fingerprint(pubB64: string): string {
 /** A base64 field (raw key / nonce / signature): the base64 alphabet only, so it
  * holds no newline that could blur a signing-bytes boundary. */
 export const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$/;
+
+/** Sealed envelope schema. */
+export const SealedEnvelopeSchema = z
+	.object({
+		ephemeralPub: b64Field(),
+		nonce: b64Field(),
+		ciphertext: b64Field(),
+		signature: b64Field(),
+	})
+	.meta({ id: "SealedEnvelope" });
+
+export type SealedEnvelope = z.infer<typeof SealedEnvelopeSchema>;
 
 export function b64Field(): z.ZodString {
 	return z.string().regex(B64_RE).min(1);

@@ -7,14 +7,12 @@ import {
 	verifyRevocation,
 } from "../../shared/admission.js";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
-import { unwrapContentKey } from "../../shared/content-envelope.js";
 import { type Identity, unseal } from "../../shared/crypto.js";
 import {
 	type GatewayBootstrapBundle,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 } from "../../shared/schemas.js";
-import { KeyEnvelopeSchema } from "../../shared/schemasContentKey.js";
 import { ALLOWLIST_FILE, Allowlist } from "./allowlist.js";
 import { ContentKeyStore } from "./contentKeyStore.js";
 
@@ -28,7 +26,7 @@ export function stageBootstrap(
 	federationDir: string,
 	bundle: GatewayBootstrapBundle,
 	gatewayIdentity: Identity,
-	liveKeys = new Map<number, Buffer>(),
+	contentKeyStore: ContentKeyStore,
 	outerSignerSignPub?: string,
 ): void {
 	const liveAllowlist = new Allowlist(federationDir);
@@ -41,7 +39,6 @@ export function stageBootstrap(
 	fs.rmSync(stagingDir, { recursive: true, force: true });
 	fs.mkdirSync(stagingDir, { recursive: true });
 	try {
-		const keyMap = new Map(liveKeys);
 		const verifiedBundleAdmissions = bundle.domain.admissions.filter((admission) =>
 			verifyAdmission(admission, bundle.domain.ownerSignPub),
 		);
@@ -77,25 +74,13 @@ export function stageBootstrap(
 			)
 				throw new Error("bootstrap frame signer is not an admitted console");
 		}
-		for (const envelope of bundle.contentKeys ?? []) {
-			const parsedEnvelope = KeyEnvelopeSchema.safeParse(envelope);
-			if (!parsedEnvelope.success) throw new Error("bootstrap content key envelope is invalid");
-			if (
-				liveSnapshot &&
-				!resolveAdmittedConsole(
-					admissions,
-					revocations,
-					bundle.domain.ownerSignPub,
-					parsedEnvelope.data.signerSignPub,
-				)
-			) {
-				throw new Error("bootstrap: content key is not signed by an admitted console");
-			}
-			const { epoch, key } = unwrapContentKey(parsedEnvelope.data, gatewayIdentity.box.priv);
-			const held = keyMap.get(epoch);
-			if (held && !held.equals(key)) throw new Error(`different content key for epoch ${epoch}`);
-			if (held) continue;
-			keyMap.set(epoch, key);
+		const keyResult = contentKeyStore.classify(
+			bundle.contentKeys ?? [],
+			liveSnapshot ? { ownerSignPub: bundle.domain.ownerSignPub, admissions, revocations } : null,
+		);
+		if (keyResult.kind === "refused") {
+			const where = keyResult.epoch === undefined ? "" : ` for epoch ${keyResult.epoch}`;
+			throw new Error(`bootstrap content key envelope was refused: ${keyResult.reason}${where}`);
 		}
 		Allowlist.writeFile(path.join(stagingDir, ALLOWLIST_FILE), {
 			ownerSignPub: bundle.domain.ownerSignPub,
@@ -112,7 +97,7 @@ export function stageBootstrap(
 			fsyncFile: true,
 			fsyncDirectory: true,
 		});
-		ContentKeyStore.writeFile(path.join(stagingDir, "content-keys.json"), keyMap);
+		ContentKeyStore.writeFile(path.join(stagingDir, "content-keys.json"), keyResult.map);
 		writeFileAtomic(path.join(stagingDir, "INSTALLED"), "", { mode: 0o600, fsyncFile: true, fsyncDirectory: true });
 	} catch (error) {
 		fs.rmSync(stagingDir, { recursive: true, force: true });

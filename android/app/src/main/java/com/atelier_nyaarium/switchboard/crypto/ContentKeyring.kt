@@ -27,7 +27,7 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 			!key.contentEquals(Crypto.deriveContentKey(ownerIdentity.sign.priv, domainId, epoch))
 		}
 		if (mismatch) {
-			store?.saveContentKeysCorrupt(loadJson())
+			store?.saveContentKeysCorrupt(keys)
 			DebugLog.log("ContentKeys", "content key slot mismatch preserved")
 			keys.clear()
 		}
@@ -84,9 +84,5 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 
 	private fun persist() {
 		store?.saveContentKeys(keys)
-	}
-
-	private fun loadJson(): String = keys.toSortedMap().entries.joinToString(prefix = "{", postfix = "}") { (epoch, key) ->
-		"\"$epoch\":\"${java.util.Base64.getEncoder().encodeToString(key)}\""
 	}
 }

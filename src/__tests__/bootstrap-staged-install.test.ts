@@ -97,7 +97,7 @@ function enrollLive(
 ): void {
 	rootLive(dir, owner, gateway);
 	const delivered = { ...signedGatewayBundle(base, owner, gateway, issuedAt), contentKeys };
-	stageBootstrap(dir, delivered, gateway);
+	stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
 	recoverStaging(dir);
 }
 
@@ -138,7 +138,8 @@ describe("staged bootstrap install", () => {
 
 	it("activates every artifact once the marker exists and recovers twice", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
-		stageBootstrap(dir, bundle().bundle, generateIdentity());
+		const initial = bundle();
+		stageBootstrap(dir, initial.bundle, initial.gateway, new ContentKeyStore(dir, initial.gateway.box.priv));
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
 		recoverStaging(dir);
 		for (const artifact of ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"])
@@ -165,7 +166,7 @@ describe("staged bootstrap install", () => {
 		);
 		const preChange = { ...base, admission, domain: { ...base.domain, admissions: [admission] } };
 
-		stageBootstrap(dir, preChange, gateway, new Map(), "unlisted-old-console");
+		stageBootstrap(dir, preChange, gateway, new ContentKeyStore(dir, gateway.box.priv), "unlisted-old-console");
 		recoverStaging(dir);
 
 		expect(new Allowlist(dir).selfAdmission(gateway.sign.pub)?.admission.gatewayId).toBe("g");
@@ -177,7 +178,7 @@ describe("staged bootstrap install", () => {
 		new Allowlist(dir).setOwner(liveOwner.sign.pub);
 		const before = fs.readdirSync(dir);
 
-		expect(() => stageBootstrap(dir, bundle().bundle, generateIdentity())).toThrow();
+		expect(() => stageBootstrap(dir, bundle().bundle, generateIdentity(), new ContentKeyStore(dir))).toThrow();
 		expect(fs.readdirSync(dir)).toEqual(before);
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
@@ -205,7 +206,7 @@ describe("staged bootstrap install", () => {
 			contentKeys: [wrapContentKey(Buffer.alloc(32, 3), 1, gateway.box.pub, gateway.sign.pub, gateway.sign.priv)],
 		};
 
-		expect(() => stageBootstrap(dir, invalid, gateway)).toThrow();
+		expect(() => stageBootstrap(dir, invalid, gateway, new ContentKeyStore(dir, gateway.box.priv))).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
 
@@ -229,7 +230,7 @@ describe("staged bootstrap install", () => {
 
 		const store = new ContentKeyStore(dir, gateway.box.priv);
 		expect(store.epochs()).toEqual([]);
-		stageBootstrap(dir, delivered, gateway);
+		stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
 		recoverStaging(dir);
 
 		expect(new Allowlist(dir).ownerSignPub).toBe(owner.sign.pub);
@@ -264,7 +265,7 @@ describe("staged bootstrap install", () => {
 					wrapContentKey(Buffer.alloc(32, 8), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 				],
 			};
-			stageBootstrap(dir, delivered, gateway);
+			stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
 			for (const artifact of artifacts.slice(0, count))
 				fs.copyFileSync(path.join(dir, "staging", artifact), path.join(dir, artifact));
 			recoverStaging(dir);
@@ -317,7 +318,9 @@ describe("staged bootstrap install", () => {
 			],
 		};
 
-		expect(() => stageBootstrap(dir, delivered, gateway, new Map(), console_.sign.pub)).toThrow();
+		expect(() =>
+			stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv), console_.sign.pub),
+		).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 
@@ -339,7 +342,15 @@ describe("staged bootstrap install", () => {
 			revocations: [],
 		});
 		const afterReAdmission = { ...delivered, domain: { ...delivered.domain, revocations: [] } };
-		expect(() => stageBootstrap(dir, afterReAdmission, gateway, new Map(), console_.sign.pub)).toThrow();
+		expect(() =>
+			stageBootstrap(
+				dir,
+				afterReAdmission,
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv),
+				console_.sign.pub,
+			),
+		).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
 
@@ -348,9 +359,21 @@ describe("staged bootstrap install", () => {
 		const { bundle: base, owner, gateway } = bundle();
 		enrollLive(dir, base, owner, gateway, 1);
 		const before = liveBytes(dir);
-		expect(() => stageBootstrap(dir, signedGatewayBundle(base, owner, gateway, 1), gateway)).toThrow();
+		expect(() =>
+			stageBootstrap(
+				dir,
+				signedGatewayBundle(base, owner, gateway, 1),
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv),
+			),
+		).toThrow();
 		expect(liveBytes(dir)).toEqual(before);
-		stageBootstrap(dir, signedGatewayBundle(base, owner, gateway, 2), gateway);
+		stageBootstrap(
+			dir,
+			signedGatewayBundle(base, owner, gateway, 2),
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv),
+		);
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
 	});
 
@@ -378,7 +401,12 @@ describe("staged bootstrap install", () => {
 			...signedGatewayBundle(base, owner, gateway, 1),
 			domain: { ...base.domain, admissions: [consoleAdmission] },
 		};
-		stageBootstrap(dir, { ...initial, contentKeys: envelopes(1, 5) }, gateway);
+		stageBootstrap(
+			dir,
+			{ ...initial, contentKeys: envelopes(1, 5) },
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv),
+		);
 		recoverStaging(dir);
 		stageBootstrap(
 			dir,
@@ -388,7 +416,7 @@ describe("staged bootstrap install", () => {
 				contentKeys: envelopes(3, 5),
 			},
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv).snapshot(),
+			new ContentKeyStore(dir, gateway.box.priv),
 		);
 		recoverStaging(dir);
 		stageBootstrap(
@@ -398,7 +426,7 @@ describe("staged bootstrap install", () => {
 				domain: { ...base.domain, admissions: [consoleAdmission] },
 			},
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv).snapshot(),
+			new ContentKeyStore(dir, gateway.box.priv),
 		);
 		recoverStaging(dir);
 		expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1, 2, 3, 4, 5]);
@@ -424,6 +452,7 @@ describe("staged bootstrap install", () => {
 				],
 			},
 			gateway,
+			new ContentKeyStore(dir, gateway.box.priv),
 		);
 		recoverStaging(dir);
 		new Allowlist(dir).applySnapshot({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] });
@@ -435,9 +464,7 @@ describe("staged bootstrap install", () => {
 				wrapContentKey(Buffer.alloc(32, 2), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 			],
 		};
-		expect(() =>
-			stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv).snapshot()),
-		).toThrow();
+		expect(() => stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv))).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 	});
@@ -458,7 +485,7 @@ describe("staged bootstrap install", () => {
 				wrapContentKey(Buffer.alloc(32, 9), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 			],
 		};
-		stageBootstrap(dir, delivered, gateway);
+		stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
 		fs.mkdirSync(path.join(dir, "content-keys.json"));
 		expect(() => activateStaged(dir)).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
@@ -475,7 +502,12 @@ describe("staged bootstrap install", () => {
 		const before = liveBytes(dir);
 		const foreign = bundle();
 		const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
-		stageBootstrap(foreignDir, foreign.bundle, foreign.gateway);
+		stageBootstrap(
+			foreignDir,
+			foreign.bundle,
+			foreign.gateway,
+			new ContentKeyStore(foreignDir, foreign.gateway.box.priv),
+		);
 		fs.mkdirSync(path.join(dir, "staging"));
 		for (const artifact of ["federation-allowlist.json", "domain-id", "content-keys.json", "transport.json"])
 			fs.copyFileSync(path.join(foreignDir, "staging", artifact), path.join(dir, "staging", artifact));
@@ -484,7 +516,12 @@ describe("staged bootstrap install", () => {
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 
-		stageBootstrap(dir, signedGatewayBundle(base, owner, gateway, 2), gateway);
+		stageBootstrap(
+			dir,
+			signedGatewayBundle(base, owner, gateway, 2),
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv),
+		);
 		fs.writeFileSync(path.join(dir, "staging", "federation-allowlist.json"), "garbage");
 		recoverStaging(dir);
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);

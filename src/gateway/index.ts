@@ -894,7 +894,7 @@ export async function startGateway(): Promise<void> {
 			const bundle = openBootstrapBundle(frame, enrollIdentity, nonce, localGatewayId);
 			const heldKeyCount = contentKeyStore.epochs().length;
 			const outerSignerSignPub = GatewayBootstrapFrameSchema.parse(frame).signerSignPub;
-			stageBootstrap(federationDir, bundle, enrollIdentity, contentKeyStore.snapshot(), outerSignerSignPub);
+			stageBootstrap(federationDir, bundle, enrollIdentity, contentKeyStore, outerSignerSignPub);
 			try {
 				activateStaged(federationDir);
 			} catch (error) {

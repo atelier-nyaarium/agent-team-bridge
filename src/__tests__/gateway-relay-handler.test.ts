@@ -70,7 +70,7 @@ function frame() {
 		relayId: "r-1",
 		srcGateway: "friend-gw",
 		dstGateway: "test-host",
-		payload: { sealed: { ephemeralPub: "e", nonce: "n", ciphertext: "c", signature: "s" } },
+		payload: { sealed: { ephemeralPub: "ZQ==", nonce: "bg==", ciphertext: "Yw==", signature: "cw==" } },
 	};
 }
 
