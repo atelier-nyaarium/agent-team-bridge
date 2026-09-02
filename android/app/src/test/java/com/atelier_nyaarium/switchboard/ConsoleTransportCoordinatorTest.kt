@@ -140,6 +140,54 @@ class ConsoleTransportCoordinatorTest {
 		assertFalse(coordinator.owns(generation))
 	}
 
+	// A cursor from before the migration names rows by an old coordinate, so nothing is taken on it
+	// until the translation is committed. A kill in between replays to the same cursor rather than
+	// acking rows nobody was handed.
+	@Test
+	fun takesNoRowsOnAPreMigrationCursorUntilTheTranslationCommits() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(7L)
+		val generation = coordinator.beginSocket()
+		coordinator.onWelcome(generation, 5L, 4L, 0L)
+
+		assertFalse(coordinator.mayConsume(generation))
+
+		assertTrue(coordinator.commitTranslation(generation, 2L, 7L))
+		assertTrue(coordinator.mayConsume(generation))
+		assertEquals(2L, coordinator.cursor())
+	}
+
+	@Test
+	fun takesRowsStraightAwayWhenTheCursorIsAlreadyOnTheMigrationEpoch() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(7L)
+		val generation = coordinator.beginSocket()
+		coordinator.onWelcome(generation, 5L, 7L, 0L)
+
+		assertTrue(coordinator.mayConsume(generation))
+	}
+
+	@Test
+	fun takesRowsWhenNoMigrationIsRunning() {
+		val coordinator = newCoordinator()
+		val generation = coordinator.beginSocket()
+		coordinator.onWelcome(generation, 5L, 4L, 0L)
+
+		assertTrue(coordinator.mayConsume(generation))
+	}
+
+	@Test
+	fun aSupersededGenerationNeitherConsumesNorCommits() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(7L)
+		val stale = coordinator.beginSocket()
+		coordinator.onWelcome(stale, 5L, 4L, 0L)
+		coordinator.beginSocket()
+
+		assertFalse(coordinator.mayConsume(stale))
+		assertFalse(coordinator.commitTranslation(stale, 2L, 7L))
+	}
+
 	private fun newCoordinator(): ConsoleTransportCoordinator {
 		val pushback = IdlePushbackManager(FakeStore(), 0L) { ZoneId.of("UTC") }
 		return ConsoleTransportCoordinator(pushback)

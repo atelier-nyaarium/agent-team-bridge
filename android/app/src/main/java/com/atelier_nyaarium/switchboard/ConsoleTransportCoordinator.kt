@@ -29,6 +29,8 @@ internal class ConsoleTransportCoordinator(
 	private var link = ConsoleLink.POLL
 	private var cursor = 0L
 	private var cursorEpoch = 0L
+	private var migrationEpoch = 0L
+	private var awaitingTranslation = false
 
 	/** Rows swept before adoption, pending UI acknowledgement. */
 	@Volatile var dropped = 0L
@@ -52,10 +54,34 @@ internal class ConsoleTransportCoordinator(
 			val lost = (floor - (cursor + 1)).coerceAtLeast(0)
 			this.cursor = cursor
 			this.cursorEpoch = cursorEpoch
+			// A cursor from before the migration names rows by an old coordinate. Nothing is taken on
+			// it until the translation is committed, so a kill in between replays to the same cursor
+			// rather than acking rows nobody was handed.
+			awaitingTranslation = migrationEpoch != 0L && cursorEpoch != migrationEpoch
 			dropped += lost
 			link = ConsoleLink.SOCKET
 			ConsoleAdoption.Adopted(cursor, cursorEpoch, lost)
 		}
+
+	/** Zero until the Router says, which is every case outside a migration window. */
+	fun setMigrationEpoch(epoch: Long) = synchronized(lock) {
+		migrationEpoch = epoch
+		if (epoch != 0L && cursorEpoch != epoch && link == ConsoleLink.SOCKET) awaitingTranslation = true
+	}
+
+	/** Whether rows may be taken and acked on the live generation. */
+	fun mayConsume(gen: Long): Boolean = synchronized(lock) {
+		gen == live && link == ConsoleLink.SOCKET && !awaitingTranslation
+	}
+
+	/** Lands the translated coordinate once the journal has it. Only then do rows flow. */
+	fun commitTranslation(gen: Long, cursor: Long, epoch: Long): Boolean = synchronized(lock) {
+		if (gen != live) return false
+		this.cursor = cursor
+		cursorEpoch = epoch
+		awaitingTranslation = false
+		true
+	}
 
 	/** True only for the live socket generation. */
 	fun owns(gen: Long): Boolean = synchronized(lock) { gen == live && link == ConsoleLink.SOCKET }

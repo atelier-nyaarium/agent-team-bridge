@@ -68,7 +68,7 @@ internal class ConsoleSocketDriver(
 					if (adopted.dropped > 0) onGap(adopted.dropped)
 				}
 				is ConsoleSocketFrame.InboxRows -> {
-					if (!coordinator.owns(gen)) return
+					if (!coordinator.mayConsume(gen)) return
 					val v = frame.value
 					onRows(v.rows, v.cursor)
 					if (coordinator.acked(gen, v.cursor)) socketOf()?.ack(v.cursor)
