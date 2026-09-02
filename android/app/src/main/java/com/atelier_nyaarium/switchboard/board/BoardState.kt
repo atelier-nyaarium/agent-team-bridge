@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard.board
 
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import kotlinx.serialization.Serializable
@@ -65,6 +66,13 @@ enum class BoardNoticeKind {
 @Serializable
 data class BoardBlob(
 	val gateways: Map<String, GatewayBoard> = emptyMap(),
+	/** The Router's board revision this device last landed. CAS is checked against it. */
+	val routerRevision: Long = 0,
+	/** The Router's board as stored, still sealed. Rendered through the keyring on read. */
+	val stored: List<BoardStoredEntry> = emptyList(),
+	/** Last text read for each entry, so a rotated-away epoch still renders. */
+	val text: Map<String, BoardCachedText> = emptyMap(),
+	val lastRouterSyncAt: Long = 0,
 	val queue: List<PendingBoardAction> = emptyList(),
 	// Durable BECAUSE the drain that mints these runs backgrounded, down a cadence ladder that ends in
 	// alarm wakeups on a killable process. An in-memory notice about pictures that are gone for good

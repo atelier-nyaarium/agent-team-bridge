@@ -33,13 +33,34 @@ class MutationJournalTest {
 	}
 
 	@Test
-	fun replayClaimIsOncePerOpId() {
+	fun replayClaimIsOncePerProcess() {
 		val dir = Files.createTempDirectory("journal").toFile()
 		val journal = MutationJournal(dir)
 		journal.append("op-1", "send", JSONObject())
 
 		assertEquals(1, journal.claimForReplay().size)
 		assertEquals(0, journal.claimForReplay().size)
+	}
+
+	// A write sent before the process died has an unknown outcome, and the opId makes re-sending it
+	// either a no-op or the recorded result. Leaving it settled would drop it silently.
+	@Test
+	fun aNewProcessReclaimsAWriteLeftInFlight() {
+		val dir = Files.createTempDirectory("journal").toFile()
+		val journal = MutationJournal(dir)
+		journal.append("op-1", "send", JSONObject())
+		journal.claimForReplay()
+
+		assertEquals(listOf("op-1"), MutationJournal(dir).claimForReplay().map { it.opId })
+	}
+
+	@Test
+	fun aSettledWriteIsNotReclaimed() {
+		val dir = Files.createTempDirectory("journal").toFile()
+		val journal = MutationJournal(dir)
+		journal.append("op-1", "send", JSONObject())
+		journal.transition("op-1", MutationState.ACKED)
+
 		assertEquals(0, MutationJournal(dir).claimForReplay().size)
 	}
 

@@ -9,6 +9,7 @@ import com.atelier_nyaarium.switchboard.ConsoleClient
 import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.localFieldOrSelf
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.rethrowIfCancellation
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
@@ -168,6 +169,31 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	/** The board as the UI should see one Gateway: snapshot with the pending queue re-applied. */
 	fun mergedEntries(gatewayId: String, now: Long = System.currentTimeMillis()): List<BoardEntry> =
 		mergeBoardSnapshot(blob.gateways[gatewayId]?.entries ?: emptyList(), blob.queue, gatewayId, now)
+
+	/** The Router's revision this device holds, and what a write must present for CAS. */
+	val routerRevision: Long
+		get() = blob.routerRevision
+
+	/**
+	 * Lands what the Router answered. An older revision is ignored, so a slow read cannot overwrite a
+	 * write result that already arrived.
+	 */
+	fun applyRouterBoard(revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()): Boolean {
+		synchronized(stateLock) {
+			if (revision < blob.routerRevision) return false
+			persist(blob.copy(routerRevision = revision, stored = entries, lastRouterSyncAt = at))
+			return true
+		}
+	}
+
+	/** Opens the Router board for the UI, remembering the text so a rotated-away epoch still renders. */
+	fun renderRouterBoard(sealing: BoardSealing): BoardRendered {
+		val rendered = synchronized(stateLock) { renderBoard(blob.stored, sealing, blob.text) }
+		// Compared before mutating: this runs per derive, and an unchanged cache should not re-serialize
+		// the whole board.
+		if (rendered.cache != blob.text) mutate { it.copy(text = rendered.cache) }
+		return rendered
+	}
 
 	/** Failed sends after which a queued action is worth telling the owner about. It only changes what
 	 * a row SAYS, never whether the action survives. */

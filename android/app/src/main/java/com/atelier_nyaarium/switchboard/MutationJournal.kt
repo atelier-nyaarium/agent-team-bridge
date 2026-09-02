@@ -56,9 +56,17 @@ internal class MutationJournal(
 	@Synchronized
 	fun pending(): List<MutationEntry> = entries.values.filter { it.state == MutationState.PENDING }
 
+	/**
+	 * Everything unsettled, claimed once per process at start, before any live send.
+	 *
+	 * SENT is included on purpose: a process that died after sending does not know whether the write
+	 * landed, and the opId makes re-sending it either a no-op or the recorded result. Leaving SENT
+	 * behind would silently drop exactly the writes a crash put at risk.
+	 */
 	@Synchronized
 	fun claimForReplay(): List<MutationEntry> {
-		val claimed = pending().filter { replayed.add(it.opId) }
+		val unsettled = entries.values.filter { it.state == MutationState.PENDING || it.state == MutationState.SENT }
+		val claimed = unsettled.filter { replayed.add(it.opId) }
 		claimed.forEach { transitionWithoutCompaction(it, MutationState.SENT) }
 		return claimed.map { it.copy(state = MutationState.SENT, payload = JSONObject(it.payload.toString())) }
 	}
