@@ -23,8 +23,8 @@ export type AgentBoardEntry = Omit<BoardEntry, "attachments"> & {
 ////////////////////////////////
 //  Schemas
 
-/** Producer-issued, so a retried post is one operation rather than several. Must satisfy the opKey
- * grammar. Optional: an older plugin sends none and the gateway mints one as before. */
+/** The caller's own id, so its retries are one ledger operation. Optional: the gateway mints one
+ * when absent. Bounded to the opKey grammar. */
 const producerOpId = z
 	.string()
 	.min(1)

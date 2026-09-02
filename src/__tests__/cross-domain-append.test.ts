@@ -65,8 +65,7 @@ describe("cross-Domain inbox append", () => {
 		expect(uploadAll).toHaveBeenCalledWith([blobId], "cache");
 	});
 
-	// The plugin's post retries, and the ledger dedupes on the opKey. Minting the opId per attempt
-	// made every retry its own operation, so a retried send delivered the message again.
+	// The ledger dedupes on the opKey, so a retried post must reach it under the caller's own id.
 	it("carries the caller's opId into the envelope so a retried send is one operation", async () => {
 		const identity = generateIdentity();
 		const calls: Array<{ params: Record<string, unknown> }> = [];
@@ -109,7 +108,7 @@ describe("cross-Domain inbox append", () => {
 			(calls[i]?.params.row as { envelope: { opKey: { opId: string } } }).envelope.opKey.opId;
 		expect(opIdOf(0)).toBe("op-retry");
 		expect(opIdOf(1)).toBe("op-retry");
-		// No caller id still mints one, so an older plugin keeps working.
+		// No caller id still mints one, which is what keeps an older plugin working.
 		expect(opIdOf(2)).toEqual(expect.any(String));
 		expect(opIdOf(2)).not.toBe("op-retry");
 	});

@@ -190,8 +190,7 @@ export async function postReply(
 	}
 	try {
 		const staged = await files?.();
-		// Minted here, not inside routerPost, whose retries would otherwise each be their own
-		// operation and deliver the reply again.
+		// Minted here rather than inside routerPost, so its retries share one id.
 		const withOpId = { opId: crypto.randomUUID(), ...payload };
 		await routerPost("/respond", staged?.length ? { ...withOpId, files: staged } : withOpId);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);

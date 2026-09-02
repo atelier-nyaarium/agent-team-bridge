@@ -212,8 +212,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					}
 				}
 
-				// Minted here, not inside routerPost, whose retries would otherwise each be their own
-				// operation and deliver the message again.
+				// Minted here rather than inside routerPost, so its retries share one id.
 				const result = (await routerPost("/send", {
 					opId: crypto.randomUUID(),
 					from: bridgeProjectName(),

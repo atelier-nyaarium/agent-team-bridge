@@ -405,8 +405,8 @@ export function createRoutes({
 				// Hashed: the natural ids carry dots the opKey grammar refuses.
 				opKey: {
 					conversationId: sha256Hex(op.kind === "send" ? op.returnRoute.srcConversationId : op.session_id),
-					// The producer's id when it sent one, so its retries are ONE ledger operation. Minting
-					// here per attempt is what made a retried post deliver the message again.
+					// The caller's id when it sent one: the ledger dedupes on this, so a per-attempt mint
+					// would make each retry its own operation.
 					opId: producerOpId ?? crypto.randomUUID(),
 				},
 				epoch: "peer" as const,
@@ -462,8 +462,7 @@ export function createRoutes({
 		producerOpId?: string,
 	): Promise<{ ok: boolean; error?: string }> {
 		const maxAttempts = 5;
-		// One id for the whole sequence. Minting per attempt would make each retry its own ledger
-		// operation, which is the retry delivering the message again rather than resending it.
+		// One id for the whole sequence, so the retries are one ledger operation.
 		const opId = producerOpId ?? crypto.randomUUID();
 		let attempt = 0;
 		return new Promise((resolveOutcome) => {
@@ -575,7 +574,7 @@ export function createRoutes({
 		// applies, just carried across the relay since the destination decides its own id space.
 		displayLabel?: string;
 		disposition?: "asking" | "informing" | "closing";
-		/** The caller's own id for this send, so its retries stay one operation. */
+		/** The caller's id, so its retries stay one operation. */
 		opId?: string;
 	}): Promise<Response> {
 		const {
