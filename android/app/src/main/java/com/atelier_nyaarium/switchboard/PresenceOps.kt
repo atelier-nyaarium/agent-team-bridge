@@ -175,16 +175,19 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		// Kept as a versioned envelope of what the Router last said, so a cold start renders the last
 		// roster instead of an empty list while the socket is still connecting. An older version is
 		// ignored, which is what stops a slow answer overwriting a newer one.
-		runCatching {
+		// Version gates roster and persistence. Stale projections regress the live roster.
+		// Storage faults do not block presence. Only confirmed staleness blocks apply.
+		val stale = runCatching {
 			val slot = RouterStateSlot(
 				epoch = projection.plane.epoch,
 				version = projection.plane.version,
 				payload = wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), projection),
 			)
-			if (newerRouterState(slot, repo.store.loadRouterState("presence"))) {
-				repo.store.saveRouterState("presence", slot)
-			}
-		}
+			if (!newerRouterState(slot, repo.store.loadRouterState("presence"))) return@runCatching true
+			repo.store.saveRouterState("presence", slot)
+			false
+		}.getOrDefault(false)
+		if (stale) return
 		applyDiscovery(
 			TeamsAnswer(
 				projection.rows.map { teamInfoToTeam(it, repo.localGatewayId) },

@@ -182,6 +182,34 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
+	// Shared file references survive edits.
+	it("keeps a file carried across an edit held", () => {
+		const { service, registry, released } = make();
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: ["kept", "dropped"], body },
+		);
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-2" },
+			{
+				kind: "schedule_send",
+				target,
+				fireAt: 300,
+				opId: "op-2",
+				files: ["kept", "added"],
+				body,
+				expectedVersion: 1,
+			},
+		);
+
+		expect(released).toEqual([
+			{ blobId: "dropped", ref: { kind: "scheduled", id: "domain-a/gateway-a/spawn.session" } },
+		]);
+		registry.close();
+	});
+
 	it("refuses stale cancellation and cancels the current record with all file references released", () => {
 		const { service, registry, released, timers } = make();
 		service.schedule(

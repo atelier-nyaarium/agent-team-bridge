@@ -27,11 +27,19 @@ export function deriveContentKey(ownerSignPrivB64: string, domainId: string, epo
 	);
 }
 
+export type BoardTextKind = "board.title" | "board.body" | "board.name";
+
+/** Binds board text to its entry, so one entry's ciphertext cannot be moved into another's. */
+export function boardTextAadKind(kind: BoardTextKind, entryId: string): `${BoardTextKind}\n${string}` {
+	return `${kind}\n${entryId}`;
+}
+
 export interface ContentAad {
 	domainId: string;
 	ownerSignPub: string;
 	epoch: number;
-	kind: ContentKind | `blob\n${string}\n${number}\n${0 | 1}`;
+	// Board kinds require entry ids.
+	kind: Exclude<ContentKind, BoardTextKind> | `${BoardTextKind}\n${string}` | `blob\n${string}\n${number}\n${0 | 1}`;
 }
 
 export function contentAad({ domainId, ownerSignPub, epoch, kind }: ContentAad): Buffer {

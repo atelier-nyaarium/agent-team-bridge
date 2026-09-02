@@ -37,8 +37,8 @@ class BoardOptimisticTest {
 
 	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(ring, domainId, owner.sign.pub)
 
-	private fun title(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE))
+	private fun title(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE, entryId))
 
 	private fun stored(
 		id: String,
@@ -164,7 +164,7 @@ class BoardOptimisticTest {
 		val board = board()
 		board.enqueueWrite(emptyList(), "first")
 		board.enqueueWrite(emptyList(), "second")
-		val result = stored("id", title("title"))
+		val result = stored("id", title("id", "title"))
 
 		board.settleWrite("first", 8L, listOf(result))
 
@@ -175,10 +175,10 @@ class BoardOptimisticTest {
 
 	@Test
 	fun lowerSettlementRevisionDoesNotMoveBoardBackwards() {
-		val original = stored("id", title("original"))
+		val original = stored("id", title("id", "original"))
 		val board = board(original, 5L)
 		board.enqueueWrite(emptyList(), "op")
-		val older = stored("id", title("older"))
+		val older = stored("id", title("id", "older"))
 
 		board.settleWrite("op", 4L, listOf(older))
 

@@ -36,7 +36,7 @@
 		"AQEBAQEBAQEBAQEB_",
 		"AQEBAQEBAQEBAQEB "
 	],
-	"acceptedCiphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9MIl3+1753tdIPddB6QRJ74",
+	"acceptedCiphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9AbB2fqMc81oFAB4S+/yCKk",
 	"derivation": [
 		{
 			"ownerSignPrivB64": "jOZl5BT+kYotKi87KPuEfJukOofufsJehdQqGiu0OLk=",
@@ -57,30 +57,30 @@
 			"domainId": "alice",
 			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
 			"epoch": 1,
-			"kind": "board.title",
+			"kind": "board.title\nentry-1",
 			"nonceB64": "AQEBAQEBAQEBAQEB",
 			"plaintextUtf8": "fixture board.title",
-			"ciphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9MIl3+1753tdIPddB6QRJ74="
+			"ciphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9AbB2fqMc81oFAB4S+/yCKk="
 		},
 		{
 			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
 			"domainId": "alice",
 			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
 			"epoch": 2,
-			"kind": "board.body",
+			"kind": "board.body\nentry-1",
 			"nonceB64": "AgICAgICAgICAgIC",
 			"plaintextUtf8": "fixture board.body",
-			"ciphertextB64": "vOzZ24MV7TqwO3s4OL7PP9QQLTNwruFG6dr5jQqGxPVCsQ=="
+			"ciphertextB64": "vOzZ24MV7TqwO3s4OL7PP9QQvP8957H8JcA0ulTMOyeFJw=="
 		},
 		{
 			"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
 			"domainId": "alice",
 			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
 			"epoch": 1,
-			"kind": "board.name",
+			"kind": "board.name\nentry-1\nblob-1",
 			"nonceB64": "AwMDAwMDAwMDAwMD",
 			"plaintextUtf8": "fixture board.name",
-			"ciphertextB64": "vr/NjvvLpPvsxHw6tQInEyRB4L3p81rUplQ8nvNAWrFMGg=="
+			"ciphertextB64": "vr/NjvvLpPvsxHw6tQInEyRBr4KUa+hiBlY/s+TIC6mSFg=="
 		},
 		{
 			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",

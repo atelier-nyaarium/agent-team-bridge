@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { type BoardMutation, createBoardClient } from "../gateway/router/boardClient.js";
 import type { BoardAttachment } from "../shared/console-protocol.js";
-import { openContent, sealContent } from "../shared/content-envelope.js";
+import { boardTextAadKind, type ContentAad, openContent, sealContent } from "../shared/content-envelope.js";
 import type { BoardStoredEntry } from "../shared/schemasBoardState.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 
@@ -11,10 +11,7 @@ const ownerSignPub = "owner-signing-public-key";
 const key = Buffer.alloc(32, 7);
 
 const keys = {
-	seal: (
-		plaintext: Buffer,
-		aad: { domainId: string; ownerSignPub: string; kind: "board.title" | "board.body" | "board.name" },
-	) => ({
+	seal: (plaintext: Buffer, aad: { domainId: string; ownerSignPub: string; kind: ContentAad["kind"] }) => ({
 		kind: "ok" as const,
 		envelope: sealContent(plaintext, key, { ...aad, epoch: 1 }),
 	}),
@@ -24,7 +21,7 @@ const keys = {
 			domainId: string;
 			ownerSignPub: string;
 			epoch: number;
-			kind: "board.title" | "board.body" | "board.name";
+			kind: ContentAad["kind"];
 		},
 	) => {
 		if (envelope.epoch !== 1) return { kind: "missing_epoch" as const, epoch: envelope.epoch };
@@ -41,12 +38,12 @@ const client = (
 	attempts?: number,
 ) => createBoardClient({ call, domainId, gatewayId, ownerSignPub: () => ownerSignPub, keys, attempts });
 
-const sealed = (text: string, kind: "board.title" | "board.body" | "board.name", epoch = 1): ContentEnvelope =>
+const sealed = (text: string, kind: ContentAad["kind"], epoch = 1): ContentEnvelope =>
 	sealContent(Buffer.from(text), key, { domainId, ownerSignPub, kind, epoch });
 
 const stored = (id: string, title: string, extra: Partial<BoardStoredEntry["clear"]> = {}): BoardStoredEntry => ({
 	clear: { id, state: "open", rank: "A", version: 1, ...extra },
-	sealed: { title: sealed(title, "board.title") },
+	sealed: { title: sealed(title, boardTextAadKind("board.title", id)) },
 });
 
 const clearAttachment = ({ blobId, size, mime, blobGateway }: BoardAttachment) => ({
@@ -59,9 +56,18 @@ const clearAttachment = ({ blobId, size, mime, blobGateway }: BoardAttachment) =
 const storedWithText = (id: string, title: string, body: string, attachment?: BoardAttachment): BoardStoredEntry => ({
 	...stored(id, title, attachment ? { attachments: [clearAttachment(attachment)] } : {}),
 	sealed: {
-		title: sealed(title, "board.title"),
-		body: sealed(body, "board.body"),
-		...(attachment ? { names: { [attachment.blobId]: sealed(attachment.filename, "board.name") } } : {}),
+		title: sealed(title, boardTextAadKind("board.title", id)),
+		body: sealed(body, boardTextAadKind("board.body", id)),
+		...(attachment
+			? {
+					names: {
+						[attachment.blobId]: sealed(
+							attachment.filename,
+							boardTextAadKind("board.name", `${id}\n${attachment.blobId}`),
+						),
+					},
+				}
+			: {}),
 	},
 });
 
@@ -88,9 +94,21 @@ describe("board client", () => {
 		expect(call).toHaveBeenCalledWith("board_read", {});
 	});
 
+	// Reject cross-entry ciphertext.
+	it("refuses a title transplanted from another entry", async () => {
+		const victim = stored("two", "Two");
+		victim.sealed.title = stored("one", "One").sealed.title;
+		const call = vi.fn().mockResolvedValue(readAnswer(1, [victim]));
+
+		const answer = await client(call).read();
+
+		expect(answer.kind).toBe("ok");
+		expect(answer.kind === "ok" && answer.entries[0].title).not.toBe("One");
+	});
+
 	it("keeps entries whose title epoch is unavailable", async () => {
 		const entry = stored("one", "ignored");
-		entry.sealed.title = sealed("hidden", "board.title", 2);
+		entry.sealed.title = sealed("hidden", boardTextAadKind("board.title", "one"), 2);
 		const call = vi.fn().mockResolvedValue(readAnswer(1, [entry]));
 
 		expect(await client(call).read()).toEqual({

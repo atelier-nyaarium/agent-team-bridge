@@ -22,11 +22,11 @@ class BoardIntentTest {
 
 	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(ring, domainId, owner.sign.pub)
 
-	private fun title(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE))
+	private fun title(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE, entryId))
 
-	private fun body(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_BODY))
+	private fun body(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_BODY, entryId))
 
 	private fun stored(
 		id: String,
@@ -50,7 +50,7 @@ class BoardIntentTest {
 	fun setTitleCopiesClearFieldsAndPassesThroughBody() {
 		val session = BoardSession(domainId, "gateway", "session")
 		val attachments = listOf(BoardStateAttachment("blob", 4L, "text/plain", "gateway"))
-		val entry = stored("id", title("old"), body("old body"), "done", "parent", "rank", session, 42L, attachments)
+		val entry = stored("id", title("id", "old"), body("id", "old body"), "done", "parent", "rank", session, 42L, attachments)
 		val op = upsert(BoardIntent.SetTitle("id", "new"), entry)
 
 		assertEquals(entry.clear.id, op.id)
@@ -61,23 +61,23 @@ class BoardIntentTest {
 		assertEquals(entry.clear.trashedAt, op.trashedAt)
 		assertEquals(entry.clear.attachments, op.attachments)
 		assertNotSame(entry.sealed.title, op.title)
-		assertEquals("new", sealing().open(op.title, BOARD_KIND_TITLE))
+		assertEquals("new", sealing().open(op.title, BOARD_KIND_TITLE, "id"))
 		assertSame(entry.sealed.body, op.body)
 	}
 
 	@Test
 	fun setBodyPassesThroughTitleAndSealsOnlyBody() {
-		val entry = stored("id", title("old title"), body("old body"))
+		val entry = stored("id", title("id", "old title"), body("id", "old body"))
 		val op = upsert(BoardIntent.SetBody("id", "new body"), entry)
 
 		assertSame(entry.sealed.title, op.title)
 		assertNotSame(entry.sealed.body, op.body)
-		assertEquals("new body", op.body?.let { sealing().open(it, BOARD_KIND_BODY) })
+		assertEquals("new body", op.body?.let { sealing().open(it, BOARD_KIND_BODY, "id") })
 	}
 
 	@Test
 	fun setBodyNullRemovesBody() {
-		val entry = stored("id", title("title"), body("body"))
+		val entry = stored("id", title("id", "title"), body("id", "body"))
 
 		assertNull(upsert(BoardIntent.SetBody("id", null), entry).body)
 	}
@@ -99,7 +99,7 @@ class BoardIntentTest {
 		val intent = BoardIntent.Create("id", "title", state = "open", rank = "m")
 		val op = checkNotNull(materialize(intent, emptyMap(), sealing())) as BoardOp.Upsert
 
-		assertEquals("title", sealing().open(op.title, BOARD_KIND_TITLE))
+		assertEquals("title", sealing().open(op.title, BOARD_KIND_TITLE, "id"))
 	}
 
 	@Test

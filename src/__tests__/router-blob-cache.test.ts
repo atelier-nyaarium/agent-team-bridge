@@ -183,6 +183,28 @@ describe("RouterBlobCache", () => {
 		});
 	});
 
+	// Expired leases retain only origins.
+	it("strips an expired lease down to a retained origin", () => {
+		const cache = make();
+		const dataDir = roots[roots.length - 1];
+		const bytes = Buffer.from("expired sidecar");
+		const blobId = blobIdFor(bytes);
+		const sealed = begin(cache, bytes);
+		cache.commitChunk("domain", blobId, sealed.lease, 0, sealed.ciphertext.subarray(0, 2), false);
+		const hash = blobId.slice("sha256-".length);
+		const sidecar = path.join(dataDir, "blob-cache-metadata", "domain", hash.slice(0, 2), `${hash}.json`);
+		expect(fs.existsSync(sidecar)).toBe(true);
+
+		clock += 10 * 60 * 1_000;
+		cache.sweep(clock);
+
+		expect(fs.existsSync(sidecar)).toBe(false);
+		const index = JSON.parse(
+			fs.readFileSync(path.join(dataDir, "blobs", "domain", "cache", "index.json"), "utf8"),
+		) as { entries: Record<string, { size?: number; ciphertextDigest?: string; epoch?: number }> };
+		expect(index.entries[blobId]).toEqual({ lastReadAt: expect.any(Number), origin: expect.any(Object) });
+	});
+
 	it("evicts the coldest complete entry but preserves a live transfer", () => {
 		const cache = make(70);
 		const oldBytes = Buffer.from("old");

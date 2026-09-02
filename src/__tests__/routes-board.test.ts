@@ -11,7 +11,7 @@ import { createRoutes, createRoutesCarryOver, type RoutesDeps } from "../gateway
 import { boardRequestBody } from "../mcp/board/boardTools.js";
 import { isBoardReply } from "../shared/board-structure.js";
 import type { BoardAttachment } from "../shared/console-protocol.js";
-import { openContent, sealContent } from "../shared/content-envelope.js";
+import { boardTextAadKind, type ContentAad, openContent, sealContent } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { DurableStore } from "../shared/durable-store.js";
 import type { BoardStoredEntry } from "../shared/schemasBoardState.js";
@@ -88,7 +88,7 @@ describe("routes", () => {
 			const keys = {
 				seal: (
 					plaintext: Buffer,
-					aad: { domainId: string; ownerSignPub: string; kind: "board.title" | "board.body" | "board.name" },
+					aad: { domainId: string; ownerSignPub: string; kind: ContentAad["kind"] },
 				) => ({
 					kind: "ok" as const,
 					envelope: sealContent(plaintext, key, { ...aad, epoch: 1 }),
@@ -99,7 +99,7 @@ describe("routes", () => {
 						domainId: string;
 						ownerSignPub: string;
 						epoch: number;
-						kind: "board.title" | "board.body" | "board.name";
+						kind: ContentAad["kind"];
 					},
 				) => {
 					try {
@@ -125,7 +125,7 @@ describe("routes", () => {
 				revision = answer.revision;
 				board.splice(0, board.length, ...answer.entries);
 			};
-			const seal = (text: string, kind: "board.title" | "board.body" | "board.name") =>
+			const seal = (text: string, kind: ContentAad["kind"]) =>
 				sealContent(Buffer.from(text), key, {
 					domainId: "owner-1",
 					ownerSignPub: identity.sign.pub,
@@ -140,7 +140,7 @@ describe("routes", () => {
 						id,
 						rank: entry.clear.rank,
 						state: entry.clear.state,
-						title: seal(title, "board.title"),
+						title: seal(title, boardTextAadKind("board.title", id)),
 						...(entry.clear.session ? { session: entry.clear.session } : {}),
 						...(entry.clear.parent ? { parent: entry.clear.parent } : {}),
 						...(entry.sealed.body ? { body: entry.sealed.body } : {}),
@@ -164,7 +164,7 @@ describe("routes", () => {
 					},
 				]);
 			const seedEntry = (id: string, title: string, sessionId?: string, attachment?: BoardAttachment) => {
-				const sealedTitle = seal(title, "board.title");
+				const sealedTitle = seal(title, boardTextAadKind("board.title", id));
 				seed({
 					clear: {
 						id,
@@ -176,7 +176,14 @@ describe("routes", () => {
 					sealed: {
 						title: sealedTitle,
 						...(attachment
-							? { names: { [attachment.blobId]: seal(attachment.filename, "board.name") } }
+							? {
+									names: {
+										[attachment.blobId]: seal(
+											attachment.filename,
+											boardTextAadKind("board.name", `${id}\n${attachment.blobId}`),
+										),
+									},
+								}
 							: {}),
 					},
 				});

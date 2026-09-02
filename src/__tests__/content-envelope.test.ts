@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAdmittedConsole, signAdmission } from "../shared/admission.js";
 import {
+	type ContentAad,
 	deriveContentKey,
 	openContent,
 	sealContentWithNonce,
@@ -20,7 +21,7 @@ type Fixture = {
 		domainId: string;
 		ownerSignPub: string;
 		epoch: number;
-		kind: "board.title" | "board.body" | "board.name" | "inbox.body" | "op.payload" | "op.result";
+		kind: ContentAad["kind"];
 		nonceB64: string;
 		plaintextUtf8: string;
 		ciphertextB64: string;
@@ -73,7 +74,7 @@ describe("content envelope", () => {
 		}
 	});
 
-	it("binds content to its domain, owner, epoch, and kind", () => {
+	it("binds content to its domain, owner, epoch, kind, and board entry", () => {
 		const vector = fixture.envelopes[0];
 		const env = {
 			v: 1 as const,
@@ -83,7 +84,8 @@ describe("content envelope", () => {
 		};
 		const key = Buffer.from(vector.keyB64, "base64");
 		for (const changed of [
-			{ kind: "board.body" as const },
+			{ kind: "board.body\nentry-1" as const },
+			{ kind: "board.title\nentry-2" as const },
 			{ epoch: vector.epoch + 1 },
 			{ domainId: `${vector.domainId}-other` },
 		]) {

@@ -20,18 +20,23 @@ class BoardSealing(
 	private val ownerSignPub: String,
 ) {
 	/** Null when this device holds no epoch, which is a device that cannot write board text at all. */
-	fun seal(text: String, kind: String): ContentEnvelope? {
+	fun seal(text: String, kind: String, entryId: String): ContentEnvelope? {
 		val epoch = keyring.epochs().maxOrNull() ?: return null
 		val key = keyring.keyFor(epoch) ?: return null
-		return Crypto.sealContent(text.toByteArray(Charsets.UTF_8), key, aad(epoch, kind))
+		return Crypto.sealContent(text.toByteArray(Charsets.UTF_8), key, aad(epoch, kind, entryId))
 	}
 
 	/** Null when the sealing epoch is absent or the envelope does not authenticate. */
-	fun open(env: ContentEnvelope, kind: String): String? {
+	fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
 		val epoch = env.epoch.toInt()
 		val key = keyring.keyFor(epoch) ?: return null
-		return runCatching { Crypto.openContent(env, key, aad(epoch, kind)).toString(Charsets.UTF_8) }.getOrNull()
+		return runCatching {
+			Crypto.openContent(env, key, aad(epoch, kind, entryId)).toString(Charsets.UTF_8)
+		}.getOrNull()
 	}
 
-	private fun aad(epoch: Int, kind: String) = Crypto.ContentAad(domainId, ownerSignPub, epoch, kind)
+	// Bind ciphertext to entry id.
+	// Match boardTextAadKind in content-envelope.ts.
+	private fun aad(epoch: Int, kind: String, entryId: String) =
+		Crypto.ContentAad(domainId, ownerSignPub, epoch, "$kind\n$entryId")
 }

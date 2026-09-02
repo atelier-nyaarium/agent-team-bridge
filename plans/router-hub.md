@@ -1055,6 +1055,37 @@ outage outliving its one-shot retry, and that is what the journal now holds.
 - `AttachmentOps` fetches the Router cache first and the origin on a typed miss.
 - HTTP polling stays until the socket tests pass.
 
+### Bug Classes
+
+Found by the phase's red team.
+
+- **Release before hold on the same reference** (`scheduledService.ts`): SECOND time this class has
+  landed in the reference-held store, after `boardService.ts` in Phase 5. Editing an armed scheduled
+  send released the previous files before holding the new ones, and both halves name the same
+  `scheduled` reference, so a file the edit kept lost its last reference and its bytes were deleted
+  while the send still answered `accepted`. Hold-then-release does not fix it either, because `hold`
+  is idempotent and the release still finds the one reference and zeroes it. Patched here the same
+  way Phase 5 was, by netting to a membership diff. The mechanism has now produced this defect twice
+  with no structural defence: `hold` and `release` are unpaired primitives that read correctly at
+  every call site and are wrong only in combination. Raise to `crust-collection`: the store should
+  own a `replace(domainId, ref, files)` that takes the whole set, so a caller cannot express the
+  broken order.
+- **A guard that protects the copy but not the original** (`PresenceOps.applyOwnerProjection`): the
+  version check gated only the persisted slot, while the live roster apply sat outside it, so a
+  stale projection was ignored on disk and applied in memory. Verdict, landed: the version decides
+  both, and only a positive older verdict stops the apply so a storage fault cannot block presence.
+- **Cleanup that forgot half its own contract** (`routerBlobCache.reconcile`): an expired lease
+  dropped the lease and the bytes but kept `size` and the recovery sidecar, and the retained sweep
+  only collects entries whose size is gone, so each expired upload left an index entry that
+  `MAX_RETAINED_ORIGINS` could never reclaim. Verdict, landed: the expiry path strips exactly what
+  `evict` strips.
+- **A missing per-entry binding in an AAD** (`content-envelope.ts`, `boardClient.ts`,
+  `BoardSealing.kt`): board text was sealed under a fixed `board.title` or `board.body` kind, so one
+  entry's ciphertext authenticated in another entry's slot and the Router could relabel entries it
+  cannot read. The blob AAD already bound blob id, index, and final. Verdict, landed: the entry id
+  rides in the kind on both runtimes, made structural in TypeScript so a bare board kind will not
+  typecheck. Free to fix now because the kind is a derivation input and not a wire field.
+
 ## Phase 7 - MCP plugin and host daemon
 
 A compatibility checklist plus one wire change. The MCP plugin keeps its local gateway base URL.

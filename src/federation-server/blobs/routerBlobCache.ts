@@ -189,13 +189,13 @@ export class RouterBlobCache {
 
 	sweep(now = this.now()): void {
 		for (const [domainId, domain] of this.domains) {
-			this.reconcile(domain, now);
+			this.reconcile(domainId, domain, now);
 			this.evict(domainId, domain, Math.max(0, this.used(domain) - this.options.quotaBytesPerDomain));
 			this.persist(domainId, domain.index);
 		}
 	}
 
-	private reconcile(domain: { store: BlobStore; index: CacheIndex }, now: number): void {
+	private reconcile(domainId: string, domain: { store: BlobStore; index: CacheIndex }, now: number): void {
 		for (const [blobId, entry] of Object.entries(domain.index.entries)) {
 			if (!entry.lease) continue;
 			const stat = domain.store.stat(blobId);
@@ -203,9 +203,15 @@ export class RouterBlobCache {
 				entry.ciphertextSize = stat.have;
 				delete entry.lease;
 			} else if (entry.lease.expiresAt <= now) {
-				// Retain the origin for later misses.
+				// Retain the origin, stripped to exactly what evict leaves. The retained sweep only
+				// collects entries whose size is gone, so keeping it escapes MAX_RETAINED_ORIGINS.
 				domain.store.remove(blobId);
 				delete entry.lease;
+				delete entry.size;
+				delete entry.ciphertextSize;
+				delete entry.ciphertextDigest;
+				delete entry.epoch;
+				this.removeRecovery(domainId, blobId);
 			}
 		}
 	}
@@ -224,7 +230,7 @@ export class RouterBlobCache {
 			this.rebuild(domainId, root, index);
 		}
 		const result = { store: new BlobStore(root), index };
-		this.reconcile(result, this.now());
+		this.reconcile(domainId, result, this.now());
 		this.reclaimOrphans(root, index);
 		this.persist(domainId, index);
 		this.domains.set(domainId, result);

@@ -4,6 +4,8 @@ import com.atelier_nyaarium.switchboard.proto.BoardReadResult
 import com.atelier_nyaarium.switchboard.proto.BoardWrite
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
 import com.atelier_nyaarium.switchboard.wireJson
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -40,6 +42,9 @@ class BoardRouterWriter(
 	private val signAndPost: suspend (JsonObject, String) -> JsonElement,
 	private val decode: (JsonElement) -> BoardWriteResult,
 ) {
+	// Serialize drains to avoid duplicate opIds.
+	private val drainMutex = Mutex()
+
 	suspend fun write(intents: List<BoardIntent>, opId: String, sealing: BoardSealing): BoardWriteOutcome {
 		var signature: List<Pair<String, String>>? = null
 		repeat(CAS_ATTEMPTS) {
@@ -82,7 +87,9 @@ class BoardRouterWriter(
 	 * One board means one lane, so a write that cannot land holds the ones behind it rather than
 	 * letting them apply out of order.
 	 */
-	suspend fun drain(sealing: BoardSealing): Int {
+	suspend fun drain(sealing: BoardSealing): Int = drainMutex.withLock { drainQueue(sealing) }
+
+	private suspend fun drainQueue(sealing: BoardSealing): Int {
 		var settled = 0
 		for (queued in board.pendingWrites()) {
 			when (write(queued.intents, queued.opId, sealing)) {

@@ -136,8 +136,16 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const write = store.put("scheduled", id, current ? expected : null, { clear: record });
 		if (write.kind !== "ok")
 			return envelope(sender, write.kind === "conflict" ? "conflict" : "durability_uncertain");
-		// Release replaced files; hold new files until fire or cancellation.
-		if (previous?.success && previous.data.state === "armed") releaseFiles(domainId, previous.data);
+		// A membership diff, never release-then-hold. Both halves name the same reference, so releasing
+		// a kept file takes its last reference and deletes the bytes. Holding first does not help:
+		// hold is idempotent, so the release still finds one reference and zeroes it.
+		if (previous?.success && previous.data.state === "armed") {
+			const kept = new Set(input.files);
+			releaseFiles(domainId, {
+				...previous.data,
+				files: previous.data.files.filter((blobId) => !kept.has(blobId)),
+			});
+		}
 		for (const blobId of input.files) deps.referenceHeld.hold(domainId, blobId, scheduledRef(input.target));
 		scheduleTimer(domainId, input.target, input.fireAt);
 		const pending = resultRow(domainId, { ...record, version: write.version } as ScheduledRecord, "pending");

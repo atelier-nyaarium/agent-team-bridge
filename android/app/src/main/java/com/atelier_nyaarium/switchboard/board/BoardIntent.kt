@@ -60,8 +60,8 @@ sealed interface BoardIntent {
 fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, sealing: BoardSealing): BoardOp? =
 	when (intent) {
 		is BoardIntent.Create -> {
-			val title = sealing.seal(intent.title, BOARD_KIND_TITLE)
-			val body = intent.body?.let { sealing.seal(it, BOARD_KIND_BODY) }
+			val title = sealing.seal(intent.title, BOARD_KIND_TITLE, intent.id)
+			val body = intent.body?.let { sealing.seal(it, BOARD_KIND_BODY, intent.id) }
 			title?.let {
 				BoardOp.Upsert(
 					id = intent.id,
@@ -77,10 +77,12 @@ fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, seal
 		// The untouched half rides across as its existing envelope, so editing a title neither reads
 		// nor re-seals the body.
 		is BoardIntent.SetTitle -> stored[intent.id]?.let { entry ->
-			sealing.seal(intent.title, BOARD_KIND_TITLE)?.let { entry.upsert(title = it, body = entry.sealed.body) }
+			sealing.seal(intent.title, BOARD_KIND_TITLE, intent.id)?.let {
+				entry.upsert(title = it, body = entry.sealed.body)
+			}
 		}
 		is BoardIntent.SetBody -> stored[intent.id]?.let { entry ->
-			val body = intent.body?.let { sealing.seal(it, BOARD_KIND_BODY) ?: return null }
+			val body = intent.body?.let { sealing.seal(it, BOARD_KIND_BODY, intent.id) ?: return null }
 			entry.upsert(title = entry.sealed.title, body = body)
 		}
 		is BoardIntent.SetState -> BoardOp.SetState(intent.id, intent.state)

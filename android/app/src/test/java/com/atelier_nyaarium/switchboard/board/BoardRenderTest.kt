@@ -19,11 +19,11 @@ class BoardRenderTest {
 
 	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(ring, domainId, owner.sign.pub)
 
-	private fun title(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE))
+	private fun title(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE, entryId))
 
-	private fun body(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_BODY))
+	private fun body(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_BODY, entryId))
 
 	private fun stored(
 		id: String,
@@ -41,35 +41,35 @@ class BoardRenderTest {
 
 	@Test
 	fun sealThenOpenRoundTripsTitle() {
-		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE))
+		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "id"))
 
-		assertEquals("title", sealing().open(envelope, BOARD_KIND_TITLE))
+		assertEquals("title", sealing().open(envelope, BOARD_KIND_TITLE, "id"))
 	}
 
 	@Test
 	fun openingTitleAsBodyReturnsNull() {
-		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE))
+		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "id"))
 
-		assertNull(sealing().open(envelope, BOARD_KIND_BODY))
+		assertNull(sealing().open(envelope, BOARD_KIND_BODY, "id"))
 	}
 
 	@Test
 	fun openingWithoutEnvelopeEpochReturnsNull() {
-		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE))
+		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "id"))
 
-		assertNull(sealing(ContentKeyring()).open(envelope, BOARD_KIND_TITLE))
+		assertNull(sealing(ContentKeyring()).open(envelope, BOARD_KIND_TITLE, "id"))
 	}
 
 	@Test
 	fun sealWithoutAnEpochReturnsNull() {
-		assertNull(sealing(ContentKeyring()).seal("title", BOARD_KIND_TITLE))
+		assertNull(sealing(ContentKeyring()).seal("title", BOARD_KIND_TITLE, "id"))
 	}
 
 	@Test
 	fun renderBoardCarriesReadableEntryFields() {
 		val session = BoardSession(domainId, "gateway", "session")
 		val result = renderBoard(
-			listOf(stored("id", title("title"), body("body"), "done", "parent", "rank", session, 42L)),
+			listOf(stored("id", title("id", "title"), body("id", "body"), "done", "parent", "rank", session, 42L)),
 			sealing(),
 			emptyMap(),
 		)
@@ -90,7 +90,7 @@ class BoardRenderTest {
 	@Test
 	fun renderBoardUsesCachedTitleForMissingEpoch() {
 		val rendered = renderBoard(
-			listOf(stored("id", title("title"))),
+			listOf(stored("id", title("id", "title"))),
 			sealing(ContentKeyring()),
 			mapOf("id" to BoardCachedText("cached")),
 		)
@@ -101,16 +101,25 @@ class BoardRenderTest {
 
 	@Test
 	fun renderBoardMarksMissingTitleWithoutCacheUnavailable() {
-		val rendered = renderBoard(listOf(stored("id", title("title"))), sealing(ContentKeyring()), emptyMap())
+		val rendered = renderBoard(listOf(stored("id", title("id", "title"))), sealing(ContentKeyring()), emptyMap())
 
 		assertEquals(BOARD_TEXT_UNAVAILABLE, rendered.entries.single().title)
 		assertTrue("id" in rendered.unavailable)
 	}
 
 	@Test
+	fun refusesATitleTransplantedFromAnotherEntry() {
+		val envelope = title("one", "title")
+		val rendered = renderBoard(listOf(stored("two", envelope)), sealing(), emptyMap())
+
+		assertEquals(BOARD_TEXT_UNAVAILABLE, rendered.entries.single().title)
+		assertTrue("two" in rendered.unavailable)
+	}
+
+	@Test
 	fun renderBoardDoesNotResurrectRemovedBody() {
 		val rendered = renderBoard(
-			listOf(stored("id", title("title"), body = null)),
+			listOf(stored("id", title("id", "title"), body = null)),
 			sealing(),
 			mapOf("id" to BoardCachedText("title", "removed")),
 		)
@@ -120,7 +129,7 @@ class BoardRenderTest {
 
 	@Test
 	fun renderBoardCacheCarriesForwardRenderedText() {
-		val storedEntry = stored("id", title("title"), body("body"))
+		val storedEntry = stored("id", title("id", "title"), body("id", "body"))
 		val first = renderBoard(listOf(storedEntry), sealing(), emptyMap())
 		val second = renderBoard(listOf(storedEntry), sealing(ContentKeyring()), first.cache)
 

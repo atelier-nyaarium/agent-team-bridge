@@ -37,8 +37,8 @@ class BoardRouterWriterTest {
 
 	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(ring, domainId, owner.sign.pub)
 
-	private fun title(text: String, ring: ContentKeyring = keyring) =
-		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE))
+	private fun title(entryId: String, text: String, ring: ContentKeyring = keyring) =
+		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE, entryId))
 
 	private fun stored(
 		id: String,
@@ -78,7 +78,7 @@ class BoardRouterWriterTest {
 
 	@Test
 	fun appliedResultLandsRevisionAndEntries() = runBlocking {
-		val resultEntry = stored("id", title("title"))
+		val resultEntry = stored("id", title("id", "title"))
 		val board = board()
 		val posts = mutableListOf<JsonObject>()
 		val writer = writer(board, ArrayDeque(listOf(BoardWriteResult("applied", 7L, listOf(resultEntry)))), posts)
@@ -95,8 +95,8 @@ class BoardRouterWriterTest {
 
 	@Test
 	fun conflictRetryMaterializesAgainstTheWinningBoard() = runBlocking {
-		val initial = stored("id", title("old"), rank = "a")
-		val winner = stored("id", title("winner"), rank = "b")
+		val initial = stored("id", title("id", "old"), rank = "a")
+		val winner = stored("id", title("id", "winner"), rank = "b")
 		val board = board(initial, 1L)
 		val posts = mutableListOf<JsonObject>()
 		val writer = writer(
@@ -120,7 +120,7 @@ class BoardRouterWriterTest {
 
 	@Test
 	fun refusedResultReturnsReasonAndLandsBoard() = runBlocking {
-		val resultEntry = stored("id", title("title"))
+		val resultEntry = stored("id", title("id", "title"))
 		val board = board()
 		val posts = mutableListOf<JsonObject>()
 		val result = BoardWriteResult("refused", 4L, listOf(resultEntry), refusal = "not owner")
@@ -150,7 +150,7 @@ class BoardRouterWriterTest {
 
 	@Test
 	fun signAndPostFailureReturnsUnreachableWithoutChangingRevision() = runBlocking {
-		val board = board(stored("id", title("title")), 5L)
+		val board = board(stored("id", title("id", "title")), 5L)
 		val posts = mutableListOf<JsonObject>()
 		val writer = writer(
 			board,

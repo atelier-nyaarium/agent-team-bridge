@@ -39,14 +39,14 @@ describe("ContentKeyStore", () => {
 			domainId: "domain",
 			ownerSignPub: owner.sign.pub,
 			epoch: 1,
-			kind: "board.body",
+			kind: "board.body\nentry-1",
 		});
 		expect(
 			store.open(content, {
 				domainId: "domain",
 				ownerSignPub: owner.sign.pub,
 				epoch: 1,
-				kind: "board.body",
+				kind: "board.body\nentry-1",
 			}),
 		).toEqual({ kind: "ok", plaintext: Buffer.from("secret") });
 	});
@@ -168,7 +168,12 @@ describe("ContentKeyStore", () => {
 		const owner = generateIdentity();
 		const gateway = generateIdentity();
 		const store = new ContentKeyStore(dir, gateway.box.priv);
-		const aad = { domainId: "domain", ownerSignPub: owner.sign.pub, epoch: 1, kind: "board.body" as const };
+		const aad = {
+			domainId: "domain",
+			ownerSignPub: owner.sign.pub,
+			epoch: 1,
+			kind: "board.body\nentry-1" as const,
+		};
 		expect(store.open({ v: 1, epoch: 4, nonce: "AA==", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" }, aad)).toEqual({
 			kind: "bad_tag",
 		});
@@ -214,9 +219,9 @@ describe("ContentKeyStore", () => {
 				domainId: "domain",
 				ownerSignPub: owner.sign.pub,
 				epoch: 1,
-				kind: "board.body",
+				kind: "board.body\nentry-1",
 			}),
-			{ domainId: "domain", ownerSignPub: owner.sign.pub, epoch: 1, kind: "board.body" },
+			{ domainId: "domain", ownerSignPub: owner.sign.pub, epoch: 1, kind: "board.body\nentry-1" },
 		);
 		expect(fs.statSync(path.join(dir, "content-keys.json")).mode & 0o777).toBe(0o600);
 		expect(logs.join("\n")).not.toContain(keyB64);

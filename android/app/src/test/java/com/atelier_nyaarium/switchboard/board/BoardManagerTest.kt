@@ -53,7 +53,7 @@ class BoardManagerTest {
 						trashedAt = e.trashedAt,
 						version = 1L,
 					),
-					sealed = BoardEntrySealed(title = sealing.seal(e.title, BOARD_KIND_TITLE)!!),
+					sealed = BoardEntrySealed(title = sealing.seal(e.title, BOARD_KIND_TITLE, e.id)!!),
 				)
 			},
 		)

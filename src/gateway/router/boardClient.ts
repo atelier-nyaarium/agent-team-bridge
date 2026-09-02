@@ -5,6 +5,7 @@ import { BOARD_REFUSALS, type BoardRefusal } from "../../shared/board-authority.
 import type { CascadeChange } from "../../shared/board-cascade.js";
 import { isValidRank, placeAtEnd } from "../../shared/board-rank.js";
 import type { BoardAttachment, BoardEntry } from "../../shared/console-protocol.js";
+import { type BoardTextKind, boardTextAadKind } from "../../shared/content-envelope.js";
 import {
 	type BoardOp,
 	BoardReadResultSchema,
@@ -83,28 +84,25 @@ const asRefusal = (value: unknown): BoardRefusal =>
 export function createBoardClient(deps: BoardClientDeps) {
 	const attempts = deps.attempts ?? 4;
 
-	const sealText = (text: string, kind: "board.title" | "board.body" | "board.name"): ContentEnvelope | null => {
+	const sealText = (text: string, kind: BoardTextKind, entryId: string): ContentEnvelope | null => {
 		const ownerSignPub = deps.ownerSignPub();
 		if (!ownerSignPub) return null;
 		const sealed = deps.keys.seal(Buffer.from(text, "utf8"), {
 			domainId: deps.domainId,
 			ownerSignPub,
-			kind,
+			kind: boardTextAadKind(kind, entryId),
 		});
 		return sealed.kind === "ok" ? sealed.envelope : null;
 	};
 
-	const openText = (
-		envelope: ContentEnvelope | undefined,
-		kind: "board.title" | "board.body" | "board.name",
-	): string | null => {
+	const openText = (envelope: ContentEnvelope | undefined, kind: BoardTextKind, entryId: string): string | null => {
 		const ownerSignPub = deps.ownerSignPub();
 		if (!envelope || !ownerSignPub) return null;
 		const opened = deps.keys.open(envelope, {
 			domainId: deps.domainId,
 			ownerSignPub,
 			epoch: envelope.epoch,
-			kind,
+			kind: boardTextAadKind(kind, entryId),
 		});
 		return opened.kind === "ok" ? opened.plaintext.toString("utf8") : null;
 	};
@@ -126,14 +124,15 @@ export function createBoardClient(deps: BoardClientDeps) {
 	function openWhole(stored: BoardStoredEntry): { entry: BoardEntry; intact: boolean } {
 		let intact = true;
 		const names = stored.sealed.names ?? {};
+		const id = stored.clear.id;
 		const attachments = (stored.clear.attachments ?? []).map((a) => {
-			const filename = openText(names[a.blobId], "board.name");
+			const filename = openText(names[a.blobId], "board.name", `${id}\n${a.blobId}`);
 			if (filename === null) intact = false;
 			return { ...a, filename: filename ?? UNOPENED };
 		});
-		const body = openText(stored.sealed.body, "board.body");
+		const body = openText(stored.sealed.body, "board.body", id);
 		if (stored.sealed.body && body === null) intact = false;
-		const title = openText(stored.sealed.title, "board.title");
+		const title = openText(stored.sealed.title, "board.title", id);
 		if (title === null) intact = false;
 		return { entry: entryOf(stored, title ?? UNOPENED, body, attachments), intact };
 	}
@@ -165,13 +164,13 @@ export function createBoardClient(deps: BoardClientDeps) {
 	/** Null when sealing fails. */
 	function sealOp(op: ClearBoardOp): BoardOp | null {
 		if (op.kind === "upsert") {
-			const title = sealText(op.title, "board.title");
+			const title = sealText(op.title, "board.title", op.id);
 			if (!title) return null;
-			const body = op.body === undefined ? undefined : sealText(op.body, "board.body");
+			const body = op.body === undefined ? undefined : sealText(op.body, "board.body", op.id);
 			if (op.body !== undefined && !body) return null;
 			const names: Record<string, ContentEnvelope> = {};
 			for (const a of op.attachments ?? []) {
-				const name = sealText(a.filename, "board.name");
+				const name = sealText(a.filename, "board.name", `${op.id}\n${a.blobId}`);
 				if (!name) return null;
 				names[a.blobId] = name;
 			}

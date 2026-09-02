@@ -43,8 +43,8 @@ fun renderBoard(
 	val nextCache = mutableMapOf<String, BoardCachedText>()
 	for (entry in stored) {
 		val id = entry.clear.id
-		val title = sealing.open(entry.sealed.title, BOARD_KIND_TITLE)
-		val body = entry.sealed.body?.let { sealing.open(it, BOARD_KIND_BODY) }
+		val title = sealing.open(entry.sealed.title, BOARD_KIND_TITLE, id)
+		val body = entry.sealed.body?.let { sealing.open(it, BOARD_KIND_BODY, id) }
 		val cached = cache[id]
 		val shownTitle = title ?: cached?.title
 		// A body that opens is authoritative; one that does not falls back only when its envelope is
