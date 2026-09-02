@@ -86,6 +86,8 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Addresses: `owner:<domainId>/<ownerSignPub>`, `session:<domainId>/<gatewayId>/<sessionId>`, `gateway:<domainId>/<gatewayId>`.
 - A row is `{ seq, acceptedAt, size, envelope, producerSig, body }`. The producer signs the envelope; the Router adds seq, acceptedAt, and size.
 - The op ledger keys on `(owner, conversationId, opId)`. A repeat with the same hash answers the recorded result; a different hash answers `conflict`.
+- **A retry must be one operation, so nothing identifying it may be regenerated per attempt.** The producer mints the `opId` once per invocation and every retry carries it, the gateway's own relay holds one across its whole sequence, and the identity hash covers the CLEAR operation because each attempt re-seals on purpose to give the receiver's replay guard a fresh nonce. Hashing the row instead would answer a retry `conflict` and tell the sender a delivered message had failed.
+- The register answer carries `opLedgerProtocol`. A producer that issues its own ids refuses to send without it, since a gateway that predates the field drops it silently and mints one per attempt. The plugin scopes what it heard to one connection, so a replaced gateway cannot inherit its predecessor's answer.
 - Capacity refuses before storage: the row cap answers `refused`, the Domain quota answers `durability_failure`, a failed fsync answers `durability_uncertain`.
 - Gateway frames name only themselves. The Router takes the Domain and gateway from the connection; a session origin must be in the session registry; a peer row into another Domain needs a link edge.
 - `gateway_register` returns an incarnation. Every inbox frame carries it; a stale one is refused.
