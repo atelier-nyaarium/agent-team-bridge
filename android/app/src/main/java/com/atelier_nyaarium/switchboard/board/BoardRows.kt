@@ -2,10 +2,12 @@ package com.atelier_nyaarium.switchboard.board
 
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 
-/** One gateway's board snapshot, in the order sources should win ties (route gateway first). */
-data class BoardSource(val gatewayId: String, val entries: List<BoardEntry>)
-
 data class BoardRow(val entry: BoardEntry, val gatewayId: String, val depth: Int)
+
+/** The Gateway an entry's session lives on, which is half a [GroupKey]. Empty for an unassigned one. */
+private fun gatewayOf(entry: BoardEntry): String = entry.session?.gatewayId ?: ""
+
+private fun groupOf(entry: BoardEntry): GroupKey? = entry.sessionId?.let { GroupKey(gatewayOf(entry), it) }
 
 /** What identifies one session group. A stored `sessionId` is the bare local field, unique only
  * within its Gateway, so the Gateway is half the identity. */
@@ -107,74 +109,50 @@ fun cardBranchOf(rows: List<BoardRow>, currentId: String?, max: Int = CARD_BRANC
  * Every live entry renders, in tree position, never collapsed behind a count or gathered to the
  * bottom - either would hide the shape of the work behind a tap. A finished entry already reads as
  * finished from its own state mark. */
-fun flattenBoard(sources: List<BoardSource>, sessionGateway: (String) -> String? = { null }): BoardRows {
-	val winners = LinkedHashMap<String, Pair<BoardEntry, String>>()
-	for (source in sources) {
-		for (e in source.entries) {
-			val current = winners[e.id]
-			if (current == null) {
-				winners[e.id] = e to source.gatewayId
-				continue
-			}
-			val (cur, curGateway) = current
-			val curTrashed = cur.trashedAt != null
-			val newTrashed = e.trashedAt != null
-			val newWins = when {
-				curTrashed != newTrashed -> curTrashed
-				else -> e.sessionId != null && sessionGateway(e.sessionId) == source.gatewayId &&
-					sessionGateway(cur.sessionId ?: "") != curGateway
-			}
-			if (newWins) winners[e.id] = e to source.gatewayId
-		}
-	}
+fun flattenBoard(entries: List<BoardEntry>): BoardRows {
+	val live = entries.filter { it.trashedAt == null }
+	val trash = entries
+		.filter { it.trashedAt != null }
+		.sortedByDescending { it.trashedAt }
+		.map { BoardRow(it, gatewayOf(it), depth = 0) }
 
-	val live = winners.values.filter { it.first.trashedAt == null }
-	val trash = winners.values
-		.filter { it.first.trashedAt != null }
-		.sortedByDescending { it.first.trashedAt }
-		.map { (e, gw) -> BoardRow(e, gw, depth = 0) }
-
-	val liveById = live.associateBy { it.first.id }
-	val childrenOf = HashMap<String, MutableList<Pair<BoardEntry, String>>>()
-	for (pair in live) {
-		val parent = pair.first.parent
+	val liveById = live.associateBy { it.id }
+	val childrenOf = HashMap<String, MutableList<BoardEntry>>()
+	for (e in live) {
+		val parent = e.parent
 		if (parent != null && liveById.containsKey(parent)) {
-			childrenOf.getOrPut(parent) { mutableListOf() }.add(pair)
+			childrenOf.getOrPut(parent) { mutableListOf() }.add(e)
 		}
 	}
-	for (list in childrenOf.values) list.sortBy { it.first.rank }
+	for (list in childrenOf.values) list.sortBy { it.rank }
 
 	// A group's local roots: entries whose parent is absent, dead, or assigned elsewhere - a child
 	// claimed away from an unassigned parent renders as a root of its own group.
 	// The key carries the GATEWAY as well as the session: a stored sessionId is the bare local field,
 	// which is unique only within one Gateway, so two machines running the same project.session would
 	// otherwise merge into one group under whichever machine's label was found first.
-	fun groupOf(pair: Pair<BoardEntry, String>): GroupKey? =
-		pair.first.sessionId?.let { GroupKey(pair.second, it) }
-	val groups = LinkedHashMap<GroupKey?, MutableList<Pair<BoardEntry, String>>>()
+	val groups = LinkedHashMap<GroupKey?, MutableList<BoardEntry>>()
 	groups[null] = mutableListOf()
-	val pairById = live.associateBy { it.first.id }
-	for (pair in live) {
-		val parent = pair.first.parent?.let { pairById[it] }
-		val isRoot = parent == null || groupOf(parent) != groupOf(pair)
-		if (isRoot) groups.getOrPut(groupOf(pair)) { mutableListOf() }.add(pair)
+	for (e in live) {
+		val parent = e.parent?.let { liveById[it] }
+		val isRoot = parent == null || groupOf(parent) != groupOf(e)
+		if (isRoot) groups.getOrPut(groupOf(e)) { mutableListOf() }.add(e)
 	}
-	for (list in groups.values) list.sortBy { it.first.rank }
+	for (list in groups.values) list.sortBy { it.rank }
 
 	/** The children a group's walk renders: a child claimed away to another session is a root of its
 	 * own group, not a descendant here. */
-	fun kidsIn(id: String, group: GroupKey?): List<Pair<BoardEntry, String>> =
-		(childrenOf[id] ?: emptyList<Pair<BoardEntry, String>>()).filter { groupOf(it) == group }
+	fun kidsIn(id: String, group: GroupKey?): List<BoardEntry> =
+		(childrenOf[id] ?: emptyList<BoardEntry>()).filter { groupOf(it) == group }
 
-	fun buildGroup(group: GroupKey?, roots: List<Pair<BoardEntry, String>>): BoardGroup {
+	fun buildGroup(group: GroupKey?, roots: List<BoardEntry>): BoardGroup {
 		val rows = mutableListOf<BoardRow>()
 		// Bad data with a parent cycle terminates on the visited set rather than hanging the UI.
 		val visited = mutableSetOf<String>()
 
-		fun walk(pair: Pair<BoardEntry, String>, depth: Int) {
-			val (e, gw) = pair
+		fun walk(e: BoardEntry, depth: Int) {
 			if (!visited.add(e.id)) return
-			rows.add(BoardRow(e, gw, depth))
+			rows.add(BoardRow(e, gatewayOf(e), depth))
 			for (kid in kidsIn(e.id, group)) walk(kid, depth + 1)
 		}
 

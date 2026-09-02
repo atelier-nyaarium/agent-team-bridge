@@ -119,6 +119,9 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = repo.board.mergedEntries(gatewayId)
 
+	/** The whole board. One Router board means one list, grouped by each entry's own session. */
+	fun boardEntries(): List<BoardEntry> = repo.board.mergedEntries(boardGatewayOf(null))
+
 	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds()
 
 	fun boardLastSyncedAt(gatewayId: String): Long = repo.board.lastSyncedAt(gatewayId)

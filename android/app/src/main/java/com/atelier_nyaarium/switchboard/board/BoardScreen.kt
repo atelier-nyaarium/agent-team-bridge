@@ -71,11 +71,7 @@ fun BoardScreen(
 
 	// The revision read is what re-derives rows when the cache, queue or a plane snapshot moves.
 	val revision by repo.boardOps.boardRevision
-	val rows = remember(revision) {
-		val sessionGateway = { sessionKey: String -> repo.boardOps.boardGatewayOfKey(sessionKey) }
-		val sources = repo.boardOps.boardSourceGatewayIds().map { gw -> BoardSource(gw, repo.boardOps.boardEntriesOn(gw)) }
-		flattenBoard(sources, sessionGateway)
-	}
+	val rows = remember(revision) { flattenBoard(repo.boardOps.boardEntries()) }
 
 	// A Gateway whose column could not be refreshed says HOW stale it is: a silently old column is
 	// otherwise indistinguishable from a current one.

@@ -615,7 +615,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	 * everything under it. Empty when the session has no live board work. */
 	fun cardBranch(gatewayId: String, team: String, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
 		val key = GroupKey(gatewayId, sessionKeyOf(team))
-		val group = flattenBoard(listOf(BoardSource(gatewayId, mergedEntries(gatewayId))))
+		val group = flattenBoard(mergedEntries(gatewayId))
 			.sessions.firstOrNull { it.key == key }
 			?: return CardBranch(emptyList(), 0)
 		return cardBranchOf(group.rows, currentId, max)

@@ -26,7 +26,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.board.BoardEntryDialog
 import com.atelier_nyaarium.switchboard.board.BoardScreen
-import com.atelier_nyaarium.switchboard.board.BoardSource
 import com.atelier_nyaarium.switchboard.board.GroupKey
 import com.atelier_nyaarium.switchboard.board.flattenBoard
 import com.atelier_nyaarium.switchboard.plugins.Plugins
@@ -355,7 +354,7 @@ fun App(
 				if (!boardOn) null
 				else {
 					val key = GroupKey(boardGateway, repo.boardOps.boardSessionKeyOf(openTeam!!))
-					flattenBoard(listOf(BoardSource(boardGateway, repo.boardOps.boardEntriesFor(openTeam))))
+					flattenBoard(repo.boardOps.boardEntriesFor(openTeam))
 						.sessions.firstOrNull { it.key == key }
 				}
 			}
