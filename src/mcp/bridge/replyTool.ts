@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
@@ -189,7 +190,10 @@ export async function postReply(
 	}
 	try {
 		const staged = await files?.();
-		await routerPost("/respond", staged?.length ? { ...payload, files: staged } : payload);
+		// Minted here, not inside routerPost, whose retries would otherwise each be their own
+		// operation and deliver the reply again.
+		const withOpId = { opId: crypto.randomUUID(), ...payload };
+		await routerPost("/respond", staged?.length ? { ...withOpId, files: staged } : withOpId);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
 		return { content: [{ type: "text" as const, text: `Reply sent.` }] };
 	} catch (err) {

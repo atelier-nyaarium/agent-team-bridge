@@ -370,6 +370,7 @@ export function createRoutes({
 		dstGateway: string,
 		op: FederatedOp,
 		dstDomain?: string,
+		producerOpId?: string,
 	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
 		if (!routerClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
@@ -404,7 +405,9 @@ export function createRoutes({
 				// Hashed: the natural ids carry dots the opKey grammar refuses.
 				opKey: {
 					conversationId: sha256Hex(op.kind === "send" ? op.returnRoute.srcConversationId : op.session_id),
-					opId: crypto.randomUUID(),
+					// The producer's id when it sent one, so its retries are ONE ledger operation. Minting
+					// here per attempt is what made a retried post deliver the message again.
+					opId: producerOpId ?? crypto.randomUUID(),
 				},
 				epoch: "peer" as const,
 				kind: op.kind === "send" ? ("message" as const) : ("reply" as const),
@@ -456,8 +459,12 @@ export function createRoutes({
 		op: FederatedOp,
 		label: string,
 		dstDomain?: string,
+		producerOpId?: string,
 	): Promise<{ ok: boolean; error?: string }> {
 		const maxAttempts = 5;
+		// One id for the whole sequence. Minting per attempt would make each retry its own ledger
+		// operation, which is the retry delivering the message again rather than resending it.
+		const opId = producerOpId ?? crypto.randomUUID();
 		let attempt = 0;
 		return new Promise((resolveOutcome) => {
 			const tryOnce = async (): Promise<void> => {
@@ -465,7 +472,7 @@ export function createRoutes({
 				// failure: fold it into the retry path so it never escapes as an unhandled rejection.
 				let error: string | undefined;
 				try {
-					const r = await relayToGateway(dstGateway, op, dstDomain);
+					const r = await relayToGateway(dstGateway, op, dstDomain, opId);
 					if (r.ok) {
 						// A landing-side refusal (an oversized console_push the sibling dropped) answers ok
 						// with delivered:false. Permanent, so never retried - but silent-to-origin is how a
@@ -568,6 +575,8 @@ export function createRoutes({
 		// applies, just carried across the relay since the destination decides its own id space.
 		displayLabel?: string;
 		disposition?: "asking" | "informing" | "closing";
+		/** The caller's own id for this send, so its retries stay one operation. */
+		opId?: string;
 	}): Promise<Response> {
 		const {
 			targetGateway,
@@ -580,6 +589,7 @@ export function createRoutes({
 			files,
 			displayLabel,
 			disposition,
+			opId,
 		} = args;
 		if (!routerClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
@@ -607,7 +617,7 @@ export function createRoutes({
 			...(disposition ? { disposition } : {}),
 			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
 		};
-		const relay = await relayToGateway(targetGateway, op, targetDomain);
+		const relay = await relayToGateway(targetGateway, op, targetDomain, opId);
 		if (!relay.ok)
 			return jsonResponse({ error: relay.error ?? `cross-Gateway send to "${qualifiedTo}" failed` }, 502);
 		// Keep a local pollable anchor ONLY once the destination accepted the send, so
@@ -851,6 +861,7 @@ export function createRoutes({
 			channelOnly,
 			displayLabel,
 			disposition,
+			opId: producerOpId,
 		} = parsed.data;
 		// Same rule as respond: only a local agent's own upload gets this Gateway's stamp.
 		const files =
@@ -929,6 +940,7 @@ export function createRoutes({
 				files,
 				displayLabel,
 				disposition,
+				opId: producerOpId,
 			});
 		}
 
@@ -1191,7 +1203,7 @@ export function createRoutes({
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 
-		const { session_id: respondSessionId, replyAsJson, files: rawFiles, ...rest } = parsed.data;
+		const { session_id: respondSessionId, replyAsJson, files: rawFiles, opId: producerOpId, ...rest } = parsed.data;
 		// Stamp this Gateway as the holder, but only for a LOCAL agent: it uploaded its bytes here and
 		// posts the message here, so this is the one point that knows both facts at once, which is why
 		// an agent never has to learn its own Gateway id. A relayed message already carries its
@@ -1350,6 +1362,7 @@ export function createRoutes({
 				},
 				"cross-Gateway reply-pin",
 				deliverResult.dstDomainId ?? undefined,
+				producerOpId,
 			);
 			if (opts.onFederatedSettled) {
 				void relayOutcome.then((r) => opts.onFederatedSettled?.(r.ok));

@@ -23,8 +23,18 @@ export type AgentBoardEntry = Omit<BoardEntry, "attachments"> & {
 ////////////////////////////////
 //  Schemas
 
+/** Producer-issued, so a retried post is one operation rather than several. Must satisfy the opKey
+ * grammar. Optional: an older plugin sends none and the gateway mints one as before. */
+const producerOpId = z
+	.string()
+	.min(1)
+	.max(128)
+	.regex(/^[^/\r\n]+$/)
+	.optional();
+
 export const SendRequestSchema = z.object({
 	from: z.string(),
+	opId: producerOpId,
 	fromConversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	to: z.string(),
 	// The Domain id of a cross-Domain target (a session from a linked friend Domain). A
@@ -58,6 +68,7 @@ export const SendRequestSchema = z.object({
 
 export const RespondBodySchema = z.object({
 	session_id: z.string(),
+	opId: producerOpId,
 	status: z.string().optional(),
 	response: z.string().optional(),
 	// The MCP process's own stable conversationId (see mcp/bridge/helpers.ts's bridgeConversationId),

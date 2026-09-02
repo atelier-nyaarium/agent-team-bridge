@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
@@ -211,7 +212,10 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					}
 				}
 
+				// Minted here, not inside routerPost, whose retries would otherwise each be their own
+				// operation and deliver the message again.
 				const result = (await routerPost("/send", {
+					opId: crypto.randomUUID(),
 					from: bridgeProjectName(),
 					fromConversationId: bridgeConversationId(),
 					to,

@@ -157,6 +157,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 		});
 		const result = await handleChannelReply(args);
 		expect(mockRouterPost).toHaveBeenCalledWith("/respond", {
+			opId: expect.any(String),
 			session_id: "s1",
 			title: "Title",
 			summary: "Summary sentence.",
@@ -198,6 +199,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 		const args = ChannelReplyStructuredSchema.parse({ session_id: "s1", responseData: { isMainOrLead: true } });
 		const result = await handleChannelReplyStructured(args);
 		expect(mockRouterPost).toHaveBeenCalledWith("/respond", {
+			opId: expect.any(String),
 			session_id: "s1",
 			replyAsJson: { isMainOrLead: true },
 			conversationId: "conv-1",
