@@ -174,6 +174,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	val routerRevision: Long
 		get() = blob.routerRevision
 
+	/** The Router board by entry id, which is what an intent is materialized against. */
+	fun storedById(): Map<String, BoardStoredEntry> = blob.stored.associateBy { it.clear.id }
+
 	/**
 	 * Lands what the Router answered. An older revision is ignored, so a slow read cannot overwrite a
 	 * write result that already arrived.

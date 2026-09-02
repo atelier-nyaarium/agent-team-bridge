@@ -93,6 +93,31 @@ fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, seal
 		is BoardIntent.Remove -> BoardOp.Remove(intent.id)
 	}
 
+/** The pair the Router's replay record hashes, so a retry can check its op set is unchanged. */
+fun BoardOp.id(): String = when (this) {
+	is BoardOp.Upsert -> id
+	is BoardOp.Remove -> id
+	is BoardOp.SetState -> id
+	is BoardOp.SetParent -> id
+	is BoardOp.SetRank -> id
+	is BoardOp.SetAttachments -> id
+	is BoardOp.SetSession -> id
+	is BoardOp.Trash -> id
+	is BoardOp.Restore -> id
+}
+
+fun BoardOp.kind(): String = when (this) {
+	is BoardOp.Upsert -> "upsert"
+	is BoardOp.Remove -> "remove"
+	is BoardOp.SetState -> "set_state"
+	is BoardOp.SetParent -> "set_parent"
+	is BoardOp.SetRank -> "set_rank"
+	is BoardOp.SetAttachments -> "set_attachments"
+	is BoardOp.SetSession -> "set_session"
+	is BoardOp.Trash -> "trash"
+	is BoardOp.Restore -> "restore"
+}
+
 private fun BoardStoredEntry.upsert(title: ContentEnvelope, body: ContentEnvelope?) =
 	BoardOp.Upsert(
 		id = clear.id,

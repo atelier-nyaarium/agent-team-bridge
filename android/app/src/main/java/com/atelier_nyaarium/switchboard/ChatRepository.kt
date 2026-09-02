@@ -161,6 +161,9 @@ class ChatRepository(
 	// Arbitrates socket and poll ownership, sole pushback.decide caller.
 	internal val transportCoordinator = ConsoleTransportCoordinator(pushback)
 
+	/** Signs this console's own ops. Reaches back into the repo lazily, never during construction. */
+	val ownerOps = OwnerOps(this)
+
 	// Always available from construction, independent of the drain's scope (null until the loop
 	// starts) and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be
 	// a silent no-op the way scheduleAttachmentDelete's best-effort drain.scope?.launch is allowed to be
