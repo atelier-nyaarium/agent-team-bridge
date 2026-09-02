@@ -12,9 +12,6 @@ internal sealed interface ConsoleAdoption {
 	data class Adopted(val cursor: Long, val cursorEpoch: Long, val dropped: Long) : ConsoleAdoption
 }
 
-/** Fallback wake for parked polls. */
-internal const val SOCKET_PARK_MS = 5 * 60_000L
-
 /**
  * One Router consumer across two transports.
  *
@@ -94,13 +91,14 @@ internal class ConsoleTransportCoordinator(
 		synchronized(lock) { dropped = 0 }
 	}
 
-	/** Parks the poll while the socket owns the drain. Runs decide either way, so the scheduler still
-	 * sees every pass. */
-	fun nextWait(visible: Boolean, lastPassFailed: Boolean, watchedWorking: Boolean): PollWait {
-		val wait = pushback.decide(now(), visible, lastPassFailed, watchedWorking)
-		return if (link() == ConsoleLink.SOCKET) PollWait.Delay(SOCKET_PARK_MS) else wait
-	}
-
-	/** False while the socket owns the drain. */
-	fun mayPoll(): Boolean = link() == ConsoleLink.POLL
+	/**
+	 * The poll's wait, and the one place the idle ladder is consulted.
+	 *
+	 * A live socket does NOT park the poll. The socket carries the ROUTER's owner inbox while the poll
+	 * drains the GATEWAY's mailbox, and those are separate sources with their own cursors, so parking
+	 * one on the other's account would drop the phone's messages. The arbitration below exists for the
+	 * day a background transport reads the same Router inbox.
+	 */
+	fun nextWait(visible: Boolean, lastPassFailed: Boolean, watchedWorking: Boolean): PollWait =
+		pushback.decide(now(), visible, lastPassFailed, watchedWorking)
 }

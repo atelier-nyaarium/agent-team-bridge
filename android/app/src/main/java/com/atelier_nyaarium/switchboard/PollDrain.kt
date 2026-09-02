@@ -207,11 +207,6 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
-				// Shared cursor ownership prevents polling during socket drain.
-				if (!repo.transportCoordinator.mayPoll()) {
-					withTimeoutOrNull(SOCKET_PARK_MS) { kick.receive() }
-					continue@pollLoop
-				}
 				try {
 					// Mesh-wide discovery (see DISCOVERY_REFRESH_MS's own doc): the one thing left with
 					// no push mechanism, so it still needs its own bounded-interval pull, independent of

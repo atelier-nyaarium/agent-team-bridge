@@ -12,7 +12,6 @@ class ConsoleTransportCoordinatorTest {
 		val coordinator = newCoordinator()
 
 		assertEquals(ConsoleLink.POLL, coordinator.link())
-		assertTrue(coordinator.mayPoll())
 	}
 
 	@Test
@@ -26,7 +25,6 @@ class ConsoleTransportCoordinatorTest {
 		)
 		assertEquals(ConsoleLink.SOCKET, coordinator.link())
 		assertEquals(42L, coordinator.cursor())
-		assertFalse(coordinator.mayPoll())
 	}
 
 	@Test
@@ -84,7 +82,6 @@ class ConsoleTransportCoordinatorTest {
 		coordinator.onSocketClosed(live)
 
 		assertEquals(ConsoleLink.POLL, coordinator.link())
-		assertTrue(coordinator.mayPoll())
 	}
 
 	@Test
@@ -97,7 +94,6 @@ class ConsoleTransportCoordinatorTest {
 		coordinator.onSocketClosed(first)
 
 		assertEquals(ConsoleLink.SOCKET, coordinator.link())
-		assertFalse(coordinator.mayPoll())
 		assertTrue(coordinator.owns(live))
 	}
 
@@ -111,22 +107,22 @@ class ConsoleTransportCoordinatorTest {
 		coordinator.onVisibility(true)
 
 		assertEquals(ConsoleLink.POLL, coordinator.link())
-		assertTrue(coordinator.mayPoll())
 	}
 
+	// A live socket must NOT park the poll. The socket carries the Router's owner inbox and the poll
+	// drains the Gateway's mailbox, so parking one on the other's account drops the phone's messages.
 	@Test
-	fun nextWaitParksSocketAndUsesPushbackWhilePolling() {
+	fun nextWaitFollowsTheLadderEvenWithASocketLive() {
 		var now = 0L
 		val pushback = IdlePushbackManager(FakeStore(), 0L) { ZoneId.of("UTC") }
 		val coordinator = ConsoleTransportCoordinator(pushback) { now }
 		val live = coordinator.beginSocket()
 		coordinator.onWelcome(live, cursor = 1L, cursorEpoch = 1L, floor = 2L)
 
-		assertEquals(PollWait.Delay(SOCKET_PARK_MS), coordinator.nextWait(true, false, false))
+		assertEquals(PollWait.Chain, coordinator.nextWait(true, false, false))
 
 		coordinator.onSocketClosed(live)
-		val foreground = coordinator.nextWait(true, false, false)
-		assertEquals(PollWait.Chain, foreground)
+		assertEquals(PollWait.Chain, coordinator.nextWait(true, false, false))
 		now = 600_000L
 		val expected = pushback.decide(now, false, false, false)
 		assertEquals(expected, coordinator.nextWait(false, false, false))
