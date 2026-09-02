@@ -1969,3 +1969,26 @@ What the phone shows, the current producer, and the hub's.
 - **`ContentKeyStore` shipped open-only and needed `seal` added mid-phase.** A store built with a
   reader and no writer is a sign the phase that built it had no writer yet, which is fine, but the
   next phase pays for it at an awkward moment.
+- **`PresenceOps` cannot be constructed in a unit test, and it is where a regression shipped.** It
+  reaches through `repo` about thirty times and no test anywhere builds a `ChatRepository`. A version
+  gate added there disabled the cold-start roster outright and every gate stayed green; only
+  re-auditing the fix caught it. A pure-function test would not have caught it either, the defect
+  being control flow rather than a comparison. The Android repository ops are all shaped this way, so
+  this is a class, not one file.
+- **Cross-runtime twins are pinned by hand-written comments far more often than by fixtures.**
+  `BoardSealing.kt` agreed with `boardTextAadKind` only because a comment said to. `BoardRank.kt`
+  duplicates a 62-character alphabet under a doc claiming mirrored tests. The fixture corpora that do
+  exist feed PRE-COMPOSED values, so they pin the outer frame and never the composition step, and
+  each runtime's own tests seal and open against themselves. The question worth asking of every twin
+  is "what fails if only one side changes", and too often the answer is nothing.
+- **`runCatching {}` and bare `catch {}` are the default, and each site reads fine alone.** The
+  codebase has three distinct real disciplines (surface, log, genuinely ignore) and no stated way to
+  tell which applies, so the swallow keeps winning. Four separate swallowed-fault defects turned up
+  across the audits this phase.
+- **Tests that encode the premise rather than the behaviour.** `read-anchors.test.ts` had a pair
+  asserting that epochs order by magnitude, which was never true. One half was rewritten and the
+  other passed by coincidence, its epoch values inert. A test green for the wrong reason is worse
+  than a missing one, because it reads as a landmark protecting the thing it actually forbids.
+- **The plan grew two sources of truth about the same slice.** Retention notes recorded that
+  `routeGateway` and `refreshDiscovery` survive, while the spec bullets above them still said both
+  were deleted. A reader hitting the bullets first audits against a phase that never shipped.
