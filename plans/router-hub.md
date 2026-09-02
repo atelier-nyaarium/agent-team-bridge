@@ -1039,19 +1039,24 @@ outage outliving its one-shot retry, and that is what the journal now holds.
   start, Service destruction, process revival, and simultaneous reconnects.
 - `RouterReach` gains socket-aware candidates and a failover state machine with LAN-to-public
   transition tests.
-- `ConsoleClient` targets the Router only. Delete `routeGateway`, the non-route capability re-report,
-  and the per-gateway board pull with it.
-- `PollDrain` becomes the one drain for one source. `PresenceOps.refreshDiscovery` and every
-  refresh trigger in `TrustOps` and `SessionOps` are deleted once presence is pushed.
+- `ConsoleClient` targets the Router only. `routeGateway` and the gateway board path SURVIVE, per
+  the retention note above; the non-route capability re-report is gone. Deleting the rest is Phase 8.
+- `PollDrain` is the one drain for the Router's own planes. `PresenceOps.refreshDiscovery` and the
+  `TrustOps` and `SessionOps` triggers SURVIVE for the background, per the retention note above. One
+  drain for one source lands in Phase 8 with the mailbox migration.
 - `BoardManager` and `BoardOps` rewritten together around Router versions: the Router payload is
   decrypted into the existing UI model; a title or body edit is journaled, re-sealed, and
   re-applied on a lost CAS race; a `missing_epoch` entry renders its cached text or an explicit
   unavailable state. CAS, attachment availability, refusal persistence, forget disposition, move
-  ordering. No per-gateway lanes.
+  ordering. One Router lane, no per-gateway write lanes, but `BoardBlob.gateways` itself SURVIVES
+  with no writer left, and `boardIsKnown` and `attachmentBuckets` still read it. Removing it needs a
+  blob migration, recorded on the board.
 - Persistence journal per its spec: per-kind versioned envelopes of what the Router last said,
   a mutation journal with idempotency keys, ack and retirement, torn-write recovery, and a
   migration for every existing unversioned slot. Read anchors, scheduled sends, and optimistic
-  sends reconcile through it. A scheduled send composed with the Router down waits in it.
+  sends reconcile through it. A scheduled send composed with the Router down waits in it. Board
+  pending writes do NOT ride `MutationJournal`; they persist in the board blob's own queue, which is
+  written through `apply()` rather than `commit()`. Recorded on the board.
 - `AttachmentOps` fetches the Router cache first and the origin on a typed miss.
 - HTTP polling stays until the socket tests pass.
 
