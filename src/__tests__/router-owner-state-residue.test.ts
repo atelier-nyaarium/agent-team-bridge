@@ -119,6 +119,15 @@ describe("Router owner state residue", () => {
 			proofNonce: "proof",
 			proof: signRegister("fgw", proofAt, "proof", gateway.sign.priv),
 		});
+		// The registration is the only identity a frame handler ever sees.
+		const seen: Array<{ reg: unknown; params: unknown }> = [];
+		bridge.registerGatewayFrame("probe", (reg, params) => {
+			seen.push({ reg, params });
+			return { ok: true };
+		});
+		await bridge.handleCall("c1", "probe", { incarnation: 1, domainId: "home", gatewayId: "hgw", note: "x" });
+		expect(seen[0]).toMatchObject({ reg: { domainId: "friend", gatewayId: "fgw" }, params: { note: "x" } });
+		expect(seen[0]?.params).not.toHaveProperty("domainId");
 		inbox.upsertSession("home", "hgw", "proj.main", { kind: "shell", label: "x", recordExists: true });
 		share.share("home", "home.hgw.proj.main", { kind: "domain", domainId: "friend" });
 		const peerRow = (opId: string) => {

@@ -399,6 +399,8 @@ export class GatewayBridge implements ToolProvider {
 				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
 				return { ok: false, error: "stale_incarnation" };
 			}
+			// A handler cannot trust an identity it never receives.
+			const { domainId: _domainId, gatewayId: _gatewayId, ...payload } = params;
 			return frameHandler(
 				{
 					domainId: reg.domainId,
@@ -406,7 +408,7 @@ export class GatewayBridge implements ToolProvider {
 					signPub: reg.signPub,
 					incarnation: reg.incarnation,
 				},
-				params,
+				payload,
 			);
 		}
 		if (name === "gateway_relay") return this.handleGatewayRelay(connId, params);

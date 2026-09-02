@@ -635,6 +635,8 @@ Deferred from the Phase 3 audit:
 
 ## Phase 4 - Router: owner-scoped state (tiers 1 and 2) ✅ Done
 
+Commit 975b8725.
+
 - The Router state layer per its spec, separate from `fileSecretStore`, which stays the enrollment
   and admin whole-file CAS. Per-Domain, per-owner records keyed `(domainId, ownerId, kind, id)`;
   keyed versions with CAS.
@@ -692,9 +694,9 @@ Deferred from Phase 4:
 - **Payload-named identity** (`presenceService.ts`, `boardService.ts` `board_op`, `shareService.ts`
   `attest`): the second phase in a row where a handler trusted a gatewayId, sessionId, or
   sessionTarget from the payload instead of the registration (Phase 3's origin-binding class).
-  Verdict, landed: every frame handler receives the registration and stamps or checks identity
-  from it. Redesign target for the architecture pass: strip identity fields from frame payload
-  schemas so a handler cannot read them, and residue-test the hook surface for it.
+  Verdict, landed in two rounds: every frame handler receives the registration and stamps or
+  checks identity from it, and the bridge now deletes `domainId` and `gatewayId` from a frame's
+  payload before the handler runs, so a handler cannot read one. Residue-tested.
 - **Result rows sharing the op's key** (`scheduledService.ts`): the pending, sent, and failed
   result rows used the send's own opKey, so the op ledger answered `conflict` to the fire itself
   and no scheduled send ever landed. Unit tests with a stubbed inbox could not see it. Verdict,
