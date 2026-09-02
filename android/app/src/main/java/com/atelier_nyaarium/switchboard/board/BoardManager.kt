@@ -379,54 +379,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return (fromEntries + fromQueue + fromPending).toSet()
 	}
 
-	/** The cross-Gateway move: the write half upserts the subtree on the target, and the delete
-	 * half is LINKED so it cannot drain until the write's acceptance is recorded - per-Gateway
-	 * lanes would otherwise let the delete land first and the entry exist nowhere. */
-	fun enqueueMove(
-		subtree: List<BoardEntry>,
-		fromGateway: String,
-		toGateway: String,
-		sourceFor: (entryId: String, blobId: String) -> String,
-	) {
-		// Seed the destination as a known Gateway before either half is queued. Membership must not
-		// depend on the queue: once the upsert is accepted and retired, a target with no snapshot
-		// would drop out of the source list while the origin's delete still subtracts the entry, and
-		// it would render nowhere at all.
-		mutate { blob ->
-			if (blob.gateways.containsKey(toGateway)) blob
-			else blob.copy(gateways = blob.gateways + (toGateway to GatewayBoard()))
-		}
-		var last = enqueue(ConsoleOp.BoardUpsert(subtree), toGateway)
-		// The upsert deliberately carries no attachments, so each entry that has any needs its own
-		// absolute write on the destination. Chained rather than parallel: the origin delete must not
-		// fire until every one of them has landed, or the move destroys the last copy of a picture.
-		for (entry in subtree) {
-			val members = entry.attachments.orEmpty()
-			if (members.isEmpty()) continue
-			// Re-stamped to the DESTINATION, which is where these bytes are about to live. Copying the
-			// origin's id forward leaves the record naming a machine that no longer has to hold them,
-			// and a console routed anywhere else then loses the picture the moment that cache sweeps.
-			val landed = members.map { it.copy(blobGateway = toGateway) }
-			val held = members.filter { File(sourceFor(entry.id, it.blobId)).isFile }
-			last = enqueue(
-				ConsoleOp.BoardSetAttachments(entry.id, landed, supplied = held.map { it.blobId }),
-				toGateway,
-				dependsOn = last,
-				sources = members.associate { it.blobId to sourceFor(entry.id, it.blobId) },
-				// The members this device does NOT hold. Its bytes are on the ORIGIN, which is what the
-				// record names until the destination stores its own. Keeping these out of `supplied` is
-				// what leaves the op a terminal answer: a member neither side can produce is DROPPED by
-				// the Gateway and reported, rather than retried forever behind a linked delete that
-				// closes the origin's lane. Claiming to supply them would disable that and leave
-				// forgetting the session as the only escape.
-				fetchFrom = members
-					.filterNot { File(sourceFor(entry.id, it.blobId)).isFile }
-					.associate { it.blobId to it.blobGateway },
-			)
-		}
-		enqueue(ConsoleOp.BoardRemove(subtree.map { it.id }), fromGateway, dependsOn = last)
-	}
-
 	/** Drop queued writes for a session's entries, because the owner has just forgotten it.
 	 *
 	 * The disposition rides the forget op, so it is no longer a writer to race. The queue still is:

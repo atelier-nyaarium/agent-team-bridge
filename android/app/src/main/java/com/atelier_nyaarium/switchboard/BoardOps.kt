@@ -30,17 +30,6 @@ internal class BoardOps(private val repo: ChatRepository) {
 		return opId
 	}
 
-	private fun enqueueMove(
-		subtree: List<BoardEntry>,
-		fromGateway: String,
-		toGateway: String,
-		sourceFor: (entryId: String, blobId: String) -> String,
-	) {
-		repo.board.enqueueMove(subtree, fromGateway, toGateway, sourceFor)
-		// Poll promptly so moved edits can ride the next message.
-		repo.drain.kickPoll()
-	}
-
 	/** Re-reads the Router's board and drains what is queued. One board, so there is nothing to gather
 	 * per Gateway. Fired on board-tab open, pull-refresh, the board poke, and the poll. */
 	fun refreshBoard() {
