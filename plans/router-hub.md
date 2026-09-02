@@ -5,8 +5,9 @@ route-gateway model. `plans/vault.md` is parked until this lands; the board hold
 
 ## Status
 
-Questionaire complete. Plan through two refinement laps: 44 findings, 30 verified against the code,
-6 refuted. Not started. Phase 1 gates every later phase.
+Questionaire complete. Plan through three refinement laps: 60 findings, 48 verified against the
+code, 7 refuted. Not started. Phase 1 gates every later phase, and each spec it produces gets its
+own audit when written.
 
 Evidence the plan rests on, verified against the code:
 - Timeouts. The gateway waits 120s for a Router answer (`TOOL_CALL_TIMEOUT_MS`). The Router holds a
@@ -15,12 +16,14 @@ Evidence the plan rests on, verified against the code:
   original deadline. The phone reads for 35s (`PINNED_READ_TIMEOUT_MS`), holds a long poll 40s
   (`LONG_POLL_HOLD_MS`) against the Router's 55s (`ROUTER_HOLD_MS`), and refreshes discovery every
   30s (`DISCOVERY_REFRESH_MS`).
-- Commits. The transport failure-fix set is the 27 commits listed in Phase 1, from a wider window
+- Commits. The transport failure-fix set is the 35 commits listed in Phase 1, from a wider window
   than 120. The Codex thread lifecycle cluster is outside this plan.
 - `discoverFull` has no single-flight; the only `inFlight` in `routes` guards blob fetches.
-- Two delivery legs exist today. Gateway to session already holds a row until the receiver acks
-  (`PendingDeliveryStore`, `ChannelDeliveryCoordinator`). Gateway to gateway is still the
-  synchronous `gateway_relay` RPC. Question 3 extends the first model to the second.
+- Two delivery legs exist today. Gateway to session holds a row until the receiver acks
+  (`PendingDeliveryStore`, `ChannelDeliveryCoordinator`) for a peer that can ack; a legacy peer
+  retires the row on socket write, and a held row can still expire or be failed. Gateway to
+  gateway is the synchronous `gateway_relay` RPC. Question 3 extends the first model to the second
+  and makes it unconditional.
 - Board entry `bd_36caa212` holds the route-gateway analysis behind the plan.
 
 Decided by the owner after lap 1:
@@ -32,13 +35,16 @@ Decided by the owner after lap 1:
 > "Retract it. No degradation. Router down means the phone read-only cache only. Maybe scheduled
 > send at most. Just "Router unavailable"."
 
-Working assumptions in force until the owner answers:
-- Drafts and armed goals stay phone-local. Scheduled sends move to the Router as sealed-shared
-  rows with a clear fire time, so they fire with the phone off. The Router is their only
-  scheduler; the phone's alarm path retires.
-- Rollback restores the Phase 0 snapshots and loses writes made after cutover. The window is one
-  day. A bidirectional journal that would preserve them costs more than the writes it saves for a
-  single owner.
+- Scheduled sends move to the Router as sealed-shared rows with a clear fire time, so they fire
+  with the phone off. The Router is their only scheduler; the phone's alarm path retires. Drafts
+  and armed goals stay phone-local.
+
+> "and sure, scheduled sends at the Router."
+
+- No rollback. Fix forward; Phase 0's snapshots are the only safety net. The federation is one
+  owner plus a test user's Domain, so a window that preserves post-cutover writes buys nothing.
+
+> "no rollback. just 1 user and a test user Kashia"
 
 > "Currently it's all centralized and revolved around an arbitrary Gateway. True Sync is impossible
 > and shimmed here and there. TBH I didn't come up with it, it just sort of happened with Opus."
@@ -75,6 +81,9 @@ WHAT IS UNTOUCHED
 - The app's non-transport screens: thread, terminal view, playback, attachments, board UI, drafts,
   zoom, settings. Their repositories change where state comes from; the screens do not.
 - MCP tool surfaces. They keep calling the local gateway; the gateway answers from the Router.
+  One wire change: `send` and `respond` carry a producer-issued `opId`, because the Router op
+  ledger needs an identity that survives a retry through another gateway, and today's requests
+  have none (`deliveryId` is minted per attempt).
 - Host daemon.
 
 ROUTER DOWN
@@ -85,7 +94,7 @@ state fail the same way. Today's behaviour is the same minus the cached rows, so
 regression.
 
 THE RISK, stated plainly
-This is a rewrite of the layer that took 27 delivery fixes. Each encodes a real failure mode. The
+This is a rewrite of the layer that took 35 delivery fixes. Each encodes a real failure mode. The
 plan must map every one to "impossible by construction under the hub" or "carried over", or the
 rewrite rediscovers them. Phase 1 is that map.
 
@@ -93,8 +102,7 @@ rewrite rediscovers them. Phase 1 is that map.
 
 The four components update on separate triggers, and an old phone cannot talk to a hub Router. A
 single-owner self-hosted system can cut over all four at once. No wire compatibility with the
-route-gateway model is kept. The cutover has a migration step and a rollback window; neither is
-wire compatibility.
+route-gateway model is kept. The cutover has a migration step and no rollback.
 
 ### A2 resolved - Cross-Domain is same-Router; the Router stays a courier for friends
 
@@ -205,10 +213,13 @@ splits cascade across phone and gateway (the Kotlin-twin pattern the codebase al
 keeps one cascade owner and seals the words; a leaked tree shape says "17 tasks, one has three
 children", not what they are.
 
-Refined against the code: `applyCascade` and the awareness renderer read titles. So the split is:
-the Router runs cascade and emits STRUCTURAL observations (entry ids, pre and post state, actor);
-the gateway that delivers an awareness row opens the titles and renders the text. One cascade
-owner, one renderer, the Router still blind.
+Refined against the code: `applyCascade`, the awareness fold, and the MCP cascade prose all read
+titles, and the awareness bank hashes complete pre and post entries. So the split is: the Router
+runs cascade on structure and emits observations as complete pre and post projections in which
+title and body are the ciphertext it already holds; the gateway that delivers an awareness row
+opens them, folds, and renders; the gateway that answers a board write re-hydrates the cascaded
+titles before answering MCP. One cascade owner, one renderer, the Router still blind. Board
+sessions are `(domainId, gatewayId, sessionId)` in the clear envelope, never a bare session id.
 
 ## Question 3 - One delivery primitive, or two?
 
@@ -245,16 +256,22 @@ Refined against the code:
   Body, file manifest, and awareness payload are inside the ciphertext. No title.
 - The operation ledger moves with the mailbox: one Router transaction keyed
   `(domainId, ownerId, conversationId, opId)` dedupes acceptance and appends the row, so a retry
-  through a different gateway cannot accept twice.
+  through a different gateway cannot accept twice. Console ops carry that `opId` today; agent
+  `send` and `respond` gain one (the MCP wire change above). `deliveryId` and `channelJobId` are
+  never the key.
 - Every append answers a sender-visible result: accepted, refused (capacity), expired, target
   revoked, or durability failure, with "accepted, durability uncertain" distinct from "not
   accepted".
 - Wake is not a Router op. A row for a session that is not registered makes the destination
-  gateway run its existing wake path; the row's state (accepted, waking, delivered, failed) is what
-  the sender reads. No synchronous wait crosses the Router.
-- Acks are sender-local delivery state, validated against `(gatewayId, sessionId, incarnation,
-  deliveryEpoch)`. Across Domains they never distinguish an absent target from an unshared one,
-  and delivered state is redacted after unshare or unlink.
+  gateway run its existing wake path; `wakeStart` already fires at dispatch and becomes the
+  `waking` report. The row's state (accepted, waking, delivered, failed) is what the sender reads.
+  Timeout and host-disconnect stay `waking`, since the launch may still complete; `failed` is a
+  definitive refusal only. No synchronous wait crosses the Router.
+- Acks are sender-local delivery state. The hold-until-ack behaviour carries over from
+  `ChannelDeliveryCoordinator`; the ack envelope `(deliveryId, gatewayId, sessionId, incarnation,
+  deliveryEpoch)` is new, since today's ack is `deliveryId` alone and any socket in the team can
+  retire a row. Across Domains acks never distinguish an absent target from an unshared one, and
+  delivered state is redacted after unshare or unlink.
 
 ## Question 4 - Where do file bytes live?
 
@@ -278,7 +295,7 @@ A: C - Router cache, origin authoritative.
 
 > "C it is"
 
-Recommendation reason, chosen: B with a floor under eviction. sha256 ids mean the Router never
+Recommendation reason, chosen: C is B with a floor under eviction. sha256 ids mean the Router never
 reasons about staleness; the cache is a quota number and a sweep. Closes the asleep-laptop case
 that A leaves open.
 
@@ -286,7 +303,8 @@ Refined against the code: the Router has no blob store at all, and board attachm
 OUT of the gateway's evicting cache on purpose (`BoardAttachmentStore`, no sweeping). The Router
 gets two stores, both Domain-scoped in path and lookup: a quota-swept cache for message files, and
 a reference-held store for board attachments and scheduled-send files, released when the entry is
-deleted or the send fires. Each cached entry records its origin `(domainId, gatewayId)` so a miss
+deleted or the fired row reaches a terminal state (receiver ack, expiry, typed failure). Firing
+transfers the reference to the row; it does not drop it. Each cached entry records its origin `(domainId, gatewayId)` so a miss
 can be routed and an offline origin told apart from an evicted one. The phone fetches the Router
 first and the origin only on a typed miss.
 
@@ -298,10 +316,14 @@ first and the origin only on a typed miss.
   Router version never discards a journaled local edit; it is re-applied or reported.
 - The gateway keeps only what it physically owns. Precisely: the session store (tmux records, bind
   metadata, labels, workdirs), Codex and Copilot catalogs and threads, pending jobs, `ReplayGuard`,
-  origin blob copies, its identity and admissions, `crossDomainPeers` and the sealer, and the
-  awareness delivery adapter. The owner state that leaves: `boardStore`, `capabilityStore`, the
-  device mailbox, the plane registry, awareness generation, share state, read anchors, the
-  console op ledger.
+  origin blob copies, its identity and admissions, `crossDomainPeers` and the sealer, the
+  awareness delivery adapter, and the daemon capability source. The owner state that leaves:
+  `boardStore`, `capabilityStore`, the device mailbox, the plane registry, awareness generation,
+  share state, read anchors, the console op ledger. Migrated once in Phase 8, then gone: pending
+  deliveries, board attachment bytes. Discarded after the migration fence: board replay markers.
+- The Router keeps a session registry: `(domainId, gatewayId, sessionId)` for every session record
+  a gateway reports, kept while the record exists and not expired with presence. It is how a row,
+  an observation, or a board assignment reaches a sleeping session's gateway.
 - Tenant isolation at the Router becomes load-bearing. The Router legitimately reads across
   Domains for roster, transport, enrollment, and link resolution, so the rule is not "no read
   crosses a domainId". The rule: every owner-state store API takes a `domainId`, the caller is
@@ -365,9 +387,8 @@ all of 3 to 6. Phase 3 gates 4. Phase 8 gates 9.
 - Snapshot every durable store: each gateway's `DurableStore` files and blob roots, and the
   Router's `federation.json`. Hash each. No phone snapshot: drafts and goals stay on the phone,
   and everything else the phone holds is re-derived from the Router or journaled to it.
-- Write a release manifest: commit, plugin bundle hash, gateway and Router image digests, daemon
-  commit, APK hash, schema versions, snapshot paths and hashes. Deploy and rollback consume the
-  manifest with no fetch and no build.
+- Record the running release by hand: commit, image digests, APK hash, snapshot paths and hashes.
+  An operator's note, not a rollback vehicle; there is no rollback.
 - `plans/vault.md` stays parked. No code.
 
 ## Phase 1 - Failure-mode ledger, invariants, and specs
@@ -376,14 +397,17 @@ No code. Output is appended to this plan. Gates Phase 2.
 
 ### Ledger
 
-Input, the transport failure-fix set, oldest first: `2ead9add`, `5495f624`, `258e1f51`,
-`0d4ccd6a`, `cb98949d`, `ac10e5db`, `f270dcf4`, `cacc8774`, `054368bb`, `b0a51863`, `d1ebf73b`,
+Input, the transport failure-fix set, oldest first: `e6f70cb4`, `12869b9c`, `2ce9938f`,
+`66b71d4d`, `0a1a5983`, `21fbd1a8`, `2ead9add`, `5495f624`, `258e1f51`, `0d4ccd6a`, `cb98949d`,
+`ac10e5db`, `f270dcf4`, `cacc8774`, `054368bb`, `d489614f`, `d7fb5a6a`, `b0a51863`, `d1ebf73b`,
 `9ece181c`, `a0d18ad0`, `4bee4c04`, `04046284`, `18dc9910`, `e10af02c`, `f0c2e370`, `efe70a45`,
 `a321772e`, `6ffa04c4`, `bbb29426`, `83301504`, `744f1a59`, `cd1f3df3`, `4e1e0b43`, `4963848d`.
 Plus the failure modes the code carries without a commit of their own:
 `PendingDeliveryStore.enqueue` refusing at capacity, `PendingDeliveryStore.sweep` expiring rows,
-`DeviceMailbox.sweepIdleConsumers`, and every cross-Domain relay gate named in A2. Excluded, and
-why: `d46807e8` (documentation), `b647b51c` (board replay validation, not transport), and the Codex
+`DeviceMailbox.sweepIdleConsumers`, the legacy-peer retire-on-write branch of
+`ChannelDeliveryCoordinator.offer`, and every cross-Domain relay gate named in A2. Excluded, and
+why: `d46807e8`, `2de44eef`, `d00c0fa5` (documentation), `9258d185` (test only), `b647b51c` (board
+replay validation, not transport), the refactor-only wake and poll extractions, and the Codex
 thread lifecycle cluster (`75442682` through `86cfab91`), which the hub does not touch.
 
 Each row states trigger, wrong outcome, and the invariant the fix imposed, then maps to
@@ -429,13 +453,18 @@ and add nothing the spec did not say.
 - Router state layer: record format, segment and snapshot generations, fsync order, boot replay,
   compaction commit, corruption quarantine (its own, `durable-store`'s `load` returns null and does
   not quarantine), single-writer enforcement, quota, ENOSPC (Phase 4).
-- Inbox, op ledger, consumer registry, capacity, and result envelope (Phase 3).
+- Inbox, op ledger, consumer registry, session registry, delivery ack envelope, capacity, and
+  result envelope (Phase 3).
 - Presence deltas, roster, and the two projections (Phase 4).
 - Share state and attestation (Phase 4).
-- Board structure, cascade, observations, and the gateway awareness adapter (Phase 4).
+- Board structure, cascade, sealed pre and post observations, the gateway awareness adapter, and
+  the phone's sealed-text projection (Phase 4 and 6).
 - Scheduled sends (Phase 4).
+- Retained gateway endpoints: the local authentication boundary, Router request and response
+  shapes, local-versus-Router composition, attachment authorization (Phase 5).
 - Console WS, transport coordinator, and persistence journal (Phase 6).
-- Migration fence and snapshot cut (Phase 8).
+- Migration fence, snapshot cut, and offline import (Phase 8).
+- The cutover verification gate (Phase 9).
 
 ## Phase 2 - Owner content key
 
@@ -448,8 +477,9 @@ and add nothing the spec did not say.
   with it on re-provision; the gateway persists them under `DATA_DIR`.
 - Delivery as sealed key envelopes, one per recipient box key, versioned by epoch:
   - to a new console inside the `ConsoleTransport` sealed at Add Device;
-  - to a new gateway as a new field in the bootstrap bundle, installed atomically with the
-    admission and transport, or the install fails whole;
+  - to a new gateway as a new field in the bootstrap bundle. Install is staged: every artifact
+    written, then one commit marker, then activation; boot recovery completes or rolls back the
+    whole bundle. Today's install and Add Device are separate writes, so this is new;
   - to an already-enrolled member by a re-delivery op: signed by the member's admitted signing
     key, box key resolved from the Router's admission record, never from the request; the
     response sealed to that box key; operation nonce persisted for idempotency and expiry.
@@ -471,11 +501,13 @@ Additive; old surfaces untouched.
   accepted-but-undelivered rows on restart. One writer, residue-tested.
 - Op ledger transaction: dedupe on `(domainId, ownerId, conversationId, opId)`, append, persist,
   then answer. In-flight, complete, failed, and crash-recovery states.
+- Session registry per the Consequences section, fed by gateway registration and session record
+  changes.
 - Delivery to a gateway over its WS with `(deliveryId, incarnation, deliveryEpoch)`; the gateway
-  offers to the session and acks on the receiver's word, as `ChannelDeliveryCoordinator` does
-  today; a row for an unregistered session runs the gateway's wake path and reports `waking`.
-  Only the destination gateway may ack its rows. `deliveryProtocol < 1` plugins are refused at
-  cutover, not silently downgraded.
+  offers to the session and acks on the receiver's word with the full ack envelope; a row for an
+  unregistered session runs the gateway's wake path, `wakeStart` reports `waking`, ambiguous
+  outcomes stay `waking`. Only the destination gateway may ack its rows. `deliveryProtocol < 1`
+  plugins are refused at cutover, not silently downgraded.
 - Cross-Domain rows as A2 states. `sendCrossGateway` and `relayWithRetry` are replaced by an
   append, never merely deleted.
 - `blob_fetch` stays request-response with an operation id, the 70s Router hold and 120s gateway
@@ -503,18 +535,24 @@ Additive; old surfaces untouched.
   lists are derived from it, so the `bridgeDiscover` shape survives with no fan-out.
 - Share state and attestation per A2.
 - Board: `boardStore`, `boardAuthority`, `boardCascade` at the Router on the clear envelope (id,
-  parent, rank, state, session, version, attachment manifest). Titles and bodies sealed. Cascade
-  emits structural changes. Observations go to the owning gateway as session inbox rows; the
-  gateway's awareness bank keeps its fold (first pre, last post), recipient selection, `act_now`
-  for a gone entry, holding for a waking session, dropping at `MAX_HOLD_MS`, and renders titles it
-  can open. Attachment manifest commits after the bytes are in the reference-held store.
+  parent, rank, state, session as `(domainId, gatewayId, sessionId)`, version, attachment
+  manifest). Titles and bodies sealed. Cascade runs on structure. Observations are complete pre
+  and post projections carrying the sealed title and body, delivered as inbox rows to the gateway
+  hosting the recipient session per the session registry; that gateway's awareness bank keeps its
+  fold (first pre, last post), recipient selection, `act_now` for a gone entry, holding for a
+  waking session, dropping at `MAX_HOLD_MS`, opens the text, and renders. A board write's
+  cascaded changes come back the same way and the answering gateway re-hydrates their titles
+  before the MCP response. Attachment manifest commits after the bytes are in the reference-held
+  store.
 - Scheduled sends as tier-2: destination resolved at schedule time to `(domainId, gatewayId,
-  sessionId)` in the clear envelope with the fire time; files uploaded at schedule time to the
-  reference-held store; body sealed. One record per target session; replace and cancel are
-  versioned writes with tombstones, so a stale cancel cannot remove a newer replacement. At fire
-  time the Router appends the row to the session inbox through the op ledger under the send's own
-  opId, and writes a sender-visible result row the phones render as pending, sent, or error. The
-  phone's alarm path retires.
+  sessionId)` in the clear envelope with the fire time, the sender conversation and its channel
+  job key so a reply can route; files uploaded at schedule time to the reference-held store; body
+  and the echo the phones need to fold the result into the pending row sealed. A spawn point is
+  not a valid target, as `routes.send` already refuses. One record per target session; replace and
+  cancel are versioned writes with tombstones, so a stale cancel cannot remove a newer
+  replacement. At fire time the Router appends the row to the session inbox through the op ledger
+  under the send's own opId, and writes a sender-visible result row the phones render as pending,
+  sent, or error. The phone's alarm path retires.
 - Capability fold and read anchors as tier-1 state.
 - Access-matrix residue test at the store layer and the public methods.
 - New wire shapes in the shared Zod schemas, Kotlin regenerated.
@@ -532,11 +570,14 @@ gateway code imports it.
   (Router console answer composed with the local daemon source), `/task-board` and attachments
   (the gateway authenticates the session token locally and acts as the gateway for that session),
   `/discover` (Router roster and projections in the `bridgeDiscover` shape).
-- Delete, each at its removal point: `discoverFull` and every `DISCOVERY_REFRESH_MS` consumer,
-  `consolePushOps`, the `list_teams` and `presence_push` legs of `presenceExchange`, the device
-  mailbox and `consoleDevices`, the plane registry and `pollPlanes`, `boardStore` and the three
-  board modules except the awareness adapter, `capabilityStore`, `durableOpStore`,
-  `sendCrossGateway`, `relayWithRetry`, `crossDomainShareState`.
+- Delete at the replacement point: `discoverFull` and every `DISCOVERY_REFRESH_MS` consumer,
+  `consolePushOps`, the `list_teams` and `presence_push` legs of `presenceExchange`, the plane
+  registry and `pollPlanes`, `capabilityStore` (phones re-report on first connect), awareness
+  generation, `sendCrossGateway`, `relayWithRetry`.
+- Delete only after Phase 8 has imported and verified them, since they are its sources: the
+  device mailbox and `consoleDevices`, `pendingDeliveries`, `boardStore` and the board modules
+  except the awareness adapter, board attachment bytes, `durableOpStore` and `boardReplays`,
+  `crossDomainShareState`, the read-anchor projection.
 - Residue test on the retained-state inventory of the Consequences section.
 
 ## Phase 6 - Phone transport
@@ -555,9 +596,11 @@ gateway code imports it.
   capability re-report and the per-gateway board pull.
 - `PollDrain` becomes the one drain for one source. `PresenceOps.refreshDiscovery` and every
   refresh trigger in `TrustOps` and `SessionOps` are deleted once presence is pushed.
-- `BoardManager` and `BoardOps` rewritten together around Router versions: CAS, re-apply on a
-  lost race, attachment availability, refusal persistence, forget disposition, move ordering. No
-  per-gateway lanes.
+- `BoardManager` and `BoardOps` rewritten together around Router versions: the Router payload is
+  decrypted into the existing UI model; a title or body edit is journaled, re-sealed, and
+  re-applied on a lost CAS race; a `missing_epoch` entry renders its cached text or an explicit
+  unavailable state. CAS, attachment availability, refusal persistence, forget disposition, move
+  ordering. No per-gateway lanes.
 - Persistence journal per its spec: per-kind versioned envelopes of what the Router last said,
   a mutation journal with idempotency keys, ack and retirement, torn-write recovery, and a
   migration for every existing unversioned slot. Read anchors, scheduled sends, and optimistic
@@ -567,8 +610,9 @@ gateway code imports it.
 
 ## Phase 7 - MCP plugin and host daemon
 
-A compatibility checklist, not "near zero". The MCP plugin keeps its local gateway base URL. Verify
-against the new gateway: `fetchCapabilities`, `postBoard` and `fetchAttachments`,
+A compatibility checklist plus one wire change. The MCP plugin keeps its local gateway base URL.
+`send` and `respond` gain a producer-issued `opId`, minted once per invocation and reused on every
+retry. Verify against the new gateway: `fetchCapabilities`, `postBoard` and `fetchAttachments`,
 `registerBridgeDiscover`, Codex and Copilot dispatch, `host_op`, `presence_watch`, and
 `presence_derive`. The agent routes, session authority, and the daemon protocol are unchanged.
 
@@ -579,13 +623,17 @@ After the Router is live and the key backfill has confirmed every member, before
   on every mutation; in-flight console ops settle or are failed typed; no in-flight op is
   imported, because `DurableOpStore` keeps only a marker, not the request.
 - Cut: with zero writers, immutable hashed snapshots of every gateway store and blob root at one
-  epoch. Restore is offline into an empty Router process, never into a live one.
+  epoch. Restore is an offline import mode, new in this phase: it keeps the Router's identity and
+  enrollment state, restores every owner store and blob root, and refuses to serve until
+  verification passes. Never into a live process. Today the Router started without its file mints
+  a fresh identity, which would break every pin.
 - Import: board envelopes and attachment bytes; mailbox rows, cursors, and epochs with an explicit
-  old-to-new mapping; pending deliveries; read anchors. Verify counts, hashes, parent and rank
-  invariants, attachment manifests.
+  old-to-new mapping; pending deliveries; read anchors; share state with its TTLs. Verify counts,
+  hashes, parent and rank invariants, attachment manifests.
 - Phone self-migration on first hub connect: scheduled sends and read anchors enter the journal
-  from the local records and upload; the local alarm is cancelled only after the Router accepts.
-  Drafts and goals stay where they are.
+  from the local records and upload, idempotent by opId, the Router answering the existing state
+  for one it already holds; the local alarm is cancelled and the record tombstoned only after the
+  Router accepts. Drafts and goals stay where they are.
 - Each gateway holds a migration lease: active, offline, retired, or excluded. Router authority
   for owner state turns on when every active gateway reports complete; an offline gateway is
   fenced and reconciles its epoch on reconnect before it may write.
@@ -593,11 +641,12 @@ After the Router is live and the key backfill has confirmed every member, before
 
 ## Phase 9 - Cutover and removal
 
-Order: Router (both surfaces live), then every gateway, then every phone, then the plugin bump
-pushed last, so marketplace auto-update never installs a plugin ahead of its gateway. No pin.
-- Rollback: restore the Phase 0 snapshots from the manifest, no fetch, no build. Writes made after
-  cutover are lost (working assumption, see Status). Window one day; then delete the old Router
-  console surface and every old gateway path in one commit. Any shim that lets the two coexist
-  during the window carries a remove-by comment.
-- `setup.sh --verify` learns the new registration. Vault questionaire resumes on the new
-  substrate.
+Order: Router (both surfaces live), then every gateway, then every phone, then the plugin bump.
+The bump is pushed only after `setup.sh --verify` passes on every gateway host, and it learns to
+check the running gateway and Router versions and the protocol version alongside registration.
+That is the gate; marketplace auto-update then cannot install a plugin ahead of its gateway. No
+pin.
+- No rollback. Fix forward; Phase 0's snapshots are the only safety net. Once the gate has passed
+  everywhere, delete the old Router console surface and every old gateway path in one commit. Any
+  shim that let the two coexist carries a remove-by comment.
+- Vault questionaire resumes on the new substrate.
