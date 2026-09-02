@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /** Sends banked to fire later: the record mutations, the single shared next-due alarm, and the fire
  * path that converts a due record into a live row. Owns the fire mutex and the two fields the
@@ -225,6 +226,9 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 			val (picked, _) = repo.rebuildFiles(rec.fileRefs)
 			repo.deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
 			if (repo._state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
+				// The alarm is the prompt retry; the journal is what makes an outage longer than one
+				// retry survivable, since the row would otherwise sit in error until the owner noticed.
+				journalPendingSend(team, rec)
 				val at = System.currentTimeMillis() + ChatRepository.SCHEDULED_SEND_RETRY_DELAY_MS
 				scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
 			}
@@ -251,6 +255,47 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 			repo.retrySend(team, id, targetDomainId)
 			if (repo._state.value.threads[team]?.firstOrNull { it.opId == opId }?.status == "error") {
 				onScheduledSendFailed?.invoke(team, opId)
+			} else {
+				retireJournaledSend(opId)
+			}
+		}
+	}
+
+	/** A fired send that could not be delivered, kept so an outage outliving the one-shot retry does
+	 * not strand it. Keyed by the send's own opId, so a replay is the same op rather than a second. */
+	private fun journalPendingSend(team: String, rec: ScheduledSend) {
+		runCatching {
+			repo.mutationJournal.append(
+				rec.opId,
+				"scheduled_send",
+				JSONObject().put("team", team).put("opId", rec.opId).put("domainId", rec.targetDomainId),
+			)
+		}
+	}
+
+	private fun retireJournaledSend(opId: String) {
+		runCatching { repo.mutationJournal.transition(opId, MutationState.ACKED) }
+	}
+
+	/**
+	 * Re-drive every send the journal still holds, once per process.
+	 *
+	 * The row is the durable copy, so this only re-sends one still sitting in error. A row that has
+	 * since gone through, or vanished, retires its record without sending anything.
+	 */
+	suspend fun replayJournaledSends() {
+		for (entry in runCatching { repo.mutationJournal.claimForReplay() }.getOrDefault(emptyList())) {
+			if (entry.kind != "scheduled_send") continue
+			val team = entry.payload.optString("team").takeIf { it.isNotEmpty() } ?: continue
+			val opId = entry.payload.optString("opId").takeIf { it.isNotEmpty() } ?: continue
+			val row = repo._state.value.threads[team]?.firstOrNull { it.opId == opId }
+			if (row == null || row.status != "error") {
+				retireJournaledSend(opId)
+				continue
+			}
+			repo.retrySend(team, row.id, entry.payload.optString("domainId").takeIf { it.isNotEmpty() })
+			if (repo._state.value.threads[team]?.firstOrNull { it.opId == opId }?.status != "error") {
+				retireJournaledSend(opId)
 			}
 		}
 	}

@@ -300,6 +300,9 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
 					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
+					// A send stranded by an outage that outlived its one-shot retry. Claimed once per
+					// process, so this is a no-op after the first connected pass.
+					launch { runCatching { repo.scheduled.replayJournaledSends() } }
 					// Restarts the wait for a goal armed before this process started, and retires an
 					// expired one. A no-op when none is armed.
 					repo.goals.tick()
