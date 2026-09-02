@@ -177,6 +177,29 @@ class ChatRepository(
 		board.sealing = { boardSealing() }
 	}
 
+	/**
+	 * The Router's push channel, live only while the app is foregrounded.
+	 *
+	 * Planes only: it carries presence and the board's revision poke. Rows stay on the Gateway poll
+	 * until the Router's owner inbox carries this device's messages, so the two never contend.
+	 */
+	internal val socket = ConsoleSocketDriver(
+		coordinator = transportCoordinator,
+		newClient = { listener -> ConsoleSocketClient(client().transport, ownerOps, listener) },
+		onRows = { _, _ -> },
+		onPlane = { name, _, payload -> applyPlane(name, payload) },
+		kick = { drain.kickPoll() },
+		onUnreachable = { client().transport.unreachable(client().transport.proxyBase) },
+	)
+
+	private fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?) {
+		if (name != "presence" || payload == null) return
+		val projection = runCatching {
+			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
+		}.getOrNull() ?: return
+		repoScope.launch { presence.applyOwnerProjection(projection) }
+	}
+
 	/** The board's one path to the Router. Signs each write as this console and walks the reach ring. */
 	val boardRouter = BoardRouterWriter(
 		board = board,
@@ -341,10 +364,13 @@ class ChatRepository(
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
 		declareFocus(lastVisibleFocus)
 		drain.kickPoll()
+		// Best effort: a socket that cannot open leaves the poll carrying everything, as before.
+		if (ownerOps.domainId() != null) runCatching { socket.connect() }
 	}
 
 	fun onBackground() {
 		visible = false
+		socket.onBackground()
 		pushback.onBackground(System.currentTimeMillis())
 		declareFocus(FocusIntent(screen = "background"))
 		_state.update { it.copy(foreground = false) }

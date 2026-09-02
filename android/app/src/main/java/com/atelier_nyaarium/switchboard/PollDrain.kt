@@ -208,19 +208,14 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					// Mesh-wide discovery (see DISCOVERY_REFRESH_MS's own doc): the one thing left with
-					// no push mechanism, so it still needs its own bounded-interval pull, independent of
-					// the presence/linked-peers planes above and unconditional (no capability gate - a
-					// gateway that cannot push presence can still relay discovery just fine, and this
-					// covers OTHER gateways regardless of this one's own plane support).
+					// Backgrounded only: the Router pushes the owner projection over the console socket,
+					// which is foreground-only, so the pull remains the sole source while the socket is
+					// down. Which gateways the Router can reach rides the same interval, being perishable
+					// for the same reason.
 					val now = System.currentTimeMillis()
-					if (now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
+					if (!repo.isVisible && now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
 						lastDiscoveryAt = now
 						repo.presence.refreshDiscovery()
-						// Which Gateways the Router can currently reach, on the same interval and for the
-						// same reason: perishable, no push, and pulled at a bounded cadence. Rides here
-						// rather than connect, because a machine that goes down mid-session is exactly the
-						// case worth reporting and a connect-time read would still call it online.
 						repo.presence.refreshConnectedGateways()
 					}
 					if (repo.pluginReportPending) repo.reportEnabledPlugins()

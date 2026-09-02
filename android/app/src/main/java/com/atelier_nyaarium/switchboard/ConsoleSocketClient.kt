@@ -44,6 +44,10 @@ internal class ConsoleSocketClient(
 	private var cursorEpoch: Long? = null
 	private var closed = false
 
+	/** Planes only until the Router's owner inbox carries this device's messages. Reading it before
+	 * then would pin the compaction floor at a cursor nothing advances. */
+	var mode: String? = "planes"
+
 	constructor(
 		transport: ConsoleRelayTransport,
 		ownerOps: OwnerOps,
@@ -60,7 +64,9 @@ internal class ConsoleSocketClient(
 			.build()
 		socket = openSocket(transport.clientFor(base), request, object : WebSocketListener() {
 			override fun onOpen(webSocket: WebSocket, response: Response) {
-				webSocket.send(wireJson.encodeToString(ConsoleHelloFrame.serializer(), ConsoleHelloFrame(ownerOp = ownerOp)))
+				webSocket.send(
+					wireJson.encodeToString(ConsoleHelloFrame.serializer(), ConsoleHelloFrame(ownerOp = ownerOp, mode = mode)),
+				)
 			}
 
 			override fun onMessage(webSocket: WebSocket, text: String) {

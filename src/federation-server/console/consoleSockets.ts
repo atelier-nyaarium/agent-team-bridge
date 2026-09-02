@@ -10,6 +10,7 @@
 
 import {
 	CONSOLE_HELLO_DEADLINE_MS,
+	CONSOLE_PLANES_ONLY,
 	CONSOLE_ROWS_PER_FRAME,
 	ConsoleSocketInboundSchema,
 	type ConsoleSocketOutbound,
@@ -54,6 +55,8 @@ interface Bound {
 	signerSignPub: string;
 	incarnation: number;
 	cursorEpoch: number;
+	/** Takes planes only. Gets no rows and holds no cursor. */
+	planesOnly: boolean;
 }
 
 /** The answer a hello handler hands back through the intake. */
@@ -116,7 +119,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		});
 	}
 
-	async function hello(socket: ConsoleSocket, ownerOp: unknown): Promise<void> {
+	async function hello(socket: ConsoleSocket, ownerOp: unknown, planesOnly: boolean): Promise<void> {
 		const answer = (await deps.handleOwnerOp(ownerOp)) as
 			| { outcome?: string; reason?: string; hello?: ConsoleHelloAnswer }
 			| undefined;
@@ -128,7 +131,11 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		const key = `${identity.domainId}/${identity.signerSignPub}`;
 		const incarnation = (incarnations.get(key) ?? 0) + 1;
 		incarnations.set(key, incarnation);
-		const consumer = deps.registerConsumer(identity.domainId, identity.signerSignPub, incarnation);
+		// No consumer for a planes-only console: registering one pins the compaction floor at a cursor
+		// that will never move.
+		const consumer = planesOnly
+			? { cursor: 0, cursorEpoch: 0 }
+			: deps.registerConsumer(identity.domainId, identity.signerSignPub, incarnation);
 		const timer = pending.get(socket);
 		if (timer) clearTimeout(timer);
 		pending.delete(socket);
@@ -137,7 +144,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			if (at.domainId === identity.domainId && at.signerSignPub === identity.signerSignPub)
 				refuse(other, "superseded");
 		}
-		const at: Bound = { ...identity, incarnation, cursorEpoch: consumer.cursorEpoch };
+		const at: Bound = { ...identity, incarnation, cursorEpoch: consumer.cursorEpoch, planesOnly };
 		bound.set(socket, at);
 		send(socket, {
 			type: "welcome",
@@ -147,7 +154,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			floor: deps.ownerFloor(identity.domainId),
 			versions: deps.planeVersions?.(identity.domainId, identity.signerSignPub) ?? {},
 		});
-		drain(socket, at, consumer.cursor);
+		if (!planesOnly) drain(socket, at, consumer.cursor);
 	}
 
 	async function message(socket: ConsoleSocket, data: string): Promise<void> {
@@ -167,13 +174,18 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		if (frame.data.type === "hello") {
 			// A second hello on a bound socket is a client bug, not a re-auth.
 			if (at) refuse(socket, "already_bound");
-			else await hello(socket, frame.data.ownerOp);
+			else await hello(socket, frame.data.ownerOp, frame.data.mode === CONSOLE_PLANES_ONLY);
 			return;
 		}
 		// Stale means a frame from the socket this one replaced; it is dropped, never acted on.
 		if (!at || frame.data.incarnation !== at.incarnation) return;
 		if (frame.data.type === "ping") {
 			send(socket, { type: "pong", incarnation: at.incarnation });
+			return;
+		}
+		// A console holding no cursor cannot advance one.
+		if (at.planesOnly) {
+			refuse(socket, "planes_only");
 			return;
 		}
 		const advanced = deps.advanceCursor(at.domainId, at.signerSignPub, frame.data.cursor, frame.data.cursorEpoch);
@@ -187,7 +199,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	/** Best effort by design: an unreached console reads from its cursor on the next hello. */
 	function pushOwnerRow(domainId: string, signerSignPub: string | null, row: InboxRow): void {
 		for (const [socket, at] of bound) {
-			if (at.domainId !== domainId) continue;
+			if (at.domainId !== domainId || at.planesOnly) continue;
 			if (signerSignPub !== null && at.signerSignPub !== signerSignPub) continue;
 			send(socket, { type: "inbox_rows", incarnation: at.incarnation, rows: [row], cursor: row.seq });
 		}

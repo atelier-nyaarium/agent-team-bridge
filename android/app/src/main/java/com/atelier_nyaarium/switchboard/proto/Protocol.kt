@@ -513,6 +513,7 @@ data class ConsoleHelloFrame(
 	@EncodeDefault
 	val type: String = "hello",
 	val ownerOp: OwnerOp,
+	val mode: String? = null,
 )
 
 @Serializable

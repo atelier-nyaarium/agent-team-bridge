@@ -389,13 +389,11 @@ export function createRoutes({
 		// The cache is sealed to THIS Domain's key, so it serves this Domain's own devices and nobody
 		// else. Uploading regardless of target is what lets a phone read an attachment while this
 		// gateway is asleep; a cross-Domain peer cannot open these bytes and falls back to origin.
-		const cachedRefs =
-			blobUploader && (op.kind === "send" || op.kind === "response_push")
-				? await blobUploader.uploadAll(
-						[...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])],
-						"cache",
-					)
-				: [];
+		if (blobUploader && (op.kind === "send" || op.kind === "response_push"))
+			await blobUploader.uploadAll(
+				[...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])],
+				"cache",
+			);
 		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
 			// Not advertised to the peer: it holds none of this Domain's content keys, so naming them
 			// would promise a read it cannot perform.

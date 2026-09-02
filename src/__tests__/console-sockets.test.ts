@@ -157,6 +157,40 @@ describe("console sockets", () => {
 		fixture.registry.close();
 	});
 
+	// A planes-only console takes pushes without reading the inbox. Registering a consumer for one
+	// would pin the compaction floor at a cursor that never moves, so the inbox could never be
+	// reclaimed while it stayed connected.
+	it("gives a planes-only console no rows and no consumer", async () => {
+		const fixture = setup();
+		row(fixture, domainA, "waiting");
+		const client = socket();
+		fixture.hub.open(client);
+
+		await fixture.hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture), mode: "planes" }));
+
+		expect(client.frames[0]).toMatchObject({ type: "welcome" });
+		expect(client.frames.some((frame) => frame.type === "inbox_rows")).toBe(false);
+		fixture.hub.pushOwnerRow(domainA, null, row(fixture, domainA, "pushed"));
+		expect(client.frames.some((frame) => frame.type === "inbox_rows")).toBe(false);
+		// Planes still arrive; that is the whole point of the mode.
+		fixture.hub.pushPlane(domainA, "presence", 3, { rows: [] });
+		expect(client.frames.at(-1)).toMatchObject({ type: "plane", name: "presence", version: 3 });
+		fixture.registry.close();
+	});
+
+	it("refuses an ack from a console that holds no cursor", async () => {
+		const fixture = setup();
+		const client = socket();
+		fixture.hub.open(client);
+		await fixture.hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture), mode: "planes" }));
+		const incarnation = (client.frames[0] as { incarnation: number }).incarnation;
+
+		await fixture.hub.message(client, JSON.stringify({ type: "ack", incarnation, cursor: 1, cursorEpoch: 1 }));
+
+		expect(client.frames.at(-1)).toMatchObject({ type: "refused", reason: "planes_only" });
+		fixture.registry.close();
+	});
+
 	it("advances the durable cursor before the next drain", async () => {
 		const fixture = setup();
 		const first = row(fixture, domainA, "first");

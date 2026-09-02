@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
+import com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
@@ -150,6 +151,23 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	suspend fun refreshDiscovery() {
 		runCatchingCancellable { repo.client().teams(repo.localGatewayId) }
 			.onSuccess { applyDiscovery(it) }
+	}
+
+	/**
+	 * Land the Router's pushed owner projection.
+	 *
+	 * It carries what discovery used to be pulled for, so it goes through the same merge path: the
+	 * unreachable holds, the tombstones and the absence streaks all apply regardless of source.
+	 */
+	suspend fun applyOwnerProjection(projection: OwnerPresenceProjection) {
+		applyDiscovery(
+			TeamsAnswer(
+				projection.rows.map { teamInfoToTeam(it, repo.localGatewayId) },
+				projection.coverage,
+				projection.spawnPoints,
+			),
+		)
+		applyCrossDomainPresence(projection.linked)
 	}
 
 	/** Land a discovery answer, holding rows for gateways the answer names as unreachable: those

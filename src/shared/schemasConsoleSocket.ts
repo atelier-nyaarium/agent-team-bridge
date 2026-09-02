@@ -9,8 +9,22 @@ import { InboxRowSchema, OwnerOpSchema } from "./schemasInbox.js";
 //  poll, and a cursor the Router already owns.
 
 /** Opens the socket. Its `op.kind` is `hello`, and the one OwnerOp routine verifies it. */
+/**
+ * A console that takes planes but does not read the owner inbox.
+ *
+ * It registers NO consumer on purpose. A cursor sitting at zero would hold the inbox floor down
+ * forever, since compaction takes the minimum cursor across consumers, so a console that never
+ * drains would stop the inbox being reclaimed at all.
+ */
+export const CONSOLE_PLANES_ONLY = "planes";
+
 export const ConsoleHelloFrameSchema = z
-	.object({ type: z.literal("hello"), ownerOp: OwnerOpSchema })
+	.object({
+		type: z.literal("hello"),
+		ownerOp: OwnerOpSchema,
+		/** Absent means this console reads the owner inbox. See [CONSOLE_PLANES_ONLY]. */
+		mode: z.enum([CONSOLE_PLANES_ONLY]).optional(),
+	})
 	.meta({ id: "ConsoleHelloFrame" });
 
 /** Advances the consumer cursor. The Router refuses one that is below the compaction floor. */
