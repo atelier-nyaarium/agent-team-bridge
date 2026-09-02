@@ -326,6 +326,19 @@ class BoardManagerTest {
 		assertFalse("one gateway's loss is not permission to delete its bytes", manager.boardIsKnown)
 	}
 
+	// The board now comes from the Router, so a device that has not landed it once has no keep set at
+	// all. Answering known there would let the first sweep delete every board attachment on the phone.
+	@Test
+	fun aBoardNeverLandedFromTheRouterIsNotKnown() {
+		val manager = BoardManager(storeStub())
+
+		assertFalse("no Router revision means no keep set", manager.boardIsKnown)
+
+		seedRouter(manager, listOf(entry("a1")))
+		assertTrue("a landed board is known", manager.boardIsKnown)
+		assertTrue(manager.attachmentBuckets().isNotEmpty())
+	}
+
 	@Test
 	fun anUndecodableBoardIsNotAnEmptyOne() {
 		// The keep set is the only thing between every board picture on the device and the orphan

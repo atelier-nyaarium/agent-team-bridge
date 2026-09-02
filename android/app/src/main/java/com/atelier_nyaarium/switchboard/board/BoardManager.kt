@@ -145,15 +145,20 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	 * wire - and in that second case the phone's copies are the last ones anywhere, since the
 	 * Gateway's bytes survive with nothing left to name them.
 	 *
+	 * A Router revision of zero means this device has not landed the board even once, so the keep set
+	 * would be built from nothing and every bucket would look dead.
+	 *
 	 * EVERY gateway must have entries, not merely one of them: buckets are keyed by entry and the keep
 	 * set is built per gateway, so with two machines a snapshot loss on the second still drops its
 	 * buckets out of the keep set while the first keeps this answer true. Two machines is the ordinary
 	 * configuration. The cost of being conservative is that a genuinely empty board stops reclaiming
-	 * dead buckets until any gateway reports an entry again, which is a leak that self-heals; deleted
-	 * bytes do not.
+	 * dead buckets until the board is known again, which is a leak that self-heals; deleted bytes do
+	 * not.
 	 */
 	val boardIsKnown: Boolean
-		get() = loadedCleanly && blob.gateways.values.all { it.entries.isNotEmpty() }
+		get() = loadedCleanly &&
+			blob.routerRevision > 0 &&
+			blob.gateways.values.all { it.entries.isNotEmpty() }
 
 	private fun load(): BoardBlob {
 		val raw = store.loadTaskBoard() ?: return BoardBlob()
@@ -363,15 +368,15 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		// copy with it on the next sweep, which for a picture nothing else still holds is the silent
 		// disappearance this whole feature exists to prevent. A bucket whose files were legitimately
 		// removed is already emptied at the write, so keeping its name costs nothing.
-		val fromEntries = blob.gateways.keys
-			.flatMap { mergedEntries(it) }
+		val fromEntries = (routerEntries() + blob.gateways.keys.flatMap { mergedEntries(it) })
 			.map { Attachments.boardBucket(it.id) }
 		// By entry rather than by parsing the stored paths: sources hold absolute paths for the upload,
 		// which are not the src shape bucketOf reads.
 		val fromQueue = blob.queue.filter { it.sources.isNotEmpty() }
 			.mapNotNull { entryIdOf(it.op) }
 			.map { Attachments.boardBucket(it) }
-		return (fromEntries + fromQueue).toSet()
+		val fromPending = blob.pending.flatMap { write -> write.intents.map { Attachments.boardBucket(it.id) } }
+		return (fromEntries + fromQueue + fromPending).toSet()
 	}
 
 	/** The cross-Gateway move: the write half upserts the subtree on the target, and the delete
