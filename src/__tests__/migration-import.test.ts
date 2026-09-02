@@ -39,7 +39,7 @@ const owner = (rows: MailboxEntry[], cursorMap: Array<{ oldSeq: number }>) => ({
 		{
 			conversationId: "conv",
 			epoch: 4,
-			rows,
+			rows: rows.map((row) => ({ row })),
 			cursorMap: cursorMap.map((c) => ({ oldEpoch: 4, oldSeq: c.oldSeq, epoch: 7, seq: 1 })),
 			consumerCursors: [],
 		},

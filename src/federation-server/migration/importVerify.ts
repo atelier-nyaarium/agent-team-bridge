@@ -1,7 +1,6 @@
 // The gate between "written" and "served". An import that cannot prove what it wrote must not
 // start answering for it.
 
-import type { MailboxEntry } from "../../shared/console-protocol.js";
 import type { MigrationExport } from "../../shared/schemasMigration.js";
 
 export interface VerifyFailure {
@@ -46,7 +45,7 @@ export function unmappedRows(snapshot: MigrationExport): Array<{ conversationId:
 	for (const owner of snapshot.owners) {
 		for (const box of owner.mailboxes) {
 			const mapped = new Set(box.cursorMap.map((c) => c.oldSeq));
-			for (const row of box.rows) {
+			for (const { row } of box.rows) {
 				if (!mapped.has(row.seq)) missing.push({ conversationId: box.conversationId, oldSeq: row.seq });
 			}
 		}
@@ -59,7 +58,10 @@ export function unmappedRows(snapshot: MigrationExport): Array<{ conversationId:
  * hold. Deduped by `dedupeKey`, the id whichever gateway first composed the entry set and every
  * relay carried verbatim, so the same logical message is one row however many paths it took.
  */
-export function dedupeRows(existing: readonly MailboxEntry[], incoming: readonly MailboxEntry[]): MailboxEntry[] {
+export function dedupeRows<T extends { dedupeKey?: string }>(
+	existing: readonly { dedupeKey?: string }[],
+	incoming: readonly T[],
+): T[] {
 	const held = new Set(existing.flatMap((row) => (row.dedupeKey ? [row.dedupeKey] : [])));
 	return incoming.filter((row) => !row.dedupeKey || !held.has(row.dedupeKey));
 }

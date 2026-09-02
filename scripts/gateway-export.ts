@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { BoardStore } from "../src/gateway/boardStore.js";
+import { ContentKeyStore } from "../src/gateway/federation/contentKeyStore.js";
 import { CrossDomainShareState } from "../src/gateway/federation/crossDomainShareState.js";
+import { loadOrCreateIdentity } from "../src/gateway/federation/identity.js";
 import { buildExport } from "../src/gateway/migration/exportSnapshot.js";
 import { ReadAnchors } from "../src/gateway/readAnchors.js";
+import { boardTextAadKind } from "../src/shared/content-envelope.js";
 import { DeviceMailboxStore } from "../src/shared/device-mailbox.js";
 import { resolveLocalDomainId } from "../src/shared/domain-id.js";
 import { DurableStore, openDurable } from "../src/shared/durable-store.js";
@@ -52,6 +55,8 @@ function main(): void {
 	const allowlist = readJson(path.join("federation", "federation-allowlist.json"));
 	const ownerSignPub = (allowlist as { ownerSignPub?: string | null } | null)?.ownerSignPub;
 	const localOwnerId = ownerSignPub ? ownerKeyId(ownerSignPub) : null;
+	if (!ownerSignPub) throw new Error("gateway holds no owner key; refusing to export readable text");
+	const keys = new ContentKeyStore(federationDir, () => loadOrCreateIdentity(federationDir).box.priv);
 
 	const sessionDurable = new DurableStore(dataDir, "session-resume");
 	const sessionStore = new SessionStore();
@@ -86,6 +91,15 @@ function main(): void {
 		{
 			domainId,
 			gatewayId,
+			// The gateway holds the key, which is why the export runs here rather than at the Router.
+			seal: (plaintext, kind, entryId) => {
+				const sealed = keys.seal(Buffer.from(plaintext, "utf8"), {
+					domainId,
+					ownerSignPub,
+					kind: kind === "inbox.body" ? "inbox.body" : boardTextAadKind(kind, entryId),
+				});
+				return sealed.kind === "ok" ? sealed.envelope : null;
+			},
 			ownerIds: () => [...owners],
 			boardEntries: (ownerId) => board.allEntries(ownerId),
 			holdsSession: (sessionId) =>

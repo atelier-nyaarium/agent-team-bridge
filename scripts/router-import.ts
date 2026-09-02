@@ -73,13 +73,8 @@ function main(): void {
 					...(entry.parent ? { parent: entry.parent } : {}),
 					...(item.session ? { session: item.session } : {}),
 				};
-				const result = store.put("board.entry", String(entry.id), null, {
-					clear,
-					sealed: (entry.sealed as Record<string, unknown> | undefined) ?? {
-						title: entry.title,
-						...(entry.body ? { body: entry.body } : {}),
-					},
-				});
+				// The export sealed these at the gateway. The Router stores them without reading them.
+				const result = store.put("board.entry", String(entry.id), null, { clear, sealed: item.sealed });
 				if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`board write ${result.kind}`);
 				written.board++;
 			}
@@ -87,7 +82,9 @@ function main(): void {
 			for (const box of owner.mailboxes) {
 				const address = `owner:${snapshot.domainId}/${ownerSignPub}`;
 				const existing = store.rows(address, 1, Number.MAX_SAFE_INTEGER).map((row) => row.row);
-				for (const row of dedupeRows(existing as never[], box.rows)) {
+				// Deduped on the row's own key. The sealed text rides along untouched.
+				const incoming = box.rows.map((entry) => ({ ...entry, dedupeKey: entry.row.dedupeKey }));
+				for (const row of dedupeRows(existing as { dedupeKey?: string }[], incoming)) {
 					const result = store.append(address, row as unknown as Record<string, unknown>);
 					if (result.kind !== "ok") throw new Error(`mailbox write ${result.kind}`);
 					written.rows++;

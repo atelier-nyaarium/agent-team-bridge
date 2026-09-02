@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BoardEntrySchema, MailboxEntrySchema } from "./schemas.js";
+import { BoardEntrySchema, ContentEnvelopeSchema, MailboxEntrySchema } from "./schemas.js";
 
 ////////////////////////////////
 //  Migration export
@@ -8,10 +8,17 @@ import { BoardEntrySchema, MailboxEntrySchema } from "./schemas.js";
 //  import. Board text and message bodies cross SEALED: the Router is a courier for them here as
 //  everywhere else.
 
-/** One board entry, with its session resolved to a full triple. */
+/** One board entry, with its session resolved to a full triple and its text sealed. */
 export const MigratedBoardEntrySchema = z
 	.object({
-		entry: BoardEntrySchema,
+		/** Clear structure only. The text fields are stripped: they travel in `sealed`. */
+		entry: BoardEntrySchema.omit({ title: true, body: true }),
+		/** What the Router carries and cannot read. Bound per entry, as everywhere else. */
+		sealed: z.object({
+			title: ContentEnvelopeSchema,
+			body: ContentEnvelopeSchema.optional(),
+			names: z.record(z.string(), ContentEnvelopeSchema).optional(),
+		}),
 		// The exporting gateway's own (domainId, gatewayId). A bare sessionId means nothing at the
 		// Router, which serves every gateway.
 		session: z.object({ domainId: z.string(), gatewayId: z.string(), sessionId: z.string() }).optional(),
@@ -21,7 +28,13 @@ export const MigratedBoardEntrySchema = z
 /** An entry whose session the exporting gateway does not hold. Named rather than guessed: stamping
  * this gateway onto a session it never had would move somebody else's work here. */
 export const MigrationRefusalSchema = z
-	.object({ entryId: z.string(), sessionId: z.string(), reason: z.literal("session_unknown") })
+	.object({
+		entryId: z.string(),
+		sessionId: z.string(),
+		/** `unsealable` means this gateway holds no key for it, so its text could only have crossed
+		 * readable. Named rather than shipped in the clear. */
+		reason: z.enum(["session_unknown", "unsealable"]),
+	})
 	.meta({ id: "MigrationRefusal" });
 
 /** Where an old mailbox coordinate lands. The phone holds the old pair and needs the new one. */
@@ -34,11 +47,20 @@ export const CursorMapEntrySchema = z
 	})
 	.meta({ id: "CursorMapEntry" });
 
+/** A row with its body lifted out and sealed, so the Router carries text it cannot read. */
+export const MigratedRowSchema = z
+	.object({
+		row: MailboxEntrySchema.omit({ title: true, summary: true, body: true, fullSpoken: true }),
+		/** The four readable fields, sealed together so they cannot be separated in transit. */
+		text: ContentEnvelopeSchema.optional(),
+	})
+	.meta({ id: "MigratedRow" });
+
 export const MigratedMailboxSchema = z
 	.object({
 		conversationId: z.string(),
 		epoch: z.number().int(),
-		rows: z.array(MailboxEntrySchema),
+		rows: z.array(MigratedRowSchema),
 		cursorMap: z.array(CursorMapEntrySchema),
 		consumerCursors: z.array(z.tuple([z.string(), z.number().int()])),
 	})

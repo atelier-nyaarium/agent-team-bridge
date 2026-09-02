@@ -2023,6 +2023,13 @@ What the phone shows, the current producer, and the hub's.
   Adding a register answer ahead of the challenge silently retargeted it, and the naive repair made it
   pass while testing nothing, since the new first send consumed the "once". Keying on the payload
   rather than the position survives both.
+- **Building every RULE and calling the phase done, while the state transfer stayed skeletal.** In
+  Phase 8 the fence, the import decision, the lease and the cursor translation all landed with sharp
+  invariants and real tests, and each slice read as finished on its own terms. The alignment audit
+  then found that board text and message bodies crossed UNSEALED, no snapshot cut existed, and the
+  lease service had no caller at all. The rules were the interesting half and the transfer was the
+  point, and a slice-shaped view of progress hid that: every slice was done, the phase was not.
+  Worth asking, at the end of a phase that decomposed cleanly, which slice actually MOVES the data.
 - **The cycle renders a TRUNCATED copy of the phase text, and it is not marked as truncated.** Phase
   7's step block dropped two sentences requiring a version gate. An audit correctly reported the gate
   missing and I rejected the finding, having checked it against the rendered copy rather than the
