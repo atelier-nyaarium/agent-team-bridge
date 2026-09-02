@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { applyImport, type ImportStore } from "../src/federation-server/migration/applyImport.js";
 import { decideImport, type ImportMarker, markerKey } from "../src/federation-server/migration/importDecision.js";
 import { PRESERVED, violations } from "../src/federation-server/migration/importLayout.js";
 import {
@@ -75,61 +76,10 @@ function main(): void {
 		limitBytes: Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024),
 	});
 	const store = OwnerStateStore.open({ dataDir, key: { domainId: snapshot.domainId, ownerSignPub }, quota });
-	const written = { owners: snapshot.owners.length, board: 0, refusals: 0, rows: 0, cursorMap: 0, shares: 0 };
-	const addresses: string[] = [];
 	try {
-		for (const owner of snapshot.owners) {
+		for (const owner of snapshot.owners)
 			if (owner.ownerId !== ownerId) throw new Error(`owner mismatch: ${owner.ownerId}`);
-			for (const item of owner.board) {
-				const entry = item.entry as Record<string, unknown>;
-				const clear = {
-					id: entry.id,
-					state: entry.state,
-					rank: entry.rank,
-					...(entry.parent ? { parent: entry.parent } : {}),
-					...(item.session ? { session: item.session } : {}),
-				};
-				// The export sealed these at the gateway. The Router stores them without reading them.
-				const result = store.put("board.entry", String(entry.id), null, { clear, sealed: item.sealed });
-				if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`board write ${result.kind}`);
-				written.board++;
-			}
-			written.refusals += owner.refusals.length;
-			for (const box of owner.mailboxes) {
-				const address = `owner:${snapshot.domainId}/${ownerSignPub}`;
-				const existing = store.rows(address, 1, Number.MAX_SAFE_INTEGER).map((row) => row.row);
-				// Deduped on the row's own key. The sealed text rides along untouched.
-				const incoming = box.rows.map((entry) => ({ ...entry, dedupeKey: entry.row.dedupeKey }));
-				for (const row of dedupeRows(existing as { dedupeKey?: string }[], incoming)) {
-					const result = store.append(address, row as unknown as Record<string, unknown>);
-					if (result.kind !== "ok") throw new Error(`mailbox write ${result.kind}`);
-					written.rows++;
-				}
-				// The cursor map is kept for the whole window, so a phone can ask again.
-				store.put("inbox.address", address, store.get("inbox.address", address)?.version ?? null, {
-					clear: { epoch: box.epoch, cursorMap: box.cursorMap, consumerCursors: box.consumerCursors },
-				});
-				written.cursorMap += box.cursorMap.length;
-				addresses.push(address);
-			}
-			for (const [team, anchor] of Object.entries(owner.readAnchors)) {
-				const id = `readAnchor:${team}`;
-				store.put("readAnchor", id, store.get("readAnchor", id)?.version ?? null, {
-					clear: anchor as Record<string, unknown>,
-				});
-			}
-			for (const delivery of owner.pending as Array<Record<string, unknown>>) {
-				const id = String(delivery.deliveryId ?? "");
-				if (!id) throw new Error("pending delivery without an id");
-				store.put("inbox.row", `pending:${id}`, null, { clear: delivery });
-			}
-		}
-		for (const share of snapshot.shares as Array<Record<string, unknown>>) {
-			const id = `share:${String(share.sessionTarget)}|${JSON.stringify(share.target)}`;
-			const result = store.put("share", id, null, { clear: share });
-			if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`share write ${result.kind}`);
-			written.shares++;
-		}
+		const { addresses } = applyImport(store as unknown as ImportStore, snapshot, ownerSignPub, dedupeRows);
 		// Read back, not counted as written: a counter only proves the loop ran.
 		const failures = verifyCounts(declaredCounts(snapshot), writtenCounts(store, addresses));
 		if (failures.length) throw new Error(`count verification failed: ${JSON.stringify(failures)}`);
