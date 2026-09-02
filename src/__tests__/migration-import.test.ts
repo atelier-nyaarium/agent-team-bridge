@@ -5,7 +5,14 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { decideImport, type ImportMarker, markerKey } from "../federation-server/migration/importDecision.js";
 import { IMPORTED, isPreserved, PRESERVED, violations } from "../federation-server/migration/importLayout.js";
-import { declaredCounts, dedupeRows, unmappedRows, verifyCounts } from "../federation-server/migration/importVerify.js";
+import {
+	declaredCounts,
+	dedupeRows,
+	structureFaults,
+	unmappedRows,
+	verifyCounts,
+	writtenCounts,
+} from "../federation-server/migration/importVerify.js";
 import {
 	beginImport,
 	decideServe,
@@ -149,6 +156,52 @@ describe("migration import", () => {
 		);
 
 		expect(unclassified).toEqual([]);
+	});
+
+	// Named rather than repaired: guessing a rank or reparenting an entry moves work nobody asked to
+	// move.
+	it("names a board structure the import would otherwise carry broken", () => {
+		const board = (entries: Array<{ id: string; rank?: string; parent?: string }>) =>
+			({
+				...snapshot(),
+				owners: [
+					{
+						ownerId: "owner-1",
+						board: entries.map((e) => ({
+							entry: { id: e.id, state: "open", rank: e.rank ?? "m", parent: e.parent },
+						})),
+						refusals: [],
+						mailboxes: [],
+						pending: [],
+						readAnchors: {},
+					},
+				],
+			}) as unknown as MigrationExport;
+
+		expect(structureFaults(board([{ id: "a" }]))).toEqual([]);
+		expect(structureFaults(board([{ id: "a", parent: "gone" }]))).toEqual([
+			{ entryId: "a", fault: "parent_missing" },
+		]);
+		expect(structureFaults(board([{ id: "a", rank: "!!" }]))).toEqual([{ entryId: "a", fault: "bad_rank" }]);
+		expect(
+			structureFaults(
+				board([
+					{ id: "a", parent: "b" },
+					{ id: "b", parent: "a" },
+				]),
+			).map((f) => f.fault),
+		).toContain("cycle");
+	});
+
+	// A counter incremented beside each write only proves the loop ran. Reading the tree back is what
+	// catches a write the store refused or deduped.
+	it("counts what the store actually holds rather than what the loop attempted", () => {
+		const store = {
+			list: (kind: "board.entry" | "share") => (kind === "board.entry" ? [1, 2] : [1]),
+			rows: () => [1, 2, 3],
+		};
+
+		expect(writtenCounts(store, ["owner:a"])).toEqual({ board: 2, shares: 1, rows: 3 });
 	});
 
 	// An import that began and never verified leaves a half-written tree. Answering from it is worse

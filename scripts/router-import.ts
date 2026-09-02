@@ -6,8 +6,10 @@ import { PRESERVED, violations } from "../src/federation-server/migration/import
 import {
 	declaredCounts,
 	dedupeRows,
+	structureFaults,
 	unmappedRows,
 	verifyCounts,
+	writtenCounts,
 } from "../src/federation-server/migration/importVerify.js";
 import { beginImport, declaredDigest, finishImport, parseSums } from "../src/federation-server/migration/serveGate.js";
 import { DomainQuota } from "../src/federation-server/owner/domainQuota.js";
@@ -52,6 +54,8 @@ function main(): void {
 	const missing = unmappedRows(snapshot);
 	if (missing.length)
 		throw new Error(`unmapped rows: ${missing.map((row) => `${row.conversationId}/${row.oldSeq}`).join(", ")}`);
+	const faults = structureFaults(snapshot);
+	if (faults.length) throw new Error(`board structure: ${faults.map((f) => `${f.entryId} ${f.fault}`).join(", ")}`);
 	// Claimed before the first write and dropped only once counts verify, so a crash in between
 	// leaves the Router refusing to serve rather than answering from a half-written tree.
 	beginImport(dataDir, `${snapshot.gatewayId}/${snapshot.epoch}`);
@@ -72,6 +76,7 @@ function main(): void {
 	});
 	const store = OwnerStateStore.open({ dataDir, key: { domainId: snapshot.domainId, ownerSignPub }, quota });
 	const written = { owners: snapshot.owners.length, board: 0, refusals: 0, rows: 0, cursorMap: 0, shares: 0 };
+	const addresses: string[] = [];
 	try {
 		for (const owner of snapshot.owners) {
 			if (owner.ownerId !== ownerId) throw new Error(`owner mismatch: ${owner.ownerId}`);
@@ -100,10 +105,23 @@ function main(): void {
 					if (result.kind !== "ok") throw new Error(`mailbox write ${result.kind}`);
 					written.rows++;
 				}
+				// The cursor map is kept for the whole window, so a phone can ask again.
 				store.put("inbox.address", address, store.get("inbox.address", address)?.version ?? null, {
-					clear: { epoch: box.epoch, cursorMap: box.cursorMap },
+					clear: { epoch: box.epoch, cursorMap: box.cursorMap, consumerCursors: box.consumerCursors },
 				});
 				written.cursorMap += box.cursorMap.length;
+				addresses.push(address);
+			}
+			for (const [team, anchor] of Object.entries(owner.readAnchors)) {
+				const id = `readAnchor:${team}`;
+				store.put("readAnchor", id, store.get("readAnchor", id)?.version ?? null, {
+					clear: anchor as Record<string, unknown>,
+				});
+			}
+			for (const delivery of owner.pending as Array<Record<string, unknown>>) {
+				const id = String(delivery.deliveryId ?? "");
+				if (!id) throw new Error("pending delivery without an id");
+				store.put("inbox.row", `pending:${id}`, null, { clear: delivery });
 			}
 		}
 		for (const share of snapshot.shares as Array<Record<string, unknown>>) {
@@ -112,7 +130,8 @@ function main(): void {
 			if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`share write ${result.kind}`);
 			written.shares++;
 		}
-		const failures = verifyCounts(declaredCounts(snapshot), written);
+		// Read back, not counted as written: a counter only proves the loop ran.
+		const failures = verifyCounts(declaredCounts(snapshot), writtenCounts(store, addresses));
 		if (failures.length) throw new Error(`count verification failed: ${JSON.stringify(failures)}`);
 	} finally {
 		store.close();
