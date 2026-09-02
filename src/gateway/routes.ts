@@ -502,7 +502,17 @@ export function createRoutes({
 		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
-		cacheBlobs: blobUploader ? (blobIds) => void blobUploader.uploadAll(blobIds, "cache") : null,
+		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's
+		// own per-blob warning.
+		cacheBlobs: blobUploader
+			? (blobIds) => {
+					blobUploader
+						.uploadAll(blobIds, "cache")
+						.catch((error) =>
+							console.warn(`[blob-cache] ${error instanceof Error ? error.message : String(error)}`),
+						);
+				}
+			: null,
 		refuseImpersonation,
 		relayWithRetry,
 	});

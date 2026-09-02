@@ -161,8 +161,12 @@ export function createPresenceService(deps: {
 
 	const onGatewayDropped = (reg: GatewayRegistration): void => markUnreachable(reg.domainId, reg.gatewayId);
 
-	/** Restart leaves gateways disconnected until re-registration. */
-	const rearm = (domainId: string): void => markUnreachable(domainId);
+	/** Restart leaves gateways disconnected until re-registration. Pushed, or a connected console
+	 * keeps showing everything online until something happens to pull. */
+	const rearm = (domainId: string): void => {
+		markUnreachable(domainId);
+		pushIfChanged(domainId);
+	};
 
 	const forgetSession = (reg: GatewayRegistration, sessionId: string): void => {
 		const store = deps.registry.for(reg.domainId);
@@ -293,6 +297,9 @@ export function createPresenceService(deps: {
 				incarnation: reg.incarnation,
 				lastRegisteredAt: now(),
 			});
+			// The roster counts a connected gateway, so registering is a projection-visible change even
+			// before its baseline frame arrives.
+			pushIfChanged(reg.domainId);
 		});
 		hooks.onGatewayDropped((reg) => {
 			onGatewayDropped(reg);

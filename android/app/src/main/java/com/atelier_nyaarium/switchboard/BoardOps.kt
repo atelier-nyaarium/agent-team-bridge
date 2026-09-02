@@ -41,11 +41,8 @@ internal class BoardOps(private val repo: ChatRepository) {
 		repo.drain.kickPoll()
 	}
 
-	/** board_read every NON-route Gateway the presence roster names (the route Gateway's half rides
-	 * the plane). Fired on board-tab open, pull-refresh, and entering a non-route session's thread;
-	 * a down Gateway just leaves its column stale. Same-Domain only: a linked friend's Gateway is
-	 * not this owner's board. */
-	/** Re-reads the Router's board. One board, so there is nothing to gather per Gateway. */
+	/** Re-reads the Router's board and drains what is queued. One board, so there is nothing to gather
+	 * per Gateway. Fired on board-tab open, pull-refresh, the board poke, and the poll. */
 	fun refreshBoard() {
 		repo.repoScope.launch { readRouterBoard() }
 	}
@@ -452,9 +449,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 		}
 	}
 
-	/** Assign an entry (and its subtree, gateway-side) to a session, or null back to the backlog. A
-	 * target session homed on ANOTHER Gateway is a MOVE: upsert the subtree there, linked delete
-	 * here, and the entry keeps its id so the union collapses the crash-window duplicate. */
+	/** Assign an entry and its subtree to a session, or null back to the backlog. */
 	fun boardAssign(fromGateway: String, id: String, team: String?) {
 		// One Router board, so assigning to a session on another Gateway is a field change rather than
 		// a move: there is no second copy to upsert and no first copy to delete. The session carries
@@ -467,7 +462,25 @@ internal class BoardOps(private val repo: ChatRepository) {
 				sessionId = repo.board.sessionKeyOf(name),
 			)
 		}
-		intend(BoardIntent.SetSession(id, session))
+		// The whole subtree moves with its root, which is what the op this replaced did. One write, so
+		// the batch is one CAS attempt rather than a partial reassignment if a later one loses.
+		intend(*subtreeOf(id).map { BoardIntent.SetSession(it, session) }.toTypedArray())
+	}
+
+	/** An entry and everything under it, in the board the owner is looking at. Visited-guarded: a
+	 * self-parent from bad data would otherwise walk forever on the main thread. */
+	private fun subtreeOf(rootId: String): List<String> {
+		val children = repo.board.routerEntries().groupBy { it.parent }
+		val out = mutableListOf<String>()
+		val seen = mutableSetOf<String>()
+		val stack = ArrayDeque(listOf(rootId))
+		while (stack.isNotEmpty()) {
+			val id = stack.removeLast()
+			if (!seen.add(id)) continue
+			out.add(id)
+			for (kid in children[id] ?: emptyList()) stack.addLast(kid.id)
+		}
+		return out
 	}
 
 }

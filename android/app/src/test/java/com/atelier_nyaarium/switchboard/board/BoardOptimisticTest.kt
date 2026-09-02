@@ -228,5 +228,24 @@ class BoardOptimisticTest {
 		assertTrue(posts.isEmpty())
 	}
 
+	// Assigning a parent takes its children with it, which is what the gateway op this replaced did.
+	// The Router sets one entry per set_session, so the subtree has to be fanned out by the caller and
+	// ride one write.
+	@Test
+	fun assigningAParentCarriesItsSubtree() {
+		val target = BoardSession("domain", "gw-b", "sess-b")
+		val entries = listOf(entry("root"), entry("kid", parent = "root"), entry("other"))
+		val write = PendingWrite(
+			"op",
+			listOf(BoardIntent.SetSession("root", target), BoardIntent.SetSession("kid", target)),
+		)
+
+		val applied = applyPending(entries, listOf(write)).associateBy { it.id }
+
+		assertEquals(target, applied["root"]?.session)
+		assertEquals(target, applied["kid"]?.session)
+		assertEquals(null, applied["other"]?.session)
+	}
+
 	private fun pending(intent: BoardIntent) = listOf(PendingWrite("op", listOf(intent)))
 }
