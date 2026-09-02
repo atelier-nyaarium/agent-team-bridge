@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
+import { createCursorService } from "../federation-server/migration/cursorService.js";
 import { createLeaseService } from "../federation-server/migration/leaseService.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { generateIdentity } from "../shared/crypto.js";
+import { translateCursor } from "../shared/migration-cursor.js";
 
 const roots: string[] = [];
 
@@ -68,6 +70,26 @@ describe("migration lease service", () => {
 		const { registry, service } = make(0);
 
 		expect(service.fenced("alpha", "stranger")).toBe(false);
+		registry.close();
+	});
+
+	// Repeatable by construction: the map is kept for the whole window, so a phone that dies between
+	// hearing the answer and committing it asks again and gets the same one.
+	it("answers a cursor translation from the stored map, the same way every time", () => {
+		const { registry } = make();
+		const cursors = createCursorService({ registry, migrationEpoch: () => 7 });
+		const address = "owner:alpha/key";
+		registry.for("alpha").put("inbox.address", address, null, {
+			clear: { cursorMap: [{ oldEpoch: 4, oldSeq: 9, epoch: 7, seq: 2 }] },
+		});
+
+		const first = translateCursor({ epoch: 4, seq: 9 }, 7, cursors.mapFor("alpha", address));
+
+		expect(first).toEqual({ kind: "translated", cursor: { epoch: 7, seq: 2 } });
+		expect(translateCursor({ epoch: 4, seq: 9 }, 7, cursors.mapFor("alpha", address))).toEqual(first);
+		expect(translateCursor({ epoch: 4, seq: 5 }, 7, cursors.mapFor("alpha", address))).toEqual({
+			kind: "unmapped",
+		});
 		registry.close();
 	});
 
