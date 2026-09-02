@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { decideImport, type ImportMarker, markerKey } from "../federation-server/migration/importDecision.js";
+import { IMPORTED, isPreserved, PRESERVED, violations } from "../federation-server/migration/importLayout.js";
 import { declaredCounts, dedupeRows, unmappedRows, verifyCounts } from "../federation-server/migration/importVerify.js";
 import type { MailboxEntry } from "../shared/console-protocol.js";
 import type { MigrationExport } from "../shared/schemasMigration.js";
@@ -95,6 +99,42 @@ describe("migration import", () => {
 		const missing = unmappedRows(snapshot({ owners: [owner([row(1), row(9)], [{ oldSeq: 1 }])] }));
 
 		expect(missing).toEqual([{ conversationId: "conv", oldSeq: 9 }]);
+	});
+
+	// The whole reason offline import exists: a Router started without its identity mints a fresh
+	// one, and the fleet has pinned the old one.
+	it("names a preserved file an import changed", () => {
+		const before = { "federation.json": "a", "router-cert.pem": "b", "router-key.pem": "c" };
+
+		expect(violations(before, { ...before })).toEqual([]);
+		expect(violations(before, { ...before, "router-key.pem": "rotated" })).toEqual(["router-key.pem"]);
+	});
+
+	it("holds the identity and enrollment files apart from the owner state it replaces", () => {
+		for (const name of PRESERVED) expect(isPreserved(name)).toBe(true);
+
+		expect(IMPORTED.some((name) => isPreserved(name))).toBe(false);
+	});
+
+	// A new file under the Router's data directory has to be a deliberate choice: preserved with the
+	// identity, or replaced with the owner state. Landing in neither is how an import quietly drops
+	// something or quietly overwrites a pin.
+	it("every Router data-dir child is either preserved or imported", () => {
+		const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "federation-server");
+		const sources = fs
+			.readdirSync(root, { recursive: true, encoding: "utf8" })
+			.filter((name) => name.endsWith(".ts"))
+			.map((name) => fs.readFileSync(path.join(root, name), "utf8"))
+			.join("\n");
+		const children = new Set(
+			[...sources.matchAll(/path\.join\(\s*(?:this\.opts\.|opts\.)?dataDir\s*,\s*"([^"]+)"/g)].map((m) => m[1]!),
+		);
+
+		const unclassified = [...children].filter(
+			(name) => !isPreserved(name) && !(IMPORTED as readonly string[]).includes(name),
+		);
+
+		expect(unclassified).toEqual([]);
 	});
 
 	// A late export carries rows the Router already took by another path.
