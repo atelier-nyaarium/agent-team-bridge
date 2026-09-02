@@ -490,8 +490,10 @@ describe("handshake-established session records", () => {
 		it("mintHandshake itself survives a register-time send failure, leaving the entry recoverable", () => {
 			const { handlers } = setup();
 			const ws = createMockWs();
-			(ws.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-				throw new Error("boom");
+			// The challenge only, not the register answer: a socket that cannot take THAT is evicted.
+			// Persistent rather than once, or the register answer would consume it and nothing throws.
+			(ws.send as ReturnType<typeof vi.fn>).mockImplementation((raw: string) => {
+				if (JSON.parse(raw).type === "channel_push") throw new Error("boom");
 			});
 
 			expect(() => register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" })).not.toThrow();

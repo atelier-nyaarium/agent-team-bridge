@@ -339,6 +339,17 @@ export function createWebSocketHandlers({
 			// a team's first-ever connection: only a team that has already answered one real challenge
 			// can skip being asked again. A remembered "false" never arrives (a worker that answered
 			// false is evicted permanently and does not reconnect), so only true is handled here.
+			// Before any frame the plugin might answer. It refuses to reply while it has heard no
+			// version, so a challenge that arrived first would be withheld until this landed. A socket
+			// that cannot take it is not registered: let it close and reconnect rather than leave the
+			// plugin refusing against a gateway that believes it registered.
+			try {
+				ws.send(JSON.stringify({ type: "register_ok", opLedgerProtocol: OP_LEDGER_PROTOCOL }));
+			} catch {
+				evictSocket(ws);
+				return;
+			}
+
 			if (mode === "channel" && team !== "host") {
 				const confirmedBy = handshakeGate.confirmedBy(team);
 				const sameConfirmer = !!auth && !!confirmedBy && auth.sameAs(confirmedBy, auth.toAnswerFor(ws));
@@ -355,13 +366,6 @@ export function createWebSocketHandlers({
 			} else {
 				ws.data.handshakeConfirmed = true;
 			}
-
-			// Tells the plugin the ledger honours a producer-issued opId. A plugin that sends one and
-			// hears no version refuses to send, since a gateway that drops it accepts a retry twice.
-			// Last, and never fatal: a socket too dead to hear this has already failed to register.
-			try {
-				ws.send(JSON.stringify({ type: "register_ok", opLedgerProtocol: OP_LEDGER_PROTOCOL }));
-			} catch {}
 
 			onTeamConnect?.(team, ws);
 		}

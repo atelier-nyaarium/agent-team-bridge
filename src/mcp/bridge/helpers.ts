@@ -291,6 +291,9 @@ export function buildRegisterMsg(
 
 export function connectToRouter(): void {
 	const wsUrl = `${ROUTER_URL.replace(/^http/, "ws")}/bridge`;
+	// Belongs to ONE connection. Carrying it across would let a gateway that was replaced by an older
+	// one keep the capability its predecessor advertised, which is the hole the refusal exists to close.
+	opLedgerProtocol = 0;
 	routerWs = new WebSocket(wsUrl);
 
 	const isChannel = AGENT_TYPE === "claude";
@@ -383,6 +386,7 @@ export function connectToRouter(): void {
 
 	routerWs.on("close", () => {
 		console.error(`[bridge] disconnected`);
+		opLedgerProtocol = 0;
 		if (!suppressReconnect) {
 			reconnector.schedule();
 		}
@@ -396,5 +400,6 @@ export function connectToRouter(): void {
 export function closeRouter(): void {
 	// Cancel a pending reconnect first, else its timer fires connectToRouter() after the close.
 	reconnector.cancel();
+	opLedgerProtocol = 0;
 	if (routerWs) routerWs.close();
 }
