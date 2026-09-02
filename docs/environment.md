@@ -13,7 +13,7 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 | `HOST_WS_TOKEN` | Secret the host daemon presents for the reserved `host` slot. Fail-closed. Auto-provisioned into `.env` by `start-gateway.sh` |
 | `FEDERATION_DOMAIN_ID` | Domain id. Not fail-closed; the enrollment-delivered `domain-id` file takes precedence |
 | `DATA_DIR` | Durable state, default `/app/data`. Separate from the log volume, so clearing logs cannot wipe federation identity |
-| `FEDERATION_DIR` | Keypair, allowlist, `transport.json`, `domain-id`. Default inside `DATA_DIR` |
+| `FEDERATION_DIR` | Keypair, allowlist, `transport.json`, `domain-id`, `content-keys.json`, transient `staging/`. Default inside `DATA_DIR` |
 | `ENROLL_TLS_PORT` | Enrollment TLS port, default 20003. Set in `docker-compose.yml`, not `.env` |
 | `ENROLL_NONCE` | The one-time enrollment nonce, passed through by compose. Empty when no invite is armed |
 | `ENROLL_LAN_HOST` | Host advertised on the enrollment payload's LAN leg, default `0.0.0.0` |

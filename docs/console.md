@@ -18,6 +18,14 @@ participates in normal peer registries; its `send()` appends to the mailbox drai
   `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain
   only and deduplicated by `dedupeKey`.
 
+## Add Device
+
+The new device signs `approvalId`, `nonce`, `newSignPub`, and `newBoxPub`. The held device refuses an unsigned or mis-signed join before admitting the device or sealing keys.
+
+The install writes the transport, the latches, the Domain snapshot, and the content keys in one store commit.
+
+An owner backup restore replaces a key that rooted nothing and refuses a key that differs from the Domain root. Epoch 1 regenerates once the Domain id is known.
+
 ## Terminal view
 
 Terminal operations reach the host through correlated `host_op` RPCs. `hostOpRunner.ts` owns peek

@@ -14,6 +14,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/boardAwareness.ts` / `boardCascade.ts` - board awareness and parent-child state rules
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
+- `src/gateway/federation/contentKeyStore.ts` - gateway keyring, sole rule owner, sole writer of `content-keys.json`
+- `src/gateway/federation/bootstrapInstall.ts` - staged bootstrap install and re-enrollment merge
 - `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog, relay folding, authenticated route
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
 - `src/gateway/console/` - Android channel, op dispatch, capability store, relay, durable ops
@@ -32,6 +34,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../RouterReach.kt` / `ConsoleRelayTransport.kt` - Router addresses, ordering, and failover
 - `android/.../OwnerFacts.kt` / `GatewayEnrollment.kt` / `EnrollCeremonyOps.kt` / `DeviceApprovalOps.kt` / `DomainAdminOps.kt` / `TrustOps.kt` - federation delegates
 - `android/.../SasExchange.kt` / `EnrollCeremony.kt` - shared SAS exchange and commitment core for FLOW-1 and FLOW-2
+- `android/.../crypto/ContentKeyring.kt` - phone keyring, classify then commit
 - `android/.../MainActivity.kt` - `Repo`, activity, and `App` navigation shell
 - `android/.../SessionsScreen.kt` / `SettingsScreen.kt` / `ThreadScreen.kt` / `Onboarding.kt` / `SessionDialogs.kt` / `ReorderableTabRow.kt` / `TabDragMath.kt` / `TimeText.kt` - screen siblings and tab geometry
 - `android/.../RendererPoolBindings.kt` / `AppOverlays.kt` / `LinkMenu.kt` - WebView pool, overlays, and link actions
@@ -65,6 +68,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/agent-binary.ts` - uncached backend CLI presence check
 - `src/shared/capabilities.ts` - capability ids, guidance, daemon declarations, and bundle folding
 - `src/shared/schemas.ts` / `schemas*.ts` - sole Zod wire truth; `.meta({id})` names generated Kotlin classes
+- `src/shared/content-envelope.ts` - content key derivation, content envelope, key envelope, join signing bytes
+- `src/shared/schemasContentKey.ts` - content key wire shapes
 - `src/shared/codex-agent.ts` / `codexAgent*.ts` - Codex delegation wire truth; excluded from Kotlin codegen
 - `src/shared/channel-file.ts` - declared ChannelFile metadata; receivers do not infer it from bytes or position
 - `src/shared/session-id.ts` - sole address grammar owner
@@ -284,4 +289,3 @@ Purge Gateway removes only gateway state and gateway-owned `.env` keys. Purge Fe
 **The phone's half of Purge Federation is Forget this Domain.** Revoke and Delete remains the app-only path because it also purges the Domain server-side.
 
 `scripts/lib/routerState.ts` keeps Bun `$` templates on one line. Bun treats a backslash-newline as an argument split, not continuation.
-

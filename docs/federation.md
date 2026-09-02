@@ -67,6 +67,17 @@ Gateway, so revocation still applies while the Router is unreachable.
   owner-signed `kind:console` admission.
 - `CONSOLE_BRIDGE_TOKEN` remains the shared app-token gate for the console surface.
 
+## Content keys
+
+- The owner phone derives each Domain-bound content key from the owner signing key and epoch.
+- Each epoch-bound key envelope is sealed to the recipient's admitted box key and signed by an admitted console.
+- The phone stores keys in the Keystore-backed `AppStateStore` `contentKeys` slot. The Gateway stores them in `DATA_DIR/federation/content-keys.json`.
+- Add Device delivers current key envelopes in `ConsoleTransport.contentKeys`. Gateway bootstrap delivers them in `GatewayBootstrapBundle.contentKeys`.
+- Bootstrap writes admission, transport, Domain id, and keys under `federation/staging/`, writes an `INSTALLED` marker, then copies the artifacts atomically with transport last. Recovery retries a complete marked staging directory, rolls back incomplete or corrupt staging, and keeps staging on other activation errors.
+- Gateway re-enrollment validates the merged live and bundle view, requires a newer admission, merges the allowlist, and merges keys without dropping held epochs.
+- First enrollment uses trust on first use for the Domain root.
+- Deploy the Router before the app: an older Router drops the join signature and the held device refuses the join.
+
 **A cross-machine answer states how complete it is.** `discover()` returns asked, answered and
 unreachable ids plus `rosterKnown`, so a partial result is not a plain success and an unreadable
 roster is not "no peers". `isRegistered` differs from `isConnected`: a refused registration leaves
