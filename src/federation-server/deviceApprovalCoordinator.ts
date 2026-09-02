@@ -52,6 +52,7 @@ export class DeviceApprovalCoordinator {
 				return this.handleJoin(op.approvalId, op.nonce, {
 					newSignPub: op.newSignPub,
 					newBoxPub: op.newBoxPub,
+					joinSig: op.joinSig,
 					device: op.device,
 				});
 			case "poll":
@@ -90,6 +91,8 @@ export class DeviceApprovalCoordinator {
 		}
 		if (w.join) {
 			if (w.join.newSignPub === join.newSignPub && w.join.newBoxPub === join.newBoxPub) {
+				if (w.join.joinSig === join.joinSig) return { ok: true };
+				w.join = join;
 				return { ok: true };
 			}
 			return { ok: false, error: OPAQUE_PUBLIC_ERROR };

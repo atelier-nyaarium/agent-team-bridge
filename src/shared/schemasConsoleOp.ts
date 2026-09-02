@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
+import { b64Field } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
@@ -427,10 +428,10 @@ export const ConsoleOpSchema = z
 
 export const SealedEnvelopeSchema = z
 	.object({
-		ephemeralPub: z.string(),
-		nonce: z.string(),
-		ciphertext: z.string(),
-		signature: z.string(),
+		ephemeralPub: b64Field(),
+		nonce: b64Field(),
+		ciphertext: b64Field(),
+		signature: b64Field(),
 	})
 	.meta({ id: "SealedEnvelope" });
 

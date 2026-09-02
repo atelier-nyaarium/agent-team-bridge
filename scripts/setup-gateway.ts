@@ -11,6 +11,7 @@ import {
 	confirm,
 	dc,
 	detectLanHost,
+	dirExists,
 	ensureHostWsToken,
 	ensureNetwork,
 	envGet,
@@ -25,6 +26,7 @@ import { routerRunning } from "./lib/routerState.js";
 import {
 	ADMIT_PAYLOAD_URL,
 	ENROLL_URL,
+	FED_DIR_HOST,
 	GW_JSON_FILE,
 	GW_QR_GIF,
 	HEALTH_URL,
@@ -61,12 +63,13 @@ async function waitHealth(): Promise<boolean> {
 ////////////////////////////////
 //  Gateway operations (throw on failure; the menu catches per-op, the top level exits)
 
-/** Delete the gateway's container-owned transport.json so the next boot arms for enrollment and the
- * install-wait starts clean. */
+/** Delete transport.json and staging. */
 async function clearTransport(): Promise<void> {
-	if (!(await Bun.file(TRANSPORT_FILE_HOST).exists())) return;
+	if (!dirExists(FED_DIR_HOST)) return;
 	const mount = `${process.cwd()}/volumes/gateway-data:/w`;
-	await $`docker run --rm -u 0 -v ${mount} busybox rm -f /w/federation/transport.json`.quiet().nothrow();
+	await $`docker run --rm -u 0 -v ${mount} busybox rm -rf /w/federation/transport.json /w/federation/staging`
+		.quiet()
+		.nothrow();
 }
 
 /**

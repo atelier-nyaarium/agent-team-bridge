@@ -21,6 +21,9 @@ class ClearProvisioningPartitionTest {
 			"provisioning",
 			"federation_identity",
 			"federation_owner_identity",
+			"federation_content_keys",
+			"federation_content_keys_corrupt",
+			"router_reach",
 			"federation_domain",
 			"federation_domain_version",
 			"federation_console_admitted",
@@ -28,6 +31,7 @@ class ClearProvisioningPartitionTest {
 			"federation_enroll_ceremony_done",
 			"federation_profile_name",
 			"federation_hosted_tenants",
+			"federation_pending_enrolls",
 			"federation_trusted_owners",
 			"threads",
 			"read_anchors",
@@ -41,6 +45,7 @@ class ClearProvisioningPartitionTest {
 			"sync_dropped",
 			"team_absence_streak",
 			"task_board",
+			"create_last_project_by_gateway",
 		)
 		for (k in mustWipe) assertTrue("$k must be wiped by clearProvisioning", k in wiped)
 	}

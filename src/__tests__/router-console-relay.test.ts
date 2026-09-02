@@ -72,7 +72,7 @@ describe("RouterClient console relay", () => {
 				v: 1,
 				opId: "op-abc",
 				signerSignPub: "console-key",
-				sealed: { ephemeralPub: "a", nonce: "b", ciphertext: "c", signature: "d" },
+				sealed: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
 			}),
 		);
 
@@ -82,14 +82,14 @@ describe("RouterClient console relay", () => {
 		const frame = ConsoleRelayFrameSchema.parse(await relayed);
 		expect(frame.opId).toBe("op-abc");
 		expect(frame.signerSignPub).toBe("console-key");
-		expect(frame.sealed.ciphertext).toBe("c");
+		expect(frame.sealed.ciphertext).toBe("Yw==");
 
 		// The gateway-side wiring answers via callTool; assert the round trip resolves.
 		const reply = {
 			type: "console_relay_reply",
 			v: 1,
 			opId: frame.opId,
-			sealed: { ephemeralPub: "a", nonce: "b", ciphertext: "c", signature: "d" },
+			sealed: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
 		};
 		const result = await client!.callTool("console_relay_reply", reply);
 		expect(result.error).toBeUndefined();

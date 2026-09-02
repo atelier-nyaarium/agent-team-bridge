@@ -8,6 +8,7 @@ export * from "./schemasBoard.js";
 export * from "./schemasCapability.js";
 export * from "./schemasConsoleOp.js";
 export * from "./schemasConsoleResults.js";
+export * from "./schemasContentKey.js";
 export * from "./schemasCore.js";
 export * from "./schemasGatewayBootstrap.js";
 export * from "./schemasGatewayTransport.js";

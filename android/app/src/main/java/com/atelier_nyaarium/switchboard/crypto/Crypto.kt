@@ -17,6 +17,9 @@ import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
+import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
+import com.atelier_nyaarium.switchboard.proto.SealedEnvelope as ProtoSealedEnvelope
 
 /**
  * Federation crypto, the byte-exact Kotlin counterpart of switchboard's
@@ -28,6 +31,10 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
  * vectors in CryptoTest pin this.
  */
 object Crypto {
+	data class ContentAad(val domainId: String, val ownerSignPub: String, val epoch: Int, val kind: String) {
+		fun bytes(): ByteArray =
+			"$CONTENT_INFO_PREFIX$domainId\n$ownerSignPub\n$epoch\n$kind".toByteArray(Charsets.UTF_8)
+	}
 	@Serializable
 	data class KeyPairRaw(val pub: String, val priv: String)
 
@@ -41,6 +48,8 @@ object Crypto {
 	)
 
 	private val HKDF_INFO = "switchboard-seal-v1".toByteArray(Charsets.UTF_8)
+	private val CONTENT_SALT = "switchboard-content-salt-v1".toByteArray(Charsets.UTF_8)
+	private val CONTENT_INFO_PREFIX = "switchboard-content-v1\n"
 	private val rnd = SecureRandom()
 
 	private fun b64(b: ByteArray): String = Base64.getEncoder().encodeToString(b)
@@ -71,6 +80,9 @@ object Crypto {
 		} catch (_: Exception) {
 			false
 		}
+
+	fun deviceJoinSigningBytes(approvalId: String, nonce: String, newSignPub: String, newBoxPub: String): ByteArray =
+		listOf("DEVICE_JOIN_V1", approvalId, nonce, newSignPub, newBoxPub).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	private fun deriveKey(shared: ByteArray, ephemeralPub: ByteArray): ByteArray {
 		val hkdf = HKDFBytesGenerator(SHA256Digest())
@@ -116,6 +128,86 @@ object Crypto {
 		var len = cipher.processBytes(sealed, 0, sealed.size, out, 0)
 		len += cipher.doFinal(out, len) // verifies the tag
 		return out.copyOf(len)
+	}
+
+	fun deriveContentKey(signPrivB64: String, domainId: String, epoch: Int): ByteArray {
+		require(epoch >= 1) { "content epoch must be an integer from 1" }
+		val signPriv = unb64(signPrivB64).also { require(it.size == 32) { "content signing key must be 32 bytes" } }
+		val hkdf = HKDFBytesGenerator(SHA256Digest())
+		hkdf.init(
+			HKDFParameters(
+				signPriv,
+				CONTENT_SALT,
+				"$CONTENT_INFO_PREFIX$domainId\n$epoch".toByteArray(Charsets.UTF_8),
+			),
+		)
+		return ByteArray(32).also { hkdf.generateBytes(it, 0, it.size) }
+	}
+
+	fun sealContent(
+		plaintext: ByteArray,
+		key: ByteArray,
+		aad: ContentAad,
+		nonce: ByteArray = ByteArray(12).also { rnd.nextBytes(it) },
+	): ContentEnvelope {
+		require(key.size == 32) { "content key must be 32 bytes" }
+		require(nonce.size == 12) { "content nonce must be 12 bytes" }
+		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
+		cipher.init(true, AEADParameters(KeyParameter(key), 128, nonce, aad.bytes()))
+		val out = ByteArray(cipher.getOutputSize(plaintext.size))
+		var len = cipher.processBytes(plaintext, 0, plaintext.size, out, 0)
+		len += cipher.doFinal(out, len)
+		return ContentEnvelope(v = 1L, epoch = aad.epoch.toLong(), nonce = b64(nonce), ciphertext = b64(out.copyOf(len)))
+	}
+
+	fun openContent(env: ContentEnvelope, key: ByteArray, aad: ContentAad): ByteArray {
+		if (env.v != 1L) throw IllegalArgumentException("content envelope version is unsupported")
+		if (env.epoch != aad.epoch.toLong()) throw IllegalArgumentException("content envelope epoch does not match AAD")
+		require(key.size == 32) { "content key must be 32 bytes" }
+		val nonce = unb64(env.nonce)
+		require(nonce.size == 12) { "content nonce must be 12 bytes" }
+		val sealed = unb64(env.ciphertext)
+		if (sealed.size < 16) throw IllegalArgumentException("content ciphertext is too short")
+		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
+		cipher.init(false, AEADParameters(KeyParameter(key), 128, nonce, aad.bytes()))
+		val out = ByteArray(cipher.getOutputSize(sealed.size))
+		var len = cipher.processBytes(sealed, 0, sealed.size, out, 0)
+		len += cipher.doFinal(out, len)
+		return out.copyOf(len)
+	}
+
+	fun wrapContentKey(
+		key: ByteArray,
+		epoch: Int,
+		recipientBoxPubB64: String,
+		senderSignPubB64: String,
+		senderSignPrivB64: String,
+	): KeyEnvelope {
+		require(key.size == 32) { "content key must be 32 bytes" }
+		require(epoch >= 1) { "content epoch must be an integer from 1" }
+		val body = "KEYENVELOPE_V1\n$epoch\n".toByteArray(Charsets.UTF_8) + key
+		val sealed = seal(body, recipientBoxPubB64, senderSignPrivB64)
+		return KeyEnvelope(
+			epoch.toLong(),
+			senderSignPubB64,
+			ProtoSealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature),
+		)
+	}
+
+	fun unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: String): Pair<Int, ByteArray> {
+		if (env.epoch < 1 || env.epoch > Int.MAX_VALUE) throw IllegalArgumentException("content epoch is invalid")
+		val sealed = env.sealed
+		val key = unseal(
+			SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature),
+			recipientBoxPrivB64,
+			env.signerSignPub,
+		)
+		val bodyPrefix = "KEYENVELOPE_V1\n${env.epoch}\n".toByteArray(Charsets.UTF_8)
+		if (key.size != bodyPrefix.size + 32 || !key.copyOfRange(0, bodyPrefix.size).contentEquals(bodyPrefix)) {
+			throw IllegalArgumentException("content key envelope body is invalid")
+		}
+		val contentKey = key.copyOfRange(bodyPrefix.size, key.size)
+		return env.epoch.toInt() to contentKey
 	}
 
 	/** SHA-256 fingerprint (first 8 bytes, grouped hex) for the enrollment SAS. */

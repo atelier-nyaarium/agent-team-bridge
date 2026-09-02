@@ -9,7 +9,8 @@
 // omits null-defaulted optionals, which is exactly what the gateway's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
-// it MUST pair with explicitNulls = false. Note the console's POST body is the
+// it MUST pair with explicitNulls = false. A required const on an encode-side
+// shape is a required parameter. Note the console's POST body is the
 // op-only envelope {device, conversationId, opId, op}; the Router composes the
 // full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
@@ -689,6 +690,7 @@ sealed class ConsoleApprovalOp {
 		val nonce: String,
 		val newSignPub: String,
 		val newBoxPub: String,
+		val joinSig: String? = null,
 		val device: String? = null,
 	) : ConsoleApprovalOp()
 
@@ -751,6 +753,7 @@ data class GatewayBootstrapBundle(
 	val admission: SignedAdmission,
 	val domain: DomainSnapshot,
 	val domainId: String? = null,
+	val contentKeys: List<KeyEnvelope>? = null,
 )
 
 @Serializable
@@ -758,6 +761,52 @@ data class GatewayBootstrapFrame(
 	val v: Long,
 	val signerSignPub: String,
 	val sealed: SealedEnvelope,
+)
+
+@Serializable
+data class ContentEnvelope(
+	val v: Long,
+	val epoch: Long,
+	val nonce: String,
+	val ciphertext: String,
+)
+
+@Serializable
+data class KeyEnvelope(
+	val epoch: Long,
+	val signerSignPub: String,
+	val sealed: SealedEnvelope,
+)
+
+@Serializable
+data class KeyRequest(
+	val v: Long,
+	val domainId: String,
+	val requesterSignPub: String,
+	val epochs: List<Long>,
+	val at: Long,
+	val nonce: String,
+	val signature: String,
+)
+
+@Serializable
+data class KeyGrant(
+	val v: Long,
+	val recipientSignPub: String,
+	val envelope: KeyEnvelope,
+	val at: Long,
+)
+
+@Serializable
+data class KeyReceipt(
+	val v: Long,
+	val domainId: String,
+	val recipientSignPub: String,
+	val epoch: Long,
+	val keyringGeneration: Long,
+	val at: Long,
+	val nonce: String,
+	val signature: String,
 )
 
 @Serializable
@@ -1362,6 +1411,7 @@ data class EnrollReveal(
 data class ConsoleApprovalJoin(
 	val newSignPub: String,
 	val newBoxPub: String,
+	val joinSig: String? = null,
 	val device: String? = null,
 )
 

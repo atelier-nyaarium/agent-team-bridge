@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fingerprint, generateIdentity, type Identity } from "../../shared/crypto.js";
@@ -52,10 +53,36 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
 	}
 	const id = generateIdentity();
 	fs.mkdirSync(dataDir, { recursive: true });
-	fs.writeFileSync(file, JSON.stringify(id), { mode: 0o600 });
+	const temp = `${file}.${randomBytes(16).toString("hex")}`;
+	let linked = false;
 	try {
-		fs.chmodSync(file, 0o600);
-	} catch {}
+		const descriptor = fs.openSync(temp, "wx", 0o600);
+		try {
+			fs.writeFileSync(descriptor, JSON.stringify(id));
+			fs.fsyncSync(descriptor);
+		} finally {
+			fs.closeSync(descriptor);
+		}
+		try {
+			fs.linkSync(temp, file);
+			linked = true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+	} finally {
+		try {
+			fs.unlinkSync(temp);
+		} catch {}
+	}
+	if (!linked) return loadOrCreateIdentity(dataDir);
+	if (process.platform !== "win32") {
+		const descriptor = fs.openSync(dataDir, "r");
+		try {
+			fs.fsyncSync(descriptor);
+		} finally {
+			fs.closeSync(descriptor);
+		}
+	}
 	console.log(`[identity] minted federation identity (signing fp ${fingerprint(id.sign.pub)})`);
 	return id;
 }

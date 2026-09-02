@@ -476,7 +476,8 @@ One section per spec. Name its residue test. Later phases implement only these s
 ## Phase 2 - Owner content key
 
 - Derivation, on the owner phone only: `HKDF-SHA256(root, salt = fixed, info = "switchboard-content"
-  || epoch)`. Deterministic, so the owner backup regenerates every epoch. Epoch 1 at cutover.
+  || epoch)`. Deterministic, so the owner backup regenerates every epoch. Epoch 1 at first root or
+  backup restore on the owner phone; cutover backfills it to every member.
 - A standalone symmetric envelope beside the X25519 seal: AES-256-GCM, random nonce, AAD binding
   `(domainId, ownerId, epoch, content kind)`. Node and Kotlin both already hold HKDF-SHA256 and
   AES-256-GCM; `deriveKey` is private on both and stays so. Shared fixture in `tests/fixtures/`.
@@ -498,6 +499,23 @@ One section per spec. Name its residue test. Later phases implement only these s
   Documented, not automated.
 - Revocation is authorization-only.
 - Residue test: the key never appears in a log line or a debug ingest.
+- Deploy order: the Router before the app, since the held device refuses a join whose `joinSig`
+  an older Router dropped; the gateway before the app as usual, and an older phone's bundle still
+  enrolls a new gateway because first enrollment resolves no signer.
+
+### Bug Classes
+
+- **Staged install activation** (`bootstrapInstall.ts`): patched three rounds. Round one moved
+  the allowlist write to the atomic writer and made activation require all four artifacts. Round
+  two replaced rename-by-artifact with copy-then-remove so recovery re-runs. Round three split
+  corruption from activation errors and added the owner check on the recovery road. Defect class:
+  a multi-file install with no single commit point. Candidate for architecture: a per-generation
+  live directory plus one pointer rename.
+- **Held-epoch rule** (`contentKeyStore.ts`, `ContentKeyring.kt`, `bootstrapInstall.ts`):
+  patched twice. Round one made the outcome three-way. Round two made every road unwrap first and
+  byte-compare, and made re-enrollment merge instead of replace. Defect class: three roads into
+  one keyring, each with its own rule. Candidate for architecture: one keyring writer that every
+  road calls.
 
 ## Phase 3 - Router: inboxes, op ledger, blob stores
 
@@ -671,9 +689,14 @@ Phase 1 output. Each names its residue test. Wire shapes land in `src/shared/sch
 
 ## S1 - Content envelope and key delivery
 
-Key. `contentKey(epoch) = HKDF-SHA256(ikm = owner sign.priv raw 32 bytes, salt =
-"switchboard-content-salt-v1", info = "switchboard-content-v1\n" + epoch, length 32)`. Epoch is an
-integer from 1. Derived on the owner phone only; every other holder receives bytes.
+Key. `contentKey(domainId, epoch) = HKDF-SHA256(ikm = owner sign.priv raw 32 bytes, salt =
+"switchboard-content-salt-v1", info = "switchboard-content-v1\n" + domainId + "\n" + epoch, length
+32)`. Epoch is an integer from 1 to 2^31-1, so both runtimes carry it as a 32-bit int. An ikm that
+is not 32 bytes is refused. Derived on the owner phone only; every other holder receives bytes. One
+owner key roots exactly one Domain, and the Router refuses a second root under the same key. Epoch
+1 is derived at first root, where the Domain id is known, and again when a restored owner learns
+its Domain id, so every delivery that follows carries at least one epoch. The owner path verifies
+every held epoch against the derivation and sets aside a slot that disagrees.
 
 Envelope. `ContentEnvelope { v: 1, epoch, nonce (12 bytes b64), ciphertext (ct || 16-byte tag,
 b64) }`. AES-256-GCM. AAD = `"switchboard-content-v1\n" + domainId + "\n" + ownerSignPub + "\n" +
@@ -682,17 +705,42 @@ epoch + "\n" + kind`, kind a slug naming the field: `board.title`, `board.body`,
 ciphertext serves the record, the delivered row, and the echo. A ciphertext opened under another
 kind fails.
 
-Key envelope. `KeyEnvelope { epoch, sealed: SealedEnvelope }`, the existing seal of the 32 key
-bytes to the recipient's admitted box key, signed by an admitted console's signing key (the owner
-phone at first, any key-holding phone later). The recipient resolves the signer to an admission of
+Key envelope. `KeyEnvelope { epoch, signerSignPub, sealed: SealedEnvelope }`, the existing seal of
+`"KEYENVELOPE_V1\n" + epoch + "\n"` followed by the 32 key bytes to the recipient's admitted box
+key, so a sealed key cannot be relabeled to another epoch and no seal from another context passes
+as a key, signed by an admitted console's signing key
+(the owner phone at first, any key-holding phone later) and naming it, so a recipient never
+guesses the signer. The recipient resolves `signerSignPub` to an admission of
 kind `console` through a kind-checking wrapper, as `resolveConsoleBoxPub` does, never bare
-`resolveAdmitted`, then stores `epoch -> key`. A gateway key is refused as a signer.
+`resolveAdmitted`, then stores `epoch -> key`. A gateway key is refused as a signer. Resolution
+picks the newest admission for the signing key first and only then requires kind `console`, on both
+runtimes, so a key re-admitted as a gateway refuses everywhere. The bootstrap bundle's Domain
+snapshot carries the signing console's own admission beside the gateway's, so the gateway resolves
+the signer without the full roster.
 
 Delivery.
 - New console: `ConsoleTransport.contentKeys: KeyEnvelope[]`, every current epoch, at Add Device.
+  The join the new device parks at the Router carries `joinSig`, its console signature over
+  `DEVICE_JOIN_V1`, the approval id, the nonce, and both public keys, and the held device refuses
+  an unsigned or mis-signed join before it signs or seals anything, so the Router cannot swap the
+  box key the keys are sealed to. The install fails when any envelope is refused; an epoch already
+  held passes only when the delivered bytes equal the held bytes.
 - New gateway: `GatewayBootstrapBundle.contentKeys: KeyEnvelope[]`. Install is staged: admission,
-  transport, Domain id, and keys written under `federation/staging/`, then one `INSTALLED` marker
-  renamed into place, then activation; boot with a staging dir and no marker rolls it back.
+  transport, Domain id, and keys written under `federation/staging/`, every artifact atomic and
+  fsync'd, then one `INSTALLED` marker renamed into place, then activation. Activation requires all
+  four artifacts and copies each into the live dir atomically, transport last, leaving staging whole
+  until every copy landed, so boot recovery re-runs activation after any crash. Boot with a staging
+  dir and no marker rolls it back; a marker beside a missing artifact, or beside an allowlist that
+  is unrooted or rooted at another owner, is corruption and is rolled back too. Any other
+  activation error keeps staging and fails the boot, never a partial live set. The gateway
+  `ContentKeyStore` owns the key file format and `Allowlist` the allowlist file format, on the live
+  dir and on the staging dir alike. Paste enrollment holds up to 3 epochs in the bundle; LAN
+  delivery is not bounded. A corrupt keyring file is set aside, never read as empty and
+  overwritten. Re-enrollment of a rooted gateway resolves the frame signer and every key signer
+  over the union of the live and bundle admissions with both revocation lists applied, requires an
+  admission newer than the one it holds, merges the allowlist, and merges keys: a held epoch the
+  bundle omits stays, equal bytes pass, different bytes refuse the whole bundle. First enrollment
+  keeps trust on first use.
 - Enrolled member: inbox rows (S3). `key_request` to the owner inbox: from a console as an
   OwnerOp, from a gateway as a `key_request` frame over its authenticated WS, either way carrying
   the requester's admitted signing key, `at`, and nonce. The console-only rule above is for
@@ -707,8 +755,11 @@ Delivery.
   member per epoch; Phase 8 starts when every member has a `keyReceipt` for every epoch.
 
 Keyrings. Phone: `AppStateStore` slot `contentKeys`, Keystore-backed beside the identity, wiped
-with `PROVISIONING_KEYS`; a restored owner backup regenerates every epoch from the root. Gateway:
-`DATA_DIR/federation/content-keys.json`, 0600, atomic write.
+with `PROVISIONING_KEYS`; a restored owner backup regenerates epoch 1 from the root once the Domain
+id is known, and rotation records the current epoch so later epochs regenerate the same way. A
+restore replaces a stored owner key that rooted nothing and refuses one that differs from the
+Domain's root. Gateway: `DATA_DIR/federation/content-keys.json`, 0600, atomic write; a base64
+value is decoded by one strict grammar on both runtimes.
 
 Reader state `missing_epoch`: the row or record is retained and not acked; one `key_request`
 now, then every 10 minutes for 24 hours; then reported as an error row to the owner. Distinct from

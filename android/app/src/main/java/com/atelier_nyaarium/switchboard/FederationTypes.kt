@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
+import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -56,6 +57,7 @@ data class ConsoleTransport(
 	val gatewayId: String? = null,
 	val domainVersion: String? = null,
 	val domain: DomainSnapshot? = null,
+	val contentKeys: List<KeyEnvelope> = emptyList(),
 )
 
 /** Outcome of "Revoke and Delete Domain". */

@@ -126,7 +126,8 @@ export class TenantAdmin {
 		let branch = "no decision";
 		const signer = fingerprint(ownerSignPub);
 		try {
-			const result = await this.store.mutateDomain<EnrollResult>(domainId, (current) => {
+			const result = await this.store.mutateSecret<EnrollResult>(({ enrollment, seenAdminNonces }) => {
+				const current = enrollment[domainId] ?? null;
 				const pending = current?.pendingTenant;
 				const OPAQUE_REJECT = "invalid or expired invite";
 				if (!current || !pending) {
@@ -145,6 +146,14 @@ export class TenantAdmin {
 					branch = "rejected: invite nonce mismatch";
 					return { commit: false, value: { ok: false, error: OPAQUE_REJECT } };
 				}
+				if (
+					Object.entries(enrollment).some(
+						([otherDomainId, state]) => otherDomainId !== domainId && state.ownerSignPub === ownerSignPub,
+					)
+				) {
+					branch = "rejected: owner key already roots another Domain";
+					return { commit: false, value: { ok: false, error: "owner key already roots a Domain" } };
+				}
 				if (nowMs > pending.issuedAt + pending.ttlMs) {
 					branch = "rejected: invite expired";
 					return { commit: false, value: { ok: false, error: "invite expired" } };
@@ -156,7 +165,12 @@ export class TenantAdmin {
 					ownerBoxPub,
 					pendingTenant: { ...pending, rooted: true },
 				};
-				return { commit: true, next, value: { ok: true } };
+				return {
+					commit: true,
+					enrollment: { ...enrollment, [domainId]: next },
+					seenAdminNonces,
+					value: { ok: true },
+				};
 			});
 			if (result.ok) console.log(`[TenantAdmin] first_root domain "${domainId}" ${branch} (owner ${signer})`);
 			else console.warn(`[TenantAdmin] first_root domain "${domainId}" ${branch} (signer ${signer})`);

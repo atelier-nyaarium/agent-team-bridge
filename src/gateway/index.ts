@@ -4,11 +4,13 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { agentHttpPath } from "../shared/agent-backend.js";
+import { sweepAtomicTemps } from "../shared/atomic-write.js";
 import { BlobStore } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
+import type { Identity } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
+import { resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
@@ -18,7 +20,7 @@ import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
-import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
+import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema, GatewayBootstrapFrameSchema } from "../shared/schemas.js";
 import { type CodexCatalogWriter, type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import type { AwarenessObservation } from "./awarenessBank.js";
@@ -58,7 +60,8 @@ import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
 import { Allowlist } from "./federation/allowlist.js";
-import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
+import { activateStaged, openBootstrapBundle, recoverStaging, stageBootstrap } from "./federation/bootstrapInstall.js";
+import { ContentKeyStore } from "./federation/contentKeyStore.js";
 import {
 	CrossDomainHandshakeCoordinator,
 	createCrossDomainHandshakePump,
@@ -142,9 +145,13 @@ export async function startGateway(): Promise<void> {
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
-	// The Gateway persists its federation identity, mirrored allowlist, and the enrollment-delivered
-	// transport.json + domain-id under this dir (inside DATA_DIR, separate from the debug log).
+	// Federation state and staging live here.
 	const federationDir = process.env.FEDERATION_DIR || path.join(DATA_DIR, "federation");
+	recoverStaging(federationDir);
+	for (const name of sweepAtomicTemps(federationDir)) console.log(`[gateway] removed atomic temp ${name}`);
+	let cachedIdentity: Identity | null = null;
+	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir));
+	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv);
 	let localDomainId = resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 
@@ -678,7 +685,7 @@ export async function startGateway(): Promise<void> {
 			if (reason.kind === "domain") slice.handlers?.presenceSource.recomputeDomain(reason.domainId);
 			else slice.handlers?.presenceSource.recomputeAll();
 		});
-		const identity = loadOrCreateIdentity(federationDir);
+		const federationIdentity = identity();
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
 		const replayDurable = new DurableStore(DATA_DIR, "replay-guard");
@@ -687,7 +694,14 @@ export async function startGateway(): Promise<void> {
 			const persisted = replayDurable.load();
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		});
-		const sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, domainId, replayGuard);
+		const sealer = createSealer(
+			federationIdentity,
+			allowlist,
+			localGatewayId,
+			crossDomainPeers,
+			domainId,
+			replayGuard,
+		);
 		// The requester leg routes both commit-reveal rounds through the Router seam below; the Router
 		// (content-blind) forwards each frame to the receiver Gateway and holds the reply.
 		// The seam reads the client through the slice, assigned further down, so it stays lazy.
@@ -711,8 +725,8 @@ export async function startGateway(): Promise<void> {
 		const coordinator = new CrossDomainHandshakeCoordinator({
 			self: {
 				ownerSignPub: () => allowlist.ownerSignPub,
-				gatewaySignPub: identity.sign.pub,
-				gatewayBoxPub: identity.box.pub,
+				gatewaySignPub: federationIdentity.sign.pub,
+				gatewayBoxPub: federationIdentity.box.pub,
 				domainId,
 				gatewayId: localGatewayId,
 			},
@@ -730,11 +744,12 @@ export async function startGateway(): Promise<void> {
 		});
 		// The console channel rides the SAME durable replay guard + allowlist: a console
 		// frame is sealed to this gateway and signed by an admitted console key.
-		const consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
+		const consoleSealer = createConsoleSealer(federationIdentity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-gateway QR so the owner can scan this Gateway
 		// into the Domain. Once admitted (mirrored from the Router), this falls silent.
-		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
+		if (!allowlist.selfAdmission(federationIdentity.sign.pub))
+			logAdmitGatewayQr(federationIdentity, localGatewayId);
 
 		// The federation WS: dial the Router and pin its leaf fingerprint. Creds are delivered by
 		// enrollment, so there is nothing to mount and nothing to configure by hand.
@@ -791,15 +806,15 @@ export async function startGateway(): Promise<void> {
 				// Present this Gateway's owner-signed admission + a fresh possession proof,
 				// so the Router can gate registration once a Domain owner exists. Null (token
 				// only) until enrollment writes the self-admission into the allowlist.
-				const self = allowlist.selfAdmission(identity.sign.pub);
+				const self = allowlist.selfAdmission(federationIdentity.sign.pub);
 				if (!self) return null;
 				const proofAt = Date.now();
 				const proofNonce = randomBytes(18).toString("base64");
 				return {
-					signPub: identity.sign.pub,
-					boxPub: identity.box.pub,
+					signPub: federationIdentity.sign.pub,
+					boxPub: federationIdentity.box.pub,
 					admission: JSON.stringify(self),
-					proof: signRegister(localGatewayId, proofAt, proofNonce, identity.sign.priv),
+					proof: signRegister(localGatewayId, proofAt, proofNonce, federationIdentity.sign.priv),
 					proofAt,
 					proofNonce,
 				};
@@ -817,6 +832,7 @@ export async function startGateway(): Promise<void> {
 			sealer,
 			consoleSealer,
 			routerClient,
+			contentKeyStore,
 			replayPersist: () => replayDurable.save(replayGuard.snapshot()),
 			domainMeta: null,
 			handlers: null,
@@ -829,8 +845,7 @@ export async function startGateway(): Promise<void> {
 	// GET /admit-payload, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	// Leaving the arming phase is what closes the window: both slice fields die with the state.
 	function enterArming(nonce: string): void {
-		const enrollAllowlist = new Allowlist(federationDir);
-		const enrollIdentity = loadOrCreateIdentity(federationDir);
+		const enrollIdentity = identity();
 		// The phone delivers the sealed bundle over a pinned-TLS listener the gateway opens only while
 		// armed: the bundle is already E2E sealed, so this exists only to satisfy Android's no-cleartext
 		// policy without an app-wide permit and to keep the LAN wire private. The phone pins the cert
@@ -877,19 +892,22 @@ export async function startGateway(): Promise<void> {
 		let enrollTimer: ReturnType<typeof setTimeout> | null = null;
 		const install = (frame: unknown): string => {
 			const bundle = openBootstrapBundle(frame, enrollIdentity, nonce, localGatewayId);
-			// Persist the owner-signed admission FIRST, then the transport creds: a failure
-			// must never leave creds installed without the admission that authorizes them. A
-			// foreign-owner re-root is refused, so no creds are written for it.
-			if (!enrollAllowlist.applySnapshot(bundle.domain)) {
-				throw new Error("bundle is rooted at a different owner than this gateway's Domain");
+			const heldKeyCount = contentKeyStore.epochs().length;
+			const outerSignerSignPub = GatewayBootstrapFrameSchema.parse(frame).signerSignPub;
+			stageBootstrap(federationDir, bundle, enrollIdentity, contentKeyStore.snapshot(), outerSignerSignPub);
+			try {
+				activateStaged(federationDir);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				console.error(
+					`[enroll] bundle staged; a gateway restart completes it or a re-arm discards it: ${reason}`,
+				);
+				throw new Error("bundle is staged; a gateway restart completes it or a re-arm discards it");
 			}
-			fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
-				mode: 0o600,
-			});
-			// Record the joined Domain so the gateway resolves it now and on any future boot.
-			if (bundle.domainId) {
-				fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
-			}
+			contentKeyStore.reload();
+			console.log(
+				`[federation] content keys: held ${heldKeyCount}, delivered ${bundle.contentKeys?.length ?? 0}`,
+			);
 			boot = { phase: "standalone" };
 			// Graceful stop (not stop(true)): let the in-flight POST's 200 flush before the listener
 			// closes, so the Console sees success instead of a truncated-stream "delivery unreachable".

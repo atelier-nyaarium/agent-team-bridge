@@ -180,6 +180,16 @@ export function resolveAdmitted(
 	return best;
 }
 
+export function resolveAdmittedConsole(
+	allowlist: SignedAdmission[],
+	revocations: SignedRevocation[],
+	expectedOwnerSignPubB64: string,
+	subjectSignPubB64: string,
+): Admission | null {
+	const admission = resolveAdmitted(allowlist, revocations, expectedOwnerSignPubB64, subjectSignPubB64);
+	return admission?.kind === "console" ? admission : null;
+}
+
 ////////////////////////////////
 //  Registration proof-of-possession
 //

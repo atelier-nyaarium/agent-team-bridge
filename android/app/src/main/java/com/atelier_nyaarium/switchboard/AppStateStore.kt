@@ -7,6 +7,7 @@ import androidx.security.crypto.MasterKey
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
 import java.io.File
+import java.util.Base64
 import org.json.JSONObject
 
 /**
@@ -40,29 +41,39 @@ sealed interface IdentityLoad {
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
  */
-class AppStateStore(context: Context) :
+sealed interface ContentKeysLoad {
+	data object Absent : ContentKeysLoad
+	data class Loaded(val keys: Map<Int, ByteArray>) : ContentKeysLoad
+	data class Corrupt(val raw: String) : ContentKeysLoad
+}
+
+private fun securePreferences(context: Context): Pair<SharedPreferences, Boolean> = runCatching {
+		val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+		EncryptedSharedPreferences.create(
+			context,
+			"switchboard-secure",
+			key,
+			EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+			EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+		) to true
+	}.getOrElse { context.getSharedPreferences("switchboard", Context.MODE_PRIVATE) to false }
+
+class AppStateStore internal constructor(
+	val filesDir: File,
+	private val prefs: SharedPreferences,
+	val encrypted: Boolean,
+) :
 	IdleSilenceStore, ChatPersistenceStore, com.atelier_nyaarium.switchboard.board.BoardStore {
+	private constructor(context: Context, secure: Pair<SharedPreferences, Boolean>) : this(
+		context.filesDir,
+		secure.first,
+		secure.second,
+	)
+
+	constructor(context: Context) : this(context.applicationContext, securePreferences(context.applicationContext))
+
 	/** Where this app's durable state lives on disk. The prefs live here already; anything else
 	 * that has to survive a restart (the blob store's bytes) roots off the same directory. */
-	val filesDir: File = context.applicationContext.filesDir
-
-	// True when the Keystore-backed store initialized. Federation private keys are persisted ONLY
-	// when encrypted, keeping the Domain root signing key off disk in cleartext (fail closed).
-	private var encrypted = false
-	private val prefs: SharedPreferences = run {
-		val ctx = context.applicationContext
-		runCatching {
-			val key = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-			EncryptedSharedPreferences.create(
-				ctx,
-				"switchboard-secure",
-				key,
-				EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-				EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-			).also { encrypted = true }
-		}.getOrElse { ctx.getSharedPreferences("switchboard", Context.MODE_PRIVATE) }
-	}
-
 	fun save(blob: String) = prefs.edit().putString(KEY_BLOB, blob).apply()
 
 	fun load(): String? = prefs.getString(KEY_BLOB, null)
@@ -326,6 +337,33 @@ class AppStateStore(context: Context) :
 
 	fun loadOwnerIdentity(): IdentityLoad = readIdentity(KEY_OWNER_IDENTITY)
 
+	fun saveContentKeys(keys: Map<Int, ByteArray>) {
+		check(encrypted) { "secure storage unavailable; refusing to persist content keys in cleartext" }
+		val json = JSONObject()
+		keys.toSortedMap().forEach { (epoch, key) -> json.put(epoch.toString(), Base64.getEncoder().encodeToString(key)) }
+		prefs.edit().putString(KEY_CONTENT_KEYS, json.toString()).apply()
+	}
+
+	fun loadContentKeys(): ContentKeysLoad {
+		val raw = prefs.getString(KEY_CONTENT_KEYS, null) ?: return ContentKeysLoad.Absent
+		return runCatching {
+			val json = JSONObject(raw)
+			val keys = buildMap {
+				json.keys().forEach { name ->
+					val epoch = name.toIntOrNull()?.takeIf { it >= 1 } ?: error("invalid epoch")
+					val key = Base64.getDecoder().decode(json.getString(name))
+					check(key.size == 32) { "invalid key" }
+					put(epoch, key)
+				}
+			}
+			ContentKeysLoad.Loaded(keys)
+		}.getOrElse { ContentKeysLoad.Corrupt(raw) }
+	}
+
+	internal fun saveContentKeysCorrupt(raw: String) {
+		prefs.edit().putString(KEY_CONTENT_KEYS_CORRUPT, raw).apply()
+	}
+
 	/** Read a persisted identity into the [IdentityLoad] tri-state, keeping the corrupt case
 	 * distinct so the caller never mints over an unreadable key. */
 	private fun readIdentity(key: String): IdentityLoad = IdentityLoad.classify(prefs.getString(key, null))
@@ -458,6 +496,8 @@ class AppStateStore(context: Context) :
 		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
+		const val KEY_CONTENT_KEYS = "federation_content_keys"
+		const val KEY_CONTENT_KEYS_CORRUPT = "federation_content_keys_corrupt"
 		const val KEY_DOMAIN = "federation_domain"
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
@@ -521,7 +561,8 @@ class AppStateStore(context: Context) :
 		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
 		 * pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
-			KEY_BLOB, KEY_ROUTER_REACH, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
+			KEY_BLOB, KEY_ROUTER_REACH, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_CONTENT_KEYS, KEY_CONTENT_KEYS_CORRUPT,
+			KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_PENDING_ENROLLS,
 			KEY_TRUSTED_OWNERS,

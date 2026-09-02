@@ -167,7 +167,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 						status = when (repo.ownerFacts.importOwnerBackup(restoreBlob.trim(), restorePass)) {
 							OwnerRestoreResult.OK -> "Owner key restored."
 							OwnerRestoreResult.DIFFERENT_OWNER ->
-								"That backup is a different owner key. Only restore it on a fresh device."
+								"That backup is a different owner key."
 							OwnerRestoreResult.WRONG_PASSPHRASE -> "Restore failed (wrong passphrase or bad file)."
 						}
 					}
@@ -542,7 +542,7 @@ fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
 									if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 									busy = true
 									status = "Approving..."
-									repo.devices.approveDevice(a!!.approvalId, j)
+									repo.devices.approveDevice(a!!.approvalId, a.nonce, j)
 										.onSuccess {
 											done = true
 											status = ""

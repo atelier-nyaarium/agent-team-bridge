@@ -1,3 +1,4 @@
+import { resolveAdmittedConsole } from "../../shared/admission.js";
 import type { ConsoleOpEnvelope, ConsoleReplyBody } from "../../shared/console-protocol.js";
 import { type Identity, type SealedEnvelope, seal, unseal } from "../../shared/crypto.js";
 import { ConsoleOpEnvelopeSchema } from "../../shared/schemas.js";
@@ -41,8 +42,14 @@ export function createConsoleSealer(
 	now: () => number = Date.now,
 ): ConsoleSealer {
 	function resolveConsoleBoxPub(signerSignPub: string): string {
-		const admission = allowlist.resolveBySignPub(signerSignPub);
-		if (admission?.kind !== "console") {
+		const snapshot = allowlist.getSnapshot();
+		const admission = resolveAdmittedConsole(
+			snapshot?.admissions ?? [],
+			snapshot?.revocations ?? [],
+			snapshot?.ownerSignPub ?? "",
+			signerSignPub,
+		);
+		if (!admission) {
 			throw new Error("console is not admitted to the Domain");
 		}
 		return admission.boxPub;

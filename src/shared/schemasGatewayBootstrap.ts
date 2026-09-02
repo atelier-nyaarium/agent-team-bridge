@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { SealedEnvelopeSchema } from "./schemasConsoleOp.js";
+import { KeyEnvelopeSchema } from "./schemasContentKey.js";
 import { GatewayTransportSchema } from "./schemasGatewayTransport.js";
 
 ////////////////////////////////
@@ -25,6 +26,7 @@ export const GatewayBootstrapBundleSchema = z
 		domain: DomainSnapshotSchema,
 		// the network this gateway joins; the gateway records it so it resolves the same Domain on its next boot
 		domainId: z.string().min(1).max(64).optional(),
+		contentKeys: z.array(KeyEnvelopeSchema).optional(),
 	})
 	.meta({ id: "GatewayBootstrapBundle" });
 

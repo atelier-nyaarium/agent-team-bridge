@@ -263,6 +263,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				admittedGateways = sessions.keyringGateways(),
 			)
 		}
+		ownerFacts.ensureContentEpochs(confirmedDomainId())
 		presence.refreshDisplayNameFromTeams()
 		DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 	} catch (e: Exception) {

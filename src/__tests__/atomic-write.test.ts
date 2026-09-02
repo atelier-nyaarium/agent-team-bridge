@@ -113,11 +113,14 @@ describe("writeFileAtomic", () => {
 		const dead = ".tmp.999999999";
 		writeFileSync(path.join(root, `one${dead}`), "temp");
 		writeFileSync(path.join(root, `two${dead}`), "temp");
-		// Our own pid is alive, which is what another live process mid-write looks like.
-		writeFileSync(path.join(root, `live${ATOMIC_TEMP_SUFFIX}`), "temp");
+		// Parent process remains alive.
+		writeFileSync(path.join(root, `live.tmp.${process.ppid}`), "temp");
+		const ownTemp = ["own.tmp", String(process.pid)].join(".");
+		writeFileSync(path.join(root, ownTemp), "temp");
 		writeFileSync(path.join(root, "sibling.tmp"), "keep");
-		expect(sweepAtomicTemps(root).sort()).toEqual([`one${dead}`, `two${dead}`]);
-		expect(existsSync(path.join(root, `live${ATOMIC_TEMP_SUFFIX}`))).toBe(true);
+		expect(sweepAtomicTemps(root).sort()).toEqual([`one${dead}`, ownTemp, `two${dead}`]);
+		expect(existsSync(path.join(root, `live.tmp.${process.ppid}`))).toBe(true);
+		expect(existsSync(path.join(root, ownTemp))).toBe(false);
 		expect(existsSync(path.join(root, "sibling.tmp"))).toBe(true);
 	});
 });

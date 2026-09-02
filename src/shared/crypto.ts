@@ -138,15 +138,16 @@ export function seal(plaintext: Buffer, recipientBoxPubB64: string, senderSignPr
  * decrypt with the recipient's raw X25519 private key. Throws on tamper / wrong
  * sender / wrong recipient. */
 export function unseal(env: SealedEnvelope, recipientBoxPrivB64: string, senderSignPubB64: string): Buffer {
-	const ephemeralPubRaw = Buffer.from(env.ephemeralPub, "base64");
-	const nonce = Buffer.from(env.nonce, "base64");
-	const sealed = Buffer.from(env.ciphertext, "base64");
+	const ephemeralPubRaw = decodeB64(env.ephemeralPub);
+	const nonce = decodeB64(env.nonce);
+	const sealed = decodeB64(env.ciphertext);
+	decodeB64(env.signature);
 	const signed = Buffer.concat([ephemeralPubRaw, nonce, sealed]);
 	if (!verify(signed, env.signature, senderSignPubB64)) throw new Error("seal: bad signature");
 	if (sealed.length < 16) throw new Error("seal: ciphertext too short");
 	const ct = sealed.subarray(0, -16);
 	const tag = sealed.subarray(-16);
-	const recipientPriv = rawPrivToKey(Buffer.from(recipientBoxPrivB64, "base64"), "x25519");
+	const recipientPriv = rawPrivToKey(decodeB64(recipientBoxPrivB64), "x25519");
 	const shared = crypto.diffieHellman({
 		privateKey: recipientPriv,
 		publicKey: rawPubToKey(ephemeralPubRaw, "x25519"),
@@ -177,8 +178,15 @@ export function fingerprint(pubB64: string): string {
 
 /** A base64 field (raw key / nonce / signature): the base64 alphabet only, so it
  * holds no newline that could blur a signing-bytes boundary. */
+export const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$/;
+
 export function b64Field(): z.ZodString {
-	return z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/);
+	return z.string().regex(B64_RE).min(1);
+}
+
+export function decodeB64(value: string): Buffer {
+	if (value.length === 0 || !B64_RE.test(value)) throw new Error("invalid base64 field");
+	return Buffer.from(value, "base64");
 }
 
 /** A slug field (an opaque id like a domainId): lowercase alphanumeric segments joined

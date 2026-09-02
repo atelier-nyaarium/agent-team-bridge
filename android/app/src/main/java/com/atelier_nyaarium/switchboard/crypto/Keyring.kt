@@ -27,6 +27,13 @@ class Keyring(val snapshot: DomainSnapshot) {
 	/** The admission for a subject signing key, owner-verified and non-revoked. */
 	fun resolveSubject(signPubB64: String): Admission? = resolve { it.signPub == signPubB64 }
 
+	fun resolveAdmittedConsole(subjectSignPub: String): Admission? =
+		signedConsoleAdmission(subjectSignPub)?.admission
+
+	/** Match gateway order: newest admission, then console kind. */
+	fun signedConsoleAdmission(subjectSignPub: String): SignedAdmission? =
+		resolveSigned { it.signPub == subjectSignPub }?.takeIf { it.admission.kind == "console" }
+
 	/** Every Gateway this owner has admitted and not revoked. The roster of sessions is a WEAKER
 	 * source: a Gateway with no sessions listed is still one this console must reach. */
 	fun admittedGatewayIds(): List<String> =
@@ -35,7 +42,9 @@ class Keyring(val snapshot: DomainSnapshot) {
 			.distinct()
 			.filter { resolveGateway(it) != null }
 
-	private fun resolve(match: (Admission) -> Boolean): Admission? {
+	private fun resolve(match: (Admission) -> Boolean): Admission? = resolveSigned(match)?.admission
+
+	private fun resolveSigned(match: (Admission) -> Boolean): SignedAdmission? {
 		var best: SignedAdmission? = null
 		for (s in snapshot.admissions) {
 			if (!match(s.admission)) continue
@@ -44,7 +53,7 @@ class Keyring(val snapshot: DomainSnapshot) {
 		}
 		val winner = best ?: return null
 		if (isRevoked(winner.admission.signPub, winner.admission.issuedAt)) return null
-		return winner.admission
+		return winner
 	}
 
 	private fun isRevoked(signPubB64: String, admittedAt: Long): Boolean {

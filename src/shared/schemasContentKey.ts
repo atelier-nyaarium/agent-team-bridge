@@ -1,0 +1,76 @@
+import { z } from "zod";
+import { b64Field, slugField } from "./crypto.js";
+import { SealedEnvelopeSchema } from "./schemasConsoleOp.js";
+
+export const ContentKindSchema = z.enum([
+	"board.title",
+	"board.body",
+	"board.name",
+	"inbox.body",
+	"op.payload",
+	"op.result",
+]);
+
+export const ContentEnvelopeSchema = z
+	.object({
+		v: z.literal(1),
+		epoch: z.number().int().min(1).max(2147483647),
+		nonce: b64Field().refine(
+			(value) => Buffer.from(value, "base64").length === 12,
+			"nonce must decode to exactly 12 bytes",
+		),
+		ciphertext: b64Field().refine(
+			(value) => Buffer.from(value, "base64").length >= 16,
+			"ciphertext must decode to at least 16 bytes",
+		),
+	})
+	.meta({ id: "ContentEnvelope" });
+
+export const KeyEnvelopeSchema = z
+	.object({
+		epoch: z.number().int().min(1).max(2147483647),
+		signerSignPub: b64Field(),
+		sealed: SealedEnvelopeSchema,
+	})
+	.meta({ id: "KeyEnvelope" });
+
+export const KeyRequestSchema = z
+	.object({
+		v: z.literal(1),
+		domainId: slugField(),
+		requesterSignPub: b64Field(),
+		epochs: z.array(z.number().int().min(1).max(2147483647)).max(64),
+		at: z.number().int().nonnegative(),
+		nonce: b64Field(),
+		signature: b64Field(),
+	})
+	.meta({ id: "KeyRequest" });
+
+export const KeyGrantSchema = z
+	.object({
+		v: z.literal(1),
+		recipientSignPub: b64Field(),
+		envelope: KeyEnvelopeSchema,
+		at: z.number().int().nonnegative(),
+	})
+	.meta({ id: "KeyGrant" });
+
+export const KeyReceiptSchema = z
+	.object({
+		v: z.literal(1),
+		domainId: slugField(),
+		recipientSignPub: b64Field(),
+		epoch: z.number().int().min(1).max(2147483647),
+		keyringGeneration: z.number().int().nonnegative(),
+		at: z.number().int().nonnegative(),
+		nonce: b64Field(),
+		signature: b64Field(),
+	})
+	.meta({ id: "KeyReceipt" });
+
+export type ContentKind = z.infer<typeof ContentKindSchema>;
+export type ContentEnvelope = z.infer<typeof ContentEnvelopeSchema>;
+export type KeyEnvelope = z.infer<typeof KeyEnvelopeSchema>;
+export type KeyRequest = z.infer<typeof KeyRequestSchema>;
+export type KeyGrant = z.infer<typeof KeyGrantSchema>;
+export type KeyReceipt = z.infer<typeof KeyReceiptSchema>;

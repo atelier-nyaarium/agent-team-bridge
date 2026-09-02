@@ -1,0 +1,121 @@
+{
+	"v": 1,
+	"refusedNonces": [
+		"AQEBAQEBAQEBAQEBA",
+		"AQEBAQEBAQEBAQEB=",
+		"AQEBAQEBAQEBAQEB==",
+		"AQEBAQEBAQEBAQEB-",
+		"AQEBAQEBAQEBAQEB_",
+		"AQEBAQEBAQEBAQEB "
+	],
+	"acceptedCiphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9MIl3+1753tdIPddB6QRJ74",
+	"derivation": [
+		{
+			"ownerSignPrivB64": "jOZl5BT+kYotKi87KPuEfJukOofufsJehdQqGiu0OLk=",
+			"epoch": 1,
+			"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
+			"domainId": "alice"
+		},
+		{
+			"ownerSignPrivB64": "jOZl5BT+kYotKi87KPuEfJukOofufsJehdQqGiu0OLk=",
+			"epoch": 2,
+			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
+			"domainId": "alice"
+		}
+	],
+	"envelopes": [
+		{
+			"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 1,
+			"kind": "board.title",
+			"nonceB64": "AQEBAQEBAQEBAQEB",
+			"plaintextUtf8": "fixture board.title",
+			"ciphertextB64": "iJtbvl+E/P5hsjbZOPnTq7KM9MIl3+1753tdIPddB6QRJ74="
+		},
+		{
+			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 2,
+			"kind": "board.body",
+			"nonceB64": "AgICAgICAgICAgIC",
+			"plaintextUtf8": "fixture board.body",
+			"ciphertextB64": "vOzZ24MV7TqwO3s4OL7PP9QQLTNwruFG6dr5jQqGxPVCsQ=="
+		},
+		{
+			"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 1,
+			"kind": "board.name",
+			"nonceB64": "AwMDAwMDAwMDAwMD",
+			"plaintextUtf8": "fixture board.name",
+			"ciphertextB64": "vr/NjvvLpPvsxHw6tQInEyRB4L3p81rUplQ8nvNAWrFMGg=="
+		},
+		{
+			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 2,
+			"kind": "inbox.body",
+			"nonceB64": "BAQEBAQEBAQEBAQE",
+			"plaintextUtf8": "fixture inbox.body",
+			"ciphertextB64": "29oOxmHCVuYdkBS7oZjJ9X0Av1xChuIhrV80oVzfMI9Wig=="
+		},
+		{
+			"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 1,
+			"kind": "op.payload",
+			"nonceB64": "BQUFBQUFBQUFBQUF",
+			"plaintextUtf8": "fixture op.payload",
+			"ciphertextB64": "pQBqiDEW0yEfAStjOyCM8rFNph+jVTePFaHnYdJqVU6+pA=="
+		},
+		{
+			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 2,
+			"kind": "op.result",
+			"nonceB64": "BgYGBgYGBgYGBgYG",
+			"plaintextUtf8": "fixture op.result",
+			"ciphertextB64": "/rQoZvVMVDSZIyDlerK2N2jw7WQIkJAiChqU18hl/OD2"
+		}
+	],
+	"keyEnvelope": {
+		"epoch": 1,
+		"keyB64": "4Y+l3GJEIHlc7r3u60qdiJ9DgnLxVPHmkdaLeN7HXCY=",
+		"recipientBox": {
+			"pub": "PDMOa1qRSkle6392NXWtuK+q1UypBimG29Y7ACvjrEk=",
+			"priv": "L6xsdHM2X3O1x1bkWgp7KzaiPiUdzATNDtol3XK5CKU="
+		},
+		"senderSign": {
+			"pub": "IycMJdgYJ6M2BbORG9olieUQAyi/vcJWlRfgETAeH7M=",
+			"priv": "nIESTrsNqpz5uKhQgEBKClVG0JRYMpPzhX3T9dT/dg0="
+		},
+		"envelope": {
+			"epoch": 1,
+			"signerSignPub": "IycMJdgYJ6M2BbORG9olieUQAyi/vcJWlRfgETAeH7M=",
+			"sealed": {
+				"ephemeralPub": "B9j6c75jT17ZuKAU23L4KrYyjsBbol+KEBLbSmJdOQE=",
+				"nonce": "7tBpH1MrmCy9AbzE",
+				"ciphertext": "mWGdZwL5oY39TllypKhTZ63MNP0xGHnNqym2wQgVRVA1Fg4jgeO3Zqp8UHxiHSQtBHPJrF+8qTKOXu5tp+T0sm0=",
+				"signature": "F+uhKGSZnSGNCVXNb3VkaXHaDR6Pb1yJsLnVSOxehATKVYzOQdJByE5TT8tY2KBtI+cYKvnjDdIHAXrR2HCnBQ=="
+			}
+		},
+		"relabeledEpoch": {
+			"epoch": 7,
+			"signerSignPub": "IycMJdgYJ6M2BbORG9olieUQAyi/vcJWlRfgETAeH7M=",
+			"sealed": {
+				"ephemeralPub": "B9j6c75jT17ZuKAU23L4KrYyjsBbol+KEBLbSmJdOQE=",
+				"nonce": "7tBpH1MrmCy9AbzE",
+				"ciphertext": "mWGdZwL5oY39TllypKhTZ63MNP0xGHnNqym2wQgVRVA1Fg4jgeO3Zqp8UHxiHSQtBHPJrF+8qTKOXu5tp+T0sm0=",
+				"signature": "F+uhKGSZnSGNCVXNb3VkaXHaDR6Pb1yJsLnVSOxehATKVYzOQdJByE5TT8tY2KBtI+cYKvnjDdIHAXrR2HCnBQ=="
+			}
+		}
+	},
+	"refusedCiphertext": "7u4O0CvYuabbbynnIRqYpYZbyg9cOS0qMQ01HWl37a5159U "
+}

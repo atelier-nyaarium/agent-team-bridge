@@ -64,10 +64,15 @@ import {
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
+	ContentEnvelopeSchema,
 	CrossDomainShareTargetSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 	GatewayTransportSchema,
+	KeyEnvelopeSchema,
+	KeyGrantSchema,
+	KeyReceiptSchema,
+	KeyRequestSchema,
 	MailboxEntrySchema,
 	ProvisioningSchema,
 	TeamInfoSchema,
@@ -126,6 +131,12 @@ const ROOTS: z.ZodType[] = [
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
+	// Content key wire shapes.
+	ContentEnvelopeSchema,
+	KeyEnvelopeSchema,
+	KeyRequestSchema,
+	KeyGrantSchema,
+	KeyReceiptSchema,
 	// A root so the Android owner can sign it.
 	SignedXDomainUntrustSchema,
 	RosterRequestSchema,
@@ -282,7 +293,13 @@ function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): str
 		if (typeof constValue === "string") {
 			lines.push(`${INDENT}val ${name}: ${baseType} = ${kotlinString(constValue)},`);
 		} else if (constValue !== undefined) {
-			throw new Error(`non-string const for ${name} - extend the emitter before using it`);
+			if (typeof constValue !== "number") throw new Error(`unsupported const for ${name}`);
+			const isInteger = Number.isInteger(constValue);
+			const type = isInteger ? "Long" : baseType;
+			const literal = isInteger ? `${constValue}L` : `${constValue}`;
+			lines.push(
+				required.has(name) ? `${INDENT}val ${name}: ${type},` : `${INDENT}val ${name}: ${type} = ${literal},`,
+			);
 		} else if (optional) {
 			lines.push(`${INDENT}val ${name}: ${baseType}? = null,`);
 		} else {
@@ -390,7 +407,8 @@ const header = `// generated from src/shared/schemas.ts + src/shared/console-pro
 // omits null-defaulted optionals, which is exactly what the gateway's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
-// it MUST pair with explicitNulls = false. Note the console's POST body is the
+// it MUST pair with explicitNulls = false. Required consts become parameters. Note
+// the console's POST body is the
 // op-only envelope {device, conversationId, opId, op}; the Router composes the
 // full console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")

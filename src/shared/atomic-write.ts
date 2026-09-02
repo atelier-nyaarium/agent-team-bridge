@@ -41,6 +41,7 @@ export function isAtomicTemp(name: string): boolean {
 function writerAlive(name: string): boolean {
 	const pid = Number(ATOMIC_TEMP_RE.exec(name)?.[1]);
 	if (!Number.isFinite(pid) || pid <= 0) return false;
+	if (pid === process.pid) return false;
 	try {
 		process.kill(pid, 0);
 		return true;

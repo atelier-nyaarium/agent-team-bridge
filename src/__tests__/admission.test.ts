@@ -3,6 +3,7 @@ import {
 	type Admission,
 	REGISTER_MAX_SKEW_MS,
 	resolveAdmitted,
+	resolveAdmittedConsole,
 	signAdmission,
 	signRegister,
 	signRevocation,
@@ -106,6 +107,39 @@ describe("domain admission", () => {
 		];
 		// The attacker's revocation does not verify under the owner key.
 		expect(resolveAdmitted(list, revs, owner.sign.pub, host.sign.pub)).not.toBeNull();
+	});
+
+	it("uses the newest admission before applying the console kind check", () => {
+		const shared = generateIdentity();
+		const signed = (kind: "console" | "gateway", issuedAt: number) =>
+			signAdmission(
+				{
+					kind,
+					signPub: shared.sign.pub,
+					boxPub: shared.box.pub,
+					...(kind === "gateway" ? { gatewayId: "laptop" } : {}),
+					issuedAt,
+					nonce: `${kind}-${issuedAt}`,
+				},
+				owner.sign.priv,
+				owner.sign.pub,
+			);
+		const consoleAt1 = signed("console", 1000);
+		const gatewayAt2 = signed("gateway", 2000);
+		for (const list of [
+			[consoleAt1, gatewayAt2],
+			[gatewayAt2, consoleAt1],
+		]) {
+			expect(resolveAdmittedConsole(list, [], owner.sign.pub, shared.sign.pub)).toBeNull();
+		}
+		const gatewayAt1 = signed("gateway", 1000);
+		const consoleAt2 = signed("console", 2000);
+		for (const list of [
+			[gatewayAt1, consoleAt2],
+			[consoleAt2, gatewayAt1],
+		]) {
+			expect(resolveAdmittedConsole(list, [], owner.sign.pub, shared.sign.pub)?.kind).toBe("console");
+		}
 	});
 });
 

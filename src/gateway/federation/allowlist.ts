@@ -14,6 +14,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
+import { writeFileAtomic } from "../../shared/atomic-write.js";
 
 ////////////////////////////////
 //  Schemas
@@ -24,12 +25,12 @@ const AllowlistFileSchema = z.object({
 	admissions: z.array(SignedAdmissionSchema),
 	revocations: z.array(SignedRevocationSchema),
 });
-type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
+export type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
 
 ////////////////////////////////
 //  Class
 
-const ALLOWLIST_FILE = "federation-allowlist.json";
+export const ALLOWLIST_FILE = "federation-allowlist.json";
 
 /** The mirrored Domain allowlist on a Gateway: the owner root plus the
  * owner-signed admissions / revocations, persisted to the Gateway's volume so a
@@ -45,18 +46,28 @@ export class Allowlist {
 	}
 
 	private read(): AllowlistFile {
+		let raw: string;
 		try {
-			const parsed = AllowlistFileSchema.safeParse(JSON.parse(fs.readFileSync(this.file, "utf8")));
-			if (parsed.success) return parsed.data;
-		} catch {
-			// Absent / unreadable: start empty.
+			raw = fs.readFileSync(this.file, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			return { ownerSignPub: null, admissions: [], revocations: [] };
 		}
+		try {
+			const parsed = AllowlistFileSchema.safeParse(JSON.parse(raw));
+			if (parsed.success) return parsed.data;
+		} catch {}
+		console.warn(`[allowlist] invalid allowlist file ${this.file}`);
 		return { ownerSignPub: null, admissions: [], revocations: [] };
+	}
+
+	static writeFile(file: string, state: AllowlistFile): void {
+		writeFileAtomic(file, JSON.stringify(state), { mode: 0o600, fsyncFile: true, fsyncDirectory: true });
 	}
 
 	private persist(): void {
 		fs.mkdirSync(path.dirname(this.file), { recursive: true });
-		fs.writeFileSync(this.file, JSON.stringify(this.state), { mode: 0o600 });
+		Allowlist.writeFile(this.file, this.state);
 	}
 
 	get ownerSignPub(): string | null {

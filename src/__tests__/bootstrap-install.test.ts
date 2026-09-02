@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openBootstrapBundle } from "../gateway/federation/bootstrapInstall.js";
 import { type Admission, signAdmission } from "../shared/admission.js";
+import { deriveContentKey, wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity, type Identity, seal } from "../shared/crypto.js";
 
 function buildFrame(
@@ -10,6 +11,7 @@ function buildFrame(
 	nonce: string,
 	gatewayId: string,
 	admissionSigner: Identity = owner,
+	epochs = 1,
 ): unknown {
 	const admission: Admission = {
 		kind: "gateway",
@@ -20,6 +22,17 @@ function buildFrame(
 		nonce: "adm",
 	};
 	const signed = signAdmission(admission, admissionSigner.sign.priv, admissionSigner.sign.pub);
+	const consoleAdmission = signAdmission(
+		{
+			kind: "console",
+			signPub: console_.sign.pub,
+			boxPub: console_.box.pub,
+			issuedAt: 1000,
+			nonce: "Y29uc29sZQ==",
+		},
+		owner.sign.priv,
+		owner.sign.pub,
+	);
 	// Realistic field lengths, so the size assertion below measures a real bundle rather than a toy:
 	// a 64-hex fingerprint and a 64-hex bearer are what the Router actually hands out.
 	const transport = {
@@ -31,8 +44,17 @@ function buildFrame(
 		nonce,
 		transport,
 		admission: signed,
-		domain: { ownerSignPub: owner.sign.pub, admissions: [signed], revocations: [] },
+		domain: { ownerSignPub: owner.sign.pub, admissions: [signed, consoleAdmission], revocations: [] },
 		domainId: "a95dd4e979aa3be5",
+		contentKeys: Array.from({ length: epochs }, (_, index) =>
+			wrapContentKey(
+				deriveContentKey(owner.sign.priv, "a95dd4e979aa3be5", index + 1),
+				index + 1,
+				sw.box.pub,
+				owner.sign.pub,
+				owner.sign.priv,
+			),
+		),
 	};
 	const sealed = seal(Buffer.from(JSON.stringify(bundle), "utf8"), sw.box.pub, console_.sign.priv);
 	return { v: 1, signerSignPub: console_.sign.pub, sealed };
@@ -72,18 +94,19 @@ describe("openBootstrapBundle", () => {
 		expect(() => openBootstrapBundle(frame, sw, "n1", "willow")).toThrow();
 	});
 
-	// The bundle carries the root and the Gateway's OWN admission, nothing else - the roster and the
-	// revocations arrive on the register reply, verified against that same root. This pins that a
-	// minimal bundle is enough to install, and that its sealed frame fits a terminal paste with room:
-	// a bundle carrying the whole roster grew ~370 bytes per member and crossed the 4096-byte line the
-	// tty discards past, which is how paste enrollment broke on the first machine that was not the first.
-	it("installs from a bundle that names only the root and its own admission, and that fits a paste", () => {
+	it("installs the admissions and content keys within paste limits", () => {
+		for (const [epochs, limit] of [
+			[1, 3072],
+			[3, 4096],
+		] as const) {
+			const frame = buildFrame(owner, sw, console_, "n1", "sakura", owner, epochs);
+			const bundle = openBootstrapBundle(frame, sw, "n1", "sakura");
+			expect(bundle.domain.admissions).toHaveLength(2);
+			expect(bundle.contentKeys).toHaveLength(epochs);
+			expect(JSON.stringify(frame).length).toBeLessThan(limit);
+		}
 		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
-		const bundle = openBootstrapBundle(frame, sw, "n1", "sakura");
-		expect(bundle.domain.admissions).toHaveLength(1);
-		expect(bundle.domain.revocations).toHaveLength(0);
-		expect(bundle.transport.routerCertFp).toHaveLength(64);
-		const wire = JSON.stringify(frame).length;
-		expect(wire, `sealed frame is ${wire} bytes`).toBeLessThan(2048);
+		expect(openBootstrapBundle(frame, sw, "n1", "sakura").domain.revocations).toHaveLength(0);
+		expect(openBootstrapBundle(frame, sw, "n1", "sakura").transport.routerCertFp).toHaveLength(64);
 	});
 });

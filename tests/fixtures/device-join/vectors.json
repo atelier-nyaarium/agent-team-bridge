@@ -1,0 +1,12 @@
+{
+	"v": 1,
+	"approvalId": "YXBwcm92YWwtNw==",
+	"nonce": "am9pbi1ub25jZQ==",
+	"newSignPub": "Z4Cr6qMuSlPKdbhiusQg8jym5x7cMH6bdVUkfz3lt4k=",
+	"newBoxPub": "iUNUDkgpVtdAiGSiWYoKEHm2hdQBIBIBFdH/AAusCGM=",
+	"signer": {
+		"pub": "Z4Cr6qMuSlPKdbhiusQg8jym5x7cMH6bdVUkfz3lt4k=",
+		"priv": "HSGlBZbSgP6xX3SoDSp1TzYHiV9lI5QhXmXqWhdocHU="
+	},
+	"signature": "pgfzXfGJ0s5p6ECeDbYRnNf7s+tlw63KJSdxIjxflCmsKJypTN/X4mh7/urhmVDO5s2cl/jnp4h7IZyV7uw+Bg=="
+}

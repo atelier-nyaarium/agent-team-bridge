@@ -3,8 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConsoleSurface } from "../federation-server/consoleSurface.js";
+import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import { PublicApproval } from "../federation-server/publicApproval.js";
+import { RouterServer } from "../federation-server/routerServer.js";
 import { loadRouterTls } from "../federation-server/routerTls.js";
+import { generateIdentity } from "../shared/crypto.js";
+import { signFirstRoot } from "../shared/federation-lifecycle.js";
 
 describe("federation router surfaces", () => {
 	it("persists the router certificate and rejects a corrupt pair", () => {
@@ -28,10 +32,10 @@ describe("federation router surfaces", () => {
 				method: "POST",
 				body: JSON.stringify({
 					step: "join",
-					approvalId: "a",
-					nonce: "b",
-					newSignPub: "c",
-					newBoxPub: "d",
+					approvalId: "YQ==",
+					nonce: "Yg==",
+					newSignPub: "Yw==",
+					newBoxPub: "ZA==",
 					device: "e",
 				}),
 			}),
@@ -40,7 +44,7 @@ describe("federation router surfaces", () => {
 		const privateStep = await server.handleRequest(
 			new Request("https://router/device-approval", {
 				method: "POST",
-				body: JSON.stringify({ step: "arm", approvalId: "a", nonce: "b" }),
+				body: JSON.stringify({ step: "arm", approvalId: "YQ==", nonce: "Yg==" }),
 			}),
 		);
 		expect(privateStep.status).toBe(404);
@@ -87,5 +91,66 @@ describe("federation router surfaces", () => {
 		const gateways = await post('{"gateways":{}}', "secret");
 		expect(gateways.status).toBe(200);
 		expect(await gateways.json()).toEqual({ gateways: [{ gatewayId: "sakura", signFp: "3E9A-77C1-0B4D-F2A6" }] });
+	});
+
+	it("refuses a first root when the owner key already roots another Domain", async () => {
+		const dir = mkdtempSync(path.join(os.tmpdir(), "router-root-"));
+		try {
+			const store = new FileSecretStore(dir);
+			await store.init();
+			const owner = generateIdentity();
+			store.saveDomain("admin", {
+				ownerSignPub: owner.sign.pub,
+				ownerBoxPub: owner.box.pub,
+				admissions: [],
+				revocations: [],
+				isAdminDomain: true,
+			});
+			store.saveDomain("pending", {
+				ownerSignPub: null,
+				ownerBoxPub: null,
+				admissions: [],
+				revocations: [],
+				pendingTenant: {
+					displayName: "Pending",
+					nonce: "cGVuZGluZy1pbnZpdGU=",
+					issuedAt: Date.now(),
+					ttlMs: 86_400_000,
+					rooted: false,
+				},
+			});
+			await store.flushDomain("admin");
+			await store.flushDomain("pending");
+			const router = new RouterServer({
+				port: 0,
+				dataDir: dir,
+				consoleToken: "console-token",
+				federationToken: "federation-token",
+				store,
+				tls: loadRouterTls(dir),
+			});
+			const signed = signFirstRoot(
+				{
+					domainId: "pending",
+					ownerSignPub: owner.sign.pub,
+					ownerBoxPub: owner.box.pub,
+					nonce: "cGVuZGluZy1pbnZpdGU=",
+					issuedAt: Date.now(),
+				},
+				owner.sign.priv,
+			);
+			const response = await router.consoleSurface.handleRequest(
+				new Request("https://router/console", {
+					method: "POST",
+					headers: { "x-console-bridge-token": "Bearer console-token" },
+					body: JSON.stringify({ firstRoot: signed }),
+				}),
+			);
+			expect(response.ok).toBe(false);
+			expect(await response.json()).toMatchObject({ ok: false });
+			expect(store.loadDomain("pending")?.ownerSignPub).toBeNull();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.OwnerBackup
 import com.atelier_nyaarium.switchboard.crypto.ProvisionOpsCrypto
@@ -106,6 +107,14 @@ class FederationManager(private val store: AppStateStore) {
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub
 
+	/** Ensure epoch 1 for the Domain root holder. */
+	fun ensureContentEpochs(domainId: String?) {
+		if (domainId == null) return
+		if (!holdsDomainOwnerKey()) return
+		val owner = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity ?: return
+		ContentKeyring(store = store).ensureOwnerEpochs(owner, domainId)
+	}
+
 	/** The owner key fingerprint the admin confirms when rooting the Domain host-side. */
 	fun ownerSas(): String = Crypto.fingerprint(ownerIdentity().sign.pub)
 
@@ -113,18 +122,18 @@ class FederationManager(private val store: AppStateStore) {
 	fun exportOwnerBackup(passphrase: String): String =
 		OwnerBackup.export(json.encodeToString(Crypto.Identity.serializer(), ownerIdentity()), passphrase)
 
-	/** Restore the owner root key from a backup blob. Refuses to overwrite a DIFFERENT existing
-	 * owner so a backup carrying another owner key cannot silently re-root this device and brick
-	 * the mesh; re-importing the same owner is idempotent. Synchronized with ownerIdentity() so a
-	 * concurrent generation cannot overwrite the restored key. */
+	/** Restore the owner key under Domain-root ownership rules. */
 	@Synchronized
 	fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult {
 		val restored = runCatching { json.decodeFromString(Crypto.Identity.serializer(), OwnerBackup.restore(blob, passphrase)) }
 			.getOrElse { return OwnerRestoreResult.WRONG_PASSPHRASE }
-		// Only a decodable existing owner with a different key blocks the restore. An absent or
-		// corrupt stored key is what restore recovers, so it proceeds.
 		val existing = store.loadOwnerIdentity()
-		if (existing is IdentityLoad.Loaded && existing.identity.sign.pub != restored.sign.pub) {
+		val rootedOwner = Keyring.parse(store.loadDomain())?.ownerSignPub
+		val refuses = existing is IdentityLoad.Loaded && existing.identity.sign.pub != restored.sign.pub && when {
+			rootedOwner == null -> store.firstRooted || store.consoleAdmitted
+			else -> restored.sign.pub != rootedOwner
+		}
+		if (refuses) {
 			return OwnerRestoreResult.DIFFERENT_OWNER
 		}
 		store.saveOwnerIdentity(restored)
@@ -309,10 +318,7 @@ class FederationManager(private val store: AppStateStore) {
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
-	/** Seal a bootstrap bundle (transport, the Gateway's admission, the current keyring, the network
-	 * id) to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The Gateway
-	 * verifies the seal, checks the nonce and the owner-signed admission, and adopts `domainId` as
-	 * its Domain id (it boots arming and learns the id from here). */
+	/** Seal transport and content keys for Gateway bootstrap. */
 	fun sealBundle(
 		nonce: String,
 		transport: GatewayTransport,
@@ -321,24 +327,26 @@ class FederationManager(private val store: AppStateStore) {
 		domainId: String?,
 	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
-		// The bundle carries the ROOT and this Gateway's own admission, nothing more. That is all it
-		// needs to register: the owner key roots its trust (trust-on-first-enroll), and its own admission
-		// is what it presents at gateway_register. Every other member and every revocation arrives on
-		// the register reply and is verified against that same root, so shipping the whole roster here
-		// only made the bundle grow with the Domain - past what a terminal can paste (~4 KB), which is
-		// how the paste route broke on the first machine that was not the first machine.
-		val ring = keyring().snapshot
+		// Register replies carry roster and revocations. Terminal paste fits three epochs.
+		val keyring = keyring()
+		val ring = keyring.snapshot
+		// Include the key signer's admission for roster-free resolution.
+		// Root holders mint it before keyring sync.
+		val consoleAdmission = keyring.signedConsoleAdmission(console.sign.pub)
+			?: if (holdsDomainOwnerKey()) consoleAdmission(System.currentTimeMillis()) else error("this console is not admitted")
+		ensureContentEpochs(domainId)
 		val bundle = GatewayBootstrapBundle(
 			nonce = nonce,
 			transport = transport,
 			admission = admission,
 			domain = DomainSnapshot(
 				ownerSignPub = ring.ownerSignPub,
-				admissions = listOf(admission),
+				admissions = listOf(admission, consoleAdmission),
 				revocations = emptyList(),
 				displayName = ring.displayName,
 			),
 			domainId = domainId,
+			contentKeys = ContentKeyring(store = store).wrapAllFor(recipientBoxPub, console.sign.pub, console.sign.priv),
 		)
 		val plain = json.encodeToString(GatewayBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
 		val sealed = Crypto.seal(plain, recipientBoxPub, console.sign.priv)

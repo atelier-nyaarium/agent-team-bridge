@@ -4,6 +4,7 @@
 
 import type { ConsoleSealer } from "./console/consoleSealer.js";
 import type { Allowlist } from "./federation/allowlist.js";
+import type { ContentKeyStore } from "./federation/contentKeyStore.js";
 import type { CrossDomainHandshakeCoordinator } from "./federation/crossDomainHandshake.js";
 import type { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import type { CrossDomainPresenceSource } from "./federation/crossDomainPresence.js";
@@ -42,6 +43,7 @@ export interface FederationSlice {
 	sealer: Sealer;
 	consoleSealer: ConsoleSealer;
 	routerClient: RouterClient;
+	contentKeyStore: ContentKeyStore;
 	replayPersist: () => void;
 	domainMeta: DomainMeta | null;
 	handlers: RouterHandlers | null;

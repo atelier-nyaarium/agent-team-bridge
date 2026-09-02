@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DeviceApprovalCoordinator } from "../federation-server/deviceApprovalCoordinator.js";
+import { verify } from "../shared/crypto.js";
+import { deviceJoinSigningBytes } from "../shared/federation-device-approval.js";
 import type { ConsoleApprovalResult } from "../shared/federation-lifecycle.js";
 
 type SealedEnvelope = NonNullable<ConsoleApprovalResult["sealed"]>;
@@ -11,7 +15,30 @@ const sealed = (tag: string): SealedEnvelope => ({
 	signature: `sig-${tag}`,
 });
 
+const vector = JSON.parse(
+	fs.readFileSync(path.join(import.meta.dirname, "../../tests/fixtures/device-join/vectors.json"), "utf8"),
+);
+
 describe("DeviceApprovalCoordinator (dumb broker)", () => {
+	it("verifies the signed join vector and refuses a changed box key", () => {
+		const bytes = deviceJoinSigningBytes(vector.approvalId, vector.nonce, vector.newSignPub, vector.newBoxPub);
+		expect(verify(bytes, vector.signature, vector.signer.pub)).toBe(true);
+		const changedBox = Buffer.from(vector.newBoxPub, "base64");
+		changedBox[0] ^= 1;
+		expect(
+			verify(
+				deviceJoinSigningBytes(
+					vector.approvalId,
+					vector.nonce,
+					vector.newSignPub,
+					changedBox.toString("base64"),
+				),
+				vector.signature,
+				vector.signer.pub,
+			),
+		).toBe(false);
+	});
+
 	it("relays the full arm -> join -> poll -> approve -> fetch rendezvous", () => {
 		const c = new DeviceApprovalCoordinator();
 		const id = "appr";
@@ -22,12 +49,20 @@ describe("DeviceApprovalCoordinator (dumb broker)", () => {
 		expect(c.handle({ step: "poll", approvalId: id }).join).toBeUndefined();
 		// N joins over the public ingress with its fresh console keys.
 		expect(
-			c.handle({ step: "join", approvalId: id, nonce, newSignPub: "ns", newBoxPub: "nb", device: "Pixel" }),
+			c.handle({
+				step: "join",
+				approvalId: id,
+				nonce,
+				newSignPub: "ns",
+				newBoxPub: "nb",
+				joinSig: "join-signature",
+				device: "Pixel",
+			}),
 		).toEqual({ ok: true });
 		// The held device polls and now sees N's join.
 		expect(c.handle({ step: "poll", approvalId: id })).toEqual({
 			ok: true,
-			join: { newSignPub: "ns", newBoxPub: "nb", device: "Pixel" },
+			join: { newSignPub: "ns", newBoxPub: "nb", joinSig: "join-signature", device: "Pixel" },
 		});
 		// Before approval, N fetches and sees no sealed reply yet (keep polling).
 		expect(c.handle({ step: "fetch", approvalId: id, nonce }).sealed).toBeUndefined();
@@ -71,7 +106,7 @@ describe("DeviceApprovalCoordinator (dumb broker)", () => {
 		expect(c.handle({ step: "poll", approvalId: "Z" }).ok).toBe(false);
 	});
 
-	it("join is idempotent for the same keys but first-join-wins against a different key", () => {
+	it("re-signing replaces a parked join while different keys remain refused", () => {
 		const c = new DeviceApprovalCoordinator();
 		c.handle({ step: "arm", approvalId: "A", nonce: "good" });
 
@@ -82,22 +117,39 @@ describe("DeviceApprovalCoordinator (dumb broker)", () => {
 				nonce: "good",
 				newSignPub: "ns",
 				newBoxPub: "nb",
+				joinSig: "original",
 				device: "Pixel",
 			}).ok,
 		).toBe(true);
-		// Same keys re-post (N retried): idempotent ok.
-		expect(c.handle({ step: "join", approvalId: "A", nonce: "good", newSignPub: "ns", newBoxPub: "nb" }).ok).toBe(
-			true,
-		);
+		expect(
+			c.handle({
+				step: "join",
+				approvalId: "A",
+				nonce: "good",
+				newSignPub: "ns",
+				newBoxPub: "nb",
+				joinSig: "original",
+			}).ok,
+		).toBe(true);
+		expect(
+			c.handle({
+				step: "join",
+				approvalId: "A",
+				nonce: "good",
+				newSignPub: "ns",
+				newBoxPub: "nb",
+				joinSig: "resigned",
+			}).ok,
+		).toBe(true);
 		// A different key, even WITH the correct nonce, cannot overwrite the honest join.
 		expect(
 			c.handle({ step: "join", approvalId: "A", nonce: "good", newSignPub: "EVIL", newBoxPub: "EVIL" }).ok,
 		).toBe(false);
-		// The held device still sees the ORIGINAL join.
+		// Poll returns the latest signature.
 		expect(c.handle({ step: "poll", approvalId: "A" }).join).toEqual({
 			newSignPub: "ns",
 			newBoxPub: "nb",
-			device: "Pixel",
+			joinSig: "resigned",
 		});
 	});
 

@@ -3,6 +3,8 @@
 	"directories": [
 		"agent-screen",
 		"cross-domain-sas",
+		"content-envelope",
+		"device-join",
 		"enroll-sas",
 		"limit-notice",
 		"owner-id",

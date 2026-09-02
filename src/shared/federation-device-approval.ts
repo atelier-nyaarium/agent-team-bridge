@@ -16,17 +16,13 @@ import { b64Field, displayField } from "./crypto.js";
 ////////////////////////////////
 //  Schemas
 
-/** A sealed envelope (shared/crypto.ts `seal()`): an ephemeral X25519 box + an Ed25519
- * signature. Redefined inline because a synced leaf cannot import schemas.ts (it is not
- * synced), and crypto.ts exports the SealedEnvelope TYPE, not a zod schema. The shape is
- * byte-identical to schemas.ts's SealedEnvelopeSchema, so codegen dedupes the two by their
- * shared .meta id into a single Kotlin class. */
+/** A sealed envelope matching the shared crypto wire shape. */
 const SealedEnvelopeSchema = z
 	.object({
-		ephemeralPub: z.string(),
-		nonce: z.string(),
-		ciphertext: z.string(),
-		signature: z.string(),
+		ephemeralPub: b64Field(),
+		nonce: b64Field(),
+		ciphertext: b64Field(),
+		signature: b64Field(),
 	})
 	.meta({ id: "SealedEnvelope" });
 
@@ -36,6 +32,7 @@ const ConsoleApprovalJoinSchema = z
 	.object({
 		newSignPub: b64Field(),
 		newBoxPub: b64Field(),
+		joinSig: b64Field().optional(),
 		device: displayField(64).optional(),
 	})
 	.meta({ id: "ConsoleApprovalJoin" });
@@ -53,6 +50,7 @@ export const ConsoleApprovalOpSchema = z
 			nonce: b64Field(),
 			newSignPub: b64Field(),
 			newBoxPub: b64Field(),
+			joinSig: b64Field().optional(),
 			device: displayField(64).optional(),
 		}),
 		z.object({ step: z.literal("poll"), approvalId: b64Field() }),
@@ -76,3 +74,12 @@ export const ConsoleApprovalResultSchema = z
 
 export type ConsoleApprovalOp = z.infer<typeof ConsoleApprovalOpSchema>;
 export type ConsoleApprovalResult = z.infer<typeof ConsoleApprovalResultSchema>;
+
+export function deviceJoinSigningBytes(
+	approvalId: string,
+	nonce: string,
+	newSignPub: string,
+	newBoxPub: string,
+): Buffer {
+	return Buffer.from(["DEVICE_JOIN_V1", approvalId, nonce, newSignPub, newBoxPub].join("\n"), "utf8");
+}

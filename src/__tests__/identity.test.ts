@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadOrCreateIdentity } from "../gateway/federation/identity.js";
+import { fingerprint } from "../shared/crypto.js";
 
 const dirs: string[] = [];
 function tmpDir(): string {
@@ -46,5 +48,26 @@ describe("federation identity", () => {
 		const dir = tmpDir();
 		fs.writeFileSync(path.join(dir, "federation-identity.json"), JSON.stringify({ sign: { pub: "x" } }));
 		expect(() => loadOrCreateIdentity(dir)).toThrow(/refusing to overwrite/);
+	});
+
+	it("lets concurrent first boots observe the same on-disk identity", async () => {
+		const dir = tmpDir();
+		const identityFile = path.join(dir, "federation-identity.json");
+		const script = `import fs from "node:fs"; import { fingerprint } from ${JSON.stringify(path.join(process.cwd(), "src/shared/crypto.ts"))}; const id = JSON.parse(fs.readFileSync(${JSON.stringify(identityFile)}, "utf8")); process.stdout.write(fingerprint(id.sign.pub));`;
+		const run = () =>
+			new Promise<string>((resolve, reject) => {
+				const child = spawn("bun", [
+					"-e",
+					`import { loadOrCreateIdentity } from ${JSON.stringify(path.join(process.cwd(), "src/gateway/federation/identity.ts"))}; loadOrCreateIdentity(${JSON.stringify(dir)}); ${script}`,
+				]);
+				let output = "";
+				child.stdout.on("data", (chunk) => (output += chunk));
+				child.on("error", reject);
+				child.on("close", (code) => (code === 0 ? resolve(output) : reject(new Error("child failed"))));
+			});
+		const outputs = await Promise.all([run(), run()]);
+		const disk = JSON.parse(fs.readFileSync(identityFile, "utf8"));
+		const expected = fingerprint(disk.sign.pub);
+		expect(outputs.every((output) => output.endsWith(expected))).toBe(true);
 	});
 });

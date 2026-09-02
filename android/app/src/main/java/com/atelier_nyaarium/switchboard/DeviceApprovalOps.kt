@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
+import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
@@ -12,6 +14,7 @@ import org.json.JSONObject
 /** The "Add a device" surface: a held device arms a one-time approval window and a fresh device
  * joins it, all keyed off the console-approval broker (no admin round trip). */
 internal class DeviceApprovalOps(private val repo: ChatRepository) {
+	private val approvalNonces = mutableMapOf<String, String>()
 	////////////////////////////////
 	//  Add a device (USER self-enroll: the owner authorizes their OWN fresh device, no admin)
 
@@ -35,6 +38,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			val nonce = repo.federation.freshApprovalToken()
 			val result = repo.client().postConsoleApproval(ConsoleApprovalOp.Arm(approvalId = approvalId, nonce = nonce))
 			if (!result.ok) error(result.error ?: "Couldn't arm the approval window.")
+			approvalNonces[approvalId] = nonce
 			val qr = JSONObject()
 				.put("type", "authorize-console")
 				.put("domainId", domainId)
@@ -57,22 +61,42 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		runCatchingCancellable {
 			val result = repo.client().postConsoleApproval(ConsoleApprovalOp.Poll(approvalId = approvalId))
 			if (!result.ok) error(result.error ?: "approval window closed")
-			result.join
+			val join = result.join ?: return@runCatchingCancellable null
+			val nonce = approvalNonces[approvalId] ?: error("approval nonce unavailable")
+			require(
+				join.joinSig != null && Crypto.verify(
+					Crypto.deviceJoinSigningBytes(approvalId, nonce, join.newSignPub, join.newBoxPub),
+					join.joinSig!!,
+					join.newSignPub,
+				),
+			) {
+				"device join signature is invalid"
+			}
+			join
 		}
 	}
 
 	/** HELD device: approve the joined device. Owner-signs a kind:console admission for its keys and
 	 * submits it (the existing submit_admission path), then seals the console transport to its box key
 	 * and parks it for the device to fetch. The biometric gate is applied at the UI call site. */
-	suspend fun approveDevice(approvalId: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
+	suspend fun approveDevice(approvalId: String, nonce: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
+			require(
+				join.joinSig != null && Crypto.verify(
+					Crypto.deviceJoinSigningBytes(approvalId, nonce, join.newSignPub, join.newBoxPub),
+					join.joinSig!!,
+					join.newSignPub,
+				),
+			) {
+				"device join signature is invalid"
+			}
+			val transport = buildConsoleTransport(join.newBoxPub)
+			val plain = wireJson.encodeToString(ConsoleTransport.serializer(), transport).toByteArray(Charsets.UTF_8)
+			val sealed = repo.federation.sealConsoleTransport(join.newBoxPub, plain)
 			val signed = repo.federation.admitConsole(join.newSignPub, join.newBoxPub, System.currentTimeMillis())
 			if (!repo.ownerFacts.submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Approve failed")) {
 				error(repo._state.value.error ?: "The server rejected the new device.")
 			}
-			val transport = buildConsoleTransport()
-			val plain = wireJson.encodeToString(ConsoleTransport.serializer(), transport).toByteArray(Charsets.UTF_8)
-			val sealed = repo.federation.sealConsoleTransport(join.newBoxPub, plain)
 			val result = repo.client().postConsoleApproval(ConsoleApprovalOp.Approve(approvalId = approvalId, sealed = sealed))
 			if (!result.ok) error(result.error ?: "Couldn't deliver the sealed transport.")
 			Unit
@@ -86,19 +110,25 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		}
 	}
 
-	/** The console transport the held device seals to a new device: its own provisioning creds plus the
-	 * owner's synced keyring + route Gateway, so the new device can seal to the Gateway the owner
-	 * already admitted without holding the owner key to re-sync the keyring itself. */
-	private fun buildConsoleTransport(): ConsoleTransport {
+	/** Transport for an approved device. */
+	private fun buildConsoleTransport(recipientBoxPub: String): ConsoleTransport {
 		val prov = Provisioning.parse(repo.store.load() ?: error("not provisioned"))
+		val console = repo.federation.consoleIdentity()
+		val domainId = repo.confirmedDomainId() ?: error("Your Domain isn't confirmed yet - open a session first.")
+		repo.federation.ensureContentEpochs(domainId)
 		return ConsoleTransport(
 			routerUrl = prov.routerUrl,
 			routerCertFp = prov.routerCertFp,
 			appToken = prov.appToken,
-			domainId = repo.confirmedDomainId(),
+			domainId = domainId,
 			gatewayId = repo.localGatewayId.takeIf { it.isNotEmpty() } ?: repo.store.loadGatewayId().takeIf { it.isNotEmpty() },
 			domainVersion = repo.store.loadDomainVersion().ifEmpty { null },
 			domain = repo.federation.keyring().snapshot,
+			contentKeys = ContentKeyring(store = repo.store).wrapAllFor(
+				recipientBoxPub,
+				console.sign.pub,
+				console.sign.priv,
+			),
 		)
 	}
 
@@ -131,11 +161,16 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	suspend fun newDeviceJoin(scan: ScannedDeviceApproval): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatching {
 			val id = repo.federation.consoleIdentity()
+			val joinSig = Crypto.sign(
+				Crypto.deviceJoinSigningBytes(scan.approvalId, scan.nonce, id.sign.pub, id.box.pub),
+				id.sign.priv,
+			)
 			val op = ConsoleApprovalOp.Join(
 				approvalId = scan.approvalId,
 				nonce = scan.nonce,
 				newSignPub = id.sign.pub,
 				newBoxPub = id.box.pub,
+				joinSig = joinSig,
 				device = android.os.Build.MODEL,
 			)
 			val result = ConsoleHttp.postPublicApproval(scan.reach, op)
@@ -166,6 +201,10 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	 * no owner key, so it must NEVER self-sign. provisioned flips LAST so the poll loop starts only
 	 * after consoleAdmitted is set, never racing a self-admission with a throwaway owner key. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
+		if (!installContentKeys(transport)) {
+			repo._state.update { it.copy(error = "content key installation refused", provisioned = false) }
+			error("content key installation refused")
+		}
 		// Every transport field is restated: a rebuild that enumerates a subset drops a record on the
 		// way in, and the new device silently provisions against nothing.
 		val prov = com.atelier_nyaarium.switchboard.proto.Provisioning(
@@ -205,5 +244,14 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		repo.sttsClient = null
 		val parsed = Provisioning.parse(blob)
 		repo._state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
+	}
+
+	private fun installContentKeys(transport: ConsoleTransport): Boolean {
+		val domain = transport.domain ?: return transport.contentKeys.isEmpty()
+		val keyring = Keyring(domain)
+		val contentKeyring = ContentKeyring(repo.federation.consoleIdentity().box.priv, repo.store)
+		val classified = contentKeyring.classify(transport.contentKeys, keyring) ?: return false
+		contentKeyring.commit(classified)
+		return true
 	}
 }

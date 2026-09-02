@@ -12,6 +12,9 @@ import kotlinx.coroutines.withContext
  * its backup, and every admission / revocation / cross-Domain-link fact submitted through the
  * merge-iff-accepted path, plus the membership that path leaves in the keyring. */
 internal class OwnerFacts(private val repo: ChatRepository) {
+	/** Ensure epoch 1 for the Domain root holder. */
+	fun ensureContentEpochs(domainId: String?) = repo.federation.ensureContentEpochs(domainId)
+
 	/** First-root a pending friend Domain if the imported blob carries one (and it is not yet
 	 * rooted). Builds a FirstRoot over this device's silent owner key + the invite nonce, self-signs
 	 * it (FederationManager), and POSTs it to the Router's console-bridge firstRoot intake. Returns true to
@@ -34,6 +37,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 				}
 				if (result.ok) {
 					repo.store.firstRooted = true
+					repo.federation.ensureContentEpochs(decision.domainId)
 					DebugLog.log("FirstRoot", "rooted ok domain=${decision.domainId}")
 					true
 				} else {
