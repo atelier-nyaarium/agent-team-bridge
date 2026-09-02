@@ -298,6 +298,9 @@ class FederationManager(private val store: AppStateStore) {
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
+	/** This device's content keyring, read fresh so a just-installed epoch is visible at once. */
+	fun contentKeyring(): ContentKeyring = ContentKeyring(consoleIdentity().box.priv, store)
+
 	@Synchronized
 	fun installContentKeys(envelopes: List<KeyEnvelope>, trust: Keyring): ContentKeyring.Merge {
 		val keyring = ContentKeyring(consoleIdentity().box.priv, store)

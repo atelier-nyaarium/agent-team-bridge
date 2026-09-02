@@ -72,6 +72,8 @@ data class BoardBlob(
 	val stored: List<BoardStoredEntry> = emptyList(),
 	/** Last text read for each entry, so a rotated-away epoch still renders. */
 	val text: Map<String, BoardCachedText> = emptyMap(),
+	/** Writes still in flight, oldest first, applied over the Router's entries for the UI. */
+	val pending: List<PendingWrite> = emptyList(),
 	val lastRouterSyncAt: Long = 0,
 	val queue: List<PendingBoardAction> = emptyList(),
 	// Durable BECAUSE the drain that mints these runs backgrounded, down a cadence ladder that ends in

@@ -1,8 +1,11 @@
 package com.atelier_nyaarium.switchboard
 
 import android.content.ContentResolver
+import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
+import com.atelier_nyaarium.switchboard.board.BoardSealing
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
@@ -163,6 +166,19 @@ class ChatRepository(
 
 	/** Signs this console's own ops. Reaches back into the repo lazily, never during construction. */
 	val ownerOps = OwnerOps(this)
+
+	/** Null before this device has rooted a Domain, since board text cannot be sealed without one. */
+	fun boardSealing(): BoardSealing? {
+		val domain = ownerOps.domainId() ?: return null
+		return BoardSealing(federation.contentKeyring(), domain, federation.ownerSignPub())
+	}
+
+	/** The board's one path to the Router. Signs each write as this console and walks the reach ring. */
+	val boardRouter = BoardRouterWriter(
+		board = board,
+		signAndPost = { op, opId -> client().postOwnerOp(ownerOps.sign(op, opId) ?: error("cannot sign board op")) },
+		decode = { wireJson.decodeFromJsonElement(BoardWriteResult.serializer(), it) },
+	)
 
 	// Always available from construction, independent of the drain's scope (null until the loop
 	// starts) and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be

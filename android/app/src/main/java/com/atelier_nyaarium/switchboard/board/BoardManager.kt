@@ -177,6 +177,49 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	/** The Router board by entry id, which is what an intent is materialized against. */
 	fun storedById(): Map<String, BoardStoredEntry> = blob.stored.associateBy { it.clear.id }
 
+	/** The board the owner should see: the Router's entries with everything in flight applied on top. */
+	fun routerEntries(sealing: BoardSealing): List<BoardEntry> =
+		applyPending(renderRouterBoard(sealing).entries, blob.pending)
+
+	/**
+	 * The durable record of board writes in flight.
+	 *
+	 * Deliberately here and not in the mutation journal. Landing a Router result and retiring the write
+	 * it answers has to be ONE durable transition, or a crash between them either replays a write that
+	 * already applied or drops the optimistic row while the board still lacks it. Only the store that
+	 * holds the board can make that atomic. The journal keeps the mutation kinds with no such pairing.
+	 */
+	fun pendingWrites(): List<PendingWrite> = blob.pending
+
+	/** Queues a write and answers the opId that spans it, including any crash replay. */
+	fun enqueueWrite(intents: List<BoardIntent>, opId: String = java.util.UUID.randomUUID().toString()): String {
+		mutate { it.copy(pending = it.pending + PendingWrite(opId, intents)) }
+		return opId
+	}
+
+	/** Lands the Router's answer and retires the write it answers in one durable transition. */
+	fun settleWrite(opId: String, revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()) {
+		synchronized(stateLock) {
+			val landed = if (revision >= blob.routerRevision) {
+				blob.copy(routerRevision = revision, stored = entries, lastRouterSyncAt = at)
+			} else {
+				blob
+			}
+			persist(landed.copy(pending = landed.pending.filterNot { it.opId == opId }))
+		}
+	}
+
+	fun retireWrite(opId: String) {
+		mutate { blob -> blob.copy(pending = blob.pending.filterNot { it.opId == opId }) }
+	}
+
+	/** Counts a failed attempt so a struggling row can say so, without dropping the write. */
+	fun failWrite(opId: String) {
+		mutate { blob ->
+			blob.copy(pending = blob.pending.map { if (it.opId == opId) it.copy(attempts = it.attempts + 1) else it })
+		}
+	}
+
 	/**
 	 * Lands what the Router answered. An older revision is ignored, so a slow read cannot overwrite a
 	 * write result that already arrived.

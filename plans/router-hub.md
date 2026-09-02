@@ -951,6 +951,36 @@ blob is unsolved. So the phone's board attachment writes keep the gateway path u
 settled. The READ half is fixed: `blob_fetch` is now an OwnerOp, so a console can pull bytes from the
 Router cache or the origin without a gateway.
 
+### The board rewrite, decided while building
+
+**There is no `set_title` or `set_body` op.** A text change is a full `upsert` carrying every other
+field. An op built against one revision would therefore replay stale neighbours over the board that
+won a CAS race. So the phone holds edits as INTENT and re-materializes them against current stored
+state on every attempt. The untouched half rides across as its existing sealed envelope, so editing
+a title neither reads nor re-seals the body.
+
+**One opId spans a whole logical write, retries included.** The Router returns a conflict BEFORE
+writing any ledger record, so reusing the id across CAS attempts cannot be answered with a stale
+recorded result. The id must stay stable anyway, because a reply lost in transit leaves the write in
+an unknown state and only the id makes the crash replay dedupe.
+
+**The replay record hashes which ops over which entries.** So a retry that dropped an op because its
+entry vanished would come back refused as `operation_id_reused`. The writer compares the op-set
+signature between attempts and stops instead, leaving the intents queued.
+
+**Pending board writes live in the board blob, not the mutation journal.** Landing a Router result
+and retiring the write it answers has to be one durable transition, or a crash between them either
+replays a write that already applied or drops the optimistic row while the board still lacks it.
+Only the store holding the board can make that atomic. The journal keeps the mutation kinds with no
+such pairing.
+
+**`MutationJournal.claimForReplay` now claims SENT as well as PENDING.** A write sent before the
+process died has an unknown outcome, and the opId is what makes re-sending it either a no-op or the
+recorded result. Claiming only PENDING silently dropped exactly the writes a crash put at risk. Once
+per process, before any live send.
+
+**The Router's attachment record carries no filename**, so the blob id stands in until it does.
+
 - Console WS per its spec: framing, authentication with the existing console credentials, cursor
   and ack semantics matching Phase 3, `newWebSocket` on the pinned client, `wss` only, reconnect
   with a generation fence.
