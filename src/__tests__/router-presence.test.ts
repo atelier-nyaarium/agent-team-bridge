@@ -19,7 +19,7 @@ const row = (team: string, lastActive = 1, status: "online" | "verifying" | "ava
 		queue_depth: 1,
 		lastActive,
 	});
-const make = () => {
+const make = (pokeOwner?: (domainId: string, version: number) => void) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-presence-"));
 	roots.push(dataDir);
 	const registry = new OwnerStoreRegistry({
@@ -34,7 +34,7 @@ const make = () => {
 			}),
 		now: () => 100,
 	});
-	return { registry, service: createPresenceService({ registry }) };
+	return { registry, service: createPresenceService({ registry, pokeOwner }) };
 };
 const reg: GatewayRegistration = { domainId: "domain", gatewayId: "gw", signPub: "pub", incarnation: 1 };
 const projectionDeps = {
@@ -67,6 +67,38 @@ describe("router presence slice", () => {
 			tombstones: [],
 		});
 		expect(service.ownerProjection("domain", projectionDeps).plane.version).toBe(before.version + 1);
+		registry.close();
+	});
+
+	// A poke is what lets the phone drop its bounded-interval discovery pull, so it has to fire on a
+	// real change and stay quiet otherwise, or the pull comes back as a push that cries wolf.
+	it("pokes the owner only when the projection actually changed", () => {
+		const pokes: Array<{ domainId: string; version: number }> = [];
+		const { registry, service } = make((domainId, version) => pokes.push({ domainId, version }));
+		service.applyBaseline(reg, {
+			incarnation: 1,
+			seq: 0,
+			rows: [row("proj.main")],
+			spawnPoints: { gatewayId: "gw", hostSpawns: [] },
+		});
+
+		service.ownerProjection("domain", projectionDeps);
+		expect(pokes).toEqual([{ domainId: "domain", version: 0 }]);
+		// Same projection read twice: no change, so no second poke.
+		service.ownerProjection("domain", projectionDeps);
+		expect(pokes).toHaveLength(1);
+
+		service.applyDelta(reg, {
+			incarnation: 1,
+			seq: 1,
+			upserts: [row("proj.main", 2, "available")],
+			tombstones: [],
+		});
+		service.ownerProjection("domain", projectionDeps);
+		expect(pokes).toEqual([
+			{ domainId: "domain", version: 0 },
+			{ domainId: "domain", version: 1 },
+		]);
 		registry.close();
 	});
 

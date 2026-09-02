@@ -42,6 +42,9 @@ export function createPresenceService(deps: {
 	friend?: FriendDeps;
 	/** Keep cross-Domain shares alive for a live session. */
 	touch?: (domainId: string, sessionTarget: string) => void;
+	/** A POKE carrying the new version, never the projection: a console re-reads, and the owner
+	 * audience can be large. Fires only when the projection actually changed. */
+	pokeOwner?: (domainId: string, version: number) => void;
 }) {
 	const now = deps.now ?? (() => deps.registry.now());
 
@@ -78,12 +81,14 @@ export function createPresenceService(deps: {
 		const versions = clear?.versions ?? {};
 		const identities = clear?.identities ?? {};
 		const version = identities[key] === identity ? (versions[key] ?? 0) : (versions[key] ?? -1) + 1;
-		if (!clear || identities[key] !== identity)
+		if (!clear || identities[key] !== identity) {
 			write(domainId, planeRecordId, {
 				epoch,
 				versions: { ...versions, [key]: version },
 				identities: { ...identities, [key]: identity },
 			});
+			if (key === "owner") deps.pokeOwner?.(domainId, version);
+		}
 		return { epoch, version };
 	};
 
