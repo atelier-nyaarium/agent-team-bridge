@@ -401,7 +401,7 @@ through 6. Phase 3 gates 4. Phase 8 gates 9.
 
 ## Phase 1 - Failure-mode ledger, invariants, and specs
 
-No code. Output is appended to this plan. Gates Phase 2.
+✅ Done. No code. Output is the `# Specs` and `# Phase 1 outputs` sections. Gates Phase 2.
 
 ### Ledger
 
@@ -1377,3 +1377,12 @@ What the phone shows, the current producer, and the hub's.
 - Message row `failed`: current `deliver.fail` on a refusal or transport failure; hub: the S3
   result envelope (`refused`, `expired`, `target_revoked`, `durability_failure`) as an
   `op_result` row, plus local transport failure.
+
+## Painpoints
+
+- A prose sweep that is told "timeless, no history" strips the failure descriptions out of a
+  ledger and the recommendation reasons out of a questionaire, because both read as narration.
+  A sweep prompt has to name what counts as content, not only what counts as style.
+- A refuter that reads "the spec says the gateway dedupes by `deliveryId`" as proof that a dedupe
+  exists refutes the finding that the mechanism is unspecified. Verification prompts must ask
+  "is the mechanism specified" apart from "is the claim stated".
