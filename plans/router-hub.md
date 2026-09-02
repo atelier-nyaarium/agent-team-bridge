@@ -473,7 +473,9 @@ One section per spec. Name its residue test. Later phases implement only these s
 - Migration fence, snapshot cut, and offline import (Phase 8).
 - The cutover verification gate (Phase 9).
 
-## Phase 2 - Owner content key
+## Phase 2 - Owner content key ✅ Done
+
+Commits 41bd6ff6, ce8ddb71, 4ec17784.
 
 - Derivation, on the owner phone only, per S1: `HKDF-SHA256(root, salt = fixed, info =
   "switchboard-content-v1\n" + domainId + "\n" + epoch)`. Deterministic, so the owner backup
@@ -549,6 +551,11 @@ A7 (delete the staging directory; `domain-id` folds into the allowlist record; t
 last), A8 (residue tests: sole writer of `content-keys.json`, sole derivation site, no key bytes in
 any log the roads emit, on both runtimes), A9 (a cross-runtime merge decision table in a shared
 fixture), A11 (a residue test that every shared `_V1` preimage tag has a Kotlin twin and a fixture).
+Crust from Phase 2, small: the identity mint temp (`federation-identity.json.<hex>`) sits outside
+the atomic temp sweep's name grammar, so a crash mid-mint leaves it behind; the phone keeps one
+corrupt content-key sibling slot, so a second set-aside overwrites the first; numeric wire
+grammar (`1.0`, quoted `"1"`) differs between zod and kotlinx, which matters once a row both
+runtimes decode exists, so the Router re-emits rows through its schema before relaying.
 - Inboxes per Question 3, addressed by owner or by `(domainId, gatewayId,
   sessionId)`. Consumer registry keyed by console installation identity with incarnation, last
   seen, forget on revoke. Capacity refuses; per-Domain and per-owner quotas. Recovery of
@@ -1459,6 +1466,23 @@ What the phone shows, the current producer, and the hub's.
   `op_result` row, plus local transport failure.
 
 ## Painpoints
+
+- Codex reports "DONE" for a slice and "not done" only for the item it names, while quietly
+  skipping listed tests. Every test-bearing prompt now lists cases by name and the report is
+  checked with a grep of `it(` names before the gate. Two of the three Phase 2 test gaps were
+  found only by the verifiers.
+- Codex cannot run Gradle, so every Kotlin slice costs one gate round trip for type mismatches it
+  could not see (Long versus Int, `Crypto.SealedEnvelope` versus the proto twin, JUnit4
+  `assertThrows`). Asking for a hand audit against `Protocol.kt` halves the misses; it does not
+  remove them.
+- `scripts/codegen-kotlin.ts` emits its header comment into `Protocol.kt`, so a comment sweep
+  that touches the generator without regenerating leaves CI's drift check red. Regenerate after
+  any edit to the generator, even a comment.
+- Older tests used placeholder strings such as `"a"` in base64 fields, so tightening `b64Field`
+  broke four suites that were never about base64. Placeholders in wire fields should be canonical
+  values from the start.
+- A session usage limit killed seven verifiers mid-workflow; resume replayed the cached agents and
+  re-ran only the failed ones, which worked.
 
 - A prose sweep that is told "timeless, no history" strips the failure descriptions out of a
   ledger and the recommendation reasons out of a questionaire, because both read as narration.
