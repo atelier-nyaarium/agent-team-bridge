@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
 import java.io.File
 import java.util.Base64
+import kotlinx.serialization.json.JsonObject
 import org.json.JSONObject
 
 /**
@@ -105,6 +106,21 @@ class AppStateStore internal constructor(
 	fun saveRouterReach(json: String) = prefs.edit().putString(KEY_ROUTER_REACH, json).apply()
 
 	fun loadRouterReach(): String? = prefs.getString(KEY_ROUTER_REACH, null)
+
+	internal fun saveRouterState(kind: String, slot: RouterStateSlot) {
+		check(prefs.edit().putString(KEY_ROUTER_STATE_PREFIX + kind, wireJson.encodeToString(JsonObject.serializer(), slot.encode())).commit()) {
+			"router state commit failed"
+		}
+	}
+
+	internal fun loadRouterState(kind: String, legacy: String? = null): RouterStateSlot? {
+		val stored = prefs.getString(KEY_ROUTER_STATE_PREFIX + kind, null)
+		if (stored != null) return wireJson.decodeFromString<JsonObject>(stored).decodeRouterStateSlot()
+		if (legacy == null) return null
+		val slot = RouterStateSlot(0L, 0L, wireJson.parseToJsonElement(legacy))
+		saveRouterState(kind, slot)
+		return slot
+	}
 
 	fun clear() = prefs.edit().clear().apply()
 
@@ -515,6 +531,7 @@ class AppStateStore internal constructor(
 	internal companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_ROUTER_REACH = "router_reach"
+		const val KEY_ROUTER_STATE_PREFIX = "router_state."
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_READ_ANCHORS = "read_anchors"

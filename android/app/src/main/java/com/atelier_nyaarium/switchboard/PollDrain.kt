@@ -92,6 +92,10 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 	 * Dispatchers.IO's multi-threaded pool, so an unguarded compound operation could lose the reset
 	 * underneath a poll response still applying stale pre-reset data. */
 	private val crossDomainVersionsMutex = Mutex()
+	private val drainMutex = Mutex()
+
+	/** One drain at a time, whichever transport carried the payload. */
+	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T = drainMutex.withLock { block() }
 
 	/** Data-plane subscribers, invoked once per genuinely-new inbound message at the drain gate.
 	 * Delivery is synchronous and pre-commit, so a subscriber inherits the mailbox cursor's

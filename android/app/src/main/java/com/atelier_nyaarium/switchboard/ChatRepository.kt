@@ -65,6 +65,7 @@ class ChatRepository(
 	/** The JSON codec over [store]. Declared before _state so its loads can seed the initial state. */
 	// internal (not private): the drafts surface (ChatRepositoryDrafts.kt) and AttachmentOps write through it.
 	internal val persistence = ChatPersistence(store)
+	internal val mutationJournal = MutationJournal(filesDir)
 
 	// One-shot grammar-version wipe. MUST run BEFORE the first thread/label load-parse below, so a
 	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
