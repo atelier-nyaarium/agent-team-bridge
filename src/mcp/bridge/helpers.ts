@@ -315,6 +315,7 @@ export function connectToRouter(): void {
 			if (role !== null) {
 				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${role}`);
 				routerPost("/respond", {
+					opId: crypto.randomUUID(),
 					session_id: hsSessionId,
 					status: "completed",
 					replyAsJson: { isMainOrLead: role },
