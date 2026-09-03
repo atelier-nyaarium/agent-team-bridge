@@ -28,7 +28,6 @@ internal object ConsoleHttp {
 
 	// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
 	// against these from a separate test class, and FORGET_TOMBSTONE_MS derives from
-	// DEFAULT_RELAY_CALL_TIMEOUT_MS below for the same reason. PINNED_READ_TIMEOUT_MS also
 	// gets its own pin against the gateway's SEND_BOUND_MS, the relationship its own comment
 	// on buildPinnedClient already describes.
 	internal const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
@@ -50,13 +49,7 @@ internal object ConsoleHttp {
 	// as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS > this in ChatRepositoryConstantsTest.
 	internal const val ROUTER_HOLD_MS = 55_000L
 
-	// Bounds the common (non-held) relay() call: base read timeout + connect + margin.
-	// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout
-	// instead of using this (see poll()). send() opts out entirely (callTimeoutMs = null)
-	// since its upload body write must not be capped by an overall call duration.
-	// internal (not private): ChatRepository derives FORGET_TOMBSTONE_MS from this, since
-	// that tombstone must outlast the same teams() call this bounds.
-	internal const val DEFAULT_RELAY_CALL_TIMEOUT_MS =
+	internal const val DEFAULT_OWNER_OP_TIMEOUT_MS =
 		PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS + CALL_TIMEOUT_MARGIN_MS
 
 	/** System-trust client for the PUBLIC device-approval ingress. No CA pin (the reach URL is a real
@@ -90,7 +83,7 @@ internal object ConsoleHttp {
 	 * and the Response closed INSIDE the OkHttp callback, before resuming - so a cancellation racing
 	 * the callback can only ever abandon an already-closed, already-read HttpTextResult, never a
 	 * leaked Response, and every caller's own parsing/decoding runs after resume, on the CALLER's
-	 * dispatcher, not OkHttp's callback thread. Shared by relay() and postRouterDirect() so this
+	 * dispatcher, not OkHttp's callback thread. Shared by direct Router posts so this
 	 * cancellability lands in exactly these two places. */
 	internal suspend fun executeCancellable(httpClient: OkHttpClient, req: Request): HttpTextResult =
 		suspendCancellableCoroutine { cont ->
@@ -124,7 +117,7 @@ internal object ConsoleHttp {
 			)
 		}
 
-	/** Shared Router-direct POST: every op that bypasses relay() and talks to the Router's console-bridge
+	 /**
 	 * straight (enroll, postConsoleApproval, firstRoot, requestGatewayTransport, enrollHandshake,
 	 * roster, trustHandshake, trustPending, provisionTenant) shares this exact decode contract - 2xx
 	 * decodes as R (falling back through `fail` on a malformed body); non-2xx tries R first (a
@@ -137,7 +130,7 @@ internal object ConsoleHttp {
 	 * Trust pair, or provisionTenant vs enroll sharing the "Enroll" tag). `logBody` gates only the
 	 * resp line's body preview - requestGatewayTransport (a minted SA token) and provisionTenant (a
 	 * one-time invite nonce) pass false so their 2xx bodies never reach the debug log, which the
-	 * debug build ships off-device to the relay's own /ingest as well as logcat. */
+	  */
 	internal suspend inline fun <reified R> postRouterDirect(
 		httpClient: OkHttpClient,
 		url: String,
@@ -212,11 +205,11 @@ internal object ConsoleHttp {
 	 * or a port-forwarded address without reissue. The pin is the trust, and it is delivered
 	 * out-of-band in the provisioning blob.
 	 *
-	 * The relay holds a send op server-side for up to 25s (the gateway's send bound) before
+	 * The Router holds a send op server-side for up to 25s (the gateway's send bound) before
 	 * answering "running", so OkHttp's 10s default read timeout would mislabel every cold-wake send
 	 * as failed. Write gets headroom for a 500 MB attachment upload on slow links. No callTimeout
-	 * here deliberately: it varies per call (tight for poll/relay, unbounded for send's upload), so
-	 * relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
+	 * here deliberately: it varies per call (tight for polling, unbounded for send's upload), so
+	 * Owner operations set call timeouts per request.
 	 */
 	internal fun buildLeafPinnedClient(certFpHex: String): OkHttpClient {
 		val tm = object : X509TrustManager {

@@ -1,0 +1,5 @@
+{
+	"kind": "create_session",
+	"target": "host",
+	"displayLabel": "My Work"
+}

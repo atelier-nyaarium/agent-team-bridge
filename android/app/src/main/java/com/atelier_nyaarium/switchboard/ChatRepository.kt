@@ -13,7 +13,6 @@ import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
-import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.Protocol
@@ -43,6 +42,12 @@ internal interface ClearsOnReprovision {
 }
 
 /** Chat state over a ConsoleClient. */
+data class FocusIntent(
+	val screen: String,
+	val terminalTeam: String? = null,
+	val terminalRateMs: Long? = null,
+)
+
 class ChatRepository(
 	internal val store: AppStateStore,
 	internal val filesDir: File,
@@ -56,9 +61,6 @@ class ChatRepository(
 	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
 
 	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
-	internal var localGatewayId: String
-		get() = homeGatewayId
-		set(value) { homeGatewayId = value }
 	@Volatile internal var gapFloor: Long = 0L
 	@Volatile internal var gapDropped: Long = 0L
 	internal var onScheduledResult: (com.atelier_nyaarium.switchboard.proto.ScheduledResultRow) -> Unit = {}
@@ -91,7 +93,6 @@ class ChatRepository(
 			deviceName = currentDeviceName(),
 			labels = persistence.loadPersistedLabels(),
 			teamAbsenceStreaks = persistence.loadPersistedAbsenceStreaks(),
-			localGatewayId = homeGatewayId,
 			homeGatewayId = homeGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
@@ -110,16 +111,16 @@ class ChatRepository(
 
 	/** Canonicalize a target address. */
 	internal fun canonicalTarget(team: String): String =
-		runCatching { parseTarget(team, localDomain(), localGatewayId).canonical }.getOrDefault(team)
+		runCatching { parseTarget(team, localDomain(), homeGatewayId).canonical }.getOrDefault(team)
 
 	/** Resolve a sender address. */
 	internal fun fromCanonical(from: String): String? =
-		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrNull()
+		runCatching { parseTarget(from, localDomain(), homeGatewayId).canonical }.getOrNull()
 
 	/** This device's session address. */
 	internal fun thisDeviceAddress(): Address? =
 		runCatching {
-			Address.local(localDomain(), localGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
+			Address.local(localDomain(), homeGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
 		}.getOrNull()
 
 	@Volatile internal var client: ConsoleClient? = null
@@ -430,7 +431,7 @@ class ChatRepository(
 			store.saveGatewayId(nextHome)
 		}
 		if (ids != _state.value.admittedGateways || nextHome != _state.value.homeGatewayId)
-			_state.update { it.copy(admittedGateways = ids, localGatewayId = nextHome, homeGatewayId = nextHome) }
+			_state.update { it.copy(admittedGateways = ids, homeGatewayId = nextHome) }
 		// Remove revoked Gateway columns.
 		board.retainGateways(ids)
 	}
@@ -464,7 +465,7 @@ class ChatRepository(
 			conversationId = { client().transport.prov.conversationId },
 			contentKeyring = { federation.contentKeyring() },
 			target = { team, _ ->
-				val parsed = parseTarget(team, localDomain(), localGatewayId) as com.atelier_nyaarium.switchboard.proto.Address
+				val parsed = parseTarget(team, localDomain(), homeGatewayId) as com.atelier_nyaarium.switchboard.proto.Address
 				com.atelier_nyaarium.switchboard.proto.ScheduledTarget(parsed.domain, parsed.gateway, parsed.spawn + "." + parsed.session)
 			},
 			uploadFile = { file -> client().uploadBlob(Attachments.fileFor(filesDir, file.src) ?: error("missing scheduled file")) },
@@ -508,7 +509,7 @@ class ChatRepository(
 	override suspend fun clearInMemory() {
 		client = null
 		sttsClient = null
-		localGatewayId = ""
+		homeGatewayId = ""
 		mailboxSync.clearInMemory()
 		forgottenUntil.clear()
 		reconciled.clear()
@@ -561,11 +562,11 @@ class ChatRepository(
 	}
 
 	/** Declare current UI focus. */
-	fun declareFocus(focus: FocusIntent) {
+	internal fun declareFocus(focus: FocusIntent) {
 		val prior = currentFocus
 		currentFocus = focus
 		if (focus.screen != "background") lastVisibleFocus = focus
-		if (prior != focus) drain.interrupt()
+		if (prior != focus) drain.kickPoll()
 	}
 
 	internal fun client(): ConsoleClient {
@@ -613,7 +614,7 @@ class ChatRepository(
 		admittedGateways: List<String> = emptyList(),
 	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
-		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { localGatewayId = it }
+		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { homeGatewayId = it }
 		if (store.load() == null) store.save(SANDBOX_PROVISIONING)
 		sandboxDirs = dirs
 		_state.update { s ->
@@ -626,10 +627,10 @@ class ChatRepository(
 				provisioned = true,
 				status = "",
 				error = null,
-				localGatewayId = localGatewayId,
 				drafts = drafts,
 				goals = goals,
 				admittedGateways = admittedGateways,
+				homeGatewayId = homeGatewayId,
 			)
 		}
 	}
@@ -722,10 +723,9 @@ class ChatRepository(
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Alarm backstop slack.
 		const val PARK_SLACK_MS = 5_000L
-		// Bounded mesh discovery refresh.
-		const val DISCOVERY_REFRESH_MS = 30_000L
+		const val BACKGROUND_TICK_MS = 30_000L
 		// Outlast one teams request.
-		const val FORGET_TOMBSTONE_MS = ConsoleHttp.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
+		const val FORGET_TOMBSTONE_MS = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS + 5_000L
 		// Total attachment cap from wire protocol.
 		const val MAX_OUTGOING_BYTES = Protocol.MAX_BLOB_BYTES
 

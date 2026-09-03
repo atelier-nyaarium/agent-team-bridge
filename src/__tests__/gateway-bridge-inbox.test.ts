@@ -93,6 +93,20 @@ const signedRow = (envelope: Parameters<typeof signRowEnvelope>[0], signPriv: st
 });
 
 describe("GatewayBridge inbox", () => {
+	it("refuses gateway_value for a protocol-1 gateway", async () => {
+		const { bridge } = await registered(fakeInbox());
+		await expect(
+			bridge.forwardGatewayValue("domain", {
+				opId: "op",
+				conversationId: "conversation",
+				signerSignPub: "owner",
+				device: "phone",
+				gatewayId: "gateway",
+				value: { kind: "list_dirs", path: "/" },
+			}),
+		).resolves.toEqual({ outcome: "unsupported" });
+	});
+
 	it("refuses a held blob begin for a missing record", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-held-"));
 		try {

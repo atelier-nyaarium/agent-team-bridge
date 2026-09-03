@@ -45,7 +45,6 @@ data class ScannedDeviceApproval(
 )
 
 /** The console transport a held device seals to a freshly-approved one: the provisioning creds, plus
- * the owner's synced keyring and route Gateway so the new device can seal to an already-admitted
  * Gateway without holding the owner key. */
 @kotlinx.serialization.Serializable
 data class ConsoleTransport(
@@ -73,7 +72,7 @@ sealed class DeleteDomainOutcome {
 }
 
 /** A linked friend Domain row for the Federation hub. `ownerSignPub` is null for a Domain seen only
- * via discovery, with no peer entry yet. */
+ */
 data class LinkedDomain(
 	val domainId: String,
 	val displayName: String?,

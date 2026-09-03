@@ -95,15 +95,11 @@ internal fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDevice
 	val scope = rememberCoroutineScope()
 	// The owner's display name (one per owner): what linked friends see them as. Owner-signed +
 	// pushed to the Router; it lives above the per-install device name. Seeded from state.displayName
-	// (cache, refreshed from discovery) and re-seeded when that changes.
 	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
-	// A friend (one who first-rooted their own Domain) renaming before discovery has reported a
 	// confirmed Domain id has nothing real to sign over, so the Router would reject the rename ("Domain
-	// not rooted" / "not owner-signed") as a raw "Could not save". Gate Save until discovery lands
 	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
-	// signs over its own confirmed Domain once discovery reports it.
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
 	Text("Your name", style = MaterialTheme.typography.titleMedium)
 	Text(
@@ -400,7 +396,7 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 
 	Text("Federation Router", style = MaterialTheme.typography.titleSmall)
 	Text(
-		if (stored?.direct == true) "Connected directly to your own Router." else "Using the hosted relay.",
+		if (stored?.direct == true) "Connected directly to your own Router." else "Using the hosted transport.",
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)

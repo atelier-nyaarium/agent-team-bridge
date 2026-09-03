@@ -120,7 +120,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			routerCertFp = prov.routerCertFp,
 			appToken = prov.appToken,
 			domainId = domainId,
-			gatewayId = repo.localGatewayId.takeIf { it.isNotEmpty() } ?: repo.store.loadGatewayId().takeIf { it.isNotEmpty() },
+			gatewayId = repo.homeGatewayId.takeIf { it.isNotEmpty() } ?: repo.store.loadGatewayId().takeIf { it.isNotEmpty() },
 			domainVersion = repo.store.loadDomainVersion().ifEmpty { null },
 			domain = repo.federation.keyring().snapshot,
 			contentKeys = ContentKeyring(store = repo.store).wrapAllFor(
@@ -220,7 +220,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 		check(repo.store.installApprovedDevice(blob, domainJson, transport.domainVersion, gatewayId, contentKeys)) {
 			"approved-device install could not be committed"
 		}
-		gatewayId?.let { repo.localGatewayId = it }
+		gatewayId?.let { repo.homeGatewayId = it }
 		repo.client = null
 		repo.sttsClient = null
 		// Refresh after route assignment.

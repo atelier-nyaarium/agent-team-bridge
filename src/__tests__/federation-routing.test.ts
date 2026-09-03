@@ -3,7 +3,6 @@ import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { generateIdentity } from "../shared/crypto.js";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import { channelWs, fakeRouter, makeCtx, registryWith, sealerA, sealerB, storeWith } from "./helpers/federation.js";
 
@@ -182,45 +181,6 @@ describe("federation routing (E2E sealed)", () => {
 		)) as { ok: boolean };
 		expect(result.ok).toBe(true);
 		expect(senderPushes[0]).toMatchObject({ type: "response_push", session_id: srcSession, response: "all good" });
-	});
-
-	it("DESTINATION: a response_push with spoken tiers lands them on a console origin's mailbox", async () => {
-		const mailboxStore = new DeviceMailboxStore();
-		mailboxStore.ensure("owner-1");
-		const ctx = makeCtx("hosta", { mailboxStore });
-		const srcSession = "conv.owner-1.alice.hostb.api.dev";
-		ctx.store.create(srcSession, "recipe-app.dev", "alice.hostb.api.dev", {
-			persistent: true,
-			fromConversationId: "owner-1",
-		});
-		const routes = createRoutes(ctx);
-		const handler = createGatewayRelayHandler({
-			routes,
-			tryWakeTeam: ctx.tryWakeTeam,
-			localGatewayId: "hosta",
-			localDomainId: "alice",
-		});
-
-		await handler.handleOp(
-			{
-				kind: "response_push",
-				session_id: srcSession,
-				status: "completed",
-				response: "# report",
-				title: "t",
-				summary: "s",
-				fullSpoken: "The report, spoken.",
-			},
-			"hostb",
-			null,
-		);
-		expect(mailboxStore.get("owner-1")?.drain().entries[0]).toMatchObject({
-			kind: "reply",
-			body: "# report",
-			title: "t",
-			summary: "s",
-			fullSpoken: "The report, spoken.",
-		});
 	});
 
 	it("DESTINATION: a send to a not-yet-existing target relays displayLabel through to the local mint rule", async () => {

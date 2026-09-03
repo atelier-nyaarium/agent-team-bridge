@@ -1,11 +1,6 @@
+import crypto from "node:crypto";
 import type { BoardAttachmentStore } from "../../shared/board-attachment-store.js";
-import type {
-	ConsoleOp,
-	ConsoleOpResult,
-	ConsoleReplyBody,
-	CrossDomainShareTarget,
-	OpenedConsoleFrame,
-} from "../../shared/console-protocol.js";
+import type { ConsoleOp, ConsoleOpResult, CrossDomainShareTarget } from "../../shared/console-protocol.js";
 import {
 	ALLOWED_KEYS,
 	type HostListDirsResult,
@@ -15,9 +10,8 @@ import {
 	isSpawnWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
-import { MIGRATING } from "../../shared/migration-fence.js";
+import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import { DomainStatusSchema } from "../../shared/schemas.js";
 import { DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
 import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { sanitizeLabel } from "../../shared/session-sanitize.js";
@@ -26,7 +20,6 @@ import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
 import { type BoardDisposition, type BoardResult, type BoardStore, OWNER_ACTOR, refusalError } from "../boardStore.js";
 import { readAnchorsPlaneName } from "../readAnchors.js";
-import { createConsoleDevices } from "./consoleDevices.js";
 import { createConsoleTargets } from "./consoleTargets.js";
 import {
 	type ConsoleHandlerDeps,
@@ -34,21 +27,14 @@ import {
 	CreateSessionAmbiguousError,
 	FAKE_REQ,
 	friendlyPeekError,
-	HOLD_CAP_MS,
-	isBoardMutationKind,
-	isMutatingOp,
 	SEND_BOUND_MS,
 	type SendRouteJson,
 } from "./consoleTypes.js";
-import { buildPollParticipants, type PollPiggyback } from "./pollPlanes.js";
 
 export type { ConsoleHandlerDeps, ConsoleRoutes } from "./consoleTypes.js";
 export { CREATE_SESSION_BOUND_MS } from "./consoleTypes.js";
 
 export function createConsoleDispatcher({
-	registry,
-	conversationRegistry,
-	mailboxStore,
 	routes,
 	localGatewayId,
 	localDomainId,
@@ -59,14 +45,9 @@ export function createConsoleDispatcher({
 	sessionStore,
 	capabilityStore,
 	domain,
-	domainStatus,
 	planeRegistry,
-	presence,
-	intentTracker,
 	readAnchors,
 	boardStore,
-	crossDomainPresenceConsumer,
-	linkedDomainIds,
 	blobStore,
 	boardAttachments,
 	fetchBlobFromGateway,
@@ -82,29 +63,29 @@ export function createConsoleDispatcher({
 	durableOpStore,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
-
+	const ownerByConversation = new Map<string, string>();
+	const appendIfLive = (
+		conversationId: string,
+		entry: import("../../shared/console-protocol.js").MailboxInput,
+		dedupeKey?: string,
+	): undefined | typeof MIGRATING => {
+		if (fenced()) return MIGRATING;
+		const ownerId = ownerByConversation.get(conversationId);
+		if (!ownerId) return;
+		const delivered = routes.deliverToOwner({
+			entry: entry as import("../../shared/federation-protocol.js").ConsolePushEntry,
+			dedupeKey: dedupeKey ?? crypto.randomUUID(),
+			origin: "local",
+			label: "console-device",
+		});
+		return delivered ? undefined : fenced() ? MIGRATING : undefined;
+	};
 	function assertDaemonDrivable(target: TmuxTarget): void {
 		const record = sessionStore?.getByTeam(composeSessionName(target.name, target.sessionName));
 		if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
 			throw new Error(`terminal view unavailable for a user-launched session; end it from your terminal`);
 		}
 	}
-
-	const devices = createConsoleDevices({
-		registry,
-		conversationRegistry,
-		mailboxStore,
-		deliver: routes.deliverToOwner,
-		isTrustedCatalogProject,
-		qualifyFrom: (from) => {
-			try {
-				return targets.parse(from).canonical;
-			} catch {
-				return from;
-			}
-		},
-		capabilityStore,
-	});
 
 	function requireBoard(): BoardStore {
 		if (!boardStore) throw new Error("task board is not available on this Gateway");
@@ -134,35 +115,6 @@ export function createConsoleDispatcher({
 		generation = 0,
 	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
-			case "register": {
-				const box = mailboxStore.ensure(ownerId);
-				capabilityStore?.report(conversationId, op.enabledPlugins, op.clientVersion);
-				console.log(
-					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
-				);
-				const status = DomainStatusSchema.safeParse(domainStatus?.());
-				return {
-					device,
-					gatewayId: localGatewayId,
-					cursor: box.highWater,
-					epoch: box.epoch,
-					...(status.success ? { domainStatus: status.data } : {}),
-				};
-			}
-
-			case "first_root": {
-				throw new Error("first_root is handled directly at the Router, not through a Gateway");
-			}
-
-			case "list_teams": {
-				const { teams, coverage, spawnPoints } = await routes.discoverFull();
-				return {
-					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
-					coverage,
-					spawnPoints,
-				};
-			}
-
 			case "send": {
 				const targetAddr = targets.parse(op.to);
 				const expectedSession =
@@ -194,7 +146,7 @@ export function createConsoleDispatcher({
 					void sendPromise
 						.then(async (res) => {
 							if (res.ok) {
-								const appended = devices.appendIfLive(
+								const appended = appendIfLive(
 									conversationId,
 									{
 										kind: "sent",
@@ -216,7 +168,7 @@ export function createConsoleDispatcher({
 								return;
 							}
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
-							devices.appendIfLive(conversationId, {
+							appendIfLive(conversationId, {
 								kind: "reply",
 								session_id: expectedSession,
 								status: "error",
@@ -233,7 +185,7 @@ export function createConsoleDispatcher({
 				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
 				const sendResult = { session_id: json.session_id ?? "", status: json.status ?? "running" };
-				const appended = devices.appendIfLive(
+				const appended = appendIfLive(
 					conversationId,
 					{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
 					`sent:${conversationId}:${opId}`,
@@ -244,9 +196,6 @@ export function createConsoleDispatcher({
 			}
 
 			case "respond": {
-				if (!mailboxStore.get(ownerId)?.canRespond(op.session_id)) {
-					throw new Error(`Unknown session_id; you can only respond to a thread delivered to you`);
-				}
 				const res = routes.respond(
 					FAKE_REQ,
 					{
@@ -281,66 +230,6 @@ export function createConsoleDispatcher({
 					}
 				}
 				return { delivered: true };
-			}
-
-			case "poll": {
-				if (op.focus) {
-					const declared = op.focus.terminalTeam;
-					const local = declared === undefined ? null : targets.tryLocalName(declared);
-					intentTracker?.declare(
-						conversationId,
-						local === null ? op.focus : { ...op.focus, terminalTeam: local },
-					);
-				}
-
-				const box = mailboxStore.ensure(ownerId);
-				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
-				if ("outcome" in snap) throw new Error(snap.outcome);
-				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
-
-				const participants = buildPollParticipants({
-					op,
-					ownerId,
-					localGatewayId,
-					planeRegistry,
-					presence,
-					readAnchors,
-					boardStore,
-					crossDomainPresenceConsumer,
-					linkedDomainIds,
-					domain,
-				});
-
-				const cursor = op.cursor ?? 0;
-				const nothingNew = (s: typeof snap) => s.entries.every((e) => e.seq <= cursor);
-				if (nothingNew(snap) && hold > 0) {
-					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
-					for (const p of participants) if (p.wait) waits.push(p.wait(hold));
-					await Promise.race(waits);
-					snap = box.drain(cursor, op.epoch, conversationId);
-					if ("outcome" in snap) throw new Error(snap.outcome);
-				}
-				if (snap.entries.length > 0 || snap.dropped > 0) {
-					console.log(
-						`[console poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
-					);
-				}
-				const settled =
-					snap.entries.length > 0
-						? ("mailbox" as const)
-						: (participants.find((p) => p.changed())?.settledAs ?? ("timeout" as const));
-				let piggyback: PollPiggyback = {};
-				for (const p of participants) {
-					if (p.changed()) piggyback = { ...piggyback, ...p.emit() };
-				}
-				return {
-					entries: snap.entries,
-					cursor: snap.cursor,
-					dropped: snap.dropped,
-					epoch: snap.epoch,
-					...piggyback,
-					settled,
-				};
 			}
 
 			case "report_read": {
@@ -424,13 +313,6 @@ export function createConsoleDispatcher({
 			case "board_remove": {
 				return boardWrite(requireBoard().remove(ownerId, op.ids));
 			}
-			case "board_read": {
-				const board = requireBoard();
-				board.ensureRegistered(ownerId);
-				const projection = board.projection(ownerId);
-				return { entries: projection.entries, ...(projection.truncated ? { truncated: true } : {}) };
-			}
-
 			case "peek": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = targets.tmuxTarget(op.target);
@@ -758,89 +640,12 @@ export function createConsoleDispatcher({
 		return canonical;
 	}
 
-	async function runFrame(frame: OpenedConsoleFrame, generation = 0): Promise<ConsoleReplyBody> {
-		try {
-			const ownerId = ownerKeyId(frame.ownerSignPub);
-			devices.ensurePeer(
-				frame.device,
-				frame.conversationId,
-				frame.signerSignPub,
-				ownerId,
-				frame.op.kind === "register",
-			);
-			capabilityStore?.touch(frame.conversationId);
-			const result = await dispatch(
-				frame.op,
-				frame.device,
-				frame.conversationId,
-				ownerId,
-				frame.opId,
-				frame.ownerSignPub,
-				generation,
-			);
-			return { ok: true, result };
-		} catch (err) {
-			const message = (err as Error).message;
-			console.error(`[console] ${frame.op.kind} op failed for ${frame.device}: ${message}`);
-			return { ok: false, error: message };
-		}
-	}
-
 	function durableOpKey(kind: string, opId: string): string {
 		return `${kind}:${opId}`;
 	}
 
 	function evictOpCacheIfStillOwned(conv: string, opId: string, kind: string, generation: number): void {
-		if (!durableOpStore || durableOpStore.clear(conv, durableOpKey(kind, opId), generation)) {
-			devices.opCacheDelete(conv, opId);
-		}
-	}
-
-	function cacheInMemory(conv: string, opId: string, promise: Promise<ConsoleReplyBody>): void {
-		devices.opCacheSet(conv, opId, promise);
-	}
-
-	function handleFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {
-		if (!isMutatingOp(frame.op)) return runFrame(frame);
-
-		const conv = frame.conversationId;
-		const cached = devices.opCacheGet(conv, frame.opId);
-		if (cached) return cached;
-
-		const isBoardMutation = isBoardMutationKind(frame.op.kind);
-		const isDurableOp = frame.op.kind === "send" || frame.op.kind === "respond" || isBoardMutation;
-		let generation = 0;
-		if (isDurableOp && durableOpStore) {
-			const key = durableOpKey(frame.op.kind, frame.opId);
-			const record = durableOpStore.get(conv, key);
-			if (record?.state === "complete") {
-				const replayed = Promise.resolve<ConsoleReplyBody>({ ok: true, result: record.result });
-				cacheInMemory(conv, frame.opId, replayed);
-				return replayed;
-			}
-			const marked = durableOpStore.markInFlight(conv, key);
-			if (marked === null) throw new Error(MIGRATING);
-			generation = marked;
-		}
-
-		const promise = runFrame(frame, generation);
-		cacheInMemory(conv, frame.opId, promise);
-		void promise
-			.then((reply) => {
-				if (reply.ok) {
-					if (isBoardMutation && reply.result) {
-						durableOpStore?.markComplete(conv, durableOpKey(frame.op.kind, frame.opId), reply.result);
-					}
-					return;
-				}
-				if (isDurableOp) evictOpCacheIfStillOwned(conv, frame.opId, frame.op.kind, generation);
-				else devices.opCacheDelete(conv, frame.opId);
-			})
-			.catch(() => {
-				if (isDurableOp) evictOpCacheIfStillOwned(conv, frame.opId, frame.op.kind, generation);
-				else devices.opCacheDelete(conv, frame.opId);
-			});
-		return promise;
+		durableOpStore?.clear(conv, durableOpKey(kind, opId), generation);
 	}
 
 	async function handleValue(
@@ -849,8 +654,9 @@ export function createConsoleDispatcher({
 		conversationId: string,
 		opId: string,
 		ownerSignPub: string,
-	) {
+	): Promise<ConsoleOpResult> {
 		if (!VALUE_OP_KINDS.has(op.kind)) throw new Error("value op kind is not allowed");
+		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
@@ -860,10 +666,11 @@ export function createConsoleDispatcher({
 		conversationId: string,
 		opId: string,
 		ownerSignPub: string,
-	) {
+	): Promise<ConsoleOpResult> {
 		if (!DELIVERY_OP_KINDS.has(op.kind)) throw new Error("delivery op kind is not allowed");
+		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
-	return { handleFrame, handleValue, handleDelivery, ensurePeer: devices.ensurePeer, removePeer: devices.removePeer };
+	return { handleValue, handleDelivery };
 }

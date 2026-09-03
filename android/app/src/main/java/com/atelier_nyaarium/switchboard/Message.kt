@@ -13,7 +13,7 @@ data class Message(
 	val files: List<MessageFile> = emptyList(),
 	/** Wire "running"/"error", local "pending" (echo in flight), or null once settled. */
 	val status: String? = null,
-	/** The relay opId this send was first delivered under. A retry reuses it so the gateway replays a
+	 /**
 	 * lost reply instead of double-delivering to the agent. */
 	val opId: String? = null,
 	/** Notification-bar line for a notice. The thread renders the body as usual and never shows this. */
@@ -66,8 +66,6 @@ internal fun resolveMessageAttribution(
 ): MessageAttribution =
 	if (kind == "peer") {
 		// A from that fails to canonicalize is shown RAW, never replaced by the thread key: the
-		// substitute is a real identity (the target), which forges the sender. Same family as
-		// stamping the route Gateway onto a bare relayed name.
 		MessageAttribution(
 			entryFrom?.let { canonicalize(it) ?: it } ?: team,
 			entryTo?.let { canonicalize(it) ?: it },

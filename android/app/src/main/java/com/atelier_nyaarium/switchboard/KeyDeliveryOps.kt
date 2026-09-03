@@ -133,7 +133,7 @@ class KeyDeliveryOps(
 		}
 		val answer = send(keyReceiptsReadOp()) ?: return members.flatMap { member -> epochs.map { KeyDeliveryMember(member.kind, member.signPub, it, false) } }
 		val receipts = runCatching {
-			val body = wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody.serializer(), answer)
+			val body = wireJson.decodeFromJsonElement(OwnerOpAnswer.serializer(), answer)
 			wireJson.decodeFromJsonElement(KeyReceiptsReadResult.serializer(), body.result ?: return@runCatching null)
 		}.getOrElse {
 			runCatching { wireJson.decodeFromJsonElement(KeyReceiptsReadResult.serializer(), answer) }.getOrNull()

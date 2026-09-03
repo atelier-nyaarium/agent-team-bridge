@@ -11,10 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 data class ChatState(
 	val provisioned: Boolean = false,
 	val teams: List<Team> = emptyList(),
-	/** What each Gateway's machine offers beyond the universal `host`, from DISCOVERY only. Held
-	 * across presence-plane pushes for the same reason discovery rows are: the plane speaks for the
-	 * route Gateway alone, so letting it clear this would drop every other machine's answer on each
-	 * local presence change. Empty means nothing has been advertised yet, never "no Windows". */
+	/** Spawn points each Gateway advertises; held across presence pushes. */
 	val gatewaySpawnPoints: List<GatewaySpawnPoints> = emptyList(),
 	/** Per Gateway, the project last spawned there. Only a SUGGESTION for the create dialog, which
 	 * re-checks it against what that Gateway offers now, so a stale entry preselects nothing. */
@@ -53,10 +50,9 @@ data class ChatState(
 	val pollFailStreak: Int = 0,
 	/** Connected Gateway id, learned from the register result. Empty before the first
 	 * federation-aware connect, where bare names resolve to the local Gateway. */
-	val localGatewayId: String = "",
 	val homeGatewayId: String = "",
 	/** Epoch ms while a post-enrollment allowlist sync is in progress: the device is admitted but the
-	 * route Gateway has not re-synced, so sealed ops transiently reject. Drives the calm SYNCING
+	 * home Gateway has not re-synced, so sealed ops transiently reject. Drives the calm SYNCING
 	 * header; cleared once an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
 	/** Every Gateway this owner has admitted, by gateway id. The sessions board unions these with the
@@ -76,16 +72,13 @@ data class ChatState(
 	 * switched on. Folding them lost exactly the distinction between a machine sitting idle and one
 	 * nobody could reach. */
 	val connectedGateways: List<String>? = null,
-	/** Linked friend Domains from the route Gateway's cross-Domain peer set. Unioned with the
-	 * discovery-derived Domains in linkedDomains(), so a freshly-linked peer is visible even while its
-	 * gateway is offline and has shared nothing back. */
+	/** Linked friend Domains by owner key. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** A linked friend Domain's sessions, keyed by domainId and UPSERTED per domain. The wire ships
 	 * only the subset whose plane changed, so a wholesale replace would wipe every other friend's
 	 * cached entry. Pruned to the current [linkedPeerOwners] keys whenever that roster changes, since
 	 * an upsert has no other way to notice an unlinked friend should disappear. */
 	val crossDomainPeerSessions: Map<String, CrossDomainPresenceEntry> = emptyMap(),
-	/** This owner's own display name. Seeded from the local cache, refreshed from discovery. */
 	val displayName: String = "",
 	/** True once this device has first-rooted a pending friend Domain from its invite blob. Lets the
 	 * empty board tell a friend with no host yet from an admin who has admitted no Gateway. */

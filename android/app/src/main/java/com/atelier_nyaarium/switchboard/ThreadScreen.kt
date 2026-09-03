@@ -64,7 +64,6 @@ import com.atelier_nyaarium.switchboard.board.BoardGroup
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
 import com.atelier_nyaarium.switchboard.board.BoardRow
 import com.atelier_nyaarium.switchboard.plugins.Plugins
-import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import kotlinx.coroutines.launch
 
 ////////////////////////////////

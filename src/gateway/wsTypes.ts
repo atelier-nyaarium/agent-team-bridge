@@ -109,9 +109,6 @@ export interface WsData {
 	handshakeConfirmed: boolean;
 	proxyProject?: string;
 	proxyAuth?: string;
-	// True for a console mailbox peer: a duck-typed socket whose send() appends to a
-	// DeviceMailbox instead of writing a wire. Liveness comes from the console<->Router
-	// connection, so it is excluded from the ping/pong heartbeat.
 	virtual?: boolean;
 	// Which delivery contract this peer's plugin speaks, as reported at register. 1 means it
 	// acknowledges each channel_push, which is what lets a message be held until it truly lands.

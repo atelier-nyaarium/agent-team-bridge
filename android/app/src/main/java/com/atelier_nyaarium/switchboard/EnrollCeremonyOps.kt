@@ -26,7 +26,7 @@ internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 	 * carried as `expectedPeer` so a substituted admin reveal is caught against the in-person QR, not
 	 * only at the compare. Null when the blob carries no enroll handshake (an ordinary invite). The
 	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
-	 * confirmedDomainId() - which is null until a local discovery session lands. */
+	  */
 	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
 		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return null
 		val hs = prov.enrollHandshake ?: return null
@@ -88,8 +88,6 @@ internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
 				// Record the OWNER-keyed friend edge first (the Users-surface trust): the compare confirmed
-				// the peer's owner key, so trust the PERSON even if the relay edge below is rejected (a
-				// gateway-less friend still becomes a friend; relay enables later).
 				repo.federation.addTrustedOwner(peerOwnerSignPub)
 				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (the Router
 				// dedupes by (src, nonce)) instead of accumulating a duplicate per attempt.

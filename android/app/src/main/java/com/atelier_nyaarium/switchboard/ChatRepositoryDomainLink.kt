@@ -44,6 +44,8 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 		return@withContext
 	}
 	store.save(blob)
+	homeGatewayId = ""
+	store.saveGatewayId("")
 	// Re-import requires fresh admission.
 	store.consoleAdmitted = false
 	// Re-evaluate pending invites.
@@ -53,7 +55,9 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 	client = null
 	sttsClient = null
 	// Mirror the reset in UI state.
-	_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false) }
+	_state.update {
+		it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false, homeGatewayId = "")
+	}
 }
 
 /** Normalize a SHA-256 leaf fingerprint. */
@@ -121,7 +125,7 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	// Attach debug ingest before enrollment.
 	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) { client().transport.proxyBase } } }
-	DebugLog.log("Connect", "start gateway=${localGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
+	DebugLog.log("Connect", "start gateway=${homeGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 	try {
 		// Distinguish cluster failures early.
 		runCatchingCancellable { client().apiReachable() }.onFailure { e ->
@@ -159,7 +163,6 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			homeGatewayId = id
 			store.saveGatewayId(id)
 		}
-		client().routeGateway = homeGatewayId.ifEmpty { null }
 		pluginReportPending = false
 		repoScope.launch { reportCapabilitiesToRouter() }
 		val teams = _state.value.teams
@@ -170,7 +173,6 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				error = null,
 				connected = true,
 				pollFailStreak = 0,
-				localGatewayId = homeGatewayId,
 				homeGatewayId = homeGatewayId,
 				enrollingSince = 0L,
 				// Publish sessions and roster together.
@@ -179,7 +181,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		}
 		ownerFacts.ensureContentEpochs(confirmedDomainId())
 		presence.refreshDisplayNameFromTeams()
-		DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
+		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }}")
 	} catch (e: Exception) {
 		// Rethrow cancellation before connection handling.
 		e.rethrowIfCancellation()
@@ -213,7 +215,7 @@ fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { con
 
 /** Confirmed local Domain id. */
 fun ChatRepository.confirmedDomainId(): String? {
-	val gw = localGatewayId
+	val gw = homeGatewayId
 	return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 }
 
@@ -223,7 +225,7 @@ internal fun ChatRepository.confirmedDomainIdOrThrow(): String =
 
 /** True when the local session owns the admin Domain. */
 fun ChatRepository.isAdmin(): Boolean {
-	val gw = localGatewayId
+	val gw = homeGatewayId
 	return _state.value.teams.any { (it.gatewayId.ifEmpty { gw }) == gw && it.isAdminDomain }
 }
 

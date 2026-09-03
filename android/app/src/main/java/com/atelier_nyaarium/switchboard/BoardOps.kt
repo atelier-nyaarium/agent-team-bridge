@@ -6,12 +6,11 @@ import com.atelier_nyaarium.switchboard.board.BoardRefusal
 import com.atelier_nyaarium.switchboard.board.CardBranch
 import com.atelier_nyaarium.switchboard.board.BoardIntent
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
+import com.atelier_nyaarium.switchboard.proto.BoardStateAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardReadResult
 import com.atelier_nyaarium.switchboard.proto.BoardSession
-import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.Protocol
-import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.update
@@ -19,13 +18,6 @@ import kotlinx.coroutines.launch
 
 /** Repository-side board operations. */
 internal class BoardOps(private val repo: ChatRepository) {
-	private fun enqueue(op: ConsoleOp, gatewayId: String, sources: Map<String, String> = emptyMap()): String {
-		val opId = repo.board.enqueue(op, gatewayId, sources = sources)
-		// Poll promptly.
-		repo.drain.kickPoll()
-		return opId
-	}
-
 	/** Reads and drains the Router board. */
 	fun refreshBoard() {
 		repo.repoScope.launch { readRouterBoard() }
@@ -43,7 +35,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** Assignable live sessions with sealable keys. */
 	fun boardAssignTargets(): List<Team> {
-		val reachable = (repo.sessions.otherKeyringGateways(repo.localGatewayId) + repo.localGatewayId).toSet()
+		val reachable = repo.sessions.keyringGateways().toSet()
 		return repo._state.value.teams.filter {
 			it.kind != "console" && it.kind != "devcontainer" && (it.gatewayId.isEmpty() || it.gatewayId in reachable)
 		}
@@ -52,27 +44,20 @@ internal class BoardOps(private val repo: ChatRepository) {
 	/** Forgets a session and its board disposition. */
 	fun forgetWithBoardDisposition(team: String, cancelThem: Boolean, onForgotten: () -> Unit) {
 		val asked = if (cancelThem) "cancel" else "release"
-		repo.board.dropQueuedForSession(boardGatewayOf(team), team)
 		repo.sessions.forget(team, asked, onForgotten)
-	}
-
-	/** Whether a session uses a non-route Gateway. */
-	fun isNonRouteSession(team: String): Boolean {
-		val gw = repo._state.value.teams.firstOrNull { it.name == team }?.gatewayId ?: return false
-		return gw.isNotEmpty() && gw != repo.localGatewayId
 	}
 
 	/** Resolves the board Gateway from the address. */
 	fun boardGatewayOf(team: String?): String {
 		val fromName = team?.let { runCatching { gatewayOf(it) }.getOrNull() }?.ifEmpty { null }
-		return fromName ?: repo.localGatewayId
+		return fromName ?: repo.homeGatewayId
 	}
 
 	/** Resolves the board Gateway for a session key. */
 	fun boardGatewayOfKey(sessionKey: String): String? {
 		if (sessionKey.isEmpty()) return null
 		val gw = repo._state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
-		return gw?.ifEmpty { repo.localGatewayId }
+		return gw?.ifEmpty { repo.homeGatewayId }
 	}
 
 	fun boardEntriesFor(team: String?): List<BoardEntry> = repo.board.routerEntries()
@@ -91,7 +76,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 	/** The whole Router board. */
 	fun boardEntries(): List<BoardEntry> = repo.board.routerEntries()
 
-	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds()
+	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds(repo.homeGatewayId)
 
 	fun boardLastSyncedAt(gatewayId: String): Long = repo.board.lastSyncedAt(gatewayId)
 
@@ -110,11 +95,9 @@ internal class BoardOps(private val repo: ChatRepository) {
 	fun applyBoardSnapshot(
 		gatewayId: String,
 		entries: List<BoardEntry>,
-		version: TaskBoardVersion?,
+		version: Long?,
 		truncated: Boolean,
 	) = repo.board.applySnapshot(gatewayId, entries, version, truncated)
-
-	suspend fun drainBoard() = repo.board.drain(repo.client())
 
 	/** Queues an intent. */
 	private fun intend(vararg intents: BoardIntent) {
@@ -170,10 +153,15 @@ internal class BoardOps(private val repo: ChatRepository) {
 			repo._state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
 			return
 		}
+		val client = repo.client ?: run {
+			staged.forEach { it.source.delete() }
+			repo._state.update { it.copy(error = "Connect before adding attachments") }
+			return
+		}
 		val sources = mutableMapOf<String, String>()
 		val added = staged.mapNotNull { picked ->
 			// Land under the blob name.
-			val blobId = repo.client?.blobIdOf(picked.source) ?: return@mapNotNull null
+			val blobId = client.blobIdOf(picked.source)
 			val target = Attachments.boardFile(repo.filesDir, id, blobId)
 			target.parentFile?.mkdirs()
 			picked.source.copyTo(target, overwrite = true)
@@ -199,10 +187,11 @@ internal class BoardOps(private val repo: ChatRepository) {
 		}
 
 		// Supplied means locally present.
-		enqueue(
-			ConsoleOp.BoardSetAttachments(id, keep + added, supplied = sources.keys.toList()),
-			gatewayId,
-			sources = sources,
+		intend(
+			BoardIntent.SetAttachments(
+				id,
+				(keep + added).map { BoardStateAttachment(it.blobId, it.size, it.mime, it.blobGateway) },
+			),
 		)
 		// Upload outside the single-flight drain.
 		for ((_, source) in sources) kickBoardUpload(source, gatewayId)
@@ -304,8 +293,6 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** Restarts pending transfers. */
 	internal fun resumeBoardUploads() {
-		for ((_, source, gatewayId) in repo.board.pendingSources()) kickBoardUpload(source, gatewayId)
-		// Restart pending downloads.
 	}
 
 	/** One upload per source. */

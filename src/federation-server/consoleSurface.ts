@@ -1,9 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
-import type { RouterBlobCache } from "./blobs/routerBlobCache.js";
-import type { InboxService } from "./inbox/inboxService.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;
@@ -41,18 +38,9 @@ import {
 const MAX_INGEST_LINES = 2000;
 const MAX_INGEST_BYTES = 512 * 1024;
 
-export interface GatewayFrameSink {
-	isConnected(): boolean;
-	pushGatewayFrame(frame: Record<string, unknown>): boolean;
-	pushToGateway(gatewayId: string, frame: Record<string, unknown>): boolean;
-	gatewayIds(): string[];
-}
-
 export interface ConsoleSurfaceParams {
 	port: number;
 	authToken: string;
-	getBridge: () => GatewayFrameSink | null;
-	timeoutMs?: number;
 	ingestFile?: string;
 	onEnrollOp?: (op: EnrollOp) => EnrollResult | Promise<EnrollResult>;
 	onFirstRoot?: (signed: SignedFirstRoot) => EnrollResult | Promise<EnrollResult>;
@@ -67,9 +55,6 @@ export interface ConsoleSurfaceParams {
 	/** Gateway listings use the admin Domain. */
 	onGateways?: () => RouterGatewaysAnswer;
 	onOwnerOp?: (raw: unknown) => unknown | Promise<unknown>;
-	inbox?: InboxService;
-	blobCache?: RouterBlobCache;
-	referenceHeld?: ReferenceHeldStore;
 }
 
 /** Empty reach fields preserve cached addresses. */
@@ -83,14 +68,10 @@ export interface RouterGatewaysAnswer {
 	gateways: { gatewayId: string; signFp: string | null }[];
 }
 
-const CONSOLE_PROTOCOL_VERSION = 1;
-const DEFAULT_TIMEOUT_MS = 55_000;
 export const APP_TOKEN_HEADER = "x-console-bridge-token";
 
 export class ConsoleSurface {
 	private readonly authToken: string;
-	private readonly getBridge: () => GatewayFrameSink | null;
-	private readonly timeoutMs: number;
 	private readonly ingestFile: string | null;
 	private readonly onEnrollOp: ((op: EnrollOp) => EnrollResult | Promise<EnrollResult>) | null;
 	private readonly onFirstRoot: ((signed: SignedFirstRoot) => EnrollResult | Promise<EnrollResult>) | null;
@@ -111,16 +92,9 @@ export class ConsoleSurface {
 	private readonly onReach: (() => RouterReachAnswer) | null;
 	private readonly onGateways: (() => RouterGatewaysAnswer) | null;
 	private readonly onOwnerOp: ((raw: unknown) => unknown | Promise<unknown>) | null;
-	private readonly pending = new Map<
-		string,
-		{ resolve: (res: Response) => void; timer: ReturnType<typeof setTimeout> }
-	>();
-
 	public constructor({
 		port,
 		authToken,
-		getBridge,
-		timeoutMs,
 		ingestFile,
 		onEnrollOp,
 		onFirstRoot,
@@ -135,8 +109,6 @@ export class ConsoleSurface {
 		onOwnerOp,
 	}: ConsoleSurfaceParams) {
 		this.authToken = authToken;
-		this.getBridge = getBridge;
-		this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.ingestFile = ingestFile ?? null;
 		this.onEnrollOp = onEnrollOp ?? null;
 		this.onFirstRoot = onFirstRoot ?? null;
@@ -156,13 +128,7 @@ export class ConsoleSurface {
 		throw new Error("ConsoleSurface requires RouterServer");
 	}
 
-	public stop(): void {
-		for (const [, entry] of this.pending) {
-			clearTimeout(entry.timer);
-			entry.resolve(bounce(503, `console bridge shutting down`));
-		}
-		this.pending.clear();
-	}
+	public stop(): void {}
 
 	private async handleEnrollOp(raw: unknown): Promise<Response> {
 		if (!this.onEnrollOp) return bounce(501, `enrollment not available`, false);
@@ -272,14 +238,6 @@ export class ConsoleSurface {
 	private handleGateways(): Response {
 		if (!this.onGateways) return bounce(501, `gateways not available`, false);
 		return json(this.onGateways(), 200);
-	}
-
-	public settleConsoleRelay(opId: string, reply: Record<string, unknown>): void {
-		const entry = this.pending.get(opId);
-		if (!entry) return;
-		clearTimeout(entry.timer);
-		this.pending.delete(opId);
-		entry.resolve(json(reply, 200));
 	}
 
 	private async handleIngest(req: Request): Promise<Response> {
@@ -396,46 +354,7 @@ export class ConsoleSurface {
 			return json(result, 200);
 		}
 
-		const { opId, signerSignPub, sealed, targetGateway } = body;
-		if (
-			typeof opId !== "string" ||
-			typeof signerSignPub !== "string" ||
-			typeof sealed !== "object" ||
-			sealed === null
-		) {
-			return bounce(400, `opId, signerSignPub (strings) and sealed (object) are required`, false);
-		}
-
-		if (this.pending.has(opId)) {
-			return bounce(409, `op already in flight`, true);
-		}
-
-		const bridge = this.getBridge();
-		if (!bridge?.isConnected()) {
-			return bounce(503, `gateway not connected`, true);
-		}
-
-		// Sealed payloads stay with named gateways.
-		const route = (typeof targetGateway === "string" && targetGateway) || "";
-		if (route && !bridge.gatewayIds().includes(route)) {
-			return bounce(503, `gateway "${route}" is not connected`, true);
-		}
-
-		return new Promise<Response>((resolve) => {
-			const timer = setTimeout(() => {
-				this.pending.delete(opId);
-				resolve(bounce(504, `relay timed out`, true));
-			}, this.timeoutMs);
-			this.pending.set(opId, { resolve, timer });
-
-			const frame = { type: "console_relay", v: CONSOLE_PROTOCOL_VERSION, opId, signerSignPub, sealed };
-			const pushed = route ? bridge.pushToGateway(route, frame) : bridge.pushGatewayFrame(frame);
-			if (!pushed) {
-				clearTimeout(timer);
-				this.pending.delete(opId);
-				resolve(bounce(503, `gateway unavailable`, true));
-			}
-		});
+		return bounce(404, `route not found`, false);
 	}
 }
 

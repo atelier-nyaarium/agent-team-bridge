@@ -148,10 +148,9 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 			if (!submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Admit failed")) {
 				return@withContext null
 			}
-			// The first admitted Gateway becomes the route Gateway the Console seals to.
 			if (repo.store.loadGatewayId().isEmpty()) {
 				repo.store.saveGatewayId(gatewayId)
-				repo.localGatewayId = gatewayId
+				repo.homeGatewayId = gatewayId
 			}
 			signed
 		}

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -399,65 +398,6 @@ describe("routes", () => {
 				});
 				expect(landed.status).toBe(200);
 			});
-		});
-	});
-
-	describe("/respond console durability", () => {
-		const req = new Request("http://gateway/respond");
-
-		it("appends a reply to the device mailbox even when no live peer exists", () => {
-			// The class-4 case: after a restart the mailbox is restored but the virtual
-			// peer is not rehydrated, so conversationRegistry has no entry for the console.
-			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-1", "team-a", "console", { persistent: true, fromConversationId: "console-conv" });
-			const mailboxStore = new DeviceMailboxStore();
-			mailboxStore.ensure("console-conv"); // mailbox restored, no conversationRegistry peer
-			const ctx = makeCtx({ store, mailboxStore });
-			const { respond } = createRoutes(ctx);
-
-			const res = respond(req, { session_id: "sess-1", status: "completed", response: "the answer" });
-			expect(res.status).toBe(200);
-
-			const drained = mailboxStore.get("console-conv")?.drain(0);
-			expect(drained?.entries.length).toBe(1);
-			expect(drained?.entries[0]).toMatchObject({ kind: "reply", body: "the answer", status: "completed" });
-		});
-
-		it("stamps the spoken tiers onto the mailbox reply entry", () => {
-			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-1", "team-a", "console", { persistent: true, fromConversationId: "console-conv" });
-			const mailboxStore = new DeviceMailboxStore();
-			mailboxStore.ensure("console-conv");
-			const ctx = makeCtx({ store, mailboxStore });
-			const { respond } = createRoutes(ctx);
-
-			respond(req, {
-				session_id: "sess-1",
-				status: "completed",
-				response: "# the answer",
-				title: "t",
-				summary: "s",
-				fullSpoken: "The answer, spoken.",
-			});
-			expect(mailboxStore.get("console-conv")?.drain(0)?.entries[0]).toMatchObject({
-				kind: "reply",
-				body: "# the answer",
-				title: "t",
-				summary: "s",
-				fullSpoken: "The answer, spoken.",
-			});
-		});
-
-		it("does not create a spurious mailbox for a channel agent (no mailbox = live-WS path)", () => {
-			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-2", "team-b", "agent", { persistent: true, fromConversationId: "agent-conv" });
-			const mailboxStore = new DeviceMailboxStore();
-			const ctx = makeCtx({ store, mailboxStore });
-			const { respond } = createRoutes(ctx);
-
-			respond(req, { session_id: "sess-2", status: "completed", response: "reply" });
-			// A channel agent has no mailbox; respond must not mint one for it.
-			expect(mailboxStore.get("agent-conv")).toBeUndefined();
 		});
 	});
 });

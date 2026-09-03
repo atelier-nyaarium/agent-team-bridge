@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceVersion
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -44,31 +43,22 @@ class CrossDomainPresenceUiTest {
 
 	@Test
 	fun emptyCurrentAdoptsAllIncomingEntries() {
-		val result = upsertKnownCrossDomainPresenceVersions(emptyList(), listOf(entry("alice"), entry("bob")))
-		assertEquals(setOf("alice", "bob"), result.map { it.domainId }.toSet())
+		val result = upsertKnownCrossDomainPresenceVersions(emptyMap(), listOf(entry("alice"), entry("bob")))
+		assertEquals(mapOf("alice" to 1L, "bob" to 1L), result)
 	}
 
 	@Test
 	fun matchingDomainIsReplacedNotDuplicated() {
-		val current = listOf(CrossDomainPresenceKnownVersion("alice", epoch = 1, version = 1))
+		val current = mapOf("alice" to 1L)
 		val result = upsertKnownCrossDomainPresenceVersions(current, listOf(entry("alice", epoch = 1, version = 2)))
-		assertEquals(listOf(CrossDomainPresenceKnownVersion("alice", epoch = 1, version = 2)), result)
+		assertEquals(mapOf("alice" to 2L), result)
 	}
 
 	@Test
 	fun otherKnownDomainsSurviveAPartialUpdate() {
 		// The wire only ships the CHANGED subset - "bob" not appearing in `entries` must not drop it.
-		val current = listOf(
-			CrossDomainPresenceKnownVersion("alice", epoch = 1, version = 1),
-			CrossDomainPresenceKnownVersion("bob", epoch = 1, version = 5),
-		)
+		val current = mapOf("alice" to 1L, "bob" to 5L)
 		val result = upsertKnownCrossDomainPresenceVersions(current, listOf(entry("alice", epoch = 1, version = 2)))
-		assertEquals(
-			setOf(
-				CrossDomainPresenceKnownVersion("alice", epoch = 1, version = 2),
-				CrossDomainPresenceKnownVersion("bob", epoch = 1, version = 5),
-			),
-			result.toSet(),
-		)
+		assertEquals(mapOf("alice" to 2L, "bob" to 5L), result)
 	}
 }

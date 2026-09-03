@@ -33,7 +33,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 	}.getOrNull()
 
 	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery)
-	 * fetch the bootstrap transport from the route Gateway, seal a bootstrap bundle, and deliver
+	 * fetch the bootstrap transport from the home Gateway, seal a bootstrap bundle, and deliver
 	 * it over the LAN, falling back to handing the admin the sealed text to paste. A
 	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
 	 * through the Router's domain sync. */

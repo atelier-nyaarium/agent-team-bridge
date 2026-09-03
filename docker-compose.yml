@@ -40,7 +40,7 @@ services:
       - switchboard-federation
     volumes:
       - ./volumes/gateway:/app/log
-      # Durable state (federation keys, jobs, mailboxes, replay-guard, session-resume) lives here,
+      # Durable state (federation keys, jobs, owner-row outbox, replay-guard, session-resume) lives here,
       # separate from the log volume so clearing logs can never wipe federation identity.
       - ./volumes/gateway-data:/app/data
 networks:

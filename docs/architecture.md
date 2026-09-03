@@ -94,10 +94,21 @@ rule refuses every real host session.
 the console's authenticated `create_session` opens a host record. A reattached pane and a purged
 `DATA_DIR` lose their proof and must be relaunched.
 
+## Phone path
+
+The phone reaches the Router through signed OwnerOps. `deliver` carries a `console_op` row.
+`gateway_value` is forwarded as a `value_op` frame. The phone also sends
+`consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`, and
+`capabilities_report`. Results are sealed under `opResultAadKind` or `valueResultAadKind`.
+
+`ConsoleSocketMode.INBOX` selects the inbox socket. `PollDrain.drainTick` reads the owner inbox and
+planes, then advances the inbox once when rows drain. `homeGatewayId` selects the home Gateway from
+the admitted gateways.
+
 ## Versioned state planes
 
-The console poll response carries versioned server-state snapshots. `shared/plane-registry.ts` owns
-version identity, hash-gated bumps, held polling, and the 60s recovery tripwire.
+The console reads versioned server-state snapshots through OwnerOps. `shared/plane-registry.ts`
+owns version identity, hash-gated bumps, held reads, and the 60s recovery tripwire.
 
 Planes: **presence**, **linked-peers**, **read-anchors** per owner, and **cross-domain-presence** per
 linked Domain.

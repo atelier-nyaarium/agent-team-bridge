@@ -32,12 +32,12 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	////////////////////////////////
 	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
 
-	/** The linked friend Domains. The trust roster comes from the route Gateway's cross-Domain peer
+	 /**
 	 * set (pushed on the poll response's linkedPeers plane; see applyLinkedPeers): a peer is listed
 	 * the moment it is linked, regardless of whether its gateway is online or has shared anything
-	 * back. That set is unioned with the discovery-derived Domains so a just-linked peer is
+	 * back. That set is unioned with the presence-derived Domains so a just-linked peer is
 	 * immediately visible (and its detail reachable to start sharing) before any of its sessions
-	 * surface in discovery. Discovery still supplies the session count + presence; a peer present
+	 * surface in presence. Presence still supplies the session count; a peer present
 	 * only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> {
 		val adminDomain = repo.confirmedDomainId() ?: return emptyList()
@@ -48,7 +48,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	 * host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
 		val adminDomain = repo.confirmedDomainId() ?: return emptyList()
-		val gw = repo.localGatewayId
+		val gw = repo.homeGatewayId
 		val s = repo._state.value
 		return s.teams
 			.filter { (it.domainId.isNullOrEmpty() || it.domainId == adminDomain) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
@@ -76,7 +76,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 					pin = pin,
 					requesterOwnerSignPub = repo.federation.ownerSignPub(),
 					requesterDomainId = adminDomain,
-					requesterGatewayId = repo.localGatewayId,
+					requesterGatewayId = repo.homeGatewayId,
 				)
 				CrossDomainPairing(pin = pin, result = result)
 			}
@@ -238,9 +238,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 			for (d in peerDomains) {
 				runCatchingCancellable { repo.ownerFacts.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
 			}
-			// Mesh-wide discovery has no push, so an explicit pull is what makes the person's sessions
-			// leave the board promptly instead of waiting out DISCOVERY_REFRESH_MS.
-			repo.presence.refreshDiscovery()
+			repo.presence.refreshAfterAction()
 			Unit
 		}
 	}

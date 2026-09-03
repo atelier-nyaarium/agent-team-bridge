@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
-import com.atelier_nyaarium.switchboard.proto.DiscoverCoverage
 import com.atelier_nyaarium.switchboard.proto.GatewaySpawnPoints
 import com.atelier_nyaarium.switchboard.proto.LOCAL_DOMAIN_SENTINEL
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
@@ -22,7 +21,6 @@ data class Team(
 	// Everything a Gateway reports about this session, and what that report is WORTH. Deliberately
 	// one value rather than the loose fields it used to be: a bare `status`/`working`/`needsLogin`
 	// says nothing about whether it arrived on the pushed presence plane (current) or the 30-second
-	// discovery pull (not), and fourteen call sites read them as though they were always current.
 	// See Presence.kt for the whole reasoning; the status string in there has no accessor on purpose.
 	val presence: Presence,
 	val kind: String = "loose",
@@ -90,18 +88,6 @@ internal fun Team.withAuthority(a: Authority): Team = copy(presence = presence.w
 /** Attach this device's own outstanding request for this session, or clear it. */
 internal fun Team.withReceipt(r: ActionReceipt?): Team = copy(presence = presence.withReceipt(r))
 
-/** A list_teams answer with its own completeness. Null coverage (an older gateway) claims nothing.
- *
- * `spawnPoints` names what each Gateway's machine offers beyond the universal `host`. Null means NOT
- * ADVERTISED, never "no Windows here": an older gateway omits it, and so does a peer reached through
- * an older ROUTE gateway, whose relay schema strips the field. An empty `hostSpawns` on a row IS an
- * affirmative "nothing beyond host", which is why the row is sent even when it carries nothing. */
-internal data class TeamsAnswer(
-	val teams: List<Team>,
-	val coverage: DiscoverCoverage? = null,
-	val spawnPoints: List<GatewaySpawnPoints>? = null,
-)
-
 /** The host spawn points one Gateway offers, keyed the way the console groups sessions. Domain is
  * nullable upstream, so an absent one folds onto the admin Domain exactly as a Team row's does. */
 internal fun GatewaySpawnPoints.groupKey(adminDomainId: String): GatewayGroupKey =
@@ -110,7 +96,7 @@ internal fun GatewaySpawnPoints.groupKey(adminDomainId: String): GatewayGroupKey
 /**
  * The (gateway, project) a spawn target names, for remembering what a Gateway was last spawned on.
  *
- * A BARE target is a project on the route Gateway - that is what bare means everywhere else in this
+ * A BARE target is a project on the home Gateway - that is what bare means everywhere else in this
  * app - so an empty gateway segment resolves to this device's own rather than to nothing. Reading it
  * as nothing is not a small miss: `CreateDialogTarget.targetFor` returns bare for the local Gateway,
  * which is the common case, so it silently disabled remembering entirely for the machine most likely
@@ -119,14 +105,13 @@ internal fun GatewaySpawnPoints.groupKey(adminDomainId: String): GatewayGroupKey
  * Null for a target that does not parse, and for a full session address, which names a session
  * rather than a spawn point and is not something the create dialog produces.
  */
-internal fun spawnTargetKey(target: String, localGatewayId: String): Pair<String, String>? {
-	if (localGatewayId.isEmpty()) return null
+internal fun spawnTargetKey(target: String, homeGatewayId: String): Pair<String, String>? {
+	if (homeGatewayId.isEmpty()) return null
 	// Parsed WITH the local context, not blank context. `parseTarget` throws on a bare local field
 	// when it has no Domain and Gateway to qualify it against - which is the whole reason
 	// `localFieldOrSelf` exists - so parsing blank silently rejected every bare target, meaning every
-	// spawn on the route Gateway. The sentinel Domain is exactly the stand-in for "not confirmed
 	// yet"; only the gateway and spawn are read back out.
-	val parsed = runCatching { parseTarget(target, LOCAL_DOMAIN_SENTINEL, localGatewayId) }.getOrNull() ?: return null
+	val parsed = runCatching { parseTarget(target, LOCAL_DOMAIN_SENTINEL, homeGatewayId) }.getOrNull() ?: return null
 	// A SpawnPoint is what the create dialog builds. An Address names a SESSION, and a project whose
 	// own name contains a dot parses as one (arity decides, and nothing here knows the catalog), so
 	// such a project is simply not remembered. That degrades to no suggestion, never a wrong one.
@@ -135,29 +120,15 @@ internal fun spawnTargetKey(target: String, localGatewayId: String): Pair<String
 }
 
 /** Merge a fresh presence answer over the prior rows, keeping prior rows the answer does not speak
- * for. Fresh wins on a name collision. Pure, so the two merge policies (plane push, discovery with
+ * for. Fresh wins on a name collision. Pure, so the two merge policies (plane push, refresh with
  * coverage) share one rule and stay testable. */
 internal fun mergePresence(prior: List<Team>, fresh: List<Team>, keepPrior: (Team) -> Boolean): List<Team> {
 	val freshNames = fresh.mapTo(HashSet()) { it.name }
 	return fresh + prior.filter { it.name !in freshNames && keepPrior(it) }
 }
 
-/** The carry-forward keys a coverage names: bare gateway ids plus "domainId/gatewayId" peer keys. */
-internal fun unreachableKeys(coverage: DiscoverCoverage?): Set<String> =
-	((coverage?.unreachable ?: emptyList()) + (coverage?.unreachablePeers ?: emptyList())).toSet()
-
-/** Whether a row belongs to a gateway the answer could not reach (so its rows must be held, not
- * swept as absent). */
-internal fun rowOnUnreachable(row: Team, keys: Set<String>, localGatewayId: String): Boolean {
-	val gw = row.gatewayId.ifEmpty { localGatewayId }
-	return gw in keys || "${row.domainId.orEmpty()}/$gw" in keys
-}
-
-/** The one TeamInfo -> Team mapper, shared by the legacy `teams()` list_teams relay AND the
- * presence-plane piggyback on a poll response - both carry the identical wire shape, so mapping
- * it once here means the two paths can never quietly drift onto different Team shapes. */
-internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
-	val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
+internal fun teamInfoToTeam(it: TeamInfo, homeGatewayId: String): Team {
+	val gatewayId = it.gatewayId.ifEmpty { homeGatewayId }
 	// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the
 	// non-addressable `domain.gateway.spawn` (arity 3); every chat is the full
 	// `domain.gateway.spawn.session` (arity 4), a bare team field defaulting its session to
@@ -174,7 +145,6 @@ internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
 		name = canonicalName,
 		// Stamped POLLED here because this mapper serves BOTH channels and cannot tell them apart
 		// from the row alone. The caller that knows which channel it is holding re-stamps: the plane
-		// push to LIVE, a discovery answer's unreachable gateways to UNREACHABLE. POLLED is the safe
 		// default of the three - it claims nothing, where LIVE would claim freshness this row may
 		// not have.
 		presence = Presence.reported(

@@ -155,7 +155,6 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			// cannot match its optimistic row, so the owner's own message renders twice.
 			opId: z.string().min(1).max(MAX_STORE_KEY_LEN).optional(),
 			files: ChannelFilesSchema.optional(),
-			// A `plugin_action` entry only - see MailboxEntrySchema (schemas.ts) for the field meaning.
 			// Slug-constrained (like every composite-key identifier elsewhere) so a relayed entry from
 			// a peer Gateway can never carry a colon-ambiguous pluginId/actionType pair, belt-and-
 			// suspenders alongside the same constraint the origin's PluginActionRequestSchema enforces.
@@ -169,10 +168,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 				.refine((s) => !s || isSlug(s), "actionType must be a slug"),
 			payload: z.record(z.string(), z.unknown()).optional(),
 		}),
-		// Feeds DeviceMailbox.append's seenKeys dedup directly, so an at-least-once relay retry
-		// to the SAME destination Gateway lands exactly once there. ReplayGuard cannot serve this
-		// role: it mints a fresh nonce per relay attempt (including retries), so it never
-		// recognizes a retry as "the same delivery" the way this stable, caller-chosen key does.
+		// Stable across retries so the destination can deduplicate the delivery.
 		dedupeKey: z.string().min(1).max(128),
 	}),
 	// Cross-Domain presence push: the SOURCE Gateway proactively sends what a linked friend
@@ -221,10 +217,6 @@ export const GatewayRelayFrameSchema = z.object({
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;
 export type FederatedOpKind = FederatedOp["kind"];
-// The console_push op's own entry shape (a deliberate SUBSET of the full MailboxInput - no
-// dedupeKey/opId/replyAsJson/question/reason, and only the kinds this convergence hop carries).
-// The caller embeds dedupeKey into the actual MailboxInput it appends locally; this type is just
-// the wire payload.
 export type ConsolePushEntry = Extract<FederatedOp, { kind: "console_push" }>["entry"];
 export type GatewayRelayPayload = z.infer<typeof GatewayRelayPayloadSchema>;
 export type GatewayRelayFrame = z.infer<typeof GatewayRelayFrameSchema>;

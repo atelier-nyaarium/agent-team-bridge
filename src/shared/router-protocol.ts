@@ -39,9 +39,6 @@ export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 		error: z.string().optional(),
 	}),
 	z.looseObject({
-		type: z.literal("console_relay"),
-	}),
-	z.looseObject({
 		type: z.literal("gateway_relay"),
 	}),
 	z.looseObject({

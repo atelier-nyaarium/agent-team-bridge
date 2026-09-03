@@ -40,7 +40,6 @@ suspend fun ChatRepository.send(team: String, text: String, uris: List<Uri> = em
 		Message(true, text, System.currentTimeMillis(), files = localFiles, status = "pending", opId = opId),
 	)
 	// Deliberately NOT gated on `authoritative`, unlike the terminal's peek gate. On a non-route
-	// Gateway this row can be a discovery interval old in either direction, but the cost of being
 	// wrong here is a notice card that is briefly right or briefly absent, and awaitingWake's own
 	// expiry already absorbs a wrong guess. Requiring authority instead means never raising the
 	// notice for another machine at all, which is strictly worse than raising it late.
@@ -125,11 +124,9 @@ internal suspend fun ChatRepository.deliver(
 	try {
 		// Ship queued board edits first, so the gateway can attach their notice to this message.
 		try {
-			boardOps.drainBoard()
 		} catch (e: Exception) {
 			e.rethrowIfCancellation()
 		}
-		// A cross-Domain target carries the friend Domain id from its discovery entry, so the
 		// gateway resolves the seal target by the full (domainId, gatewayId) pair; a local /
 		// same-Domain session resolves to null and keeps the existing routing. A cold scheduled-
 		// send fire supplies targetDomainOverride instead: state.teams is empty until connect()

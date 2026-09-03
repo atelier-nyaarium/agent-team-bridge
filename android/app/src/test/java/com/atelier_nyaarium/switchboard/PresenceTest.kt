@@ -111,7 +111,7 @@ class PresenceTest {
 	fun theBoundOutlastsADiscoveryInterval() {
 		// Shorter than one discovery pull and a slow cold boot would expire the receipt before the
 		// roster has spoken even once, which puts the blank terminal straight back.
-		assertTrue(ActionReceipt.RECEIPT_TTL_MS > ChatRepository.DISCOVERY_REFRESH_MS)
+		assertTrue(ActionReceipt.RECEIPT_TTL_MS > ChatRepository.BACKGROUND_TICK_MS)
 	}
 
 	@Test

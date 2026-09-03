@@ -106,10 +106,11 @@ fun ChatRepository.closeTab(team: String) {
 	// Stop speaking a thread the user just closed, but KEEP its cache: a close is reopenable and
 	// the audio was already paid for. Only `forget` deletes.
 	repoScope.launch { playback.dropQueuedFor(key) }
-	val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+	val t = runCatching { parseTarget(team, localDomain(), _state.value.homeGatewayId) }.getOrNull()
 	if (t?.isCloseTabTarget() == true) {
 		drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable { client().closeSession(team) }
+				.onSuccess { drain.scope?.launch(Dispatchers.IO) { presence.refreshAfterAction() } }
 				.onFailure { e -> _state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "close failed")) } }
 		}
 	}
@@ -153,15 +154,14 @@ suspend fun ChatRepository.rename(team: String, name: String) {
 		setLabel(team, "")
 		return
 	}
-	val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
-	val isLocal = t is Address && t.isLocalTo(localDomain(), setOf(_state.value.localGatewayId))
+	val t = runCatching { parseTarget(team, localDomain(), _state.value.homeGatewayId) }.getOrNull()
+	val isLocal = t is Address && t.isLocalTo(localDomain(), setOf(_state.value.homeGatewayId))
 	val previous = _state.value.labels[team]
 	if (isLocal) setLabel(team, trimmed)
-	val result = withContext(Dispatchers.IO) {
-		runCatchingCancellable { client().renameSession(team, trimmed) }
+	val reply = withContext(Dispatchers.IO) {
+		client().renameSession(team, trimmed)
 	}
-	val reply = result.getOrNull()
-	val applied = reply?.takeIf { it.renamed }?.sessionLabel
+	val applied = reply.takeIf { it.renamed }?.sessionLabel
 	if (applied != null && applied != trimmed) {
 		// A confirmed, authoritative server value always wins over "nothing was protecting the
 		// label to begin with" (isLocal false - no optimistic write was ever made to clobber).
@@ -172,7 +172,7 @@ suspend fun ChatRepository.rename(team: String, name: String) {
 			if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
 		}
 		persistence.persistLabels(next.labels)
-	} else if (reply?.renamed == false || (!isLocal && result.isFailure)) {
+	} else if (reply.renamed == false) {
 		var reverted = true
 		if (isLocal) {
 			val before = _state.value.labels[team]
@@ -187,8 +187,9 @@ suspend fun ChatRepository.rename(team: String, name: String) {
 			reverted = next.labels[team] != before
 		}
 		if (reverted) {
-			val message = result.exceptionOrNull()?.message ?: "Could not rename to \"$trimmed\""
+			val message = "Could not rename to \"$trimmed\""
 			_state.update { it.copy(transientMessages = it.transientMessages + message) }
 		}
 	}
+	presence.refreshAfterAction()
 }

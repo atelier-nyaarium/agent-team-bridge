@@ -30,7 +30,7 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 
 	/** Refresh the cached local display name. */
 	fun refreshDisplayNameFromTeams() {
-		val gw = host.localGatewayId
+		val gw = host.homeGatewayId
 		val local = host.state.value.teams.firstOrNull {
 			(it.gatewayId.ifEmpty { gw }) == gw && !it.displayName.isNullOrEmpty()
 		}?.displayName ?: return
@@ -49,12 +49,10 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 				crossDomainPeerSessions = it.crossDomainPeerSessions.filterKeys { domainId -> domainId in owners },
 			)
 		}
-		host.pruneCrossDomainVersions(owners.keys)
 	}
 
 	/** Upsert changed cross-Domain presence. */
 	suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
-		host.upsertCrossDomainVersions(entries)
 		host.state.update { it.copy(crossDomainPeerSessions = it.crossDomainPeerSessions + entries.associateBy { e -> e.domainId }) }
 	}
 
@@ -92,12 +90,10 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 	/** Reset cursors and refresh immediately. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		host.resetPlaneCursors()
-		host.interruptDrain()
-		refreshDiscovery()
+		refreshPresencePlane()
 	}
 
-	/** Best-effort mesh-wide discovery pull. */
-	suspend fun refreshDiscovery() {
+	private suspend fun refreshPresencePlane() {
 		runCatchingCancellable { host.fetchPresencePlanes() }
 			.onSuccess { result ->
 				val payload = result?.planes?.firstOrNull { it.name == "presence" }?.payload ?: return@onSuccess
@@ -140,45 +136,11 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 	} }
 
 	private suspend fun landProjection(projection: OwnerPresenceProjection, bypassFreshness: Boolean = false) {
-		applyDiscoveryLocked(
-			TeamsAnswer(
-				projection.rows.map { teamInfoToTeam(it, host.localGatewayId) },
-				projection.coverage,
-				projection.spawnPoints,
-			),
-			System.currentTimeMillis(),
-			bypassFreshness,
-		)
+		if (!bypassFreshness && System.currentTimeMillis() < lastProjectionAt) return
+		applyPlanePresenceLocked(projection.rows.map { teamInfoToTeam(it, host.homeGatewayId) })
 		applyCrossDomainPresence(projection.linked)
 	}
 
-	/** Apply discovery, preserving unreachable rows. */
-	suspend fun applyDiscovery(answer: TeamsAnswer, issuedAt: Long = System.currentTimeMillis()) = host.withDrainMutex {
-		projectionMutex.withLock { applyDiscoveryLocked(answer, issuedAt) }
-	}
-
-	private suspend fun applyDiscoveryLocked(answer: TeamsAnswer, issuedAt: Long, bypassFreshness: Boolean = false) {
-		if (!bypassFreshness && issuedAt < lastProjectionAt) return
-		val keys = unreachableKeys(answer.coverage)
-		// Merge only gateways covered by this answer.
-		answer.spawnPoints?.let { fresh ->
-			val spoke = fresh.map { it.gatewayId }.toSet()
-			host.state.update { s ->
-				val kept = s.gatewaySpawnPoints.filterNot { it.gatewayId in spoke || it.gatewayId in keys }
-				s.copy(gatewaySpawnPoints = kept + fresh)
-			}
-		}
-		val fresh = if (keys.isEmpty()) {
-			answer.teams
-		} else {
-			// Held rows remain unreachable.
-			mergePresence(lastRawTeams ?: emptyList(), answer.teams) { rowOnUnreachable(it, keys, host.localGatewayId) }
-				.map { if (rowOnUnreachable(it, keys, host.localGatewayId)) it.withAuthority(Authority.UNREACHABLE) else it }
-		}
-		applyPresenceLocked(fresh)
-	}
-
-	/** Apply route-Gateway presence rows. */
 	suspend fun applyPlanePresence(planeRows: List<Team>, issuedAt: Long = System.currentTimeMillis()) = host.withDrainMutex {
 		projectionMutex.withLock {
 			if (issuedAt < lastProjectionAt) return@withLock
@@ -187,7 +149,7 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 	}
 
 	private suspend fun applyPlanePresenceLocked(planeRows: List<Team>) {
-		val local = host.localGatewayId
+		val local = host.homeGatewayId
 		// Only pushed rows become LIVE.
 		val fresh = planeRows.map { it.withAuthority(Authority.LIVE) }
 		val planeDomain = fresh.firstOrNull()?.domainId
@@ -225,12 +187,11 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 	private var lastActionPullAt = 0L
 	private val ACTION_PULL_DEBOUNCE_MS = 2_000L
 
-	/** Debounced post-action discovery. */
 	suspend fun refreshAfterAction() {
 		val now = System.currentTimeMillis()
 		if (now - lastActionPullAt < ACTION_PULL_DEBOUNCE_MS) return
 		lastActionPullAt = now
-		refreshDiscovery()
+		refreshPresencePlane()
 	}
 
 	/** Reapply cached teams under the rebuild mutex. */

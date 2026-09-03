@@ -6,7 +6,6 @@
 // Keep encodeDefaults false: zod .optional() rejects an explicit null. Enabling it MUST pair
 // with explicitNulls = false. Required consts become parameters.
 //
-// The console POSTs the op-only envelope, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 @file:OptIn(ExperimentalSerializationApi::class)
 
@@ -135,24 +134,6 @@ sealed class CrossDomainShareTarget {
 @JsonClassDiscriminator("kind")
 sealed class ConsoleOp {
 	@Serializable
-	@SerialName("register")
-	data class Register(
-		val clientVersion: String? = null,
-		val clientVariant: String? = null,
-		val enabledPlugins: List<EnabledPlugin>? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("first_root")
-	data class FirstRoot(
-		val firstRoot: SignedFirstRoot,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("list_teams")
-	data object ListTeams : ConsoleOp()
-
-	@Serializable
 	@SerialName("send")
 	data class Send(
 		val to: String,
@@ -169,21 +150,6 @@ sealed class ConsoleOp {
 		val response: String? = null,
 		val replyAsJson: JsonObject? = null,
 		val files: List<ChannelFile>? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("poll")
-	data class Poll(
-		val cursor: Long? = null,
-		val epoch: Long? = null,
-		val holdMs: Long? = null,
-		val knownDomainVersion: String? = null,
-		val knownPresenceVersions: List<PresenceVersion>? = null,
-		val focus: FocusIntent? = null,
-		val knownLinkedPeersVersion: LinkedPeersVersion? = null,
-		val knownReadAnchorsVersion: ReadAnchorsVersion? = null,
-		val knownTaskBoardVersion: TaskBoardVersion? = null,
-		val knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion>? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -256,10 +222,6 @@ sealed class ConsoleOp {
 	data class BoardRemove(
 		val ids: List<String>,
 	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_read")
-	data object BoardRead : ConsoleOp()
 
 	@Serializable
 	@SerialName("peek")
@@ -420,56 +382,26 @@ sealed class ConsoleOp {
 }
 
 @Serializable
-data class ConsoleOpEnvelope(
-	val v: Long,
-	val conversationId: String,
-	val device: String,
-	val at: Long,
-	val op: ConsoleOp,
+data class FirstRoot(
+	val domainId: String,
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val nonce: String,
+	val issuedAt: Long,
 )
 
 @Serializable
-data class ConsoleRelayFrame(
-	@EncodeDefault
-	val type: String = "console_relay",
-	val v: Long,
-	val opId: String,
-	val signerSignPub: String,
-	val targetGateway: String? = null,
-	val sealed: SealedEnvelope,
+data class SignedFirstRoot(
+	val firstRoot: FirstRoot,
+	val signature: String,
 )
 
 @Serializable
-data class ConsoleRelayReply(
-	@EncodeDefault
-	val type: String = "console_relay_reply",
-	val v: Long,
-	val opId: String,
-	val sealed: SealedEnvelope? = null,
-	val error: String? = null,
-)
-
-@Serializable
-data class ConsoleReplyBody(
-	val ok: Boolean,
-	val result: JsonElement? = null,
-	val error: String? = null,
-)
-
-@Serializable
-data class ConsoleRegisterResult(
-	val device: String,
-	val gatewayId: String,
-	val cursor: Long,
-	val epoch: Long,
-	val domainStatus: String? = null,
-)
-
-@Serializable
-data class ConsoleListTeamsResult(
-	val teams: List<TeamInfo>,
-	val coverage: DiscoverCoverage? = null,
-	val spawnPoints: List<GatewaySpawnPoints>? = null,
+data class CrossDomainPresenceEntry(
+	val domainId: String,
+	val version: CrossDomainPresenceVersion,
+	val sessions: List<CrossDomainPresenceSession>,
+	val lastRefreshedAt: Long,
 )
 
 @Serializable
@@ -481,27 +413,6 @@ data class ConsoleSendResult(
 @Serializable
 data class ConsoleRespondResult(
 	val delivered: Boolean,
-)
-
-@Serializable
-data class ConsolePollResult(
-	val entries: List<MailboxEntry>,
-	val cursor: Long,
-	val dropped: Long,
-	val epoch: Long,
-	val domainVersion: String? = null,
-	val domain: DomainSnapshot? = null,
-	val presence: List<TeamInfo>? = null,
-	val presenceVersions: List<PresenceVersion>? = null,
-	val linkedPeers: List<CrossDomainPeerEntry>? = null,
-	val linkedPeersVersion: LinkedPeersVersion? = null,
-	val readAnchors: List<ReadAnchorWireEntry>? = null,
-	val readAnchorsVersion: ReadAnchorsVersion? = null,
-	val taskBoard: List<BoardEntry>? = null,
-	val taskBoardVersion: TaskBoardVersion? = null,
-	val taskBoardTruncated: Boolean? = null,
-	val crossDomainPresence: List<CrossDomainPresenceEntry>? = null,
-	val settled: String? = null,
 )
 
 @Serializable
@@ -587,6 +498,141 @@ data class ConsolePeekResult(
 @Serializable
 data class ConsoleTmuxSendResult(
 	val sent: Boolean,
+)
+
+@Serializable
+data class ConsoleCreateSessionResult(
+	val created: Boolean,
+	val id: String? = null,
+	val sessionLabel: String? = null,
+	val labelSanitized: Boolean? = null,
+	val status: String? = null,
+)
+
+@Serializable
+data class ConsoleReloadPluginsResult(
+	val initiated: Boolean,
+)
+
+@Serializable
+data class ConsoleForgetResult(
+	val killed: Boolean,
+	val boardDisposition: String? = null,
+)
+
+@Serializable
+data class ConsoleReportReadResult(
+	val advanced: Boolean,
+)
+
+@Serializable
+data class ConsoleCloseSessionResult(
+	val closed: Boolean,
+)
+
+@Serializable
+data class ConsoleRenameSessionResult(
+	val renamed: Boolean,
+	val sessionLabel: String? = null,
+)
+
+@Serializable
+data class ConsoleListDirsResult(
+	val entries: List<String>,
+	val truncated: Boolean? = null,
+)
+
+@Serializable
+data class ConsoleBlobStatResult(
+	val have: Long,
+	val size: Long? = null,
+	val complete: Boolean,
+)
+
+@Serializable
+data class ConsoleBlobPutResult(
+	val have: Long,
+	val complete: Boolean,
+)
+
+@Serializable
+data class ConsoleBlobGetResult(
+	val chunk: String? = null,
+	val eof: Boolean,
+	val absent: Boolean? = null,
+)
+
+@Serializable
+data class CrossDomainListenResult(
+	val listeningToken: String,
+	val receiverOwnerSignPub: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val expiresAt: Long,
+)
+
+@Serializable
+data class CrossDomainRequestResult(
+	val sas: String,
+	val requesterOwnerSignPub: String,
+	val receiverOwnerSignPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+)
+
+@Serializable
+data class CrossDomainConfirmResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainCancelResult(
+	val cancelled: Boolean,
+)
+
+@Serializable
+data class CrossDomainListenStateResult(
+	val pairingArrived: Boolean,
+	val pin: String? = null,
+	val sas: String? = null,
+	val friendOwnerSignPub: String? = null,
+	val friendGatewaySignPub: String? = null,
+	val friendGatewayBoxPub: String? = null,
+	val friendDomainId: String? = null,
+	val friendGatewayId: String? = null,
+	val expiresAt: Long? = null,
+	val expired: Boolean? = null,
+)
+
+@Serializable
+data class CrossDomainShareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainUnshareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainListSharesResult(
+	val shares: List<CrossDomainShareEntry>,
+)
+
+@Serializable
+data class CrossDomainListPeersResult(
+	val peers: List<CrossDomainPeerEntry>,
+)
+
+@Serializable
+data class CrossDomainUnlinkResult(
+	val peersRemoved: Long,
+	val sharesDropped: Long,
+	val jobsExpired: Long,
 )
 
 @Serializable
@@ -1089,6 +1135,7 @@ data class RowOrigin(
 data class OpKey(
 	val conversationId: String,
 	val opId: String,
+	val hash: String? = null,
 )
 
 @Serializable
@@ -1371,68 +1418,6 @@ data class RefSpanMeta(
 )
 
 @Serializable
-data class EnabledPlugin(
-	/** The plugin's globally unique id, as its manifest declares it. */
-	val id: String,
-	/** Agent-facing usage guidance for this capability, surfaced to the session. */
-	val instructions: String? = null,
-)
-
-@Serializable
-data class SignedFirstRoot(
-	val firstRoot: FirstRoot,
-	val signature: String,
-)
-
-@Serializable
-data class FirstRoot(
-	val domainId: String,
-	val ownerSignPub: String,
-	val ownerBoxPub: String,
-	val nonce: String,
-	val issuedAt: Long,
-)
-
-@Serializable
-data class PresenceVersion(
-	val gateway: String,
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
-data class FocusIntent(
-	val screen: String,
-	val terminalTeam: String? = null,
-	val terminalRateMs: Long? = null,
-)
-
-@Serializable
-data class LinkedPeersVersion(
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
-data class ReadAnchorsVersion(
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
-data class TaskBoardVersion(
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
-data class CrossDomainPresenceKnownVersion(
-	val domainId: String,
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
 data class BoardEntry(
 	val id: String,
 	val title: String,
@@ -1482,61 +1467,6 @@ data class XDomainLink(
 )
 
 @Serializable
-data class SealedEnvelope(
-	val ephemeralPub: String,
-	val nonce: String,
-	val ciphertext: String,
-	val signature: String,
-)
-
-@Serializable
-data class DiscoverCoverage(
-	val rosterKnown: Boolean,
-	val asked: Long,
-	val answered: Long,
-	val unreachable: List<String>? = null,
-	val unreachablePeers: List<String>? = null,
-)
-
-@Serializable
-data class GatewaySpawnPoints(
-	val domainId: String? = null,
-	val gatewayId: String,
-	val hostSpawns: List<String>,
-)
-
-@Serializable
-data class DomainSnapshot(
-	val ownerSignPub: String,
-	val admissions: List<SignedAdmission>,
-	val revocations: List<SignedRevocation>,
-	val displayName: String? = null,
-)
-
-@Serializable
-data class CrossDomainPeerEntry(
-	val domainId: String,
-	val gatewayId: String,
-	val ownerSignPub: String,
-)
-
-@Serializable
-data class ReadAnchorWireEntry(
-	val team: String,
-	val epoch: Long,
-	val seq: Long,
-	val at: Long,
-)
-
-@Serializable
-data class CrossDomainPresenceEntry(
-	val domainId: String,
-	val version: CrossDomainPresenceVersion,
-	val sessions: List<CrossDomainPresenceSession>,
-	val lastRefreshedAt: Long,
-)
-
-@Serializable
 data class CrossDomainPresenceVersion(
 	val epoch: Long,
 	val version: Long,
@@ -1557,156 +1487,16 @@ data class CrossDomainPresenceSession(
 )
 
 @Serializable
-data class ConsoleReportReadResult(
-	val advanced: Boolean,
-)
-
-@Serializable
-data class ConsoleCreateSessionResult(
-	val created: Boolean,
-	val id: String? = null,
-	val sessionLabel: String? = null,
-	val labelSanitized: Boolean? = null,
-	val status: String? = null,
-)
-
-@Serializable
-data class ConsoleReloadPluginsResult(
-	val initiated: Boolean,
-)
-
-@Serializable
-data class ConsoleForgetResult(
-	val killed: Boolean,
-	val boardDisposition: String? = null,
-)
-
-@Serializable
-data class ConsoleCloseSessionResult(
-	val closed: Boolean,
-)
-
-@Serializable
-data class ConsoleRenameSessionResult(
-	val renamed: Boolean,
-	val sessionLabel: String? = null,
-)
-
-@Serializable
-data class ConsoleListDirsResult(
-	val entries: List<String>,
-	val truncated: Boolean? = null,
-)
-
-@Serializable
-data class ConsoleBlobStatResult(
-	val have: Long,
-	val size: Long? = null,
-	val complete: Boolean,
-)
-
-@Serializable
-data class ConsoleBlobPutResult(
-	val have: Long,
-	val complete: Boolean,
-)
-
-@Serializable
-data class ConsoleBlobGetResult(
-	val chunk: String? = null,
-	val eof: Boolean,
-	val absent: Boolean? = null,
-)
-
-@Serializable
-data class ConsoleBoardWriteResult(
-	val applied: Boolean,
-	val dropped: List<String>? = null,
-)
-
-@Serializable
-data class ConsoleBoardReadResult(
-	val entries: List<BoardEntry>,
-	val truncated: Boolean? = null,
-)
-
-@Serializable
-data class CrossDomainListenResult(
-	val listeningToken: String,
-	val receiverOwnerSignPub: String,
-	val receiverGatewaySignPub: String,
-	val receiverGatewayBoxPub: String,
-	val receiverDomainId: String,
-	val receiverGatewayId: String,
-	val expiresAt: Long,
-)
-
-@Serializable
-data class CrossDomainRequestResult(
-	val sas: String,
-	val requesterOwnerSignPub: String,
-	val receiverOwnerSignPub: String,
-	val receiverDomainId: String,
-	val receiverGatewayId: String,
-	val receiverGatewaySignPub: String,
-	val receiverGatewayBoxPub: String,
-)
-
-@Serializable
-data class CrossDomainConfirmResult(
-	val ok: Boolean,
-)
-
-@Serializable
-data class CrossDomainCancelResult(
-	val cancelled: Boolean,
-)
-
-@Serializable
-data class CrossDomainListenStateResult(
-	val pairingArrived: Boolean,
-	val pin: String? = null,
-	val sas: String? = null,
-	val friendOwnerSignPub: String? = null,
-	val friendGatewaySignPub: String? = null,
-	val friendGatewayBoxPub: String? = null,
-	val friendDomainId: String? = null,
-	val friendGatewayId: String? = null,
-	val expiresAt: Long? = null,
-	val expired: Boolean? = null,
-)
-
-@Serializable
-data class CrossDomainShareResult(
-	val ok: Boolean,
-)
-
-@Serializable
-data class CrossDomainUnshareResult(
-	val ok: Boolean,
-)
-
-@Serializable
-data class CrossDomainListSharesResult(
-	val shares: List<CrossDomainShareEntry>,
-)
-
-@Serializable
 data class CrossDomainShareEntry(
 	val sessionTarget: String,
 	val target: CrossDomainShareTarget,
 )
 
 @Serializable
-data class CrossDomainListPeersResult(
-	val peers: List<CrossDomainPeerEntry>,
-)
-
-@Serializable
-data class CrossDomainUnlinkResult(
-	val peersRemoved: Long,
-	val sharesDropped: Long,
-	val jobsExpired: Long,
+data class CrossDomainPeerEntry(
+	val domainId: String,
+	val gatewayId: String,
+	val ownerSignPub: String,
 )
 
 @Serializable
@@ -1846,11 +1636,27 @@ data class EnrollReveal(
 )
 
 @Serializable
+data class SealedEnvelope(
+	val ephemeralPub: String,
+	val nonce: String,
+	val ciphertext: String,
+	val signature: String,
+)
+
+@Serializable
 data class ConsoleApprovalJoin(
 	val newSignPub: String,
 	val newBoxPub: String,
 	val joinSig: String? = null,
 	val device: String? = null,
+)
+
+@Serializable
+data class DomainSnapshot(
+	val ownerSignPub: String,
+	val admissions: List<SignedAdmission>,
+	val revocations: List<SignedRevocation>,
+	val displayName: String? = null,
 )
 
 @Serializable
@@ -1878,6 +1684,22 @@ data class TrustPendingEntry(
 data class PresencePlane(
 	val epoch: Long,
 	val version: Long,
+)
+
+@Serializable
+data class DiscoverCoverage(
+	val rosterKnown: Boolean,
+	val asked: Long,
+	val answered: Long,
+	val unreachable: List<String>? = null,
+	val unreachablePeers: List<String>? = null,
+)
+
+@Serializable
+data class GatewaySpawnPoints(
+	val domainId: String? = null,
+	val gatewayId: String,
+	val hostSpawns: List<String>,
 )
 
 @Serializable
@@ -1926,4 +1748,26 @@ data class ScheduledTarget(
 data class ScheduledSender(
 	val conversationId: String,
 	val device: String,
+)
+
+@Serializable
+data class EnabledPlugin(
+	/** The plugin's globally unique id, as its manifest declares it. */
+	val id: String,
+	/** Agent-facing usage guidance for this capability, surfaced to the session. */
+	val instructions: String? = null,
+)
+
+@Serializable
+data class ReadAnchorsVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class ReadAnchorWireEntry(
+	val team: String,
+	val epoch: Long,
+	val seq: Long,
+	val at: Long,
 )

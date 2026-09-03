@@ -1,0 +1,12 @@
+{
+	"v": 1,
+	"domainId": "domain-a",
+	"signerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+	"conversationId": "conversation-a",
+	"device": "phone",
+	"opId": "op-1",
+	"at": 1717171717171,
+	"nonce": "b3Atbm9uY2U=",
+	"op": { "kind": "send", "to": "x", "body": "y" },
+	"signature": "n4/6y12EZZMlfAVz6NSviFifiRvHtg24jAGLE36FRb/Oi0IEdTWA/kZ+u9rxWcLw9Car9y3Lw8UEMnsAzOxRDA=="
+}

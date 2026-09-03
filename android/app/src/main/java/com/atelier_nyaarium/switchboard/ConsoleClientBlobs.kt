@@ -20,7 +20,7 @@ suspend fun ConsoleClient.blobStat(blobId: String, targetGateway: String? = null
  * the blob is named by its own digest, so a retry needs no idempotency key of its own.
  *
  * `targetGateway` is which Gateway the bytes must LAND on. A board attachment belongs to the
- * Gateway holding its entry, which is regularly not this device's route Gateway; without it the
+ * Gateway holding its entry, which is regularly not this device's home Gateway; without it the
  * metadata would name bytes only another machine holds. */
 suspend fun ConsoleClient.blobPut(
 	blobId: String,
@@ -39,8 +39,7 @@ suspend fun ConsoleClient.blobPut(
 	)
 
 /** Read one bounded range back. */
-/** `fromGateway` names the Gateway holding the bytes. This device still only ever asks its own
- * route Gateway, which pulls the range in behind this call when it is not the holder. */
+/** `fromGateway` names the Gateway holding the bytes. */
 suspend fun ConsoleClient.blobGet(blobId: String, offset: Long, length: Int, fromGateway: String? = null): ConsoleBlobGetResult =
 	valueResult(
 		sendValueOp(
@@ -53,7 +52,7 @@ suspend fun ConsoleClient.blobGet(blobId: String, offset: Long, length: Int, fro
 /**
  * Put a local file's bytes on the Gateway and return the reference that names them.
  *
- * A chunk at a time in both hops, so neither this process nor a relay frame ever holds the whole
+ * A chunk at a time in both hops, so neither this process nor a transport frame ever holds the whole
  * file. `have` from each write is the resume cursor, so a transfer interrupted by a dropped
  * connection continues instead of restarting, and a re-sent chunk is free because a blob is named
  * by its own digest.

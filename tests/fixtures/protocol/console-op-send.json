@@ -1,0 +1,5 @@
+{
+	"kind": "send",
+	"to": "switchboard.main",
+	"body": "status?"
+}

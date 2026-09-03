@@ -22,12 +22,13 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/router/shareAttestor.ts` - share liveness attestation, coalesced
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
 - `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
-- `src/gateway/console/` - Android channel, op dispatch, capability store, relay, durable ops
-- `src/gateway/migration/` - Gateway export snapshots and blob artifacts
-- `android/.../ChatRepository.kt` - console process singleton and repository facade
+- `src/gateway/console/` - Android OwnerOp dispatch and capability store
+- `src/gateway/consolePushOps.ts` - phone-bound rows, `deliverToOwner`, and durable `OwnerRowOutbox`
+- S8 retained endpoints: `/capabilities`, `/discover`, `/task-board`
+- `android/.../ChatRepository.kt` - console process singleton, OwnerOp client, and home Gateway state
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers
 - `android/.../ChatPersistence.kt` - JSON codec between repository state and AppStateStore
-- `android/.../PollDrain.kt` - poll loop, mailbox drain, four plane cursors, drain-gate subscribers
+- `android/.../PollDrain.kt` - owner-inbox tick, four plane cursors, and drain-gate subscribers
 - `android/.../PlaybackOps.kt` / `PlaybackReadModels.kt` - playback serialization and lock-free read models
 - `android/.../BoardOps.kt` - repository board operations
 - `android/.../AttachmentOps.kt` - attachment fetch-and-sweep state
@@ -36,7 +37,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../PresenceOps.kt` - team presence and read-anchor reporting
 - `android/.../SessionOps.kt` - terminal and session controls
 - `android/.../ChatRepositorySend.kt` / `ChatRepositoryThreads.kt` / `ChatRepositoryDomainLink.kt` / `ChatRepositoryStts.kt` / `ChatRepositoryDrafts.kt` - stateless repository extensions
-- `android/.../RouterReach.kt` / `ConsoleRelayTransport.kt` - Router addresses, ordering, and failover
+- `android/.../RouterReach.kt` / `ConsoleSocketMode` - Router addresses, socket mode, ordering, and failover
 - `android/.../OwnerFacts.kt` / `GatewayEnrollment.kt` / `EnrollCeremonyOps.kt` / `DeviceApprovalOps.kt` / `DomainAdminOps.kt` / `TrustOps.kt` - federation delegates
 - `android/.../SasExchange.kt` / `EnrollCeremony.kt` - shared SAS exchange and commitment core for FLOW-1 and FLOW-2
 - `android/.../crypto/ContentKeyring.kt` - phone keyring, classify then commit
@@ -116,13 +117,17 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
   - **`limitNotice` searches in two passes:** whole-line matches precede welded-rule matches.
   - **The composer glyph has two members:** Linux uses U+276F; Windows uses U+003E. Whitespace is explicit because JS and JVM `\s` differ for U+00A0.
   - **The last-two-lines fallback is uniform:** readers scope it to the final region.
-- `src/shared/device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` / `process-guards.ts` - shared mailbox, jobs, planes, reconnect, and process guards
+- `src/shared/schemasConsoleOp.ts` - OwnerOp schema, `DELIVERY_OP_KINDS`, and `VALUE_OP_KINDS`
+- `src/shared/pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` / `process-guards.ts` - shared jobs, planes, reconnect, and process guards
 - `android/` - Gradle/Kotlin console app; `proto/Protocol.kt` generated
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import
 - `scripts/lib/routerStart.ts` - sole Router `.env` and startup owner
-- `scripts/gateway-fence.ts` / `gateway-export.ts` / `gateway-cut.ts` / `router-import.ts` / `router-lease.ts` - migration fence, export, cut, import, and lease commands
+- `scripts/lib/verifyChecks.ts` - setup verification checks
+- `scripts/router-import.ts` / `scripts/router-lease.ts` - Router import and lease commands
 - `android/.../SelfMigration.kt` / `CursorTranslationOps.kt` - phone self-migration and consumer cursor translation
-- **Migration window readers:** `readGatewayMigrationWindow` and `readRouterMigrationWindow`. A present null epoch means an unreadable file
+- `android/.../PollDrain.kt` - `drainTick`, owner-inbox reads, plane reads, and inbox advance
+- `android/.../ConsoleSocketClient.kt` - `ConsoleSocketMode`
+- **Migration window reader:** `readRouterMigrationWindow`. A present null epoch means an unreadable file
 - `tests/fixtures/` - shared golden wire and signing fixtures; manifests drive both runtimes
 - `skills/crosstalk/SKILL.md` - agent-facing tool reference
 

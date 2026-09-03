@@ -77,9 +77,9 @@ object CrossDomainLink {
 	fun requesterSas(result: CrossDomainRequestResult): String = result.sas
 
 	/** Build the Federation peers roster by unioning the gateway's cross-Domain peer set
-	 * (from cross_domain_list_peers) with the Domains discovery already surfaced (teams tagged
+	 * (from cross_domain_list_peers) with the Domains presence already surfaced (teams tagged
 	 * with a non-local domainId). A peer is listed the moment it is linked, so a freshly-linked
-	 * peer with no discovery sessions still appears and its detail is reachable. Discovery supplies
+	 * peer with no presence sessions still appears and its detail is reachable. Presence supplies
 	 * the session count and presence; a peer present only in the peer set shows zero sessions and
 	 * offline. The admin Domain is excluded from both inputs. Sorted for a stable list. */
 	fun mergeLinkedDomains(teams: List<Team>, peerOwners: Map<String, String>, adminDomain: String): List<LinkedDomain> {
@@ -92,12 +92,10 @@ object CrossDomainLink {
 				val sessions = byDomain[domainId].orEmpty()
 				LinkedDomain(
 					domainId = domainId,
-					// The friend's self-set display name, propagated over discovery. First non-empty
 					// wins; null until a session carries one, where the UI falls back to the domainId.
 					displayName = sessions.firstNotNullOfOrNull { it.displayName?.ifEmpty { null } },
 					sessionCount = sessions.size,
 					online = sessions.any { it.isLive },
-					// Null for a discovery-only Domain.
 					ownerSignPub = peerOwners[domainId],
 				)
 			}

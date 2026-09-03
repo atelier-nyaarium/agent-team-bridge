@@ -22,12 +22,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 ////////////////////////////////
 //  Router-direct ops
 //
-//  Enrollment, device approval, trust brokering and the roster. None of these relay to a Gateway: the
 //  Router decides them itself and answers a typed result, so they work before any Gateway is admitted.
 
 /** Submit an owner enroll op directly to the Router (the Domain root). Enroll ops are Router-direct and
- * never relayed to a Gateway, so they succeed with no gateway connected; the Router answers an
- * EnrollResult, not a console_relay_reply. A bounce (offline, 501, malformed) is surfaced as a failed
+ * never posted to a Gateway, so they succeed with no gateway connected; the Router answers an
+ * EnrollResult directly. A bounce (offline, 501, malformed) is surfaced as a failed
  * EnrollResult. */
 suspend fun ConsoleClient.enroll(op: EnrollOp): EnrollResult {
 	val envelope = EnrollEnvelope(transport.prov.device, transport.prov.conversationId, UUID.randomUUID().toString(), op)
@@ -41,7 +40,7 @@ suspend fun ConsoleClient.enroll(op: EnrollOp): EnrollResult {
 
 /** Drive one device-approval frame (arm/poll/approve/cancel) through the Router's coordinator over the
  * AUTHENTICATED console-bridge. Mirrors enroll()'s envelope + POST: the Router answers a
- * ConsoleApprovalResult directly (200 ok, 400 reject), never relaying to a Gateway. The public
+ * ConsoleApprovalResult directly (200 ok, 400 reject), never posting to a Gateway. The public
  * join/fetch steps must NOT come here - they go to postPublicApproval. */
 suspend fun ConsoleClient.postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult =
 	transport.postRouterDirect(
@@ -80,7 +79,7 @@ suspend fun ConsoleClient.requestGatewayTransport(req: TransportRequest): Transp
 	) { TransportResult(ok = false, error = it) }
 
 /** Drive one enroll-handshake frame through the Router's broker (POST { enrollHandshake }). The Router
- * relays the peer's frame back, or reports pending; the phone computes the SAS locally. Pre-admission like
+ * forwards the peer's frame, or reports pending; the phone computes the SAS locally. Pre-admission like
  * firstRoot (the fresh enrollee has no admission). A terminal failure is ok=false + error; ok=true with
  * the peer frame absent means keep polling (re-send the same step). */
 suspend fun ConsoleClient.enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {

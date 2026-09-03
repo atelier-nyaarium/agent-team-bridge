@@ -39,8 +39,7 @@ interface DomainEnrollment {
 	revocations: SignedRevocation[];
 	displayName?: string | null;
 	pendingTenant?: PendingTenantRecord;
-	// Marks the admin's own Domain so the Router scopes the console relay to it. Only the admin slice
-	// this script writes carries it; a hosted guest Domain never does.
+	// Admin Domain marker.
 	isAdminDomain?: boolean;
 }
 

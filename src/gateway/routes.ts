@@ -91,8 +91,6 @@ export interface RoutesDeps {
 	presence?: { snapshot(): TeamInfo[] };
 	// Live daemon catalog state. `known` distinguishes no reply from an empty catalog.
 	hostSpawnPoints?: HostSpawnState;
-	// Console mailboxes, for broadcast notices (notify_human). Optional so test.
-	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: GatewayConfig;
 	producerSignPriv?: string;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
@@ -208,7 +206,6 @@ export function createRoutes({
 	sessionStore,
 	presence,
 	hostSpawnPoints,
-	mailboxStore,
 	config,
 	producerSignPriv,
 	routerClient,
@@ -466,7 +463,6 @@ export function createRoutes({
 
 	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session).
 	const { mirrorPeer, consolePush, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
-		mailboxStore,
 		ownerId,
 		routerClient,
 		localDomainId: localDomainId ?? undefined,
@@ -1032,7 +1028,6 @@ export function createRoutes({
 					);
 				}
 
-				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL.
 				if (targetWs && !targetWs.data.virtual) {
 					const toAddr = target.address;
 					if (inboundSessionId) {
@@ -1229,65 +1224,37 @@ export function createRoutes({
 
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
-			// A console-bound reply is delivered by APPENDING to the owner's durable.
-			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
-			if (mailbox) {
-				// This direct append is the PRIMARY console-reply path (the ConsolePeer is only a wake.
-				deliverToOwner({
-					entry: {
-						kind: "reply",
-						session_id: respondSessionId,
-						body: response.response,
-						...pickTiers(response),
-						status: response.status,
-						files: files && files.length > 0 ? files : undefined,
-					},
-					dedupeKey: crypto.randomUUID(),
-					provenance: "message",
-					origin: "local",
-					resolveMailbox: () => mailbox,
-					label: "respond",
-				});
+			const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
+			if (senderWs && senderWs.readyState === 1) {
+				senderWs.send(pushMsg);
 				pushedViaConversation = true;
 				console.log(
-					`[respond] appended to console mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
+					`[respond] pushed to ${deliverResult.from} via conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
 				);
 			} else {
-				const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
-				if (senderWs && senderWs.readyState === 1) {
-					senderWs.send(pushMsg);
-					pushedViaConversation = true;
-					console.log(
-						`[respond] pushed to ${deliverResult.from} via conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
-					);
+				console.log(
+					`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
+				);
+			}
+			const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
+			if (askerAddr && provedLocalSession(req)) {
+				const key = parseStoreKey(respondSessionId);
+				const isRemoteAnchor =
+					key?.kind === "conv" &&
+					(key.address.gateway !== localGatewayId || key.address.domain !== localDomain);
+				const mirrorPayload = {
+					body: response.response,
+					files,
+					status: response.status,
+					...pickTiers(response),
+				};
+				if (isRemoteAnchor) {
+					mirrorPeer(askerAddr, deliverResult.to, askerAddr.canonical, mirrorPayload);
 				} else {
-					console.log(
-						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
-					);
-				}
-				// Mirror agent-to-agent traffic (no mailbox above means the original asker has no.
-				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
-				if (askerAddr && provedLocalSession(req)) {
-					const key = parseStoreKey(respondSessionId);
-					const isRemoteAnchor =
-						key?.kind === "conv" &&
-						(key.address.gateway !== localGatewayId || key.address.domain !== localDomain);
-					const mirrorPayload = {
-						body: response.response,
-						files,
-						status: response.status,
-						...pickTiers(response),
-					};
-					// This message is the REPLY: the replier speaks, the original asker receives - the.
-					if (isRemoteAnchor) {
-						// deliverResult.to is already the remote replier's canonical address here.
-						mirrorPeer(askerAddr, deliverResult.to, askerAddr.canonical, mirrorPayload);
-					} else {
-						const replierAddr = tryLocalAddress(deliverResult.to);
-						if (replierAddr) {
-							mirrorPeer(askerAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
-							mirrorPeer(replierAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
-						}
+					const replierAddr = tryLocalAddress(deliverResult.to);
+					if (replierAddr) {
+						mirrorPeer(askerAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
+						mirrorPeer(replierAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
 					}
 				}
 			}

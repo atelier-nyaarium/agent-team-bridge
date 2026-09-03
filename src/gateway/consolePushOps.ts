@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
 import { inboxBodyAadKind } from "../shared/content-envelope.js";
-import type { MailboxProvenance } from "../shared/device-mailbox.js";
+import { DurableStore } from "../shared/durable-store.js";
 import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
 import { fenced, MIGRATING } from "../shared/migration-fence.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
@@ -24,10 +24,8 @@ export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
 	/** Caller-chosen deduplication key. */
 	dedupeKey: string;
-	provenance: MailboxProvenance;
 	/** Relays never fan out. */
 	origin: "local" | "relay";
-	resolveMailbox?: () => import("../shared/device-mailbox.js").DeviceMailbox | undefined;
 	label?: string;
 }
 
@@ -35,7 +33,6 @@ export type DeliverToOwnerResult = boolean | typeof MIGRATING;
 export type DeliverToOwner = (opts: DeliverToOwnerOptions) => DeliverToOwnerResult;
 
 export interface ConsolePushOpsDeps {
-	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	ownerId?: (() => string | null) | null;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
@@ -55,8 +52,13 @@ export interface ConsolePushOpsDeps {
 	) => Promise<{ ok: boolean; error?: string }>;
 }
 
+type OwnerRowOutboxItem = {
+	entry: ConsolePushEntry;
+	opId: string;
+	label: string;
+};
+
 export function createConsolePushOps({
-	mailboxStore,
 	ownerId,
 	routerClient,
 	resolvesLocalGateway,
@@ -70,13 +72,132 @@ export function createConsolePushOps({
 	refuseImpersonation,
 	relayWithRetry,
 }: ConsolePushOpsDeps) {
-	/** Sole owner-mailbox writer. */
+	const outboxStore = new DurableStore(process.env.DATA_DIR || "/app/data", "owner-row-outbox");
+	const outbox = (outboxStore.load() as OwnerRowOutboxItem[] | null) ?? [];
+	let draining = false;
+
+	const opKeyFor = (entry: ConsolePushEntry, opId: string) => ({
+		conversationId: sha256Hex(entry.session_id ?? ""),
+		opId,
+	});
+
+	function queueOutbox(item: OwnerRowOutboxItem): boolean {
+		const opKey = opKeyFor(item.entry, item.opId);
+		const index = outbox.findIndex(
+			(existing) =>
+				existing.opId === opKey.opId && sha256Hex(existing.entry.session_id ?? "") === opKey.conversationId,
+		);
+		if (index >= 0) outbox[index] = item;
+		else outbox.push(item);
+		try {
+			outboxStore.saveChecked(outbox);
+			return true;
+		} catch (err) {
+			console.warn(
+				`[${item.label}] owner row outbox save failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return false;
+		}
+	}
+
+	function sealOwnerRow(
+		entry: ConsolePushEntry,
+		opId: string,
+	): {
+		payload: Record<string, unknown>;
+		opKey: Record<string, string>;
+	} | null {
+		const domainId = localDomainId;
+		const ownerSign = ownerSignPub?.();
+		if (!domainId || !ownerSign || !producerSignPriv || !contentKeyStore) return null;
+		const conversationId = sha256Hex(entry.session_id ?? "");
+		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(entry), "utf8"), {
+			domainId,
+			ownerSignPub: ownerSign,
+			kind: inboxBodyAadKind(conversationId, opId),
+		});
+		if (sealed.kind !== "ok") return null;
+		const envelope = {
+			origin: { kind: "gateway" as const, domainId, gatewayId: localGatewayId },
+			opKey: { conversationId, opId },
+			epoch: sealed.envelope.epoch,
+			kind: entry.kind,
+			contentRefs: [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))],
+		};
+		const payload = {
+			address: formatInboxAddress({ kind: "owner", domainId, ownerSignPub: ownerSign }),
+			row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed.envelope },
+		};
+		return { payload, opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ entry, opId })) } };
+	}
+
+	async function sendOwnerRow(
+		item: OwnerRowOutboxItem,
+		sealed: NonNullable<ReturnType<typeof sealOwnerRow>>,
+	): Promise<void> {
+		if (!routerClient) return;
+		try {
+			const result = await routerClient.callInboxTool("inbox_append", { ...sealed.payload, opKey: sealed.opKey });
+			const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
+			if (outcome === "refused") {
+				const reason =
+					OpResultEnvelopeSchema.safeParse(result.result).data?.reason ?? result.error ?? "refused";
+				console.warn(`[${item.label}] owner row ${item.opId} refused: ${reason}`);
+				return;
+			}
+			if (result.error || ["durability_failure", "durability_uncertain"].includes(outcome ?? ""))
+				queueOutbox(item);
+		} catch (err) {
+			queueOutbox(item);
+			console.warn(
+				`[${item.label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
+
+	async function drainOutbox(): Promise<void> {
+		if (
+			draining ||
+			!routerClient ||
+			typeof routerClient.isConnected !== "function" ||
+			!routerClient.isConnected() ||
+			(routerClient.isRegistered && !routerClient.isRegistered())
+		)
+			return;
+		draining = true;
+		try {
+			while (outbox.length > 0) {
+				const item = outbox[0];
+				const sealed = sealOwnerRow(item.entry, item.opId);
+				if (!sealed) break;
+				const result = await routerClient.callInboxTool("inbox_append", {
+					...sealed.payload,
+					opKey: sealed.opKey,
+				});
+				const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
+				if (outcome === "refused") {
+					const reason =
+						OpResultEnvelopeSchema.safeParse(result.result).data?.reason ?? result.error ?? "refused";
+					console.warn(`[${item.label}] owner row ${item.opId} refused: ${reason}`);
+					outbox.shift();
+					outboxStore.save(outbox);
+					continue;
+				}
+				if (result.error || ["durability_failure", "durability_uncertain"].includes(outcome ?? "")) break;
+				outbox.shift();
+				outboxStore.save(outbox);
+			}
+		} finally {
+			draining = false;
+		}
+	}
+
+	setInterval(() => void drainOutbox(), 1000).unref?.();
+
 	function deliverToOwner({
 		entry,
 		dedupeKey,
-		provenance,
 		origin,
-		resolveMailbox,
 		label = "deliver",
 	}: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {
@@ -93,66 +214,21 @@ export function createConsolePushOps({
 			);
 			return false;
 		}
-		let mailbox: import("../shared/device-mailbox.js").DeviceMailbox | undefined;
-		if (resolveMailbox) {
-			mailbox = resolveMailbox();
-		} else {
-			const owner = ownerId?.();
-			if (owner && mailboxStore) mailbox = mailboxStore.ensure(owner);
-		}
-		if (!mailbox) return false;
-		try {
-			const appended = mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
-			if ("outcome" in appended) return MIGRATING;
-			if (origin === "local" && entry.kind !== "peer")
-				void appendOwnerRow(appended, entry.opId ?? dedupeKey, label);
-		} catch (err) {
-			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
-			return false;
-		}
-		// Cache only landed blobs.
+		if (entry.kind !== "peer" && !appendOwnerRow(entry, entry.opId ?? dedupeKey, label)) return false;
 		const blobIds = [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))];
 		if (blobIds.length > 0) cacheBlobs?.(blobIds);
 		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
 		return true;
 	}
 
-	async function appendOwnerRow(
-		entry: import("../shared/console-protocol.js").MailboxEntry,
-		opId: string,
-		label: string,
-	): Promise<void> {
-		if (!routerClient?.isConnected() || (routerClient.isRegistered && !routerClient.isRegistered())) return;
-		const domainId = localDomainId;
-		const ownerSign = ownerSignPub?.();
-		if (!domainId || !ownerSign || !producerSignPriv || !contentKeyStore) return;
-		const conversationId = sha256Hex(entry.session_id);
-		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(entry), "utf8"), {
-			domainId,
-			ownerSignPub: ownerSign,
-			kind: inboxBodyAadKind(conversationId, opId),
-		});
-		if (sealed.kind !== "ok") return;
-		const envelope = {
-			origin: { kind: "gateway" as const, domainId, gatewayId: localGatewayId },
-			opKey: { conversationId, opId },
-			epoch: sealed.envelope.epoch,
-			kind: entry.kind,
-			contentRefs: [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))],
-		};
-		try {
-			const result = await routerClient.callInboxTool("inbox_append", {
-				address: formatInboxAddress({ kind: "owner", domainId, ownerSignPub: ownerSign }),
-				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed.envelope },
-				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ entry, opId })) },
-			});
-			const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
-			if (result.error || ["refused", "durability_failure", "durability_uncertain"].includes(outcome ?? "")) {
-				console.warn(`[${label}] owner inbox append refused: ${result.error ?? outcome}`);
-			}
-		} catch (err) {
-			console.warn(`[${label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
+	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string): boolean {
+		const item = { entry, opId, label };
+		const sealed = sealOwnerRow(entry, opId);
+		if (!sealed) return queueOutbox(item);
+		if (!routerClient?.isConnected() || (routerClient.isRegistered && !routerClient.isRegistered()))
+			return queueOutbox(item);
+		void sendOwnerRow(item, sealed);
+		return true;
 	}
 
 	/** Mirrors peer display entries. */
@@ -169,7 +245,7 @@ export function createConsolePushOps({
 		dedupeKey: string = crypto.randomUUID(),
 	): void {
 		const owner = ownerId?.();
-		if (!owner || !mailboxStore) return;
+		if (!owner) return;
 		try {
 			const entry: ConsolePushEntry = {
 				kind: "peer",
@@ -178,7 +254,7 @@ export function createConsolePushOps({
 				to,
 				...payload,
 			};
-			deliverToOwner({ entry, dedupeKey, provenance: "peer", origin: "local", label: "mirror" });
+			deliverToOwner({ entry, dedupeKey, origin: "local", label: "mirror" });
 		} catch (err) {
 			console.warn(`[mirror] dropped: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -189,7 +265,6 @@ export function createConsolePushOps({
 		const delivered = deliverToOwner({
 			entry,
 			dedupeKey,
-			provenance: "message",
 			origin: "relay",
 			label: "console_push",
 		});
@@ -238,9 +313,6 @@ export function createConsolePushOps({
 				);
 			}
 		}
-		if (!mailboxStore) {
-			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
-		}
 		const owner = ownerId?.();
 		if (!owner) {
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
@@ -256,7 +328,7 @@ export function createConsolePushOps({
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		const delivered = deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "notify" });
+		const delivered = deliverToOwner({ entry, dedupeKey, origin: "local", label: "notify" });
 		if (delivered === MIGRATING) return jsonResponse({ error: MIGRATING }, 503);
 		if (!delivered) {
 			return jsonResponse({ error: "failed to store notice" }, 500);
@@ -274,9 +346,6 @@ export function createConsolePushOps({
 		const { from, pluginId, actionType, payload } = parsed.data;
 		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
-		if (!mailboxStore) {
-			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
-		}
 		const owner = ownerId?.();
 		if (!owner) {
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
@@ -298,7 +367,6 @@ export function createConsolePushOps({
 		const delivered = deliverToOwner({
 			entry,
 			dedupeKey,
-			provenance: "message",
 			origin: "local",
 			label: "plugin_action",
 		});
@@ -310,5 +378,5 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush, deliverToOwner };
+	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush, deliverToOwner, drainOutbox };
 }

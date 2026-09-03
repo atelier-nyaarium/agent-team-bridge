@@ -13,7 +13,6 @@ import type {
 	CrossDomainUnlinkResult,
 	DiscoverCoverage,
 } from "../../shared/console-protocol.js";
-import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import type { PlaneRegistry } from "../../shared/plane-registry.js";
@@ -72,7 +71,6 @@ export interface SendRouteJson {
 export interface ConsoleHandlerDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
-	mailboxStore: DeviceMailboxStore;
 	routes: ConsoleRoutes;
 	/** This Gateway's id, returned on register so the console anchors its composite
 	 * (gatewayId, name) key, and used to canonicalize a send target to the qualified

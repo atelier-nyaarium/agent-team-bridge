@@ -17,8 +17,6 @@ import kotlinx.serialization.json.jsonObject
 ////////////////////////////////
 //  Per-session ops
 //
-//  Each seals to the Gateway that homes its subject, so work on another machine is reached E2E rather
-//  than through this device's route Gateway. reportRead is the exception and says why.
 
 suspend fun ConsoleClient.respond(
 	target: String,
@@ -53,7 +51,7 @@ suspend fun ConsoleClient.peek(target: String, sinceHash: String? = null): Conso
 
 /** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
  * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
- * per opId (the host replays a re-relayed send instead of re-injecting). */
+  */
 suspend fun ConsoleClient.tmuxSend(
 	target: String,
 	text: String? = null,
@@ -109,7 +107,7 @@ suspend fun ConsoleClient.createSession(
  *
  * `hostTarget` names WHICH machine's filesystem to browse, and is the qualified host spawn point when
  * creating on another gateway. Required rather than defaulted to a bare "host": a bare target resolves
- * to the route gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
+ * to the home gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
  * does not exist on the one the session will run on. */
 suspend fun ConsoleClient.listDirs(path: String, hostTarget: String, spawn: String): ConsoleListDirsResult =
 	valueResult(sendValueOp(transport.targetGatewayOf(hostTarget), ConsoleOp.ListDirs(path = path, spawn = spawn)), "list_dirs")
@@ -125,7 +123,7 @@ suspend fun ConsoleClient.renameSession(
 
 /** Report this device's read position for a team, for the cross-device read-anchor sync plane
  * (monotonic per owner - see readAnchors.ts). No targetGateway override: this is owned by the
- * console's own mailbox, so it defaults to the route Gateway exactly like poll()/register().
+ * console's own mailbox, so it defaults to the home Gateway.
  * Idempotent per opId (a retry re-applies the same merge, which is a no-op if it already landed). */
 suspend fun ConsoleClient.reportRead(
 	team: String,

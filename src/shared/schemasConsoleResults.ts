@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DomainSnapshotSchema } from "./admission.js";
 import { BoardEntrySchema } from "./schemasBoard.js";
-import { CrossDomainShareTargetSchema, MailboxEntrySchema, SealedEnvelopeSchema } from "./schemasConsoleOp.js";
+import { CrossDomainShareTargetSchema, MailboxEntrySchema } from "./schemasConsoleOp.js";
 import { DomainStatusSchema } from "./schemasCore.js";
 import {
 	CrossDomainPeerEntrySchema,
@@ -423,24 +423,6 @@ export const CrossDomainUnlinkResultSchema = z
 
 /** Shared by every board mutation: the op landed. A refusal never reaches here - it is an
  * ok=false + error on the reply body, so the console's queue can tell "retire" from "retry". */
-export const ConsoleBoardWriteResultSchema = z
-	.object({
-		applied: z.boolean(),
-		// Attachments the Gateway could not resolve on ANY machine and therefore did not store, by
-		// filename. The write still applied; these are gone. Reported because dropping is a normal
-		// outcome, and an unreported drop is indistinguishable from a picture vanishing on its own.
-		dropped: z.array(z.string().min(1).max(255)).optional(),
-	})
-	.meta({ id: "ConsoleBoardWriteResult" });
-
-export const ConsoleBoardReadResultSchema = z
-	.object({
-		entries: z.array(BoardEntrySchema),
-		// True when the byte budget forced a subset; the console keeps its prior cache for the rest.
-		truncated: z.boolean().optional(),
-	})
-	.meta({ id: "ConsoleBoardReadResult" });
-
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -459,8 +441,6 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleBlobStatResultSchema,
 	ConsoleBlobPutResultSchema,
 	ConsoleBlobGetResultSchema,
-	ConsoleBoardWriteResultSchema,
-	ConsoleBoardReadResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,
@@ -478,26 +458,3 @@ export const ConsoleOpResultSchema = z.union([
 //
 //  The gateway seals this to the console's box key; the console unseals and decodes
 //  the result for its op (correlated by opId).
-
-export const ConsoleReplyBodySchema = z
-	.object({
-		ok: z.boolean(),
-		result: ConsoleOpResultSchema.optional(),
-		error: z.string().optional(),
-	})
-	.meta({ id: "ConsoleReplyBody" });
-
-export const ConsoleRelayReplySchema = z
-	.object({
-		type: z.literal("console_relay_reply"),
-		v: z.number().int().positive(),
-		opId: z.string().min(1).max(128),
-		// The sealed ConsoleReplyBody (normal path). Absent ONLY when the gateway could
-		// not seal because the frame was unverifiable (malformed, or the signer is not
-		// an admitted console) - then `error` carries a cleartext reason so the console can
-		// surface "enroll this device". A pre-seal error is the only cleartext that
-		// ever leaves the gateway on the console reply path.
-		sealed: SealedEnvelopeSchema.optional(),
-		error: z.string().optional(),
-	})
-	.meta({ id: "ConsoleRelayReply" });

@@ -4,8 +4,7 @@ import { mintEpoch } from "./epoch.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** `epoch` distinguishes one process incarnation from a later one, mirroring DeviceMailbox's own.
- * `counter` is monotonic within an epoch. */
+/** `epoch` distinguishes one process incarnation from a later one. */
 export interface PlaneVersion {
 	epoch: number;
 	counter: number;
@@ -195,9 +194,7 @@ export class PlaneRegistry {
 		return changed;
 	}
 
-	/** Mirrors DeviceMailbox.waitForAppend, deliberately SEPARATE: `Promise.race` at the one call
-	 * site is safer than coupling the two subsystems. No `await` between check and push, so JS's
-	 * single-threaded execution IS the lock against a bump landing in between. */
+	/** No `await` between check and push, so the check and registration stay atomic. */
 	waitForBump(
 		presented: ReadonlyMap<string, PlaneVersion>,
 		timeoutMs: number,

@@ -76,7 +76,6 @@ export type GatewayFrameHandler = (
 const ProducerOpHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 const BUILT_IN_FRAMES = new Set([
-	"console_relay_reply",
 	"gateway_register",
 	"inbox_append",
 	"inbox_ack",
@@ -145,7 +144,6 @@ export class GatewayBridge implements ToolProvider {
 		}
 	>();
 	private handshakeAttempts = new Map<string, number[]>();
-	private consoleRelaySettler: ((opId: string, reply: Record<string, unknown>) => void) | null = null;
 	private readonly port: number;
 	private readonly authToken: string;
 	private readonly getDomain: (domainId: string) => DomainSnapshot | null;
@@ -421,15 +419,7 @@ export class GatewayBridge implements ToolProvider {
 		}
 	}
 
-	public setConsoleRelaySettler(fn: (opId: string, reply: Record<string, unknown>) => void): void {
-		this.consoleRelaySettler = fn;
-	}
-
 	public async handleCall(connId: ConnectionId, name: string, params: Record<string, unknown>): Promise<unknown> {
-		if (name === "console_relay_reply") {
-			if (typeof params.opId === "string") this.consoleRelaySettler?.(params.opId, params);
-			return { settled: true };
-		}
 		if (name === "gateway_register") return this.handleGatewayRegister(connId, params);
 		if (
 			[

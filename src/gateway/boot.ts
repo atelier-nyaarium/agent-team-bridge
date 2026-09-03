@@ -2,7 +2,6 @@
 // open), FederationActive (Router connection up). The phase is a value a reader receives, never a
 // null check each site re-derives.
 
-import type { ConsoleSealer } from "./console/consoleSealer.js";
 import type { Allowlist } from "./federation/allowlist.js";
 import type { ContentKeyStore } from "./federation/contentKeyStore.js";
 import type { CrossDomainHandshakeCoordinator } from "./federation/crossDomainHandshake.js";
@@ -31,11 +30,9 @@ export interface DomainMeta {
 /** The Router frame handlers, built against the federation-aware routes after the rebuild.
  * A frame arriving before they land on the slice is dropped (the console re-polls). */
 export interface RouterHandlers {
-	consoleRelay: (frame: unknown) => void;
 	gatewayRelay: (frame: unknown) => void;
 	valueOp: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
-	evictConsolePeer: (conversationId: string) => void;
 	presenceSource: CrossDomainPresenceSource;
 }
 
@@ -47,7 +44,6 @@ export interface FederationSlice {
 	shareState: CrossDomainShareState;
 	coordinator: CrossDomainHandshakeCoordinator;
 	sealer: Sealer;
-	consoleSealer: ConsoleSealer;
 	routerClient: RouterClient;
 	contentKeyStore: ContentKeyStore;
 	boardClient: BoardClient;

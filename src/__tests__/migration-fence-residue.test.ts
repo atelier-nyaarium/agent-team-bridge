@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
 import { ReadAnchors } from "../gateway/readAnchors.js";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { DurableStore } from "../shared/durable-store.js";
 import {
 	MIGRATING,
@@ -33,7 +32,6 @@ const STORE_FILES = [
 	"src/gateway/console/durableOpStore.ts",
 	"src/gateway/federation/crossDomainShareState.ts",
 	"src/shared/pending-delivery-store.ts",
-	"src/shared/device-mailbox.ts",
 ];
 
 function writers(): Array<{ file: string; symbol: string }> {
@@ -56,13 +54,6 @@ function writers(): Array<{ file: string; symbol: string }> {
 				)
 				.map(({ symbol }) => symbol),
 		);
-		if (file === "src/shared/device-mailbox.ts") {
-			const snapshot = methods.find(({ symbol }) => symbol === "snapshot");
-			const persisted = [...(snapshot?.body.matchAll(/this\.(consumer\w+)/g) ?? [])].map((match) => match[1]);
-			for (const method of methods) {
-				if (persisted.some((field) => method.body.includes(`this.${field}.set(`))) helpers.add(method.symbol);
-			}
-		}
 		helpers.delete("write");
 		let changed = true;
 		while (changed) {
@@ -123,8 +114,6 @@ describe("migration fence residue", () => {
 			{ file: "src/gateway/boardStore.ts", symbol: "mutate" },
 			{ file: "src/gateway/readAnchors.ts", symbol: "report" },
 			{ file: "src/gateway/federation/gatewayRelay.ts", symbol: "handleOp" },
-			{ file: "src/shared/device-mailbox.ts", symbol: "drain" },
-			{ file: "src/shared/device-mailbox.ts", symbol: "advanceConsumer" },
 		];
 		const derived = writers();
 		expect(
@@ -186,16 +175,6 @@ describe("migration fence residue", () => {
 		store.enqueue({ ...(delivery("d3") as object), enqueuedAt: 1_000 } as never);
 		expect(store.sweep()).toHaveLength(1);
 		now = 3_000;
-	});
-
-	it("mailbox writers refuse and write after removal", () => {
-		const mailbox = new DeviceMailboxStore().ensure("owner");
-		mailbox.append({ kind: "message", session_id: "s", body: "body" });
-		setMigrationEpoch(7);
-		expect(mailbox.drain(1, mailbox.epoch, "device")).toEqual({ outcome: MIGRATING });
-		expect(mailbox.advanceConsumer("device", 1)).toEqual({ outcome: MIGRATING });
-		setMigrationEpoch(null);
-		expect(mailbox.drain(1, mailbox.epoch, "device").entries).toHaveLength(0);
 	});
 
 	it("a read anchor never advances under the fence", () => {

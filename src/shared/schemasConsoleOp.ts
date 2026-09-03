@@ -1,9 +1,6 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
-import { SealedEnvelopeSchema } from "./crypto.js";
-import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
-import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlob.js";
 import {
 	BOARD_ATTACHMENTS_MAX,
@@ -13,15 +10,6 @@ import {
 	BoardAttachmentSchema,
 	BoardEntrySchema,
 } from "./schemasBoard.js";
-import { EnabledPluginSchema } from "./schemasCapability.js";
-import {
-	CrossDomainPresenceKnownVersionSchema,
-	FocusIntentSchema,
-	LinkedPeersVersionSchema,
-	PresenceVersionSchema,
-	ReadAnchorsVersionSchema,
-	TaskBoardVersionSchema,
-} from "./schemasPresence.js";
 
 export { SealedEnvelopeSchema } from "./crypto.js";
 
@@ -42,14 +30,6 @@ export const MAX_POLL_HOLD_MS = 45_000;
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
-			kind: z.literal("register"),
-			clientVersion: z.string().max(64).optional(),
-			clientVariant: z.string().max(16).optional(),
-			enabledPlugins: z.array(EnabledPluginSchema).max(64).optional(),
-		}),
-		z.object({ kind: z.literal("first_root"), firstRoot: SignedFirstRootSchema }),
-		z.object({ kind: z.literal("list_teams") }),
-		z.object({
 			kind: z.literal("send"),
 			to: z.string().min(1).max(128),
 			domainId: z.string().min(1).max(64).optional(),
@@ -63,19 +43,6 @@ export const ConsoleOpSchema = z
 			response: z.string().optional(),
 			replyAsJson: z.record(z.string(), z.unknown()).optional(),
 			files: ChannelFilesSchema.optional(),
-		}),
-		z.object({
-			kind: z.literal("poll"),
-			cursor: z.number().int().nonnegative().optional(),
-			epoch: z.number().int().nonnegative().optional(),
-			holdMs: z.number().int().nonnegative().max(MAX_POLL_HOLD_MS).optional(),
-			knownDomainVersion: z.string().optional(),
-			knownPresenceVersions: z.array(PresenceVersionSchema).optional(),
-			focus: FocusIntentSchema.optional(),
-			knownLinkedPeersVersion: LinkedPeersVersionSchema.optional(),
-			knownReadAnchorsVersion: ReadAnchorsVersionSchema.optional(),
-			knownTaskBoardVersion: TaskBoardVersionSchema.optional(),
-			knownCrossDomainPresenceVersions: z.array(CrossDomainPresenceKnownVersionSchema).optional(),
 		}),
 		z.object({
 			kind: z.literal("report_read"),
@@ -97,7 +64,6 @@ export const ConsoleOpSchema = z
 			id: z.string().min(1).max(64),
 			title: z.string().min(1).max(500),
 		}),
-		// Absent body clears it.
 		z.object({
 			kind: z.literal("board_set_body"),
 			id: z.string().min(1).max(64),
@@ -129,7 +95,6 @@ export const ConsoleOpSchema = z
 			kind: z.literal("board_remove"),
 			ids: z.array(z.string().min(1).max(64)).min(1).max(BOARD_BATCH_MAX),
 		}),
-		z.object({ kind: z.literal("board_read") }),
 		z.object({
 			kind: z.literal("peek"),
 			target: z.string().min(1).max(128),
@@ -258,30 +223,6 @@ export const VALUE_OP_KINDS = new Set([
 
 ////////////////////////////////
 //  Console relay frame schema
-
-export const ConsoleRelayFrameSchema = z
-	.object({
-		type: z.literal("console_relay"),
-		v: z.number().int().positive(),
-		opId: z.string().min(1).max(128),
-		signerSignPub: z.string().min(1),
-		targetGateway: z.string().optional(),
-		sealed: SealedEnvelopeSchema,
-	})
-	.meta({ id: "ConsoleRelayFrame" });
-
-////////////////////////////////
-//  Console op envelope
-
-export const ConsoleOpEnvelopeSchema = z
-	.object({
-		v: z.number().int().positive(),
-		conversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
-		device: z.string().min(1).max(64),
-		at: z.number().int().nonnegative(),
-		op: ConsoleOpSchema,
-	})
-	.meta({ id: "ConsoleOpEnvelope" });
 
 ////////////////////////////////
 //  Mailbox entry schema

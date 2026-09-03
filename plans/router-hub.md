@@ -1581,9 +1581,9 @@ cursor still sits behind the result row.
 locally; the gateway sends the board op to the Router as `{ actor: session (domainId, gatewayId,
 sessionId) }` over its WS; the reply's entries have titles, bodies, names, and cascaded titles
 opened by the gateway; `from` is stamped by the gateway, never read from the request. The entry
-shape gains `session: { domainId, gatewayId, sessionId }` beside the bare `sessionId`, which is
-kept for the plugin build in the field until the Phase 9 removal commit drops it; Kotlin is
-regenerated in the same change. Attachment
+shape carries `session: { domainId, gatewayId, sessionId }` beside the bare `sessionId`, which
+stays: the gateway store, the shared authority and observation rules, the Router projection, the
+plugin, and the phone reducers all key on it as the local session key. Attachment
 reads are authorized by `visibleTo` on the clear entry and served from the origin copy or the
 reference-held store.
 

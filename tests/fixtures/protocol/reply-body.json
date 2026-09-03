@@ -1,9 +1,0 @@
-{
-	"ok": true,
-	"result": {
-		"entries": [],
-		"cursor": 42,
-		"dropped": 0,
-		"epoch": 1073741824
-	}
-}

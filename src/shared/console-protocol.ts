@@ -3,16 +3,9 @@ import type {
 	BoardAttachmentSchema,
 	BoardEntrySchema,
 	ConsoleListDirsResultSchema,
-	ConsoleListTeamsResultSchema,
-	ConsoleOpEnvelopeSchema,
 	ConsoleOpResultSchema,
 	ConsoleOpSchema,
 	ConsolePeekResultSchema,
-	ConsolePollResultSchema,
-	ConsoleRegisterResultSchema,
-	ConsoleRelayFrameSchema,
-	ConsoleRelayReplySchema,
-	ConsoleReplyBodySchema,
 	ConsoleReportReadResultSchema,
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
@@ -33,7 +26,6 @@ import type {
 	DiscoverCoverageSchema,
 	MailboxEntrySchema,
 	ReadAnchorWireEntrySchema,
-	SealedEnvelopeSchema,
 } from "./schemas.js";
 ////////////////////////////////
 //  Console bridge protocol
@@ -69,11 +61,8 @@ export type CrossDomainPresenceEntry = z.infer<typeof CrossDomainPresenceEntrySc
 export type BoardEntry = z.infer<typeof BoardEntrySchema>;
 export type BoardAttachment = z.infer<typeof BoardAttachmentSchema>;
 export type ConsoleReportReadOp = Extract<ConsoleOp, { kind: "report_read" }>;
-export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
-export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
 export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
-export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
 export type ConsolePeekOp = Extract<ConsoleOp, { kind: "peek" }>;
 export type ConsoleTmuxSendOp = Extract<ConsoleOp, { kind: "tmux_send" }>;
 export type CrossDomainListenOp = Extract<ConsoleOp, { kind: "cross_domain_listen" }>;
@@ -88,42 +77,11 @@ export type CrossDomainListPeersOp = Extract<ConsoleOp, { kind: "cross_domain_li
 export type CrossDomainUnlinkOp = Extract<ConsoleOp, { kind: "cross_domain_unlink" }>;
 
 ////////////////////////////////
-//  Relay frames (carried over the gateway<->Router WebSocket)
-//
-//  The wire frame is sealed: only opId + signerSignPub are cleartext, the op rides
-//  inside `sealed` as a ConsoleOpEnvelope. The gateway opens the seal into an
-//  OpenedConsoleFrame (the flattened op + its verified signer) before dispatch, and
-//  seals a ConsoleReplyBody back. The Router sees neither.
-
-export type SealedEnvelope = z.infer<typeof SealedEnvelopeSchema>;
-export type ConsoleRelayFrame = z.infer<typeof ConsoleRelayFrameSchema>;
-export type ConsoleOpEnvelope = z.infer<typeof ConsoleOpEnvelopeSchema>;
-export type ConsoleRelayReply = z.infer<typeof ConsoleRelayReplySchema>;
-export type ConsoleReplyBody = z.infer<typeof ConsoleReplyBodySchema>;
-
-/** An inbound console op AFTER the gateway has opened + verified its seal: the
- * flattened op carried by the envelope plus the cleartext correlation/signer. The
- * handler operates on this, never on the raw sealed frame. */
-export interface OpenedConsoleFrame {
-	opId: string;
-	signerSignPub: string;
-	/** The Domain owner that admitted this console (the allowlist root). All of an
-	 * owner's devices resolve to the same value, which keys their shared inbox. */
-	ownerSignPub: string;
-	conversationId: string;
-	device: string;
-	op: ConsoleOp;
-}
-
-////////////////////////////////
 //  Op results (gateway -> console)
 
-export type ConsoleRegisterResult = z.infer<typeof ConsoleRegisterResultSchema>;
 export type DiscoverCoverage = z.infer<typeof DiscoverCoverageSchema>;
-export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema>;
 export type ConsoleSendResult = z.infer<typeof ConsoleSendResultSchema>;
 export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
-export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
 export type ConsoleReportReadResult = z.infer<typeof ConsoleReportReadResultSchema>;
 export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
 export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
@@ -138,7 +96,7 @@ export type CrossDomainUnshareResult = z.infer<typeof CrossDomainUnshareResultSc
 export type CrossDomainListSharesResult = z.infer<typeof CrossDomainListSharesResultSchema>;
 export type CrossDomainListPeersResult = z.infer<typeof CrossDomainListPeersResultSchema>;
 export type CrossDomainUnlinkResult = z.infer<typeof CrossDomainUnlinkResultSchema>;
-export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
+export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema> | { applied: true; dropped?: string[] };
 
 ////////////////////////////////
 //  Mailbox

@@ -29,6 +29,7 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 | `FEDERATION_PUBLIC_HOST`, `FEDERATION_PUBLIC_PORT` | The Router's address from outside, the one thing setup asks. An empty host means LAN only, and the port is not asked. The port is advertised only when it differs from the Router's own |
 | `FEDERATION_WS_TOKEN` | Bearer the gateway presents at the Router's WS upgrade. Fail-closed. Minted into `.env` by `start-federation.sh` |
 | `CONSOLE_BRIDGE_TOKEN` | App token every console presents on the op surface. Fail-closed. Minted into `.env` by `start-federation.sh` |
+| `FEDERATION_ROUTER_CERT_FP` | Persisted Router fingerprint. `setup.sh --verify` pins against it. Written at Router start and during provision |
 | `ROUTER_DOMAIN_QUOTA_BYTES` | Owner state and inbox bytes per data dir, default 2 GiB. A 64 MB reserve is kept free |
 | `ROUTER_BLOB_CACHE_BYTES` | Blob cache bytes per Domain, default 1 GiB. The LRU sweep skips live transfers |
 | `ROUTER_MIGRATION_EPOCH` | Fallback migration epoch when the Router has no `migration-epoch` file. A positive integer raises the Router migration window |
@@ -36,8 +37,8 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 Router state under its `DATA_DIR`: `owner/<domainId>/<fingerprint>/` (manifest, snapshots, journals),
 `blobs/` (cache and reference-held entries), `inbox-claims/` on the gateway side.
 
-Migration scripts read `DATA_DIR`, default `/app/data`. `gateway-export.ts` reads `FEDERATION_DIR`,
-defaulting to `DATA_DIR/federation`. `router-import.ts` and `router-lease.ts` read Router `DATA_DIR`.
+Migration scripts read `DATA_DIR`, default `/app/data`. `router-import.ts` and `router-lease.ts` read
+Router `DATA_DIR`.
 
 ## Host daemon
 

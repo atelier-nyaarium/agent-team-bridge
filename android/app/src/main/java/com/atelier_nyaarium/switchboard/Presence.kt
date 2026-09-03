@@ -6,11 +6,8 @@ package com.atelier_nyaarium.switchboard
 /**
  * How much a presence answer is worth.
  *
- * A session's facts reach this device by TWO channels with very different latency. The presence
- * plane PUSHES the route Gateway's own rows on every poll (`PresenceOps.applyPlanePresence`, and
- * `presence.ts`'s snapshot, which walks only its own session store). Every OTHER machine's rows are
- * PULLED once per `DISCOVERY_REFRESH_MS` (`PresenceOps.refreshDiscovery`, which the poll loop calls
- * "the one thing left with no push mechanism").
+ * A session's facts reach this device through the presence plane. Local rows are applied immediately
+ * and other Gateway rows arrive on the background tick.
  *
  * Nothing on the wire says which channel delivered a row, so a consumer that reads a value alone
  * silently assumes push latency and is wrong for every machine but one. That is the whole reason
@@ -21,7 +18,6 @@ enum class Authority {
 	/** Pushed by the Gateway that owns this session, so it is current as of this poll. */
 	LIVE,
 
-	/** Pulled on the discovery interval, so up to `DISCOVERY_REFRESH_MS` old. Not evidence. */
 	POLLED,
 
 	/** That Gateway could not be reached when we last asked. The row is only what it used to be, and
@@ -35,9 +31,8 @@ enum class Authority {
 /**
  * What this device asked for and has not yet seen confirmed.
  *
- * This device's own action is the freshest fact it will ever hold about a session, and before this
- * type it was thrown away: `wakeSession` fired and then waited to be TOLD what it already knew,
- * which on a non-route Gateway takes up to a discovery interval.
+ * This device's own action is the freshest fact it will ever hold about a session. It remains a
+ * receipt until the presence plane confirms the resulting state.
  *
  * It is a RECEIPT, not a status. It is scoped to one operation id, because a wake followed by a
  * relaunch would otherwise let the first one's outcome clear the second one's. It carries an
@@ -70,8 +65,8 @@ data class ActionReceipt(
 		 * A safety bound, NOT the expiry that matters. The real expiry is evidence: a receipt is
 		 * dropped the moment any Gateway reports the session as up.
 		 *
-		 * Comfortably longer than one discovery interval on purpose. Shorter, and a slow cold boot
-		 * expires the receipt before discovery has run even once, which puts the blank terminal
+		 * Comfortably longer than one presence refresh on purpose. Shorter, and a slow cold boot
+		 * expires the receipt before the presence plane has run even once, which puts the blank terminal
 		 * straight back. Longer, and a wake that silently went nowhere keeps saying so.
 		 */
 		const val RECEIPT_TTL_MS = 90_000L
@@ -117,7 +112,7 @@ private constructor(
 	val hasEnded: Boolean get() = status == ENDED
 
 	/** The base board/thread word, before any working/waking/login refinement. Display tolerates
-	 * staleness: being a discovery interval behind on a label is cosmetic, where being behind on a
+	 * staleness: being one presence refresh behind on a label is cosmetic, where being behind on a
 	 * gate is the bug this file exists for. Pair with `presenceColor` for the chip colour. */
 	val word: String get() = wordFor(status)
 
@@ -141,7 +136,7 @@ private constructor(
 	 *
 	 * A POLLED row is deliberately NOT trusted enough to skip peeking forever: the caller probes once
 	 * per mount when [authority] is not LIVE (see TerminalView), which settles a stale row for the
-	 * price of a single op instead of a discovery interval of blank screen.
+	 * price of a single op instead of a blank screen during the next presence refresh.
 	 */
 	fun mayHavePane(now: Long): Boolean = when (authority) {
 		Authority.UNREACHABLE, Authority.NONE -> false
@@ -150,7 +145,7 @@ private constructor(
 
 	/** True only when a Gateway that speaks for this session said so THIS poll. A caller that would
 	 * act on "there is nothing there" has to consult this, or it is acting on a value that may be a
-	 * discovery interval old. */
+	  */
 	val authoritative: Boolean get() = authority == Authority.LIVE
 
 	fun withAuthority(a: Authority): Presence = rebuild(a = a)

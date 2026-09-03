@@ -5,7 +5,7 @@ The self-hosted Router, how a Gateway reaches it, and the trust model.
 ## Self-hosted Router
 
 `src/federation-server/` is the Router. Three surfaces share one TLS port: bearer-gated gateway WS,
-app-token-gated console ops, and token-exempt device approval for fresh devices.
+signed OwnerOps for the phone, and token-exempt device approval for fresh devices.
 
 The Router certificate is minted once. Rotation requires re-provisioning every enrolled Gateway and
 phone. It is distinct from the ephemeral certificate used by the 20003 enrollment listener.
@@ -64,8 +64,8 @@ Gateway, so revocation still applies while the Router is unreachable.
   never leaves the phone.
 - `ReplayGuard` runs after signature verification.
 - Trust-on-first-enroll rejects later snapshots rooted at a different owner key.
-- Console relay frames are sealed and signed by the enrolled console key; the Gateway checks the
-  owner-signed `kind:console` admission.
+- Phone OwnerOps are sealed and signed by the enrolled console key. The Router checks the owner-signed
+  `kind:console` admission.
 - `CONSOLE_BRIDGE_TOKEN` remains the shared app-token gate for the console surface.
 
 ## Content keys
@@ -86,14 +86,14 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Addresses: `owner:<domainId>/<ownerSignPub>`, `session:<domainId>/<gatewayId>/<sessionId>`, `gateway:<domainId>/<gatewayId>`.
 - A row is `{ seq, acceptedAt, size, envelope, producerSig, body }`. The producer signs the envelope; the Router adds seq, acceptedAt, and size.
 - The op ledger keys on `(owner, conversationId, opId)`. A repeat with the same hash answers the recorded result; a different hash answers `conflict`.
-- **A retry is one operation:** The producer mints `opId` once per invocation, and every retry carries it. The relay holds one across its sequence. The identity hash covers the CLEAR operation.
-- The register answer carries `opLedgerProtocol`. A producer that issues its own ids refuses to send without it, since a gateway that predates the field drops it silently and mints one per attempt. The plugin scopes what it heard to one connection, so a replaced gateway cannot inherit its predecessor's answer.
+- **A retry is one operation:** The producer mints `opId` once per invocation, and every retry carries it. The identity hash covers the CLEAR operation.
+- The phone uses protocol version 2. A protocol-1 Gateway receives `unsupported` for removed paths through the `Remove-by` shims.
 - Capacity refuses before storage: the row cap answers `refused`, the Domain quota answers `durability_failure`, a failed fsync answers `durability_uncertain`.
 - Gateway frames name only themselves. The Router takes the Domain and gateway from the connection; a session origin must be in the session registry; a peer row into another Domain needs a link edge.
 - `gateway_register` returns an incarnation. Every inbox frame carries it; a stale one is refused.
 - The Router pushes `inbox_deliver` on append and again after each register. The gateway keeps a durable claim per delivery under `DATA_DIR/inbox-claims/`, offers once, and acks on the receiver's word. A redelivered claimed row is re-acked, never re-offered.
 - An undelivered row expires after 30 days with an `expired` result row to its sender.
-- A console reaches the inbox through a signed `OwnerOp` on the op surface: `deliver`, `consumer_register`, `inbox_read`, `inbox_advance`, `op_result`.
+- A console reaches the inbox through signed OwnerOps: `deliver` with a `console_op` row, `consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`, and `capabilities_report`. `gateway_value` forwards VALUE kinds as `value_op`. Delivery answers use `op_result`. Value answers use typed `unreachable` or `timeout` outcomes.
 
 ## Owner state
 
@@ -132,9 +132,7 @@ bun run router:lease --domain <id> --gateway <id> --state active
 
 Use `offline`, `retired`, or `excluded` for the corresponding Gateway state.
 
-### Gateway export
-
-Run for each Gateway in order.
+### Gateway fence
 
 ```bash
 bun run gateway:fence --epoch <N>
@@ -143,21 +141,7 @@ bun run gateway:fence --epoch <N>
 The Gateway writes `DATA_DIR/migration-epoch`. Phones and agents see `migrating` for fenced writes.
 Wait 60 seconds for in-flight operations to settle.
 
-```bash
-bun run gateway:export --epoch <N> --out <dir>
-```
-
-The export writes `<dir>/export-N.json`, `<dir>/blobs/`, `<dir>/blobs.json`, and
-`<dir>/SHA256SUMS`. The export uses `DATA_DIR` and `FEDERATION_DIR`.
-
-```bash
-bun run gateway:cut --epoch <N> --out <dir>
-```
-
-The cut writes `<dir>/cut-N.tar` and adds its digest to `<dir>/SHA256SUMS`. The archive contains
-the fenced `DATA_DIR` except the archive, temporary files, corrupt files, locks, and migration
-markers. The Gateway holds `DATA_DIR/export-in-progress` during export and cut. A dead pid marker
-is reclaimed before a rerun.
+The export bundle format remains the input format for `router:import`.
 
 ### Router import
 
@@ -191,32 +175,25 @@ stay fenced on reconnect. Non-active leases do not block authority.
 ### Phone
 
 The Router welcome carries `migrationEpoch`. The phone runs self-migration once per epoch, on any
-accepted welcome. Scheduled sends upload under their own opId; read anchors re-report. An unanswered
+accepted welcome. Scheduled sends upload under their own opId. Read anchors re-report. An unanswered
 upload retries on the next welcome. A refused record keeps its local alarm. A local record is
 released only after the Router accepts it.
-
-Cursor translation runs only for a consumer socket whose welcome `cursorEpoch` is behind the
-migration epoch. It translates the welcome's cursor, journals the result, commits, then acks. The
-Router socket is planes-only until the cutover. The Gateway poll remains the inbox source before
-cutover.
 
 ### Recovery
 
 | Crash point | Safe rerun |
 |-------------|------------|
-| Fence before settle | Wait 60 seconds. Rerun export |
-| Export or cut marker present | Rerun the same export or cut. Dead pid markers are reclaimed |
-| Cut temporary archive present | Rerun cut with the same epoch and output directory |
+| Fence before settle | Wait 60 seconds. Use the export bundle |
+| Export bundle present | Rerun import with the same bundle |
 | Import marker present with a dead pid | Rerun import with the same export |
 | Import failed before completion marker | Rerun import with the same export |
 | Completion marker present | Rerun import. The same digest returns the completed result |
 | Router stopped after import | Start the Router |
 
-Lower the fence only after the cut and import are complete.
+Lower the fence only after import is complete.
 
 ```bash
 bun run gateway:fence --down
 ```
 
-`--down` refuses before 60 seconds, with a malformed fence, or while a live export or cut marker
-exists. A missing fence also refuses.
+`--down` refuses before 60 seconds or with a malformed fence. A missing fence also refuses.

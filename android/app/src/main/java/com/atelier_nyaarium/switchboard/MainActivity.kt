@@ -29,7 +29,6 @@ import com.atelier_nyaarium.switchboard.board.BoardScreen
 import com.atelier_nyaarium.switchboard.board.GroupKey
 import com.atelier_nyaarium.switchboard.board.flattenBoard
 import com.atelier_nyaarium.switchboard.plugins.Plugins
-import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.isComposite
 
 /** Process-lifetime repository. */
@@ -289,12 +288,11 @@ fun App(
 					// Clear only the still-open thread.
 				if (openTeam == forgotten) openTeam = null
 			}
-				// Refresh non-route board slice on entry.
 			val boardOn = pluginManager.isActive("taskboard")
 			val boardGateway = repo.boardOps.boardGatewayOf(openTeam)
 				// Key board gateway for notification opens.
 			LaunchedEffect(openTeam, boardOn, boardGateway) {
-				if (boardOn && repo.boardOps.isNonRouteSession(openTeam!!)) repo.boardOps.refreshBoard()
+				if (boardOn) repo.boardOps.refreshBoard()
 			}
 			val boardRevision by repo.boardOps.boardRevision
 				// Failed reads do not advance revision.
@@ -399,7 +397,7 @@ fun App(
 						// Local composite sessions permit terminal ops.
 					eligible = isComposite(localFieldOf(openTeam!!)) &&
 						run {
-							val admin = adminDomainId(state.sessions(), state.localGatewayId)
+							val admin = adminDomainId(state.sessions(), state.homeGatewayId)
 							val dom = session?.domainId
 							dom.isNullOrEmpty() || admin.isEmpty() || dom == admin
 						},

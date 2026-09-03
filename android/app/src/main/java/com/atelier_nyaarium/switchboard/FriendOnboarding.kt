@@ -11,7 +11,7 @@ package com.atelier_nyaarium.switchboard
 
 /** A hosted guest tenant row for the "Networks you host" admin list. Built locally from the
  * admin's own provisioned tenants; the Router holds the canonical pending/rooted state, surfaced
- * lazily through discovery once the friend's gateway comes online. */
+  */
 data class HostedTenant(
 	/** The opaque Domain id, never the row's title. */
 	val domainId: String,
@@ -27,7 +27,6 @@ enum class HostedTenantState {
 	/** Provisioned but the friend has not first-rooted + brought a gateway online yet. */
 	AWAITING_SETUP,
 
-	/** Rooted (a gateway has appeared in discovery for it) but currently offline. */
 	OFFLINE,
 
 	/** At least one of the tenant's sessions is online. */
@@ -66,9 +65,9 @@ enum class NoGatewayState {
 //  Functions & Helpers
 
 object FriendOnboarding {
-	/** Whether a display-name rename must wait for discovery. A first-rooted device whose local
+	 /**
 	 * session has not yet reported a confirmed Domain id (null) cannot sign a rename over a real
-	 * Domain, so gate Save until discovery lands one. A non-firstRooted device is never gated. */
+	  */
 	fun renameAwaitsDiscovery(firstRooted: Boolean, confirmedDomainId: String?): Boolean =
 		firstRooted && confirmedDomainId == null
 
@@ -121,8 +120,8 @@ object FriendOnboarding {
 			else -> NoGatewayState.NEEDS_GATEWAY
 		}
 
-	/** Derive each hosted tenant's display state from discovery. A tenant whose Domain has any
-	 * session in `teams` is rooted (online iff any is online); one with no discovery session is
+	 /**
+	 * session in `teams` is rooted (online iff any is online); one with no presence session is
 	 * still awaiting the friend's first-root + gateway bringup. */
 	fun hostedState(domainId: String, teams: List<Team>): HostedTenantState {
 		val sessions = teams.filter { it.domainId == domainId }

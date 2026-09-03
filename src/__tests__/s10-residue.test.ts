@@ -8,7 +8,6 @@ import { createConsolePushOps } from "../gateway/consolePushOps.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
 import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js";
 import { ReadAnchors } from "../gateway/readAnchors.js";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore, openDurable } from "../shared/durable-store.js";
 import {
 	fenced,
@@ -31,6 +30,7 @@ const delivery = (id: string) =>
 	({ deliveryId: id, team: "team", channelJobId: "job", from: "from", body: "body", enqueuedAt: 1 }) as never;
 
 afterEach(() => {
+	delete process.env.DATA_DIR;
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -49,6 +49,7 @@ describe("S10 process fence", () => {
 	});
 	it("refuses every migrated writer under a real file fence and writes after removal", async () => {
 		const dir = tempDir();
+		process.env.DATA_DIR = dir;
 		const owner = "owner";
 		const board = openDurable(dir, "task-board", (store) => new BoardStore(store, new PlaneRegistry(), undefined));
 		const pending = openDurable(dir, "pending-deliveries", (store) => new PendingDeliveryStore(store));
@@ -56,7 +57,6 @@ describe("S10 process fence", () => {
 		const anchors = new ReadAnchors(new PlaneRegistry(), undefined);
 		const shares = new CrossDomainShareState(dir);
 		const push = createConsolePushOps({
-			mailboxStore: new DeviceMailboxStore(),
 			ownerId: () => owner,
 			localGatewayId: "gateway",
 			localAddress: (() => ({ canonical: "domain.gateway.team.session" })) as never,
@@ -92,7 +92,6 @@ describe("S10 process fence", () => {
 			push.deliverToOwner({
 				entry: { kind: "notice" } as never,
 				dedupeKey: "fenced-push",
-				provenance: "message",
 				origin: "relay",
 			}),
 		).toBe(MIGRATING);
@@ -113,7 +112,6 @@ describe("S10 process fence", () => {
 			push.deliverToOwner({
 				entry: { kind: "notice" } as never,
 				dedupeKey: "live-push",
-				provenance: "message",
 				origin: "relay",
 			}),
 		).toBe(true);

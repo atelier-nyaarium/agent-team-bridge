@@ -128,7 +128,9 @@ export async function purgeGateway(): Promise<void> {
 	console.log(`Purge Gateway "${gw}"\n`);
 	console.log("Removes the gateway on this machine and nothing else:");
 	console.log("  - stops the host daemon and the gateway container");
-	console.log("  - erases volumes/gateway-data and volumes/gateway (its keys, sessions, mailboxes, task board)");
+	console.log(
+		"  - erases volumes/gateway-data and volumes/gateway (its keys, sessions, owner-row outbox, task board)",
+	);
 	console.log(`  - drops its keys from .env (${GATEWAY_ENV_KEYS.join(", ")})`);
 	console.log("A Federation Router on this machine, its tokens and its Domain are not touched.\n");
 	if (!confirm(`Purge gateway "${gw}"?`)) return;

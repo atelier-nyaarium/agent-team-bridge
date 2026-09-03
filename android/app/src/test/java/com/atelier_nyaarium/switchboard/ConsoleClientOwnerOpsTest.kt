@@ -4,7 +4,6 @@ import com.atelier_nyaarium.switchboard.board.valueResultAadKind
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
-import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.InboxRow
 import com.atelier_nyaarium.switchboard.proto.OpKey
@@ -276,7 +275,7 @@ class ConsoleClientOwnerOpsTest {
 					"peek" -> reply(com.atelier_nyaarium.switchboard.proto.ConsolePeekResult.serializer(), com.atelier_nyaarium.switchboard.proto.ConsolePeekResult(hash = "hash"))
 					"rename_session" -> reply(com.atelier_nyaarium.switchboard.proto.ConsoleRenameSessionResult.serializer(), com.atelier_nyaarium.switchboard.proto.ConsoleRenameSessionResult(true, "new"))
 					"forget" -> reply(com.atelier_nyaarium.switchboard.proto.ConsoleForgetResult.serializer(), com.atelier_nyaarium.switchboard.proto.ConsoleForgetResult(true, "keep"))
-					else -> wireJson.encodeToJsonElement(ConsoleReplyBody.serializer(), ConsoleReplyBody(true))
+					else -> wireJson.encodeToJsonElement(OwnerOpAnswer.serializer(), OwnerOpAnswer(true))
 				}
 				val sealed = Crypto.sealContent(
 					body.toString().toByteArray(),
@@ -338,7 +337,7 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	private fun <T> reply(serializer: kotlinx.serialization.KSerializer<T>, result: T): JsonElement =
-		wireJson.encodeToJsonElement(ConsoleReplyBody.serializer(), ConsoleReplyBody(true, wireJson.encodeToJsonElement(serializer, result)))
+		wireJson.encodeToJsonElement(OwnerOpAnswer.serializer(), OwnerOpAnswer(true, wireJson.encodeToJsonElement(serializer, result)))
 
 	private fun rowOf(ownerOp: OwnerOp): InboxRow =
 		wireJson.decodeFromJsonElement(InboxRow.serializer(), requireNotNull(ownerOp.op["row"]))

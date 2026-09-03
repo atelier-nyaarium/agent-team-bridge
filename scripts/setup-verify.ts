@@ -70,7 +70,7 @@ export async function verify(): Promise<void> {
 
 	// The link is checked on BOTH sides, and given time. A Gateway reads `router_connected` off its
 	// own socket, which stays OPEN across a half-open connection, so it can claim a link the Router
-	// is not holding - and every console op relayed over that link fails while both ends look healthy.
+	// Both sides must report the link.
 	// And a Router that was just (re)started drops the Gateway, which reconnects on a backoff of a
 	// few seconds; a single read in that window reports an outage that is already healing.
 	const link = await awaitGatewayLink(bind);

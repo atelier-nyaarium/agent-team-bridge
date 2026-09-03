@@ -18,13 +18,13 @@ class AdminDomainIdTest {
 	@Test
 	fun resolvesFromTheLocalGatewaysDomainTaggedSession() {
 		val t = team("alice.gw.host.claude", domainId = "alice")
-		assertEquals("alice", adminDomainId(listOf(t), localGatewayId = "gw"))
+		assertEquals("alice", adminDomainId(listOf(t), homeGatewayId = "gw"))
 	}
 
 	@Test
 	fun ignoresASessionFromAnotherGateway() {
 		val other = team("bob.gw2.host.claude", domainId = "bob")
-		assertEquals("", adminDomainId(listOf(other), localGatewayId = "gw"))
+		assertEquals("", adminDomainId(listOf(other), homeGatewayId = "gw"))
 	}
 
 	@Test
@@ -33,12 +33,12 @@ class AdminDomainIdTest {
 		// gatewayId must not mask a real local domainId reported by another row.
 		val domainless = team("local.gw.old.claude", domainId = null)
 		val tagged = team("alice.gw.host.claude", domainId = "alice")
-		assertEquals("alice", adminDomainId(listOf(domainless, tagged), localGatewayId = "gw"))
+		assertEquals("alice", adminDomainId(listOf(domainless, tagged), homeGatewayId = "gw"))
 	}
 
 	@Test
 	fun noDomainTaggedLocalSessionYieldsEmpty() {
 		val domainless = team("local.gw.host.claude", domainId = null)
-		assertEquals("", adminDomainId(listOf(domainless), localGatewayId = "gw"))
+		assertEquals("", adminDomainId(listOf(domainless), homeGatewayId = "gw"))
 	}
 }

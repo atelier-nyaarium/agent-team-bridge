@@ -65,10 +65,10 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 *
 	 * Both halves are read out of the TARGET rather than passed alongside it: a caller supplying them
 	 * separately could disagree with the target it actually sent. `spawnTargetKey` owns that reading,
-	 * including the rule that a bare target means the route Gateway; a target it cannot place is not
+	 * including the rule that a bare target means the home Gateway; a target it cannot place is not
 	 * remembered at all, since a suggestion is never worth guessing at. */
 	private fun rememberProject(target: String) {
-		val (gateway, project) = spawnTargetKey(target, repo.localGatewayId) ?: return
+		val (gateway, project) = spawnTargetKey(target, repo.homeGatewayId) ?: return
 		repo.store.lastProjectByGateway = repo.store.lastProjectByGateway + (gateway to project)
 		repo._state.update { it.copy(lastProjectByGateway = repo.store.lastProjectByGateway) }
 	}
@@ -91,9 +91,6 @@ internal class SessionOps(private val repo: ChatRepository) {
 		recentSpawnOpIds[key] = opId to now
 		repo._state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
 		try {
-			// The gateway's mint/adopt bumps the presence plane synchronously with the create, so the
-			// just-adopted record's tile shows on this device's own NEXT poll with no manual nudge -
-			// unlike the pre-plane teams() pull, a fresh presence snapshot needs no explicit trigger.
 			runCatchingCancellable {
 				withContext(Dispatchers.IO) { repo.client().createSession(target, displayLabel = label, workdir = workdir, opId = opId) }
 			}
@@ -106,6 +103,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 							} else it.transientMessages,
 						)
 					}
+					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 				}
 				.onFailure { e ->
 					repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Failed to create \"$label\"")) }
@@ -151,7 +149,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 *
 	 * `hostTarget` names WHICH machine to read, so a workdir picked for a session on another Gateway
 	 * comes from that machine's filesystem. Required, with no bare default: a bare target resolves to
-	 * this device's route Gateway, so an omitted one would list the wrong machine and say nothing.
+	 * this device's home Gateway, so an omitted one would list the wrong machine and say nothing.
 	 *
 	 * Reports WHY there is no listing rather than collapsing to an empty one. An unreachable machine,
 	 * a Gateway with no host daemon and a folder with no subdirectories all produced the same blank
@@ -171,11 +169,6 @@ internal class SessionOps(private val repo: ChatRepository) {
 	// the sessions board draws a machine it can seal to even before that machine has any sessions.
 	fun keyringGateways(): List<String> = Keyring.parse(repo.store.loadDomain())?.admittedGatewayIds() ?: emptyList()
 
-	/** The same list without the route Gateway, for the fan-outs that have already asked it. */
-	// internal (not private): BoardOps.refreshBoard and BoardOps.boardAssignTargets fan out to every
-	// other Gateway the same way forget and ChatRepository.reportPluginsToOtherGateways do.
-	fun otherKeyringGateways(route: String): List<String> = keyringGateways().filter { it != route }
-
 	val terminalRefreshMs: Long get() = repo.store.terminalRefreshMs
 
 	fun setTerminalRefreshMs(ms: Long) {
@@ -184,7 +177,6 @@ internal class SessionOps(private val repo: ChatRepository) {
 
 	// This device's own outstanding requests, keyed by team. The freshest fact this device holds
 	// about a session, and before it existed the wake below threw it away and then waited to be TOLD
-	// what it already knew - which on a non-route Gateway takes a discovery interval, and is exactly
 	// why waking another machine showed a blank terminal. Scoped by opId so an overlapping wake and
 	// relaunch cannot retire each other's; see ActionReceipt.
 	private val receipts = mutableMapOf<String, ActionReceipt>()
@@ -228,16 +220,14 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * own spawn + leaf, so an existing record resumes rather than a duplicate being minted.
 	 * Best-effort; a failure surfaces as a transient message. */
 	fun wakeSession(team: String) {
-		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
+		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
 		if (t !is Address) return
 		// The QUALIFIED spawn point, so the create routes to the session's own Gateway. Rebuilding a
-		// bare `t.spawn` sent every wake to the route Gateway; a guard hid that as "cannot wake".
 		val target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical
 		val opId = UUID.randomUUID().toString()
 		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
 		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
 		// the next poll, and pull the session's own Gateway so the roster catches up in about a
-		// second instead of waiting out DISCOVERY_REFRESH_MS.
 		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
 		repo.drain.scope?.launch(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -245,7 +235,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 		}
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-					repo.presence.refreshAfterAction()
+					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 				}
 				.onFailure { e ->
 					// FAILED retires the receipt rather than letting it run out its TTL: the surface
@@ -266,7 +256,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * failure so the terminal surfaces it inline (tmuxSend's contract). */
 	suspend fun relaunchSession(team: String) {
 		withContext(Dispatchers.IO) {
-			val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
+			val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
 			if (t !is Address) error("not an addressable session")
 			// Its own receipt, its own opId. A relaunch CLOSES the session first, so the roster
 			// correctly drops to asleep mid-sequence; without a receipt covering the whole chain the
@@ -277,7 +267,6 @@ internal class SessionOps(private val repo: ChatRepository) {
 			try {
 				repo.client().closeSession(team)
 				// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
-				// the route Gateway after closing it on its own.
 				repo.client().createSession(
 					target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical,
 					sessionName = t.session,
@@ -289,7 +278,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 				throw e
 			}
 			settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-			repo.presence.refreshAfterAction()
+			repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 		}
 	}
 
@@ -351,10 +340,9 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
 		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
-		// gating this on the route Gateway left its record alive to return when the tombstone expired.
 		// Best-effort, the gateway no-ops an absent session.
-		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.localGatewayId) }.getOrNull()
-		val reachable = (otherKeyringGateways(repo.localGatewayId) + repo.localGatewayId).toSet()
+		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
+		val reachable = keyringGateways().toSet()
 		if (t is Address && t.isLocalTo(repo.localDomain(), reachable)) {
 			repo.drain.scope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { repo.client().forget(team, boardDisposition) }
@@ -363,6 +351,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 					// spawnSession, none of which nudge the poll loop either) - no client-side action
 					// needed on success.
 					.onSuccess { applied ->
+						repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 						// A Gateway that predates the field strips the request's copy and answers
 						// without one, so it RELEASED work the owner asked to cancel. Say so; the
 						// session is gone either way and there is nothing left to retry against.

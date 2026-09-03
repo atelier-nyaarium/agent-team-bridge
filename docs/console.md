@@ -1,37 +1,29 @@
 # Console
 
-The Android console, its bridge to the Gateway, and the terminal view.
+The Android console reaches the Router through signed OwnerOps.
 
-## Bridge
+## OwnerOps
 
-Poll-based, keyed by per-install `conversationId`. Device Name is display-only. `ConsolePeer`
-participates in normal peer registries; its `send()` appends to the mailbox drained by `poll`.
+`ConsoleClient` sends protocol version 2 operations with one `conversationId` and `opId`.
 
-- Mutating ops deduplicate by `(conversationId, opId)`. `send` and `respond` also use
-  `DurableOpStore`, preserving delivery identity across restart.
-- Mailbox instances carry an epoch. A stale poll cannot acknowledge a replacement instance. Eviction
-  prefers display-only `"peer"` entries over unread mail.
-- `mirrorPeer` is display-only and never applies to console senders or targets.
-- Plugin actions use one generic `kind: "plugin_action"` entry. `threadAddr` comes only from the
-  request's `from`.
-- `consolePushOps.deliverToOwner` is the sole mailbox writer, enforced by a residue test.
-  `origin: "relay"` is the only non-fanning append, preventing relay loops. Delivery is same-Domain
-  only and deduplicated by `dedupeKey`.
+- `deliver` carries a `console_op` row. Delivery kinds are `DELIVERY_OP_KINDS` in
+  `src/shared/schemasConsoleOp.ts`. The answer is an `op_result` row sealed under
+  `opResultAadKind`.
+- `gateway_value` carries a VALUE kind from `VALUE_OP_KINDS`. The Router forwards it as a
+  `value_op` frame. The answer is sealed under `valueResultAadKind`. Results use typed `unreachable`
+  or `timeout` outcomes.
+- Other OwnerOps are `consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`,
+  and `capabilities_report`.
+- The phone socket uses `ConsoleSocketMode.INBOX`.
+- `PollDrain.drainTick` calls `inbox_read` and `planes_read`. It sends one `inbox_advance` after
+  rows drain.
 
-## Router socket
+`homeGatewayId` selects the phone's home Gateway from the admitted gateways. Phone-bound rows are
+appended by the Gateway through `deliverToOwner`. `src/gateway/consolePushOps.ts` owns the durable
+`OwnerRowOutbox` for disconnected or uncertain appends.
 
-The phone also holds a socket to the Router at `/console`, alongside the poll. The upgrade is
-app-token gated and a hello OwnerOp proves identity; an incarnation fences a superseded connection.
-
-- `ConsoleTransportCoordinator` owns the one Router consumer across both transports and is the sole
-  caller of the idle pushback ladder. It does NOT park the gateway poll: the two carry different
-  sources and different cursors, so a live socket silences nothing.
-- `ConsoleSocketDriver` routes frames under a generation fence. The client is paired with its
-  generation, so a superseded close cannot clear the live one. `onUnreachable` fires pre-welcome only.
-- The console registers NO consumer and takes planes only. A consumer cursor at zero would pin the
-  owner inbox's compaction floor forever, since compaction takes the minimum across consumers.
-- Agent messages are session-addressed and arrive through the Gateway. One source has one drain, which
-  waits on mailbox migration.
+Protocol-1 gateways receive `unsupported` refusals for the removed protocol paths. The
+`Remove-by` shims are in `gatewayBridge.ts` and `ownerOpIntake.ts`.
 
 ## Add Device
 
@@ -101,11 +93,11 @@ no TTL.
   a plugin is disabled. `threadDockSlots` stays outside the caught-dispatch path, because Compose
   values cannot cross a non-inline lambda.
 - **Inbound pipeline:** handlers receive wire fields and file names, never file bytes. Subscribers
-  run synchronously before `mailboxSync.commit`. A `SharedFlow` here breaks that ordering.
+  run synchronously before persistence commit.
 - **Row re-render** (`ThreadRenderer`): any changing row payload must enter its fingerprint. JS
   bridge state mutates in place and intentionally does not.
 - **Presence authority** (`Presence.kt`): the gateway's own presence is pushed; other machines are
-  discovered by polling. A bare presence value does not reveal which channel produced it.
+  discovered by `/discover`. A bare presence value does not reveal which channel produced it.
 - **Presence residue** (`presence-authority-residue.test.ts`): `status` is private, `Presence`
   construction is private, and consumers use authority-bearing members such as `isLive`, `isOnline`,
   `mayHavePane`, `authoritative`. Do not restore writable status strings.
@@ -133,10 +125,9 @@ no TTL.
   tmux-wrapped rows.
 - **Designer plugin** (`plugins/designer/`): owns design cards, live content-keyed rendering, and
   per-team `DesignStore`.
-- **Unread tracking** (`ReadAnchor.kt`, `thread.js`): anchors match mailbox rows by epoch and
+- **Unread tracking** (`ReadAnchor.kt`, `thread.js`): anchors match inbox rows by epoch and
   sequence equality. Reads drain by scroll position.
-- **Idle pushback** (`IdlePushbackManager.kt`): owns silent-poll backoff and aligned `AlarmManager`
-  wakeups.
+- **Idle pushback** (`IdlePushbackManager.kt`): owns aligned `AlarmManager` wakeups.
 - **Playback requests** (`PlaybackRequests.kt`, `SttsPlayer.kt`): registry state mints and queues
   each event under the same lock as its transition. `PlaybackResidueTest` owns the single-mint
   boundary. Warm-up holds no claim and purge reaches it through the epoch.

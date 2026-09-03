@@ -61,7 +61,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (String) -> Unit) {
 	val state by repo.state.collectAsState()
-	// Re-derive rows on a discovery change (a state chip flips) or after an add/remove.
 	var refresh by remember { mutableStateOf(0) }
 	val tenants = remember(state.teams, refresh) { repo.domainAdmin.hostedTenants() }
 	var showAdd by remember { mutableStateOf(false) }
@@ -210,7 +209,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 //  Hosted-tenant detail (invite QR + Copy / Save + Remove + Link)
 
 /** A hosted tenant's detail: generate the one-time invite for the friend to scan, regenerate it,
- * Remove the tenant, or Link with it. The invite blob carries the route Gateway's transport creds
+ * Remove the tenant, or Link with it. The invite blob carries the Router transport credentials
  * plus the pending {domainId, nonce}; the friend's app first-roots their Domain on scan. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

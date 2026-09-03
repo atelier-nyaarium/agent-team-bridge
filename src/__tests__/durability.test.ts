@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 
 ////////////////////////////////
 //  Delivery-state durability
 //
 //  The gateway snapshots its in-memory delivery state to disk and reloads it on boot so a
-//  restart/deploy no longer 404s a reply ("no pending request") or loses queued mail.
+// Replies remain pending until delivery.
 //  These pin the snapshot/restore round-trips the DurableStore wires to disk.
 
 describe("delivery-state durability", () => {
@@ -37,25 +36,5 @@ describe("delivery-state durability", () => {
 		b.deliver("conv:x", "fresh"); // a registration raced the restore
 		b.restore(snap);
 		expect(b.poll("conv:x")).toBe("fresh"); // the live entry wins
-	});
-
-	it("mailbox boxes survive snapshot/restore keeping epoch, seq, and entries", () => {
-		const a = new DeviceMailboxStore();
-		const box = a.ensure("console-1");
-		box.append({ kind: "reply", session_id: "s", body: "hi" });
-		box.append({ kind: "reply", session_id: "s", body: "there" });
-		const epoch = box.epoch;
-		const hw = box.highWater;
-
-		const snap = a.snapshot();
-		const b = new DeviceMailboxStore();
-		b.restore(snap);
-
-		const r = b.get("console-1");
-		expect(r).toBeDefined();
-		expect(r?.epoch).toBe(epoch); // epoch preserved -> no spurious flip on the console
-		expect(r?.highWater).toBe(hw); // seq preserved -> no re-seen entries
-		const drained = r?.drain(0, epoch);
-		expect(drained?.entries.map((e) => e.body)).toEqual(["hi", "there"]); // entries survived
 	});
 });

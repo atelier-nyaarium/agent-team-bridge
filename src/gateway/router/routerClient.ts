@@ -39,8 +39,6 @@ export interface RouterClientConfig {
 	gatewayId: string;
 	// Domain id used with the Gateway id as the Router connection key.
 	domainId: string;
-	// The console relay pump validates the payload.
-	onConsoleRelay?: (frame: unknown) => void;
 	// The gateway relay pump validates the payload.
 	onGatewayRelay?: (frame: unknown) => void;
 	// The handshake pump validates the payload.
@@ -218,10 +216,6 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			}
 
 			switch (frame.type) {
-				case "console_relay": {
-					config.onConsoleRelay?.(frame);
-					break;
-				}
 				case "gateway_relay": {
 					config.onGatewayRelay?.(frame);
 					break;

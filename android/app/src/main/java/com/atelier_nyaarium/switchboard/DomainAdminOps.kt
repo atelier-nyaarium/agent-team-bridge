@@ -12,7 +12,7 @@ import org.json.JSONObject
 internal class DomainAdminOps(private val repo: ChatRepository) {
 	/** Rename this owner's own display name: owner-sign a SET_ADMIN_NAME op over the admin Domain and
 	 * submit it Router-direct. On success cache the new name + reflect it immediately (the Router pushes
-	 * a domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
+	  */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
@@ -71,10 +71,10 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	////////////////////////////////
 	//  Networks you host (guest tenants the admin pre-stages)
 
-	/** The guest tenants this owner has staged, each with its discovery-derived state
+	 /**
 	 * (awaiting-setup -> offline -> online). The locally-persisted rows supply the label + the
 	 * invite nonce (so a row can re-render its QR before the friend's gateway ever appears);
-	 * discovery upgrades the state once the friend roots + brings a gateway online. */
+	  */
 	fun hostedTenants(): List<HostedTenant> {
 		val stored = loadHostedTenants()
 		val teams = repo._state.value.teams
@@ -121,7 +121,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 
 	/** Build the invite blob a hosted tenant's QR encodes: the console transport creds the admin was
 	 * itself provisioned with (this owner's own blob) plus the pending tenant's {domainId, nonce}.
-	 * The friend reaches the SAME Router as the admin and first-roots over its /relay path; the
+	 * The friend reaches the SAME Router as the admin and first-roots over its enrollment path; the
 	 * admin's own CONSOLE_BRIDGE_TOKEN is what authorizes the friend's first_root there. The route
 	 * Gateway's bootstrap-transport would instead hand over the gateway bearer, which that path does
 	 * not accept. The JSON is what the paste / file-import path also accepts. */

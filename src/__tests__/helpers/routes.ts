@@ -76,7 +76,6 @@ export function makeCtx(overrides: CtxOverrides = {}): RoutesDeps {
 			localGatewayId: config.localGatewayId,
 		}),
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve({ ok: false })),
-		mailboxStore: overrides.mailboxStore,
 		sessionStore: overrides.sessionStore,
 		presence:
 			overrides.presence ||

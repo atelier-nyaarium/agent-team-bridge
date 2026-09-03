@@ -37,7 +37,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
-import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -100,11 +99,8 @@ fun TerminalView(
 	// A wake has been asked for (a create/wake opened this thread, or the Wake button was tapped), so
 	// the off-session screen reads "Waking..." and offers Retry rather than a first-time "Wake".
 	// Seeded from the repository's own outstanding receipt rather than from a status word: this
-	// device's request is the freshest fact it holds, and on a non-route Gateway it is up to a
-	// discovery interval ahead of anything the roster will say.
 	var wakeRequested by remember(team) { mutableStateOf(presence?.waking(System.currentTimeMillis()) == true) }
 	// One probing peek per mount whenever the row is not authoritative. A POLLED "available" is up to
-	// DISCOVERY_REFRESH_MS old and is therefore NOT evidence that the session is asleep, but peeking
 	// it forever is the cost the idle gate exists to avoid. One op settles it: a pane latches
 	// everSawTmuxFrame and the loop carries on, and an absent one falls back to the gate.
 	var probed by remember(team) { mutableStateOf(false) }

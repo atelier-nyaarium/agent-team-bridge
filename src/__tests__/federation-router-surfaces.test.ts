@@ -51,7 +51,7 @@ describe("federation router surfaces", () => {
 	});
 
 	it("keeps health token-free and gates console requests", async () => {
-		const surface = new ConsoleSurface({ port: 0, authToken: "secret", getBridge: () => null });
+		const surface = new ConsoleSurface({ port: 0, authToken: "secret" });
 		expect((await surface.handleRequest(new Request("https://router/health"))).status).toBe(405);
 		expect(
 			(await surface.handleRequest(new Request("https://router/console", { method: "POST", body: "{}" }))).status,
@@ -64,7 +64,6 @@ describe("federation router surfaces", () => {
 		const surface = new ConsoleSurface({
 			port: 0,
 			authToken: "secret",
-			getBridge: () => null,
 			onReach: () => ({
 				publicHost: "switchboard.example.com",
 				publicPort: 8443,

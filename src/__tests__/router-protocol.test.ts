@@ -4,9 +4,6 @@ import { RouterInboundFrameSchema, ToolCallFrameSchema } from "../shared/router-
 ////////////////////////////////
 //  Router bridge frame schemas
 //
-//  The boundary union the Router client parses inbound frames with. The console_relay
-//  member is deliberately loose (the relay pump owns full validation); the
-//  rest are exact decode shapes.
 
 describe("Router inbound frame union", () => {
 	it("rejects a retired tool_registry frame (the tool proxy is gone)", () => {
@@ -24,19 +21,6 @@ describe("Router inbound frame union", () => {
 
 	it("accepts tool_error with callId null (the Router sends it for unattributable failures)", () => {
 		const result = RouterInboundFrameSchema.safeParse({ type: "tool_error", callId: null, error: "invalid JSON" });
-		expect(result.success).toBe(true);
-	});
-
-	it("keeps console_relay loose - the relay pump owns full validation", () => {
-		const result = RouterInboundFrameSchema.safeParse({
-			type: "console_relay",
-			v: 1,
-			device: "pixel",
-			conversationId: "conv-1",
-			opId: "op-1",
-			op: { kind: "register" },
-			some_future_field: true,
-		});
 		expect(result.success).toBe(true);
 	});
 
@@ -63,9 +47,9 @@ describe("tool_call frame", () => {
 		const frame = ToolCallFrameSchema.parse({
 			type: "tool_call",
 			callId: "c2",
-			action: "console_relay_reply",
+			action: "value_result",
 			params: { opId: "op-1", ok: true },
 		});
-		expect(frame.action).toBe("console_relay_reply");
+		expect(frame.action).toBe("value_result");
 	});
 });

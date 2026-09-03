@@ -11,7 +11,6 @@ import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { type BoardReply, isBoardReply } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import type { Identity } from "../shared/crypto.js";
-import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
@@ -61,10 +60,8 @@ import { ContentEnvelopeSchema } from "../shared/schemasContentKey.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { CapabilityStore } from "./console/capabilityStore.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
-import { createConsoleSealer } from "./console/consoleSealer.js";
 import type { TrustedCatalogProject } from "./console/consoleTypes.js";
 import { DurableOpStore } from "./console/durableOpStore.js";
-import { createConsoleRelayPump } from "./console/relayPump.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { activateStaged, openBootstrapBundle, recoverStaging, stageBootstrap } from "./federation/bootstrapInstall.js";
@@ -186,13 +183,9 @@ export async function startGateway(): Promise<void> {
 	const wakeCoordinator = new WakeCoordinator();
 	const hostOpCoordinator = new HostOpCoordinator();
 
-	const mailboxStore = new DeviceMailboxStore();
-
 	store.startCleanup();
-	mailboxStore.startCleanup();
 
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
-	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
 	const durableOpStore = openDurable(DATA_DIR, "op-idempotency", (d) => new DurableOpStore(d));
 	const pendingDeliveries = openDurable(DATA_DIR, "pending-deliveries", (d) => new PendingDeliveryStore(d));
 	const inboxClaims = createInboxClaims(DATA_DIR);
@@ -268,15 +261,8 @@ export async function startGateway(): Promise<void> {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
 	});
-	restoreDurable("mailboxes", () => {
-		const boxes = mailboxDurable.load();
-		if (boxes && typeof boxes === "object")
-			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
-	});
 	restoreDurable("session-resume", () => sessionStore.restore(restoredSessions));
-	console.log(
-		`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size} ops=${durableOpStore.size}`,
-	);
+	console.log(`[durability] restored jobs=${store.size} resume=${sessionStore.size} ops=${durableOpStore.size}`);
 
 	const planeRegistry = new PlaneRegistry();
 	const presence = new PresenceFacade({
@@ -363,13 +349,6 @@ export async function startGateway(): Promise<void> {
 					cleanShutdown ? jobsDurable.saveChecked(store.snapshot()) : jobsDurable.save(store.snapshot()),
 			},
 			{
-				name: "mailboxes",
-				run: () =>
-					cleanShutdown
-						? mailboxDurable.saveChecked(mailboxStore.snapshot())
-						: mailboxDurable.save(mailboxStore.snapshot()),
-			},
-			{
 				name: "session-sweep",
 				run: () => {
 					const sweptTeams = sessionStore.sweep(SESSION_RESUME_TTL_MS, {
@@ -421,7 +400,6 @@ export async function startGateway(): Promise<void> {
 	const shutdown = () => {
 		try {
 			jobsDurable.saveChecked(store.snapshot());
-			mailboxDurable.saveChecked(mailboxStore.snapshot());
 			sessionResumeDurable.saveChecked(sessionResumeSnapshot(true));
 			persistDelivery(true);
 		} catch (err) {
@@ -629,7 +607,6 @@ export async function startGateway(): Promise<void> {
 				},
 			},
 		});
-		const consoleSealer = createConsoleSealer(federationIdentity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		if (!allowlist.selfAdmission(federationIdentity.sign.pub))
 			logAdmitGatewayQr(federationIdentity, localGatewayId);
@@ -646,9 +623,6 @@ export async function startGateway(): Promise<void> {
 			domainId,
 			reach: loadRouterReach(federationDir),
 			onReach: (learned) => saveRouterReach(federationDir, learned),
-			onConsoleRelay: (frame) => {
-				slice.handlers?.consoleRelay(frame);
-			},
 			onGatewayRelay: (frame) => {
 				slice.handlers?.gatewayRelay(frame);
 			},
@@ -811,7 +785,6 @@ export async function startGateway(): Promise<void> {
 							body: message,
 						},
 						dedupeKey: `key-request:${domainId}:${localGatewayId}`,
-						provenance: "message",
 						origin: "local",
 						label: "key-request",
 					});
@@ -833,7 +806,6 @@ export async function startGateway(): Promise<void> {
 			shareState,
 			coordinator,
 			sealer,
-			consoleSealer,
 			routerClient,
 			contentKeyStore,
 			boardClient,
@@ -980,9 +952,6 @@ export async function startGateway(): Promise<void> {
 		hostSpawnPoints,
 		wakeCoordinator,
 		hostOpCoordinator,
-		onVirtualPeerEvicted: (conversationId) => {
-			fed()?.handlers?.evictConsolePeer(conversationId);
-		},
 		onTeamConnect: (team) => {
 			if (team === "host") pushPresenceWatch(true);
 			const handed = channelDeliveries.drain(team);
@@ -1040,7 +1009,6 @@ export async function startGateway(): Promise<void> {
 			sessionStore,
 			presence,
 			hostSpawnPoints,
-			mailboxStore,
 			routerClient: f?.routerClient ?? null,
 			sealer: f?.sealer ?? null,
 			crossDomainPeers: f?.crossDomainPeers ?? null,
@@ -1111,7 +1079,6 @@ export async function startGateway(): Promise<void> {
 			fetchBlobFromGateway: routes.fetchBlobFromGateway,
 			registry,
 			conversationRegistry,
-			mailboxStore,
 			routes,
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
@@ -1184,12 +1151,6 @@ export async function startGateway(): Promise<void> {
 			durableOpStore,
 		});
 		consoleDeliveryHandler = consoleHandler.handleDelivery;
-		const consoleRelay = createConsoleRelayPump({
-			sealer: federation.consoleSealer,
-			handleFrame: consoleHandler.handleFrame,
-			sendReply: (reply) =>
-				federation.routerClient.callTool("console_relay_reply", reply as unknown as Record<string, unknown>),
-		});
 		const valueOp = (raw: unknown): void => {
 			void (async () => {
 				const frame = ValueOpFrameSchema.safeParse(raw);
@@ -1287,11 +1248,9 @@ export async function startGateway(): Promise<void> {
 		});
 
 		return {
-			consoleRelay,
 			gatewayRelay,
 			valueOp,
 			crossDomainHandshake,
-			evictConsolePeer: (conversationId) => consoleHandler.removePeer(conversationId),
 			presenceSource,
 		};
 	}

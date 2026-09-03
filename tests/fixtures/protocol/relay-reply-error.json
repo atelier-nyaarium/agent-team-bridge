@@ -1,6 +1,0 @@
-{
-	"type": "console_relay_reply",
-	"v": 1,
-	"opId": "op-send-9",
-	"error": "Unknown team \"nope\""
-}

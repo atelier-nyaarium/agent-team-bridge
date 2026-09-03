@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 
 /**
  * Pure helpers for the cross-Domain-presence UI (a linked friend's live sessions, pushed/pulled via
@@ -55,12 +54,12 @@ fun crossDomainFreshness(
  * the whole list on one response would forget every OTHER already-known Domain's version, making the
  * Gateway needlessly re-ship them as "unknown" on the next poll. */
 fun upsertKnownCrossDomainPresenceVersions(
-	current: List<CrossDomainPresenceKnownVersion>,
+	current: Map<String, Long>,
 	entries: List<CrossDomainPresenceEntry>,
-): List<CrossDomainPresenceKnownVersion> {
-	val byDomain = current.associateByTo(LinkedHashMap()) { it.domainId }
+): Map<String, Long> {
+	val byDomain = current.toMutableMap()
 	for (e in entries) {
-		byDomain[e.domainId] = CrossDomainPresenceKnownVersion(e.domainId, e.version.epoch, e.version.version)
+		byDomain[e.domainId] = e.version.version
 	}
-	return byDomain.values.toList()
+	return byDomain
 }

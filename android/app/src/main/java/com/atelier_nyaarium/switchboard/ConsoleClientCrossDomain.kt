@@ -18,7 +18,6 @@ import java.util.UUID
 ////////////////////////////////
 //  Cross-Domain trust ops
 //
-//  Thin wrappers over the same seal/relay/poll path as the ops above, all defaulting to the route
 //  Gateway: the handshake coordinator, the per-session share state, and the unlink cleanup all run on
 //  this owner's own Gateway (the friend Gateway is reached through the mesh, not sealed to directly).
 //  Reads run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
@@ -106,8 +105,8 @@ suspend fun ConsoleClient.crossDomainUnshare(
 suspend fun ConsoleClient.crossDomainListShares(): CrossDomainListSharesResult =
 	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
 
-/** The linked friend Domains from the route Gateway's cross-Domain peer set, so a just-linked
- * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
+ /**
+ * peer is visible (and its detail reachable) before any of its sessions surface in the presence plane. A
  * fresh read each call (never cached). */
 suspend fun ConsoleClient.crossDomainListPeers(): CrossDomainListPeersResult =
 	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")

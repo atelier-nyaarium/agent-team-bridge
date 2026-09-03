@@ -13,7 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Debug-only log stream. This build writes NO on-device file. DEBUG builds buffer the last RING_CAP
- * lines and flush them to the relay's own POST /ingest once per poll cycle; release builds emit logcat only
+ * lines and flush them to the Router POST /ingest once per poll cycle; release builds emit logcat only
  * (every ring/ingest path sits inside `if (BuildConfig.DEBUG)`). Lines also go to logcat under the
  * `sb/<tag>` tag.
  *
@@ -45,7 +45,6 @@ object DebugLog {
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
 	@Volatile private var ingestConversationId: String? = null
-	// The relay's own pinned client (cluster CA or Router leaf), so the debug channel rides the
 	// exact trust and transport the real one does.
 	@Volatile private var ingestClient: okhttp3.OkHttpClient? = null
 
@@ -97,7 +96,6 @@ object DebugLog {
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
 			ingestConversationId = prov.conversationId
-			// The SAME client the relay path uses, not a second HTTP stack with its own trust. The two
 			// Android stacks reached the same host with different outcomes on one device (OkHttp
 			// connected through the LAN hairpin, HttpURLConnection timed out), and a debug channel
 			// that dies where the real one lives is worse than none: it says "nothing is wrong".

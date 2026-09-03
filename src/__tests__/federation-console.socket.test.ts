@@ -2,16 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { afterEach, describe, expect, it } from "vitest";
 import { signTrustPendingRequest } from "../shared/federation-proofs.js";
-import {
-	CONSOLE_TOKEN,
-	callTool,
-	type Frame,
-	nextFrame,
-	openGateway,
-	type RouterFixture,
-	registerParams,
-	startRouter,
-} from "./helpers/federation-router.js";
+import { CONSOLE_TOKEN, openGateway, type RouterFixture, startRouter } from "./helpers/federation-router.js";
 
 describe("federation router console surface", () => {
 	let fixture: RouterFixture | null = null;
@@ -61,126 +52,6 @@ describe("federation router console surface", () => {
 		expect((await request("bad", "wrong")).status).toBe(401);
 	});
 
-	it("bounces retryable when no gateway is connected", async () => {
-		fixture = await startRouter();
-		expect((await request("offline")).status).toBe(503);
-	});
-
-	// Waiting for the relay frame, never a fixed sleep. The Router holds the request and THEN pushes
-	// to the gateway, so that frame arriving is proof the op is held and a reply will find it. A
-	// `setTimeout(10)` here instead was the whole flake: under load the reply arrived before the hold
-	// was registered, settleConsoleRelay found no pending entry and dropped it, and the request sat
-	// until the test timed out - failing in CI while passing on an idle laptop.
-	function relayReaches(gateway: WebSocket, opId: string): Promise<Frame> {
-		return nextFrame(gateway, (frame) => frame.type === "console_relay" && frame.opId === opId);
-	}
-
-	it("rejects a duplicate while the first request is held", async () => {
-		fixture = await startRouter();
-		const gateway = openGateway(fixture.port);
-		sockets.push(gateway);
-		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
-		await callTool(gateway, "gateway_register", registerParams(fixture));
-		// Attached BEFORE the request, or the frame can land before anyone is listening for it.
-		const held = relayReaches(gateway, "duplicate");
-		const first = request("duplicate");
-		await held;
-		const duplicate = await request("duplicate");
-		expect(duplicate.status).toBe(409);
-		gateway.send(
-			JSON.stringify({
-				type: "tool_call",
-				callId: "dup-reply",
-				action: "console_relay_reply",
-				params: { opId: "duplicate", ok: true, result: {} },
-			}),
-		);
-		expect((await first).status).toBe(200);
-	});
-
-	it("refuses a frame naming a gateway that is not connected, rather than substituting one", async () => {
-		// The connected gateway must NOT receive it. A frame is sealed to the box key of the gateway it
-		// names, so a substitute cannot open it and answers "unseal failed" - reporting a switched-off
-		// machine as a cryptography failure, which is what every console op against an offline second
-		// machine did.
-		fixture = await startRouter();
-		const gateway = openGateway(fixture.port);
-		sockets.push(gateway);
-		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
-		await callTool(gateway, "gateway_register", registerParams(fixture));
-		let delivered = false;
-		void relayReaches(gateway, "elsewhere").then(() => {
-			delivered = true;
-		});
-		const res = await requestBody("/console", {
-			opId: "elsewhere",
-			signerSignPub: "console",
-			sealed: { value: "opaque" },
-			targetGateway: "not-connected",
-		});
-		expect(res.status).toBe(503);
-		expect(delivered).toBe(false);
-	});
-
-	it("delivers a frame naming the connected gateway", async () => {
-		fixture = await startRouter();
-		const gateway = openGateway(fixture.port);
-		sockets.push(gateway);
-		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
-		await callTool(gateway, "gateway_register", registerParams(fixture));
-		const held = relayReaches(gateway, "named");
-		const pending = requestBody("/console", {
-			opId: "named",
-			signerSignPub: "console",
-			sealed: { value: "opaque" },
-			targetGateway: "laptop",
-		});
-		await held;
-		gateway.send(
-			JSON.stringify({
-				type: "tool_call",
-				callId: "named-reply",
-				action: "console_relay_reply",
-				params: { opId: "named", ok: true, result: {} },
-			}),
-		);
-		expect((await pending).status).toBe(200);
-	});
-
-	it("holds and settles a console relay through the gateway socket", async () => {
-		fixture = await startRouter();
-		const gateway = openGateway(fixture.port);
-		sockets.push(gateway);
-		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
-		await callTool(gateway, "gateway_register", registerParams(fixture));
-		const held = relayReaches(gateway, "settle");
-		const pending = request("settle");
-		await held;
-		gateway.send(
-			JSON.stringify({
-				type: "tool_call",
-				callId: "console-reply",
-				action: "console_relay_reply",
-				params: { opId: "settle", ok: true, result: { accepted: true } },
-			}),
-		);
-		expect((await pending).status).toBe(200);
-	});
-
-	it("resolves held requests during shutdown", async () => {
-		fixture = await startRouter();
-		const gateway = openGateway(fixture.port);
-		sockets.push(gateway);
-		await new Promise<void>((resolve) => gateway.addEventListener("open", () => resolve(), { once: true }));
-		await callTool(gateway, "gateway_register", registerParams(fixture));
-		const held = relayReaches(gateway, "shutdown");
-		const pending = request("shutdown");
-		await held;
-		const stopped = fixture.server.stop();
-		expect((await pending).status).toBe(503);
-		await stopped;
-	});
-
 	it("keeps public approval token-free while console remains gated", async () => {
 		fixture = await startRouter();
 		const approval = await fetch(`https://localhost:${fixture.port}/device-approval`, {
@@ -194,7 +65,7 @@ describe("federation router console surface", () => {
 
 	it("survives aborted bodies on every capped surface", async () => {
 		fixture = await startRouter();
-		for (const path of ["/console", "/relay", "/ingest", "/device-approval"]) {
+		for (const path of ["/console", "/ingest", "/device-approval"]) {
 			await abortBody(path);
 			await abortBody(path, true);
 		}

@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
 import com.atelier_nyaarium.switchboard.proto.DiscoverCoverage
 import com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection
 import com.atelier_nyaarium.switchboard.proto.PresencePlane
@@ -15,7 +14,7 @@ import org.junit.Test
 class PresenceOpsTest {
 	private class FakeHost : PresenceHost {
 		override val state = MutableStateFlow(ChatState())
-		override val localGatewayId = "local"
+		override val homeGatewayId = "local"
 		override var storedDisplayName = ""
 		override val forgottenUntil = mutableMapOf<String, Long>()
 		var slot: RouterStateSlot? = null
@@ -25,9 +24,6 @@ class PresenceOpsTest {
 
 		override suspend fun <T> withDrainMutex(block: suspend () -> T): T = block()
 		override suspend fun resetPlaneCursors() = Unit
-		override fun interruptDrain() = Unit
-		override suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>) = Unit
-		override suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>) = Unit
 		override suspend fun reportRead(team: String, epoch: Long, seq: Long) = Unit
 		override suspend fun fetchPresencePlanes() = null
 		override fun fetchConnectedGateways(): List<String>? = null
@@ -60,7 +56,6 @@ class PresenceOpsTest {
 		spawnPoints = emptyList(),
 	)
 
-	private fun answer(name: String) = TeamsAnswer(listOf(testTeam(name)))
 
 	@Test
 	fun restoreLastProjectionAppliesStoredSlotWithoutSelfBlocking() = runBlocking {
@@ -97,26 +92,4 @@ class PresenceOpsTest {
 		assertNull(host.slot)
 	}
 
-	@Test
-	fun domainLinkPresenceCallCannotLetAnOlderPullOverwriteLastRawTeams() = runBlocking {
-		val host = FakeHost()
-		val ops = PresenceOps(host)
-		ops.applyOwnerProjection(projection(2, "host.new"))
-		ops.applyDiscovery(answer("domain.local.host.old"), issuedAt = 0)
-		assertEquals("local.local.host.new", ops.lastRawTeams?.single()?.name)
-	}
-
-	@Test
-	fun staleDiscoveryAndPlanePresenceDoNothingButFreshOnesApply() = runBlocking {
-		val host = FakeHost()
-		val ops = PresenceOps(host)
-		ops.applyOwnerProjection(projection(2, "host.new"))
-		ops.applyDiscovery(answer("domain.local.host.stale"), issuedAt = 0)
-		ops.applyPlanePresence(listOf(testTeam("domain.local.host.stale")), issuedAt = 0)
-		assertEquals("local.local.host.new", ops.lastRawTeams?.single()?.name)
-		ops.applyDiscovery(answer("domain.local.host.fresh"), issuedAt = Long.MAX_VALUE)
-		assertEquals("domain.local.host.fresh", ops.lastRawTeams?.single()?.name)
-		ops.applyPlanePresence(listOf(testTeam("domain.local.host.latest")), issuedAt = Long.MAX_VALUE)
-		assertEquals("domain.local.host.latest", ops.lastRawTeams?.single()?.name)
-	}
 }

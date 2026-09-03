@@ -1,28 +1,18 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
-import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
-import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
-import com.atelier_nyaarium.switchboard.proto.PresenceVersion
-import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.SessionKey
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -125,24 +115,8 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	private val kick = Channel<Unit>(Channel.CONFLATED)
 
-	// Interrupts the currently held poll.
-	@Volatile private var pollInterrupt: CompletableDeferred<Unit>? = null
-
-	// Last applied presence versions.
-	@Volatile private var knownPresenceVersions: List<PresenceVersion> = emptyList()
-
-	// Last applied linked-peers version.
-	@Volatile private var knownLinkedPeersVersion: LinkedPeersVersion? = null
-
-	// Last applied read-anchor version.
-	@Volatile private var knownReadAnchorsVersion: ReadAnchorsVersion? = null
-
-	// Per-domain versions. Upsert, never replace.
-	@Volatile private var knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion> = emptyList()
 	@Volatile private var knownPlaneVersions: Map<String, Long> = emptyMap()
 
-	/** Serialize per-domain version updates. */
-	private val crossDomainVersionsMutex = Mutex()
 	private val drainMutex = Mutex()
 
 	/** One drain at a time, whichever transport carried the payload. */
@@ -169,11 +143,6 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		kick.trySend(Unit)
 	}
 
-	/** Interrupt the held poll. */
-	fun interrupt() {
-		pollInterrupt?.complete(Unit)
-	}
-
 	/** Cancel and join the loop. */
 	suspend fun stopAndJoin() {
 		pollJob?.cancelAndJoin()
@@ -190,11 +159,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	/** Reset cursors for cold boot. */
 	suspend fun resetPlaneCursors() {
-		knownPresenceVersions = emptyList()
-		knownLinkedPeersVersion = null
-		knownReadAnchorsVersion = null
 		knownPlaneVersions = emptyMap()
-		crossDomainVersionsMutex.withLock { knownCrossDomainPresenceVersions = emptyList() }
 	}
 
 	internal fun notePlane(name: String, version: Long) {
@@ -285,39 +250,6 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		repo.attachments.fetchPendingAttachments()
 	}
 
-	/** Prune removed Domain cursors. */
-	suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>) {
-		crossDomainVersionsMutex.withLock {
-			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions.filter { it.domainId in ownedDomainIds }
-		}
-	}
-
-	/** Upsert changed Domain cursors. */
-	suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>) {
-		crossDomainVersionsMutex.withLock {
-			knownCrossDomainPresenceVersions = upsertKnownCrossDomainPresenceVersions(knownCrossDomainPresenceVersions, entries)
-		}
-	}
-
-	/** Race the held poll against interruption. */
-	private suspend fun pollRacingFocusChange(block: suspend () -> ConsolePollResult): ConsolePollResult? =
-		coroutineScope {
-			val signal = CompletableDeferred<Unit>()
-			pollInterrupt = signal
-			try {
-				val pollDeferred = async { block() }
-				select<ConsolePollResult?> {
-					pollDeferred.onAwait { it }
-					signal.onAwait {
-						pollDeferred.cancel()
-						null
-					}
-				}
-			} finally {
-				pollInterrupt = null
-			}
-		}
-
 	private suspend fun drainOwnerInbox() {
 		withDrainMutex {
 			val outcome = drainTick(
@@ -349,7 +281,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					}
 					if (!repo.isVisible && repo.transportCoordinator.link() == ConsoleLink.POLL) {
 						drainOwnerInbox()
-						withTimeoutOrNull(ChatRepository.DISCOVERY_REFRESH_MS) { kick.receive() }
+						withTimeoutOrNull(ChatRepository.BACKGROUND_TICK_MS) { kick.receive() }
 						continue@pollLoop
 					}
 					} catch (e: Exception) {

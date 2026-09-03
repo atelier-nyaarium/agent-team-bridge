@@ -132,9 +132,6 @@ export class RouterServer {
 			hasLinkEdge: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
 			reach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
-			inbox: this.inbox,
-			blobCache: this.blobCache,
-			referenceHeld: this.referenceHeld,
 		});
 		this.consoleSockets = createConsoleSockets({
 			handleOwnerOp: (raw) => this.ownerOps.handle(raw),
@@ -198,7 +195,6 @@ export class RouterServer {
 			port: params.port,
 			authToken: params.consoleToken,
 			ingestFile: path.join(params.dataDir, "console-ingest.jsonl"),
-			getBridge: () => this.bridge,
 			onFirstRoot: async (op) => {
 				const result = await this.tenantAdmin.firstRoot(op);
 				if (result.ok) {
@@ -229,9 +225,6 @@ export class RouterServer {
 				};
 			},
 			onOwnerOp: (raw) => this.ownerOps.handle(raw),
-			inbox: this.inbox,
-			blobCache: this.blobCache,
-			referenceHeld: this.referenceHeld,
 		});
 		this.sweepTimer = setInterval(() => {
 			// Refuse imports during service.
@@ -248,7 +241,6 @@ export class RouterServer {
 			}
 		}, 60_000);
 		this.sweepTimer.unref?.();
-		this.bridge.setConsoleRelaySettler((opId, reply) => this.console.settleConsoleRelay(opId, reply));
 		this.approval = new PublicApproval({ port: params.port, onApproval: (op) => this.deviceApproval.handle(op) });
 	}
 
@@ -387,10 +379,10 @@ export class RouterServer {
 				? 8 * 1024
 				: url.pathname === "/ingest"
 					? 512 * 1024
-					: ["/relay", "/console"].includes(url.pathname)
+					: url.pathname === "/console"
 						? 67_108_864
 						: 0;
-		if (["/relay", "/console", "/ingest"].includes(url.pathname) && request.method === "POST") {
+		if (["/console", "/ingest"].includes(url.pathname) && request.method === "POST") {
 			const provided = request.headers["x-console-bridge-token"];
 			const token = Array.isArray(provided) ? provided[0] : provided;
 			const left = Buffer.from(token ?? "");
@@ -414,7 +406,7 @@ export class RouterServer {
 		if (url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")) {
 			return this.approval.handleRequest(webRequest);
 		}
-		if (["/relay", "/console", "/ingest"].includes(url.pathname)) {
+		if (["/console", "/ingest"].includes(url.pathname)) {
 			return this.console.handleRequest(webRequest);
 		}
 		return new Response("Not Found", { status: 404 });

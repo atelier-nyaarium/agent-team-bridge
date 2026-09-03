@@ -1,15 +1,9 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.board.BoardWriter
 import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
-import com.atelier_nyaarium.switchboard.proto.ConsoleBoardReadResult
-import com.atelier_nyaarium.switchboard.proto.ConsoleBoardWriteResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
-import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
-import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
-import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.InboxRow
@@ -30,6 +24,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.Serializable
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -37,6 +32,9 @@ internal fun inboxBodyAadKind(conversationId: String, opId: String): String = sc
 
 internal fun opResultAadKind(conversationId: String, opId: String): String =
 	"op.result\n$conversationId\n$opId"
+
+@Serializable
+internal data class OwnerOpAnswer(val ok: Boolean, val result: JsonElement? = null, val error: String? = null)
 
 /** Console bridge client. */
 class ConsoleClient internal constructor(
@@ -50,9 +48,8 @@ class ConsoleClient internal constructor(
 	private val contentKeyring: () -> com.atelier_nyaarium.switchboard.crypto.ContentKeyring = { ContentKeyring(store = store) },
 	private val postOwnerOpSender: (suspend (OwnerOp) -> JsonElement?)? = null,
 	private val rowSigner: ((RowEnvelope) -> String?)? = null,
-) : BoardWriter {
-	/** Seal and relay transport. */
-	internal val transport = ConsoleRelayTransport(prov, store)
+) {
+	internal val transport = ConsoleRelayTransport(prov, store, homeGatewayId)
 
 	/** Content-addressed blob staging. */
 	internal val blobs = BlobStore(BlobStore.root(store.filesDir))
@@ -126,7 +123,7 @@ class ConsoleClient internal constructor(
 		target: String,
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
-		timeoutMs: Long = ConsoleHttp.DEFAULT_RELAY_CALL_TIMEOUT_MS,
+		timeoutMs: Long = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS,
 	): JsonElement? {
 		val conversationId = transport.prov.conversationId
 		val sealed = sealOwnerPayload(
@@ -183,27 +180,27 @@ class ConsoleClient internal constructor(
 	}
 
 	private fun failureAnswer(answer: JsonElement): JsonElement = wireJson.encodeToJsonElement(
-		ConsoleReplyBody.serializer(),
-		ConsoleReplyBody(ok = false, error = answer.jsonObject["reason"]?.jsonPrimitive?.content ?: "owner operation refused"),
+		OwnerOpAnswer.serializer(),
+		OwnerOpAnswer(ok = false, error = answer.jsonObject["reason"]?.jsonPrimitive?.content ?: "owner operation refused"),
 	)
 
 	private fun transportFailureAnswer(): JsonElement = wireJson.encodeToJsonElement(
-		ConsoleReplyBody.serializer(),
-		ConsoleReplyBody(ok = false, error = "transport"),
+		OwnerOpAnswer.serializer(),
+		OwnerOpAnswer(ok = false, error = "transport"),
 	)
 
 	internal inline fun <reified T> deliveryResult(answer: JsonElement?, op: String): T {
 		if (answer == null) error("$op timed out")
-		return transport.resultOf(wireJson.decodeFromJsonElement<ConsoleReplyBody>(answer), op)
+		return transport.resultOf(wireJson.decodeFromJsonElement<OwnerOpAnswer>(answer), op)
 	}
 
 	internal fun requireDelivery(answer: JsonElement?, op: String) {
 		if (answer == null) error("$op timed out")
-		val body = wireJson.decodeFromJsonElement<ConsoleReplyBody>(answer)
+		val body = wireJson.decodeFromJsonElement<OwnerOpAnswer>(answer)
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")
 	}
 
-	internal fun defaultGatewayId(): String = (homeGatewayId?.invoke() ?: transport.routeGateway)?.takeIf { it.isNotEmpty() }
+	internal fun defaultGatewayId(): String = homeGatewayId?.invoke()?.takeIf { it.isNotEmpty() }
 		?: error("No home Gateway admitted yet")
 
 	internal fun sessionAddressOf(target: String): String {
@@ -213,7 +210,7 @@ class ConsoleClient internal constructor(
 
 	internal inline fun <reified T> valueResult(answer: JsonElement?, op: String): T {
 		if (answer == null) error("$op timed out")
-		return transport.resultOf(wireJson.decodeFromJsonElement<ConsoleReplyBody>(answer), op)
+		return transport.resultOf(wireJson.decodeFromJsonElement<OwnerOpAnswer>(answer), op)
 	}
 
 internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String = UUID.randomUUID().toString()): JsonElement? {
@@ -258,16 +255,9 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 					),
 				).toString(Charsets.UTF_8),
 			)
-			wireJson.encodeToJsonElement(ConsoleReplyBody.serializer(), ConsoleReplyBody(ok = true, result = plain))
+			wireJson.encodeToJsonElement(OwnerOpAnswer.serializer(), OwnerOpAnswer(ok = true, result = plain))
 		}.onFailure { DebugLog.log("Console", "value result open failed opId=$opId") }.getOrNull()
 	}
-
-	/** Current route Gateway id. */
-	var routeGateway: String?
-		get() = transport.routeGateway
-		set(value) {
-			transport.routeGateway = value
-		}
 
 	/** Leaf-pinned Router preflight. */
 	suspend fun apiReachable(): String {
@@ -318,32 +308,6 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		}
 	}
 
-	/** Claim the mailbox and report capabilities. */
-	suspend fun register(enabledPlugins: List<EnabledPlugin>? = null): ConsoleRegisterResult = transport.resultOf(
-		transport.relay(
-			ConsoleOp.Register(
-				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
-				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
-				enabledPlugins = enabledPlugins,
-			),
-		),
-		"register",
-	)
-
-	/** List canonical sessions. */
-	internal suspend fun teams(localGatewayId: String = ""): TeamsAnswer {
-		val body = transport.relay(ConsoleOp.ListTeams)
-		// Preserve the prior list on failure.
-		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
-		val result =
-			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
-		return TeamsAnswer(result.teams.map { teamInfoToTeam(it, localGatewayId) }, result.coverage, result.spawnPoints)
-	}
-
-	// Return an empty list on failure.
-	suspend fun listTeams(): List<String> =
-		runCatchingCancellable { teams().teams.map { it.name } }.getOrDefault(emptyList())
-
 	/** Send a message. */
 	suspend fun send(
 		to: String,
@@ -353,7 +317,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		domainId: String? = null,
 	): SendResult {
 		// Blob holder Gateway.
-		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: transport.store.loadGatewayId()
+		val local = defaultGatewayId()
 		val wireFiles = files.map { f ->
 			ChannelFile(
 				filename = f.name,
@@ -371,34 +335,11 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		val op = ConsoleOp.Send(to = to, domainId = crossDomain, body = body, files = wireFiles.ifEmpty { null })
 		// Cross-Domain sends seal locally.
 		val answer = sendDeliveryOp(sessionAddressOf(to), op, opId)
-		val replyBody = answer?.let { wireJson.decodeFromJsonElement<ConsoleReplyBody>(it) }
+		val replyBody = answer?.let { wireJson.decodeFromJsonElement<OwnerOpAnswer>(it) }
 		val status = replyBody?.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
 		return SendResult(ok = replyBody?.ok == true, status = status.orEmpty(), error = replyBody?.error ?: answer?.let { null } ?: "send timed out")
 	}
 
-	/** Read one Gateway's board half. */
-	suspend fun boardRead(gatewayId: String): ConsoleBoardReadResult =
-		transport.resultOf(transport.relay(ConsoleOp.BoardRead, targetGateway = gatewayId), "board_read")
-
-	/** Write a board mutation. Refusals retire; errors retry. */
-	override suspend fun boardWrite(op: ConsoleOp, gatewayId: String, opId: String): List<String> {
-		val body = transport.relay(op, opId, targetGateway = gatewayId)
-		// Report dropped attachments.
-		if (body.ok) {
-			// Do not retry an applied write.
-			return runCatching { transport.resultOf<ConsoleBoardWriteResult>(body, "board_write").dropped }
-				.getOrNull()
-				.orEmpty()
-		}
-		val error = body.error ?: ""
-		// Refusals use a distinct prefix.
-		if (error.startsWith(BOARD_REFUSED_PREFIX)) throw BoardRefused(error.removePrefix(BOARD_REFUSED_PREFIX).trim())
-		error("board write failed: ${error.ifEmpty { "unknown error" }}")
-	}
-
-	/** Check whether a Gateway has the complete blob. */
-	override suspend fun boardBytesReady(blobId: String, gatewayId: String): Boolean =
-		blobStat(blobId, gatewayId).complete
 }

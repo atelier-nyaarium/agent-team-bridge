@@ -1,0 +1,14 @@
+{
+	"envelope": {
+		"origin": { "kind": "router", "domainId": "domain-a" },
+		"opKey": { "conversationId": "conversation-a", "opId": "op-1" },
+		"epoch": "clear",
+		"kind": "op_result",
+		"contentRefs": []
+	},
+	"producerSig": "n4/6y12EZZMlfAVz6NSviFifiRvHtg24jAGLE36FRb/Oi0IEdTWA/kZ+u9rxWcLw9Car9y3Lw8UEMnsAzOxRDA==",
+	"body": { "status": "ok" },
+	"seq": 1,
+	"acceptedAt": 1717171717171,
+	"size": 32
+}

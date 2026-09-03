@@ -65,8 +65,7 @@ data class Provisioning(
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
-/** The owner enroll envelope: `enrollOp` (not `op`) routes to the Router's enrollment coordinator,
- * which answers an EnrollResult directly instead of relaying to a Gateway. */
+/** The owner enroll envelope: `enrollOp` routes to the Router's enrollment coordinator. */
 @Serializable
 internal data class EnrollEnvelope(
 	val device: String,
@@ -83,13 +82,11 @@ internal data class EnrollEnvelope(
 // PINNED_*/HELD_*/ROUTER_HOLD_MS constants; see their comment for the general rule.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
-/** First-root POST body: a top-level `firstRoot` field routes to the Router's console-bridge
- * firstRoot intake, decided at the Router and never relayed to a Gateway. */
+/** First-root POST body: a top-level `firstRoot` field routes to the Router's first-root intake. */
 @Serializable
 internal data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
 
-/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to the Router's
- * console-bridge enroll-handshake broker, a dumb relay never sent to a Gateway. */
+/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to the Router's broker. */
 @Serializable
 internal data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
 

@@ -20,7 +20,7 @@ class GroupByGatewayTest {
 		// The reported bug: a second machine registers, relays, and draws nothing, because the roster
 		// it contributes to is built from session rows and it has none.
 		val rows = listOf(team("alice.sakura.claude"))
-		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "alice", localGatewayId = "sakura")
+		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "alice", homeGatewayId = "sakura")
 		assertEquals(listOf("sakura", "ql-2815"), keys(groups))
 		assertEquals(emptyList<Team>(), groups.last().second)
 	}
@@ -28,7 +28,7 @@ class GroupByGatewayTest {
 	@Test
 	fun anAdmittedGatewayWithSessionsIsNotDrawnTwice() {
 		val rows = listOf(team("alice.ql-2815.claude"))
-		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "alice", localGatewayId = "sakura")
+		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "alice", homeGatewayId = "sakura")
 		assertEquals(1, groups.count { it.first.gatewayId == "ql-2815" })
 		assertEquals(rows, groups.first { it.first.gatewayId == "ql-2815" }.second)
 	}
@@ -36,7 +36,7 @@ class GroupByGatewayTest {
 	@Test
 	fun theRouteGatewaySortsFirst() {
 		val rows = listOf(team("alice.aaa.claude"), team("alice.sakura.claude"))
-		val groups = groupByGateway(rows, listOf("zzz"), adminDomainId = "alice", localGatewayId = "sakura")
+		val groups = groupByGateway(rows, listOf("zzz"), adminDomainId = "alice", homeGatewayId = "sakura")
 		assertEquals("sakura", keys(groups).first())
 	}
 
@@ -45,7 +45,7 @@ class GroupByGatewayTest {
 		// A machine can only be named through its Domain, and nothing here acts on a guessed one. The
 		// route Gateway needs none, since a bare target already names it.
 		val rows = listOf(team("local.sakura.claude", domainId = null))
-		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "", localGatewayId = "sakura")
+		val groups = groupByGateway(rows, listOf("sakura", "ql-2815"), adminDomainId = "", homeGatewayId = "sakura")
 		assertEquals(listOf("sakura"), keys(groups))
 	}
 
@@ -53,14 +53,14 @@ class GroupByGatewayTest {
 	fun theRouteGatewayIsDrawnWithNoSessionsAnywhere() {
 		// A machine whose daemon is up but which holds no devcontainers and no sessions contributes no
 		// rows at all, and its owner had nothing to press.
-		val groups = groupByGateway(emptyList(), listOf("sakura"), adminDomainId = "", localGatewayId = "sakura")
+		val groups = groupByGateway(emptyList(), listOf("sakura"), adminDomainId = "", homeGatewayId = "sakura")
 		assertEquals(listOf("sakura"), keys(groups))
 		assertEquals(emptyList<Team>(), groups.single().second)
 	}
 
 	@Test
 	fun anEmptyRosterInventsNothing() {
-		val groups = groupByGateway(emptyList(), emptyList(), adminDomainId = "alice", localGatewayId = "sakura")
+		val groups = groupByGateway(emptyList(), emptyList(), adminDomainId = "alice", homeGatewayId = "sakura")
 		assertEquals(emptyList<String>(), keys(groups))
 	}
 
