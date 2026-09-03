@@ -23,7 +23,7 @@ class BoardSealing(
 
 	fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
 		val epoch = env.epoch.toInt()
-		val key = keyring.keyFor(epoch) ?: return null
+		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		return runCatching {
 			Crypto.openContent(env, key, aad(epoch, kind, entryId)).toString(Charsets.UTF_8)
 		}.getOrNull()

@@ -5,7 +5,6 @@ import androidx.compose.runtime.mutableStateListOf
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.BoardRefused
 import com.atelier_nyaarium.switchboard.ClearsOnReprovision
-import com.atelier_nyaarium.switchboard.ConsoleClient
 import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.localFieldOrSelf
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
@@ -39,9 +38,6 @@ interface BoardWriter {
 	/** Presence check only. */
 	suspend fun boardBytesReady(blobId: String, gatewayId: String): Boolean = true
 }
-
-/** Named fields prevent positional misuse. */
-data class PendingFetch(val entryId: String, val blobId: String, val holder: String)
 
 /** `currentId` identifies the displayed branch. */
 data class BoardLiveLine(
@@ -97,15 +93,13 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	}
 
 	val knownVersion: TaskBoardVersion?
-		get() = blob.gateways[routeGatewayId()]?.version
+		get() = null
 
 	private fun routeGatewayId(): String = store.loadGatewayId()
 
 	/** Empty or incomplete state cannot authorize deletion. */
 	val boardIsKnown: Boolean
-		get() = loadedCleanly &&
-			blob.routerRevision > 0 &&
-			blob.gateways.values.all { it.entries.isNotEmpty() }
+		get() = loadedCleanly && blob.routerRevision > 0
 
 	private fun load(): BoardBlob {
 		val raw = store.loadTaskBoard() ?: return BoardBlob()
@@ -123,21 +117,27 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		revision.longValue++
 	}
 
-	fun mergedEntries(gatewayId: String, now: Long = System.currentTimeMillis()): List<BoardEntry> =
-		mergeBoardSnapshot(blob.gateways[gatewayId]?.entries ?: emptyList(), blob.queue, gatewayId, now)
+	fun mergedEntries(gatewayId: String, now: Long = System.currentTimeMillis()): List<BoardEntry> {
+		val current = snapshot()
+		return mergeBoardSnapshot(routerEntries(current), current.queue, gatewayId, now)
+	}
 
 	val routerRevision: Long
-		get() = blob.routerRevision
+		get() = snapshot().routerRevision
 
-	fun storedById(): Map<String, BoardStoredEntry> = blob.stored.associateBy { it.clear.id }
+	fun storedById(): Map<String, BoardStoredEntry> = snapshot().stored.associateBy { it.clear.id }
 
 	/** Null before the device roots a Domain. */
 	@Volatile var sealing: (() -> BoardSealing?)? = null
 
-	fun routerEntries(): List<BoardEntry> {
-		val open = sealing?.invoke() ?: return applyPending(emptyList(), blob.pending)
-		return applyPending(renderRouterBoard(open).entries, blob.pending)
+	fun snapshot(): BoardBlob = synchronized(stateLock) { blob }
+
+	private fun routerEntries(current: BoardBlob): List<BoardEntry> {
+		val open = sealing?.invoke() ?: return applyPending(emptyList(), current.pending)
+		return applyPending(renderBoard(current.stored, open, current.text).entries, current.pending)
 	}
+
+	fun routerEntries(): List<BoardEntry> = routerEntries(snapshot())
 
 	fun pendingWrites(): List<PendingWrite> = blob.pending
 
@@ -179,8 +179,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	/** Cache rendered text across epoch rotation. */
 	fun renderRouterBoard(sealing: BoardSealing): BoardRendered {
-		val rendered = synchronized(stateLock) { renderBoard(blob.stored, sealing, blob.text) }
-		if (rendered.cache != blob.text) mutate { it.copy(text = rendered.cache) }
+		val current = snapshot()
+		val rendered = renderBoard(current.stored, sealing, current.text)
+		if (rendered.cache != current.text) mutate { it.copy(text = rendered.cache) }
 		return rendered
 	}
 
@@ -190,11 +191,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	fun strugglingEntries(): Set<String> =
 		blob.queue.filter { it.attempts >= STRUGGLING_AFTER }.mapNotNull { entryIdOf(it.op) }.toSet()
 
-	/** Include queued target gateways. */
+	/** Include queued targets. */
 	fun sourceGatewayIds(): List<String> =
-		(listOf(routeGatewayId()) + blob.gateways.keys + blob.queue.map { it.gatewayId }).filter { it.isNotEmpty() }.distinct()
+		(listOf(routeGatewayId()) + snapshot().queue.map { it.gatewayId }).filter { it.isNotEmpty() }.distinct()
 
-	fun lastSyncedAt(gatewayId: String): Long = blob.gateways[gatewayId]?.lastSyncedAt ?: 0
+	fun lastSyncedAt(gatewayId: String): Long = snapshot().lastRouterSyncAt
 
 	fun dismissRefusal(refusal: BoardRefusal) {
 		refusals.remove(refusal)
@@ -208,64 +209,45 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		truncated: Boolean,
 		now: Long = System.currentTimeMillis(),
 	) {
-		mutate { blob ->
-			val prior = blob.gateways[gatewayId]?.entries ?: emptyList()
-			// Truncated snapshots cover only ids through their last id.
-			val covered = entries.maxOfOrNull { it.id }
-			val merged = if (!truncated || prior.isEmpty() || covered == null) {
-				entries
-			} else {
-				entries + prior.filter { it.id > covered }
-			}
-			val next = GatewayBoard(entries = merged, version = version, truncated = truncated, lastSyncedAt = now)
-			blob.copy(gateways = blob.gateways + (gatewayId to next))
-		}
+		return
 	}
 
 	/** Revocation prunes columns and queued writes. */
 	fun retainGateways(admitted: Collection<String>) {
 		if (admitted.isEmpty()) return
-		val keep = admitted.toSet()
-		mutate { blob ->
-			val gone = blob.gateways.keys.filter { it !in keep }
-			if (gone.isEmpty() && blob.queue.none { it.gatewayId !in keep }) return@mutate blob
-			var queue = blob.queue
-			for (action in blob.queue) if (action.gatewayId !in keep) queue = abandonBoardAction(queue, action.opId)
-			if (gone.isNotEmpty()) DebugLog.log("Board", "dropping columns of revoked gateways: $gone")
-			blob.copy(gateways = blob.gateways - gone.toSet(), queue = queue)
-		}
+		return
 	}
 
 	/** Gateways with truncated snapshots. */
-	fun truncatedGateways(): List<String> = blob.gateways.filterValues { it.truncated }.keys.toList()
+	fun truncatedGateways(): List<String> = emptyList()
 
 	fun enqueue(
 		op: ConsoleOp,
 		gatewayId: String,
 		dependsOn: String? = null,
 		sources: Map<String, String> = emptyMap(),
-		fetchFrom: Map<String, String> = emptyMap(),
 	): String {
 		val opId = UUID.randomUUID().toString()
 		mutate {
 			it.copy(
 				queue = it.queue +
-					PendingBoardAction(opId, gatewayId, op, dependsOn, sources = sources, fetchFrom = fetchFrom),
+					PendingBoardAction(opId, gatewayId, op, dependsOn, sources = sources),
 			)
 		}
 		return opId
 	}
 
 	/** Attachment buckets protected from sweeping. */
-	fun attachmentBuckets(): Set<String> {
+	fun attachmentBuckets(): Set<String>? {
 		// Include queued attachments.
 		// Keep every known entry bucket.
-		val fromEntries = (routerEntries() + blob.gateways.keys.flatMap { mergedEntries(it) })
-			.map { Attachments.boardBucket(it.id) }
-		val fromQueue = blob.queue.filter { it.sources.isNotEmpty() }
+		val current = snapshot()
+		if (!loadedCleanly || current.routerRevision <= 0 || sealing?.invoke() == null) return null
+		val fromEntries = routerEntries(current).map { Attachments.boardBucket(it.id) }
+		val fromQueue = current.queue.filter { it.sources.isNotEmpty() }
 			.mapNotNull { entryIdOf(it.op) }
 			.map { Attachments.boardBucket(it) }
-		val fromPending = blob.pending.flatMap { write -> write.intents.map { Attachments.boardBucket(it.id) } }
+		val fromPending = current.pending.flatMap { write -> write.intents.map { Attachments.boardBucket(it.id) } }
 		return (fromEntries + fromQueue + fromPending).toSet()
 	}
 
@@ -342,7 +324,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		for ((blobId, source) in action.sources) {
 			if (client.boardBytesReady(blobId, action.gatewayId)) continue
 			// Missing local files may still be fetched.
-			if (!File(source).exists() && blobId !in action.fetchFrom) {
+			if (!File(source).exists()) {
 				DebugLog.log("Board", "action ${action.opId} abandoned: ${source.substringAfterLast('/')} is gone")
 				notice(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
@@ -356,29 +338,8 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		get() = blob.queue
 
 	/** Entry id comes from the queued action. */
-	fun pendingFetches(): List<PendingFetch> =
-		blob.queue.flatMap { action ->
-			val entryId = entryIdOf(action.op) ?: return@flatMap emptyList()
-			action.fetchFrom.map { (blobId, gw) -> PendingFetch(entryId, blobId, gw) }
-		}
-
-	fun retireDeadFetch(entryId: String, blobId: String) {
-		mutate { it.copy(queue = markFetchDead(it.queue, entryId, blobId)) }
-	}
-
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }
-
-	suspend fun read(client: ConsoleClient, gatewayId: String) {
-		val result = try {
-			client.boardRead(gatewayId)
-		} catch (e: Exception) {
-			e.rethrowIfCancellation()
-			DebugLog.log("Board", "board_read $gatewayId failed (column stays stale): ${e.message}")
-			return
-		}
-		applySnapshot(gatewayId, result.entries, version = blob.gateways[gatewayId]?.version, truncated = result.truncated == true)
-	}
 
 	/** Convert team names to local keys. */
 	fun sessionKeyOf(team: String): String = localFieldOrSelf(team)

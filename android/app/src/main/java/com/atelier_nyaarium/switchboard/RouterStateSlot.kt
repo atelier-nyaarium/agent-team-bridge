@@ -14,7 +14,7 @@ internal data class RouterStateSlot(
 )
 
 internal fun newerRouterState(incoming: RouterStateSlot, applied: RouterStateSlot?): Boolean =
-	applied == null || incoming.epoch > applied.epoch ||
+	applied == null || incoming.epoch != applied.epoch ||
 		(incoming.epoch == applied.epoch && incoming.version > applied.version)
 
 internal fun RouterStateSlot.encode(): JsonObject = buildJsonObject {

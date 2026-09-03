@@ -3,6 +3,11 @@ package com.atelier_nyaarium.switchboard.board
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class BoardRankTest {
 	@Test
@@ -27,12 +32,16 @@ class BoardRankTest {
 
 	@Test
 	fun mirrorsTheTypescriptTwinOnPinnedVectors() {
-		// The same calls in src/shared/board-rank.ts yield these exact strings; a divergence means
-		// the two sides order a shared board differently.
-		assertEquals("V", BoardRank.between(null, null))
-		assertEquals("l", BoardRank.between("V", null))
-		assertEquals("g", BoardRank.between("V", "r"))
-		assertEquals("VV", BoardRank.between("V", "W"))
-		assertEquals("8", BoardRank.between(null, "G"))
+		val vectors = Json.parseToJsonElement(
+			javaClass.classLoader!!.getResourceAsStream("board-rank/vectors.json")!!.bufferedReader().readText(),
+		).jsonObject
+		assertEquals(62, vectors["alphabet"]!!.jsonPrimitive.content.length)
+		for (vector in vectors["between"]!!.jsonArray + vectors["after"]!!.jsonArray) {
+			val value = vector.jsonObject
+			assertEquals(value["rank"]!!.jsonPrimitive.content, BoardRank.between(
+				value["before"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content,
+				value["after"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content,
+			))
+		}
 	}
 }

@@ -39,13 +39,14 @@ class BoardRouterWriter(
 		var signature: List<Pair<String, String>>? = null
 		repeat(CAS_ATTEMPTS) {
 			// Rebuild retries from the winning board.
-			val stored = board.storedById()
+			val snapshot = board.snapshot()
+			val stored = snapshot.stored.associateBy { it.clear.id }
 			val ops = intents.mapNotNull { materialize(it, stored, sealing) }
 			if (ops.isEmpty()) return BoardWriteOutcome.Empty
 			// Keep op contents stable for replay deduplication.
 			val current = ops.map { it.kind() to it.id() }
 			if (signature == null) signature = current else if (signature != current) return BoardWriteOutcome.Exhausted
-			val write = BoardWrite(ops = ops, expectedRevision = board.routerRevision)
+			val write = BoardWrite(ops = ops, expectedRevision = snapshot.routerRevision)
 			val result = runCatching { decode(signAndPost(body(write), opId)) }
 				.getOrElse { return BoardWriteOutcome.Unreachable(it) }
 			when (result.outcome) {

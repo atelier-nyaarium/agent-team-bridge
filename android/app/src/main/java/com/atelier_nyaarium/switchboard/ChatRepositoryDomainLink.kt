@@ -167,20 +167,13 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		}
 		// Pin subsequent relays to this Gateway.
 		client().routeGateway = localGatewayId.ifEmpty { null }
-		// Preserve teams after refresh failure.
+		val discoveryIssuedAt = System.currentTimeMillis()
 		val answer = runCatchingCancellable { client().teams(localGatewayId) }.getOrElse {
 			DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
 			TeamsAnswer(_state.value.teams)
 		}
-		// Preserve unreachable gateway rows.
-		val keys = unreachableKeys(answer.coverage)
-		val teams = if (keys.isEmpty()) {
-			answer.teams
-		} else {
-			mergePresence(_state.value.teams, answer.teams) { rowOnUnreachable(it, keys, localGatewayId) }
-		}
-		// Seed the raw presence cache.
-		presence.lastRawTeams = teams
+		presence.applyDiscovery(answer, discoveryIssuedAt)
+		val teams = _state.value.teams
 		_state.update {
 			it.copy(
 				teams = teams.withoutTombstoned(),

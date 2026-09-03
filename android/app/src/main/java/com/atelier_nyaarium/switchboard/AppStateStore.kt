@@ -262,7 +262,7 @@ class AppStateStore internal constructor(
 	override fun loadGoals(): String? = prefs.getString(KEY_GOALS, null)
 
 	/** Board state and pending actions share one key. */
-	override fun saveTaskBoard(json: String) = prefs.edit().putString(KEY_TASK_BOARD, json).apply()
+	override fun saveTaskBoard(json: String) = check(prefs.edit().putString(KEY_TASK_BOARD, json).commit())
 
 	override fun loadTaskBoard(): String? = prefs.getString(KEY_TASK_BOARD, null)
 

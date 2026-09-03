@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.BoardStateAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /** Owner request, materialized against current state. */
 @Serializable
@@ -116,6 +117,9 @@ private fun BoardStoredEntry.upsert(title: ContentEnvelope, body: ContentEnvelop
 		session = clear.session,
 		trashedAt = clear.trashedAt,
 		attachments = clear.attachments,
+		names = clear.attachments?.let { attachments ->
+			sealed.names?.let { names -> JsonObject(names.filterKeys { key -> attachments.any { it.blobId == key } }) }
+		},
 		title = title,
 		body = body,
 	)

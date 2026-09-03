@@ -559,6 +559,33 @@ describe("router board service", () => {
 		registry.close();
 	});
 
+	it("keeps names only for blobs retained by an unnamed upsert", () => {
+		const { service, registry, references } = make();
+		references.add("keep");
+		references.add("drop");
+		const attachments = (blobId: string) => ({ blobId, size: 1, mime: "text/plain", blobGateway: "g" });
+		const names = { keep: envelope("board.name"), drop: envelope("board.name") };
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { attachments: [attachments("keep"), attachments("drop")], names })],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.write(
+			"a",
+			{
+				expectedRevision: 1,
+				ops: [entry("one", { title: envelope(), attachments: [attachments("drop")] })],
+			},
+			{ kind: "owner" },
+		);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries[0]?.sealed.names).toEqual({ drop: names.drop });
+		registry.close();
+	});
+
 	it("requires held attachments and replaces their entry references", () => {
 		const { service, registry, references } = make();
 		references.add("old");

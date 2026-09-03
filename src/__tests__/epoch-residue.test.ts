@@ -2,14 +2,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { filesUnder, linesMatching } from "./helpers/residue.js";
 
-const comparison = /(?:cursorEpoch|deliveryEpoch)\s*(?:<|>|<=|>=)/;
+const epochValue = "(?:\\w+\\.)?\\w*Epoch|(?:\\w+\\.)?epoch";
+const comparison = new RegExp(`(?:${epochValue})\\s*(?:<|>|<=|>=)\\s*(?:${epochValue})`);
 const successor = /(?:cursorEpoch|deliveryEpoch)[^\n]*\+\s*1/;
 const derivedMint = /\bepoch\s*:\s*(?:1\s*\+\s*Math\.random|Math\.random|Math\.floor|now\s*\()/;
 
 describe("epoch residue", () => {
 	it("rejects ordering and counter minting in production", () => {
-		expect(comparison.test("if (cursorEpoch > current) return;")).toBe(true);
-		const roots = [path.join(process.cwd(), "src"), path.join(process.cwd(), "android/app/src/main")];
+		expect(comparison.test("if (incoming.epoch > applied.epoch) return;")).toBe(true);
+		expect(comparison.test("if (epoch >= 1) return;")).toBe(false);
+		const roots = [path.join(process.cwd(), "android/app/src/main"), path.join(process.cwd(), "src")];
 		const offenders = roots
 			.flatMap((root) => filesUnder(root, ".ts").concat(filesUnder(root, ".kt")))
 			.filter((file) => !file.includes(`${path.sep}__tests__${path.sep}`))

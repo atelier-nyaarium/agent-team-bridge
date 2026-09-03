@@ -3,6 +3,8 @@ package com.atelier_nyaarium.switchboard
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import org.json.JSONObject
 
 internal enum class MutationState {
@@ -26,6 +28,7 @@ internal class MutationCommitException(cause: Throwable) : IOException("mutation
 internal class MutationJournal(
 	private val filesDir: File,
 	private val fileName: String = "mutation-journal.jsonl",
+	private val beforeJournalReplace: () -> Unit = {},
 ) {
 	private val file = File(filesDir, fileName)
 	private val entries = linkedMapOf<String, MutationEntry>()
@@ -49,7 +52,7 @@ internal class MutationJournal(
 		val next = prior.copy(state = state, payload = JSONObject(prior.payload.toString()))
 		commit(next)
 		entries[opId] = next
-		if (state == MutationState.ACKED || state == MutationState.REFUSED) compact()
+		if (state == MutationState.ACKED || state == MutationState.REFUSED || state == MutationState.CONFLICT) compact()
 		return next
 	}
 
@@ -67,7 +70,9 @@ internal class MutationJournal(
 
 	@Synchronized
 	fun compact() {
-		val keep = entries.values.filterNot { it.state == MutationState.ACKED || it.state == MutationState.REFUSED }
+		val keep = entries.values.filterNot {
+			it.state == MutationState.ACKED || it.state == MutationState.REFUSED || it.state == MutationState.CONFLICT
+		}
 		val temp = File(filesDir, "$fileName.tmp")
 		try {
 			filesDir.mkdirs()
@@ -76,21 +81,25 @@ internal class MutationJournal(
 				// Fsync before replacement.
 				output.fd.sync()
 			}
-			if (!temp.renameTo(file)) error("cannot replace mutation journal")
-			entries.clear()
-			keep.forEach { entries[it.opId] = it }
+				replaceJournal(temp)
+				entries.clear()
+				keep.forEach { entries[it.opId] = it }
+				replayed.retainAll(keep.mapTo(mutableSetOf()) { it.opId })
 		} catch (error: Throwable) {
 			temp.delete()
 			throw MutationCommitException(error)
 		}
 	}
 
-	/** Drop torn final lines during recovery. */
+	/** Recover readable lines. */
 	private fun recover() {
 		if (!file.isFile) return
-		var torn = 0
-		file.forEachLine(Charsets.UTF_8) { raw ->
-			if (raw.isBlank()) return@forEachLine
+		val text = file.readText(Charsets.UTF_8)
+		val rawLines = text.split('\n')
+		val readable = mutableListOf<String>()
+		val corrupt = mutableListOf<String>()
+		for ((index, raw) in rawLines.withIndex()) {
+			if (raw.isBlank()) continue
 			val entry = runCatching {
 				val json = JSONObject(raw)
 				MutationEntry(
@@ -99,11 +108,33 @@ internal class MutationJournal(
 					json.getJSONObject("payload"),
 					json.getLong("createdAt"),
 					MutationState.valueOf(json.getString("state").uppercase()),
-				)
+					)
 			}.getOrNull()
-			if (entry == null) torn++ else entries[entry.opId] = entry
+			if (entry == null) {
+				if (index == rawLines.lastIndex && !text.endsWith('\n')) continue
+				corrupt += raw
+			} else {
+				entries[entry.opId] = entry
+				readable += raw
+			}
 		}
-		if (torn > 0) DebugLog.log("Journal", "dropped $torn unreadable line(s) on recover")
+		if (corrupt.isNotEmpty()) {
+			File(filesDir, "$fileName.corrupt-${System.currentTimeMillis()}").writeText(corrupt.joinToString("\n") + "\n")
+		}
+		if (corrupt.isNotEmpty() || (text.isNotEmpty() && !text.endsWith('\n'))) {
+			val temp = File(filesDir, "$fileName.tmp")
+			try {
+				FileOutputStream(temp, false).use { output ->
+					if (readable.isNotEmpty()) output.write((readable.joinToString("\n") + "\n").toByteArray(Charsets.UTF_8))
+					output.fd.sync()
+				}
+				replaceJournal(temp)
+			} catch (error: Throwable) {
+				temp.delete()
+				throw MutationCommitException(error)
+			}
+		}
+		if (corrupt.isNotEmpty()) DebugLog.log("Journal", "set aside ${corrupt.size} corrupt line(s) on recover")
 	}
 
 	private fun transitionWithoutCompaction(prior: MutationEntry, state: MutationState) {
@@ -123,6 +154,12 @@ internal class MutationJournal(
 		} catch (error: Throwable) {
 			throw MutationCommitException(error)
 		}
+	}
+
+	private fun replaceJournal(temp: File) {
+		beforeJournalReplace()
+		if (!temp.renameTo(file)) error("cannot replace mutation journal")
+		FileChannel.open(filesDir.toPath(), StandardOpenOption.READ).use { it.force(true) }
 	}
 
 	private fun line(entry: MutationEntry): String = JSONObject()

@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.board
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
-import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import kotlinx.serialization.Serializable
 
 /** Retire only on accept or sealed refusal. */
@@ -17,17 +16,6 @@ data class PendingBoardAction(
 	val attempts: Int = 0,
 	// Upload before send; survives restart.
 	val sources: Map<String, String> = emptyMap(),
-	// Missing fetch source retries.
-	val fetchFrom: Map<String, String> = emptyMap(),
-)
-
-/** Cache metadata, not entry timestamps. */
-@Serializable
-data class GatewayBoard(
-	val entries: List<BoardEntry> = emptyList(),
-	val version: TaskBoardVersion? = null,
-	val truncated: Boolean = false,
-	val lastSyncedAt: Long = 0,
 )
 
 /** Distinguishes refused writes from terminal drops. */
@@ -46,7 +34,6 @@ enum class BoardNoticeKind {
 
 @Serializable
 data class BoardBlob(
-	val gateways: Map<String, GatewayBoard> = emptyMap(),
 	/** Router revision used for CAS. */
 	val routerRevision: Long = 0,
 	/** Sealed Router entries. */
@@ -61,7 +48,7 @@ data class BoardBlob(
 	val notices: List<BoardRefusal> = emptyList(),
 )
 
-/** Per-Gateway oldest eligible actions. */
+/** Oldest actions per target. */
 fun eligibleBoardActions(
 	queue: List<PendingBoardAction>,
 	strugglingAfter: Int = Int.MAX_VALUE,
@@ -113,16 +100,11 @@ fun boardEntryIdsOf(op: ConsoleOp): Set<String> = when (op) {
 fun retireBoardAction(queue: List<PendingBoardAction>, opId: String): List<PendingBoardAction> =
 	queue.filter { it.opId != opId }
 
-/** Remove unreachable fetches; let Gateway report the drop. */
-fun markFetchDead(queue: List<PendingBoardAction>, entryId: String, blobId: String): List<PendingBoardAction> =
-	queue.map { action ->
-		if (blobId in action.fetchFrom && entryId in boardEntryIdsOf(action.op)) {
-			// Preserve attachment claims for Gateway.
-			action.copy(fetchFrom = action.fetchFrom - blobId, sources = action.sources - blobId)
-		} else {
-			action
-		}
-	}
+
+val BOARD_REFUSALS = setOf(
+	"entry_missing", "parent_missing", "cycle", "held", "would_orphan", "board_full", "bad_rank",
+	"attachment_missing", "session_missing", "durability_failure", "operation_id_reused",
+)
 
 /** Refused writes abandon dependent deletes. */
 fun abandonBoardAction(queue: List<PendingBoardAction>, opId: String): List<PendingBoardAction> {

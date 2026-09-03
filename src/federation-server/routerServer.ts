@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { resolveAdmitted } from "../shared/admission.js";
 import { fingerprint } from "../shared/crypto.js";
 import type { EnrollOp } from "../shared/federation-lifecycle.js";
 import {
@@ -150,6 +151,21 @@ export class RouterServer {
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
 				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
 			ownerFloor: (domainId) => this.inbox.ownerFloor(domainId),
+			admittedConsoleSigners: (domainId) => {
+				const domain = this.coordinatorFor(domainId)?.getDomainSnapshot();
+				if (!domain) return [];
+				return domain.admissions
+					.filter(
+						(admission) =>
+							resolveAdmitted(
+								domain.admissions,
+								domain.revocations,
+								domain.ownerSignPub,
+								admission.admission.signPub,
+							)?.kind === "console",
+					)
+					.map((admission) => admission.admission.signPub);
+			},
 		});
 		this.ownerServices = createOwnerServices({
 			registry: this.ownerRegistry,

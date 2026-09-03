@@ -1,0 +1,15 @@
+{
+	"alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+	"between": [
+		{ "before": null, "after": null, "rank": "V" },
+		{ "before": "V", "after": null, "rank": "l" },
+		{ "before": "V", "after": "r", "rank": "g" },
+		{ "before": "V", "after": "W", "rank": "VV" },
+		{ "before": null, "after": "G", "rank": "8" }
+	],
+	"after": [
+		{ "before": "z", "rank": "zV" },
+		{ "before": "A", "after": "B", "rank": "AV" },
+		{ "after": "1", "rank": "0V" }
+	]
+}

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ConsoleInboxRowsFrame
 import com.atelier_nyaarium.switchboard.proto.ConsolePlaneFrame
+import com.atelier_nyaarium.switchboard.proto.ConsoleRefusedFrame
 import com.atelier_nyaarium.switchboard.proto.ConsoleWelcomeFrame
 import com.atelier_nyaarium.switchboard.proto.InboxRow
 import com.atelier_nyaarium.switchboard.proto.OpKey
@@ -38,7 +39,7 @@ class ConsoleSocketDriverTest {
 		val coordinator = newCoordinator()
 		val events = mutableListOf<String>()
 		val rows = listOf(row())
-		val h = harness(coordinator, onRows = { received, cursor ->
+		val h = harness(coordinator, clientMode = null, onRows = { received, cursor ->
 			events += "rows"
 			assertEquals(rows, received)
 			assertEquals(4L, cursor)
@@ -144,6 +145,36 @@ class ConsoleSocketDriverTest {
 		assertEquals(ConsoleLink.POLL, coordinator.link())
 		assertEquals(1, kicks)
 		assertEquals(1, h.closeCalls[0])
+	}
+
+	@Test
+	fun refusedThenSocketCloseSchedulesOneReconnect() {
+		val coordinator = newCoordinator()
+		val reconnects = mutableListOf<Long>()
+		val h = harness(coordinator, reconnect = { reconnects += it })
+		h.driver.connect()
+		val listener = h.listenerListeners.single()
+
+		listener.onFrame(ConsoleSocketFrame.Refused(ConsoleRefusedFrame(reason = "revoked")))
+		listener.onClosed(null, "revoked", null)
+
+		assertEquals(listOf(1_000L), reconnects)
+	}
+
+	@Test
+	fun socketConstructionFailureUsesCloseBackoff() {
+		val coordinator = newCoordinator()
+		val reconnects = mutableListOf<Long>()
+		val driver = ConsoleSocketDriver(
+			coordinator = coordinator,
+			newClient = { error("construct") },
+			onRows = { _, _ -> },
+			reconnect = { reconnects += it },
+		)
+
+		driver.connect()
+
+		assertEquals(listOf(1_000L), reconnects)
 	}
 
 	@Test
@@ -262,12 +293,14 @@ class ConsoleSocketDriverTest {
 
 	private fun harness(
 		coordinator: ConsoleTransportCoordinator,
+		clientMode: String? = "planes",
 		onRows: (List<InboxRow>, Long) -> Unit = { _, _ -> },
 		onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 		onGap: (Long) -> Unit = {},
 		onAck: () -> Unit = {},
 		kick: () -> Unit = {},
 		onUnreachable: () -> Unit = {},
+		reconnect: (Long) -> Unit = {},
 	): Harness {
 		val listenerListeners = mutableListOf<ConsoleSocketListener>()
 		val wireListeners = mutableListOf<WebSocketListener>()
@@ -304,13 +337,14 @@ class ConsoleSocketDriverTest {
 				) { _, _, webSocketListener ->
 					wireListeners += webSocketListener
 					socket
-				}
+				}.also { it.mode = clientMode }
 			},
 			onRows = onRows,
 			onPlane = onPlane,
 			onGap = onGap,
 			kick = kick,
 			onUnreachable = onUnreachable,
+			reconnect = reconnect,
 		)
 		return Harness(driver, listenerListeners, wireListeners, socket, closeCalls)
 	}

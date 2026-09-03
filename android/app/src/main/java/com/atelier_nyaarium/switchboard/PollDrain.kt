@@ -158,7 +158,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				try {
 					// Pull discovery while backgrounded.
 					val now = System.currentTimeMillis()
-					if (!repo.isVisible && now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
+					if (repo.transportCoordinator.plan(repo.isVisible, repo.transportCoordinator.link() == ConsoleLink.SOCKET, false).pullDiscovery && now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
 						lastDiscoveryAt = now
 						repo.presence.refreshDiscovery()
 						repo.presence.refreshConnectedGateways()
@@ -202,7 +202,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						mb.presence?.let { rows ->
 							val bumpAt = System.currentTimeMillis()
 							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
+							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) }, started)
 						}
 					}
 					// Apply changed linked peers.
@@ -403,7 +403,12 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					DebugLog.flushToIngest()
 				}
 				val watchedWorking = repo._state.value.let { s -> s.openTabs.any { tab -> s.working(tab) } }
-				when (val wait = repo.transportCoordinator.nextWait(repo.isVisible, failed, watchedWorking)) {
+				val plan = repo.transportCoordinator.plan(
+					repo.isVisible,
+					repo.transportCoordinator.link() == ConsoleLink.SOCKET,
+					failed,
+				)
+				when (val wait = plan.wait) {
 					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
 					// Alarm timeout is a backstop.

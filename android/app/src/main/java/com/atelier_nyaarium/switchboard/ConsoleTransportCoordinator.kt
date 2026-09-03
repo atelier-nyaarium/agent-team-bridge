@@ -8,6 +8,12 @@ internal sealed interface ConsoleAdoption {
 	data class Adopted(val cursor: Long, val cursorEpoch: Long, val dropped: Long) : ConsoleAdoption
 }
 
+internal data class ConsoleTransportPlan(
+	val wait: PollWait,
+	val reconnectSocket: Boolean,
+	val pullDiscovery: Boolean,
+)
+
 /** One Router consumer across transports. */
 // One cursor permits one drain at a time.
 internal class ConsoleTransportCoordinator(
@@ -93,6 +99,13 @@ internal class ConsoleTransportCoordinator(
 	}
 
 	fun onActivity(visible: Boolean) = pushback.onCommsActivity(now(), visible)
+
+	fun plan(visible: Boolean, linkUp: Boolean, lastPassFailed: Boolean): ConsoleTransportPlan =
+		ConsoleTransportPlan(
+			wait = nextWait(visible, lastPassFailed, false),
+			reconnectSocket = visible && !linkUp,
+			pullDiscovery = !linkUp,
+		)
 
 	fun clearDropped() {
 		synchronized(lock) { dropped = 0 }

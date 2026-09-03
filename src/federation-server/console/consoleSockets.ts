@@ -45,6 +45,7 @@ export interface ConsoleSocketsDeps {
 	ownerFloor: (domainId: string) => number;
 	/** Current plane versions. */
 	planeVersions?: (domainId: string, signerSignPub: string) => Record<string, number>;
+	admittedConsoleSigners?: (domainId: string) => string[];
 }
 
 /** Verified frame identity. */
@@ -126,6 +127,11 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		if (!identity) {
 			refuse(socket, answer?.reason ?? "not admitted");
 			return;
+		}
+		const admitted = new Set(deps.admittedConsoleSigners?.(identity.domainId) ?? [identity.signerSignPub]);
+		for (const key of incarnations.keys()) {
+			if (key.startsWith(`${identity.domainId}/`) && !admitted.has(key.slice(identity.domainId.length + 1)))
+				incarnations.delete(key);
 		}
 		const key = `${identity.domainId}/${identity.signerSignPub}`;
 		const incarnation = (incarnations.get(key) ?? 0) + 1;

@@ -11,18 +11,25 @@ internal class ConsoleSocketDriver(
 	private val kick: () -> Unit = {},
 	/** Fires for pre-welcome connection failure. */
 	private val onUnreachable: () -> Unit = {},
+	private val visible: () -> Boolean = { true },
+	private val reconnect: (Long) -> Unit = {},
 ) {
 	private val lock = Any()
 
 	/** Generation fence prevents stale clears. */
 	private var client: Pair<Long, ConsoleSocketClient>? = null
+	private var closeStreak = 0
+	private var reconnectPending = false
 
 	fun connect() {
+		reconnectPending = false
 		val gen = coordinator.beginSocket()
 		val listener = Listener(gen)
 		val opened = runCatching { newClient(listener) }.getOrNull()
 		if (opened == null) {
 			coordinator.onSocketClosed(gen)
+			scheduleReconnect()
+			kick()
 			return
 		}
 		synchronized(lock) { client = gen to opened }
@@ -30,6 +37,7 @@ internal class ConsoleSocketDriver(
 			coordinator.onSocketClosed(gen)
 			forget(gen)
 			retire(opened)
+			scheduleReconnect()
 			kick()
 		}
 	}
@@ -58,20 +66,23 @@ internal class ConsoleSocketDriver(
 
 		// Stale generations cannot consume, apply, or acknowledge.
 		override fun onFrame(frame: ConsoleSocketFrame) {
+			coordinator.onActivity(visible())
 			when (frame) {
 				is ConsoleSocketFrame.Welcome -> {
 					val v = frame.value
 					val adopted = coordinator.onWelcome(gen, v.cursor, v.cursorEpoch, v.floor)
 					if (adopted !is ConsoleAdoption.Adopted) return
-					welcomed = true
+						welcomed = true
+						closeStreak = 0
 					if (adopted.dropped > 0) onGap(adopted.dropped)
 				}
-				is ConsoleSocketFrame.InboxRows -> {
-					val v = frame.value
-					if (coordinator.owns(gen) && socketOf()?.mode == "planes" && v.rows.isNotEmpty() && v.rows.all { it.envelope.kind in KEY_ROW_KINDS }) {
-						onRows(v.rows, v.cursor)
-						return
-					}
+					is ConsoleSocketFrame.InboxRows -> {
+						val v = frame.value
+						if (coordinator.owns(gen) && socketOf()?.mode == "planes" && v.rows.isNotEmpty() && v.rows.all { it.envelope.kind in KEY_ROW_KINDS }) {
+							onRows(v.rows, v.cursor)
+							return
+						}
+						if (coordinator.owns(gen) && socketOf()?.mode == "planes") return
 					if (!coordinator.mayConsume(gen)) return
 					onRows(v.rows, v.cursor)
 					if (coordinator.acked(gen, v.cursor)) socketOf()?.ack(v.cursor)
@@ -89,10 +100,21 @@ internal class ConsoleSocketDriver(
 			coordinator.onSocketClosed(gen)
 			forget(gen)
 			if (cause != null && !welcomed) onUnreachable()
+			if (visible()) {
+				scheduleReconnect()
+			}
 			kick()
 		}
 
 		private fun socketOf(): ConsoleSocketClient? = synchronized(lock) { client?.takeIf { it.first == gen }?.second }
+	}
+
+	private fun scheduleReconnect() {
+		if (!visible() || reconnectPending) return
+		val delay = (1L shl closeStreak.coerceAtMost(5)) * 1_000L
+		closeStreak++
+		reconnectPending = true
+		reconnect(delay)
 	}
 
 	private companion object {

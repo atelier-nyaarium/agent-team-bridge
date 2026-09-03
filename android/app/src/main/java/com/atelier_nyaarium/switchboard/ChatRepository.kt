@@ -143,13 +143,18 @@ class ChatRepository(
 	}
 
 	/** Foreground Router push channel. */
-	internal val socket = ConsoleSocketDriver(
+	internal val socket: ConsoleSocketDriver = ConsoleSocketDriver(
 		coordinator = transportCoordinator,
 		newClient = { listener -> ConsoleSocketClient(client().transport, ownerOps, listener) },
 		onRows = { rows, _ -> repoScope.launch(Dispatchers.IO) { dispatchKeyRows(rows) } },
 		onPlane = { name, _, payload -> applyPlane(name, payload) },
 		kick = { drain.kickPoll() },
 		onUnreachable = { client().transport.unreachable(client().transport.proxyBase) },
+		visible = { isVisible },
+		reconnect = { delay -> repoScope.launch {
+			kotlinx.coroutines.delay(delay)
+			if (isVisible && transportCoordinator.link() != ConsoleLink.SOCKET) runCatching { socket.connect() }
+		} },
 	)
 
 	private fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?) {
@@ -282,7 +287,8 @@ class ChatRepository(
 	internal val boardOps = BoardOps(this)
 	internal val attachments = AttachmentOps(this)
 	internal val scheduled = ScheduledSendOps(this)
-	internal val presence = PresenceOps(this)
+	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
+	internal val presence = PresenceOps(presenceHost)
 	internal val sessions = SessionOps(this)
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()

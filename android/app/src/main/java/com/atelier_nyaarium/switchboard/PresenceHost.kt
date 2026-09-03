@@ -1,0 +1,55 @@
+package com.atelier_nyaarium.switchboard
+
+import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
+import kotlinx.coroutines.flow.MutableStateFlow
+
+internal interface PresenceHost {
+	val state: MutableStateFlow<ChatState>
+	val localGatewayId: String
+	var storedDisplayName: String
+	val forgottenUntil: MutableMap<String, Long>
+
+	suspend fun <T> withDrainMutex(block: suspend () -> T): T
+	suspend fun resetPlaneCursors()
+	fun interruptDrain()
+	suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>)
+	suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>)
+	suspend fun reportRead(team: String, epoch: Long, seq: Long)
+	suspend fun fetchTeams(): TeamsAnswer
+	fun fetchConnectedGateways(): List<String>?
+
+	fun loadRouterState(kind: String): RouterStateSlot?
+	fun saveRouterState(kind: String, slot: RouterStateSlot)
+	fun persistLabels(labels: Map<String, String>)
+	fun persistAbsenceStreaks(streaks: Map<String, Int>)
+	fun persistReadAnchors(anchors: Map<String, ReadAnchor>)
+	fun receiptFor(team: String, now: Long): ActionReceipt?
+	fun clearReceipt(team: String)
+}
+
+internal class ChatRepositoryPresenceHost(private val repo: ChatRepository) : PresenceHost {
+	override val state get() = repo._state
+	override val localGatewayId get() = repo.localGatewayId
+	override var storedDisplayName
+		get() = repo.store.displayName
+		set(value) { repo.store.displayName = value }
+	override val forgottenUntil get() = repo.forgottenUntil
+
+	override suspend fun <T> withDrainMutex(block: suspend () -> T): T = repo.drain.withDrainMutex(block)
+	override suspend fun resetPlaneCursors() = repo.drain.resetPlaneCursors()
+	override fun interruptDrain() = repo.drain.interrupt()
+	override suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>) = repo.drain.pruneCrossDomainVersions(ownedDomainIds)
+	override suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>) = repo.drain.upsertCrossDomainVersions(entries)
+	override suspend fun reportRead(team: String, epoch: Long, seq: Long) {
+		repo.client().reportRead(team, epoch, seq)
+	}
+	override suspend fun fetchTeams(): TeamsAnswer = repo.client().teams(repo.localGatewayId)
+	override fun fetchConnectedGateways(): List<String>? = repo.client().fetchConnectedGateways()
+	override fun loadRouterState(kind: String) = repo.store.loadRouterState(kind)
+	override fun saveRouterState(kind: String, slot: RouterStateSlot) = repo.store.saveRouterState(kind, slot)
+	override fun persistLabels(labels: Map<String, String>) = repo.persistence.persistLabels(labels)
+	override fun persistAbsenceStreaks(streaks: Map<String, Int>) = repo.persistence.persistAbsenceStreaks(streaks)
+	override fun persistReadAnchors(anchors: Map<String, ReadAnchor>) = repo.persistence.persistReadAnchors(anchors)
+	override fun receiptFor(team: String, now: Long) = repo.sessions.receiptFor(team, now)
+	override fun clearReceipt(team: String) = repo.sessions.clearReceipt(team)
+}

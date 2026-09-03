@@ -11,6 +11,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
+internal data class ScheduledSendFireFailure(val opId: String)
+
+internal fun scheduledSendJournalDecision(committed: Boolean): Boolean = committed
+
 /** Scheduled-send state and firing. */
 internal class ScheduledSendOps(private val repo: ChatRepository) {
 	@Volatile var scheduledSendScheduler: ScheduledSendAlarmScheduler? = null
@@ -121,17 +125,19 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 	}
 
 	/** Fires all due scheduled sends. */
-	suspend fun fireDueScheduledSends() = scheduledSendFireMutex.withLock {
+	suspend fun fireDueScheduledSends(): List<ScheduledSendFireFailure> = scheduledSendFireMutex.withLock {
+		val failures = mutableListOf<ScheduledSendFireFailure>()
 		while (true) {
 			val now = System.currentTimeMillis()
 			val due = repo._state.value.scheduledSends.entries.firstOrNull { it.value.fireAtMillis <= now } ?: break
-			fireOne(due.key, due.value)
+			fireOne(due.key, due.value)?.let { failures += it }
 		}
 		rearmScheduledSendAlarm()
+		failures
 	}
 
 	/** Fires one record idempotently by opId. */
-	private suspend fun fireOne(team: String, rec: ScheduledSend) {
+	private suspend fun fireOne(team: String, rec: ScheduledSend): ScheduledSendFireFailure? {
 		val alreadyFired = repo._state.value.threads[team]?.any { it.opId == rec.opId } == true
 		if (!alreadyFired) {
 			val echoId = repo.append(
@@ -144,14 +150,16 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 			repo.deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
 			if (repo._state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
 				// Journal failures beyond the alarm retry.
-				journalPendingSend(team, rec)
-				val at = System.currentTimeMillis() + ChatRepository.SCHEDULED_SEND_RETRY_DELAY_MS
-				scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
+					val journaled = journalPendingSend(team, rec)
+					val at = System.currentTimeMillis() + ChatRepository.SCHEDULED_SEND_RETRY_DELAY_MS
+					scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
+					if (!scheduledSendJournalDecision(journaled)) return ScheduledSendFireFailure(rec.opId)
 			}
 		} else {
 			clearScheduledSendRecord(team)
 		}
 		repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
+		return null
 	}
 
 	/** Retries a failed send by opId. */
@@ -170,8 +178,8 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 	}
 
 	/** Journals failed sends by opId. */
-	private fun journalPendingSend(team: String, rec: ScheduledSend) {
-		runCatching {
+	private fun journalPendingSend(team: String, rec: ScheduledSend): Boolean {
+		return runCatching {
 			repo.mutationJournal.append(
 				rec.opId,
 				"scheduled_send",
@@ -182,7 +190,7 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 				"ScheduledSend",
 				"journal append failed for ${rec.opId}: ${it.javaClass.simpleName}: ${it.message}",
 			)
-		}
+		}.isSuccess
 	}
 
 	private fun retireJournaledSend(opId: String) {

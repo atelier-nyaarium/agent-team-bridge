@@ -239,17 +239,14 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	private fun kickBoardDownload(entryId: String, a: BoardAttachment) {
 		// Prefer this entry's pending wait.
-		val fetches = repo.board.pendingFetches()
-		val waiting = fetches.firstOrNull { it.blobId == a.blobId && it.entryId == entryId }
-			?: fetches.firstOrNull { it.blobId == a.blobId }
-		if (waiting == null && (boardFetchFailures[a.blobId] ?: 0) >= ChatRepository.BOARD_FETCH_GIVE_UP) return
+		if ((boardFetchFailures[a.blobId] ?: 0) >= ChatRepository.BOARD_FETCH_GIVE_UP) return
 		if (!boardDownloadsInFlight.add(a.blobId)) return
 		// The queued action identifies the holder.
-		val holder = waiting?.holder ?: a.blobGateway
+		val holder = a.blobGateway
 		repo.repoScope.launch {
 			try {
 				val target = Attachments.boardFile(repo.filesDir, entryId, a.blobId)
-				val c = repo.client() ?: return@launch
+				val c = repo.client()
 				val staged = c.downloadBlob(a.blobId, holder)
 				target.parentFile?.mkdirs()
 				// Land atomically through a temporary file.
@@ -268,13 +265,12 @@ internal class BoardOps(private val repo: ChatRepository) {
 				repo.board.revision.longValue++
 			} catch (e: BlobAbsent) {
 				// Gateway-confirmed absence.
-				val key = (waiting?.entryId ?: entryId) to a.blobId
+				val key = entryId to a.blobId
 				val proven = (boardFetchAbsent[key] ?: 0) + 1
 				boardFetchAbsent[key] = proven
 				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
 				DebugLog.log("Board", "attachment ${a.blobId.take(16)} proven absent ($proven) for ${key.first}")
-				if (proven >= ChatRepository.BOARD_FETCH_DEAD_AFTER && waiting != null) {
-					repo.board.retireDeadFetch(waiting.entryId, a.blobId)
+				if (proven >= ChatRepository.BOARD_FETCH_DEAD_AFTER) {
 					boardFetchAbsent.remove(key)
 				}
 				repo.board.revision.longValue++
@@ -304,17 +300,12 @@ internal class BoardOps(private val repo: ChatRepository) {
 	internal val boardIsKnown: Boolean get() = repo.board.boardIsKnown
 
 	/** Live board attachment buckets. */
-	internal fun attachmentBuckets(): Set<String> = repo.board.attachmentBuckets()
+	internal fun attachmentBuckets(): Set<String>? = repo.board.attachmentBuckets()
 
 	/** Restarts pending transfers. */
 	internal fun resumeBoardUploads() {
 		for ((_, source, gatewayId) in repo.board.pendingSources()) kickBoardUpload(source, gatewayId)
 		// Restart pending downloads.
-		for ((entryId, blobId, holder) in repo.board.pendingFetches()) {
-			if (Attachments.boardFile(repo.filesDir, entryId, blobId).isFile) continue
-			// Use the queued action's identity.
-			kickBoardDownload(entryId, BoardAttachment(blobId, holder, blobId, "application/octet-stream", 0))
-		}
 	}
 
 	/** One upload per source. */

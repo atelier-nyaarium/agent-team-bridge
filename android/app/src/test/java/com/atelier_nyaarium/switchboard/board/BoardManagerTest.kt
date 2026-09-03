@@ -60,30 +60,13 @@ class BoardManagerTest {
 	@Test
 	fun anEditIsVisibleImmediatelyAndSurvivesAStaleSnapshot() {
 		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a")), version = null, truncated = false)
+		seedRouter(board, listOf(entry("a")))
 
 		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
 		assertEquals("done", board.mergedEntries("gw-route").single().state)
 
-		board.applySnapshot("gw-route", listOf(entry("a")), version = null, truncated = false)
+		board.applyRouterBoard(board.routerRevision, board.snapshot().stored)
 		assertEquals("done", board.mergedEntries("gw-route").single().state)
-	}
-
-	@Test
-	fun aTruncatedSnapshotKeepsTheUncoveredTailButHonoursDeletionsInsideItsRange() {
-		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a"), entry("b"), entry("c"), entry("z")), null, false)
-
-		board.applySnapshot("gw-route", listOf(entry("a"), entry("c")), null, truncated = true)
-		assertEquals(listOf("a", "c", "z"), board.mergedEntries("gw-route").map { it.id }.sorted())
-	}
-
-	@Test
-	fun anUntruncatedSnapshotIsTakenWholeSoNothingCarriesForward() {
-		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a"), entry("z")), null, truncated = true)
-		board.applySnapshot("gw-route", listOf(entry("a")), null, truncated = false)
-		assertEquals(listOf("a"), board.mergedEntries("gw-route").map { it.id })
 	}
 
 	@Test
@@ -126,7 +109,7 @@ class BoardManagerTest {
 	@Test
 	fun aTransportFailureKeepsTheEditQueuedForALaterDrain() = runBlocking {
 		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a")), null, false)
+		seedRouter(board, listOf(entry("a")))
 		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
 
 		board.drain(RecordingWriter(fail = { error("offline") }))
@@ -139,7 +122,7 @@ class BoardManagerTest {
 	@Test
 	fun aRefusedActionIsRetiredAndTheRowRevertsWithAMarker() = runBlocking {
 		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("a")), null, false)
+		seedRouter(board, listOf(entry("a")))
 		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
 
 		board.drain(RecordingWriter(fail = { throw BoardRefused("entry_missing") }))
@@ -150,12 +133,7 @@ class BoardManagerTest {
 	@Test
 	fun forgettingASessionDropsItsQueuedEditsSoNoneCanOutliveTheDisposition() = runBlocking {
 		val board = BoardManager(storeStub())
-		board.applySnapshot(
-			"gw-route",
-			listOf(entry("mine", sessionId = "s1"), entry("theirs", sessionId = "s2")),
-			null,
-			false,
-		)
+		seedRouter(board, listOf(entry("mine", sessionId = "s1"), entry("theirs", sessionId = "s2")))
 		board.enqueue(ConsoleOp.BoardSetState("mine", "in_progress"), "gw-route")
 		board.enqueue(ConsoleOp.BoardSetState("theirs", "in_progress"), "gw-route")
 
@@ -192,21 +170,6 @@ class BoardManagerTest {
 		assertTrue(manager.strugglingEntries().isEmpty())
 	}
 
-	@Test
-	fun oneGatewaysEmptySnapshotCannotDriveAByteDelete() {
-		// Keep sets are gateway-scoped.
-		val json = Json { ignoreUnknownKeys = true }
-		val blob = BoardBlob(
-			gateways = mapOf(
-				"gw-a" to GatewayBoard(entries = listOf(entry("a1"))),
-				"gw-b" to GatewayBoard(entries = emptyList()),
-			),
-		)
-		val manager = BoardManager(FakeStore(json.encodeToString(BoardBlob.serializer(), blob)))
-
-		assertFalse("one gateway's loss is not permission to delete its bytes", manager.boardIsKnown)
-	}
-
 	// Unlanded boards have no keep set.
 	@Test
 	fun aBoardNeverLandedFromTheRouterIsNotKnown() {
@@ -216,7 +179,8 @@ class BoardManagerTest {
 
 		seedRouter(manager, listOf(entry("a1")))
 		assertTrue("a landed board is known", manager.boardIsKnown)
-		assertTrue(manager.attachmentBuckets().isNotEmpty())
+		val keep = manager.attachmentBuckets()
+		assertTrue("a landed board answers its keep set", keep != null && keep.isNotEmpty())
 	}
 
 	@Test
@@ -226,27 +190,21 @@ class BoardManagerTest {
 	}
 
 	@Test
-	fun aRevokedGatewaysColumnAndItsQueuedWritesGoWithIt() {
+	fun anEmptyKeyringPrunesNothing() {
 		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-route", listOf(entry("r1")), null, false)
-		board.applySnapshot("gw-gone", listOf(entry("g1")), null, false)
-		board.applySnapshot("gw-kept", listOf(entry("k1")), null, false)
-		board.enqueue(ConsoleOp.BoardSetState("g1", "done"), "gw-gone")
-		val keptOp = board.enqueue(ConsoleOp.BoardSetState("k1", "done"), "gw-kept")
-
-		board.retainGateways(listOf("gw-route", "gw-kept"))
-
-		assertEquals(setOf("gw-route", "gw-kept"), board.sourceGatewayIds().toSet())
-		assertTrue("the revoked column is gone", board.mergedEntries("gw-gone").isEmpty())
-		assertEquals("the kept column is untouched", listOf("k1"), board.mergedEntries("gw-kept").map { it.id })
-		assertEquals("only the kept write survives", listOf(keptOp), board.queuedActions.map { it.opId })
+		board.retainGateways(emptyList())
+		assertNull(board.attachmentBuckets())
 	}
 
 	@Test
-	fun anEmptyKeyringPrunesNothing() {
-		val board = BoardManager(storeStub())
-		board.applySnapshot("gw-a", listOf(entry("a1")), null, false)
-		board.retainGateways(emptyList())
-		assertEquals(listOf("a1"), board.mergedEntries("gw-a").map { it.id })
+	fun aPreviousBlobWithGatewayColumnsLoadsRouterEntriesWithoutGatewayState() {
+		val oldBlob = """
+			{"gateways":{"old-gateway":{"entries":[]}},"routerRevision":7,"stored":[{"clear":{"id":"old-entry","state":"open","rank":"m","version":1},"sealed":{"title":{"v":1,"epoch":1,"nonce":"","ciphertext":""}}}]}
+		""".trimIndent()
+		val board = BoardManager(FakeStore(oldBlob))
+
+		assertEquals(7L, board.snapshot().routerRevision)
+		assertEquals(listOf("old-entry"), board.snapshot().stored.map { it.clear.id })
+		assertFalse(Json.encodeToString(BoardBlob.serializer(), board.snapshot()).contains("\"gateways\""))
 	}
 }

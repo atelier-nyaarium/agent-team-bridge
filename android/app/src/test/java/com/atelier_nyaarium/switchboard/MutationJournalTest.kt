@@ -46,6 +46,27 @@ class MutationJournalTest {
 	}
 
 	@Test
+	fun interruptedRecoveryRewriteLeavesOriginalJournalIntact() {
+		val dir = Files.createTempDirectory("journal").toFile()
+		val journal = MutationJournal(dir)
+		journal.append("first", "send", JSONObject())
+		File(dir, "mutation-journal.jsonl").appendText("broken\n")
+		journal.append("last", "send", JSONObject())
+
+		var interrupted = false
+		try {
+			MutationJournal(dir, beforeJournalReplace = {
+				interrupted = true
+				throw IllegalStateException("interrupt")
+			})
+		} catch (_: MutationCommitException) {
+		}
+
+		assertTrue(interrupted)
+		assertEquals(listOf("first", "last"), MutationJournal(dir).pending().map { it.opId })
+	}
+
+	@Test
 	fun replayClaimIsOncePerProcess() {
 		val dir = Files.createTempDirectory("journal").toFile()
 		val journal = MutationJournal(dir)

@@ -215,12 +215,22 @@ export function createBoardService(deps: Deps) {
 					sealed: {
 						title: op.title,
 						...(op.body ? { body: op.body } : {}),
-						// Unnamed attachments retain sealed names.
-						...(op.names
-							? { names: op.names }
-							: op.attachments || !(e as Versioned | undefined)?.sealed?.names
-								? {}
-								: { names: (e as Versioned).sealed?.names }),
+						...(op.attachments
+							? {
+									names: Object.fromEntries(
+										op.attachments.flatMap(({ blobId }) => {
+											const name =
+												op.names?.[blobId] ??
+												(e as Versioned | undefined)?.sealed?.names?.[blobId];
+											return name ? [[blobId, name]] : [];
+										}),
+									),
+								}
+							: op.names
+								? { names: op.names }
+								: (e as Versioned | undefined)?.sealed?.names
+									? { names: (e as Versioned).sealed?.names }
+									: {}),
 					},
 				} as BoardEntry;
 				if (op.attachments)

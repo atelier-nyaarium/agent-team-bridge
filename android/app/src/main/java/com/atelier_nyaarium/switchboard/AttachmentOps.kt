@@ -8,6 +8,15 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+internal fun shedDeadAttachmentFailures(
+	liveBlobIds: Set<String>,
+	failures: MutableMap<String, Int>,
+	failed: MutableStateFlow<Set<String>>,
+) {
+	failures.keys.removeIf { it !in liveBlobIds }
+	failed.update { it intersect liveBlobIds }
+}
+
 /** Fetches attachment bytes and sweeps residue. */
 internal class AttachmentOps(private val repo: ChatRepository) {
 	/** Range answers declare whether bytes are sealed. */
@@ -61,12 +70,8 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 			.map { VideoThumbs.bucketFor(it) }
 			.toSet()
 		// Unknown boards retain all board buckets.
-		val keep = frameBuckets + repo.boardOps.attachmentBuckets()
-		if (repo.boardOps.boardIsKnown) {
-			Attachments.sweepOrphanBuckets(repo.filesDir, referencedSrcs, keep)
-		} else {
-			Attachments.sweepOrphanBuckets(repo.filesDir, referencedSrcs, keep + repo.boardOps.existingBoardBuckets())
-		}
+		val keep = repo.boardOps.attachmentBuckets()
+		if (keep != null) Attachments.sweepOrphanBuckets(repo.filesDir, referencedSrcs, frameBuckets + keep)
 		// Prune staged blobs before polling.
 		val freed = repo.client?.pruneStaleBlobs(ChatRepository.STALE_BLOB_MAX_AGE_MS) ?: 0L
 		if (freed > 0) DebugLog.log("Attachments", "pruned $freed bytes of transfer residue")
@@ -92,6 +97,7 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 						m.files.filter { it.blobId != null && it.src == null }.map { Triple(team, m, it) }
 					}
 				}
+				shedDeadAttachmentFailures(pending.mapNotNull { it.third.blobId }.toSet(), attachmentFetchFailures, _failedAttachmentFetches)
 				for ((team, message, file) in pending) {
 					val blobId = file.blobId ?: continue
 					if (attachmentFetchFailures.getOrDefault(blobId, 0) >= ChatRepository.MAX_ATTACHMENT_FETCH_TRIES) continue

@@ -7,7 +7,7 @@ import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
-import { signAdmission } from "../shared/admission.js";
+import { signAdmission, signRevocation } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
 
@@ -37,6 +37,7 @@ function setup() {
 	let owner = generateIdentity();
 	while (owner.sign.pub.includes("/")) owner = generateIdentity();
 	const consoleIdentity = generateIdentity();
+	const secondConsoleIdentity = generateIdentity();
 	const router = generateIdentity();
 	const registry = new OwnerStoreRegistry({
 		dataDir,
@@ -57,9 +58,11 @@ function setup() {
 		owner.sign.priv,
 		owner.sign.pub,
 	);
+	let admitted = [admission];
+	let revocations: ReturnType<typeof signRevocation>[] = [];
 	const intake = new OwnerOpIntake({
 		inbox,
-		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
+		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: admitted, revocations }),
 		push: () => true,
 		now: () => now,
 	});
@@ -75,16 +78,34 @@ function setup() {
 		ownerFloor: inbox.ownerFloor.bind(inbox),
 		planeVersions: () => ({ board: 4 }),
 		now: () => now,
+		admittedConsoleSigners: () => admitted.map((item) => item.admission.signPub),
 	});
-	return { consoleIdentity, inbox, hub, owner, router, registry, setNow: (value: number) => (now = value) };
+	return {
+		consoleIdentity,
+		secondConsoleIdentity,
+		inbox,
+		hub,
+		owner,
+		router,
+		admission,
+		setAdmitted: (next: typeof admitted) => (admitted = next),
+		setRevocations: (next: typeof revocations) => (revocations = next),
+		registry,
+		setNow: (value: number) => (now = value),
+	};
 }
 
-function hello(fixture: ReturnType<typeof setup>, domainId = domainA, nonce = `hello-${Math.random()}`) {
+function helloAs(
+	fixture: ReturnType<typeof setup>,
+	identity: ReturnType<typeof generateIdentity>,
+	domainId = domainA,
+	nonce = `hello-${Math.random()}`,
+) {
 	return signOwnerOp(
 		{
 			v: 1,
 			domainId,
-			signerSignPub: fixture.consoleIdentity.sign.pub,
+			signerSignPub: identity.sign.pub,
 			conversationId: "console",
 			device: "phone",
 			opId: nonce,
@@ -92,8 +113,12 @@ function hello(fixture: ReturnType<typeof setup>, domainId = domainA, nonce = `h
 			nonce: Buffer.from(nonce).toString("base64"),
 			op: { kind: "hello" },
 		},
-		fixture.consoleIdentity.sign.priv,
+		identity.sign.priv,
 	);
+}
+
+function hello(fixture: ReturnType<typeof setup>, domainId = domainA, nonce = `hello-${Math.random()}`) {
+	return helloAs(fixture, fixture.consoleIdentity, domainId, nonce);
 }
 
 function row(fixture: ReturnType<typeof setup>, domainId = domainA, opId = `row-${Math.random()}`) {
@@ -199,6 +224,51 @@ describe("console sockets", () => {
 		expect(welcome.cursorEpoch).toBeGreaterThan(0);
 		expect(welcome.cursorEpoch).toBe(consumer?.clear.cursorEpoch);
 		expect(client.frames[1]).toMatchObject({ type: "inbox_rows", cursor: 2, rows: waiting });
+		fixture.registry.close();
+	});
+
+	it("drops incarnation rows for revoked console signers", async () => {
+		const fixture = setup();
+		const first = socket();
+		fixture.hub.open(first);
+		await fixture.hub.message(first, JSON.stringify({ type: "hello", ownerOp: hello(fixture, domainA, "a") }));
+
+		const secondAdmission = signAdmission(
+			{
+				kind: "console",
+				signPub: fixture.secondConsoleIdentity.sign.pub,
+				boxPub: fixture.secondConsoleIdentity.box.pub,
+				issuedAt: 2,
+				nonce: "admission-b",
+			},
+			fixture.owner.sign.priv,
+			fixture.owner.sign.pub,
+		);
+		fixture.setAdmitted([secondAdmission]);
+		fixture.setRevocations([
+			signRevocation(
+				{ signPub: fixture.consoleIdentity.sign.pub, issuedAt: 2, nonce: "revoke-a" },
+				fixture.owner.sign.priv,
+				fixture.owner.sign.pub,
+			),
+		]);
+		const second = socket();
+		fixture.hub.open(second);
+		await fixture.hub.message(
+			second,
+			JSON.stringify({ type: "hello", ownerOp: helloAs(fixture, fixture.secondConsoleIdentity, domainA, "b") }),
+		);
+
+		fixture.setAdmitted([fixture.admission]);
+		fixture.setRevocations([]);
+		const restored = socket();
+		fixture.hub.open(restored);
+		await fixture.hub.message(
+			restored,
+			JSON.stringify({ type: "hello", ownerOp: hello(fixture, domainA, "a-again") }),
+		);
+
+		expect((restored.frames[0] as { incarnation: number }).incarnation).toBe(1);
 		fixture.registry.close();
 	});
 

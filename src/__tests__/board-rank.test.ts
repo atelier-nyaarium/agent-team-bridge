@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { isValidRank, RANK_MAX_LENGTH, rankBetween, rebalanceRanks } from "../shared/board-rank.js";
 
 describe("rankBetween ordering", () => {
@@ -51,8 +52,6 @@ describe("rankBetween ordering", () => {
 
 describe("rebalanceRanks", () => {
 	it("yields sorted, unique, valid ranks at every size that matters", () => {
-		// 3843 crosses the two-digit slot space and 5000 is the per-owner board cap: the counts at
-		// which a width bug would mint over-long ranks and poison the durable file.
 		for (const count of [1, 2, 3, 61, 62, 200, 1000, 3843, 5000]) {
 			const ranks = rebalanceRanks(count);
 			expect(ranks.length).toBe(count);
