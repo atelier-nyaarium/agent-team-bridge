@@ -20,6 +20,7 @@ internal interface ConsoleSocketTransport {
 	fun unreachable(base: String): Boolean = false
 }
 
+/** Posts OwnerOps to the Router console surface with reach failover and pinning. */
 internal class ConsoleRouterTransport(
 	internal val prov: Provisioning,
 	internal val store: AppStateStore,

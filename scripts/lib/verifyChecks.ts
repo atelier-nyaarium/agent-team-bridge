@@ -6,6 +6,7 @@ import { DiscoverCoverageSchema } from "../../src/shared/schemasConsoleResults.j
 import { TeamInfoSchema } from "../../src/shared/schemasPresence.js";
 import { OP_LEDGER_PROTOCOL } from "../../src/shared/schemasRegister.js";
 
+// The setup verify checks, run in order and printed PASS or FAIL.
 export interface VerifyRouterReport {
 	certFingerprint: string;
 	version?: string;

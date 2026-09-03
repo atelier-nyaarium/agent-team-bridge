@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard.crypto
 
+// Sole home of the AAD kind builders; twins of src/shared/content-envelope.ts, pinned by shared vectors.
 const val BOARD_TITLE_KIND = "board.title"
 const val BOARD_BODY_KIND = "board.body"
 const val BOARD_NAME_KIND = "board.name"
