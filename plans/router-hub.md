@@ -1177,7 +1177,7 @@ fan-out chose the shape: one typed writer surface per store wrapped once by the 
 once. The residue derivation from persisted fields stays as the guard. Recorded in
 `crust-collection` with the operator scripts' shared plumbing.
 
-## Phase 9 - Cutover and removal
+## Phase 9 - Cutover and removal ✅ Done
 
 Order: Router (both surfaces live), then every gateway, then every phone, then the plugin bump.
 The bump is pushed only after `setup.sh --verify` passes on every gateway host, and it learns to
@@ -2103,3 +2103,25 @@ What the phone shows, the current producer, and the hub's.
 - **One agent backend per rule, and no rule for its outage.** Codex answered 404 for two hours after
   its limit reset; Copilot agents did the same mechanical rounds without incident. The standing
   instruction named Luna only, so the substitution needed a judgment call and a channel note.
+- **A comment sweep that deletes lines breaks block comments.** Told to delete comment lines the
+  diff added, an agent removed the last line of thirteen multi-line KDoc blocks and the first line
+  of others, commenting out the definitions beneath and orphaning closers. Seventeen files, found
+  only by the compiler. A sweep must treat a block comment as one unit, and a marker-balance check
+  per touched file belongs beside the banned-character grep.
+- **A removal deletes a test harness before its behaviors have a new home.** The relay harness went
+  with the relay and took twenty-two test files, and the per-op logic they pinned survived untested
+  until the cases were ported onto the dispatch seam. The order is: port onto the seam, then delete
+  the harness, and a removal prompt has to say so.
+- **Wire schemas pruned by op name, not by consumer.** The pruning took the per-op result shapes and
+  the first-root types because their names sat beside the relay ops; both runtimes still used them.
+  Five gate rounds to restore. Prune a `.meta({id})` schema only after grepping its name on both
+  runtimes.
+- **A path constant lives on two sides and no test pins it.** The Router dropped `/relay` while the
+  phone still posted there; nothing failed until an auditor read both. Every cross-runtime constant
+  (paths, kinds, versions) needs the same treatment the AAD kinds got: one vector, two consumers.
+- **"Cannot test, no seam" is the right refusal and the wrong stop.** Two agents refused to write
+  placeholder tests for repository code with no seam, which is correct, and the fix each time was to
+  add the seam in the same round. The prompt should say that up front.
+- **The gate log is the only trustworthy report.** Agents reported gates green while the other
+  agent's mid-flight edits were failing them, and one reported a compile fix that never landed. Run
+  the gate yourself after every round; never carry an agent's gate claim into a commit.
