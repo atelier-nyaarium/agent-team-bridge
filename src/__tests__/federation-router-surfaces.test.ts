@@ -64,10 +64,11 @@ describe("federation router surfaces", () => {
 		const surface = new ConsoleSurface({
 			port: 0,
 			authToken: "secret",
-			onReach: () => ({
+			onReach: (signerSignPub) => ({
 				publicHost: "switchboard.example.com",
 				publicPort: 8443,
 				lanAddresses: ["192.168.1.238"],
+				...(signerSignPub ? { domainId: `domain-of:${signerSignPub}` } : {}),
 			}),
 			onGateways: () => ({ gateways: [{ gatewayId: "sakura", signFp: "3E9A-77C1-0B4D-F2A6" }] }),
 		});
@@ -87,6 +88,8 @@ describe("federation router surfaces", () => {
 			publicPort: 8443,
 			lanAddresses: ["192.168.1.238"],
 		});
+		const named = await post('{"reach":{"signerSignPub":"console-pub"}}', "secret");
+		expect(await named.json()).toMatchObject({ domainId: "domain-of:console-pub" });
 		const gateways = await post('{"gateways":{}}', "secret");
 		expect(gateways.status).toBe(200);
 		expect(await gateways.json()).toEqual({ gateways: [{ gatewayId: "sakura", signFp: "3E9A-77C1-0B4D-F2A6" }] });

@@ -4,7 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import packageJson from "../../package.json";
-import { resolveAdmitted } from "../shared/admission.js";
+import { resolveAdmitted, resolveAdmittedConsole } from "../shared/admission.js";
 import { fingerprint } from "../shared/crypto.js";
 import type { EnrollOp } from "../shared/federation-lifecycle.js";
 import {
@@ -214,7 +214,22 @@ export class RouterServer {
 			onTrustPending: (op) => this.handleTrustPending(op),
 			onRoster: (req) => this.handleRoster(req),
 			onTransport: (req) => this.handleTransport(req),
-			onReach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
+			onReach: (signerSignPub) => {
+				const base = params.reach ?? { publicHost: null, lanAddresses: [] };
+				if (!signerSignPub) return base;
+				const admitting = params.store.listDomains().find(({ domainId }) => {
+					const snapshot = this.coordinatorFor(domainId)?.getDomainSnapshot();
+					return snapshot
+						? resolveAdmittedConsole(
+								snapshot.admissions,
+								snapshot.revocations,
+								snapshot.ownerSignPub,
+								signerSignPub,
+							) !== null
+						: false;
+				});
+				return admitting ? { ...base, domainId: admitting.domainId } : base;
+			},
 			onGateways: () => {
 				const adminDomainId = params.store.adminDomainId();
 				if (!adminDomainId) return { gateways: [] };

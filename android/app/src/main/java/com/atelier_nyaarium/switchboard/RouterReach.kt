@@ -14,6 +14,8 @@ data class RouterReach(
 	/** Public forwarding port. */
 	val publicPort: Int? = null,
 	val lanAddresses: List<String> = emptyList(),
+	/** Domain admitting this console, when the request named its signer. */
+	val domainId: String? = null,
 ) {
 	fun encode(): String = json.encodeToString(this)
 

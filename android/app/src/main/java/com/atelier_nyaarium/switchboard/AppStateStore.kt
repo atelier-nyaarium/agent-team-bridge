@@ -271,6 +271,11 @@ class AppStateStore internal constructor(
 
 	override fun loadGatewayId(): String = prefs.getString(KEY_GATEWAY_ID, "") ?: ""
 
+	/** Domain id the Router reported for this console. */
+	fun saveDomainId(id: String) = prefs.edit().putString(KEY_DOMAIN_ID, id).apply()
+
+	fun loadDomainId(): String = prefs.getString(KEY_DOMAIN_ID, "") ?: ""
+
 	/** Console-owned mailbox cursor. */
 	fun saveSyncCursor(cursor: SyncCursor) {
 		prefs.edit()
@@ -424,6 +429,7 @@ class AppStateStore internal constructor(
 	internal companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_ROUTER_REACH = "router_reach"
+		const val KEY_DOMAIN_ID = "domain_id"
 		const val KEY_ROUTER_STATE_PREFIX = "router_state."
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"

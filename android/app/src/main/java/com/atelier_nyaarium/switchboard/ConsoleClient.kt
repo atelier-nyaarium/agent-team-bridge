@@ -299,16 +299,25 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		}
 	}
 
-	/** Advertised Router addresses. */
+	/** Advertised Router addresses, and this console's Domain when the signer is known. */
 	private fun fetchReach(): RouterReach? {
+		val signer = (transport.store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
+		val body = buildJsonObject {
+			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })
+		}.toString()
 		val req = Request.Builder()
 			.url("${transport.proxyBase}/console")
 			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
-			.post("""{"reach":{}}""".toRequestBody(ConsoleHttp.JSON))
+			.post(body.toRequestBody(ConsoleHttp.JSON))
 			.build()
 		transport.client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
-			return RouterReach.decode(resp.body?.string())
+			val reach = RouterReach.decode(resp.body?.string())
+			reach.domainId?.takeIf { it.isNotEmpty() }?.let { transport.store.saveDomainId(it) }
+			// #region debug: reach domain
+			DebugLog.log("Connect", "reach domain=${reach.domainId ?: "none"} signer=${signer != null}")
+			// #endregion
+			return reach
 		}
 	}
 

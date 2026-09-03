@@ -179,9 +179,11 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				admittedGateways = sessions.keyringGateways(),
 			)
 		}
-		ownerFacts.ensureContentEpochs(confirmedDomainId())
+		val domain = confirmedDomainId()
+		domain?.let { store.saveDomainId(it) }
+		ownerFacts.ensureContentEpochs(domain)
 		presence.refreshDisplayNameFromTeams()
-		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }}")
+		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }} domain=${domain ?: "none"}")
 	} catch (e: Exception) {
 		// Rethrow cancellation before connection handling.
 		e.rethrowIfCancellation()
@@ -216,7 +218,9 @@ fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { con
 /** Confirmed local Domain id. */
 fun ChatRepository.confirmedDomainId(): String? {
 	val gw = homeGatewayId
-	return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
+	val fromRoster = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
+	// The roster arrives over signed reads, so the Router's reach answer seeds the id.
+	return fromRoster ?: store.loadDomainId().takeIf { it.isNotEmpty() }
 }
 
 /** Confirmed local Domain id or error. */

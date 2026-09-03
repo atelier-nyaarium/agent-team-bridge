@@ -51,7 +51,7 @@ export interface ConsoleSurfaceParams {
 	onTrustPending?: (req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>;
 	onTransport?: (req: TransportRequest) => TransportResult | Promise<TransportResult>;
 	/** Reach requires the app token. */
-	onReach?: () => RouterReachAnswer;
+	onReach?: (signerSignPub?: string) => RouterReachAnswer;
 	/** Gateway listings use the admin Domain. */
 	onGateways?: () => RouterGatewaysAnswer;
 	onOwnerOp?: (raw: unknown) => unknown | Promise<unknown>;
@@ -62,6 +62,8 @@ export interface RouterReachAnswer {
 	publicHost: string | null;
 	publicPort?: number;
 	lanAddresses: string[];
+	/** The Domain admitting the asking console; a console needs it before it can sign. */
+	domainId?: string;
 }
 
 export interface RouterGatewaysAnswer {
@@ -89,7 +91,7 @@ export class ConsoleSurface {
 		| ((req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>)
 		| null;
 	private readonly onTransport: ((req: TransportRequest) => TransportResult | Promise<TransportResult>) | null;
-	private readonly onReach: (() => RouterReachAnswer) | null;
+	private readonly onReach: ((signerSignPub?: string) => RouterReachAnswer) | null;
 	private readonly onGateways: (() => RouterGatewaysAnswer) | null;
 	private readonly onOwnerOp: ((raw: unknown) => unknown | Promise<unknown>) | null;
 	public constructor({
@@ -230,9 +232,11 @@ export class ConsoleSurface {
 		}
 	}
 
-	private handleReach(): Response {
+	private handleReach(reach: unknown): Response {
 		if (!this.onReach) return bounce(501, `reach not available`, false);
-		return json(this.onReach(), 200);
+		const signer =
+			reach && typeof reach === "object" ? (reach as { signerSignPub?: unknown }).signerSignPub : undefined;
+		return json(this.onReach(typeof signer === "string" ? signer : undefined), 200);
 	}
 
 	private handleGateways(): Response {
@@ -344,7 +348,7 @@ export class ConsoleSurface {
 		if (body.trustPending !== undefined) return this.handleTrustPending(body.trustPending);
 
 		if (body.transport !== undefined) return this.handleTransport(body.transport);
-		if (body.reach !== undefined) return this.handleReach();
+		if (body.reach !== undefined) return this.handleReach(body.reach);
 		if (body.gateways !== undefined) return this.handleGateways();
 		if (body.ownerOp !== undefined) {
 			if (!this.onOwnerOp) return bounce(501, `owner op not available`, false);
