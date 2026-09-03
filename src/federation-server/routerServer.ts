@@ -121,6 +121,7 @@ export class RouterServer {
 		this.bridge = new GatewayBridge({
 			port: params.port,
 			authToken: params.federationToken,
+			inbox: this.inbox,
 			adminDomainId: () => params.store.adminDomainId(),
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			getDomainMeta: (domainId) => {

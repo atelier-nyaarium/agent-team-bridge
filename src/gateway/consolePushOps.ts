@@ -176,7 +176,10 @@ export function createConsolePushOps({
 				}
 				const parsed = result.error ? null : OpResultEnvelopeSchema.safeParse(result.result).data;
 				if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) {
-					waiting(`answer ${parsed?.outcome ?? result.error ?? "unparsed"}`);
+					const raw = result.result as { error?: unknown } | undefined;
+					waiting(
+						`answer ${parsed?.outcome ?? result.error ?? `unparsed error=${String(raw?.error ?? "")} keys=${Object.keys(raw ?? {}).join(",")}`}`,
+					);
 					break;
 				}
 				if (parsed.outcome === "refused") {
