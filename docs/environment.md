@@ -37,9 +37,6 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 Router state under its `DATA_DIR`: `owner/<domainId>/<fingerprint>/` (manifest, snapshots, journals),
 `blobs/` (cache and reference-held entries), `inbox-claims/` on the gateway side.
 
-Migration scripts read `DATA_DIR`, default `/app/data`. `router-import.ts` and `router-lease.ts` read
-Router `DATA_DIR`.
-
 ## Host daemon
 
 `HOST_WS_TOKEN` and `BRIDGE_ROUTER_URL`, as above. The daemon announces each capability when its

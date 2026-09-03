@@ -79,7 +79,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
-- `src/federation-server/migration/` - Router import, leases, serve gate, and cursor translation
+- `src/federation-server/migration/` - leases, serve gate, and cursor translation
 - `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
 - `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
   - **A mailbox epoch is a random tag, never a counter:** `mintEpoch` draws it. Compare epochs for
@@ -124,7 +124,6 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import
 - `scripts/lib/routerStart.ts` - sole Router `.env` and startup owner
 - `scripts/lib/verifyChecks.ts` - setup verification checks
-- `scripts/router-import.ts` / `scripts/router-lease.ts` - Router import and lease commands
 - `android/.../SelfMigration.kt` / `CursorTranslationOps.kt` - phone self-migration and consumer cursor translation
 - `android/.../PollDrain.kt` - `drainTick`, owner-inbox reads, plane reads, and inbox advance
 - `android/.../ConsoleSocketClient.kt` - `ConsoleSocketMode`

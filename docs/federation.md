@@ -129,17 +129,9 @@ gateway rather than sweeping them.
 
 Router live. Key backfill confirmed for every member. Leases set for every member.
 
-```bash
-bun run router:lease --domain <id> --gateway <id> --state active
-```
-
-Use `offline`, `retired`, or `excluded` for the corresponding Gateway state.
+Leases support `active`, `offline`, `retired`, and `excluded` Gateway states.
 
 ### Gateway fence
-
-```bash
-bun run gateway:fence --epoch <N>
-```
 
 The Gateway writes `DATA_DIR/migration-epoch`. Phones and agents see `migrating` for fenced writes.
 Wait 60 seconds for in-flight operations to settle.
@@ -163,8 +155,4 @@ released only after the Router accepts it.
 |-------------|------------|
 | Fence before settle | Wait 60 seconds |
 
-```bash
-bun run gateway:fence --down
-```
-
-`--down` refuses before 60 seconds or with a malformed fence. A missing fence also refuses.
+Lowering the fence refuses before 60 seconds or with a malformed fence. A missing fence also refuses.

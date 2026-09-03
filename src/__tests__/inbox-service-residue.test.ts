@@ -13,7 +13,7 @@ describe("inbox service residue", () => {
 			const source = fs.readFileSync(path.join(dir, name), "utf8");
 			return [...source.matchAll(/store\.append\s*\(/g)].map(() => name);
 		});
-		expect(calls).toEqual(["migration/applyImport.ts"]);
+		expect(calls).toEqual([]);
 	});
 
 	it("exposes Domain-bearing addresses for public address methods", () => {

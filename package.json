@@ -8,12 +8,9 @@
 		"start:mcp": "bun run src/main-mcp.ts",
 		"start:host-daemon": "bun run src/main-host-daemon.ts",
 		"build": "bun run scripts/build.ts",
-		"gateway:fence": "bun run scripts/gateway-fence.ts",
 		"lint": "bun scripts/lint.ts",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
-		"router:import": "bun run scripts/router-import.ts",
-		"router:lease": "bun run scripts/router-lease.ts",
 		"check:pinning": "bun run scripts/check-pinning-runtime.ts",
 		"postinstall": "bun scripts/link-lexicon.mjs || node scripts/link-lexicon.mjs"
 	},
