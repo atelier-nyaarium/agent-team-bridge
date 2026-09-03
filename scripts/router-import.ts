@@ -83,7 +83,7 @@ async function main(): Promise<void> {
 		: {};
 	const key = markerKey(snapshot.gatewayId, snapshot.epoch);
 	const verdict = decideImport({ digest, epoch: snapshot.epoch, gatewayId: snapshot.gatewayId }, markers[key]);
-	if (verdict.kind === "noop") {
+	if (verdict.kind === "alreadyApplied") {
 		const gate = path.join(dataDir, "import-in-progress");
 		let canFinish = !fs.existsSync(gate);
 		if (!canFinish) {
@@ -208,7 +208,7 @@ async function main(): Promise<void> {
 			registry: {
 				for: (domainId: string) => stores.find((item) => item.plan.domainId === domainId)!.store,
 			} as never,
-			migrationEpoch: () => snapshot.epoch,
+			migrationWindow: () => ({ fenced: true, epoch: snapshot.epoch }),
 		});
 		const after = preservedDigests(dataDir);
 		const changed = violations(before, after);

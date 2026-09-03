@@ -3,6 +3,8 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import java.lang.reflect.Proxy
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -63,7 +65,7 @@ class ConsoleSocketClientTest {
 		val socket: WebSocket,
 	)
 
-	private fun harness(): Harness {
+	private fun harness(mode: ConsoleSocketMode = ConsoleSocketMode.PLANES): Harness {
 		val events = Events()
 		var listener: WebSocketListener? = null
 		val sent = mutableListOf<String>()
@@ -91,6 +93,7 @@ class ConsoleSocketClientTest {
 			listener = socketListener
 			socket
 		}
+		client.socketMode = mode
 		client.open()
 		return Harness(client, listener!!, sent, socket)
 	}
@@ -109,6 +112,15 @@ class ConsoleSocketClientTest {
 		assertEquals(1, h.sent.size)
 		assertTrue(h.sent.first().contains("\"type\":\"hello\""))
 		assertTrue(h.sent.first().contains("\"signature\":\"signed\""))
+		assertEquals("planes", wireJson.parseToJsonElement(h.sent.single()).jsonObject["mode"]!!.jsonPrimitive.content)
+	}
+
+	@Test
+	fun inboxHelloOmitsTheModeField() {
+		val h = harness(ConsoleSocketMode.INBOX)
+		h.listener.onOpen(h.socket, response())
+
+		assertFalse(h.sent.single().contains("\"mode\""))
 	}
 
 	@Test

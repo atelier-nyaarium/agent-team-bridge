@@ -33,7 +33,7 @@ import { WS_MAX_PAYLOAD_BYTES } from "./gatewayTransport.js";
 import { InboxService } from "./inbox/inboxService.js";
 import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
-import { createLeaseService, routerMigrationEpoch } from "./migration/leaseService.js";
+import { createLeaseService, readRouterMigrationWindow } from "./migration/leaseService.js";
 import { decideServe } from "./migration/serveGate.js";
 import { DomainQuota } from "./owner/domainQuota.js";
 import { OwnerQuarantined } from "./owner/ownerStateStore.js";
@@ -99,7 +99,7 @@ export class RouterServer {
 		});
 		this.leases = createLeaseService({
 			registry: this.ownerRegistry,
-			migrationEpoch: () => routerMigrationEpoch(),
+			migrationWindow: readRouterMigrationWindow,
 		});
 		this.inbox = new InboxService(this.ownerRegistry, {
 			signPub: params.store.persistedIdentity.sign.pub,

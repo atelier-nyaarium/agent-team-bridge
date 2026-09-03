@@ -36,7 +36,7 @@ import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewa
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
 import { type InboxService, type PeerRowGate, sessionTargetOf } from "./inbox/inboxService.js";
-import { routerMigrationEpoch } from "./migration/leaseService.js";
+import { readRouterMigrationWindow } from "./migration/leaseService.js";
 import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { verifyRegistrationClaim } from "./registrationVerification.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
@@ -426,7 +426,7 @@ export class GatewayBridge implements ToolProvider {
 				return { ok: false, error: "stale_incarnation" };
 			}
 			if (
-				routerMigrationEpoch() > 0 &&
+				readRouterMigrationWindow().fenced &&
 				name === "board_op" &&
 				this.migrationReady &&
 				!this.migrationReady(reg.domainId)

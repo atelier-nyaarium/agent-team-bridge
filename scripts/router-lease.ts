@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { OwnerStoreRegistry } from "../src/federation-server/inbox/ownerStoreRegistry.js";
-import { createLeaseService, routerMigrationEpoch } from "../src/federation-server/migration/leaseService.js";
+import { createLeaseService, readRouterMigrationWindow } from "../src/federation-server/migration/leaseService.js";
 import { DomainQuota } from "../src/federation-server/owner/domainQuota.js";
 import { OwnerLockHeld } from "../src/federation-server/owner/ownerLock.js";
 
@@ -35,8 +35,9 @@ async function main(): Promise<void> {
 	const state = arg("--state");
 	console.log(`data ${path.resolve(dataDir)}`);
 	if (!states.has(state)) throw new Error(`invalid lease state: ${state}`);
-	const epoch = routerMigrationEpoch();
-	if (epoch === 0) throw new Error("migration epoch must be positive");
+	const window = readRouterMigrationWindow();
+	if (!window.fenced || window.epoch === null) throw new Error("migration epoch must be readable and positive");
+	const epoch = window.epoch;
 	const ownerSignPub = ownerOf(domainId);
 	if (!ownerSignPub) throw new Error(`domain is not rooted: ${domainId}`);
 	const registry = new OwnerStoreRegistry({
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
 			}),
 	});
 	try {
-		const leases = createLeaseService({ registry, migrationEpoch: () => epoch });
+		const leases = createLeaseService({ registry, migrationWindow: () => ({ fenced: true, epoch }) });
 		leases.put(domainId, gatewayId, state as "active" | "offline" | "retired" | "excluded");
 		console.log(JSON.stringify(leases.read(domainId, gatewayId)));
 	} catch (error) {

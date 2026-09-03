@@ -16,8 +16,9 @@ import { DurableStore, openDurable } from "../src/shared/durable-store.js";
 import { resolveLocalGatewayId } from "../src/shared/gateway-id.js";
 import {
 	MIGRATION_SETTLE_MS,
-	readMigrationEpochFile,
+	readGatewayMigrationWindow,
 	readMigrationFenceRaisedAt,
+	useMigrationEpochFile,
 	withMigrationInProgress,
 } from "../src/shared/migration-fence.js";
 import { ownerKeyId } from "../src/shared/owner-id.js";
@@ -28,6 +29,7 @@ import type { MigrationExport } from "../src/shared/schemasMigration.js";
 import { SessionStore } from "../src/shared/session-store.js";
 
 const dataDir = process.env.DATA_DIR || "/app/data";
+useMigrationEpochFile(dataDir);
 
 function argument(name: string): string {
 	const index = process.argv.indexOf(name);
@@ -83,9 +85,10 @@ function main(): void {
 	const outDir = path.resolve(process.argv.includes("--out") ? argument("--out") : dataDir);
 	console.log(`output ${outDir}`);
 	withMigrationInProgress(dataDir, () => {
-		const currentEpoch = readMigrationEpochFile(dataDir);
-		if (currentEpoch === null) throw new Error("migration fence is not up; refusing to export live state");
-		if (currentEpoch === 0) throw new Error("migration fence has malformed epoch");
+		const window = readGatewayMigrationWindow();
+		if (!window.fenced) throw new Error("migration fence is not up; refusing to export live state");
+		if (window.epoch === null) throw new Error("migration fence has malformed epoch");
+		const currentEpoch = window.epoch;
 		if (currentEpoch !== epoch)
 			throw new Error(`migration epoch mismatch: fence=${currentEpoch} argument=${epoch}`);
 		const raisedAt = readMigrationFenceRaisedAt(dataDir);

@@ -39,7 +39,7 @@ class ConsoleSocketDriverTest {
 		val coordinator = newCoordinator()
 		val events = mutableListOf<String>()
 		val rows = listOf(row())
-		val h = harness(coordinator, clientMode = null, onRows = { received, cursor ->
+		val h = harness(coordinator, clientMode = ConsoleSocketMode.INBOX, onRows = { received, cursor ->
 			events += "rows"
 			assertEquals(rows, received)
 			assertEquals(4L, cursor)
@@ -287,7 +287,7 @@ class ConsoleSocketDriverTest {
 	fun ackAfterTranslationCarriesTheCommittedEpoch() {
 		val coordinator = newCoordinator()
 		coordinator.setMigrationEpoch(9L)
-		val h = harness(coordinator, clientMode = null)
+		val h = harness(coordinator, clientMode = ConsoleSocketMode.INBOX)
 		h.driver.connect()
 		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 1L, epoch = 4L, floor = 2L, migrationEpoch = 9L))
 		assertTrue(h.driver.commitTranslation(1L, 7L, 9L))
@@ -327,7 +327,7 @@ class ConsoleSocketDriverTest {
 	fun consumerWelcomeBehindEpochAwaitsTranslationAndInvokesMigration() {
 		val coordinator = newCoordinator()
 		var migrations = 0
-		val h = harness(coordinator, clientMode = null, onWelcome = { _, _ -> migrations++ })
+		val h = harness(coordinator, clientMode = ConsoleSocketMode.INBOX, onWelcome = { _, _ -> migrations++ })
 		h.driver.connect()
 
 		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 11L, epoch = 4L, floor = 12L, migrationEpoch = 9L))
@@ -342,7 +342,7 @@ class ConsoleSocketDriverTest {
 	fun staleWelcomeDoesNotChangeMigrationEpochOrAwaitingState() {
 		val coordinator = newCoordinator()
 		coordinator.setMigrationEpoch(7L)
-		val h = harness(coordinator, clientMode = null)
+		val h = harness(coordinator, clientMode = ConsoleSocketMode.INBOX)
 		h.driver.connect()
 		h.driver.connect()
 
@@ -363,7 +363,7 @@ class ConsoleSocketDriverTest {
 
 	private fun harness(
 		coordinator: ConsoleTransportCoordinator,
-		clientMode: String? = "planes",
+		clientMode: ConsoleSocketMode = ConsoleSocketMode.PLANES,
 		onRows: (List<InboxRow>, Long) -> Unit = { _, _ -> },
 		onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 		onGap: (Long) -> Unit = {},
@@ -412,7 +412,7 @@ class ConsoleSocketDriverTest {
 				) { _, _, webSocketListener ->
 					wireListeners += webSocketListener
 					socket
-				}.also { it.mode = clientMode }
+				}.also { it.socketMode = clientMode }
 			},
 			onRows = onRows,
 			onPlane = onPlane,

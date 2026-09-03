@@ -200,7 +200,7 @@ describe("S10 Router import", () => {
 				{ digest: digestValue, epoch: value.epoch, gatewayId: value.gatewayId },
 				markers[key],
 			);
-			if (verdict.kind === "noop") return verdict.marker;
+			if (verdict.kind === "alreadyApplied") return verdict.marker;
 			if (verdict.kind === "refused") throw new Error(`epoch conflict: ${JSON.stringify(verdict.recorded)}`);
 			const store = OwnerStateStore.open({
 				dataDir: router,

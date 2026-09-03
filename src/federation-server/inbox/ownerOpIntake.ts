@@ -12,7 +12,7 @@ import {
 	parseInboxAddress,
 	verifyOwnerOp,
 } from "../../shared/schemasInbox.js";
-import { type LeaseService, routerMigrationEpoch } from "../migration/leaseService.js";
+import { type LeaseService, readRouterMigrationWindow } from "../migration/leaseService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { InboxService } from "./inboxService.js";
 
@@ -122,7 +122,7 @@ export class OwnerOpIntake {
 
 	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown | Promise<unknown> {
 		const value = op.op;
-		if (routerMigrationEpoch() > 0 && OWNER_STATE_MUTATION_KINDS.has(String(value.kind))) {
+		if (readRouterMigrationWindow().fenced && OWNER_STATE_MUTATION_KINDS.has(String(value.kind))) {
 			if (!this.params.leases?.ready(op.domainId)) return refused("migrating");
 		}
 		const handler = this.handlers.get(String(value.kind));

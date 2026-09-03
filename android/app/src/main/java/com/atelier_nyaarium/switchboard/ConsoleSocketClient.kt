@@ -24,6 +24,11 @@ internal interface ConsoleSocketScheduler {
 	fun schedule(delayMs: Long, task: () -> Unit)
 }
 
+internal enum class ConsoleSocketMode(val wireValue: String?) {
+	PLANES("planes"),
+	INBOX(null),
+}
+
 internal val defaultConsoleSocketScheduler = object : ConsoleSocketScheduler {
 	private val executor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task ->
 		Thread(task, "console-socket").apply { isDaemon = true }
@@ -62,13 +67,13 @@ internal class ConsoleSocketClient(
 	private var lastPongAt = 0L
 	private var heartbeatArmed = false
 
-	/** Use planes until owner inbox delivery. */
-	var mode: String? = "planes"
+	var socketMode: ConsoleSocketMode = ConsoleSocketMode.PLANES
 
 	constructor(
 		transport: ConsoleRelayTransport,
 		ownerOps: OwnerOps,
 		listener: ConsoleSocketListener,
+		socketMode: ConsoleSocketMode = ConsoleSocketMode.PLANES,
 	) : this(
 		transport,
 		{ ownerOps.sign(JsonObject(mapOf("kind" to JsonPrimitive("hello")))) },
@@ -76,7 +81,9 @@ internal class ConsoleSocketClient(
 		::newWebSocket,
 		defaultConsoleSocketScheduler,
 		System::currentTimeMillis,
-	)
+	) {
+		this.socketMode = socketMode
+	}
 
 	constructor(
 		transport: ConsoleSocketTransport,
@@ -99,7 +106,7 @@ internal class ConsoleSocketClient(
 					heartbeatArmed = true
 					scheduleHeartbeat()
 				webSocket.send(
-					wireJson.encodeToString(ConsoleHelloFrame.serializer(), ConsoleHelloFrame(ownerOp = ownerOp, mode = mode)),
+					wireJson.encodeToString(ConsoleHelloFrame.serializer(), ConsoleHelloFrame(ownerOp = ownerOp, mode = socketMode.wireValue)),
 				)
 			}
 

@@ -1170,9 +1170,12 @@ does not cover, found by audit rather than by the residue test. Round one fenced
 mutators; round two found pending-delivery acknowledge, fail, sweep, and the mailbox drain and
 cursor advance; round three found the mailbox append itself and two callers that swallowed the
 typed refusal. The residue derivation reads each store's persist calls, so a mutator that persists
-through a sibling or a caller that drops a typed answer stays invisible. Candidate for
-`architecture-fan-out`: derive fenced writers from the persisted fields, and type every
-`migrating` answer so a caller cannot drop it without a compile error.
+through a sibling or a caller that drops a typed answer stays invisible. The architecture
+fan-out chose the shape: one typed writer surface per store wrapped once by the fence, plus a
+`foldMigrating` every route boundary must pass through, checked by an AST residue rule; about
+300 lines. Deferred: the fenced stores are the gateway paths Phase 9 deletes, and the fence runs
+once. The residue derivation from persisted fields stays as the guard. Recorded in
+`crust-collection` with the operator scripts' shared plumbing.
 
 ## Phase 9 - Cutover and removal
 

@@ -7,12 +7,14 @@ import path from "node:path";
 import { writeFileAtomic } from "../src/shared/atomic-write.js";
 import {
 	MIGRATION_SETTLE_MS,
-	readMigrationEpochFile,
+	readGatewayMigrationWindow,
 	readMigrationFenceRaisedAt,
+	useMigrationEpochFile,
 	withMigrationInProgress,
 } from "../src/shared/migration-fence.js";
 
 const dataDir = process.env.DATA_DIR || "/app/data";
+useMigrationEpochFile(dataDir);
 
 function argument(name: string): string {
 	const index = process.argv.indexOf(name);
@@ -75,9 +77,10 @@ function main(): void {
 	console.log(`output ${outDir}`);
 	withMigrationInProgress(dataDir, () => {
 		// Refuse torn archives.
-		const currentEpoch = readMigrationEpochFile(dataDir);
-		if (currentEpoch === null) throw new Error("migration fence is not up; refusing to cut live state");
-		if (currentEpoch === 0) throw new Error("migration fence has malformed epoch");
+		const window = readGatewayMigrationWindow();
+		if (!window.fenced) throw new Error("migration fence is not up; refusing to cut live state");
+		if (window.epoch === null) throw new Error("migration fence has malformed epoch");
+		const currentEpoch = window.epoch;
 		if (currentEpoch !== epoch)
 			throw new Error(`migration epoch mismatch: fence=${currentEpoch} argument=${epoch}`);
 		const raisedAt = readMigrationFenceRaisedAt(dataDir);

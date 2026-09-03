@@ -19,7 +19,7 @@ import type { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
 import { createKeyDeliveryService } from "./keyDeliveryService.js";
 import { createCursorService } from "./migration/cursorService.js";
-import { createLeaseService, routerMigrationEpoch } from "./migration/leaseService.js";
+import { createLeaseService, readRouterMigrationWindow } from "./migration/leaseService.js";
 import type { OwnerServiceHooks } from "./ownerServiceHooks.js";
 import { createPresenceService } from "./presence/presenceService.js";
 import { createScheduledService } from "./scheduled/scheduledService.js";
@@ -130,12 +130,13 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	};
 	inbox.setPeerGate(peerGate);
 	bridge.setPeerRowGate(peerGate);
-	const leases = deps.leases ?? createLeaseService({ registry, migrationEpoch: () => routerMigrationEpoch() });
+	const leases = deps.leases ?? createLeaseService({ registry, migrationWindow: readRouterMigrationWindow });
 	bridge.setMigrationFence((domainId, gatewayId) => leases.fenced(domainId, gatewayId));
 	bridge.setMigrationReady((domainId) => leases.ready(domainId));
 	bridge.setMigrationLease((domainId, gatewayId) => {
-		const epoch = routerMigrationEpoch();
-		if (epoch > 0 && leases.read(domainId, gatewayId)?.epoch !== epoch) leases.put(domainId, gatewayId, "active");
+		const window = readRouterMigrationWindow();
+		if (window.fenced && window.epoch !== null && leases.read(domainId, gatewayId)?.epoch !== window.epoch)
+			leases.put(domainId, gatewayId, "active");
 	});
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
@@ -215,7 +216,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	const capabilities = createCapabilitiesService({ registry });
 	const readAnchors = createReadAnchorsService({ registry });
 
-	const cursors = createCursorService({ registry, migrationEpoch: () => routerMigrationEpoch() });
+	const cursors = createCursorService({ registry, migrationEpoch: () => readRouterMigrationWindow().epoch ?? 0 });
 	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery])
 		service.register(hooks);
 

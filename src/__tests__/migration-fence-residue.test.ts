@@ -10,7 +10,12 @@ import { CrossDomainShareState } from "../gateway/federation/crossDomainShareSta
 import { ReadAnchors } from "../gateway/readAnchors.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { DurableStore } from "../shared/durable-store.js";
-import { MIGRATING, setMigrationEpoch } from "../shared/migration-fence.js";
+import {
+	MIGRATING,
+	readGatewayMigrationWindow,
+	setMigrationEpoch,
+	useMigrationEpochFile,
+} from "../shared/migration-fence.js";
 import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 
@@ -91,6 +96,26 @@ afterEach(() => {
 });
 
 describe("migration fence residue", () => {
+	it("reads no gateway fence as an open window", () => {
+		const dir = tempDir();
+		useMigrationEpochFile(dir);
+		expect(readGatewayMigrationWindow()).toEqual({ fenced: false, epoch: null });
+	});
+
+	it("reads a gateway fence epoch", () => {
+		const dir = tempDir();
+		fs.writeFileSync(path.join(dir, "migration-epoch"), "12\n");
+		useMigrationEpochFile(dir);
+		expect(readGatewayMigrationWindow()).toEqual({ fenced: true, epoch: 12 });
+	});
+
+	it("fails closed for an unreadable gateway fence", () => {
+		const dir = tempDir();
+		fs.mkdirSync(path.join(dir, "migration-epoch"));
+		useMigrationEpochFile(dir);
+		expect(readGatewayMigrationWindow()).toEqual({ fenced: true, epoch: null });
+	});
+
 	it("every named writer calls the guard in its own body", () => {
 		const floor = [
 			{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },

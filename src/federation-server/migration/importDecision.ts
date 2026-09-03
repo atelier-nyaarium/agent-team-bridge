@@ -12,7 +12,7 @@ export interface ImportMarker {
 export type ImportVerdict =
 	| { kind: "apply" }
 	/** Already applied. */
-	| { kind: "noop"; marker: ImportMarker }
+	| { kind: "alreadyApplied"; marker: ImportMarker }
 	/** Epoch conflict. */
 	| { kind: "refused"; reason: "epoch_conflict"; recorded: ImportMarker };
 
@@ -26,6 +26,6 @@ export function decideImport(
 	recorded: ImportMarker | undefined,
 ): ImportVerdict {
 	if (!recorded) return { kind: "apply" };
-	if (recorded.digest === incoming.digest) return { kind: "noop", marker: recorded };
+	if (recorded.digest === incoming.digest) return { kind: "alreadyApplied", marker: recorded };
 	return { kind: "refused", reason: "epoch_conflict", recorded };
 }

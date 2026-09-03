@@ -148,7 +148,10 @@ class ChatRepository(
 	/** Foreground Router push channel. */
 	internal val socket: ConsoleSocketDriver = ConsoleSocketDriver(
 		coordinator = transportCoordinator,
-		newClient = { listener -> ConsoleSocketClient(client().transport, ownerOps, listener) },
+		newClient = { listener ->
+			// INBOX is the cutover; until then the poll drains the gateway mailbox.
+			ConsoleSocketClient(client().transport, ownerOps, listener, socketMode = ConsoleSocketMode.PLANES)
+		},
 		onRows = { rows, _ -> repoScope.launch(Dispatchers.IO) { dispatchKeyRows(rows) } },
 		onPlane = { name, _, payload -> applyPlane(name, payload) },
 		kick = { drain.kickPoll() },

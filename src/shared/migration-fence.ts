@@ -14,6 +14,8 @@ const POLL_MS = 1000;
 export const MIGRATION_SETTLE_MS = 60_000;
 export const MIGRATION_IN_PROGRESS = "export-in-progress";
 
+export type MigrationWindow = { fenced: boolean; epoch: number | null };
+
 let read: () => number | null = () => null;
 let raisedAt: () => number | null = () => null;
 let cachedEpoch: number | null = null;
@@ -45,18 +47,6 @@ export function useMigrationEpochFile(dataDir: string): void {
 	invalidate();
 }
 
-export function readMigrationEpochFile(dataDir: string): number | null {
-	const file = path.join(dataDir, "migration-epoch");
-	try {
-		const raw = fs.readFileSync(file, "utf8").trim();
-		if (!/^[1-9][0-9]*$/.test(raw)) return 0;
-		const epoch = Number(raw);
-		return Number.isSafeInteger(epoch) ? epoch : 0;
-	} catch {
-		return fs.existsSync(file) ? 0 : null;
-	}
-}
-
 export function readMigrationFenceRaisedAt(dataDir: string): number | null {
 	try {
 		return fs.statSync(path.join(dataDir, "migration-epoch")).mtimeMs;
@@ -83,7 +73,7 @@ export function useMigrationClock(next: () => number): void {
 	invalidate();
 }
 
-export function migrationEpoch(): number | null {
+function cachedMigrationEpoch(): number | null {
 	const now = clock();
 	if (now - cachedAt >= POLL_MS) {
 		cachedEpoch = read();
@@ -92,9 +82,14 @@ export function migrationEpoch(): number | null {
 	return cachedEpoch;
 }
 
-/** Whether migrated state is fenced. */
+export function readGatewayMigrationWindow(): MigrationWindow {
+	const epoch = cachedMigrationEpoch();
+	return { fenced: epoch !== null, epoch: epoch === 0 ? null : epoch };
+}
+
+/** Compatibility alias for writer guards. */
 export function fenced(): boolean {
-	return migrationEpoch() !== null;
+	return readGatewayMigrationWindow().fenced;
 }
 
 export function migrationInProgressFile(dataDir: string): string {
@@ -152,10 +147,10 @@ export function withMigrationInProgress<T>(dataDir: string, operation: () => T):
 	}
 }
 
-// Decimal epoch. Mtime marks raising.
+// Null means no fence or unknown epoch. The flag distinguishes those states.
 // Grammar: bare decimal epoch; settle age uses the operator's clock and file mtime.
 export function migrationFenceRaisedAt(): number | null {
 	const now = clock();
-	if (now - cachedAt >= POLL_MS) migrationEpoch();
+	if (now - cachedAt >= POLL_MS) cachedMigrationEpoch();
 	return raisedAt();
 }

@@ -10,7 +10,13 @@ import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js
 import { ReadAnchors } from "../gateway/readAnchors.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore, openDurable } from "../shared/durable-store.js";
-import { fenced, invalidate, MIGRATING, migrationEpoch, useMigrationEpochFile } from "../shared/migration-fence.js";
+import {
+	fenced,
+	invalidate,
+	MIGRATING,
+	readGatewayMigrationWindow,
+	useMigrationEpochFile,
+} from "../shared/migration-fence.js";
 import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 
@@ -34,11 +40,11 @@ describe("S10 process fence", () => {
 		fs.writeFileSync(path.join(dir, "migration-epoch"), "not-an-epoch\n");
 		useMigrationEpochFile(dir);
 		invalidate();
-		expect(migrationEpoch()).toBe(0);
+		expect(readGatewayMigrationWindow()).toEqual({ fenced: true, epoch: null });
 		expect(fenced()).toBe(true);
 		fs.writeFileSync(path.join(dir, "migration-epoch"), "8-suffix\n");
 		invalidate();
-		expect(migrationEpoch()).toBe(0);
+		expect(readGatewayMigrationWindow()).toEqual({ fenced: true, epoch: null });
 		expect(fenced()).toBe(true);
 	});
 	it("refuses every migrated writer under a real file fence and writes after removal", async () => {

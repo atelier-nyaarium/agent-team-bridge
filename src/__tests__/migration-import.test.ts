@@ -96,7 +96,7 @@ describe("migration import", () => {
 		const recorded = marker();
 
 		expect(decideImport({ digest: "d1", epoch: 7, gatewayId: "hosta" }, recorded)).toEqual({
-			kind: "noop",
+			kind: "alreadyApplied",
 			marker: recorded,
 		});
 	});

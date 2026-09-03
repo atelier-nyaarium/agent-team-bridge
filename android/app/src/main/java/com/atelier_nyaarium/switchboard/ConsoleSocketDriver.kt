@@ -79,7 +79,7 @@ internal class ConsoleSocketDriver(
 			when (frame) {
 				is ConsoleSocketFrame.Welcome -> {
 					val v = frame.value
-					val consumer = socketOf()?.mode != "planes"
+					val consumer = socketOf()?.socketMode == ConsoleSocketMode.INBOX
 					val adopted = coordinator.onWelcome(gen, v.cursor, v.cursorEpoch, v.floor, if (consumer) v.migrationEpoch else 0L)
 					if (adopted !is ConsoleAdoption.Adopted) return
 						welcomed = true
@@ -89,11 +89,11 @@ internal class ConsoleSocketDriver(
 				}
 					is ConsoleSocketFrame.InboxRows -> {
 						val v = frame.value
-						if (coordinator.owns(gen) && socketOf()?.mode == "planes" && v.rows.isNotEmpty() && v.rows.all { it.envelope.kind in KEY_ROW_KINDS }) {
+						if (coordinator.owns(gen) && socketOf()?.socketMode == ConsoleSocketMode.PLANES && v.rows.isNotEmpty() && v.rows.all { it.envelope.kind in KEY_ROW_KINDS }) {
 							onRows(v.rows, v.cursor)
 							return
 						}
-						if (coordinator.owns(gen) && socketOf()?.mode == "planes") return
+						if (coordinator.owns(gen) && socketOf()?.socketMode == ConsoleSocketMode.PLANES) return
 					if (!coordinator.mayConsume(gen)) return
 					onRows(v.rows, v.cursor)
 					if (coordinator.acked(gen, v.cursor)) {

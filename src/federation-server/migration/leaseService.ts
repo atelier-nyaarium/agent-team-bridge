@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { MigrationWindow } from "../../shared/migration-fence.js";
 import {
 	authorityReady,
 	fenceOnReconnect,
@@ -8,28 +9,28 @@ import {
 } from "../../shared/migration-lease.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 
-/** Zero disables migration. NaN is malformed. */
-export function routerMigrationEpoch(): number {
+/** A present unreadable file fences the Router. */
+export function readRouterMigrationWindow(): MigrationWindow {
 	const file = path.join(process.env.DATA_DIR || "/app/data", "migration-epoch");
 	if (fs.existsSync(file)) {
 		try {
 			const raw = fs.readFileSync(file, "utf8").trim();
-			if (!/^[1-9][0-9]*$/.test(raw)) return Number.NaN;
+			if (!/^[1-9][0-9]*$/.test(raw)) return { fenced: true, epoch: null };
 			const epoch = Number(raw);
-			return Number.isSafeInteger(epoch) ? epoch : Number.NaN;
+			return Number.isSafeInteger(epoch) ? { fenced: true, epoch } : { fenced: true, epoch: null };
 		} catch {
-			return Number.NaN;
+			return { fenced: true, epoch: null };
 		}
 	}
 	const raw = process.env.ROUTER_MIGRATION_EPOCH ?? "";
-	if (!/^[1-9][0-9]*$/.test(raw)) return 0;
+	if (!/^[1-9][0-9]*$/.test(raw)) return { fenced: false, epoch: null };
 	const epoch = Number(raw);
-	return Number.isSafeInteger(epoch) ? epoch : 0;
+	return Number.isSafeInteger(epoch) ? { fenced: true, epoch } : { fenced: false, epoch: null };
 }
 
 export interface LeaseDeps {
 	registry: OwnerStoreRegistry;
-	migrationEpoch: () => number;
+	migrationWindow: () => MigrationWindow;
 }
 
 const asLease = (clear: Record<string, unknown>): MigrationLease => ({
@@ -58,7 +59,7 @@ export function createLeaseService(deps: LeaseDeps) {
 		put(domainId: string, gatewayId: string, state: LeaseState): void {
 			const store = deps.registry.for(domainId);
 			const current = store.get("migration", gatewayId);
-			const lease = { ...(current?.clear ?? {}), state, epoch: deps.migrationEpoch() };
+			const lease = { ...(current?.clear ?? {}), state, epoch: deps.migrationWindow().epoch ?? 0 };
 			store.put("migration", gatewayId, current?.version ?? null, { clear: lease });
 		},
 
@@ -66,20 +67,23 @@ export function createLeaseService(deps: LeaseDeps) {
 		complete(domainId: string, gatewayId: string): void {
 			const store = deps.registry.for(domainId);
 			const current = store.get("migration", gatewayId);
-			const lease = { ...(current?.clear ?? { state: "active" }), completedEpoch: deps.migrationEpoch() };
+			const lease = {
+				...(current?.clear ?? { state: "active" }),
+				completedEpoch: deps.migrationWindow().epoch ?? 0,
+			};
 			store.put("migration", gatewayId, current?.version ?? null, { clear: lease });
 		},
 
 		ready(domainId: string): boolean {
-			const epoch = deps.migrationEpoch();
-			return Number.isFinite(epoch) && authorityReady(list(domainId), epoch);
+			const window = deps.migrationWindow();
+			return !window.fenced || (window.epoch !== null && authorityReady(list(domainId), window.epoch));
 		},
 
 		fenced(domainId: string, gatewayId: string): boolean {
-			const epoch = deps.migrationEpoch();
-			if (Number.isNaN(epoch)) return true;
-			if (epoch === 0) return false;
-			return fenceOnReconnect(read(domainId, gatewayId), epoch);
+			const window = deps.migrationWindow();
+			if (!window.fenced) return false;
+			if (window.epoch === null) return true;
+			return fenceOnReconnect(read(domainId, gatewayId), window.epoch);
 		},
 	};
 }

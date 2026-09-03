@@ -8,7 +8,7 @@ import {
 	type ConsoleSocketOutbound,
 } from "../../shared/schemasConsoleSocket.js";
 import type { InboxRow } from "../../shared/schemasInbox.js";
-import { routerMigrationEpoch } from "../migration/leaseService.js";
+import { readRouterMigrationWindow } from "../migration/leaseService.js";
 
 export interface ConsoleSocket {
 	send(data: string): void;
@@ -158,7 +158,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			cursorEpoch: consumer.cursorEpoch,
 			floor: deps.ownerFloor(identity.domainId),
 			versions: deps.planeVersions?.(identity.domainId, identity.signerSignPub) ?? {},
-			migrationEpoch: routerMigrationEpoch(),
+			migrationEpoch: readRouterMigrationWindow().epoch ?? 0,
 		});
 		if (!planesOnly) drain(socket, at, consumer.cursor);
 		if (planesOnly) {

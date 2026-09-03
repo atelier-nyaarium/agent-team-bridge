@@ -4,14 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { createCursorService } from "../federation-server/migration/cursorService.js";
-import { createLeaseService, routerMigrationEpoch } from "../federation-server/migration/leaseService.js";
+import { createLeaseService, readRouterMigrationWindow } from "../federation-server/migration/leaseService.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { translateCursor } from "../shared/migration-cursor.js";
 
 const roots: string[] = [];
 
-function make(migrationEpoch = 7) {
+function make(epoch = 7) {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-"));
 	roots.push(dataDir);
 	const owner = generateIdentity();
@@ -22,7 +22,13 @@ function make(migrationEpoch = 7) {
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
 		now: () => 100,
 	});
-	return { registry, service: createLeaseService({ registry, migrationEpoch: () => migrationEpoch }) };
+	return {
+		registry,
+		service: createLeaseService({
+			registry,
+			migrationWindow: () => ({ fenced: epoch !== 0, epoch: epoch || null }),
+		}),
+	};
 }
 
 afterEach(() => {
@@ -30,7 +36,7 @@ afterEach(() => {
 });
 
 describe("migration lease service", () => {
-	it("prefers the file epoch over the environment fallback", () => {
+	it("reads a Router file epoch", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-file-"));
 		roots.push(dir);
 		fs.writeFileSync(path.join(dir, "migration-epoch"), "9\n");
@@ -39,11 +45,59 @@ describe("migration lease service", () => {
 		process.env.DATA_DIR = dir;
 		process.env.ROUTER_MIGRATION_EPOCH = "3";
 		try {
-			expect(routerMigrationEpoch()).toBe(9);
-			fs.rmSync(path.join(dir, "migration-epoch"));
-			expect(routerMigrationEpoch()).toBe(3);
-			fs.writeFileSync(path.join(dir, "migration-epoch"), "9-suffix\n");
-			expect(routerMigrationEpoch()).toBeNaN();
+			expect(readRouterMigrationWindow()).toEqual({ fenced: true, epoch: 9 });
+		} finally {
+			if (previousDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+		}
+	});
+
+	it("uses the Router variable only without a file", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-env-"));
+		roots.push(dir);
+		const previousDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		process.env.ROUTER_MIGRATION_EPOCH = "3";
+		try {
+			expect(readRouterMigrationWindow()).toEqual({ fenced: true, epoch: 3 });
+		} finally {
+			if (previousDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+		}
+	});
+
+	it("reads no Router fence as an open window", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-none-"));
+		roots.push(dir);
+		const previousDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		delete process.env.ROUTER_MIGRATION_EPOCH;
+		try {
+			expect(readRouterMigrationWindow()).toEqual({ fenced: false, epoch: null });
+		} finally {
+			if (previousDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+		}
+	});
+
+	it("fails closed for an unreadable Router fence", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-bad-"));
+		roots.push(dir);
+		fs.mkdirSync(path.join(dir, "migration-epoch"));
+		const previousDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		process.env.ROUTER_MIGRATION_EPOCH = "3";
+		try {
+			expect(readRouterMigrationWindow()).toEqual({ fenced: true, epoch: null });
 		} finally {
 			if (previousDir === undefined) delete process.env.DATA_DIR;
 			else process.env.DATA_DIR = previousDir;

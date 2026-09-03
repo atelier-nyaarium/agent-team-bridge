@@ -21,7 +21,7 @@ enum class UploadOutcome {
 	/** Router owns the record. */
 	ACCEPTED,
 
-	/** Router ownership is unknown. */
+	/** No Router answer; retry on the next welcome. */
 	UNANSWERED,
 
 	REFUSED,
