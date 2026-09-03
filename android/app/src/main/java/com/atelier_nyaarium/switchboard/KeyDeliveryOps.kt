@@ -12,7 +12,6 @@ import com.atelier_nyaarium.switchboard.proto.KeyReceiptsReadOp
 import com.atelier_nyaarium.switchboard.proto.KeyReceiptsReadResult
 import com.atelier_nyaarium.switchboard.proto.KeyRequestOp
 import com.atelier_nyaarium.switchboard.proto.KeyRequest
-import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -58,7 +57,7 @@ class KeyDeliveryOps(
 		}
 	},
 	private val now: () -> Long = { System.currentTimeMillis() },
-	private val newNonce: () -> String = { UUID.randomUUID().toString() },
+	private val newNonce: () -> String = { com.atelier_nyaarium.switchboard.crypto.randomNonceB64() },
 	private val missingTimer: MissingEpochTimer = CoroutineMissingEpochTimer(),
 	private val reportError: (String) -> Unit = {},
 ) {

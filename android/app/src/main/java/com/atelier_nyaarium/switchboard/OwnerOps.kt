@@ -19,7 +19,7 @@ class OwnerOps(private val repo: ChatRepository) {
 		val identity = repo.federation.consoleIdentity()
 		val prov = repo.client().transport.prov
 		val at = System.currentTimeMillis()
-		val nonce = UUID.randomUUID().toString()
+		val nonce = com.atelier_nyaarium.switchboard.crypto.randomNonceB64()
 		val signature = Crypto.sign(
 			ownerOpSigningBytes(
 				domainId = domain,
