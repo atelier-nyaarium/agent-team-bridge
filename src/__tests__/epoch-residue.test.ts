@@ -4,6 +4,7 @@ import { filesUnder, linesMatching } from "./helpers/residue.js";
 
 const comparison = /(?:cursorEpoch|deliveryEpoch)\s*(?:<|>|<=|>=)/;
 const successor = /(?:cursorEpoch|deliveryEpoch)[^\n]*\+\s*1/;
+const derivedMint = /\bepoch\s*:\s*(?:1\s*\+\s*Math\.random|Math\.random|Math\.floor|now\s*\()/;
 
 describe("epoch residue", () => {
 	it("rejects ordering and counter minting in production", () => {
@@ -12,7 +13,12 @@ describe("epoch residue", () => {
 		const offenders = roots
 			.flatMap((root) => filesUnder(root, ".ts").concat(filesUnder(root, ".kt")))
 			.filter((file) => !file.includes(`${path.sep}__tests__${path.sep}`))
-			.flatMap((file) => [...linesMatching(file, comparison), ...linesMatching(file, successor)]);
+			.filter((file) => !file.endsWith(`${path.sep}shared${path.sep}epoch.ts`))
+			.flatMap((file) => [
+				...linesMatching(file, comparison),
+				...linesMatching(file, successor),
+				...linesMatching(file, derivedMint),
+			]);
 		expect(offenders).toEqual([]);
 	});
 });

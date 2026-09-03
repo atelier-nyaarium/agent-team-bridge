@@ -1,3 +1,4 @@
+import { mintEpoch } from "../../shared/epoch.js";
 import type { CrossDomainPresenceSession } from "../../shared/federation-protocol.js";
 import { type PresenceRow, presenceIdentityOf } from "../../shared/presence-identity.js";
 import { toCrossDomainPresenceSession } from "../../shared/presence-projection.js";
@@ -11,6 +12,7 @@ import {
 } from "../../shared/schemasRouterPresence.js";
 import { type Address, isValidSessionName, parseTarget } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
+import { type FoldedWrite, foldWriteResult } from "../../shared/write-result.js";
 import type { GatewayRegistration } from "../gatewayBridge.js";
 import type { OwnerOpHandler } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
@@ -47,14 +49,13 @@ export function createPresenceService(deps: {
 	pokeOwner?: (domainId: string, version: number, projection: unknown) => void;
 }) {
 	const now = deps.now ?? (() => deps.registry.now());
-	// Consume after projection assembly.
-	let pokePending = false;
+	const pokePending = new Map<string, boolean>();
 
-	const write = (domainId: string, id: string, clear: Record<string, unknown>): void => {
+	const write = (domainId: string, id: string, clear: Record<string, unknown>): FoldedWrite => {
 		const store = deps.registry.for(domainId);
 		const current = store.get("presence.row", id);
 		const result = store.put("presence.row", id, current?.version ?? null, { clear });
-		if (result.kind !== "ok") throw new Error(`presence write ${result.kind}`);
+		return foldWriteResult(result);
 	};
 
 	const rowsFor = (domainId: string): PresenceRow[] =>
@@ -79,19 +80,24 @@ export function createPresenceService(deps: {
 		const clear = current?.clear as
 			| { epoch?: number; versions?: Record<string, number>; identities?: Record<string, string> }
 			| undefined;
-		const epoch = clear?.epoch ?? Math.floor(now());
+		const epoch = clear?.epoch ?? mintEpoch();
 		const versions = clear?.versions ?? {};
 		const identities = clear?.identities ?? {};
 		const version = identities[key] === identity ? (versions[key] ?? 0) : (versions[key] ?? -1) + 1;
-		if (!clear || identities[key] !== identity) {
-			write(domainId, planeRecordId, {
-				epoch,
-				versions: { ...versions, [key]: version },
-				identities: { ...identities, [key]: identity },
-			});
-			if (key === "owner") pokePending = true;
-		}
-		return { epoch, version };
+		const changed = !clear || identities[key] !== identity;
+		return {
+			plane: { epoch, version },
+			commit: (): FoldedWrite => {
+				if (!changed) return { applied: true, outcome: "accepted" };
+				const result = write(domainId, planeRecordId, {
+					epoch,
+					versions: { ...versions, [key]: version },
+					identities: { ...identities, [key]: identity },
+				});
+				if (result.applied && key === "owner") pokePending.set(domainId, true);
+				return result;
+			},
+		};
 	};
 
 	/** Rows follow registration incarnation. */
@@ -102,12 +108,14 @@ export function createPresenceService(deps: {
 		presenceFresh: "fresh",
 	});
 
-	const upsertRows = (reg: GatewayRegistration, rows: TeamInfo[]): void => {
+	const upsertRows = (reg: GatewayRegistration, rows: TeamInfo[]): FoldedWrite | undefined => {
 		for (const row of rows) {
-			write(reg.domainId, rowId(reg.gatewayId, row.team), ownedRow(reg, row));
+			const result = write(reg.domainId, rowId(reg.gatewayId, row.team), ownedRow(reg, row));
+			if (!result.applied) return result;
 			if (LIVE_STATUSES.has(row.status))
 				deps.touch?.(reg.domainId, `${reg.domainId}.${reg.gatewayId}.${row.team}`);
 		}
+		return undefined;
 	};
 
 	const applyBaseline = (reg: GatewayRegistration, params: Baseline) => {
@@ -115,16 +123,18 @@ export function createPresenceService(deps: {
 		if (parsed.incarnation !== reg.incarnation) return { resync: true as const };
 		const store = deps.registry.for(reg.domainId);
 		for (const record of store.list("presence.row")) {
-			if (record.id.startsWith(rowPrefix(reg.gatewayId))) store.del("presence.row", record.id, record.version);
+			if (record.id.startsWith(rowPrefix(reg.gatewayId)))
+				foldWriteResult(store.del("presence.row", record.id, record.version));
 		}
-		upsertRows(reg, parsed.rows);
-		write(reg.domainId, gatewayRecordId(reg.gatewayId), {
+		const rowsResult = upsertRows(reg, parsed.rows);
+		if (rowsResult) return { outcome: rowsResult.outcome };
+		const gatewayResult = write(reg.domainId, gatewayRecordId(reg.gatewayId), {
 			incarnation: parsed.incarnation,
 			seq: 0,
 			spawnPoints: { ...parsed.spawnPoints, gatewayId: reg.gatewayId, domainId: reg.domainId },
 			lastRegisteredAt: now(),
 		});
-		return { ok: true as const };
+		return { outcome: gatewayResult.outcome };
 	};
 
 	const applyDelta = (reg: GatewayRegistration, params: Delta) => {
@@ -142,11 +152,12 @@ export function createPresenceService(deps: {
 			return { resync: true as const };
 		for (const sessionId of parsed.tombstones) {
 			const current = store.get("presence.row", rowId(reg.gatewayId, sessionId));
-			if (current) store.del("presence.row", current.id, current.version);
+			if (current) foldWriteResult(store.del("presence.row", current.id, current.version));
 		}
-		upsertRows(reg, parsed.upserts);
-		write(reg.domainId, gatewayRecordId(reg.gatewayId), { ...record.clear, seq: parsed.seq });
-		return { ok: true as const };
+		const rowsResult = upsertRows(reg, parsed.upserts);
+		if (rowsResult) return { outcome: rowsResult.outcome };
+		const gatewayResult = write(reg.domainId, gatewayRecordId(reg.gatewayId), { ...record.clear, seq: parsed.seq });
+		return { outcome: gatewayResult.outcome };
 	};
 
 	const markUnreachable = (domainId: string, gatewayId?: string): void => {
@@ -170,7 +181,7 @@ export function createPresenceService(deps: {
 	const forgetSession = (reg: GatewayRegistration, sessionId: string): void => {
 		const store = deps.registry.for(reg.domainId);
 		const current = store.get("presence.row", rowId(reg.gatewayId, sessionId));
-		if (current) store.del("presence.row", current.id, current.version);
+		if (current) foldWriteResult(store.del("presence.row", current.id, current.version));
 	};
 
 	const roster = (domainId: string, admitted: string[], connected: string[]) => {
@@ -208,10 +219,11 @@ export function createPresenceService(deps: {
 		}
 		const bounded = sessions.slice(0, 200);
 		const identity = JSON.stringify(bounded.map(({ lastActive: _lastActive, ...rest }) => rest));
-		return FriendPresenceProjectionSchema.parse({
-			plane: projectionPlane(domainId, `friend:${toDomainId}`, identity),
-			sessions: bounded,
-		});
+		const plane = projectionPlane(domainId, `friend:${toDomainId}`, identity);
+		const projection = FriendPresenceProjectionSchema.parse({ plane: plane.plane, sessions: bounded });
+		const result = plane.commit();
+		if (!result.applied) return { outcome: result.outcome } as never;
+		return projection;
 	};
 
 	const ownerProjection = (domainId: string, projectionDeps: ProjectionDeps) => {
@@ -223,6 +235,7 @@ export function createPresenceService(deps: {
 		);
 		const linked = projectionDeps.linkedDomains(domainId).map((linkedDomain) => {
 			const projection = friendProjection(linkedDomain, domainId, projectionDeps);
+			if ("outcome" in projection) return projection as never;
 			return {
 				domainId: linkedDomain,
 				version: projection.plane,
@@ -242,15 +255,17 @@ export function createPresenceService(deps: {
 		});
 		const plane = projectionPlane(domainId, "owner", identity);
 		const projection = OwnerPresenceProjectionSchema.parse({
-			plane,
+			plane: plane.plane,
 			rows,
 			linked,
 			...rosterData,
 			spawnPoints,
 		});
-		if (pokePending) {
-			pokePending = false;
-			deps.pokeOwner?.(domainId, plane.version, projection);
+		const result = plane.commit();
+		if (!result.applied) return { outcome: result.outcome } as never;
+		if (pokePending.get(domainId)) {
+			pokePending.delete(domainId);
+			deps.pokeOwner?.(domainId, plane.plane.version, projection);
 		}
 		return projection;
 	};
@@ -258,10 +273,8 @@ export function createPresenceService(deps: {
 	/** Recompute and push the owner projection. */
 	const pushIfChanged = (domainId: string): void => {
 		if (!deps.pokeOwner || !deps.projection) return;
-		// Projection failure must not fail writes.
-		try {
-			ownerProjection(domainId, deps.projection);
-		} catch {}
+		const result = ownerProjection(domainId, deps.projection);
+		if ("outcome" in result) console.error(`[presence] projection failed for ${domainId}: ${result.outcome}`);
 	};
 
 	const register = (hooks: OwnerServiceHooks): void => {

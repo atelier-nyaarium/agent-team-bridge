@@ -125,6 +125,23 @@ describe("router presence slice", () => {
 		]);
 		registry.close();
 	});
+	it("returns an unapplied plane outcome without advancing or poking", () => {
+		const pokes: unknown[] = [];
+		const { registry, service } = make((...args) => pokes.push(args));
+		service.applyBaseline(reg, {
+			incarnation: 1,
+			seq: 0,
+			rows: [row("proj.main")],
+			spawnPoints: { gatewayId: "gw", hostSpawns: [] },
+		});
+		const store = registry.for("domain");
+		vi.spyOn(store, "put").mockReturnValue({ kind: "durability_failure", reason: "full" });
+		const result = service.ownerProjection("domain", { ...projectionDeps, connected: () => [] });
+		expect(result).toEqual({ outcome: "durability_failure" });
+		expect(store.get("presence.row", "presence.plane")).toBeNull();
+		expect(pokes).toEqual([]);
+		registry.close();
+	});
 
 	it("resyncs gaps and foreign incarnations without changing rows", () => {
 		const { registry, service } = make();
@@ -443,7 +460,7 @@ describe("router presence slice", () => {
 			{
 				incarnation: 1,
 				seq: 0,
-				rows: [row("b.main")],
+				rows: [row("b.main"), row("b.private")],
 				spawnPoints: { gatewayId: "gw", hostSpawns: [] },
 			},
 		);
@@ -465,6 +482,9 @@ describe("router presence slice", () => {
 		});
 		expect(handlers.get("presence_read_friend")!(op, { toDomainId: "b" })).toMatchObject({
 			sessions: [{ team: "b.main" }],
+		});
+		expect(handlers.get("presence_read_friend")!(op, { toDomainId: "b" })).not.toMatchObject({
+			sessions: [{ team: "b.private" }],
 		});
 		expect(
 			service

@@ -15,7 +15,8 @@ export function targetKey(target: CrossDomainShareTarget): string {
 	return target.kind === "domain" ? `domain:${target.domainId}` : "everyone_trusted";
 }
 
-export type ShareState = { shares: ShareRecord[] };
+export type UnlinkedDomainMark = { domainId: string; edgeId: string };
+export type ShareState = { shares: ShareRecord[]; unlinkedDomains?: readonly UnlinkedDomainMark[] };
 
 /** Re-sharing refreshes `lastSeenAt` without duplicating. */
 export function share(
@@ -48,7 +49,10 @@ export function isSharedTo(
 	sessionTarget: string,
 	toDomainId: string,
 	isLinked: (domainId: string) => boolean,
+	linkEdgeId?: (domainId: string) => string | null,
 ): boolean {
+	const edgeId = linkEdgeId?.(toDomainId);
+	if (state.unlinkedDomains?.some((mark) => mark.domainId === toDomainId && mark.edgeId === edgeId)) return false;
 	return state.shares.some(
 		(s) =>
 			s.sessionTarget === sessionTarget &&
@@ -56,7 +60,14 @@ export function isSharedTo(
 	);
 }
 
-export function sharesFor(state: ShareState, toDomainId: string, isLinked: (domainId: string) => boolean): string[] {
+export function sharesFor(
+	state: ShareState,
+	toDomainId: string,
+	isLinked: (domainId: string) => boolean,
+	linkEdgeId?: (domainId: string) => string | null,
+): string[] {
+	const edgeId = linkEdgeId?.(toDomainId);
+	if (state.unlinkedDomains?.some((mark) => mark.domainId === toDomainId && mark.edgeId === edgeId)) return [];
 	const linked = isLinked(toDomainId);
 	return [
 		...new Set(

@@ -217,4 +217,27 @@ describe("Router tier 1 services", () => {
 		).toMatchObject({ known: true });
 		registry.close();
 	});
+	it("returns unapplied tier 1 writes without following effects", async () => {
+		const { registry } = make();
+		const capabilities = createCapabilitiesService({ registry });
+		const anchors = createReadAnchorsService({ registry });
+		const { hooks, ownerOps } = makeHooks();
+		capabilities.register(hooks);
+		anchors.register(hooks);
+		vi.spyOn(registry.for("a"), "put").mockReturnValue({ kind: "durability_failure", reason: "full" });
+		const op = { domainId: "a", conversationId: "phone" } as Parameters<OwnerOpHandler>[0];
+		expect(
+			await ownerOps.get("capabilities_report")?.(op, { kind: "capabilities_report", capabilities: [] }),
+		).toEqual({
+			outcome: "durability_failure",
+		});
+		expect(
+			await ownerOps.get("report_read")?.(op, { kind: "report_read", team: "team", epoch: 1, seq: 1, at: 1 }),
+		).toEqual({
+			outcome: "durability_failure",
+		});
+		expect(registry.for("a").list("capabilities")).toEqual([]);
+		expect(registry.for("a").list("readAnchor")).toEqual([]);
+		registry.close();
+	});
 });

@@ -1,9 +1,10 @@
 import type { CapabilitySnapshot } from "../../shared/capabilities.js";
 import { admit, type CapabilityFoldRecord, foldCapabilitySnapshot } from "../../shared/capability-fold.js";
 import { CapabilitiesReadSchema, CapabilitiesReportSchema } from "../../shared/schemasTier1.js";
+import { foldWriteResult } from "../../shared/write-result.js";
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
-import type { StateRecord, WriteResult } from "../owner/ownerStateStore.js";
+import type { StateRecord } from "../owner/ownerStateStore.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
 
@@ -16,9 +17,7 @@ export interface CapabilitiesServiceDeps {
 	ttlMs?: number;
 }
 
-const write = (result: WriteResult): void => {
-	if (result.kind !== "ok") throw new Error(result.kind === "conflict" ? "conflict" : result.kind);
-};
+const write = (result: Parameters<typeof foldWriteResult>[0]) => foldWriteResult(result);
 
 const deviceId = (conversationId: string): string => `capabilities:${conversationId}`;
 
@@ -29,7 +28,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 		domainId: string,
 		conversationId: string,
 		value: { capabilities?: unknown[]; clientVersion?: string },
-	): void => {
+	): ReturnType<typeof write> => {
 		const store = deps.registry.for(domainId);
 		const id = deviceId(conversationId);
 		const current = store.get("capabilities", id);
@@ -48,7 +47,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 					: {}
 				: { clientVersion: value.clientVersion }),
 		};
-		write(store.put("capabilities", id, current?.version ?? null, { clear }));
+		return write(store.put("capabilities", id, current?.version ?? null, { clear }));
 	};
 
 	const touch = (domainId: string, conversationId: string): void => {
@@ -63,7 +62,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 	const forget = (domainId: string, conversationId: string): void => {
 		const store = deps.registry.for(domainId);
 		const current = store.get("capabilities", deviceId(conversationId));
-		if (current) write(store.del("capabilities", current.id, current.version));
+		if (current) foldWriteResult(store.del("capabilities", current.id, current.version));
 	};
 
 	const snapshot = (domainId: string): CapabilitySnapshot => {
@@ -86,7 +85,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 		const store = deps.registry.for(domainId);
 		for (const record of store.list("capabilities"))
 			if (now - Number(record.clear.lastSeen) > ttlMs)
-				write(store.del("capabilities", record.id, record.version));
+				foldWriteResult(store.del("capabilities", record.id, record.version));
 	};
 
 	return {
@@ -99,8 +98,9 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 			hooks.ownerOp("capabilities_report", async (_op, value) => {
 				const parsed = CapabilitiesReportSchema.safeParse(value);
 				if (!parsed.success) throw new OwnerOpRefused("malformed");
-				report(_op.domainId, _op.conversationId, parsed.data);
-				return snapshot(_op.domainId);
+				const result = report(_op.domainId, _op.conversationId, parsed.data);
+				if (!result.applied) return { outcome: result.outcome };
+				return { ...snapshot(_op.domainId), outcome: result.outcome };
 			});
 			hooks.ownerOp("capabilities_read", async (op, value) => {
 				if (!CapabilitiesReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");

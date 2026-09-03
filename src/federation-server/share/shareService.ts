@@ -17,9 +17,13 @@ import {
 	type ShareRecord,
 	type ShareState,
 	targetKey,
+	type UnlinkedDomainMark,
 } from "../../shared/share-rules.js";
+import type { WriteOutcome } from "../../shared/write-result.js";
+import { foldWriteResult } from "../../shared/write-result.js";
 import type { GatewayRegistration } from "../gatewayBridge.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
+import type { OwnerStateStore } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
 
 const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -30,12 +34,21 @@ const shareId = (sessionTarget: string, target: CrossDomainShareTarget): string 
 	`share:${sessionTarget}|${targetKey(target)}`;
 const generationId = (sessionTarget: string, friendDomainId: string): string =>
 	`share.generation:${sessionTarget}|${friendDomainId}`;
+const unlinkedId = (friendDomainId: string): string => `share.unlinked:${friendDomainId}`;
 
 export interface ShareServiceDeps {
 	registry: OwnerStoreRegistry;
 	isLinked: (domainId: string, friendDomainId: string) => boolean;
+	linkEdgeId?: (domainId: string, friendDomainId: string) => string | null;
 	dropLinkEdge: (domainId: string, friendDomainId: string) => void;
 	retireRevokedPeerRows: (domainId: string, sessionTarget: string, friendDomainId: string) => void;
+	retireRevokedPeerRowsInBatch?: (
+		store: OwnerStateStore,
+		tx: Parameters<Parameters<OwnerStateStore["batch"]>[0]>[0],
+		domainId: string,
+		sessionTarget: string,
+		friendDomainId: string,
+	) => number;
 	connectedGateways: (domainId: string) => string[];
 	now: () => number;
 }
@@ -57,16 +70,12 @@ export interface ShareService {
 	unlink(
 		domainId: string,
 		friendDomainId: string,
-	): { peersRemoved: number; sharesDropped: number; jobsExpired: number };
+	): { peersRemoved: number; sharesDropped: number; jobsExpired: number; outcome?: WriteOutcome };
 	register(hooks: OwnerServiceHooks): void;
 }
 
-function state(records: ShareRecord[]): ShareState {
-	return { shares: records };
-}
-
-function assertWrite(result: { kind: string }): void {
-	if (result.kind !== "ok") throw new Error(`share state write ${result.kind}`);
+function state(records: ShareRecord[], unlinkedDomains: UnlinkedDomainMark[] = []): ShareState {
+	return { shares: records, ...(unlinkedDomains.length ? { unlinkedDomains } : {}) };
 }
 
 export function createShareService(deps: ShareServiceDeps): ShareService {
@@ -79,19 +88,33 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 			.list("share")
 			.filter((record) => record.id.startsWith("share:"))
 			.map((record) => ({ ...record.clear }) as unknown as ShareRecord);
+	const unlinked = (domainId: string): UnlinkedDomainMark[] =>
+		deps.registry
+			.for(domainId)
+			.list("share")
+			.filter((record) => record.id.startsWith("share.unlinked:"))
+			.map((record) => record.clear as unknown as UnlinkedDomainMark);
 	/** Batch the share change with all implied generation bumps. */
 	const putState = (
 		domainId: string,
 		before: ShareRecord[],
 		after: ShareRecord[],
 		bumps: Array<{ sessionTarget: string; friendDomainId: string }> = [],
-	): void => {
+		marks: { add?: UnlinkedDomainMark[]; remove?: string[] } = {},
+	): ReturnType<typeof foldWriteResult> => {
 		const store = deps.registry.for(domainId);
 		const previous = new Map(before.map((record) => [shareId(record.sessionTarget, record.target), record]));
 		const next = new Map(after.map((record) => [shareId(record.sessionTarget, record.target), record]));
 		const changed = [...next].filter(([id, record]) => JSON.stringify(previous.get(id)) !== JSON.stringify(record));
 		const removed = [...previous].filter(([id]) => !next.has(id));
-		if (changed.length === 0 && removed.length === 0 && bumps.length === 0) return;
+		if (
+			changed.length === 0 &&
+			removed.length === 0 &&
+			bumps.length === 0 &&
+			!marks.add?.length &&
+			!marks.remove?.length
+		)
+			return { applied: true, outcome: "accepted" };
 		const result = store.batch((tx) => {
 			for (const [id, record] of changed) {
 				const current = store.get("share", id);
@@ -105,12 +128,28 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 					clear: { generation: Number(current?.clear.generation ?? 0) + 1 },
 				});
 			}
+			for (const { domainId: friendDomainId, edgeId } of marks.add ?? []) {
+				const id = unlinkedId(friendDomainId);
+				if (!store.get("share", id)) tx.put("share", id, null, { clear: { domainId: friendDomainId, edgeId } });
+			}
+			for (const friendDomainId of marks.remove ?? []) {
+				const current = store.get("share", unlinkedId(friendDomainId));
+				if (current) tx.del("share", current.id, current.version);
+			}
+			for (const { sessionTarget, friendDomainId } of bumps)
+				deps.retireRevokedPeerRowsInBatch?.(store, tx, domainId, sessionTarget, friendDomainId);
 		});
-		assertWrite(result);
+		return foldWriteResult(result);
 	};
 	const sharedTo = (records: ShareRecord[], domainId: string, sessionTarget: string, friend: string): boolean =>
 		deps.isLinked(domainId, friend) &&
-		ruleIsSharedTo(state(records), sessionTarget, friend, (id) => deps.isLinked(domainId, id));
+		ruleIsSharedTo(
+			state(records, unlinked(domainId)),
+			sessionTarget,
+			friend,
+			(id) => deps.isLinked(domainId, id),
+			(id) => deps.linkEdgeId?.(domainId, id) ?? null,
+		);
 	const attestationsOf = (reg: GatewayRegistration) => `${reg.domainId}|${reg.gatewayId}|`;
 	const linkedDomains = (domainId: string): string[] =>
 		deps.registry.domains().filter((id) => deps.isLinked(domainId, id));
@@ -118,13 +157,19 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 	return {
 		share(domainId, sessionTarget, target) {
 			const before = records(domainId);
-			putState(domainId, before, ruleShare(state(before), sessionTarget, target, deps.now()).shares);
-			return { ok: true };
+			const written = putState(
+				domainId,
+				before,
+				ruleShare(state(before, unlinked(domainId)), sessionTarget, target, deps.now()).shares,
+				[],
+				target.kind === "domain" ? { remove: [target.domainId] } : {},
+			);
+			return written.applied ? { ok: true } : { ok: false, outcome: written.outcome };
 		},
 		// Bump generation only when no remaining record shares the pair.
 		unshare(domainId, sessionTarget, target) {
 			const before = records(domainId);
-			const changed = ruleUnshare(state(before), sessionTarget, target);
+			const changed = ruleUnshare(state(before, unlinked(domainId)), sessionTarget, target);
 			if (!changed.removed) return { ok: false };
 			const after = changed.state.shares;
 			const friends = target.kind === "domain" ? [target.domainId] : linkedDomains(domainId);
@@ -133,14 +178,15 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 					sharedTo(before, domainId, sessionTarget, friend) &&
 					!sharedTo(after, domainId, sessionTarget, friend),
 			);
-			putState(
+			const written = putState(
 				domainId,
 				before,
 				after,
 				revoked.map((friendDomainId) => ({ sessionTarget, friendDomainId })),
 			);
-			for (const friend of revoked) deps.retireRevokedPeerRows(domainId, sessionTarget, friend);
-			return { ok: true };
+			if (written.applied && !deps.retireRevokedPeerRowsInBatch)
+				for (const friend of revoked) deps.retireRevokedPeerRows(domainId, sessionTarget, friend);
+			return written.applied ? { ok: true } : { ok: false, outcome: written.outcome };
 		},
 		listShares(domainId) {
 			return {
@@ -150,12 +196,23 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 		isSharedTo(domainId, sessionTarget, toDomainId) {
 			return (
 				deps.isLinked(domainId, toDomainId) &&
-				ruleIsSharedTo(state(records(domainId)), sessionTarget, toDomainId, (id) => deps.isLinked(domainId, id))
+				ruleIsSharedTo(
+					state(records(domainId), unlinked(domainId)),
+					sessionTarget,
+					toDomainId,
+					(id) => deps.isLinked(domainId, id),
+					(id) => deps.linkEdgeId?.(domainId, id) ?? null,
+				)
 			);
 		},
 		sharesFor(domainId, toDomainId) {
 			return deps.isLinked(domainId, toDomainId)
-				? ruleSharesFor(state(records(domainId)), toDomainId, (id) => deps.isLinked(domainId, id))
+				? ruleSharesFor(
+						state(records(domainId), unlinked(domainId)),
+						toDomainId,
+						(id) => deps.isLinked(domainId, id),
+						(id) => deps.linkEdgeId?.(domainId, id) ?? null,
+					)
 				: [];
 		},
 		generation(domainId, sessionTarget, friendDomainId) {
@@ -213,14 +270,33 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 						value.jobIds.length > 0 &&
 						now - value.receivedAt <= ATTESTATION_TTL_MS,
 				);
-			const result = ruleSweep(state(before), now, SHARE_TTL_MS, live);
-			putState(domainId, before, result.state.shares);
+			const result = ruleSweep(state(before, unlinked(domainId)), now, SHARE_TTL_MS, live);
+			const revoked = [
+				...new Set(
+					before.flatMap((record) =>
+						linkedDomains(domainId)
+							.filter(
+								(friend) =>
+									sharedTo(before, domainId, record.sessionTarget, friend) &&
+									!sharedTo(result.state.shares, domainId, record.sessionTarget, friend),
+							)
+							.map((friendDomainId) => `${record.sessionTarget}|${friendDomainId}`),
+					),
+				),
+			].map((value) => {
+				const [sessionTarget, friendDomainId] = value.split("|");
+				return { sessionTarget, friendDomainId };
+			});
+			const written = putState(domainId, before, result.state.shares, revoked);
+			if (written.applied && !deps.retireRevokedPeerRowsInBatch)
+				for (const { sessionTarget, friendDomainId } of revoked)
+					deps.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
 			return result.removed;
 		},
 		// Tear down linked friends; unlinked names only drop stale explicit shares.
 		unlink(domainId, friendDomainId) {
 			const before = records(domainId);
-			const linked = deps.isLinked(domainId, friendDomainId);
+			const isCurrentlyLinked = deps.isLinked(domainId, friendDomainId);
 			const affected = [
 				...new Set(
 					before
@@ -228,15 +304,22 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 						.map((record) => record.sessionTarget),
 				),
 			];
-			const dropped = dropDomain(state(before), friendDomainId);
-			putState(
+			const dropped = dropDomain(state(before, unlinked(domainId)), friendDomainId);
+			const written = putState(
 				domainId,
 				before,
 				dropped.state.shares,
 				affected.map((sessionTarget) => ({ sessionTarget, friendDomainId })),
+				isCurrentlyLinked
+					? { add: [{ domainId: friendDomainId, edgeId: deps.linkEdgeId?.(domainId, friendDomainId) ?? "" }] }
+					: {},
 			);
-			for (const sessionTarget of affected) deps.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
-			if (!linked) return { peersRemoved: 0, sharesDropped: dropped.removed, jobsExpired: 0 };
+			if (!written.applied)
+				return { peersRemoved: 0, sharesDropped: 0, jobsExpired: 0, outcome: written.outcome };
+			if (!deps.retireRevokedPeerRowsInBatch)
+				for (const sessionTarget of affected)
+					deps.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
+			if (!isCurrentlyLinked) return { peersRemoved: 0, sharesDropped: dropped.removed, jobsExpired: 0 };
 			deps.dropLinkEdge(domainId, friendDomainId);
 			if (registeredHooks) {
 				const localFrame = { type: "unlink", domainId: friendDomainId };

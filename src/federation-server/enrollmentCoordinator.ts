@@ -197,6 +197,19 @@ export class EnrollmentCoordinator {
 		return true;
 	}
 
+	public linkEdgeId(srcDomainId: string, dstDomainId: string): string | null {
+		if (!this.hasLinkEdge(srcDomainId, dstDomainId) || !this.state.ownerSignPub) return null;
+		const edge = (this.state.linkEdges ?? [])
+			.filter(
+				(s) =>
+					s.edge.srcDomainId === srcDomainId &&
+					s.edge.dstDomainId === dstDomainId &&
+					verifyXDomainLinkEdge(s, this.state.ownerSignPub as string),
+			)
+			.sort((a, b) => b.edge.issuedAt - a.edge.issuedAt)[0];
+		return edge?.signature ?? null;
+	}
+
 	public getDomainSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
 		return {

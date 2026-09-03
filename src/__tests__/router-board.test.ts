@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
 import { createBoardService } from "../federation-server/board/boardService.js";
+import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
@@ -26,7 +27,7 @@ type ReferenceHeld = {
 	has(domainId: string, blobId: string): boolean;
 	applyRefs(domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]): void;
 };
-const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
+const make = (sessionExists = true, referenceHeld?: ReferenceHeld, useRealInbox = false) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-"));
 	roots.push(dataDir);
 	const owners = new Map([
@@ -40,6 +41,8 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
 		now: () => 100,
 	});
+	const router = generateIdentity();
+	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 	const rows: Array<{ address: InboxAddress; row: InboxRow }> = [];
 	const delivered: Array<{ address: InboxAddress; row: InboxRow }> = [];
 	const references = new Set<string>();
@@ -47,8 +50,14 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 	const service = createBoardService({
 		registry,
 		inbox: {
-			hasSession: () => sessionExists,
+			hasSession: (domainId, gatewayId, sessionId) =>
+				useRealInbox ? inbox.hasSession(domainId, gatewayId, sessionId) : sessionExists,
 			appendRouterRow: (input) => {
+				if (useRealInbox) {
+					const result = inbox.appendRouterRow(input);
+					if (result.row) rows.push({ address: input.address, row: result.row });
+					return result;
+				}
 				const row = {
 					envelope: {
 						origin: { kind: "router" as const, domainId: input.address.domainId },
@@ -89,7 +98,7 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 			},
 		},
 	});
-	return { service, registry, rows, delivered, references };
+	return { service, registry, rows, delivered, references, inbox };
 };
 const entry = (id: string, extra: Record<string, unknown> = {}) => ({
 	kind: "upsert" as const,
@@ -749,6 +758,23 @@ describe("router board service", () => {
 		);
 		expect(delivered).toHaveLength(rows.length);
 		expect(delivered[0]?.row.envelope.opKey).toEqual(rows[0]?.row.envelope.opKey);
+		registry.close();
+	});
+
+	it("writes observations to a registered sleeping session inbox", () => {
+		const { service, registry, inbox } = make(true, undefined, true);
+		inbox.upsertSession("a", "g", "s", { kind: "session", label: "sleeping", recordExists: true });
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
+		const rows = inbox.rows({ kind: "session", domainId: "a", gatewayId: "g", sessionId: "s" }, 1, 10);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.envelope.kind).toBe("board_observation");
 		registry.close();
 	});
 

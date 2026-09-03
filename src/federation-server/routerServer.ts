@@ -165,6 +165,8 @@ export class RouterServer {
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			hasLinkEdge: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
+			linkEdgeId: (srcDomainId, dstDomainId) =>
+				this.coordinatorFor(srcDomainId)?.linkEdgeId(srcDomainId, dstDomainId) ?? null,
 		});
 		this.console = new ConsoleSurface({
 			port: params.port,

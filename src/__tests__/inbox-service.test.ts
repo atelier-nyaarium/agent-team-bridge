@@ -60,6 +60,20 @@ afterEach(() => {
 });
 
 describe("InboxService", () => {
+	it("returns the appended row when the journal fsync is uncertain", () => {
+		const { service, registry, owner, producer } = make();
+		const address = ownerAddress(owner);
+		registry.for(domainId);
+		const fsync = vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
+			throw new Error("fsync uncertain");
+		});
+		const result = service.appendRow({ address, row: rowFor(producer), producerSignPub: producer.sign.pub });
+		expect(result.outcome).toBe("durability_uncertain");
+		expect(result.row?.seq).toBe(1);
+		fsync.mockRestore();
+		registry.close();
+	});
+
 	it("deduplicates equal hashes and conflicts different hashes", () => {
 		const { service, registry, owner, producer } = make();
 		const address = ownerAddress(owner);

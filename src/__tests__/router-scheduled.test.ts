@@ -2,13 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { createScheduledService, type ScheduledDeps } from "../federation-server/scheduled/scheduledService.js";
 import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
-import { formatInboxAddress } from "../shared/schemasInbox.js";
+import { formatInboxAddress, type InboxRowInput, signRowEnvelope } from "../shared/schemasInbox.js";
 import type { ScheduledTarget } from "../shared/schemasScheduled.js";
 
 const roots: string[] = [];
@@ -20,10 +21,20 @@ const body: ContentEnvelope = {
 };
 const target: ScheduledTarget = { domainId: "domain-a", gatewayId: "gateway-a", sessionId: "spawn.session" };
 
-function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean } = {}) {
-	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-service-"));
-	roots.push(dataDir);
-	const owner = generateIdentity();
+function make(
+	options: {
+		appendOutcome?: "accepted" | "refused";
+		resultOutcome?: "accepted" | "refused" | "durability_uncertain";
+		held?: boolean;
+		firedOutcome?: "accepted" | "durability_uncertain";
+		dataDir?: string;
+		owner?: ReturnType<typeof generateIdentity>;
+		durableInbox?: boolean;
+	} = {},
+) {
+	const dataDir = options.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-service-"));
+	if (!options.dataDir) roots.push(dataDir);
+	const owner = options.owner ?? generateIdentity();
 	let now = 100;
 	const registry = new OwnerStoreRegistry({
 		dataDir,
@@ -32,6 +43,10 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
 		now: () => now,
 	});
+	const router = generateIdentity();
+	const realInbox = options.durableInbox
+		? new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv })
+		: undefined;
 	const timers = new Map<number, () => void>();
 	const timerDelays = new Map<number, number>();
 	let nextTimer = 1;
@@ -51,13 +66,30 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 	};
 	const deps: ScheduledDeps = {
 		registry,
-		inbox: {
+		inbox: realInbox ?? {
 			appendRouterRow: (input) => {
 				rows.push(input);
-				return { opKey: input.opKey, outcome: "accepted", seq: 1 };
+				return { opKey: input.opKey, outcome: options.resultOutcome ?? "accepted", seq: 1 };
 			},
 		},
-		appendScheduledMessage: (_domainId, _address, opKey, messageBody, contentRefs) => {
+		appendScheduledMessage: (domainId, address, opKey, messageBody, contentRefs) => {
+			if (realInbox) {
+				const envelope = {
+					origin: { kind: "router" as const, domainId },
+					opKey,
+					epoch: messageBody.epoch,
+					kind: "message" as const,
+					contentRefs,
+				};
+				const row = {
+					envelope,
+					producerSig: signRowEnvelope(envelope, router.sign.priv),
+					body: messageBody,
+				} as InboxRowInput;
+				const result = realInbox.appendRow({ address, row, producerSignPub: router.sign.pub });
+				if (result.row) messages.push(result.row);
+				return result;
+			}
 			messages.push({ opKey, body: messageBody, contentRefs });
 			return {
 				opKey: { conversationId: "c", opId: "scheduled" },
@@ -105,6 +137,8 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 		memberships,
 		timerDelays,
 		deps,
+		dataDir,
+		owner,
 	};
 }
 
@@ -327,6 +361,69 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
+	it("dedupes a message after reopening following a crash", async () => {
+		const first = make({ durableInbox: true });
+		first.service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: [], body },
+		);
+		const append = first.deps.appendScheduledMessage;
+		first.deps.appendScheduledMessage = (...args) => {
+			append(...args);
+			throw new Error("crash after message append");
+		};
+		await expect(first.service.fire("domain-a", target)).rejects.toThrow("crash after message append");
+		first.registry.close();
+
+		const second = make({ dataDir: first.dataDir, owner: first.owner, durableInbox: true });
+		await second.service.fire("domain-a", target);
+		const address = { kind: "session" as const, ...target };
+		const messages = second.registry.for("domain-a").rows(formatInboxAddress(address), 1, 10);
+		const ownerAddress = {
+			kind: "owner" as const,
+			domainId: "domain-a",
+			ownerSignPub: second.owner.sign.pub,
+		};
+		const results = second.registry.for("domain-a").rows(formatInboxAddress(ownerAddress), 1, 10);
+		expect(messages).toHaveLength(1);
+		expect(results).toHaveLength(2);
+		expect(results.map((row) => (row.row as { envelope: { kind: string } }).envelope.kind)).toEqual([
+			"scheduled_result",
+			"scheduled_result",
+		]);
+		second.registry.close();
+	});
+
+	it("transfers references after an uncertain fired write", async () => {
+		const { service, registry, held, released, rows } = make();
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: ["blob-1"], body },
+		);
+		const store = registry.for("domain-a");
+		const put = store.put.bind(store);
+		vi.spyOn(store, "put").mockImplementation((kind, id, expected, record) => {
+			const result = put(kind, id, expected, record);
+			if (kind === "scheduled" && record.clear.state === "fired")
+				return { kind: "durability_uncertain", reason: "fsync" };
+			return result;
+		});
+		await service.fire("domain-a", target);
+		expect(held).toContainEqual({
+			blobId: "blob-1",
+			ref: { kind: "row", id: "domain-a/gateway-a/spawn.session:7" },
+		});
+		expect(released).toContainEqual({
+			blobId: "blob-1",
+			ref: { kind: "scheduled", id: "domain-a/gateway-a/spawn.session" },
+		});
+		expect(rows).toHaveLength(2);
+		expect(rows[1]).toMatchObject({ body: { outcome: "sent" } });
+		registry.close();
+	});
+
 	it("holds each file for the message row and releases the scheduled hold on fire", async () => {
 		const { service, registry, held, released } = make();
 		service.schedule(
@@ -342,6 +439,20 @@ describe("scheduled service", () => {
 		expect(released).toEqual([
 			{ blobId: "blob-1", ref: { kind: "scheduled", id: "domain-a/gateway-a/spawn.session" } },
 		]);
+		registry.close();
+	});
+
+	it("keeps the scheduled hold when the sent result is refused", async () => {
+		const options: { resultOutcome?: "accepted" | "refused" } = {};
+		const { service, registry, memberships } = make(options);
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: ["blob-1"], body },
+		);
+		options.resultOutcome = "refused";
+		await service.fire("domain-a", target);
+		expect(memberships.get(formatBlobReference({ kind: "scheduled", target }))).toEqual(new Set(["blob-1"]));
 		registry.close();
 	});
 

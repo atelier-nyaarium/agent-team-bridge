@@ -14,6 +14,7 @@ import {
 	signRowEnvelope,
 	verifyRowEnvelope,
 } from "../../shared/schemasInbox.js";
+import { foldWriteResult } from "../../shared/write-result.js";
 import { OwnerQuarantined, type OwnerStateStore } from "../owner/ownerStateStore.js";
 import { capacityRefusal } from "./inboxCapacity.js";
 import type { OwnerStoreRegistry } from "./ownerStoreRegistry.js";
@@ -145,6 +146,31 @@ export class InboxService {
 			}
 			return retired;
 		}, 0);
+	}
+
+	retireRevokedPeerRowsInBatch(
+		store: OwnerStateStore,
+		tx: Parameters<Parameters<OwnerStateStore["batch"]>[0]>[0],
+		domainId: string,
+		sessionTarget: string,
+		friendDomainId: string,
+	): number {
+		const address = addressOfTarget(sessionTarget);
+		if (!address || address.domainId !== domainId) return 0;
+		let retired = 0;
+		for (const row of this.rows(address, 1, Number.MAX_SAFE_INTEGER)) {
+			if (row.envelope.epoch !== "peer" || row.envelope.origin.domainId !== friendDomainId) continue;
+			const ledgerId = recordId(row.envelope.opKey, this.registry.ownerKey(domainId).ownerSignPub);
+			const ledger = store.get("op", ledgerId);
+			const result: OpResultEnvelope = { opKey: row.envelope.opKey, outcome: "target_revoked", seq: row.seq };
+			if (ledger)
+				tx.put("op", ledger.id, ledger.version, {
+					clear: { ...ledger.clear, state: "target_revoked", result },
+				});
+			tx.remove(formatInboxAddress(address), row.seq);
+			retired++;
+		}
+		return retired;
 	}
 
 	ack(input: {
@@ -612,7 +638,8 @@ export class InboxService {
 			if (nonce) tx.put("nonce", `${nonce.signerSignPub}/${nonce.nonce}`, null, { clear: { at: nonce.at } });
 			tx.append(formatInboxAddress(address), row);
 		});
-		if (write.kind === "ok") return { ...result, row };
+		const folded = foldWriteResult(write);
+		if (folded.applied) return { ...result, outcome: folded.outcome, row };
 		return { opKey: input.envelope.opKey, outcome: this.durabilityOutcome(write.kind) };
 	}
 	private ledgerTransaction(

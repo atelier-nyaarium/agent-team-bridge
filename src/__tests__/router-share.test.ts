@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler, GatewayRegistration } from "../federation-server/gatewayBridge.js";
 import type { OwnerOpHandler } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
@@ -19,6 +19,7 @@ const make = () => {
 	]);
 	let now = 100;
 	const links = new Set<string>();
+	const edgeIds = new Map<string, string>();
 	const retired: string[][] = [];
 	const pushed: Array<{ domainId: string; gatewayId: string; frame: Record<string, unknown> }> = [];
 	const ownerOps = new Map<string, OwnerOpHandler>();
@@ -38,6 +39,10 @@ const make = () => {
 	const deps: ShareServiceDeps = {
 		registry,
 		isLinked: (domainId, friendDomainId) => links.has(`${domainId}|${friendDomainId}`),
+		linkEdgeId: (domainId, friendDomainId) =>
+			links.has(`${domainId}|${friendDomainId}`)
+				? (edgeIds.get(`${domainId}|${friendDomainId}`) ?? "edge-1")
+				: null,
 		dropLinkEdge: (domainId, friendDomainId) => links.delete(`${domainId}|${friendDomainId}`),
 		retireRevokedPeerRows: (domainId, sessionTarget, friendDomainId) =>
 			retired.push([domainId, sessionTarget, friendDomainId]),
@@ -50,6 +55,7 @@ const make = () => {
 		ownerOps,
 		gatewayFrames,
 		links,
+		edgeIds,
 		retired,
 		pushed,
 		dropGateway: (reg: GatewayRegistration) => gatewayDropped?.(reg),
@@ -83,6 +89,7 @@ describe("ShareService", () => {
 		ctx.service.share("a", "a.gw.spawn.other", { kind: "everyone_trusted" });
 		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(false);
 		ctx.links.add("a|b");
+		ctx.edgeIds.set("a|b", "edge-1");
 		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(true);
 		expect(ctx.service.isSharedTo("a", "a.gw.spawn.other", "b")).toBe(true);
 		ctx.registry.close();
@@ -91,6 +98,7 @@ describe("ShareService", () => {
 	it("unsharing bumps generation and retires the pair once", () => {
 		const ctx = make();
 		ctx.links.add("a|b");
+		ctx.edgeIds.set("a|b", "edge-1");
 		ctx.service.share("a", "a.gw.spawn.main", { kind: "domain", domainId: "b" });
 		const before = ctx.service.generation("a", "a.gw.spawn.main", "b");
 		expect(ctx.service.unshare("a", "a.gw.spawn.main", { kind: "domain", domainId: "b" })).toEqual({ ok: true });
@@ -245,6 +253,42 @@ describe("ShareService", () => {
 		expect(ctx.service.unlink("a", "b")).toEqual({ peersRemoved: 0, sharesDropped: 1, jobsExpired: 0 });
 		expect(ctx.pushed).toEqual([]);
 		expect(ctx.links.has("a|b")).toBe(false);
+		ctx.registry.close();
+	});
+
+	it("allows everyone-trusted sharing after an unlinked Domain establishes a link", () => {
+		const ctx = make();
+		ctx.service.unlink("a", "b");
+		ctx.links.add("a|b");
+		ctx.service.share("a", "a.gw.spawn.main", { kind: "everyone_trusted" });
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(true);
+		ctx.registry.close();
+	});
+
+	it("allows everyone-trusted sharing after a fresh link replaces an unlinked edge", () => {
+		const ctx = make();
+		ctx.links.add("a|b");
+		ctx.edgeIds.set("a|b", "edge-1");
+		ctx.service.share("a", "a.gw.spawn.main", { kind: "everyone_trusted" });
+		ctx.service.unlink("a", "b");
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(false);
+		ctx.links.add("a|b");
+		ctx.edgeIds.set("a|b", "edge-1");
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(false);
+		ctx.edgeIds.set("a|b", "edge-2");
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(true);
+		ctx.registry.close();
+	});
+
+	it("does not apply unlink effects after a failed batch", () => {
+		const ctx = make();
+		ctx.links.add("a|b");
+		ctx.service.share("a", "a.gw.spawn.main", { kind: "domain", domainId: "b" });
+		ctx.service.register(ctx.hooks);
+		vi.spyOn(ctx.registry.for("a"), "batch").mockReturnValue({ kind: "durability_failure", reason: "test" });
+		expect(ctx.service.unlink("a", "b")).toMatchObject({ outcome: "durability_failure" });
+		expect(ctx.links.has("a|b")).toBe(true);
+		expect(ctx.pushed).toEqual([]);
 		ctx.registry.close();
 	});
 

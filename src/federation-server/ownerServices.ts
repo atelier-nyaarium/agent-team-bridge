@@ -36,6 +36,7 @@ export interface OwnerServicesDeps {
 	routerIdentity: { signPub: string; signPriv: string };
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
+	linkEdgeId: (srcDomainId: string, dstDomainId: string) => string | null;
 	/** Owner rows wait for the next read. */
 	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget">;
 }
@@ -111,10 +112,13 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	const share = createShareService({
 		registry,
 		isLinked: (domainId, friendDomainId) => deps.hasLinkEdge(domainId, friendDomainId),
+		linkEdgeId: (domainId, friendDomainId) => deps.linkEdgeId(domainId, friendDomainId),
 		dropLinkEdge: () => undefined,
 		retireRevokedPeerRows: (domainId, sessionTarget, friendDomainId) => {
 			inbox.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
 		},
+		retireRevokedPeerRowsInBatch: (store, tx, domainId, sessionTarget, friendDomainId) =>
+			inbox.retireRevokedPeerRowsInBatch(store, tx, domainId, sessionTarget, friendDomainId),
 		connectedGateways: connected,
 		now: () => registry.now(),
 	});

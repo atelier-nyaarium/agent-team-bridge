@@ -122,7 +122,7 @@ export function createBoardService(deps: Deps) {
 		const answerBefore = () => [...before.entries.values()].map(stored);
 		const a = actor(writer);
 		const replayId = opId ? `${a.kind}:${a.kind === "owner" ? "owner" : a.sessionId}:${opId}` : undefined;
-		// Hash caller intent only.
+		// Replay hashes operation identity.
 		const hash = sha256Hex(canonicalJson(input.ops.map((op) => [op.kind, op.id])));
 		const replay = replayId ? store.get("board.op", replayId) : null;
 		if (replay) {
