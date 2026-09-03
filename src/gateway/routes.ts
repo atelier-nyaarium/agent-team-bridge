@@ -88,8 +88,7 @@ export interface RoutesDeps {
 	presence?: { snapshot(): TeamInfo[] };
 	// Live daemon catalog state. `known` distinguishes no reply from an empty catalog.
 	hostSpawnPoints?: HostSpawnState;
-	// Console mailboxes, for broadcast notices (notify_human). Optional so test
-	// harnesses without a console bridge need not supply one.
+	// Console mailboxes, for broadcast notices (notify_human). Optional so test.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: GatewayConfig;
 	producerSignPriv?: string;
@@ -102,32 +101,17 @@ export interface RoutesDeps {
 	blobUploader?: ReturnType<typeof import("./router/blobUploader.js").createBlobUploader>;
 	contentKeyStore?: Pick<import("./federation/contentKeyStore.js").ContentKeyStore, "keyFor">;
 	ownerSignPub?: (() => string | null) | null;
-	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain
-	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
-	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
+	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the
-	// sealer's local-first resolution on the SEND side, so a send to your own local Gateway
-	// whose id collides with a friend's gateway id is sealed v1 to the local Domain (the bare-string
-	// shorthand) rather than hijacked to the friend. Absent when federation crypto is off.
+	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the.
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
-	// Refresh the share lastSeenAt for a live local session (its canonical domain.gateway.spawn.session),
-	// called from teams() per online team so a session's presence keeps its shares from
-	// auto-forgetting. Absent when federation sharing is not wired.
+	// Refresh the share lastSeenAt for a live local session (its canonical domain.gateway.spawn.session),.
 	touchShares?: ((sessionTarget: string) => void) | null;
-	// Whether a local session (canonical domain.gateway.spawn.session) is still shared to a friend Domain,
-	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
-	// session was un-shared has its in-flight reply DROPPED here rather than relayed back to the origin. The
-	// share state is the single source both the inbound gate and this reply gate read, so an
-	// un-share bites without the Router. Absent when federation sharing is not wired (no recheck).
+	// Whether a local session (canonical domain.gateway.spawn.session) is still shared to a friend Domain,.
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
-	// The session targets currently shared to a friend Domain (the same slimmed discovery filter
-	// gatewayRelay.ts's list_teams case applies) - read by presenceForDomain to compute what a
-	// linked Domain currently sees, for the cross-Domain-presence push. Absent when federation
-	// sharing is not wired.
+	// The session targets currently shared to a friend Domain (the same slimmed discovery filter.
 	sharesFor?: ((domainId: string) => string[]) | null;
-	// The cross-Domain-presence landing store (gateway/federation/crossDomainPresence.ts) -
-	// presence_push's landing side appends into it. Absent when federation is not wired.
+	// The cross-Domain-presence landing store (gateway/federation/crossDomainPresence.ts) -.
 	crossDomainPresenceConsumer?: import("./federation/crossDomainPresence.js").CrossDomainPresenceConsumer | null;
 	resolveHandshake?: (
 		sessionId: string,
@@ -135,32 +119,22 @@ export interface RoutesDeps {
 		response?: string,
 		responderToken?: Presented,
 	) => boolean;
-	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake
-	// an unconfirmed caller must answer first. Absent in test harnesses that don't exercise the gate.
+	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake.
 	findPendingHandshake?: (team: string, subId: string) => string | undefined;
-	// Re-sends a (team, subId)'s still-pending handshake so a caller that lost the original
-	// notification gets a fresh one instead of a dead-end 409. Absent in test harnesses that don't
-	// exercise the gate; the gate fails open to its unenhanced message when this is undefined.
+	// Re-sends a (team, subId)'s still-pending handshake so a caller that lost the original.
 	repushHandshake?: (team: string, subId: string) => HandshakeRepushOutcome;
-	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the
-	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
-	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
+	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the.
 	ownerId?: (() => string | null) | null;
-	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do
-	// not exercise the identity gates, which then behave as an ungated gateway does.
+	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do.
 	auth?: SessionAuthority;
 	// Router-held owner board. Unavailable before enrollment.
 	boardClient?: ReturnType<typeof createBoardClient>;
-	// Restart-proof replay for the board's ABSOLUTE writes. Absent only in tests, which then fall
-	// back to the in-memory carry-over map.
+	// Restart-proof replay for the board's ABSOLUTE writes. Absent only in tests, which then fall.
 	boardReplays?: DurableOpStore<BoardReply>;
-	// State that must survive a rebuild (see RoutesCarryOver). Absent in test harnesses, which build
-	// the route table once and never rebuild it.
+	// State that must survive a rebuild (see RoutesCarryOver). Absent in test harnesses, which build.
 	carryOver?: RoutesCarryOver;
 	awareness?: { takeFor(sessionKey: string): RidingAwareness | null };
-	// Holds a channel message for a session that could not take it, and hands it over when the
-	// session arrives. Absent in test harnesses and on a gateway built before it, which then keep the
-	// deliver-or-refuse behaviour this replaced.
+	// Holds a channel message for a session that could not take it, and hands it over when the.
 	deliveries?: ChannelDeliveryCoordinator;
 }
 
@@ -219,8 +193,7 @@ export function createRoutesCarryOver(): RoutesCarryOver {
 	return { boardOperationReplies: new Map(), blobFetches: new Map() };
 }
 
-////////////////////////////////
-//  Functions & Helpers
+// Functions & Helpers.
 
 export function createRoutes({
 	registry,
@@ -266,10 +239,7 @@ export function createRoutes({
 	 * beyond host", which is a different answer from a Gateway that said nothing at all, and only the
 	 * row makes that distinction expressible. */
 	function localSpawnPoints(): GatewaySpawnPoints[] {
-		// NO ROW until a daemon has actually answered. An empty `hostSpawns` is an affirmative
-		// "nothing beyond host", and emitting one for a daemon that never spoke - an older daemon that
-		// does not send the field, or a machine whose daemon is down - states a fact nobody established.
-		// Absent has to keep meaning UNKNOWN, or the optional field is optional in name only.
+		// NO ROW until a daemon has actually answered. An empty `hostSpawns` is an affirmative.
 		if (!hostSpawnPoints?.known) return [];
 		return [
 			{
@@ -307,8 +277,7 @@ export function createRoutes({
 		boardOperationReplies.set(`${from}:${replayKeyOf(action, operationId)}`, reply);
 		capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
 	};
-	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
-	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
+	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment).
 	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
 
 	/** Build the canonical Address of a LOCAL session from its registry team field (`spawn` or
@@ -375,10 +344,7 @@ export function createRoutes({
 		if (!routerClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
-		// Resolve the target to a SealTarget once: a local peer is the bare string (v1); a
-		// cross-Domain peer becomes an explicit (domainId, gatewayId) target (v2). An explicit
-		// dstDomain disambiguates a gateway id shared across two linked Domains. The destination's
-		// Domain (if any) also lets us open its v2 reply by the full pair.
+		// Resolve the target to a SealTarget once: a local peer is the bare string (v1); a.
 		let target: import("./federation/sealer.js").SealTarget;
 		let sealed: SealedEnvelope;
 		try {
@@ -387,17 +353,14 @@ export function createRoutes({
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
-		// The cache is sealed to THIS Domain's key, so it serves this Domain's own devices and nobody
-		// else. Uploading regardless of target is what lets a phone read an attachment while this
-		// gateway is asleep; a cross-Domain peer cannot open these bytes and falls back to origin.
+		// The cache is sealed to THIS Domain's key, so it serves this Domain's own devices and nobody.
 		if (blobUploader && (op.kind === "send" || op.kind === "response_push"))
 			await blobUploader.uploadAll(
 				[...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])],
 				"cache",
 			);
 		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
-			// Not advertised to the peer: it holds none of this Domain's content keys, so naming them
-			// would promise a read it cannot perform.
+			// Not advertised to the peer: it holds none of this Domain's content keys, so naming them.
 			const contentRefs: string[] = [];
 			// The gateway is the producer: it signs the envelope and seals the body to the peer.
 			const envelope = {
@@ -405,8 +368,7 @@ export function createRoutes({
 				// Hashed: the natural ids carry dots the opKey grammar refuses.
 				opKey: {
 					conversationId: sha256Hex(op.kind === "send" ? op.returnRoute.srcConversationId : op.session_id),
-					// The caller's id when it sent one: the ledger dedupes on this, so a per-attempt mint
-					// would make each retry its own operation.
+					// The caller's id when it sent one: the ledger dedupes on this, so a per-attempt mint.
 					opId: producerOpId ?? crypto.randomUUID(),
 				},
 				epoch: "peer" as const,
@@ -418,9 +380,7 @@ export function createRoutes({
 			const result = await routerClient.callInboxTool("inbox_append", {
 				address,
 				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed },
-				// Identifies the operation by the CLEAR op. The ledger's own hash covers the sealed bytes,
-				// which every attempt regenerates on purpose so the receiver's replay guard sees a new
-				// nonce, and a retry carrying one key with two hashes is refused as a conflict.
+				// Identifies the operation by the CLEAR op. The ledger's own hash covers the sealed bytes,.
 				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ address, op })) },
 			});
 			if (result.error) return { ok: false, error: result.error };
@@ -428,8 +388,7 @@ export function createRoutes({
 			if (accepted?.outcome && accepted.outcome !== "accepted") return { ok: false, error: accepted.outcome };
 			return { ok: true, result: accepted };
 		}
-		// The Domain the target actually resolved to (authoritative over the caller's hint),
-		// used to open the destination's v2 reply by the full (domainId, gatewayId) pair.
+		// The Domain the target actually resolved to (authoritative over the caller's hint),.
 		const resolvedDstDomain = typeof target === "string" ? undefined : target.domainId;
 		const relayId = crypto.randomUUID();
 		const call = await routerClient.callTool("gateway_relay", {
@@ -442,9 +401,7 @@ export function createRoutes({
 		if (call.error) return { ok: false, error: call.error };
 		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
 		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Gateway relay failed" };
-		// The reply result is sealed by the destination Gateway back to us; open it. A
-		// cross-Domain reply is v2, so pass the destination's Domain to resolve the peer by
-		// the full pair (a bare-id scan would be ambiguous if two friends share an id).
+		// The reply result is sealed by the destination Gateway back to us; open it. A.
 		try {
 			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope, resolvedDstDomain) };
 		} catch (err) {
@@ -471,15 +428,12 @@ export function createRoutes({
 		let attempt = 0;
 		return new Promise((resolveOutcome) => {
 			const tryOnce = async (): Promise<void> => {
-				// A relay throw (Router disconnect mid-call, call timeout) is just another transient
-				// failure: fold it into the retry path so it never escapes as an unhandled rejection.
+				// A relay throw (Router disconnect mid-call, call timeout) is just another transient.
 				let error: string | undefined;
 				try {
 					const r = await relayToGateway(dstGateway, op, dstDomain, opId);
 					if (r.ok) {
-						// A landing-side refusal (an oversized console_push the sibling dropped) answers ok
-						// with delivered:false. Permanent, so never retried - but silent-to-origin is how a
-						// stranded entry looks exactly like a converged one, so it gets a log here.
+						// A landing-side refusal (an oversized console_push the sibling dropped) answers ok.
 						if (op.kind === "console_push" && (r.result as { delivered?: boolean })?.delivered === false) {
 							console.warn(`[relay] ${label} to ${dstGateway} landed but was refused (delivered: false)`);
 						}
@@ -502,9 +456,7 @@ export function createRoutes({
 		});
 	}
 
-	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session)
-	// hands each module the freshly-captured deps, so nothing here keeps serving the pre-federation
-	// closure. Anything whose loss would change behaviour rides carryOver instead.
+	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session).
 	const { mirrorPeer, consolePush, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
 		mailboxStore,
 		ownerId,
@@ -512,8 +464,7 @@ export function createRoutes({
 		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
-		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's
-		// own per-blob warning.
+		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's.
 		cacheBlobs: blobUploader
 			? (blobIds) => {
 					blobUploader
@@ -566,16 +517,12 @@ export function createRoutes({
 		targetName: string;
 		targetDomain?: string;
 		from: string;
-		// Pre-built canonical sender address. The console sets it (owner-id based) because its `from`
-		// is a free-form Device Name that is not a slug; an agent send leaves it unset and the sender
-		// address is derived from its slug team field instead.
+		// Pre-built canonical sender address. The console sets it (owner-id based) because its `from`.
 		fromAddress?: string;
 		fromConversationId: string | undefined;
 		body?: string;
 		files?: ChannelFile[];
-		// Threaded through to the destination Gateway's own local send() so a not-yet-existing target
-		// there mints an opaque id instead of adopting the typed segment - the SAME rule a local send
-		// applies, just carried across the relay since the destination decides its own id space.
+		// Threaded through to the destination Gateway's own local send() so a not-yet-existing target.
 		displayLabel?: string;
 		disposition?: "asking" | "informing" | "closing";
 		/** The caller's id, so its retries stay one operation. */
@@ -600,9 +547,7 @@ export function createRoutes({
 		if (!fromConversationId) {
 			return jsonResponse({ error: `fromConversationId is required for a cross-Gateway send` }, 400);
 		}
-		// Resolve the destination Domain ONCE so the address's domain segment and the anchor's
-		// dstDomainId binding are byte-identical (the reply gate compares them). The address carries
-		// the DESTINATION's domain so its store key matches the destination's own local key.
+		// Resolve the destination Domain ONCE so the address's domain segment and the anchor's.
 		const resolvedDomain = targetDomainId(targetGateway, targetDomain);
 		const { project: tSpawn, session: tSession } = parseSessionName(targetName);
 		const targetAddr = Address.remote(resolvedDomain ?? localDomain, targetGateway, tSpawn, tSession);
@@ -623,19 +568,13 @@ export function createRoutes({
 		const relay = await relayToGateway(targetGateway, op, targetDomain, opId);
 		if (!relay.ok)
 			return jsonResponse({ error: relay.error ?? `cross-Gateway send to "${qualifiedTo}" failed` }, 502);
-		// Keep a local pollable anchor ONLY once the destination accepted the send, so
-		// a failed send (offline / timed-out Gateway) never leaves a dangling persistent
-		// entry. The destination's reply is asynchronous (its agent answers later), so
-		// the anchor is always present before any response_push arrives. Record the resolved
-		// target Domain so the reply gate binds the response_push to THIS friend Domain (a
-		// reply from any other Domain, even one sharing the bare gateway id, is rejected).
+		// Keep a local pollable anchor ONLY once the destination accepted the send, so.
 		store.create(srcSession, from, qualifiedTo, {
 			persistent: true,
 			fromConversationId,
 			dstDomainId: resolvedDomain ?? undefined,
 		});
-		// Mirror the LOCAL sender's own outbound leg; the remote target's own gateway mirrors its
-		// side independently. Never for a console sender (senderAddr is only ever set for an agent).
+		// Mirror the LOCAL sender's own outbound leg; the remote target's own gateway mirrors its.
 		if (senderAddr) {
 			mirrorPeer(senderAddr, senderCanonical, targetAddr.canonical, { body, files });
 		}
@@ -649,8 +588,7 @@ export function createRoutes({
 	/** Ungated on purpose: it serves non-secret capability ids and their own instruction text, and the
 	 * hand-launched host window this exists to serve carries no credential to present. */
 	async function capabilities(): Promise<Response> {
-		// Kept apart rather than merged here: only the caller knows what it already holds, and a
-		// merged list cannot say which source spoke this round.
+		// Kept apart rather than merged here: only the caller knows what it already holds, and a.
 		let consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
 		if (routerClient?.isRegistered()) {
 			const result = await withDeadline(
@@ -663,8 +601,7 @@ export function createRoutes({
 			if (!result.error && parsed.success && parsed.data.known) consoleSnapshot = parsed.data;
 		}
 		return jsonResponse({
-			// LEGACY, remove after 2026-11-01. A session started by a plugin from before the split reads
-			// these flat fields and nothing else, so they carry exactly what it would have been served then.
+			// LEGACY, remove after 2026-11-01. A session started by a plugin from before the split reads.
 			...consoleSnapshot,
 			console: consoleSnapshot,
 			daemon: daemonCapabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES,
@@ -714,8 +651,7 @@ export function createRoutes({
 	}> {
 		const local = (await teams().json()) as TeamInfo[];
 		const offlineCoverage: DiscoverCoverage = { rosterKnown: false, asked: 0, answered: 0 };
-		// isRegistered, not isConnected: a refused registration leaves the socket open, and reading
-		// that as "no peers" reports a revoked Gateway as an empty mesh.
+		// isRegistered, not isConnected: a refused registration leaves the socket open, and reading.
 		if (!routerClient?.isRegistered()) {
 			return { teams: local, coverage: offlineCoverage, spawnPoints: localSpawnPoints() };
 		}
@@ -745,11 +681,7 @@ export function createRoutes({
 	async function discover(url?: URL): Promise<Response> {
 		const full = await discoverFull();
 		if (url?.searchParams.get("coverage") === "1") {
-			// `spawnPoints` is destructured off and NOT served here. It is answered to a same-Domain
-			// relay caller and to the console op, both of which are authenticated as this owner; this
-			// route is a plain HTTP surface and spreading the whole object would carry it out of that
-			// boundary by accident. A machine's shells are a fact about the machine, not a session
-			// list.
+			// `spawnPoints` is destructured off and NOT served here. It is answered to a same-Domain.
 			const { spawnPoints: _spawnPoints, ...served } = full;
 			return jsonResponse({ ...served, localGatewayId, localDomainId: localDomain });
 		}
@@ -779,19 +711,14 @@ export function createRoutes({
 
 	function refuseImpersonation(req: Request, claimed: string, scope: CallerScope): Response | null {
 		if (!auth) return null;
-		// Owner data is not addressed to a session, so naming one proves nothing about the right to
-		// read or write it: an unregistered name resolves to UNBOUND, which anything satisfies. Ask
-		// the local-plane question first, so an unproven caller learns nothing about which names exist.
+		// Owner data is not addressed to a session, so naming one proves nothing about the right to.
 		if (scope === "owner-data" && !provedLocalSession(req)) {
 			console.warn(`[auth] refused an owner-data call claiming "${claimed}" without any session binding`);
 			return jsonResponse({ error: "the owner's own data is not open to this caller" }, 403);
 		}
 		const key = auth.localTeamKey(claimed);
 		if (key === null) {
-			// Malformed rather than unauthorized: the name cannot denote any session here, so the
-			// caller gets the same 400 an unparseable field has always produced. Still a refusal, which
-			// is the security-relevant part - `from` reaches the recipient verbatim, so a name that
-			// resolves to nothing must not be waved through just because it matched no record.
+			// Malformed rather than unauthorized: the name cannot denote any session here, so the.
 			return jsonResponse({ error: `Invalid sender: "${claimed}" does not name a local session` }, 400);
 		}
 		if (auth.satisfies(auth.toClaim(key), presentedByRequest(req))) return null;
@@ -836,11 +763,7 @@ export function createRoutes({
 			return jsonResponse({ error: "this job's answer is not collected over local HTTP" }, 403);
 		}
 		if (auth.satisfies(auth.toActFor(key), presentedByRequest(req))) return null;
-		// The SAME body and status an id that names nothing gets: an unproven caller must not be able
-		// to tell a live job from a dead id. This per-job answer replaced a machine-wide pre-check that
-		// refused an unbound session the job IT created (issue #252): an unbound asker resolves to
-		// UNBOUND, which its own tokenless poll satisfies, while a bound session's job still demands
-		// the binding.
+		// The SAME body and status an id that names nothing gets: an unproven caller must not be able.
 		console.warn(`[auth] refused a poll of a job asked by "${asker}" from another session`);
 		return jsonResponse({ error: `No pending job for session_id "${sessionId}"` }, 404);
 	}
@@ -870,29 +793,18 @@ export function createRoutes({
 		const files =
 			rawSendFiles &&
 			(opts.trustedInbound || opts.consoleSender ? rawSendFiles : stampBlobHolder(rawSendFiles, localGatewayId));
-		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the
-		// console's `from` is its free-form Device Name rather than a session name, so neither can be
-		// resolved to a local record and both arrive already authenticated by their own sealed path.
+		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the.
 		if (!opts.trustedInbound && !opts.consoleSender) {
 			const refused = refuseImpersonation(req, from, "session");
 			if (refused) return refused;
-			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is
-			// strictly stronger than mislabelling a message: it injects the answer into that session's
-			// context as though it had asked. A conversation held by a bound socket therefore belongs
-			// to that socket alone; an unheld or unbound one stays open, which is what keeps console
-			// sends (owner-keyed, no socket) and hand-launched sessions working.
+			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is.
 			const holder = fromConversationId ? conversationRegistry.get(fromConversationId) : undefined;
 			if (auth && !auth.satisfies(auth.toAnswerFor(holder), presentedByRequest(req))) {
 				console.warn(`[auth] refused a send claiming another session's conversation`);
 				return jsonResponse({ error: "conversation is not this caller's" }, 403);
 			}
 		}
-		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted
-		// internal gateway-relay path (opts.trustedInbound). An external HTTP /send caller cannot set
-		// them - they are structurally seal-sourced - so a local caller can never forge a cross-Domain
-		// `dstDomainId` binding (the keystone the response_push hard-deny rests on), nor pin the channel
-		// job key / skip arity classification via a crafted `sessionId`. `targetDomainId` stays
-		// caller-supplied: it is a routing HINT resolved via crossDomainPeers, never a trust input.
+		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted.
 		const trustedInbound = opts.trustedInbound === true;
 		const inboundSessionId = trustedInbound ? parsed.data.sessionId : undefined;
 		const returnRoute = trustedInbound ? parsed.data.returnRoute : undefined;
@@ -909,9 +821,7 @@ export function createRoutes({
 			}
 		}
 
-		// Classify the target by arity. An INBOUND federated send (the gateway-relay handler) arrives
-		// with a bare local `to` plus an explicit sessionId, so it skips classification and lands
-		// locally. A spawn-point (arity 1/3) is not an addressable session - fail fast.
+		// Classify the target by arity. An INBOUND federated send (the gateway-relay handler) arrives.
 		const parsedTarget = inboundSessionId ? null : parseTarget(to, localDomain, localGatewayId);
 		if (parsedTarget instanceof SpawnPoint) {
 			return jsonResponse(
@@ -919,8 +829,7 @@ export function createRoutes({
 				400,
 			);
 		}
-		// Cross-Gateway OUTBOUND: an Address whose (domain, gateway) is not ours routes through the
-		// Router. The local-collapse rule keeps an our-(domain,gateway) target local.
+		// Cross-Gateway OUTBOUND: an Address whose (domain, gateway) is not ours routes through the.
 		if (parsedTarget && (parsedTarget.domain !== localDomain || parsedTarget.gateway !== localGatewayId)) {
 			const realDomain =
 				parsedTarget.domain !== localDomain && parsedTarget.domain !== LOCAL_DOMAIN_SENTINEL
@@ -931,9 +840,7 @@ export function createRoutes({
 				targetName: composeSessionName(parsedTarget.spawn, parsedTarget.session),
 				targetDomain: realDomain,
 				from,
-				// A console send carries a non-slug Device Name as `from`; build its sender address from
-				// the owner id instead. For a console send fromConversationId IS the slug owner id (the
-				// shared inbox key), not a device conversation id. An agent send leaves fromAddress unset.
+				// A console send carries a non-slug Device Name as `from`; build its sender address from.
 				fromAddress:
 					opts.consoleSender && fromConversationId
 						? consoleSelfAddress(fromConversationId).canonical
@@ -947,8 +854,7 @@ export function createRoutes({
 			});
 		}
 
-		// Resolve the target to a local registry name + its canonical Address. A local target
-		// resolves here; a remote one took the cross-Gateway branch above.
+		// Resolve the target to a local registry name + its canonical Address. A local target.
 		let target = resolveLocalTarget(to);
 		if (!target) {
 			return jsonResponse({ error: `Gateway for "${to}" is not reachable from this Gateway` }, 404);
@@ -966,28 +872,17 @@ export function createRoutes({
 			);
 		}
 
-		// Resolve the live incarnation serving this record: its canonical pane, else an alias
-		// re-incarnation stamped as liveTeam. A send delivers to whichever is live, so a manual
-		// `claude --resume` under a different name still receives sends addressed to the record.
+		// Resolve the live incarnation serving this record: its canonical pane, else an alias.
 		let targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 
 		// If offline, attempt to wake the container - or, for a target with no record yet, create it.
 		if (!targetWs) {
-			// A retry sharing the same (sender conversation, resolved target) provenance reattaches to
-			// its own prior mint instead of minting a second session. Keyed on localName (the already-
-			// resolved canonical spawn.session), never the caller's raw `to` - the same local target can
-			// be legally spelled two ways (a short local form and a self-qualified domain.gateway.spawn.session
-			// form), and keying on the raw spelling would let two retries of the identical target mint
-			// twice. A federated inbound send already has exactly this provenance in inboundSessionId (the
-			// origin's own channel job key); a local caller cannot set that field itself, so it always
-			// falls back to composing one from its own request.
+			// A retry sharing the same (sender conversation, resolved target) provenance reattaches to.
 			const mintedFrom =
 				inboundSessionId ?? (fromConversationId ? `${fromConversationId}:${localName}` : undefined);
 			const woken = await tryWakeTeam(localName, { displayLabel, mintedFrom });
 			if (!woken.ok) {
-				// Say WHICH failure this was. All three used to fall through to the "is not connected"
-				// below, which names the SESSION - so a machine whose daemon was never up, and a launch
-				// still on its way, both read as a session that answered and refused.
+				// Say WHICH failure this was. All three used to fall through to the "is not connected".
 				if (woken.error) return jsonResponse({ error: woken.error }, 404);
 				if (woken.errorKind === "disconnected") {
 					return jsonResponse(
@@ -998,14 +893,12 @@ export function createRoutes({
 					);
 				}
 				if (woken.errorKind === "timeout") {
-					// Ambiguous by contract: the waiter gave up and the launch may still be coming. Calling
-					// that a failure would be a guess.
+					// Ambiguous by contract: the waiter gave up and the launch may still be coming. Calling.
 					return jsonResponse({ error: `"${qualifiedTo}" is still starting; try again shortly` }, 404);
 				}
 			}
 			if (woken.ok) {
-				// Minting (no existing record, a displayLabel was set) lands on a fresh id, never the
-				// one typed - switch to addressing that for everything downstream of this wake.
+				// Minting (no existing record, a displayLabel was set) lands on a fresh id, never the.
 				if (woken.resolvedTeam && woken.resolvedTeam !== localName) {
 					localName = woken.resolvedTeam;
 					const resolved = tryLocalAddress(localName);
@@ -1015,17 +908,14 @@ export function createRoutes({
 					}
 				}
 				// Claude Code needs time after MCP connect to initialize its channel listener.
-				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, POST_WAKE_SETTLE_MS));
 				targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 			}
 		}
 
-		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the
-		// alias team for a re-incarnation).
+		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the.
 		const subs = targetWs ? registry.get(targetWs.data.teamName ?? localName) : undefined;
-		// Nothing is listening. Without somewhere to hold the message this is the end of the road, so
-		// the caller is told plainly rather than promised a delivery that will not happen.
+		// Nothing is listening. Without somewhere to hold the message this is the end of the road, so.
 		if ((!targetWs || !subs) && !deliveries) {
 			return jsonResponse(
 				{
@@ -1039,15 +929,10 @@ export function createRoutes({
 			);
 		}
 
-		// An absent session is taken as channel mode: every bridge connection registers as one (see
-		// websocket.ts), so there is no CLI registrant left for a hold to mis-serve.
+		// An absent session is taken as channel mode: every bridge connection registers as one (see.
 		const targetMode = subs ? getTeamMode(subs) : "channel";
 
-		// channelOnly senders (the console) must never reach the CLI branch below:
-		// it mints a fresh random session id that can never join the sender's
-		// deterministic conversation threads. Checked post-wake, so even a
-		// sleeping CLI team that this send just woke gets a clean error instead
-		// of an orphan session.
+		// channelOnly senders (the console) must never reach the CLI branch below:.
 		if (channelOnly && targetMode !== "channel") {
 			return jsonResponse(
 				{ error: `"${localName}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only` },
@@ -1056,13 +941,9 @@ export function createRoutes({
 		}
 
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
-		// The target is the canonical qualified name, so the console threads the reply
-		// under (gatewayId, name). Same pair reuses the same store entry forever; entries
-		// are persistent.
 		if (targetMode === "channel") {
 			try {
-				// A federated inbound send carries the origin's session id; a local send
-				// derives a stable key from (sender conversation, target).
+				// A federated inbound send carries the origin's session id; a local send.
 				const channelJobId =
 					inboundSessionId ??
 					(fromConversationId
@@ -1072,10 +953,7 @@ export function createRoutes({
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
 
-				// Honor a Domain binding ONLY on an inbound federated send (the gateway-relay
-				// handler sets inboundSessionId + dstDomainId together from the verified seal). A
-				// plain local /send must never stamp it from the request body, or a local caller
-				// could forge a binding that lets a cross-Domain reply land in a local job.
+				// Honor a Domain binding ONLY on an inbound federated send (the gateway-relay.
 				const inboundDstDomainId = inboundSessionId ? dstDomainId : undefined;
 				store.create(channelJobId, from, localName, {
 					persistent: true,
@@ -1085,17 +963,14 @@ export function createRoutes({
 				});
 
 				// message_id is the file-materialization bucket key, read only when files are present.
-				// Mint it (and send it) only then; a fileless send carries no message_id.
 				const hasFiles = files !== undefined && files.length > 0;
 				const messageId = hasFiles ? crypto.randomUUID() : undefined;
-				// Taken once, HERE, and carried on the row. Reading it at delivery would drop it on a
-				// crash and take it twice on a replay, since taking is destructive.
+				// Taken once, HERE, and carried on the row. Reading it at delivery would drop it on a.
 				const riding = awareness?.takeFor(localName) ?? undefined;
 
 				if (deliveries) {
 					const outcome = deliveries.accept({
-						// Minted per send. The console's own op store already collapses its retries before
-						// they reach here, so this identifies the message rather than the attempt.
+						// Minted per send. The console's own op store already collapses its retries before.
 						deliveryId: crypto.randomUUID(),
 						team: targetWs?.data.teamName ?? localName,
 						channelJobId,
@@ -1133,11 +1008,7 @@ export function createRoutes({
 					const payload = JSON.stringify(channelPayload);
 
 					for (const ws of activeWs) {
-						// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the
-						// message, so the agent answers the handshake first and its reply never burns a turn
-						// on the reply gate's 409. Delivery itself is never gated on confirmation - the nudge
-						// rides alongside. repushHandshake's own dedupe window keeps a freshly-minted
-						// handshake (a just-woken session) from being duplicated here.
+						// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the.
 						if (!ws.data.handshakeConfirmed && ws.data.teamName) {
 							repushHandshake?.(ws.data.teamName, ws.data.subId);
 						}
@@ -1149,21 +1020,14 @@ export function createRoutes({
 					);
 				}
 
-				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL
-				// participant's own thread. Never for a console sender (opts.consoleSender). The
-				// `!virtual` check is defense-in-depth, not independently reachable today: targetWs is
-				// always resolveLiveIncarnation's result, which already excludes virtual (console) peers
-				// on every resolution path (see websocket.ts), so a console can never be targetWs here.
+				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL.
 				if (targetWs && !targetWs.data.virtual) {
 					const toAddr = target.address;
 					if (inboundSessionId) {
-						// Federated inbound landing: only the local target is ours to mirror. `from` here
-						// is already the remote origin's canonical address (set verbatim by the origin
-						// gateway), not a local team field.
+						// Federated inbound landing: only the local target is ours to mirror. `from` here.
 						mirrorPeer(toAddr, from, toAddr.canonical, { body: msgBody, files });
 					} else if (!opts.consoleSender) {
-						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must
-						// not turn an already-delivered channel_push into a spurious 500 for the caller.
+						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must.
 						const fromAddr = tryLocalAddress(from);
 						if (fromAddr && provedLocalSession(req)) {
 							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
@@ -1184,21 +1048,14 @@ export function createRoutes({
 			}
 		}
 
-		// Unreachable: targetMode is the single-value `channel` literal, so the block above always
-		// returns. Retained as the function's fall-through return (TS does not narrow it to never).
+		// Unreachable: targetMode is the single-value `channel` literal, so the block above always.
 		return jsonResponse({ error: "unsupported connection mode" }, 400);
 	}
 
 	function respond(
 		req: Request,
 		body: Record<string, unknown>,
-		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a
-		// plain call: its cross-Gateway behavior is already driven by the job's own recorded
-		// returnRoute/dstDomainId and the respond session id's own address, not a live flag.
-		// onFederatedSettled fires once the cross-Gateway reply-pin relay actually resolves
-		// (success or exhausted retries) - respond() itself returns long before that, so a
-		// caller needing to know the TRUE outcome (durable op idempotency) cannot use the
-		// Response alone.
+		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a.
 		opts: { consoleSender?: boolean; trustedInbound?: boolean; onFederatedSettled?: (ok: boolean) => void } = {},
 	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
@@ -1207,10 +1064,7 @@ export function createRoutes({
 		}
 
 		const { session_id: respondSessionId, replyAsJson, files: rawFiles, opId: producerOpId, ...rest } = parsed.data;
-		// Stamp this Gateway as the holder, but only for a LOCAL agent: it uploaded its bytes here and
-		// posts the message here, so this is the one point that knows both facts at once, which is why
-		// an agent never has to learn its own Gateway id. A relayed message already carries its
-		// origin's stamp and the console carries its own, so neither may be overwritten with ours.
+		// Stamp this Gateway as the holder, but only for a LOCAL agent: it uploaded its bytes here and.
 		const files =
 			rawFiles &&
 			(opts.trustedInbound || opts.consoleSender ? rawFiles : stampBlobHolder(rawFiles, localGatewayId));
@@ -1226,10 +1080,7 @@ export function createRoutes({
 			}
 		}
 
-		// Check if this is a handshake response (handshakes never carry files). The caller's own
-		// launcher-delivered binding rides the header, so the resolver can require that only the
-		// challenged session answers its own handshake. A console-relayed respond arrives in-process
-		// with no header and answers no handshake, so it is unaffected.
+		// Check if this is a handshake response (handshakes never carry files). The caller's own.
 		const responderToken = presentedByRequest(req);
 		if (
 			resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined, responderToken)
@@ -1237,38 +1088,20 @@ export function createRoutes({
 			return jsonResponse({ delivered: true, handshake: true });
 		}
 
-		// Nothing can ENFORCE no-reply, so a reply that comes anyway would miss at store.deliver and
-		// reach the agent as a 404 for doing nothing wrong. Gated on there being NO job: a federated
-		// peer names its own return-route key, so the prefix alone would let it park a real job here
-		// and have this swallow the answer while the agent is told it was sent.
+		// Nothing can ENFORCE no-reply, so a reply that comes anyway would miss at store.deliver and.
 		if (isNoAckSessionId(respondSessionId) && !store.has(respondSessionId)) {
 			return jsonResponse({ delivered: true, noAck: true });
 		}
 
-		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is
-		// still unconfirmed, bounce it rather than silently deliver: without this, a session that
-		// answers a real conversation before its own handshake sits confirmed-looking on the board
-		// (messages flowing) while actually still "verifying". Fails open whenever the caller can't be
-		// identified as a live, unconfirmed, actually-pending socket - a registry miss, a virtual/console
-		// peer, or an unconfirmed socket with no pending entry (its challenge was already consumed by a
-		// dead connection, so there is nothing to name) all deliver normally rather than block.
+		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is.
 		if (rest.conversationId) {
 			const callerWs = conversationRegistry.get(rest.conversationId);
 			if (callerWs && callerWs.readyState === 1 && !callerWs.data.virtual && !callerWs.data.handshakeConfirmed) {
 				const team = callerWs.data.teamName;
 				const pendingHsId = team && findPendingHandshake?.(team, callerWs.data.subId);
-				// Deliberately does not name the pending hs-* id: conversationId is not secret (it rides
-				// verbatim in every session_id this caller has ever seen), so echoing the id here would let
-				// anyone who merely knows a victim's conversationId learn its live handshake id and replay it
-				// against /respond to forge or evict that victim's session. A legitimate self-caller already
-				// has its own pending id from the original handshake push, so it needs no reminder here.
+				// Deliberately does not name the pending hs-* id: conversationId is not secret (it rides.
 				if (team && pendingHsId) {
-					// Re-push the handshake before bouncing: the caller may have lost the original
-					// notification (dropped, batched behind other messages, or aged out of a compacted
-					// context) and so has no id left to answer with. A fresh push gives it another chance;
-					// "capped" means repeated pushes already went unanswered, so say so plainly instead of
-					// repeating the same instruction forever; "socket-gone" means the re-push itself could
-					// not be delivered, so the standing instruction to answer it would be misleading.
+					// Re-push the handshake before bouncing: the caller may have lost the original.
 					const outcome = repushHandshake?.(team, callerWs.data.subId);
 					const error =
 						outcome === "capped"
@@ -1281,7 +1114,7 @@ export function createRoutes({
 			}
 		}
 
-		// If JSON reply provided but no explicit response string, pretty-stringify for text consumers
+		// If JSON reply provided but no explicit response string, pretty-stringify for text consumers.
 		const response: ResponsePayload = {
 			session_id: respondSessionId,
 			status: rest.status as ResponsePayload["status"] | undefined,
@@ -1293,11 +1126,7 @@ export function createRoutes({
 			what_to_decide: rest.what_to_decide,
 			message: rest.message,
 		};
-		// The STORE keeps names, never a way to get the bytes. `/poll` reads this copy and authorizes
-		// nothing, and a channel entry is persistent and never swept, so whatever is written here is
-		// readable indefinitely by anyone who can reach the port. A blobId is not metadata: it is a
-		// bearer token for the content, since `/blob/get` will hand the bytes to whoever names them.
-		// The live push and the mailbox below carry the full record over authenticated paths.
+		// The STORE keeps names, never a way to get the bytes. `/poll` reads this copy and authorizes.
 		if (files && files.length > 0) response.files = stripFileRefs(files);
 		if (replyAsJson) {
 			response.replyAsJson = replyAsJson;
@@ -1306,17 +1135,14 @@ export function createRoutes({
 			}
 		}
 
-		// A reply may only come from the session the job is addressed to: the id is a pure function of
-		// two non-secret values, so anyone who has exchanged one message can compute it and would
-		// otherwise be able to answer as that session indefinitely.
+		// A reply may only come from the session the job is addressed to: the id is a pure function of.
 		const jobTarget = store.targetOf(respondSessionId);
 		if (jobTarget && !opts.consoleSender && !opts.trustedInbound) {
 			const refused = refuseForeignReply(req, jobTarget);
 			if (refused) return refused;
 		}
 
-		// The respond session_id is the opaque store key the agent echoes verbatim; under the
-		// fully-qualified grammar there is no bare form to normalize, so deliver against it directly.
+		// The respond session_id is the opaque store key the agent echoes verbatim; under the.
 		const deliverResult = store.deliver(respondSessionId, response);
 		if (!deliverResult) {
 			console.log(
@@ -1327,19 +1153,10 @@ export function createRoutes({
 
 		console.log(`[respond] ${respondSessionId}${response.status ? ` → ${response.status}` : ""}`);
 
-		// Cross-Gateway reply-pinning: a job created by a federated send belongs to the
-		// ORIGIN Gateway's session, not a local conversation. Forward a response_push
-		// back through the Router (carrying the full file bytes) and stop here - the
-		// local conversationRegistry has no entry for the remote sender.
+		// Cross-Gateway reply-pinning: a job created by a federated send belongs to the.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
-			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the
-			// verified friend Domain): an already-accepted send whose session was un-shared after it
-			// landed must have its in-flight reply DROPPED, not relayed back to the origin. The share state is the
-			// same source the inbound op gate reads, so an un-share bites every direction without
-			// the Router. The session target is the canonical domain.gateway.spawn.session parsed from the job's own
-			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
-			// (dstDomainId null) skips the gate, unchanged.
+			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the.
 			if (deliverResult.dstDomainId) {
 				const pinned = parseStoreKey(rr.srcSession);
 				const sessionTarget = pinned?.kind === "conv" ? pinned.address.canonical : undefined;
@@ -1371,8 +1188,7 @@ export function createRoutes({
 				void relayOutcome.then((r) => opts.onFederatedSettled?.(r.ok));
 			}
 			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
-			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
-			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
+			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -.
 			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
 			if (localAddr && provedLocalSession(req)) {
 				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
@@ -1385,18 +1201,14 @@ export function createRoutes({
 			return jsonResponse({ delivered: true, federated: true });
 		}
 
-		// Push response back to the sender. For conversation-routed sends we target the
-		// specific sub-session via conversationRegistry so parallel host windows don't
-		// all receive each other's replies. Fall back to team broadcast when the entry
-		// has no conversation id.
+		// Push response back to the sender. For conversation-routed sends we target the.
 		const push: ResponsePushPayload = {
 			type: "response_push",
 			session_id: respondSessionId,
 			response: response.response,
 		};
 		if (response.status) push.status = response.status;
-		// The push carries the full bytes; the store kept metadata only. message_id is the
-		// materialization bucket key, minted only alongside files as on the send path.
+		// The push carries the full bytes; the store kept metadata only. message_id is the.
 		if (files && files.length > 0) {
 			push.files = files;
 			push.message_id = crypto.randomUUID();
@@ -1405,19 +1217,10 @@ export function createRoutes({
 
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
-			// A console-bound reply is delivered by APPENDING to the owner's durable
-			// mailbox by data, independent of any live ConsolePeer. For a console job
-			// `fromConversationId` is the OWNER id (the inbox is shared by all the
-			// owner's devices); a real channel agent's is its device conversation id,
-			// which has no mailbox and takes the live-WS branch below. After a gateway
-			// restart the mailbox is restored but the virtual peer is rebuilt only on
-			// the console's next frame, so routing the reply through the live peer would
-			// drop it. The mailbox is the delivery truth; the peer is a wake hint.
+			// A console-bound reply is delivered by APPENDING to the owner's durable.
 			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
 			if (mailbox) {
-				// This direct append is the PRIMARY console-reply path (the ConsolePeer is only a wake
-				// hint), and the funnel converges it - hooking the peer alone left a reply from a
-				// remote-held conversation in a mailbox the console never polls.
+				// This direct append is the PRIMARY console-reply path (the ConsolePeer is only a wake.
 				deliverToOwner({
 					entry: {
 						kind: "reply",
@@ -1450,11 +1253,7 @@ export function createRoutes({
 						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
 					);
 				}
-				// Mirror agent-to-agent traffic (no mailbox above means the original asker has no
-				// console inbox, so it's a real agent; never for the console itself replying, opts.
-				// consoleSender). Discriminate a genuinely local reply from this gateway completing its
-				// own cross-Gateway origin anchor: the anchor's own session key embeds the REMOTE
-				// target's address, never a local one.
+				// Mirror agent-to-agent traffic (no mailbox above means the original asker has no.
 				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
 				if (askerAddr && provedLocalSession(req)) {
 					const key = parseStoreKey(respondSessionId);
@@ -1467,11 +1266,9 @@ export function createRoutes({
 						status: response.status,
 						...pickTiers(response),
 					};
-					// This message is the REPLY: the replier speaks, the original asker receives - the
-					// mirror's from/to must reflect that direction, not the original ask's.
+					// This message is the REPLY: the replier speaks, the original asker receives - the.
 					if (isRemoteAnchor) {
-						// deliverResult.to is already the remote replier's canonical address here
-						// (sendCrossGateway's own anchor records qualifiedTo, not a bare team name).
+						// deliverResult.to is already the remote replier's canonical address here.
 						mirrorPeer(askerAddr, deliverResult.to, askerAddr.canonical, mirrorPayload);
 					} else {
 						const replierAddr = tryLocalAddress(deliverResult.to);
@@ -1484,10 +1281,7 @@ export function createRoutes({
 			}
 		}
 
-		// Conversation-routed sends never degrade to name-based broadcast: the
-		// sender team name may since have been claimed by an unrelated identity
-		// (e.g. a real team replacing an evicted console peer), and the result
-		// stays poll-recoverable in the store regardless.
+		// Conversation-routed sends never degrade to name-based broadcast: the.
 		if (!pushedViaConversation && !deliverResult.fromConversationId) {
 			const fromSubs = registry.get(deliverResult.from);
 			if (fromSubs && getTeamMode(fromSubs) === "channel") {
@@ -1597,23 +1391,18 @@ export function createRoutes({
 		const r = parsed.data;
 		const refused = refuseImpersonation(req, r.from, "owner-data");
 		if (refused) return refused;
-		// Replay before anything else. These writes are ABSOLUTE, so re-running one after a newer
-		// write regresses the field - an update whose reply was lost would set the value back on
-		// retry, and routerPost retries four times. Keyed per sender so two sessions cannot collide,
-		// and only after impersonation is refused, or an unauthenticated caller could read a reply.
+		// Replay before anything else. These writes are ABSOLUTE, so re-running one after a newer.
 		const recorded = r.operationId ? recallBoardReply(r.from, r.action, r.operationId) : undefined;
 		if (recorded) return jsonResponse(recorded);
 		if (!boardClient) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
 		const client = boardClient;
-		// refuseImpersonation already resolved the name when auth is wired; the bare fallback only
-		// exists for authless harnesses.
+		// refuseImpersonation already resolved the name when auth is wired; the bare fallback only.
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
 		// Mirror authority for local refusal. Reassign and restore stay owner-only.
 		const actor: BoardActor = { kind: "session", sessionId: sessionKey };
 
-		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes
-		// through jsonResponse directly: a malformed request is not an operation that happened.
+		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes.
 		const done = (bodyOut: BoardReply): Response => {
 			if (r.operationId) rememberBoardReply(r.from, r.action, r.operationId, bodyOut);
 			return jsonResponse(bodyOut);
@@ -1648,18 +1437,13 @@ export function createRoutes({
 				});
 			}
 			case "attachments": {
-				// Hop one of a fetch: names to blobIds. Its own action because the list deliberately
-				// cannot serve them, and route-side rather than in the plugin because during the
-				// gateway-first deploy window an older plugin would relay whole records into an agent's
-				// context. Same `visibleTo` gate the list applies, checked here since that filter lives
-				// per-case rather than at the route.
+				// Hop one of a fetch: names to blobIds. Its own action because the list deliberately.
 				if (!r.id) return jsonResponse({ error: "attachments requires an id" }, 400);
 				const board = await client.read();
 				if (board.kind !== "ok") return jsonResponse({ error: board.error }, 503);
 				const entry = board.entries.find((e) => e.id === r.id);
 				if (!entry || !visibleTo(entry, sessionKey)) return jsonResponse({ error: "no such entry" }, 404);
-				// A read like the list: never recorded, so a re-run cannot replay blobIds for pictures
-				// the owner has since swapped.
+				// A read like the list: never recorded, so a re-run cannot replay blobIds for pictures.
 				return jsonResponse({ attachments: entry.attachments ?? [] });
 			}
 			case "claim": {
@@ -1760,8 +1544,7 @@ export function createRoutes({
 						sessionKey,
 						(view) => {
 							const entry = view.entry(id);
-							// Scope first: an empty update would otherwise answer applied on an entry
-							// this session cannot see, which tells the caller which ids exist.
+							// Scope first: an empty update would otherwise answer applied on an entry.
 							if (!entry) return "entry_missing";
 							const denied = mayWrite(entry, actor);
 							if (denied) return denied;
@@ -1784,8 +1567,7 @@ export function createRoutes({
 							if (update.state !== undefined) ops.push({ kind: "set_state", id, state: update.state });
 							if (update.parent !== undefined) {
 								const parent = update.parent === null ? undefined : update.parent;
-								// An unchanged parent skips placement: a retried update must not re-rank
-								// the entry to the end of a group it never left.
+								// An unchanged parent skips placement: a retried update must not re-rank.
 								if (parent !== entry.parent) {
 									if (parent !== undefined) {
 										const target = view.entry(parent);

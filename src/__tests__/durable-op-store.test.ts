@@ -3,7 +3,6 @@ import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { isBoardReply } from "../shared/board-structure.js";
 import type { DurableStore } from "../shared/durable-store.js";
 
-/** Shared memory simulates the durable file across store instances. */
 function fakeDurable(initial: unknown = null): DurableStore {
 	let state: unknown = initial;
 	return {
@@ -14,7 +13,6 @@ function fakeDurable(initial: unknown = null): DurableStore {
 	} as unknown as DurableStore;
 }
 
-/** markInFlight answers null under the migration fence, which is never the case here. */
 function mark(store: DurableOpStore, conversationId: string, opId: string): number {
 	const generation = store.markInFlight(conversationId, opId);
 	if (generation === null) throw new Error("unexpectedly fenced");
@@ -36,7 +34,6 @@ describe("DurableOpStore", () => {
 	});
 
 	it("a failed op never becomes replayable: clearing after in-flight leaves nothing to replay", () => {
-		// Failed operations clear in-flight state so retries execute again.
 		const store = new DurableOpStore(fakeDurable());
 		const generation = mark(store, "conv-a", "op-1");
 		store.clear("conv-a", "op-1", generation);
@@ -52,7 +49,6 @@ describe("DurableOpStore", () => {
 	});
 
 	it("clear() is a no-op when a NEWER attempt has since taken over the same key (stale generation), even though the record is still in-flight", () => {
-		// A stale attempt must not clear a newer in-flight generation.
 		const store = new DurableOpStore(fakeDurable());
 		const staleGeneration = mark(store, "conv-a", "op-1");
 		const currentGeneration = mark(store, "conv-a", "op-1");
@@ -75,7 +71,6 @@ describe("DurableOpStore", () => {
 	});
 
 	it("an in-flight record left by a crash is still in-flight after restart (re-execute, not replay)", () => {
-		// Restart preserves in-flight state after a crash before settlement.
 		const durable = fakeDurable();
 		const crashed = new DurableOpStore(durable);
 		crashed.markInFlight("conv-a", "op-crashed");
@@ -185,7 +180,6 @@ describe("DurableOpStore", () => {
 	});
 
 	it("evicts the least-recently-WRITTEN conversation, not the first-created one, when the conversation cap is hit", () => {
-		// Eviction follows activity, not creation order.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 256, 2);
 		mark(store, "conv-a", "op-1");
 		mark(store, "conv-b", "op-1");
@@ -198,7 +192,6 @@ describe("DurableOpStore", () => {
 	});
 
 	it("evicts the least-recently-WRITTEN op within a conversation, not the first-created one, when the per-conversation cap is hit", () => {
-		// Updates refresh recency within a conversation.
 		const store = new DurableOpStore(fakeDurable(), 14 * 24 * 60 * 60 * 1000, 3, 500);
 		mark(store, "conv-a", "op-1");
 		mark(store, "conv-a", "op-2");
@@ -260,7 +253,6 @@ describe("DurableOpStore", () => {
 				],
 			],
 		]);
-		// Restore enforces the current cap on older snapshots.
 		const store = new DurableOpStore(durable, 14 * 24 * 60 * 60 * 1000, 2, 500);
 		expect(store.get("conv-a", "op-1")).toBeUndefined();
 		expect(store.get("conv-a", "op-2")).toBeDefined();
@@ -290,7 +282,6 @@ describe("DurableOpStore.withValidator", () => {
 	});
 
 	it("rejects a restored row its own validator does not accept", () => {
-		// Ignore rows belonging to another operation store.
 		const durable = fakeDurable([
 			["sess-a", [["op-1", { state: "complete", result: { delivered: true } }, Date.now() + 100_000, 1]]],
 		]);

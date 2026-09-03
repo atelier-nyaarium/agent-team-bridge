@@ -44,8 +44,7 @@ internal class ConsoleSocketClient(
 	private var cursorEpoch: Long? = null
 	private var closed = false
 
-	/** Planes only until the Router's owner inbox carries this device's messages. Reading it before
-	 * then would pin the compaction floor at a cursor nothing advances. */
+	/** Use planes until owner inbox delivery. */
 	var mode: String? = "planes"
 
 	constructor(

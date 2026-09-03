@@ -89,7 +89,7 @@ export function openSealedBlobRange(
 	key: Buffer,
 	context: Omit<BlobSealContext, "epoch">,
 ): { bytes: Buffer; eof: boolean } {
-	// Partial reads authenticate chunks; BlobStore verifies the whole plaintext only on finalization.
+	// Chunks authenticate; finalization verifies all plaintext.
 	const chunks: Buffer[] = [];
 	let cursor = 0;
 	let index = range.offset / BLOB_CHUNK_BYTES;

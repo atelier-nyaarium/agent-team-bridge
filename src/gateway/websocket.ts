@@ -21,9 +21,7 @@ import {
 	type WsData,
 } from "./wsTypes.js";
 
-// The pre-split public surface of this module, preserved verbatim so the nine importers of
-// ./websocket.js (and sessionAuthority.ts's type-only edge back into it) needed no change. Retire a
-// name here only together with its last importer; deleting the re-export is not a cleanup.
+// The pre-split public surface of this module, preserved verbatim so the nine importers of.
 export type { ConversationRegistry, HandshakeRepushOutcome, TeamRegistry, WebSocketDeps, WsData };
 export { getAllActiveRealWs, getAllActiveWs, HANDSHAKE_REPUSH_DEDUPE_MS, RESERVED_TEAM_NAMES, resolveLiveIncarnation };
 
@@ -55,8 +53,7 @@ export function createWebSocketHandlers({
 	now,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
-	// Falls back to sessionStore directly (its own methods have identical signatures) when no
-	// presence facade is wired - tests exercising only read-side behavior stay unaffected.
+	// Falls back to sessionStore directly (its own methods have identical signatures) when no.
 	const liveWriter = presenceWriter ?? sessionStore;
 
 	function heartbeatTick() {
@@ -80,8 +77,7 @@ export function createWebSocketHandlers({
 	}
 	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
-	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,
-	// which binding confirmed a team's lead) live in the gate; every socket effect stays here.
+	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,.
 	const handshakeGate = new HandshakeGate(now);
 
 	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
@@ -166,10 +162,7 @@ export function createWebSocketHandlers({
 			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
-			// Host-daemon auth: the reserved "host" slot (which drives agent terminals and
-			// receives wakes) is admission-gated by a shared secret so a LAN peer cannot
-			// claim it. Refused unless the gateway has HOST_WS_TOKEN configured and the
-			// daemon presents the matching token.
+			// Host-daemon auth: the reserved "host" slot (which drives agent terminals and.
 			if (team === "host" && (!config.hostWsToken || reg.data.token !== config.hostWsToken)) {
 				console.log(`[ws] rejected host register - bad or missing token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -178,25 +171,13 @@ export function createWebSocketHandlers({
 				return;
 			}
 
-			// Session binding: the token was minted with the record and reaches the session only
-			// through the daemon's launch command, so presenting the one bound to the name being
-			// claimed proves this connection IS that record's session. Anything else is unbound.
-			// Deliberately NOT a rejection on its own - a hand-launched session has no token by
-			// design, and a purged DATA_DIR leaves every running session's token unresolvable.
+			// Session binding: the token was minted with the record and reaches the session only.
 			const presentedToken = reg.data.sessionToken;
 			const boundRecord = presentedToken ? sessionStore?.recordByBindToken(presentedToken) : undefined;
 			const isBound = !!boundRecord && sessionStore?.teamOf(boundRecord) === team;
 			const presentedHere = presentedByRegister(reg.data);
 
-			// A name whose binding is ACTIVE may be claimed only by the holder of that binding. This
-			// is the impersonation gate: a neighbouring container can reach the register path but
-			// cannot produce another record's token. A name with no binding, or one whose binding
-			// has never been presented, stays claimable by anyone - which is what keeps a
-			// hand-launched session, a pre-existing record, and a reattached pane that never
-			// received its token all working.
-			// The wire name IS the key at register: a bare spawn-point name legitimately has no record,
-			// unlike the sender gates, which must resolve a name the way delivery does because what a
-			// message claims to be FROM is what gets stamped on it.
+			// A name whose binding is ACTIVE may be claimed only by the holder of that binding. This.
 			if (auth && !auth.satisfies(auth.toClaim(team), presentedHere)) {
 				console.log(`[ws] rejected register for bound team "${team}" - binding not presented`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -204,10 +185,7 @@ export function createWebSocketHandlers({
 				ws.close();
 				return;
 			}
-			// A session on a host SHELL must prove the daemon launched it, because that name is what
-			// routes a later wake at the real machine rather than a container. Checked against the
-			// record directly: its token is presented on the FIRST registration, before activation,
-			// so the claim gate above cannot see it and would pass an unclaimed name to anyone.
+			// A session on a host SHELL must prove the daemon launched it, because that name is what.
 			if (auth && isHostSpawnSession(team) && !auth.presentsOwnLaunchToken(team, presentedHere)) {
 				console.log(`[ws] rejected register for host session "${team}" - no daemon launch token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -219,10 +197,7 @@ export function createWebSocketHandlers({
 				ws.data.boundToken = presentedToken;
 				const wasInert = !sessionStore?.isBindingActive(boundRecord);
 				sessionStore?.activateBinding(boundRecord);
-				// Arming the binding must also expel anyone who claimed this name while it was inert,
-				// or squatting first would defeat the gate entirely: delivery fans out to every active
-				// socket under a team, not just the confirmed lead, so a pre-claimer would keep reading
-				// the victim's messages forever despite the binding now being armed.
+				// Arming the binding must also expel anyone who claimed this name while it was inert,.
 				if (wasInert) {
 					for (const [otherSubId, other] of registry.get(team) ?? []) {
 						if (other !== ws && other.data.boundToken !== presentedToken) {
@@ -235,9 +210,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// Reserved-name protection: first live registration wins. A second process
-			// trying to claim "host" is rejected so a stray container project cannot squat
-			// on the host daemon's slot.
+			// Reserved-name protection: first live registration wins. A second process.
 			if (RESERVED_TEAM_NAMES.has(team)) {
 				const existingSubs = registry.get(team);
 				const existingActive = existingSubs ? getAllActiveWs(existingSubs) : [];
@@ -251,8 +224,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// After every rejection gate, so a second daemon carrying the token cannot replace the live
-			// declaration on its way out.
+			// After every rejection gate, so a second daemon carrying the token cannot replace the live.
 			if (team === "host" && reg.data.daemonCapabilities) {
 				onDaemonCapabilities?.(reg.data.daemonCapabilities);
 			}
@@ -263,9 +235,7 @@ export function createWebSocketHandlers({
 				registry.set(team, subs);
 			}
 
-			// A real registration claims the name over any virtual console peers
-			// squatting it: evict them so a console can never absorb a real team's
-			// traffic. The console's next frame gets the name-taken rejection.
+			// A real registration claims the name over any virtual console peers.
 			for (const [virtualSubId, virtualWs] of [...subs]) {
 				if (virtualWs.data.virtual) {
 					subs.delete(virtualSubId);
@@ -278,7 +248,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// If this subId already exists with a different socket, evict the old one
+			// If this subId already exists with a different socket, evict the old one.
 			const existing = subs.get(subId);
 			if (existing && existing !== ws) {
 				evictSocket(existing);
@@ -294,23 +264,12 @@ export function createWebSocketHandlers({
 			ws.data.claudeSessionId = reg.data.claudeSessionId;
 			ws.data.cwdName = reg.data.cwdName;
 			subs.set(subId, ws);
-			// The registry a snapshot reads from already reflects this socket live at this point (see
-			// resolveLiveIncarnation), but nothing has told the plane registry to recompute yet - every
-			// branch below either announces itself independently (the remembered-lead fast path, via
-			// establishRecord) or does not (a fresh handshake mint, or the non-channel/host branch), so
-			// announce here unconditionally rather than depend on each future branch remembering to.
+			// The registry a snapshot reads from already reflects this socket live at this point (see.
 			announcePresenceDirty?.();
 
 			if (conversationId) {
 				const priorConversationWs = conversationRegistry.get(conversationId);
-				// A conversationId belongs to ONE MCP process for its whole lifetime, reused across
-				// that process's own reconnects under its OWN unchanging team - never legitimately
-				// claimed by a different team. conversationId itself carries no secret/proof (it rides
-				// verbatim in every session_id a caller has seen, same as the handshake ids above), so
-				// without this check a connection that merely learned a victim's conversationId could
-				// evict the victim's live socket and steal its slot under an unrelated team name. A
-				// mismatch is refused outright - neither evicting the real holder nor claiming its slot
-				// - rather than assuming this connection is the legitimate reconnect.
+				// A conversationId belongs to ONE MCP process for its whole lifetime, reused across.
 				if (priorConversationWs && priorConversationWs.data.teamName !== team) {
 					console.warn(
 						`[ws] refusing conversationId claim: ${team}/${subId} presented a conversationId already held by team "${priorConversationWs.data.teamName}"`,
@@ -323,8 +282,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// Only a bare project is a devcontainer catalog entry; a composite `project.session` is a
-			// loose session and must never land in knownTeamPaths (it would be misclassified).
+			// Only a bare project is a devcontainer catalog entry; a composite `project.session` is a.
 			if (typeof msg.projectPath === "string" && msg.projectPath && !isComposite(team)) {
 				knownTeamPaths.set(team, msg.projectPath);
 			}
@@ -332,17 +290,7 @@ export function createWebSocketHandlers({
 			wakeCoordinator.notify(team);
 			console.log(`[ws] ${team}/${subId} connected (mode: ${mode})`);
 
-			// Handshake: ask channel-mode connections if they are the main/lead agent - UNLESS this
-			// registrant already remembers its own answer from a prior handshake (reg.data.isMainOrLead)
-			// AND this team has actually completed one (confirmedLeadTeams), in which case it confirms
-			// silently with no prompt. The confirmedLeadTeams check keeps the shortcut from ever covering
-			// a team's first-ever connection: only a team that has already answered one real challenge
-			// can skip being asked again. A remembered "false" never arrives (a worker that answered
-			// false is evicted permanently and does not reconnect), so only true is handled here.
-			// Before any frame the plugin might answer. It refuses to reply while it has heard no
-			// version, so a challenge that arrived first would be withheld until this landed. A socket
-			// that cannot take it is not registered: let it close and reconnect rather than leave the
-			// plugin refusing against a gateway that believes it registered.
+			// Handshake: ask channel-mode connections if they are the main/lead agent - UNLESS this.
 			try {
 				ws.send(JSON.stringify({ type: "register_ok", opLedgerProtocol: OP_LEDGER_PROTOCOL }));
 			} catch {
@@ -370,12 +318,7 @@ export function createWebSocketHandlers({
 			onTeamConnect?.(team, ws);
 		}
 
-		// Only the authenticated host socket may report a wake outcome (matching host_op_reply and
-		// catalog), so a LAN peer cannot forge a wake_result to fail or shorten an in-flight wake.
-		// A failed wake_result fails the wait at once. A success proves the container started but is
-		// not deliverable until it registers, so it shortens the wait to the registration window (the
-		// woken container's own register resolves it true) instead of stalling WAKE_TIMEOUT_MS if the
-		// agent crashed before registering.
+		// Only the authenticated host socket may report a wake outcome (matching host_op_reply and.
 		if (msg.type === "wake_result" && ws.data.teamName === "host" && typeof msg.team === "string") {
 			if (msg.success === false) {
 				wakeCoordinator.notify(msg.team, false);
@@ -385,14 +328,11 @@ export function createWebSocketHandlers({
 		}
 
 		// The receiver confirming it emitted a held message, which is the only thing that retires one.
-		// Scoped to the socket's OWN team: a delivery id is not a secret, and nothing else should be
-		// able to retire another session's mail by naming it.
 		if (msg.type === "channel_delivery_ack" && typeof msg.delivery_id === "string" && ws.data.teamName) {
 			onDeliveryAck?.(ws.data.teamName, msg.delivery_id);
 		}
 
-		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the
-		// authenticated host socket may settle a host op (matching the catalog branch).
+		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the.
 		if (msg.type === "host_op_reply" && ws.data.teamName === "host" && typeof msg.reqId === "string") {
 			hostOpCoordinator?.settle(msg.reqId, {
 				ok: msg.ok === true,
@@ -421,16 +361,11 @@ export function createWebSocketHandlers({
 					}
 				}
 				console.log(`[ws] catalog received: ${offlineCatalog.size} projects`);
-				// Detected host spawn points ride the same frame. Rewritten whole on every catalog,
-				// like offlineCatalog: what the daemon last said IS the answer, and a daemon that
-				// stops offering one must stop advertising it. Absent (an older daemon) leaves the
-				// previous answer alone rather than clearing it, so an upgrade cannot look like a loss.
+				// Detected host spawn points ride the same frame. Rewritten whole on every catalog,.
 				const spawns = msg.hostSpawns;
 				if (Array.isArray(spawns) && hostSpawnPoints) {
 					hostSpawnPoints.ids = spawns.filter((s): s is string => typeof s === "string" && s.length > 0);
-					// Only NOW is the answer known. An older daemon omits the field entirely and leaves
-					// this false, so discovery says nothing about that machine rather than claiming it
-					// offers nothing.
+					// Only NOW is the answer known. An older daemon omits the field entirely and leaves.
 					hostSpawnPoints.known = true;
 					console.log(`[ws] host spawn points: ${hostSpawnPoints.ids.join(", ") || "(none beyond host)"}`);
 				}
@@ -438,10 +373,7 @@ export function createWebSocketHandlers({
 			}
 		}
 
-		// The daemon's presence-derivation report for one team. Only the authenticated host socket
-		// may report a derivation (matching wake_result/host_op_reply/catalog). A frame carrying no
-		// derived field at all means a derivation-impossible clear, not "observed false" - passed
-		// through as undefined so the presence facade can tell the two apart.
+		// The daemon's presence-derivation report for one team. Only the authenticated host socket.
 		if (msg.type === "presence_derive" && ws.data.teamName === "host" && typeof msg.team === "string") {
 			const working = typeof msg.working === "boolean" ? msg.working : undefined;
 			const needsLogin = typeof msg.needsLogin === "boolean" ? msg.needsLogin : undefined;
@@ -451,7 +383,7 @@ export function createWebSocketHandlers({
 			onPresenceDerive?.(msg.team, cleared ? undefined : { working, needsLogin, limitBlocked, limitDetail });
 		}
 
-		// Reset missed pings on any message (acts like pong)
+		// Reset missed pings on any message (acts like pong).
 		ws.data.missedPings = 0;
 	}
 
@@ -473,17 +405,12 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
-					// Cleared with the catalog, for the same reason: a machine with no daemon cannot
-					// launch anything, so advertising a Windows spawn point would offer a target that
-					// is guaranteed to fail. Back to UNKNOWN rather than to an empty answer - nothing
-					// has been established about a machine whose daemon just left. The next catalog
-					// frame re-announces whatever it finds.
+					// Cleared with the catalog, for the same reason: a machine with no daemon cannot.
 					if (hostSpawnPoints) {
 						hostSpawnPoints.known = false;
 						hostSpawnPoints.ids = [];
 					}
-					// Fail in-flight terminal ops AND wakes so a console peek/send or a /send awaiting a
-					// wake returns at once instead of waiting out its full timeout across the host restart.
+					// Fail in-flight terminal ops AND wakes so a console peek/send or a /send awaiting a.
 					hostOpCoordinator?.failAll("host daemon disconnected");
 					wakeCoordinator.failAll();
 					console.log(`[ws] host disconnected - offline catalog cleared`);
@@ -502,7 +429,7 @@ export function createWebSocketHandlers({
 		const subs = registry.get(teamName);
 		if (!subs) return;
 
-		// Only remove if this is the registered socket for this subId
+		// Only remove if this is the registered socket for this subId.
 		if (subs.get(subId) !== ws) {
 			console.log(`[ws] stale close for ${teamName}/${subId} - skipping cleanup`);
 			return;
@@ -511,12 +438,10 @@ export function createWebSocketHandlers({
 		subs.delete(subId);
 		console.log(`[ws] ${teamName}/${subId} disconnected (${subs.size} remaining)`);
 
-		// Clear any pending lead-handshake owned by this socket: a socket that drops before it answers
-		// would otherwise leave its entry in the map forever (resolveHandshake never fires for it).
+		// Clear any pending lead-handshake owned by this socket: a socket that drops before it answers.
 		handshakeGate.forget(teamName, subId);
 
-		// Drop the record's live pointer if this exact incarnation was serving it, so send/wake
-		// resolution stops probing a dead incarnation.
+		// Drop the record's live pointer if this exact incarnation was serving it, so send/wake.
 		liveWriter?.clearLive(teamName, subId);
 
 		// Clear conversation registry entry if it still points at this ws.
@@ -525,9 +450,7 @@ export function createWebSocketHandlers({
 			conversationRegistry.delete(closingConversationId);
 		}
 
-		// If team has no more live sub-sessions, clean up fully. Virtual console
-		// peers do not count as liveness; they must not suppress disconnect
-		// cleanup (pin clearing, job cancellation).
+		// If team has no more live sub-sessions, clean up fully. Virtual console.
 		const hasRealSubs = [...subs.values()].some((s) => !s.data.virtual);
 		if (!hasRealSubs) {
 			if (subs.size === 0) registry.delete(teamName);
@@ -545,10 +468,7 @@ export function createWebSocketHandlers({
 		if (!sessionStore) return "not-recorded";
 		const claudeSessionId = ws.data.claudeSessionId;
 		let handover = false;
-		// First-binding-holds: if this transcript already lives on a DIFFERENT record's live
-		// incarnation, refuse to re-bind it here (the first binding holds), so a second live process on
-		// one transcript never steals the card. The session's own segment (a daemon relaunch of the
-		// same record) is exempt - that is a legitimate rebind, not a steal.
+		// First-binding-holds: if this transcript already lives on a DIFFERENT record's live.
 		if (claudeSessionId) {
 			const holder = sessionStore.resumeRecord(claudeSessionId);
 			if (holder && sessionStore.teamOf(holder) !== pending.team) {
@@ -592,14 +512,7 @@ export function createWebSocketHandlers({
 		const pending = handshakeGate.pendingOf(sessionId);
 		if (!pending) return false;
 
-		// Only the challenged session may answer its own handshake. Without this, anyone who learns
-		// an hs- id can answer it with isMainOrLead:false, which evicts the victim's socket while its
-		// MCP sets suppressReconnect - a permanent remote kill. Keyed on the CHALLENGED SOCKET, which
-		// is literally the subject of the question: only the connection a challenge was issued to may
-		// answer it. Checked BEFORE the consume below, so a spoofed answer cannot eat the pending
-		// entry the real session still needs. Socket-keyed also means a token minted but never
-		// delivered cannot strand its session, since such a socket carries nothing and is therefore
-		// owed nothing.
+		// Only the challenged session may answer its own handshake. Without this, anyone who learns.
 		const challenged = registry.get(pending.team)?.get(pending.subId);
 		if (auth && !auth.satisfies(auth.toAnswerFor(challenged), responderToken ?? NOTHING_PRESENTED)) {
 			console.log(`[ws] ignored handshake answer for ${pending.team} - not from the challenged session`);
@@ -610,8 +523,7 @@ export function createWebSocketHandlers({
 		const subs = registry.get(pending.team);
 		const ws = subs?.get(pending.subId);
 		if (!ws) return true;
-		// Honor a confirm only for a still-open socket: a reply arriving after the socket dropped or
-		// was evicted must not resurrect a record or mutate registry state.
+		// Honor a confirm only for a still-open socket: a reply arriving after the socket dropped or.
 		if (ws.readyState !== 1) return true;
 
 		const claim = HandshakeGate.leadClaim(replyAsJson, response);

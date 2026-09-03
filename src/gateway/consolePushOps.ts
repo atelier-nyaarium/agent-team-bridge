@@ -17,39 +17,26 @@ import {
 } from "./routeSchemas.js";
 import type { CallerScope } from "./routes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
-	/** Caller-chosen; the funnel never mints one, so an omission is a compile error, not a
-	 * silently non-idempotent relay. */
+	/** Caller-chosen deduplication key. */
 	dedupeKey: string;
 	provenance: MailboxProvenance;
-	/** "relay" is the ONLY non-fanning append: the gossip-loop guard as API, not discipline. */
+	/** Relays never fan out. */
 	origin: "local" | "relay";
-	/** Device-scoped producers pass their own liveness accessor (undefined = torn down, deliver
-	 * nothing). Absent means owner-scoped: the shared inbox, ensured by owner id. */
 	resolveMailbox?: () => import("../shared/device-mailbox.js").DeviceMailbox | undefined;
-	/** Log label for a failed append. */
 	label?: string;
 }
 
 export type DeliverToOwner = (opts: DeliverToOwnerOptions) => boolean;
 
 export interface ConsolePushOpsDeps {
-	/** Console mailboxes. Absent when the console bridge is off, which makes every path here a no-op. */
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
-	/** This Gateway's own Domain owner id, the shared inbox key. Null pre-enrollment. */
 	ownerId?: (() => string | null) | null;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
-	/** Whether a gateway id resolves to a LOCAL peer, the allowlist filter the fan-out applies. */
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	localGatewayId: string;
-	/** The ONE producer of a local session's canonical Address (routes.ts's own). */
 	localAddress: (name: string) => Address;
-	/** Copies an entry's blobs into the Router cache, so a console can read them while this machine
-	 * is asleep. Best effort and fire-and-forget: delivery never waits on it. */
 	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
 	relayWithRetry: (
@@ -59,9 +46,6 @@ export interface ConsolePushOpsDeps {
 		dstDomain?: string,
 	) => Promise<{ ok: boolean; error?: string }>;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function createConsolePushOps({
 	mailboxStore,
@@ -74,16 +58,7 @@ export function createConsolePushOps({
 	refuseImpersonation,
 	relayWithRetry,
 }: ConsolePushOpsDeps) {
-	/** THE owner-mailbox writer. Every console-bound entry lands through here and nowhere else
-	 * (console-mailbox-delivery-residue.test.ts fails the build on any other `.append(` under
-	 * src/gateway), so the convergence relay cannot be forgotten by a new producer - the defect
-	 * that cost three separate fixes when five call sites each held the invariant by discipline.
-	 *
-	 * Embeds `dedupeKey` onto the entry AND passes the identical value as `append()`'s dedup
-	 * parameter, so the two necessarily-equal uses of one key cannot drift. Only what actually
-	 * landed is fanned: fanOutConsolePush's contract is "already appended locally". Fan-out is
-	 * skipped for an empty session_id (a spawn-point echo names no thread; the relay schema
-	 * would reject it inside a floating promise). Never throws. */
+	/** Sole owner-mailbox writer. */
 	function deliverToOwner({
 		entry,
 		dedupeKey,
@@ -92,14 +67,10 @@ export function createConsolePushOps({
 		resolveMailbox,
 		label = "deliver",
 	}: DeliverToOwnerOptions): boolean {
-		// The sole mailbox writer, so the fence sits here rather than at each of its origins.
 		if (fenced()) {
 			console.warn(`[${label}] refused: migrating`);
 			return false;
 		}
-		// The same caps the landing side holds against a relayed-in entry, held here against every
-		// origin too. Origins pre-validate (send/respond/humanNotify 4xx first), so a trip here is
-		// a producer bug worth a log, never a user-visible path.
 		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
 			console.warn(`[${label}] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
 			return false;
@@ -124,19 +95,14 @@ export function createConsolePushOps({
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
-		// After the append, never before: the entry is what names these blobs, so caching bytes for one
-		// that failed to land would put copies on the Router nothing references.
+		// Cache only landed blobs.
 		const blobIds = [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))];
 		if (blobIds.length > 0) cacheBlobs?.(blobIds);
 		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
 		return true;
 	}
 
-	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
-	 * `threadAddr`'s own thread, then fan the same entry out to every other same-Domain Gateway
-	 * (fanOutConsolePush) so it lands wherever the owner's console actually polls. A no-op
-	 * pre-enrollment (no owner id) or when the console bridge is off (no mailboxStore) - the
-	 * mirror is purely additive display, never load-bearing. */
+	/** Mirrors peer display entries. */
 	function mirrorPeer(
 		threadAddr: Address,
 		from: string,
@@ -146,19 +112,11 @@ export function createConsolePushOps({
 			files?: ChannelFile[];
 			status?: string;
 		},
-		// A stable id lets an at-least-once RELAY of this same already-composed entry (the
-		// console_push convergence hop, see fanOutConsolePush) dedupe against the same key on
-		// each receiving gateway. It does NOT protect against a caller-level HTTP retry of
-		// send()/respond() itself - that gap is pre-existing (the channel_push/response_push it
-		// mirrors has no such protection either) and is not solved here. Defaults to a fresh id
-		// when no caller has one to give.
+		// Stable across relay hops.
 		dedupeKey: string = crypto.randomUUID(),
 	): void {
 		const owner = ownerId?.();
 		if (!owner || !mailboxStore) return;
-		// Never load-bearing, and that has to hold for a THROW as well as an outcome: every caller
-		// mirrors AFTER its primary delivery, so escaping here reports a spurious failure and earns a
-		// retry that duplicates an already-delivered message.
 		try {
 			const entry: ConsolePushEntry = {
 				kind: "peer",
@@ -173,17 +131,7 @@ export function createConsolePushOps({
 		}
 	}
 
-	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
-	 * relayed from ANOTHER same-Domain Gateway) onto THIS Gateway's own owner mailbox - the
-	 * console_push LANDING side. Idempotent per dedupeKey. Local-append only: this function never
-	 * fans out further, so a receiving Gateway can never gossip-loop an entry back out to the mesh
-	 * (only fanOutConsolePush calls the relay, and nothing calls it from here). A no-op (not an
-	 * error, so the origin's relayWithRetry does not burn retries on it) pre-enrollment, when the
-	 * console bridge is off, when the attached files exceed the same byte cap every other
-	 * mailbox-writing path enforces (send/respond/humanNotify - this is the only path that lands
-	 * relayed-in content rather than a request this Gateway already validated itself), when a
-	 * plugin_action payload exceeds its own byte cap, or if the append itself fails - mirroring
-	 * mirrorPeer's own "purely additive, never load-bearing" posture. */
+	/** Lands relayed entries without fan-out. */
 	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
 		return {
 			delivered: deliverToOwner({
@@ -196,22 +144,11 @@ export function createConsolePushOps({
 		};
 	}
 
-	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
-	 * same-Domain Gateway, so it lands wherever the owner's console actually polls - not just the
-	 * Gateway that composed it. Same-Domain peers are enumerated the same way discover() already
-	 * does (the Router's list_gateways; no new discovery machinery), filtered through the
-	 * locally-mirrored Allowlist where available (a mailbox WRITE deserves the extra check
-	 * discover()'s read-only list_teams fan-out doesn't bother with) and self-excluded as cheap
-	 * insurance against the Router ever including the caller in its own roster. Fire-and-forget with
-	 * retry (relayWithRetry); never throws. ORIGIN-ONLY: call this from an origination tap point
-	 * (mirrorPeer, humanNotify) alone - never from console_push's own landing case in handleOp, or
-	 * an entry would gossip-loop around the mesh forever. */
+	/** Fans out local entries only. */
 	async function fanOutConsolePush(entry: ConsolePushEntry, dedupeKey: string): Promise<void> {
 		if (!routerClient?.isConnected()) return;
 		if (!resolvesLocalGateway) {
-			// Not just "no extra check" - trusting the Router's roster alone for a mailbox WRITE is a
-			// deliberately bigger trust extension than list_teams' read-only fan-out takes, so a
-			// missing filter is worth a log, not a silent downgrade.
+			// Mailbox writes require the allowlist.
 			console.warn("[console_push] fan-out running with no allowlist filter (resolvesLocalGateway unset)");
 		}
 		try {
@@ -229,27 +166,15 @@ export function createConsolePushOps({
 		}
 	}
 
-	/** Broadcast a notice to the owner's mailbox (one shared inbox drained by every one of their
-	 * devices). Notices thread under the sender on the console and are never respondable: they
-	 * are appended directly here (not via a peer push), so no inbound session is recorded.
-	 * Ensures the mailbox by owner id rather than iterating whatever conversations already happen
-	 * to be registered ON THIS GATEWAY: a Gateway with zero consoles ever registered against it
-	 * (the ordinary shape for a multi-gateway Domain's non-home Gateway) would otherwise have an
-	 * empty mailbox map, silently dropping the notice instead of landing it somewhere the owner
-	 * will eventually poll. fanOutConsolePush then relays the same entry to every other
-	 * same-Domain Gateway too, so it reaches wherever the console actually is. */
+	/** Broadcasts a notice to the owner mailbox. */
 	function humanNotify(req: Request, body: Record<string, unknown>): Response {
 		const parsed = HumanNotifySchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, title, summary, full, fullSpoken, files: rawNoticeFiles } = parsed.data;
-		// Stamped like every other locally-composed message. This route has no federated or console
-		// caller - a notice is always posted by an agent on this machine, whose bytes are therefore
-		// here - and the notice then fans out to wherever the owner's console actually polls, so
-		// without the stamp a multi-Gateway owner can never fetch a notify_human attachment.
+		// Blob ownership follows the originating gateway.
 		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
-		// The owner's mailbox, not the named session's: a notice lands wherever the owner reads.
 		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
 		if (files && files.length > 0) {
@@ -269,15 +194,10 @@ export function createConsolePushOps({
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
 		}
 		const dedupeKey = crypto.randomUUID();
-		// Qualified, never the bare team field: fanOutConsolePush relays this entry verbatim to
-		// sibling Gateways, and a console qualifies a bare `from` with its ROUTE Gateway - filing a
-		// notice from machine B under a thread that looks like machine A's.
+		// Notices require qualified sender addresses.
 		const sender = localAddress(from);
 		const entry: ConsolePushEntry = {
 			kind: "notice",
-			// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
-			// never throws here - unlike a console send's free-form Device Name. notify_human is an
-			// agent-only tool; a console never posts a notice, so the sender is always a slug.
 			session_id: storeKey({ kind: "notice", sender }),
 			from: sender.canonical,
 			body: full,
@@ -291,19 +211,13 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	/** Land a generic plugin-action envelope (pluginId/actionType/payload) into the owner's mailbox
-	 * as a `plugin_action` entry, threaded under the CALLING agent's own address - never a
-	 * client-suppliable target - so a caller can only ever act on its own conversation.
-	 * Best-effort/never-load-bearing, matching every other mailbox-writing path here: the console
-	 * routes an unclaimed pluginId:actionType to nothing (silently skipped), so a dropped write here
-	 * is no worse than a dropped claim there. */
+	/** Lands a plugin action in the owner's mailbox. */
 	function pluginAction(req: Request, body: Record<string, unknown>): Response {
 		const parsed = PluginActionRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, pluginId, actionType, payload } = parsed.data;
-		// Drives a plugin on the owner's own device, so it is owner data like the notice above.
 		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
 		if (!mailboxStore) {

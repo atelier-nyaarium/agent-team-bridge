@@ -1,18 +1,12 @@
 // generated from src/shared/schemas.ts + src/shared/console-protocol.ts - DO NOT EDIT.
 // Regenerate: bun scripts/codegen-kotlin.ts
+// Decode with ignoreUnknownKeys = true. Enum-like fields are open Strings, so a console
+// tolerates values newer than its build.
 //
-// Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
-// posture). Enum-like fields are open Strings on purpose: the console must
-// tolerate values newer than this build.
+// Keep encodeDefaults false: zod .optional() rejects an explicit null. Enabling it MUST pair
+// with explicitNulls = false. Required consts become parameters.
 //
-// ENCODE config is load-bearing: the default Json (encodeDefaults = false)
-// omits null-defaulted optionals, which is exactly what the gateway's zod
-// schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
-// is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
-// it MUST pair with explicitNulls = false. Required consts become parameters. Note
-// the console's POST body is the
-// op-only envelope {device, conversationId, opId, op}; the Router composes the
-// full console_relay frame, so ConsoleRelayFrame is decode-side here.
+// The console POSTs the op-only envelope, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 @file:OptIn(ExperimentalSerializationApi::class)
 
@@ -29,39 +23,35 @@ import kotlinx.serialization.json.JsonObject
 object Protocol {
 	const val CONSOLE_PROTOCOL_VERSION: Int = 2
 
-	/** The one structural separator for every address / store / thread key. */
+	/** Address and store separator. */
 	const val ADDRESS_SEP: String = "."
 
-	/** Position-0 store-key tag for a channel conversation key. */
+	/** Channel key tag. */
 	const val CONV_TAG: String = "conv"
 
-	/** Position-0 store-key tag for a broadcast notice key. */
+	/** Broadcast key tag. */
 	const val NOTICE_TAG: String = "notice"
 
-	/** The session a bare spawn-point name defaults to as a wake / UI default. */
+	/** Default session. */
 	const val DEFAULT_SESSION: String = "claude"
 
-	/** The one address-segment slug pattern (lowercase alnum, internal / trailing hyphen). */
+	/** Address slug pattern. */
 	const val SLUG_PATTERN: String = "^[a-z0-9][a-z0-9-]*\$"
 
 	const val MAX_SLUG_LEN: Int = 64
 
 	const val MAX_CONV_ID_LEN: Int = 128
 
-	/** Bytes per blob chunk. Every runtime moves attachment bytes in units of this, so the peak
-	 * allocation on a transfer is a constant no matter how large the file is. */
+	/** Blob chunk size. */
 	const val BLOB_CHUNK_BYTES: Int = 1048576
 
-	/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
-	 * are described, since a message's stated size is the sender's own claim. */
+	/** Blob size limit. Enforced where the bytes land: a stated size is the sender's claim. */
 	const val MAX_BLOB_BYTES: Long = 500000000
 
-	/** Above this a console waits to be asked before fetching a board attachment. NOT a cap on what
-	 * may be attached - the wire carries up to MAX_BLOB_BYTES in chunks either way. It only decides
-	 * what a device pulls down unprompted. */
+	/** Unprompted fetch threshold, not an attachment cap. The wire still carries MAX_BLOB_BYTES. */
 	const val BOARD_AUTO_DOWNLOAD_MAX_BYTES: Long = 25000000
 
-	/** Attachments one board entry may hold. */
+	/** Board attachment limit. */
 	const val BOARD_ATTACHMENTS_MAX: Int = 10
 }
 

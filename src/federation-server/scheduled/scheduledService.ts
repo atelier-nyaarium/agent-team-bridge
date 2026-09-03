@@ -41,7 +41,7 @@ const RETRY_MS = 60_000;
 const TERMINAL = new Set(["fired", "cancelled", "error"]);
 const recordId = (target: ScheduledTarget): string => `${target.domainId}/${target.gatewayId}/${target.sessionId}`;
 const addressOf = (target: ScheduledTarget): InboxAddress => ({ kind: "session", ...target });
-/** The send and result rows use adjacent ledger keys. */
+/** Adjacent ledger keys. */
 const messageKey = (record: { sender: { conversationId: string }; opId: string }): OpKey => ({
 	conversationId: record.sender.conversationId,
 	opId: record.opId,
@@ -136,12 +136,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const write = store.put("scheduled", id, current ? expected : null, { clear: record });
 		if (write.kind !== "ok")
 			return envelope(sender, write.kind === "conflict" ? "conflict" : "durability_uncertain");
-		// A membership diff, never release-then-hold. Both halves name the same reference, so releasing
-		// a kept file takes its last reference and deletes the bytes. Holding first does not help:
-		// hold is idempotent, so the release still finds one reference and zeroes it.
-		// Every previous state releases, not just an armed one. Fire and cancel only ever release the
-		// CURRENT file set, so a member dropped while firing would keep its reference with nothing
-		// left to release it. A repeat release is a no-op, the reference already being gone.
+		// Release only membership diffs; holds are idempotent.
 		if (previous?.success) {
 			const kept = new Set(input.files);
 			releaseFiles(domainId, {
@@ -197,6 +192,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 			retryLater(domainId, target);
 			return { outcome: firing.kind };
 		}
+		// Fire via the op ledger.
 		const sent = deps.appendScheduledMessage(
 			domainId,
 			addressOf(target),
@@ -205,7 +201,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 			record.files,
 		);
 		if (sent.outcome === "accepted") {
-			// The row now holds the files; release the schedule hold.
+			// Row holds files; release schedule hold.
 			if (sent.seq !== undefined)
 				for (const blobId of record.files)
 					deps.referenceHeld.hold(domainId, blobId, { kind: "row", id: `${recordId(target)}:${sent.seq}` });

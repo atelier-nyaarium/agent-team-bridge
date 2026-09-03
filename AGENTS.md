@@ -18,7 +18,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog, relay folding, authenticated route
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
 - `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting
-- `src/gateway/router/presenceReporter.ts` / `presenceProtocol.ts` - the presence pump, and the pure protocol it obeys; `applyAnswer` cannot reach the sender, so no answer starts a frame
+- `src/gateway/router/presenceReporter.ts` / `presenceProtocol.ts` - presence pump and pure protocol; `applyAnswer` cannot reach the sender, so answers do not start frames
 - `src/gateway/router/shareAttestor.ts` - share liveness attestation, coalesced
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
 - `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
@@ -78,11 +78,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
 - `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
-  - **A mailbox epoch is a random tag, never a counter.** `mintEpoch` draws it, so epochs compare for
-    EQUALITY only. Within one epoch the seq orders; across a re-mint nothing does, and the later
-    report wins. `at` is stamped by whoever receives the report, never taken from the reporter, since
-    it decides every cross-epoch merge. `ReadAnchor.kt` is the phone's twin and resolves by row
-    position.
+  - **A mailbox epoch is a random tag, never a counter:** `mintEpoch` draws it. Compare epochs for
+    EQUALITY only. Sequence orders rows within an epoch. Across epochs, the later report wins. The
+    receiver stamps `at`; it decides cross-epoch merges. `ReadAnchor.kt` is the phone twin and
+    resolves by row position.
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - registration and relay routing; four trust callbacks required
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
@@ -92,10 +91,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/schemas.ts` / `schemas*.ts` - sole Zod wire truth; `.meta({id})` names generated Kotlin classes
 - `src/shared/sealed-blob.ts` - per-chunk blob AEAD, twinned by `crypto/SealedBlob.kt` over a shared fixture corpus
 - `src/shared/content-envelope.ts` - content key derivation, content envelope, key envelope, join signing bytes
-  - **Board text binds its entry id into the AAD kind.** `boardTextAadKind` is the sole builder, and
-    a bare board kind does not typecheck. `BoardSealing.aad` is its Kotlin twin and must match byte
-    for byte. The revision is deliberately absent: an untouched title or body rides across an edit as
-    its existing envelope, and a device missing the epoch cannot re-seal one.
+  - **Board text binds its entry id into the AAD kind:** `boardTextAadKind` is the sole builder. A
+    bare board kind does not typecheck. `BoardSealing.aad` is its Kotlin twin and must match byte for
+    byte. The revision is absent. An untouched title or body keeps its envelope across edits. A device
+    missing the epoch cannot re-seal it.
 - `src/shared/schemasContentKey.ts` - content key wire shapes
 - `src/shared/codex-agent.ts` / `codexAgent*.ts` - Codex delegation wire truth; excluded from Kotlin codegen
 - `src/shared/channel-file.ts` - declared ChannelFile metadata; receivers do not infer it from bytes or position
@@ -110,11 +109,11 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/board-attachment-store.ts` - path-asserted board attachment ownership; no sweeping
 - `src/shared/board-rank.ts` - sibling ordering and asserted fractional ranks
 - `src/shared/agent-screen.ts` / `pane-trim.ts` - pure tmux-pane reads with Kotlin twins and shared fixtures
-  - **A rule is a RUN, not a LINE, and `afterRuleRun` is the sole owner of that.** `-J` welds rows; Windows-hosted panes weld composer rules to adjacent rows. All readers use `footerRegion`; residue-tested.
-  - **Two rule notions, not interchangeable.** `TOOLBAR_RUN_RE` is U+2500 only; `ANY_RULE_RUN_RE` spans U+2500-U+259F.
-  - **`limitNotice` searches in TWO passes and the order is load-bearing.** Whole-line matches precede welded-rule matches.
-  - **The composer glyph is a two-member class.** Linux uses U+276F; Windows uses U+003E. Whitespace is explicit because JS and JVM `\s` differ for U+00A0.
-  - **The last-two-lines fallback is uniform.** Every reader scopes this fallback to the final region.
+  - **A rule is a RUN, not a LINE, and `afterRuleRun` owns it:** `-J` welds rows. Windows panes weld composer rules to adjacent rows. Readers use `footerRegion`.
+  - **Two rule notions are distinct:** `TOOLBAR_RUN_RE` is U+2500 only; `ANY_RULE_RUN_RE` spans U+2500-U+259F.
+  - **`limitNotice` searches in two passes:** whole-line matches precede welded-rule matches.
+  - **The composer glyph has two members:** Linux uses U+276F; Windows uses U+003E. Whitespace is explicit because JS and JVM `\s` differ for U+00A0.
+  - **The last-two-lines fallback is uniform:** readers scope it to the final region.
 - `src/shared/device-mailbox.ts` / `pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` / `process-guards.ts` - shared mailbox, jobs, planes, reconnect, and process guards
 - `android/` - Gradle/Kotlin console app; `proto/Protocol.kt` generated
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import
@@ -226,7 +225,7 @@ CI enforces the `SYNC-HASH` and the copy. Always use `sync-leaf.ts`: format, res
 
 Biome: tabs, double quotes, semicolons, 120-character width.
 
-**Do not sanitize invisible characters in display strings.** `oneLine` collapses ASCII whitespace,
+**Do not sanitize invisible characters in display strings:** `oneLine` collapses ASCII whitespace,
 which is the whole of it. No category strip, no bidi rule, no Unicode whitespace set.
 
 ### Testing
@@ -307,12 +306,12 @@ Gateway Setup displays the admit payload and waits on the same screen for the ph
 
 Purge Gateway removes only gateway state and gateway-owned `.env` keys. Purge Federation removes this owner's Domain slice first, then performs the gateway purge and removes the Domain id and setup code. The Domain id may come from `.env` or the Router's admin-Domain mark.
 
-**Purge Gateway does not revoke the Gateway.** Only the phone holds the signing key. Use Revoke in the app. Do not edit the Router file to remove an admission.
+**Purge Gateway does not revoke the Gateway:** Only the phone holds the signing key. Use Revoke in the app.
 
-**`.env` is shared by the gateway and Router.** Purges must preserve the file.
+**`.env` is shared by the gateway and Router:** Purges must preserve the file.
 
-**The phone drops a revoked Gateway's board column.** `BoardManager.retainGateways` also makes unreferenced attachment buckets collectible.
+**The phone drops a revoked Gateway's board column:** `BoardManager.retainGateways` makes unreferenced attachment buckets collectible.
 
-**The phone's half of Purge Federation is Forget this Domain.** Revoke and Delete remains the app-only path because it also purges the Domain server-side.
+**The phone's half of Purge Federation is Forget this Domain:** Revoke and Delete is app-only because it purges the Domain server-side.
 
 `scripts/lib/routerState.ts` keeps Bun `$` templates on one line. Bun treats a backslash-newline as an argument split, not continuation.

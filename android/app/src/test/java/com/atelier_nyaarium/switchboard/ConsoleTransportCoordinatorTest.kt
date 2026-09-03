@@ -109,8 +109,7 @@ class ConsoleTransportCoordinatorTest {
 		assertEquals(ConsoleLink.POLL, coordinator.link())
 	}
 
-	// A live socket must NOT park the poll. The socket carries the Router's owner inbox and the poll
-	// drains the Gateway's mailbox, so parking one on the other's account drops the phone's messages.
+	// Independent socket and poll.
 	@Test
 	fun nextWaitFollowsTheLadderEvenWithASocketLive() {
 		var now = 0L
@@ -140,9 +139,7 @@ class ConsoleTransportCoordinatorTest {
 		assertFalse(coordinator.owns(generation))
 	}
 
-	// A cursor from before the migration names rows by an old coordinate, so nothing is taken on it
-	// until the translation is committed. A kill in between replays to the same cursor rather than
-	// acking rows nobody was handed.
+	// Crash before translation replays.
 	@Test
 	fun takesNoRowsOnAPreMigrationCursorUntilTheTranslationCommits() {
 		val coordinator = newCoordinator()

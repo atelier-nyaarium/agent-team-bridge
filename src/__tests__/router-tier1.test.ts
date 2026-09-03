@@ -142,8 +142,7 @@ describe("Router tier 1 services", () => {
 		registry.close();
 	});
 
-	// `at` decides every cross-epoch merge, so a device with a fast clock would otherwise pin the
-	// anchor against every later report.
+	// Cross-epoch merges use receiver time.
 	it("stamps the report time itself rather than trusting the reporter", async () => {
 		const { registry, setNow } = make();
 		const anchors = createReadAnchorsService({ registry });

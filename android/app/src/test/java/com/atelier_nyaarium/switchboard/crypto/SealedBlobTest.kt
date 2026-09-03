@@ -12,7 +12,6 @@ class SealedBlobTest {
 	private val context = BlobSealContext("domain", "owner", 5, "blob-id")
 
 	private fun frame(plaintext: ByteArray, index: Long, final: Boolean): ByteArray {
-		// AAD kind is blob\n<blobId>\n<index>\n<final flag>.
 		val aad = Crypto.ContentAad(
 			context.domainId,
 			context.ownerSignPub,

@@ -41,7 +41,7 @@ class BoardRowsTest {
 
 	@Test
 	fun twoGatewaysRunningTheSameSessionNameStayTwoGroups() {
-		// Session IDs are local to each gateway.
+		// Session IDs are gateway-local.
 		val rows = flattenBoard(
 			listOf(
 				entry("a1", sessionId = "recipe.claude", session = BoardSession("domain", "gw-a", "recipe.claude")),
@@ -58,9 +58,6 @@ class BoardRowsTest {
 
 	@Test
 	fun aFinishedBranchStaysInPlaceWithEveryDescendantShown() {
-		// Nothing collapses and nothing moves to the bottom: a finished entry reads as finished from
-		// its own state mark, so collapsing or relocating it would only hide the shape of the work behind
-		// a tap.
 		val rows = flattenBoard(
 			listOf(
 				entry("root", state = "in_progress", sessionId = "s1", rank = "a"),
@@ -110,8 +107,7 @@ class BoardRowsTest {
 				entry("b", parent = "a"),
 			),
 		)
-		// Neither is a root (each parent is live in the same group), so neither renders - but the
-		// call returns rather than looping, and nothing crashes downstream.
+		// Cyclic entries have no roots.
 		assertTrue(allIds(rows).isEmpty())
 	}
 
@@ -125,7 +121,7 @@ class BoardRowsTest {
 			),
 		)
 		assertEquals(listOf("new", "old"), rows.trash.map { it.entry.id })
-		// A live child of a trashed parent renders as a root of its group, not under the trash.
+		// Children of trash become roots.
 		assertEquals(listOf("kidOfTrashed"), rows.unassigned.rows.map { it.entry.id })
 	}
 }

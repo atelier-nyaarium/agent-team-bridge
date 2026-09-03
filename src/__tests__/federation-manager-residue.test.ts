@@ -2,22 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-////////////////////////////////
-//  Functions & Helpers
-
-/**
- * A source-residue guard over who may reach the owner's signing keys.
- *
- * `FederationManager` signs and merges owner facts. The merge-iff-accepted invariant (an owner action
- * cannot submit without the matching local merge, or a revoked member stays visible on the board)
- * holds only because every caller goes through one of the files below. `ChatRepository.federation` is
- * declared `internal`, not `private`, so nothing in the compiler stops another file in the module from
- * merging an admission the Router rejected, or adding a trusted owner with no ceremony - this guard is what
- * actually enforces the boundary.
- *
- * Deliberately in the TS suite: the Android tests only run on push to main, so a Kotlin-side
- * assertion could not block a bad PR that widens this reachability again.
- */
+/** Guard signing key reachability. */
 const ANDROID_SRC = path.join(
 	import.meta.dirname,
 	"..",
@@ -32,7 +17,7 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** The manager itself, plus the seven collaborators the repository hands it to. */
+/** Allowed callers. */
 const ALLOWED = [
 	"ChatRepository.kt",
 	"DeviceApprovalOps.kt",
@@ -44,14 +29,13 @@ const ALLOWED = [
 	"TrustOps.kt",
 ];
 
-/** Where the type is declared, so its own file cannot count as a caller. */
+/** Declaring file. */
 const DECLARING_FILE = "FederationManager.kt";
 
-/** The manager as a receiver (`federation.sign(...)`) or as a property read (`repo.federation`). */
+/** Manager access patterns. */
 const REACHES_MANAGER = /(^|[^\w.])federation\s*\.|\.federation\b/;
 
-/** Kotlin sources with comments and string literals stripped, so prose naming the field cannot trip
- * the match and a string cannot hide one. */
+/** Strip comments and literals. */
 function code(file: string): string {
 	return fs
 		.readFileSync(path.join(ANDROID_SRC, file), "utf8")
@@ -66,9 +50,6 @@ function kotlinSources(): string[] {
 		.filter((f) => f.endsWith(".kt") && path.basename(f) !== DECLARING_FILE);
 }
 
-////////////////////////////////
-//  Tests
-
 describe("only the repository and its federation collaborators reach FederationManager", () => {
 	it("no other source touches it", () => {
 		const callers = kotlinSources()
@@ -80,7 +61,6 @@ describe("only the repository and its federation collaborators reach FederationM
 	});
 
 	it.each(ALLOWED)("%s really does reach it, so the guard above is proving something", (file) => {
-		// Without this the assertion would still pass if the surface were renamed out from under it.
 		expect(REACHES_MANAGER.test(code(file))).toBe(true);
 	});
 });

@@ -1,30 +1,22 @@
-// Whether an export may be applied, decided before anything is written.
-//
-// Offline only, and never into a live process. The Router keeps its identity, its enrollment state
-// and its TLS files across an import: a Router started without them mints a fresh identity, which
-// would break every pin the fleet holds.
+// Apply imports offline only.
 
-/** What a completed import recorded beside the owner directories. */
+/** Completed import marker. */
 export interface ImportMarker {
 	digest: string;
 	epoch: number;
 	gatewayId: string;
-	/** Per section, so a re-run can answer the same numbers rather than recounting a written tree. */
+	/** Section counts for replay. */
 	counts: Record<string, number>;
 }
 
 export type ImportVerdict =
 	| { kind: "apply" }
-	/** Already applied, byte for byte. Answers the recorded counts rather than importing again. */
+	/** Already applied. */
 	| { kind: "noop"; marker: ImportMarker }
-	/** Two different exports claim one epoch. The recorded one is named so an operator can tell
-	 * which snapshot the Router is actually holding. */
+	/** Epoch conflict. */
 	| { kind: "refused"; reason: "epoch_conflict"; recorded: ImportMarker };
 
-/**
- * A marker per (gateway, epoch), so one Router can take a late export from a gateway that was
- * offline during the cut without it colliding with the gateways already imported.
- */
+/** Marker per gateway and epoch. */
 export function markerKey(gatewayId: string, epoch: number): string {
 	return `${gatewayId}/${epoch}`;
 }

@@ -8,9 +8,6 @@ import { OP_LEDGER_PROTOCOL } from "../../shared/schemas.js";
 import type { ChannelPushPayload, ConnectionMode, ResponsePushPayload } from "../../shared/types.js";
 import { emitChannelNotification, emitResponseNotification } from "../channel/channelNotify.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface BridgeConfig {
 	routerUrl: string;
 	projectName: string;
@@ -59,14 +56,10 @@ async function readResponseBody(res: Response, maxBytes: number): Promise<string
 	return new TextDecoder().decode(body);
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 let ROUTER_URL = "";
 let PROJECT_NAME = "";
 let AGENT_TYPE = "";
 
-// Per process, reused across reconnects.
 const CONVERSATION_ID: string = crypto.randomUUID();
 
 let routerWs: WebSocket | null = null;
@@ -75,8 +68,7 @@ const reconnector = createReconnector(() => connectToRouter());
 
 let channelServer: Server | null = null;
 
-/** `confirm` only takes for an id this connection received, so a relayed handshake id cannot poison
- * a worker's own cache. The guard lives on the write, not at every call site. */
+/** Confirm only received ids. */
 function createHandshakeRoleCache() {
 	let role: boolean | null = null;
 	let lastReceivedId: string | null = null;
@@ -94,17 +86,11 @@ function createHandshakeRoleCache() {
 		get(): boolean | null {
 			return role;
 		},
-		/** The handshake this process was challenged with and has not answered. The gateway refuses
-		 * to name it (conversationId is not secret, so echoing it there would hand a victim's live
-		 * handshake id to anyone who knows one), but THIS process was legitimately pushed it - the
-		 * agent is simply the half that lost it, to a compaction or a turn boundary (issue #251).
-		 * Null once answered, since the reconnect path auto-replies from `role` and needs no agent. */
+		/** Pending handshake id. */
 		unanswered(): string | null {
 			return role === null ? lastReceivedId : null;
 		},
-		/** A reconnect re-registers, and the gateway's mint() forgets the old id before pushing a
-		 * fresh one - so until that push lands, the remembered id is known-dead. No hint beats a
-		 * hint that 404s. receivedIds is kept: a late confirm of the old id must stay a no-op. */
+		/** Clear the stale pending id. */
 		resetUnanswered(): void {
 			lastReceivedId = null;
 		},
@@ -122,12 +108,12 @@ export function setChannelServer(server: Server): void {
 	channelServer = server;
 }
 
-/** False (no-op) for an id `noteReceived` never saw. */
+/** Unknown ids are no-ops. */
 export function confirmHandshakeRole(hsSessionId: string, value: boolean): boolean {
 	return handshakeRole.confirm(hsSessionId, value);
 }
 
-/** See the cache's own doc: the handshake this process owes, for naming back to an agent that lost it. */
+/** Return the pending handshake id. */
 export function unansweredHandshakeId(): string | null {
 	return handshakeRole.unanswered();
 }
@@ -140,15 +126,13 @@ export function bridgeConversationId(): string {
 	return CONVERSATION_ID;
 }
 
-/** The gateway derives the sender from this rather than a body field. Read per call, not cached:
- * the module can load before the env is in place. */
+/** Read the token per call. */
 function sessionTokenHeader(): Record<string, string> {
 	const token = process.env.SWITCHBOARD_SESSION_TOKEN;
 	return token ? { "x-session-token": token } : {};
 }
 
-/** A gateway `error` is a bare string on most routes and an object on typed refusals. Reading only
- * the string shape rendered every structured refusal as "[object Object]". */
+/** Read string and object errors. */
 export function routerErrorText(failure: unknown): string | undefined {
 	if (typeof failure === "string") return failure;
 	const message = (failure as { message?: unknown } | null)?.message;
@@ -208,8 +192,7 @@ async function routerRequest(
 	throw lastErr!;
 }
 
-/** Self-scoped: no target parameter, and `from` is always this process. Hand-rolling the POST body
- * instead of calling this is what would reopen the hole. */
+/** Post a self-scoped action. */
 export async function postPluginAction(
 	pluginId: string,
 	actionType: string,
@@ -223,9 +206,9 @@ export async function postPluginAction(
 	})) as { delivered?: boolean };
 }
 
-/** Self-scoped like postPluginAction: `from` decides whose entries the call may touch. */
+/** Post a self-scoped board action. */
 export async function postBoard(body: Record<string, unknown>): Promise<unknown> {
-	// `from` LAST, so it overwrites rather than defaults.
+	// Force the caller identity.
 	return routerPost("/task-board", { ...body, from: PROJECT_NAME });
 }
 
@@ -236,17 +219,12 @@ export async function routerGet(
 	return routerRequest(`${ROUTER_URL}${path}`, { headers: sessionTokenHeader() }, retries, retryDelayMs, "routerGet");
 }
 
-/** Rebuilt on every reconnect. The gateway records nothing until the handshake confirms, so a
- * channel-less session never becomes a durable card. Exported for tests. */
-/** The delivery contract this plugin speaks. Bumped only when the acknowledgement's meaning changes,
- * never for an ordinary release. */
+/** Delivery acknowledgement contract. */
 export const DELIVERY_PROTOCOL = 1;
 
-/** What the connected gateway last advertised, 0 until it says. */
 let opLedgerProtocol = 0;
 
-/** The refusal reason when the gateway cannot honour a producer-issued opId, or null when it can.
- * Sending anyway would let a gateway that drops the field accept a retry as a second operation. */
+/** Refuse sends without op-ledger support. */
 export function opLedgerRefusal(): string | null {
 	if (opLedgerProtocol >= OP_LEDGER_PROTOCOL) return null;
 	return opLedgerProtocol === 0
@@ -265,9 +243,6 @@ export function buildRegisterMsg(
 		subId,
 		conversationId: CONVERSATION_ID,
 		version: packageJson.version,
-		// Tells the gateway this plugin acknowledges each channel_push, which is what lets it hold a
-		// message for a session that was not ready instead of losing it. A gateway that has never heard
-		// of this keeps its old behaviour, and so does an older plugin that never sends it.
 		deliveryProtocol: DELIVERY_PROTOCOL,
 	};
 	if (process.env.PROJECT_HOST_PATH) {
@@ -278,21 +253,16 @@ export function buildRegisterMsg(
 	}
 	const cwdName = basename(process.cwd());
 	if (cwdName) registerMsg.cwdName = cwdName;
-	// A hand-launched session registers unbound: it works normally, but cannot claim a bound name.
 	if (process.env.SWITCHBOARD_SESSION_TOKEN) {
 		registerMsg.sessionToken = process.env.SWITCHBOARD_SESSION_TOKEN;
 	}
-	// Never false: a worker that answered false is evicted and never reconnects.
 	if (handshakeRole.get() === true) registerMsg.isMainOrLead = true;
 	return registerMsg;
 }
 
-// WebSocket connection to router
-
 export function connectToRouter(): void {
 	const wsUrl = `${ROUTER_URL.replace(/^http/, "ws")}/bridge`;
-	// Belongs to ONE connection. Carrying it across would let a gateway that was replaced by an older
-	// one keep the capability its predecessor advertised, which is the hole the refusal exists to close.
+	// Reset capabilities per connection.
 	opLedgerProtocol = 0;
 	routerWs = new WebSocket(wsUrl);
 
@@ -302,8 +272,7 @@ export function connectToRouter(): void {
 	routerWs.on("open", () => {
 		console.error(`[bridge] connected to router (mode: ${mode})`);
 		reconnector.reset();
-		// This register makes the gateway mint a FRESH handshake, so the previously remembered
-		// unanswered id is dead from here until the new push lands (see resetUnanswered's doc).
+		// Discard the stale handshake id.
 		handshakeRole.resetUnanswered();
 		routerWs!.send(JSON.stringify(buildRegisterMsg(crypto.randomUUID().slice(0, 8), mode)));
 	});
@@ -316,8 +285,6 @@ export function connectToRouter(): void {
 			return;
 		}
 
-		// Gated on the hs- prefix, not the sender: another gateway push must reach the LLM rather than
-		// be swallowed by this cached answer, and a future one may forget to change `from`.
 		if (
 			msg.type === "channel_push" &&
 			msg.from === "gateway" &&
@@ -329,7 +296,6 @@ export function connectToRouter(): void {
 			handshakeRole.noteReceived(hsSessionId);
 			const role = handshakeRole.get();
 			if (role !== null) {
-				// No tool result to refuse into, so the refusal is a log and no send.
 				const refusal = opLedgerRefusal();
 				if (refusal) {
 					console.error(`[bridge] handshake reply withheld: ${refusal}`);
@@ -346,7 +312,6 @@ export function connectToRouter(): void {
 				});
 				return;
 			}
-			// role === null falls through, so the LLM decides.
 		}
 
 		if (msg.type === "register_ok") {
@@ -365,14 +330,12 @@ export function connectToRouter(): void {
 			const deliveryId = typeof msg.delivery_id === "string" ? msg.delivery_id : undefined;
 			emitChannelNotification(channelServer, msg as unknown as ChannelPushPayload)
 				.then(() => {
-					// Only once the notification is actually out. The gateway holds this message until it
-					// hears this, so acknowledging on arrival rather than on emission would give away the
-					// one guarantee the acknowledgement exists to carry.
+					// Acknowledge after delivery.
 					if (deliveryId)
 						routerWs?.send(JSON.stringify({ type: "channel_delivery_ack", delivery_id: deliveryId }));
 				})
 				.catch((err: Error) => {
-					// Deliberately no acknowledgement: the gateway keeps it and offers it again.
+					// Retain failed deliveries.
 					console.error(`[channel] notification error: ${err.message}`);
 				});
 		}
@@ -398,7 +361,7 @@ export function connectToRouter(): void {
 }
 
 export function closeRouter(): void {
-	// Cancel a pending reconnect first, else its timer fires connectToRouter() after the close.
+	// Cancel reconnect before closing.
 	reconnector.cancel();
 	opLedgerProtocol = 0;
 	if (routerWs) routerWs.close();

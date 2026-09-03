@@ -200,8 +200,7 @@ describe("router board service", () => {
 		registry.close();
 	});
 
-	// The netting key carries the entry, so a move is two changes rather than one no-op. Releasing
-	// the losing entry first would take the blob's last reference and delete the bytes.
+	// Hold before release.
 	it("keeps attachment bytes when one blob moves between entries in a single write", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-move-"));
 		roots.push(root);
@@ -262,7 +261,6 @@ describe("router board service", () => {
 	});
 
 	it("answers applied when only the fsync was in doubt, since the batch was already applied", () => {
-		// Refusing would contradict the board this very call advanced.
 		const { service, registry } = make();
 		const store = registry.for("a");
 		vi.spyOn(store, "batch").mockReturnValue({ kind: "durability_uncertain" } as never);
@@ -586,7 +584,7 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		expect(applied.outcome).toBe("applied");
-		// Holds lead, so a blob moving between entries is never briefly unreferenced.
+		// Hold before release.
 		expect(referenceCalls.slice(-2)).toEqual([
 			{ action: "hold", blobId: "new", entryId: "one" },
 			{ action: "release", blobId: "old", entryId: "one" },

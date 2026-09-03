@@ -9,14 +9,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/**
- * Holds this Kotlin port and `src/shared/sealed-blob.ts` to one framing, through the shared corpus
- * at tests/fixtures/sealed-blob/vectors.json.
- *
- * The AAD binds the blob id, the chunk index and the final flag. A single character of difference
- * between the runtimes means nothing the Router holds can be opened, and a test written inside
- * either runtime alone cannot catch it, because both halves of such a test share the mistake.
- */
+/** Shared fixture corpus pins byte-for-byte TypeScript agreement. */
 class SealedBlobVectorsTest {
 	private val json = Json { ignoreUnknownKeys = true }
 
@@ -36,7 +29,6 @@ class SealedBlobVectorsTest {
 			blobId = ctx["blobId"]!!.jsonPrimitive.content,
 		)
 
-		// The AAD bytes themselves, so a divergence is named here rather than surfacing as a failed open.
 		assertEquals(
 			root["aadSample"]!!.jsonPrimitive.content,
 			Base64.getEncoder().encodeToString(blobChunkAad(context, 0, true).bytes()),

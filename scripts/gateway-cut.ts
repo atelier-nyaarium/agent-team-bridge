@@ -1,5 +1,4 @@
-// The snapshot cut: one archive of DATA_DIR at an epoch, with the fence up, plus the sums that make
-// it verifiable. The export JSON carries the logical state; this carries the bytes, blobs included.
+// Archive DATA_DIR while fenced.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -21,13 +20,13 @@ function main(): void {
 	if (!Number.isInteger(epoch) || epoch < 1) throw new Error(`invalid epoch: ${epoch}`);
 	const outDir = process.argv.includes("--out") ? argument("--out") : dataDir;
 	useMigrationEpochFile(dataDir);
-	// Taken over live writers, the archive is torn: files inside it disagree with each other.
+	// Refuse torn archives.
 	if (!fenced()) throw new Error("migration fence is not up; refusing to cut live state");
 
 	fs.mkdirSync(outDir, { recursive: true });
 	const name = `cut-${epoch}.tar`;
 	const archive = path.join(outDir, name);
-	// Written outside DATA_DIR when --out says so; a cut of a directory containing itself is not one.
+	// Avoid archiving the output itself.
 	if (path.resolve(path.dirname(archive)) === path.resolve(dataDir))
 		console.warn(`[cut] writing into DATA_DIR; pass --out to keep the archive outside it`);
 	execFileSync("tar", ["--create", "--file", archive, "--directory", dataDir, "--exclude", name, "."], {
@@ -36,7 +35,7 @@ function main(): void {
 
 	const digest = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
 	const sumsFile = path.join(outDir, "SHA256SUMS");
-	// Appended, so one sums file covers the archive and the export beside it.
+	// Preserve sibling export sums.
 	const existing = fs.existsSync(sumsFile) ? fs.readFileSync(sumsFile, "utf8") : "";
 	const kept = existing
 		.split("\n")

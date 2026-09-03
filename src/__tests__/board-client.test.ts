@@ -94,7 +94,6 @@ describe("board client", () => {
 		expect(call).toHaveBeenCalledWith("board_read", {});
 	});
 
-	// Reject cross-entry ciphertext.
 	it("refuses a title transplanted from another entry", async () => {
 		const victim = stored("two", "Two");
 		victim.sealed.title = stored("one", "One").sealed.title;
@@ -135,7 +134,6 @@ describe("board client", () => {
 		const op = params.write.ops[0]!;
 		expect(op.title).toMatchObject({ v: 1, epoch: 1 });
 		expect(op.body).toMatchObject({ v: 1, epoch: 1 });
-		// Over the whole frame: the plaintext must not survive anywhere in what the Router receives.
 		const wire = JSON.stringify(params);
 		expect(wire).not.toContain("Secret title");
 		expect(wire).not.toContain("Secret body");

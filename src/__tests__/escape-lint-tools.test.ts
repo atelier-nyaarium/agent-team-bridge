@@ -20,14 +20,7 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 
 const mockRouterPost = vi.mocked(routerPost);
 
-////////////////////////////////
-//  The blob plane under the tools
-//
-//  Attaching a file stages its bytes on the gateway before the tool posts anything, so a router
-//  mock that answers everything with {} reports a failed transfer.
-
-// Per test, not per file. A shared store lets one test's upload satisfy the next test's dedup
-// check, so a transfer that never happened looks like one that did.
+// Reset blob state per test.
 let wire: BlobWire;
 
 beforeEach(() => {
@@ -38,8 +31,6 @@ afterEach(() => {
 	wire.dispose();
 });
 
-/** Point the router mock at a real blob store for the three transfer routes, and at [reply] for
- * everything else. Resets call history, so a test that asserts "did not post" still reads clean. */
 function resetRouterPost(reply: unknown = {}): void {
 	mockRouterPost.mockReset();
 	mockRouterPost.mockImplementation(async (route: string, body: unknown) =>
@@ -121,8 +112,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		expect(mockRouterPost).toHaveBeenCalledWith("/send", expect.objectContaining({ body: `task:${bs}n- item` }));
 	});
 
-	// A gateway that drops the opId mints one per attempt, so a retry lands as a second operation.
-	// Refusing to send is the only way the plugin can tell, since the drop is silent.
+	// Refuse silent opId loss.
 	it("crosstalk_send refuses rather than sending an opId the gateway cannot honour", async () => {
 		vi.mocked(opLedgerRefusal).mockReturnValueOnce("gateway too old");
 		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
@@ -190,11 +180,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 	});
 
 	it("crosstalk_send names a polled reply's attachments and says how to actually get them", async () => {
-		// A poll reads the PERSISTENT copy, which deliberately carries no reference (stripFileRefs:
-		// /poll authorizes nobody, so a reference there would be a bearer token for the content).
-		// Naming them is therefore the most this branch can honestly do, and saying so is the point -
-		// claiming the sender attached nothing would be false AND would stop the agent asking for the
-		// one thing that recovers them.
+		// Poll results omit content references.
 		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
 		const tools = captureTools(registerBridgeSend);
 		resetRouterPost({
@@ -224,10 +210,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 });
 
 describe("lint conformance (every guidance-marked schema field is lint-enforced)", () => {
-	// The guard has two halves: REAL_NEWLINES_GUIDANCE on a field's describe (the visible half)
-	// and the handlers' enforcement loops (the enforcing half). They are coupled by convention
-	// only, so this suite derives the field list from the SCHEMAS and drives the REAL handlers -
-	// a field whose describe promises the guard but whose handler loop forgot it fails here.
+	// Guidance and enforcement must stay aligned.
 	const bs = "\\";
 
 	beforeEach(() => {
@@ -279,9 +262,7 @@ describe("lint conformance (every guidance-marked schema field is lint-enforced)
 	});
 
 	it("the enforced fields outside the derived loops still promise the guard in their describe", async () => {
-		// The reverse direction, and the one that actually drifted. Both fields below are enforced by
-		// their own handlers rather than a guidance-derived loop, so nothing above would notice their
-		// describe losing the guidance - which is how an agent got a hard reject with no warning.
+		// Direct handlers must retain guidance.
 		const { PushCardSchema } = await import("../mcp/designer/designerTools.js");
 		const { BridgeSendSchema } = await import("../mcp/bridge/bridgeSend.js");
 

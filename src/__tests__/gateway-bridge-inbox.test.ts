@@ -181,8 +181,7 @@ describe("GatewayBridge inbox", () => {
 		expect(received.at(-1)).toMatchObject({ deliveryEpoch: 1 });
 	});
 
-	// A gateway that slept through the cut holds state the Router has since taken over. It reconciles
-	// its epoch before it may write again, whatever it believes about its own state.
+	// Reconcile epoch before writes.
 	it("refuses a write from a gateway the migration has fenced", async () => {
 		const { bridge, gateway } = await registered(fakeInbox());
 		bridge.setMigrationFence(() => true);
@@ -207,9 +206,7 @@ describe("GatewayBridge inbox", () => {
 		expect(answer).toMatchObject({ ok: false, error: "migrating" });
 	});
 
-	// A retried relay re-seals, so only the producer's own hash tells the ledger the two attempts are
-	// one operation. It rides on the ROW's opKey, so a params key disagreeing with the envelope
-	// cannot express anything.
+	// Producer hash defines operation identity.
 	it("forwards the producer hash onto the row's own opKey and drops a malformed one", async () => {
 		const seen: Array<Record<string, unknown>> = [];
 		const { bridge, gateway } = await registered(

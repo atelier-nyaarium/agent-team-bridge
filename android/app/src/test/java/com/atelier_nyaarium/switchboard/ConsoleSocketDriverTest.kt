@@ -188,7 +188,6 @@ class ConsoleSocketDriverTest {
 		assertEquals(1, unreachable)
 	}
 
-	// Post-welcome drops do not trigger address failover.
 	@Test
 	fun dyingAfterWelcomeLeavesTheAddressAlone() {
 		val coordinator = newCoordinator()
@@ -203,8 +202,6 @@ class ConsoleSocketDriverTest {
 		assertEquals(0, unreachable)
 	}
 
-	// A losing reconnect's close must not clear the socket that replaced it, or the winner can no
-	// longer ack and disconnect finds nothing to close.
 	@Test
 	fun aSupersededCloseLeavesTheLiveSocketAlone() {
 		val coordinator = newCoordinator()
@@ -221,8 +218,7 @@ class ConsoleSocketDriverTest {
 		assertEquals(1, h.closeCalls[0])
 	}
 
-	// A plane that pokes carries no payload, so the frame arrives with the key absent. Without a
-	// default on that field the whole frame fails to decode and the poke is lost silently.
+	// Pokes omit payloads.
 	@Test
 	fun aPokeShapedPlaneDecodesWithoutAPayload() {
 		val coordinator = newCoordinator()

@@ -7,13 +7,7 @@ import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import kotlinx.serialization.Serializable
 
-/**
- * What the owner asked for, held as intent rather than as a built op.
- *
- * There is no set_title or set_body op: text changes are full upserts carrying every other field.
- * So an op built against one revision would, on a lost CAS race, replay stale neighbours over the
- * board that won. Intent is re-materialized against whatever the Router now holds instead.
- */
+/** Owner request, materialized against current state. */
 @Serializable
 sealed interface BoardIntent {
 	val id: String
@@ -50,13 +44,7 @@ sealed interface BoardIntent {
 	@Serializable data class Remove(override val id: String) : BoardIntent
 }
 
-/**
- * Builds the op for [intent] against the board as it now stands.
- *
- * Null means the intent no longer applies: an edit to an entry the board no longer has, or text this
- * device cannot seal because it holds no epoch. Both are dropped rather than sent, since an upsert
- * would otherwise recreate a deleted entry.
- */
+/** Null means stale or unsealable. */
 fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, sealing: BoardSealing): BoardOp? =
 	when (intent) {
 		is BoardIntent.Create -> {
@@ -74,8 +62,7 @@ fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, seal
 				)
 			}
 		}
-		// The untouched half rides across as its existing envelope, so editing a title neither reads
-		// nor re-seals the body.
+		// Preserve the untouched envelope.
 		is BoardIntent.SetTitle -> stored[intent.id]?.let { entry ->
 			sealing.seal(intent.title, BOARD_KIND_TITLE, intent.id)?.let {
 				entry.upsert(title = it, body = entry.sealed.body)
@@ -95,7 +82,7 @@ fun materialize(intent: BoardIntent, stored: Map<String, BoardStoredEntry>, seal
 		is BoardIntent.Remove -> BoardOp.Remove(intent.id)
 	}
 
-/** The pair the Router's replay record hashes, so a retry can check its op set is unchanged. */
+/** Replay identity pair. */
 fun BoardOp.id(): String = when (this) {
 	is BoardOp.Upsert -> id
 	is BoardOp.Remove -> id

@@ -32,9 +32,7 @@ type Deps = {
 	registry: OwnerStoreRegistry;
 	inbox: Pick<InboxService, "appendRouterRow" | "hasSession">;
 	referenceHeld: RefHeld;
-	/** Deliver accepted observations or mark them waking. */
 	deliver?: (domainId: string, address: InboxAddress, row: InboxRow) => void;
-	/** Tells the owner's consoles the revision moved, so they re-read. */
 	pokeOwner?: (domainId: string, revision: number) => void;
 	now?: () => number;
 };
@@ -49,7 +47,7 @@ type BoardReplay = {
 	refusal?: string;
 };
 const BOARD_OP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-/** Ledger records an owner may hold. The id is caller-minted, so the TTL alone bounds nothing. */
+/** Caller-minted ids require a count cap. */
 const MAX_BOARD_OPS_PER_OWNER = 5000;
 const key = (s: { domainId: string; gatewayId: string; sessionId: string }) =>
 	`${s.domainId}/${s.gatewayId}/${s.sessionId}`;
@@ -95,7 +93,7 @@ export function createBoardService(deps: Deps) {
 				: {}),
 			version: Number((e as Versioned).version ?? 1),
 		},
-		// Preserve every sealed field. The Router never opens them.
+		// Preserve sealed fields. The Router never opens them.
 		sealed: { ...((e as Versioned).sealed as BoardStoredEntry["sealed"]) },
 	});
 	const fromStored = (r: BoardStoredEntry, version = r.clear.version): BoardEntry =>
@@ -123,10 +121,7 @@ export function createBoardService(deps: Deps) {
 		const answerBefore = () => [...before.entries.values()].map(stored);
 		const a = actor(writer);
 		const replayId = opId ? `${a.kind}:${a.kind === "owner" ? "owner" : a.sessionId}:${opId}` : undefined;
-		// The caller's INTENT only: which ops, over which entries. A retry rebuilds against whatever
-		// the board says now, so a rank, a state or a re-sealed field legitimately differs between
-		// attempts, and hashing those would answer a crash retry with a reuse refusal. Sealed fields
-		// are excluded for the same reason, their nonce being fresh per attempt.
+		// Hash caller intent only.
 		const hash = sha256Hex(canonicalJson(input.ops.map((op) => [op.kind, op.id])));
 		const replay = replayId ? store.get("board.op", replayId) : null;
 		if (replay) {
@@ -151,7 +146,7 @@ export function createBoardService(deps: Deps) {
 			return { outcome: "conflict" as const, revision: before.revision, entries: answerBefore(), cascaded: [] };
 		const next = copy(before);
 		const touched = new Set<string>();
-		// Apply reference changes only after the batch succeeds.
+		// Apply references after commit.
 		const refChanges: RefChange[] = [];
 		const removedIds = new Set(input.ops.filter((op) => op.kind === "remove").map((op) => op.id));
 		const refuse = (reason: string) => ({
@@ -195,7 +190,7 @@ export function createBoardService(deps: Deps) {
 					if (parentDenied) return rememberRefusal(parentDenied);
 				}
 				if (!isValidRank(op.rank)) return rememberRefusal("bad_rank");
-				// Only the owner assigns another holder.
+				// Only owners assign holders.
 				if (op.session) {
 					if (
 						op.session.domainId !== domainId ||
@@ -223,7 +218,7 @@ export function createBoardService(deps: Deps) {
 					sealed: {
 						title: op.title,
 						...(op.body ? { body: op.body } : {}),
-						// Unnamed attachments retain their sealed names.
+						// Unnamed attachments retain sealed names.
 						...(op.names
 							? { names: op.names }
 							: op.attachments || !(e as Versioned | undefined)?.sealed?.names
@@ -287,10 +282,10 @@ export function createBoardService(deps: Deps) {
 				touched.add(op.id);
 			}
 		}
-		// Removed parents promote their children and count as touched.
 		const parentsBefore = new Map([...next.entries].map(([id, e]) => [id, e.parent]));
 		promoteOrphans(next.entries);
 		for (const [id, e] of next.entries) if (parentsBefore.get(id) !== e.parent) touched.add(id);
+		// Removed parents and promoted children stay touched.
 		for (const id of touched) {
 			let cur: string | undefined = id;
 			const seen = new Set<string>();
@@ -300,6 +295,7 @@ export function createBoardService(deps: Deps) {
 				cur = next.entries.get(cur)?.parent;
 			}
 		}
+		// Authority gates writes. Cascade follows touched entries.
 		const cascaded = applyCascade(next.entries, [...touched], orphanedParents(before, next, touched));
 		for (const c of cascaded) touched.add(c.id);
 		next.revision++;
@@ -329,20 +325,13 @@ export function createBoardService(deps: Deps) {
 		});
 		if (result.kind === "conflict")
 			return { outcome: "conflict" as const, revision: before.revision, entries: answerBefore(), cascaded: [] };
-		// `durability_uncertain` APPLIED the batch, including its own ledger record; only the fsync is
-		// in doubt. Refusing here would contradict the board this call just advanced, and would skip
-		// the holds and observations below for a write that is live. A crash that loses the unsynced
-		// line loses the ledger record with it, so a replay re-applies.
+		// Durability uncertainty still applied.
 		if (result.kind !== "ok" && result.kind !== "durability_uncertain")
 			return rememberRefusal("durability_failure");
-		// Net to a MEMBERSHIP DIFF first. A release that takes the last reference deletes the bytes,
-		// so replacing [A] with [A,B] as release-all then hold-all would delete A and re-hold a name
-		// with nothing behind it.
+		// Membership diff prevents premature deletion.
 		const netted = new Map<string, RefChange>();
 		for (const change of refChanges) netted.set(`${change.entryId}|${change.blobId}`, change);
-		// Holds before releases. The key carries the entry, so one blob moving between two entries nets
-		// to two changes, and releasing first would zero its count and delete the bytes before the
-		// receiving entry's hold could name them.
+		// Hold before release.
 		const ordered = [...netted.values()].sort((a, b) => (a.action === b.action ? 0 : a.action === "hold" ? -1 : 1));
 		for (const change of ordered) {
 			if (change.action === "hold") deps.referenceHeld.hold(domainId, change.blobId, change.entryId);
@@ -352,7 +341,7 @@ export function createBoardService(deps: Deps) {
 			const s = parseKey(o.sessionKey);
 			if (!deps.inbox.hasSession(domainId, s.gatewayId, s.sessionId)) continue;
 			const address: InboxAddress = { kind: "session", domainId, gatewayId: s.gatewayId, sessionId: s.sessionId };
-			// Keep one row per party, entry, and revision.
+			// One row per party, entry, revision.
 			const appended = deps.inbox.appendRouterRow({
 				address,
 				kind: "board_observation",
@@ -366,9 +355,6 @@ export function createBoardService(deps: Deps) {
 			else if (appended.outcome !== "accepted")
 				console.warn(`[board] observation for ${o.sessionKey} not written: ${appended.outcome}`);
 		}
-		// A POKE, not the board: a writer already holds the entries it just wrote, and every other
-		// console re-reads. Pushing 5000 entries per write to every socket would cost far more than
-		// the read it saves.
 		deps.pokeOwner?.(domainId, next.revision);
 		return {
 			outcome: "applied" as const,
@@ -383,8 +369,7 @@ export function createBoardService(deps: Deps) {
 		const dead = [...b.entries.values()].filter(
 			(e) => e.trashedAt !== undefined && at - e.trashedAt > BOARD_TRASH_TTL_MS,
 		);
-		// Only entries whose whole live subtree is also dead. A removal that would orphan a survivor
-		// is refused, and the sweep is one batch, so leaving one in would stop reclaiming ANY of them.
+		// Remove only dead subtrees.
 		const doomed = new Set(dead.map((e) => e.id));
 		const removable = dead.filter((e) =>
 			[...b.entries.values()].every((child) => child.parent !== e.id || doomed.has(child.id)),
@@ -400,8 +385,7 @@ export function createBoardService(deps: Deps) {
 		}
 		const records = store.list("board.op");
 		const expired = records.filter((record) => at - Number(record.clear.createdAt) > BOARD_OP_TTL_MS);
-		// A caller mints the operation id, so age alone cannot bound the ledger. Oldest first past
-		// the cap, which keeps the retries that could still arrive.
+		// Age and cap bound caller-minted ids.
 		const surplus = records
 			.filter((record) => !expired.includes(record))
 			.sort((x, y) => Number(x.clear.createdAt) - Number(y.clear.createdAt))
@@ -414,13 +398,12 @@ export function createBoardService(deps: Deps) {
 		return removed;
 	};
 	const register = (hooks: OwnerServiceHooks) => {
-		// The OwnerOp's own id is the idempotency key: a phone journals a write and replays it after a
-		// crash, and the ledger must answer the recorded outcome rather than apply it twice.
+		// OwnerOp id is the idempotency key.
 		hooks.ownerOp("board_write", (op, value) =>
 			write(op.domainId, BoardWriteSchema.parse(value.write ?? value), { kind: "owner" }, op.opId),
 		);
 		hooks.ownerOp("board_read", (op) => read(op.domainId));
-		// A gateway may act only for sessions in its registry.
+		// Gateways act only for registered sessions.
 		hooks.gatewayFrame("board_op", (reg: GatewayRegistration, params) => {
 			const p = BoardOpParamsSchema.parse(params);
 			if (!deps.inbox.hasSession(reg.domainId, reg.gatewayId, p.sessionId)) throw new OwnerOpRefused("session");
@@ -434,7 +417,6 @@ export function createBoardService(deps: Deps) {
 				p.opId,
 			);
 		});
-		// Registration supplies the gateway's Domain.
 		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => read(reg.domainId));
 	};
 	return { read, write, sweepTrash, register };

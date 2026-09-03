@@ -32,8 +32,6 @@ class MutationJournalTest {
 		assertTrue(thrown)
 	}
 
-	// A kill between the append and its fsync leaves a truncated final line. recover() runs from the
-	// constructor, so throwing on it would take the app down at launch and keep doing so.
 	@Test
 	fun aTornFinalLineIsDroppedRatherThanFatal() {
 		val dir = Files.createTempDirectory("journal").toFile()
@@ -57,8 +55,6 @@ class MutationJournalTest {
 		assertEquals(0, journal.claimForReplay().size)
 	}
 
-	// A write sent before the process died has an unknown outcome, and the opId makes re-sending it
-	// either a no-op or the recorded result. Leaving it settled would drop it silently.
 	@Test
 	fun aNewProcessReclaimsAWriteLeftInFlight() {
 		val dir = Files.createTempDirectory("journal").toFile()

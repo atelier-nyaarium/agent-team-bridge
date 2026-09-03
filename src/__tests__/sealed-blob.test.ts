@@ -127,8 +127,7 @@ describe("sealed blob framing", () => {
 		expect(store.path(claimed)).toBeNull();
 	});
 
-	// The Kotlin twin reads the same corpus. Regenerate with scripts/gen-sealed-blob-vectors.ts when
-	// the framing legitimately changes, which is what makes an accidental change fail here first.
+	// Shared Kotlin vectors.
 	it("matches the shared corpus the Kotlin twin reads", () => {
 		const vectors = JSON.parse(
 			fs.readFileSync(

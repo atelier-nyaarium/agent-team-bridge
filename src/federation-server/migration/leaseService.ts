@@ -1,8 +1,3 @@
-// Per-gateway migration leases, and the authority switch they gate.
-//
-// Records live in the owner store for their own Domain, keyed by gateway id. The rules themselves
-// are in shared/migration-lease.ts, shared so the gateway and the Router answer them the same way.
-
 import {
 	authorityReady,
 	fenceOnReconnect,
@@ -11,7 +6,7 @@ import {
 } from "../../shared/migration-lease.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 
-/** The epoch the fleet is migrating to, from the environment. Zero, and inert, outside a window. */
+/** Zero disables migration. */
 export function routerMigrationEpoch(): number {
 	const raw = Number.parseInt(process.env.ROUTER_MIGRATION_EPOCH ?? "", 10);
 	return Number.isFinite(raw) && raw > 0 ? raw : 0;
@@ -19,7 +14,6 @@ export function routerMigrationEpoch(): number {
 
 export interface LeaseDeps {
 	registry: OwnerStoreRegistry;
-	/** The epoch the fleet is migrating to. Zero outside a migration window. */
 	migrationEpoch: () => number;
 }
 
@@ -45,7 +39,7 @@ export function createLeaseService(deps: LeaseDeps) {
 		read,
 		list,
 
-		/** Records a gateway's state. Completion is stamped separately, by `complete`. */
+		/** Records gateway state. */
 		put(domainId: string, gatewayId: string, state: LeaseState): void {
 			const store = deps.registry.for(domainId);
 			const current = store.get("migration", gatewayId);
@@ -53,7 +47,7 @@ export function createLeaseService(deps: LeaseDeps) {
 			store.put("migration", gatewayId, current?.version ?? null, { clear: lease });
 		},
 
-		/** Stamps the epoch this gateway has exported AND had imported. */
+		/** Stamps completed migration. */
 		complete(domainId: string, gatewayId: string): void {
 			const store = deps.registry.for(domainId);
 			const current = store.get("migration", gatewayId);
@@ -61,12 +55,10 @@ export function createLeaseService(deps: LeaseDeps) {
 			store.put("migration", gatewayId, current?.version ?? null, { clear: lease });
 		},
 
-		/** Whether the Router may take authority for this Domain's owner state. */
 		ready(domainId: string): boolean {
 			return authorityReady(list(domainId), deps.migrationEpoch());
 		},
 
-		/** Whether a reconnecting gateway must be refused its writes. */
 		fenced(domainId: string, gatewayId: string): boolean {
 			if (deps.migrationEpoch() === 0) return false;
 			return fenceOnReconnect(read(domainId, gatewayId), deps.migrationEpoch());

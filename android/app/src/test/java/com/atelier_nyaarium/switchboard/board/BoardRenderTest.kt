@@ -39,9 +39,7 @@ class BoardRenderTest {
 		sealed = BoardEntrySealed(title, body),
 	)
 
-	// Pins the composed AAD kind against the literal both runtimes share. BoardSealing seals and
-	// opens with itself, so without this a one-sided change to the composition stays green here and
-	// silently stops matching boardTextAadKind in content-envelope.ts.
+	// Cross-runtime AAD must match.
 	@Test
 	fun composedAadKindMatchesTheCrossRuntimeLiteral() {
 		val envelope = checkNotNull(sealing().seal("title", BOARD_KIND_TITLE, "entry-1"))

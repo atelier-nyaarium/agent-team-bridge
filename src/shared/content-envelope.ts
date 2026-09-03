@@ -5,6 +5,8 @@ import type { ContentEnvelope, ContentKind, KeyEnvelope, KeyReceipt, KeyRequest 
 const CONTENT_SALT = Buffer.from("switchboard-content-salt-v1", "utf8");
 const CONTENT_INFO_PREFIX = "switchboard-content-v1\n";
 
+// Sole AAD derivation owner.
+
 function assertContentEpoch(epoch: number): void {
 	if (!Number.isInteger(epoch) || epoch < 1 || epoch > 2147483647) {
 		throw new Error("content epoch must be an integer from 1 to 2147483647");
@@ -29,20 +31,32 @@ export function deriveContentKey(ownerSignPrivB64: string, domainId: string, epo
 
 export type BoardTextKind = "board.title" | "board.body" | "board.name";
 
-/** Binds board text to its entry, so one entry's ciphertext cannot be moved into another's. */
+/** Board kinds require entry IDs. */
 export function boardTextAadKind(kind: BoardTextKind, entryId: string): `${BoardTextKind}\n${string}` {
 	return `${kind}\n${entryId}`;
+}
+
+/** Inbox kinds require row IDs. */
+export function inboxBodyAadKind(conversationId: string, seq: number): `inbox.body\n${string}` {
+	return `inbox.body\n${conversationId}\n${seq}`;
 }
 
 export interface ContentAad {
 	domainId: string;
 	ownerSignPub: string;
 	epoch: number;
-	// Board kinds require entry ids.
-	kind: Exclude<ContentKind, BoardTextKind> | `${BoardTextKind}\n${string}` | `blob\n${string}\n${number}\n${0 | 1}`;
+	// Owner key is the domain root key.
+	// Kind is an AAD input, never wire data.
+	kind:
+		| Exclude<ContentKind, BoardTextKind | "inbox.body">
+		| `${BoardTextKind}\n${string}`
+		| `inbox.body\n${string}`
+		| `blob\n${string}\n${number}\n${0 | 1}`;
 }
 
 export function contentAad({ domainId, ownerSignPub, epoch, kind }: ContentAad): Buffer {
+	// Revision absent so untouched halves survive edits.
+	// BoardSealing.kt is the byte-for-byte twin.
 	return Buffer.from(`${CONTENT_INFO_PREFIX}${domainId}\n${ownerSignPub}\n${String(epoch)}\n${kind}`, "utf8");
 }
 

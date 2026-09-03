@@ -13,9 +13,6 @@ import {
 import { expectHostRoots, resetWorkspaceRoot, setHostRoots } from "../mcp/references/refWorkspace.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
@@ -35,7 +32,6 @@ let install: string;
 let priorRoot: string | undefined;
 let priorState: string | undefined;
 
-/** An install root shaped as the client reads one: a bundle and a version file under dist/. */
 function installAt(bundle: "file" | "directory", protocolVersion: string): void {
 	fs.mkdirSync(path.join(install, "dist"), { recursive: true });
 	const daemon = path.join(install, "dist", "daemon.js");
@@ -48,7 +44,6 @@ function installAt(bundle: "file" | "directory", protocolVersion: string): void 
 }
 
 beforeEach(() => {
-	// os.tmpdir() reads TMPDIR, which mounting the wire repoints, so take the roots first.
 	root = fs.mkdtempSync(path.join(os.tmpdir(), "ref-degraded-"));
 	install = fs.mkdtempSync(path.join(os.tmpdir(), "ref-install-"));
 	priorState = process.env.XDG_STATE_HOME;
@@ -84,9 +79,6 @@ async function attach(body: string) {
 	if (!result.ok) throw new Error(`the reply was refused: ${result.error}`);
 	return { key: result.files[0]?.ref?.keys[0], notices: result.notices };
 }
-
-////////////////////////////////
-//  Tests
 
 describe("only lexicon being unable to answer degrades, and the reply says so", () => {
 	it("matches by text and notices when no lexicon is installed", async () => {

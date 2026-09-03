@@ -11,20 +11,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.json.JSONObject
 
-////////////////////////////////
-//  This device's link to its Domain
-//
-//  Adopting the provisioning blob, the connection it buys, what this device tells its Gateways it
-//  can render, who the connection says this owner is, this install's own name, and the wipe that
-//  undoes all of it. Extensions rather than members: the fields these write (client, sttsClient,
-//  localGatewayId, pluginReportPending) stay declared on the class, since an extension has no
-//  backing field.
+// This device's Domain link.
 
-/**
- * Re-report after the owner toggles a plugin, so the change reaches the gateway now instead of
- * waiting for the next reconnect. A session already running keeps the tools it started with,
- * since an agent's tool list is fixed at startup.
- */
+/** Report plugin changes. */
 suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) {
 	pluginReportPending = true
 	if (!_state.value.connected) return@withContext
@@ -35,9 +24,7 @@ suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) 
 	Unit
 }
 
-/** The plugin list to the Router's fold, which every Gateway reads. Reported once rather than to
- * each Gateway in turn: a machine that was offline for the fan-out used to keep a stale list until
- * the next toggle, and a Gateway admitted afterwards never heard one at all. */
+/** Report once to the Router. */
 private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 	val plugins = enabledPlugins?.invoke() ?: return
 	val op = buildJsonObject {
@@ -50,10 +37,7 @@ private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 }
 
 suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO) {
-	// Strict wire parse: reject before persisting. Surfaced as state.error
-	// rather than thrown - callers launch this from coroutines with no
-	// catch, and the strict kotlinx parse rejects malformed blobs (single
-	// quotes, stringy numbers) instead of silently coercing them.
+	// Reject malformed blobs before persisting.
 	val prov = try {
 		Provisioning.parse(blob)
 	} catch (e: Exception) {
@@ -61,41 +45,29 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 		return@withContext
 	}
 	store.save(blob)
-	// The blob is transport-only: the Console owns its locally-generated identity and resolves
-	// every Gateway's keys from the synced keyring, so nothing cryptographic is imported. A
-	// re-import is a fresh enrollment against a possibly re-rooted Domain, so clear the
-	// console-admitted gate to re-submit this Console's admission on the next connect.
+	// Re-import requires fresh admission.
 	store.consoleAdmitted = false
-	// A re-import may carry a fresh invite (a friend re-onboarding, or a regenerated QR), so clear
-	// the first-root latch: the next connect re-evaluates the blob's pendingTenant and re-roots if
-	// present. An ordinary already-rooted blob (no pendingTenant) skips the step.
+	// Re-evaluate pending invites.
 	store.firstRooted = false
-	// A fresh invite is a fresh trust ceremony: re-offer the in-person compare on the next connect.
+	// Re-offer the trust ceremony.
 	store.enrollCeremonyDone = false
 	client = null
 	sttsClient = null
-	// firstRooted=false in the state mirrors the latch reset so a re-imported fresh invite does not
-	// show the "already set up" host pointer before the next connect re-evaluates the pendingTenant.
+	// Mirror the reset in UI state.
 	_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false) }
 }
 
-/**
- * Canonicalize a hand-typed SHA-256 leaf fingerprint, or null if it is not one. Accepts the
- * colon- and space-separated spellings openssl and every certificate viewer print, since that is
- * what an owner copies off a terminal; the pin check compares plain lowercase hex, so an
- * un-normalized paste fails later as an opaque cert mismatch instead of here as a typo.
- */
+/** Normalize a SHA-256 leaf fingerprint. */
 internal fun normalizeCertFp(raw: String): String? {
 	val stripped = raw.trim().filterNot { it == ':' || it == ' ' || it == '-' }.lowercase()
 	if (stripped.length != 64 || !stripped.all { it.isDigit() || it in 'a'..'f' }) return null
 	return stripped
 }
 
-/** What the Router endpoint form shows. Display fields ONLY: the blob beside them carries the
- * bearer credentials this console signs in with, which must never reach a screen. */
+/** Display-only Router endpoint fields. */
+// Credentials never reach the screen.
 data class RouterEndpoint(val host: String, val port: Int, val certFp: String, val direct: Boolean)
 
-/** Split a stored routerUrl back into the host and port the form edits, or null if it is not one. */
 internal fun parseRouterUrl(url: String, fallbackPort: Int): Pair<String, Int>? {
 	val body = url.trim().removeSuffix("/").substringAfter("://", url.trim().removeSuffix("/"))
 	if (body.isEmpty()) return null
@@ -105,10 +77,7 @@ internal fun parseRouterUrl(url: String, fallbackPort: Int): Pair<String, Int>? 
 	return body.substring(0, colon) to port
 }
 
-/**
- * The endpoint this console is pointed at, for prefilling the form. Null before provisioning, and
- * null on the cloud branch, which carries no Router fields to show.
- */
+/** Current direct Router endpoint. */
 fun ChatRepository.currentRouterEndpoint(fallbackPort: Int): RouterEndpoint? {
 	val blob = store.load() ?: return null
 	val json = runCatching { JSONObject(blob) }.getOrNull() ?: return null
@@ -119,23 +88,9 @@ fun ChatRepository.currentRouterEndpoint(fallbackPort: Int): RouterEndpoint? {
 	return RouterEndpoint(host, port, json.optString("routerCertFp"), direct)
 }
 
-/**
- * Repoint this console at a different endpoint, keeping everything else.
- *
- * Deliberately NOT provision(): that treats the blob as a fresh enrollment and clears the
- * console-admitted, first-rooted and ceremony latches, so re-running it to change a host would
- * re-submit an admission and re-offer the trust compare. This edits transport fields only,
- * invalidates the cached client so the next call dials the new endpoint, and leaves identity,
- * keyring, cursors and admission state untouched.
- *
- * Reachable BEFORE any blob exists: an unprovisioned phone can point itself at a Router and confirm
- * the pin, since /health needs no token. What it cannot do without a token is sign in, and it says
- * so on the first authenticated op rather than pretending; a later blob import supplies the token
- * without disturbing the address set here.
- */
+/** Change transport fields only. */
 suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) = withContext(Dispatchers.IO) {
-	// No blob yet: start one. Only the fields this form knows; the token and everything else arrive
-	// with a real import, and Provisioning.parse below still validates the direct pair.
+	// Allow endpoint setup before provisioning.
 	val blob = store.load() ?: "{}"
 	val trimmedHost = host.trim().removeSuffix("/")
 	if (trimmedHost.isEmpty()) {
@@ -165,18 +120,11 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 }
 
 suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
-	// DEBUG: wire the ingest sender from the blob up front, BEFORE any enroll step can fail, then
-	// flush on every exit path (the finally below). Otherwise a pre-register failure (admission
-	// submit, register) strands its trace on-device until a poll cycle that never starts. The
-	// attach + flush + every DebugLog.log here compile out of release builds (BuildConfig.DEBUG).
-	// The base is the CLIENT's current one, read at each flush: it fails over between Router
-	// addresses, and the ingest must follow it or the trace dies on the network change worth reading.
+	// Attach debug ingest before enrollment.
 	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) { client().transport.proxyBase } } }
 	DebugLog.log("Connect", "start gateway=${localGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 	try {
-		// Preflight the cluster path (API server + SA token + TLS) before blaming the
-		// bridge or enrollment, so a stale blob says "re-provision" and a missing
-		// identity says "not enrolled" - two distinguishable causes.
+		// Distinguish cluster failures early.
 		runCatchingCancellable { client().apiReachable() }.onFailure { e ->
 			val (cause, kind) = classifyConnError(e)
 			_state.update {
@@ -189,21 +137,11 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			return@withContext
 		}
 		DebugLog.log("Connect", "apiReachable ok")
-		// First-root step (friend invite): a blob carrying a pendingTenant means this app must
-		// root that pending Domain at its silently-generated owner key BEFORE submitting its own
-		// admission (the Router only trusts the owner-signed admission once the Domain is rooted at
-		// that owner key). A reject (expired / already-claimed invite) is terminal: the root was
-		// decided, not dropped, so stop with the friendly guidance.
+		// Root pending invites before admission.
 		if (!ownerFacts.firstRootIfPending()) return@withContext
-		// Reflect the first-root latch into the UI state now, so if the steps below fail with the
-		// no-gateway cause (a freshly-rooted friend has no host yet) the empty board shows the
-		// "set up, now bring up a host" guidance rather than the admin Add-a-Gateway CTA.
+		// Reflect first-root state in the UI.
 		if (store.firstRooted && !_state.value.firstRooted) _state.update { it.copy(firstRooted = true) }
-		// Submit this Console's own admission before the sealed register, so the Gateway
-		// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
-		// even though the Console is not admitted yet. A THROW here (e.g. the Keystore-backed
-		// store is unavailable, so the member identity cannot be persisted) is the REAL cause;
-		// surface it instead of falling through to register()'s generic "not enrolled".
+		// Submit admission before sealed register.
 		runCatchingCancellable { ownerFacts.submitConsoleAdmission() }.onFailure { e ->
 			val (cause, kind) = classifyConnError(e)
 			_state.update {
@@ -216,38 +154,32 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			}
 			return@withContext
 		}
-		// MailboxSync owns the durable cursor, so register's cursor/epoch are not adopted. We
-		// still register to learn gatewayId, claim the mailbox, and get the epoch the box is on;
-		// the poll loop's advance() reconciles any epoch change.
+		// MailboxSync owns the durable cursor.
 		val reg = client().register(enabledPlugins?.invoke())
 		pluginReportPending = false
 		DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
-		// The Router's fold is what every other Gateway reads, so one report covers them all.
+		// One Router report covers every Gateway.
 		repoScope.launch { reportCapabilitiesToRouter() }
 		val id = reg.gatewayId
 		if (id.isNotEmpty() && id != localGatewayId) {
 			localGatewayId = id
 			store.saveGatewayId(id)
 		}
-		// Pin every subsequent relay to this route Gateway so the Gateway routes there
-		// even once other Gateways join the mesh.
+		// Pin subsequent relays to this Gateway.
 		client().routeGateway = localGatewayId.ifEmpty { null }
-		// A teams refresh failure is not a connect failure: register succeeded, so we
-		// are connected. Log and proceed with the prior team list rather than masking
-		// the error as an empty board (which would blank live sessions).
+		// Preserve teams after refresh failure.
 		val answer = runCatchingCancellable { client().teams(localGatewayId) }.getOrElse {
 			DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
 			TeamsAnswer(_state.value.teams)
 		}
-		// Hold rows for gateways the answer names as unreachable; they were not asked.
+		// Preserve unreachable gateway rows.
 		val keys = unreachableKeys(answer.coverage)
 		val teams = if (keys.isEmpty()) {
 			answer.teams
 		} else {
 			mergePresence(_state.value.teams, answer.teams) { rowOnUnreachable(it, keys, localGatewayId) }
 		}
-		// Seed the merge path's raw cache so a tombstone expiring before the first poll lands
-		// still has something to self-heal from (see applyPresence/reapplyCachedTeams).
+		// Seed the raw presence cache.
 		presence.lastRawTeams = teams
 		_state.update {
 			it.copy(
@@ -258,11 +190,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				pollFailStreak = 0,
 				localGatewayId = localGatewayId,
 				enrollingSince = 0L,
-				// In THIS update, not a refreshAdmittedGateways() call after it. A keyring that arrived
-				// while this process was not running folds through no mutator, so a connect is the only
-				// thing that surfaces it - and publishing it separately means one emission carries the
-				// session rows while the roster is still empty, drawing a machine's section with its
-				// Create missing until the next.
+				// Publish sessions and roster together.
 				admittedGateways = sessions.keyringGateways(),
 			)
 		}
@@ -270,20 +198,14 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		presence.refreshDisplayNameFromTeams()
 		DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 	} catch (e: Exception) {
-		// MUST be the first statement: this catch spans the whole connect() attempt (register(),
-		// teams(), submitConsoleAdmission(), firstRootIfPending() all suspend into the network), and
-		// would otherwise defeat the cancellation rethrow guards on the runCatchingCancellable blocks
-		// nested inside this same try - their rethrow lands right back here and gets swallowed too.
+		// Rethrow cancellation before connection handling.
 		e.rethrowIfCancellation()
 		val (cause, kind) = classifyConnError(e)
-		// "is not admitted" means the Gateway holds no admission for this Console. If we believed
-		// we were admitted, the flag is stale (the submit never landed at the Router) - clear it so
-		// the next connect re-submits the admission instead of waiting forever on a calm sync-lag.
+		// Retry stale admission state.
 		if (kind == ConnKind.ENROLLING) store.consoleAdmitted = false
 		_state.update { s ->
 			when (kind) {
-				// Post-enroll sync lag: calm "Finishing up enrollment..." (the poll loop
-				// keeps retrying + clears it on the first success), escalating past the grace.
+				// Allow post-enrollment sync lag.
 				ConnKind.ENROLLING -> {
 					val (override, since) = enrollFold(s.enrollingSince)
 					s.copy(
@@ -298,53 +220,36 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			}
 		}
 	} finally {
-		// DEBUG: stream whatever this attempt logged, even on the failure paths that return before
-		// the poll loop's own flush would run. No-op in release (flushToIngest is BuildConfig.DEBUG).
+		// Flush debug ingest on exit.
 		DebugLog.flushToIngest()
 	}
 }
 
-/** This owner's display name, falling back to the local Domain id
- * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
+/** This owner's display name. */
 fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { confirmedDomainId().orEmpty() }
 
-/** This owner's own Domain id, learned from a LOCAL session in the current board (the local
- * listing stamps domainId = the connected Gateway's Domain). Null until a local session confirms
- * it: the signing + cross-Domain routing sites refuse to act on a guessed id, so a frame never
- * names a Domain this device has not actually joined. */
+/** Confirmed local Domain id. */
 fun ChatRepository.confirmedDomainId(): String? {
 	val gw = localGatewayId
 	return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 }
 
-/** The confirmed local Domain id, or throw - for the signing/routing ops that run inside a
- * runCatching so a not-yet-confirmed Domain surfaces as a clean failure instead of a guessed id. */
+/** Confirmed local Domain id or error. */
 internal fun ChatRepository.confirmedDomainIdOrThrow(): String =
 	confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 
-/** True only when a LOCAL session confirms this device owns the ADMIN Domain (the one that runs
- * the Router and provisions others), so it can host guest networks. The Router stamps
- * isAdminDomain on the register reply and the gateway carries it onto the local TeamInfo. A guest
- * (its own non-admin Domain) returns false, and so does a device whose Domain is not yet
- * confirmed - so the Guest-networks admin section is hidden rather than shown as a dead button the
- * Router would reject (provision_tenant is gated on the admin key, so "not admin-signed" for
- * anyone else). */
+/** True when the local session owns the admin Domain. */
 fun ChatRepository.isAdmin(): Boolean {
 	val gw = localGatewayId
 	return _state.value.teams.any { (it.gatewayId.ifEmpty { gw }) == gw && it.isAdminDomain }
 }
 
-/** Whether to show "Revoke and Delete Domain": a CONFIRMED app-only user only. Never an admin (they
- * purge via setup.sh), and never while the Domain is unconfirmed. Both flags read the SAME local
- * session, so an unconfirmed id (offline, no teams) hides the action rather than letting an admin
- * whose gateway is down read the unknown state as "not admin" and delete their whole Domain. */
+/** True for confirmed app-only users. */
 fun ChatRepository.canDeleteOwnDomain(): Boolean = !isAdmin() && confirmedDomainId() != null
 
-////////////////////////////////
-//  Display name (this owner's display name)
+// Display name.
 
-/** This owner's current display name, for the profile field + the MY NETWORK card. The
- * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
+/** Cached display name. */
 fun ChatRepository.localDisplayName(): String = _state.value.displayName
 
 suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers.IO) {
@@ -360,36 +265,20 @@ suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers
 	connect()
 }
 
-// internal (not private): the _state initializer (ChatRepository.kt) seeds the device name with it.
 internal fun ChatRepository.currentDeviceName(): String =
 	store.load()?.let { runCatching { Provisioning.parse(it).device }.getOrNull() } ?: ""
 
 suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
-	// cancelAndJoin (not cancel): the poll loop's transport is cancellable, so a pass suspended
-	// in it usually unwinds promptly - but a cancel landing in the loop's non-suspend tail still
-	// completes that pass normally before the job finishes, and that tail is NOT always brief:
-	// its last statement is DebugLog.flushToIngest(), a plain blocking HttpURLConnection POST
-	// with only per-phase connect/read timeouts (no overall call bound), so a trickling ingest
-	// endpoint can hold it open well past either one. cancel() alone would let this function race
-	// ahead and reset state while that tail is still about to persist mail and re-touch _state.
-	// Joining serializes against it, so the worst case is this function waiting out that tail
-	// (bounded in practice, not in principle), not a silent resurrection of wiped state.
+	// Join the poll loop before wiping state.
 	drain.stopAndJoin()
-	// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
-	// provisioning/identity/history, never voice (clear() is the full factory wipe).
+	// Preserve voice settings.
 	store.clearProvisioning()
-	// Durable first, then every in-memory holder: a cache left holding the previous owner's data is
-	// re-persisted by the next owner's first write.
+	// Wipe durable state first.
 	for (cache in clearedOnReprovision) cache.clearInMemory()
 	stts.purgeAll()
-	// Paired with the TTS purge above, same as the one-shot schema-migration wipe does (see
-	// init{}): the prefs wipe never touches filesDir, so downloaded attachments would
-	// otherwise survive a Revoke-and-Delete/Clear-and-re-provision indefinitely.
+	// Purge file-backed attachments too.
 	Attachments.purgeAll(filesDir)
 	_state.update { ChatState(provisioned = false) }
-	// The fresh ChatState() above already resets scheduledSends to empty (and its own key is
-	// wiped from disk, being in PROVISIONING_KEYS) - only the OS-level alarm resource needs an
-	// explicit cancel. A stray late fire/retry after this would be harmless regardless (both
-	// re-check live state fresh and no-op on a miss), this just avoids a pointless wakeup.
+	// Cancel the OS-level alarm.
 	scheduled.scheduledSendScheduler?.cancelNext()
 }

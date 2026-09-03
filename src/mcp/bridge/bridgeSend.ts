@@ -7,9 +7,6 @@ import { dropReferenceArtifacts } from "../channel/channelFiles.js";
 import { bridgeConversationId, bridgeProjectName, opLedgerRefusal, routerPost } from "./helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "./replyTool.js";
 
-////////////////////////////////
-//  Schemas
-
 export const BridgeSendSchema = z
 	.object({
 		to: z
@@ -21,14 +18,14 @@ Target session. Copy the full address from \`crosstalk_discover\`: \`domain.gate
 
 Never shorten it. A shortened address resolves locally instead of to the intended target.
 
-- An online session receives it directly, with no invite step.
+- An online session receives it directly.
 - An asleep session is woken on send.
-- A spawn point without a session is not a valid target. Set \`displayLabel\` to create a session under it.
+- A spawn point without a session is not a valid target. Set \`displayLabel\` to create one under it.
 
-The created session may have a different name. Use the resolved address from the response afterwards.
+A created session may take a different name. Use the resolved address from the response afterwards.
 `.trim(),
 			),
-		body: z.string().optional().describe(`Full Markdown request details and relevant context.`),
+		body: z.string().optional().describe(`Markdown request details and relevant context.`),
 		displayLabel: z
 			.string()
 			.min(1)
@@ -38,7 +35,7 @@ The created session may have a different name. Use the resolved address from the
 				`
 Human-readable label for a new session, e.g. \`Bug Investigation\`. Never a slug, \`id\`, or generated string.
 
-Required to create a target that does not yet exist. Ignored when the target already exists.
+Required for a target that does not yet exist. Ignored when it already exists.
 `.trim() + REAL_NEWLINES_GUIDANCE,
 			),
 		disposition: z
@@ -50,7 +47,7 @@ What you need back. Set it on every send; omitted means \`asking\`.
 
 - \`asking\`: you are waiting on a reply.
 - \`informing\`: no reply needed. They stay silent unless it affects them in a way you would want to know now.
-- \`closing\`: the thread is over. Silence is the correct response.
+- \`closing\`: the thread is over. Silence is correct.
 `.trim(),
 			),
 		session_id: z
@@ -58,7 +55,7 @@ What you need back. Set it on every send; omitted means \`asking\`.
 			.optional()
 			.describe(
 				`
-Polling only. Pass \`session_id\` with no \`body\` to peek at an existing conversation's latest result.
+Polling only. Pass \`session_id\` with no \`body\` to peek at a conversation's latest result.
 
 Omit it for sends. Channel conversations derive from the sender and target pair.
 `.trim(),
@@ -77,30 +74,18 @@ The receiving agent gets local files listed in a \`[FILES]\` block.
 	.strict();
 type BridgeSendArgs = z.infer<typeof BridgeSendSchema>;
 
-////////////////////////////////
-//  Interfaces & Types
-
 type SendResult = ResponsePayload & { error?: string; available?: string[] };
-
-////////////////////////////////
-//  Functions & Helpers
 
 const description = `
 # Crosstalk Send
 
 Send a request to another team.
 
-## Send
+Provide \`to\` and \`body\` to send. Conversations are reused automatically; do not manage \`session_id\` values.
 
-Provide \`to\` and \`body\`. Conversations are reused automatically; do not manage \`session_id\` values.
+Provide \`session_id\` alone, with no \`body\`, to peek at the latest stored result without consuming it.
 
-## Poll
-
-Provide \`session_id\` only, with no \`body\`, to peek at the latest stored result without consuming it.
-
-## Replies
-
-Channel-mode replies arrive as \`<channel>\` notifications. A team may send multiple progress updates without closing the conversation.
+Channel-mode replies arrive as \`<channel>\` notifications. A team may send several progress updates without closing the conversation.
 
 ## Disposition
 
@@ -146,13 +131,11 @@ async function formatResult(
 	} else if (result.status === "timeout") {
 		parts.push(result.message || `No response in time.`);
 	} else {
-		// A ResponseStatus added later would otherwise drop its body silently.
 		const body = result.response ?? result.message ?? result.reason;
 		if (body) parts.push(`\n${body}`);
 	}
 
-	// A POLLED reply names its attachments and cannot fetch them: the stored copy holds no reference.
-	// Naming them is the honest report; the live push path materializes normally.
+	// A poll recovers names only. The stored copy holds no reference to the bytes.
 	const attached = result.files ? dropReferenceArtifacts(result.files) : [];
 	if (attached.length > 0) {
 		parts.push(`\nAttachments on this reply (a poll recovers names only; ask for a re-send to get the bytes):`);
@@ -176,7 +159,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 		},
 		async ({ to, body, session_id, displayLabel, disposition, attachments }: BridgeSendArgs) => {
 			try {
-				// Attachments exclude poll mode too, or a files-only send would discard them.
+				// Attachments exclude poll mode, or a files-only send would discard them.
 				if (session_id && !body && !attachments?.length) {
 					const result = (await routerPost("/poll", { session_id })) as SendResult;
 
@@ -194,15 +177,12 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					throw new Error(`Provide to + body for sending, or just session_id for polling.`);
 				}
 
-				// `body` stays unlinted: its primary consumer is the receiving model, and rejecting real
-				// inter-team work over a cosmetic mirror is worse than the blemish.
+				// `body` stays unlinted: its consumer is the receiving model, not a renderer.
 				if (displayLabel) {
 					const hazard = literalEscapeHazard(displayLabel);
 					if (hazard) return toolError(literalEscapeReject("crosstalk_send", "displayLabel", hazard));
 				}
 
-				// Unconfined by design, and the recipient may be a foreign agent. Accepted because
-				// mirrorPeer copies both legs into the owner's mailbox, so nothing leaves unseen.
 				let files: ChannelFile[] = [];
 				if (attachments?.length) {
 					try {

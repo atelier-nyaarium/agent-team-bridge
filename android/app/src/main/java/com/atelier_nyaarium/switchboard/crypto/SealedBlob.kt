@@ -93,7 +93,7 @@ fun openSealedBlobRange(
 	var index = range.offset / Protocol.BLOB_CHUNK_BYTES
 	while (cursor < range.bytes.size) {
 		val plaintextLength = maxOf(0L, minOf(Protocol.BLOB_CHUNK_BYTES.toLong(), range.size - index * Protocol.BLOB_CHUNK_BYTES))
-		// Full chunks use the fixed stride; only the final chunk may be short.
+		// Fixed stride. Final chunk may be short.
 		val frameLength = plaintextLength + BLOB_FRAME_OVERHEAD_BYTES
 		if (frameLength > Int.MAX_VALUE || cursor.toLong() + frameLength > range.bytes.size) {
 			throw IllegalArgumentException("sealed blob range is truncated")

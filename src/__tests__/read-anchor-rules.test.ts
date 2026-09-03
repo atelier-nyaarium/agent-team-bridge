@@ -14,8 +14,6 @@ describe("read anchor rules", () => {
 		expect(result.advanced).toBe(false);
 	});
 
-	// mintEpoch draws at random, so a re-minted mailbox is as likely to draw a smaller number as a
-	// larger one. Ordering the epochs as magnitudes stalled the anchor permanently for half of them.
 	it("accepts a re-minted mailbox whose epoch is numerically smaller", () => {
 		const result = mergeReadAnchor({ owner: { team: entry(900, 9, 5) } }, "owner", "team", entry(7, 0, 6));
 		expect(result.advanced).toBe(true);

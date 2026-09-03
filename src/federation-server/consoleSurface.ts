@@ -62,9 +62,9 @@ export interface ConsoleSurfaceParams {
 	onTrustHandshake?: (op: TrustHandshakeOp) => TrustHandshakeResult | Promise<TrustHandshakeResult>;
 	onTrustPending?: (req: TrustPendingRequest) => TrustPendingResult | Promise<TrustPendingResult>;
 	onTransport?: (req: TransportRequest) => TransportResult | Promise<TransportResult>;
-	/** Keep LAN reach behind the app token. */
+	/** Reach requires the app token. */
 	onReach?: () => RouterReachAnswer;
-	/** Scope gateway listings to the admin Domain. */
+	/** Gateway listings use the admin Domain. */
 	onGateways?: () => RouterGatewaysAnswer;
 	onOwnerOp?: (raw: unknown) => unknown | Promise<unknown>;
 	inbox?: InboxService;
@@ -331,7 +331,6 @@ export class ConsoleSurface {
 		for (const line of lines) console.log(`${prefix} ${line}`);
 		if (this.ingestFile) {
 			const batch = lines.map((line) => `${JSON.stringify({ device, conversationId, line })}\n`).join("");
-			// File logging is best effort because the launch is not awaited.
 			try {
 				mkdirSync(path.dirname(this.ingestFile), { recursive: true });
 				appendFileSync(this.ingestFile, batch);
@@ -349,7 +348,7 @@ export class ConsoleSurface {
 		return json({ ok: true, received: lines.length }, 200);
 	}
 
-	/** The same app-token check the HTTP surface runs, for the socket upgrade. */
+	/** App-token check for socket upgrades. */
 	public authorizeToken(provided: string | string[] | undefined): boolean {
 		return constantTimeBearerEquals(typeof provided === "string" ? provided : null, this.authToken);
 	}
@@ -357,6 +356,7 @@ export class ConsoleSurface {
 	public async handleRequest(req: Request): Promise<Response> {
 		const url = new URL(req.url, "http://console-bridge");
 		if (req.method !== "POST") return bounce(405, `method not allowed`);
+		// Token gates this surface. Nonce routes are separate.
 		if (!constantTimeBearerEquals(req.headers.get(APP_TOKEN_HEADER), this.authToken)) {
 			// Never log the token.
 			console.log(`[console] rejected ${url.pathname}: app token mismatch`);
@@ -415,7 +415,7 @@ export class ConsoleSurface {
 			return bounce(503, `gateway not connected`, true);
 		}
 
-		// Do not reroute named gateways; the payload is sealed to the target.
+		// Sealed payloads stay with named gateways.
 		const route = (typeof targetGateway === "string" && targetGateway) || "";
 		if (route && !bridge.gatewayIds().includes(route)) {
 			return bounce(503, `gateway "${route}" is not connected`, true);

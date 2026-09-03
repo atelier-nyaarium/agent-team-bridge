@@ -6,34 +6,22 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.TaskBoardVersion
 import kotlinx.serialization.Serializable
 
-////////////////////////////////
-//  Persisted shapes (one prefs key, see AppStateStore.saveTaskBoard)
-
-/** One queued board mutation, retired ONLY on the gateway's accept or sealed refusal - a thrown,
- * cleartext, or transport error always retries. `dependsOn` is the cross-Gateway move's link: the
- * delete half never drains until its write half's opId has retired. */
+/** Retire only on accept or sealed refusal. */
 @Serializable
 data class PendingBoardAction(
 	val opId: String,
 	val gatewayId: String,
 	val op: ConsoleOp,
 	val dependsOn: String? = null,
-	// Failed sends so far. Drives the row's "not synced" marker, and lets the lane step PAST this
-	// action so one that cannot currently send does not block every later one.
+	// Failed sends; permits lane skipping.
 	val attempts: Int = 0,
-	// Local files this action's bytes come from, by blobId. Lives HERE and never on the ConsoleOp,
-	// which is generated from the wire schema: a device path names a user and a folder layout, and
-	// these cross a Gateway. The drain uploads each before sending, so an attach survives a restart.
+	// Upload before send; survives restart.
 	val sources: Map<String, String> = emptyMap(),
-	// Members whose bytes must be PULLED before they can be pushed, by the Gateway holding them. A
-	// move carries pictures this device may never have opened, so its source file legitimately does
-	// not exist yet - which is why a missing file here retries rather than abandoning.
+	// Missing fetch source retries.
 	val fetchFrom: Map<String, String> = emptyMap(),
 )
 
-/** One Gateway's cached board half. `lastSyncedAt` is CACHE metadata (deliberately outside the
- * no-timestamps-on-entries rule) - the stale marker reads it to say how stale, not merely that a
- * fetch failed. */
+/** Cache metadata, not entry timestamps. */
 @Serializable
 data class GatewayBoard(
 	val entries: List<BoardEntry> = emptyList(),
@@ -42,14 +30,7 @@ data class GatewayBoard(
 	val lastSyncedAt: Long = 0,
 )
 
-/**
- * One thing the owner has to be told about a queued write, and WHICH thing it is.
- *
- * A refusal never landed, so the row already snapped back to Gateway truth and the owner can simply
- * redo it. A drop is the opposite on both counts: the write applied, and the pictures are gone from
- * every machine. Telling the owner "a change did not stick" about a drop invites them to redo an edit
- * that already succeeded and to keep waiting for a file nothing will bring back.
- */
+/** Distinguishes refused writes from terminal drops. */
 @Serializable
 data class BoardRefusal(
 	val entryId: String?,
@@ -66,33 +47,21 @@ enum class BoardNoticeKind {
 @Serializable
 data class BoardBlob(
 	val gateways: Map<String, GatewayBoard> = emptyMap(),
-	/** The Router's board revision this device last landed. CAS is checked against it. */
+	/** Router revision used for CAS. */
 	val routerRevision: Long = 0,
-	/** The Router's board as stored, still sealed. Rendered through the keyring on read. */
+	/** Sealed Router entries. */
 	val stored: List<BoardStoredEntry> = emptyList(),
-	/** Last text read for each entry, so a rotated-away epoch still renders. */
+	/** Cached text survives epoch rotation. */
 	val text: Map<String, BoardCachedText> = emptyMap(),
-	/** Writes still in flight, oldest first, applied over the Router's entries for the UI. */
+	/** Optimistic writes, oldest first. */
 	val pending: List<PendingWrite> = emptyList(),
 	val lastRouterSyncAt: Long = 0,
 	val queue: List<PendingBoardAction> = emptyList(),
-	// Durable BECAUSE the drain that mints these runs backgrounded, down a cadence ladder that ends in
-	// alarm wakeups on a killable process. An in-memory notice about pictures that are gone for good
-	// would routinely die before the owner ever opened the app.
+	// Persist notices across background drains.
 	val notices: List<BoardRefusal> = emptyList(),
 )
 
-////////////////////////////////
-//  Queue reducers
-
-/** The actions eligible to fire now: each Gateway's oldest action whose link (if any) has already
- * retired. Per-Gateway lanes, so one dead machine cannot head-of-line block the live one.
- *
- * A lane may step PAST a head that has failed [strugglingAfter] times, but only onto an action for a
- * DIFFERENT entry: these ops are absolute, so reordering two writes to one entry would apply the
- * older value last. Nothing is ever dropped - the skipped head stays queued and is retried on the
- * next pass - which is what keeps "an edit retires only on a gateway refusal" true while still
- * letting a permanently-unsendable op stop wedging everything behind it. */
+/** Per-Gateway oldest eligible actions. */
 fun eligibleBoardActions(
 	queue: List<PendingBoardAction>,
 	strugglingAfter: Int = Int.MAX_VALUE,
@@ -105,21 +74,18 @@ fun eligibleBoardActions(
 		val lane = action.gatewayId
 		if (lane in laneClosed) continue
 		val entries = boardEntryIdsOf(action.op)
-		// A link that has not retired closes the lane outright: nothing behind a pending write may
-		// be reordered ahead of it, since the linked pair is the move's own write-then-delete.
+		// Pending dependency closes lane.
 		if (action.dependsOn != null && action.dependsOn in queuedIds) {
 			laneClosed.add(lane)
 			continue
 		}
-		// A write to an entry an earlier skipped action also writes cannot jump ahead of it: these
-		// ops are absolute, so applying the older value last would undo the newer one.
+		// Never reorder writes to one entry.
 		if (skipped[lane]?.let { blocked -> entries.any { it in blocked } } == true) {
 			laneClosed.add(lane)
 			continue
 		}
 		if (action.attempts >= strugglingAfter) {
-			// Deprioritized, NOT dropped: it stays this lane's answer if nothing else qualifies, so a
-			// permanently-failing op keeps retrying instead of blocking everything behind it.
+			// Deprioritize, never drop.
 			chosen.putIfAbsent(lane, action)
 			skipped.getOrPut(lane) { mutableSetOf() }.addAll(entries)
 			continue
@@ -130,8 +96,7 @@ fun eligibleBoardActions(
 	return chosen.values.toList()
 }
 
-/** Every entry an op writes to. A multi-entry op (a subtree move) touches all of them, and the
- * lane's skip rule needs the full set or it could reorder a write against one of the others. */
+/** Include every touched entry. */
 fun boardEntryIdsOf(op: ConsoleOp): Set<String> = when (op) {
 	is ConsoleOp.BoardSetState -> setOf(op.id)
 	is ConsoleOp.BoardSetTitle -> setOf(op.id)
@@ -145,30 +110,21 @@ fun boardEntryIdsOf(op: ConsoleOp): Set<String> = when (op) {
 	else -> emptySet()
 }
 
-/** Retire an ACCEPTED action: it applied, so anything linked to it may now proceed. */
 fun retireBoardAction(queue: List<PendingBoardAction>, opId: String): List<PendingBoardAction> =
 	queue.filter { it.opId != opId }
 
-/**
- * Stop waiting on a member whose bytes PROVABLY exist nowhere: out of `fetchFrom` (nothing resumes
- * the pull) and out of `sources` (readiness stops demanding it). The op's own attachment list is
- * deliberately untouched and the member stays out of `supplied`, so the Gateway DROPS it and
- * reports the drop - the terminal refusal - instead of this device predicting the Gateway's answer.
- * Without this, a move whose picture is gone from every machine retries its pull on every poll
- * forever, and the linked origin delete holds that Gateway's lane closed behind it.
- */
+/** Remove unreachable fetches; let Gateway report the drop. */
 fun markFetchDead(queue: List<PendingBoardAction>, entryId: String, blobId: String): List<PendingBoardAction> =
 	queue.map { action ->
 		if (blobId in action.fetchFrom && entryId in boardEntryIdsOf(action.op)) {
+			// Preserve attachment claims for Gateway.
 			action.copy(fetchFrom = action.fetchFrom - blobId, sources = action.sources - blobId)
 		} else {
 			action
 		}
 	}
 
-/** Abandon a REFUSED action, taking everything that depended on it. A move's delete half must never
- * become eligible because its write half was refused - that destroys the entry on both Gateways,
- * inverting the whole point of write-then-delete. */
+/** Refused writes abandon dependent deletes. */
 fun abandonBoardAction(queue: List<PendingBoardAction>, opId: String): List<PendingBoardAction> {
 	val doomed = mutableSetOf(opId)
 	var grew = true
@@ -178,15 +134,7 @@ fun abandonBoardAction(queue: List<PendingBoardAction>, opId: String): List<Pend
 	return queue.filter { it.opId !in doomed }
 }
 
-////////////////////////////////
-//  The merge base
-
-/**
- * Fold a fresh Gateway snapshot under the pending queue: the snapshot is authoritative EXCEPT for
- * what a still-pending action already changed locally, re-applied on top until that action retires.
- * Without this, every optimistic edit visibly reverts on the next poll and flips back when the
- * queue drains - the same defect `withFreshTeams` exists to prevent for labels.
- */
+/** Reapply pending writes over fresh snapshots. */
 fun mergeBoardSnapshot(
 	snapshot: List<BoardEntry>,
 	queue: List<PendingBoardAction>,
@@ -200,8 +148,7 @@ fun mergeBoardSnapshot(
 	return entries
 }
 
-/** Apply one board op optimistically. Mirrors the gateway store's semantics minus the refusals: a
- * target the snapshot no longer holds is skipped (the gateway is about to refuse it anyway). */
+/** Optimistic mirror; skip missing targets. */
 fun applyBoardOp(entries: List<BoardEntry>, op: ConsoleOp, now: Long): List<BoardEntry> {
 	fun subtreeIds(rootId: String): Set<String> {
 		val children = entries.groupBy { it.parent }
@@ -217,11 +164,7 @@ fun applyBoardOp(entries: List<BoardEntry>, op: ConsoleOp, now: Long): List<Boar
 
 	return when (op) {
 		is ConsoleOp.BoardUpsert -> {
-			// Attachments are dropped here exactly as the gateway's own upsert drops them, because a
-			// move ships a subtree VERBATIM. Keeping them locally would show the destination holding
-			// pictures it has no bytes for, and the console writes off this view: the next absolute
-			// attachment write would re-state a blobId that Gateway can never satisfy, and that op
-			// retries forever rather than refusing.
+			// New upsert entries clear attachments.
 			val byId = op.entries.associateBy { it.id }
 			val kept = { e: BoardEntry -> (byId[e.id] ?: e).copy(attachments = e.attachments) }
 			entries.map(kept) + op.entries.filter { e -> entries.none { it.id == e.id } }

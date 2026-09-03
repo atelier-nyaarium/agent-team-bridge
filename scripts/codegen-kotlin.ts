@@ -1,23 +1,9 @@
-// Generates the Kotlin protocol types + constants from the zod truth in
-// src/shared/. The output (android/.../proto/Protocol.kt) is committed; CI
-// regenerates and diffs so the two sides cannot drift.
-//
-//   bun scripts/codegen-kotlin.ts
-//
-// Emission rules:
-// - Sealed classes ONLY for encode-side discriminated unions (the console
-//   composes them, closure is safe). The list is hardcoded below. Everything
-//   else the console DECODES stays forward-compatible: enums emit as open
-//   String, unknown discriminator values can never throw.
-// - Non-discriminated unions (ConsoleOpResult) emit as JsonElement; the per-op
-//   decode mapping stays in client code, correlated by opId.
-// - integer -> Long (at/seq/cursor are epoch-ms and monotonic counters),
-//   record/unknown -> JsonObject/JsonElement, optional -> nullable = null.
-// - The zod -> JSON Schema leg uses io:"input" (decode semantics; transforms
-//   drop, defaulted fields go optional). Shared sub-schemas become named
-//   $defs through their .meta ids alone - do NOT pass reused:"ref", which
-//   additionally hoists every anonymous sub-schema as __schemaN defs whose
-//   names collide across root conversions.
+// Generates committed Kotlin types from src/shared schemas.
+// Run: bun scripts/codegen-kotlin.ts
+// Encode unions use sealed classes. Decode unions stay open.
+// Non-discriminated unions emit JsonElement.
+// Integers emit Long. Optionals emit nullable types.
+// JSON Schema uses io:"input" and .meta ids.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -180,29 +166,24 @@ const ROOTS: z.ZodType[] = [
 	EnrollResultSchema,
 	EnrollHandshakeOpSchema,
 	EnrollHandshakeResultSchema,
-	// Device self-enroll approval: the held device composes the ops, decodes the Router's reply.
 	ConsoleApprovalOpSchema,
 	ConsoleApprovalResultSchema,
 	PendingTenantSchema,
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
-	// Content key wire shapes.
 	ContentEnvelopeSchema,
 	KeyEnvelopeSchema,
 	KeyRequestSchema,
 	KeyGrantSchema,
 	KeyReceiptSchema,
-	// A root so the Android owner can sign it.
 	SignedXDomainUntrustSchema,
 	RosterRequestSchema,
 	RosterResultSchema,
-	// Trust rendezvous: the phone signs/encodes the handshake plus the pending query.
 	TrustHandshakeOpSchema,
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
 	TrustPendingResultSchema,
-	// An owner pulling its network's gateway-bridge transport (proof-of-possession + the Router's reply).
 	TransportRequestSchema,
 	TransportResultSchema,
 	OwnerOpSchema,
@@ -211,7 +192,6 @@ const ROOTS: z.ZodType[] = [
 	RowOriginSchema,
 	OpKeySchema,
 	OpResultEnvelopeSchema,
-	// Owner state the phone reads and the ops it composes.
 	OwnerPresenceProjectionSchema,
 	FriendPresenceProjectionSchema,
 	RosterEntrySchema,
@@ -235,10 +215,7 @@ const ROOTS: z.ZodType[] = [
 	ReadAnchorsResultSchema,
 ];
 
-// Encode-side discriminated unions that may emit as sealed classes. Anything
-// not listed emits open (decode-side rule); the discriminator key is read from
-// zod internals. EnrollOp is composed by the console, so closure is safe; the
-// scanned EnrollmentPayload is decoded and stays hand-parsed in the client.
+// Listed unions are encoded; others stay open for decoding.
 const SEALED_ROOTS = new Set([
 	"ConsoleOp",
 	"EnrollOp",
@@ -250,14 +227,9 @@ const SEALED_ROOTS = new Set([
 	"BoardActor",
 ]);
 
-////////////////////////////////
-//  zod -> cleaned JSON Schema (evie-bot's conversion hygiene)
-
 type Json = Record<string, unknown>;
 
-/** Strip $schema and `format` validators downstream consumers do not support
- * (zod still enforces them at parse time). Mirrors evie-bot's
- * actionSchemaToTool cleanup walk. */
+/** Strip unsupported schema metadata. */
 function zodToCleanJsonSchema(schema: z.ZodType): Json {
 	const json = z.toJSONSchema(schema, { io: "input" }) as Json;
 	delete json.$schema;
@@ -268,8 +240,7 @@ function zodToCleanJsonSchema(schema: z.ZodType): Json {
 			return;
 		}
 		const record = node as Json;
-		// Keyword form only: a PROPERTY named "format" is a schema object here,
-		// while the format validator keyword is always a string.
+		// Remove only the format keyword.
 		if (typeof record.format === "string") delete record.format;
 		for (const key in record) walk(record[key]);
 	};
@@ -277,8 +248,6 @@ function zodToCleanJsonSchema(schema: z.ZodType): Json {
 	return json;
 }
 
-/** Discriminator key of a z.discriminatedUnion, from zod internals (the JSON
- * Schema output carries no discriminator keyword - verified on zod 4.4.3). */
 function discriminatorOf(schema: z.ZodType): string {
 	const def = (schema as unknown as { _zod: { def: { discriminator?: string } } })._zod.def;
 	if (!def.discriminator) throw new Error("schema has no discriminator");
@@ -293,7 +262,6 @@ function idOf(schema: z.ZodType): string {
 
 const INDENT = "\t";
 
-/** "list_teams" -> "ListTeams" */
 function pascal(value: string): string {
 	return value
 		.split(/[_\-\s]+/)
@@ -301,8 +269,6 @@ function pascal(value: string): string {
 		.join("");
 }
 
-/** The non-null member of a zod .nullable() union (a 2-member anyOf with
- * {type:"null"}), or null when the node is not that shape. */
 function nullableInner(node: Json): Json | null {
 	const members = (node.anyOf ?? node.oneOf) as Json[] | undefined;
 	if (members?.length !== 2) return null;
@@ -311,9 +277,6 @@ function nullableInner(node: Json): Json | null {
 	return members[1 - nullIndex] as Json;
 }
 
-/** Kotlin type for a JSON Schema node. `defs` resolves $ref names; refs to
- * scalar/enum defs (e.g. RequestType) inline their underlying type - the
- * decode-side rule keeps them open Strings, never Kotlin enums. */
 function kotlinType(node: Json, defs: Map<string, Json>): string {
 	const ref = node.$ref as string | undefined;
 	if (ref) {
@@ -323,15 +286,13 @@ function kotlinType(node: Json, defs: Map<string, Json>): string {
 		if (!target.properties && !target.oneOf && !target.anyOf) return kotlinType(target, defs);
 		return name;
 	}
-	// .nullable() unwraps to T (the param emitter adds the ? = null).
 	const inner = nullableInner(node);
 	if (inner) return kotlinType(inner, defs);
-	// Non-discriminated unions stay opaque: the consumer decodes per context.
 	if (node.anyOf || node.oneOf) return "JsonElement";
 	const type = node.type as string | undefined;
 	switch (type) {
 		case "string":
-			return "String"; // enums + consts included: decode-side stays open
+			return "String";
 		case "integer":
 			return "Long";
 		case "number":
@@ -345,9 +306,9 @@ function kotlinType(node: Json, defs: Map<string, Json>): string {
 		case "object":
 			if (node.properties)
 				throw new Error("inline object without $defs id - add .meta({ id }) to the sub-schema");
-			return "JsonObject"; // z.record / free-form
+			return "JsonObject";
 		default:
-			return "JsonElement"; // z.unknown and friends
+			return "JsonElement";
 	}
 }
 
@@ -355,12 +316,10 @@ function escapeKdoc(text: string): string {
 	return text.replace(/\*\//g, "*&#47;").trim();
 }
 
-/** Kotlin string literal: JSON escaping plus `$` (template interpolation). */
 function kotlinString(value: string): string {
 	return JSON.stringify(value).replace(/\$/g, "\\$");
 }
 
-/** Emit the properties of one object schema as constructor params. */
 function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): string[] {
 	const props = (node.properties ?? {}) as Record<string, Json>;
 	const required = new Set((node.required as string[] | undefined) ?? []);
@@ -374,7 +333,7 @@ function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): str
 		const description = prop.description as string | undefined;
 		if (description) lines.push(`${INDENT}/** ${escapeKdoc(description)} */`);
 		if (typeof constValue === "string") {
-			// A required const is a wire field; the console's Json drops defaults unless told to encode them.
+			// Required consts must be encoded.
 			if (required.has(name)) lines.push(`${INDENT}@EncodeDefault`);
 			lines.push(`${INDENT}val ${name}: ${baseType} = ${kotlinString(constValue)},`);
 		} else if (constValue !== undefined) {
@@ -413,13 +372,12 @@ function emitSealedClass(name: string, node: Json, discriminator: string, defs: 
 		const kindValue = props[discriminator]?.const as string | undefined;
 		if (!kindValue) throw new Error(`sealed member of ${name} lacks const ${discriminator}`);
 		const memberName = pascal(kindValue);
-		// kotlinx writes the discriminator from @SerialName; it is not a property.
+		// @SerialName supplies the discriminator.
 		const params = emitParams(member, defs, new Set([discriminator]));
 		out.push(`${INDENT}@Serializable`);
 		out.push(`${INDENT}@SerialName(${kotlinString(kindValue)})`);
 		if (params.length === 0) {
-			// kotlinx needs object (or a no-arg class) for parameterless members;
-			// data object keeps equals/toString sane.
+			// Use data objects for parameterless members.
 			out.push(`${INDENT}data object ${memberName} : ${name}()`);
 		} else {
 			out.push(`${INDENT}data class ${memberName}(`);
@@ -441,10 +399,7 @@ for (const schema of ROOTS) {
 	const json = zodToCleanJsonSchema(schema);
 	const nested = (json.$defs ?? {}) as Record<string, Json>;
 	delete json.$defs;
-	// The root converts to its body and .meta'd sub-schemas land in $defs
-	// keyed by id. The same id reappearing across roots must carry an
-	// identical body (same source schema) - anything else is a name
-	// collision that would silently emit one class for two shapes.
+	// Shared definitions must keep identical bodies.
 	const guardedSet = (name: string, body: Json) => {
 		const existing = defs.get(name);
 		if (existing && JSON.stringify(existing) !== JSON.stringify(body)) {
@@ -466,7 +421,7 @@ const blocks: string[] = [];
 for (const name of order) {
 	const node = defs.get(name);
 	if (!node) continue;
-	// Skip aliases that resolve to plain scalars/enums (decode-side Strings).
+	// Skip scalar and enum aliases.
 	if (!node.properties && !node.oneOf && !node.anyOf) continue;
 	if (SEALED_ROOTS.has(name)) {
 		const schema = ROOTS.find((s) => idOf(s) === name);
@@ -480,19 +435,13 @@ for (const name of order) {
 
 const header = `// generated from src/shared/schemas.ts + src/shared/console-protocol.ts - DO NOT EDIT.
 // Regenerate: bun scripts/codegen-kotlin.ts
+// Decode with ignoreUnknownKeys = true. Enum-like fields are open Strings, so a console
+// tolerates values newer than its build.
 //
-// Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
-// posture). Enum-like fields are open Strings on purpose: the console must
-// tolerate values newer than this build.
+// Keep encodeDefaults false: zod .optional() rejects an explicit null. Enabling it MUST pair
+// with explicitNulls = false. Required consts become parameters.
 //
-// ENCODE config is load-bearing: the default Json (encodeDefaults = false)
-// omits null-defaulted optionals, which is exactly what the gateway's zod
-// schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
-// is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
-// it MUST pair with explicitNulls = false. Required consts become parameters. Note
-// the console's POST body is the
-// op-only envelope {device, conversationId, opId, op}; the Router composes the
-// full console_relay frame, so ConsoleRelayFrame is decode-side here.
+// The console POSTs the op-only envelope, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 @file:OptIn(ExperimentalSerializationApi::class)
 
@@ -509,39 +458,35 @@ import kotlinx.serialization.json.JsonObject
 object Protocol {
 ${INDENT}const val CONSOLE_PROTOCOL_VERSION: Int = ${CONSOLE_PROTOCOL_VERSION}
 
-${INDENT}/** The one structural separator for every address / store / thread key. */
+${INDENT}/** Address and store separator. */
 ${INDENT}const val ADDRESS_SEP: String = ${kotlinString(ADDRESS_SEP)}
 
-${INDENT}/** Position-0 store-key tag for a channel conversation key. */
+${INDENT}/** Channel key tag. */
 ${INDENT}const val CONV_TAG: String = ${kotlinString(CONV_TAG)}
 
-${INDENT}/** Position-0 store-key tag for a broadcast notice key. */
+${INDENT}/** Broadcast key tag. */
 ${INDENT}const val NOTICE_TAG: String = ${kotlinString(NOTICE_TAG)}
 
-${INDENT}/** The session a bare spawn-point name defaults to as a wake / UI default. */
+${INDENT}/** Default session. */
 ${INDENT}const val DEFAULT_SESSION: String = ${kotlinString(DEFAULT_SESSION)}
 
-${INDENT}/** The one address-segment slug pattern (lowercase alnum, internal / trailing hyphen). */
+${INDENT}/** Address slug pattern. */
 ${INDENT}const val SLUG_PATTERN: String = ${kotlinString(SLUG_RE.source)}
 
 ${INDENT}const val MAX_SLUG_LEN: Int = ${MAX_SLUG_LEN}
 
 ${INDENT}const val MAX_CONV_ID_LEN: Int = ${MAX_CONV_ID_LEN}
 
-${INDENT}/** Bytes per blob chunk. Every runtime moves attachment bytes in units of this, so the peak
-${INDENT} * allocation on a transfer is a constant no matter how large the file is. */
+${INDENT}/** Blob chunk size. */
 ${INDENT}const val BLOB_CHUNK_BYTES: Int = ${BLOB_CHUNK_BYTES}
 
-${INDENT}/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
-${INDENT} * are described, since a message's stated size is the sender's own claim. */
+${INDENT}/** Blob size limit. Enforced where the bytes land: a stated size is the sender's claim. */
 ${INDENT}const val MAX_BLOB_BYTES: Long = ${MAX_BLOB_BYTES}
 
-${INDENT}/** Above this a console waits to be asked before fetching a board attachment. NOT a cap on what
-${INDENT} * may be attached - the wire carries up to MAX_BLOB_BYTES in chunks either way. It only decides
-${INDENT} * what a device pulls down unprompted. */
+${INDENT}/** Unprompted fetch threshold, not an attachment cap. The wire still carries MAX_BLOB_BYTES. */
 ${INDENT}const val BOARD_AUTO_DOWNLOAD_MAX_BYTES: Long = ${BOARD_AUTO_DOWNLOAD_MAX_BYTES}
 
-${INDENT}/** Attachments one board entry may hold. */
+${INDENT}/** Board attachment limit. */
 ${INDENT}const val BOARD_ATTACHMENTS_MAX: Int = ${BOARD_ATTACHMENTS_MAX}
 }`;
 

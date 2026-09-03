@@ -59,13 +59,11 @@ describe("cross-Domain inbox append", () => {
 			.envelope;
 		expect(envelope.opKey.conversationId).toMatch(/^[a-z0-9][a-z0-9-]*$/);
 		expect(envelope.origin).toMatchObject({ kind: "gateway" });
-		// The blob is cached for this Domain's own devices, but never named to the peer: it holds none
-		// of this Domain's content keys, so advertising the cache would promise a read it cannot do.
+		// Peer cache has no keys.
 		expect(envelope).toMatchObject({ contentRefs: [] });
 		expect(uploadAll).toHaveBeenCalledWith([blobId], "cache");
 	});
 
-	// The ledger dedupes on the opKey, so a retried post must reach it under the caller's own id.
 	it("carries the caller's opId into the envelope so a retried send is one operation", async () => {
 		const identity = generateIdentity();
 		const calls: Array<{ params: Record<string, unknown> }> = [];
@@ -108,7 +106,6 @@ describe("cross-Domain inbox append", () => {
 			(calls[i]?.params.row as { envelope: { opKey: { opId: string } } }).envelope.opKey.opId;
 		expect(opIdOf(0)).toBe("op-retry");
 		expect(opIdOf(1)).toBe("op-retry");
-		// No caller id still mints one, which is what keeps an older plugin working.
 		expect(opIdOf(2)).toEqual(expect.any(String));
 		expect(opIdOf(2)).not.toBe("op-retry");
 	});

@@ -10,11 +10,11 @@ app-token-gated console ops, and token-exempt device approval for fresh devices.
 The Router certificate is minted once. Rotation requires re-provisioning every enrolled Gateway and
 phone. It is distinct from the ephemeral certificate used by the 20003 enrollment listener.
 
-**Reach: one Router, several addresses.** Home routers may not hairpin LAN-to-public connections. The
+**Reach: one Router, several addresses:** Home routers may not hairpin LAN-to-public connections. The
 Router advertises `{publicHost, publicPort?, lanAddresses}` through the app-token-gated `reach` op.
 The phone stores this in `reach.json` and tries LAN addresses, public host, then bootstrap address.
 
-**Gateway and phone fail over differently.** The phone fails over per operation. The Gateway fails
+**Gateway and phone fail over differently:** The phone fails over per operation. The Gateway fails
 over per reconnect, advancing only when a socket never opened.
 
 - Gateway registration cannot call `reach`: it has a WS bearer, not the console app token. It
@@ -34,8 +34,8 @@ over per reconnect, advancing only when a socket never opened.
 The Router leaf is self-signed. Its fingerprint is its identity. `gateway/router/pinnedSocket.ts`
 owns the check.
 
-- **Pin before the WS upgrade.** The bearer must not be sent before the TLS leaf matches.
-- **Resolve the real `ws` package.** Bun's bare `ws` substitution lacks peer-certificate access and
+- **Pin before the WS upgrade:** The bearer must not be sent before the TLS leaf matches.
+- **Resolve the real `ws` package:** Bun's bare `ws` substitution lacks peer-certificate access and
   ignores `createConnection`.
 - Preserve `match`, `mismatch`, `unreadable`, and `pending` as separate verdicts.
 - Chain verification stays off. The fingerprint is the identity check for this self-signed leaf.
@@ -54,7 +54,7 @@ Gateway, so revocation still applies while the Router is unreachable.
 
 - **Crypto:** Ed25519 signing, X25519 boxes, HKDF-SHA256, and AES-256-GCM. AES-256-GCM is required
   because Bun lacks ChaCha20.
-- **Never sign raw JSON.** Versioned newline-joined encodings are reproduced byte-exactly across
+- **Never sign raw JSON:** Versioned newline-joined encodings are reproduced byte-exactly across
   Node, Bun, and Android.
 - Registration requires keys, an owner-signed admission, and fresh possession proof. No bearer
   fallback.
@@ -77,7 +77,7 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Bootstrap writes admission, transport, Domain id, and keys under `federation/staging/`, writes an `INSTALLED` marker, then copies the artifacts atomically with transport last. Recovery retries a complete marked staging directory, rolls back incomplete or corrupt staging, and keeps staging on other activation errors.
 - Gateway re-enrollment validates the merged live and bundle view, requires a newer admission, merges the allowlist, and merges keys without dropping held epochs.
 - First enrollment uses trust on first use for the Domain root.
-- Deploy the Router before the app: an older Router drops the join signature and the held device refuses the join.
+- Deploy the Router before the app. Unsupported join signatures cause refusal.
 - Blob bytes seal per chunk on the existing 1 MiB boundary, each frame being a nonce, the ciphertext and its tag. The blob id stays the plaintext digest, so the Router verifies the CIPHERTEXT digest it was told and only a reader holding the key can verify the plaintext. Chunk index and the final flag ride in the AAD, so a Router cannot reorder, truncate, or splice chunks. `src/shared/sealed-blob.ts` and `crypto/SealedBlob.kt` are twins over a shared fixture corpus.
 - Board text binds its entry id into the AAD the same way. See `docs/task-board.md`.
 
@@ -86,7 +86,7 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Addresses: `owner:<domainId>/<ownerSignPub>`, `session:<domainId>/<gatewayId>/<sessionId>`, `gateway:<domainId>/<gatewayId>`.
 - A row is `{ seq, acceptedAt, size, envelope, producerSig, body }`. The producer signs the envelope; the Router adds seq, acceptedAt, and size.
 - The op ledger keys on `(owner, conversationId, opId)`. A repeat with the same hash answers the recorded result; a different hash answers `conflict`.
-- **A retry must be one operation, so nothing identifying it may be regenerated per attempt.** The producer mints the `opId` once per invocation and every retry carries it, the gateway's own relay holds one across its whole sequence, and the identity hash covers the CLEAR operation because each attempt re-seals on purpose to give the receiver's replay guard a fresh nonce. Hashing the row instead would answer a retry `conflict` and tell the sender a delivered message had failed.
+- **A retry is one operation:** The producer mints `opId` once per invocation, and every retry carries it. The relay holds one across its sequence. The identity hash covers the CLEAR operation.
 - The register answer carries `opLedgerProtocol`. A producer that issues its own ids refuses to send without it, since a gateway that predates the field drops it silently and mints one per attempt. The plugin scopes what it heard to one connection, so a replaced gateway cannot inherit its predecessor's answer.
 - Capacity refuses before storage: the row cap answers `refused`, the Domain quota answers `durability_failure`, a failed fsync answers `durability_uncertain`.
 - Gateway frames name only themselves. The Router takes the Domain and gateway from the connection; a session origin must be in the session registry; a peer row into another Domain needs a link edge.
@@ -106,9 +106,8 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Capabilities and read anchors are tier-1 records with their own OwnerOps.
 - Blobs: `blob_begin` and `blob_chunk` are refused until blob sealing is designed, so the Router holds no gateway-uploaded bytes. A `blob_fetch` reads the cache first and forwards to the origin gateway only on a miss.
 
-**A cross-machine answer states how complete it is.** `discover()` returns asked, answered and
-unreachable ids plus `rosterKnown`, so a partial result is not a plain success and an unreadable
-roster is not "no peers". `isRegistered` differs from `isConnected`: a refused registration leaves
+**A cross-machine answer states completeness:** `discover()` returns asked, answered and unreachable
+ids plus `rosterKnown`. `isRegistered` differs from `isConnected`: a refused registration leaves
 the socket open, so a revoked gateway reads as alone. The console retains rows for an unreachable
 gateway rather than sweeping them.
 

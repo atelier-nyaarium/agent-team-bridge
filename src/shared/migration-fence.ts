@@ -1,19 +1,16 @@
-// The migration fence. While it is up, every writer of MIGRATED state refuses, so the snapshot cut
-// is taken over a tree nothing is still changing.
-//
-// Guarded AT THE WRITER, never at its callers. A route added later that reaches a fenced writer is
-// covered by construction, which is what the residue test over writers pins.
+// Migration fence.
+// Writers, never callers, enforce the fence. New routes inherit coverage. Residue tests pin it.
 
 import fs from "node:fs";
 import path from "node:path";
 
-/** Retryable: the caller may try again once the migration window closes. */
+/** Retry after migration. */
 export const MIGRATING = "migrating";
 
-/** How long a filesystem answer is trusted, so a write does not stat. */
+/** Cache window. */
 const POLL_MS = 1000;
 
-/** How long an op the fence caught mid-flight is given to reach its own terminal state. */
+/** Mid-flight settle window. */
 export const MIGRATION_SETTLE_MS = 60_000;
 
 let read: () => number | null = () => null;
@@ -21,7 +18,7 @@ let cachedEpoch: number | null = null;
 let cachedAt = -Infinity;
 let clock: () => number = () => Date.now();
 
-/** Reads `DATA_DIR/migration-epoch`. Wired once at boot. */
+/** Read the migration epoch. */
 export function useMigrationEpochFile(dataDir: string): void {
 	const file = path.join(dataDir, "migration-epoch");
 	read = () => {
@@ -29,26 +26,25 @@ export function useMigrationEpochFile(dataDir: string): void {
 			const epoch = Number.parseInt(fs.readFileSync(file, "utf8").trim(), 10);
 			return Number.isFinite(epoch) ? epoch : null;
 		} catch {
-			// Absent is the normal case and means the fence is down. An unreadable file is not: it
-			// cannot be told from a present one, so it fences rather than opening the gate on an error.
+			// Unreadable epoch files fence like present ones.
 			return fs.existsSync(file) ? 0 : null;
 		}
 	};
 	invalidate();
 }
 
-/** Sets the fence directly, for tests and for a gateway told to fence over the wire. */
+/** Set the fence directly. */
 export function setMigrationEpoch(epoch: number | null): void {
 	read = () => epoch;
 	invalidate();
 }
 
-/** Drops the cached answer, so the next read hits the source. */
+/** Drop the cached answer. */
 export function invalidate(): void {
 	cachedAt = -Infinity;
 }
 
-/** Test seam for the poll window. */
+/** Set the clock seam. */
 export function useMigrationClock(next: () => number): void {
 	clock = next;
 	invalidate();
@@ -63,7 +59,7 @@ export function migrationEpoch(): number | null {
 	return cachedEpoch;
 }
 
-/** True while migrated state must not be written. */
+/** Whether migrated state is fenced. */
 export function fenced(): boolean {
 	return migrationEpoch() !== null;
 }

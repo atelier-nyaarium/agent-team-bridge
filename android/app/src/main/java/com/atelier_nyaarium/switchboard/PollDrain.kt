@@ -26,127 +26,84 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * The poll loop and mailbox drain (`repo.drain`): owns the loop lifecycle, the four plane version
- * cursors this device presents back to the Gateway, and both drain-gate subscriber lists.
- *
- * The load-bearing invariant lives HERE by construction: inbound subscribers fire inside the drain,
- * before mailboxSync.commit, so they inherit the mailbox cursor's exactly-once and crash-safety.
- * Plane appliers, notification fan-out targets and every other effect stay on the repository; this
- * delegate reaches back into it the way the federation Ops delegates do.
- */
+/** Four plane cursors and drain-gate subscribers. */
 internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision {
 	private var pollFails = 0
 	private var pollJob: Job? = null
-	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
-	// notification (so the audio is cached before the user is pinged).
+	// Scope for loop-bound work.
 	private var pollScope: CoroutineScope? = null
 
-	/** Best-effort launch surface for work that may ride the loop's scope (attachment cleanup). */
+	/** Loop-bound work scope. */
 	val scope: CoroutineScope? get() = pollScope
 
-	// Set alongside `visible = true`: onForeground front-runs the resume-kicked drain, so every
-	// message still sitting in the mailbox at resume would otherwise tag arrivedVisible=true (the
-	// user never actually saw it). Cleared once the first poll pass since the transition commits,
-	// so only the genuinely-backgrounded backlog is tagged not-visible; a live message the NEXT
-	// pass drains while still foregrounded tags normally.
+	// Tags backlog drained after resume.
 	@Volatile private var resumeBacklogPending = false
 
 	private val kick = Channel<Unit>(Channel.CONFLATED)
 
-	// Non-null only while a poll is actually held open; completing it interrupts that SPECIFIC held
-	// poll so a focus transition (declareFocus) or a manual refresh (refreshTeams) reaches the
-	// Gateway within about one RTT instead of waiting out the remainder of the current hold (see
-	// pollRacingFocusChange). Never touched by anything other than the poll loop's own iteration
-	// and those two callers.
+	// Interrupts the currently held poll.
 	@Volatile private var pollInterrupt: CompletableDeferred<Unit>? = null
 
-	// The presence-plane version(s) this device last applied, presented back as knownPresenceVersions
-	// on the NEXT poll so the Gateway ships the snapshot again only once it actually changed. Never
-	// persisted (see lastRawTeams) - a fresh process presents an empty list, which the Gateway treats
-	// as a cold boot and ships everything once.
+	// Last applied presence versions.
 	@Volatile private var knownPresenceVersions: List<PresenceVersion> = emptyList()
 
-	// The linked-peers plane version this device last applied, presented back on the NEXT poll -
-	// same role as knownPresenceVersions, a single scalar since this Gateway's own roster has no
-	// multi-source concept. Null (never persisted) means this session has not applied one yet, which
-	// the Gateway treats the same as a legacy client - ship the current roster unconditionally.
+	// Last applied linked-peers version.
 	@Volatile private var knownLinkedPeersVersion: LinkedPeersVersion? = null
 
-	// This owner's read-anchors plane version last applied - same role/shape as
-	// knownLinkedPeersVersion, for the cross-device read-position sync plane (see applyReadAnchors).
+	// Last applied read-anchor version.
 	@Volatile private var knownReadAnchorsVersion: ReadAnchorsVersion? = null
 
-	// Every linked Domain's cross-Domain-presence plane version this device last applied - same
-	// ARRAY shape as knownPresenceVersions (genuinely N independently-versioned planes), not a
-	// single scalar like knownLinkedPeersVersion/knownReadAnchorsVersion. Updated by a per-domainId
-	// UPSERT (see applyCrossDomainPresence), never a wholesale replace, since the wire only ships the
-	// changed subset each poll - replacing this list outright would forget every OTHER already-known
-	// Domain's version and cause the Gateway to needlessly re-ship them as "unknown" next poll.
+	// Per-domain versions. Upsert, never replace.
 	@Volatile private var knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion> = emptyList()
 
-	/** Serializes every read-modify-write of knownCrossDomainPresenceVersions: applyLinkedPeers and
-	 * applyCrossDomainPresence both merge against its OWN prior value (a filter/upsert, not a plain
-	 * replace like the sibling knownPresenceVersions/knownLinkedPeersVersion fields), and refreshTeams()
-	 * resets it from a DIFFERENT coroutine (a manual pull-to-refresh, not the poll loop) - both run on
-	 * Dispatchers.IO's multi-threaded pool, so an unguarded compound operation could lose the reset
-	 * underneath a poll response still applying stale pre-reset data. */
+	/** Serialize per-domain version updates. */
 	private val crossDomainVersionsMutex = Mutex()
 	private val drainMutex = Mutex()
 
 	/** One drain at a time, whichever transport carried the payload. */
 	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T = drainMutex.withLock { block() }
 
-	/** Data-plane subscribers, invoked once per genuinely-new inbound message at the drain gate.
-	 * Delivery is synchronous and pre-commit, so a subscriber inherits the mailbox cursor's
-	 * exactly-once + crash-safety; it must be fast, non-blocking, and idempotent. */
+	/** Synchronous, pre-commit delivery. */
 	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
 
-	/** Register a data-plane subscriber. Add-once per process (the caller is a singleton); a
-	 * duplicate add would double-deliver. */
+	/** Register once per process. */
 	fun addInboundSubscriber(subscriber: InboundSubscriber) {
 		inboundSubscribers.addIfAbsent(subscriber)
 	}
 
-	/** Plugin-action subscribers, invoked once per `plugin_action` mailbox entry at the drain gate.
-	 * Delivery is at-least-once (this entry never renders a chat message, so it has no persisted
-	 * fold to dedupe a redraw against); a subscriber must be fast, non-blocking, and idempotent. */
+	/** Plugin actions are at-least-once. */
 	private val pluginActionSubscribers = java.util.concurrent.CopyOnWriteArrayList<PluginActionSubscriber>()
 
-	/** Register a plugin-action subscriber. Add-once per process, same as [addInboundSubscriber]. */
+	/** Register once per process. */
 	fun addPluginActionSubscriber(subscriber: PluginActionSubscriber) {
 		pluginActionSubscribers.addIfAbsent(subscriber)
 	}
 
-	/** Wakes the poll loop immediately, whatever wait tier it is parked in. */
+	/** Wake the poll loop. */
 	fun kickPoll() {
 		kick.trySend(Unit)
 	}
 
-	/** Interrupt the currently-held poll (if any) so the next one fires with fresh focus/versions. */
+	/** Interrupt the held poll. */
 	fun interrupt() {
 		pollInterrupt?.complete(Unit)
 	}
 
-	/** Cancel the loop and WAIT for its current pass's non-suspend tail to finish (see clearAll's
-	 * own doc for why the join, not a bare cancel, is load-bearing there). */
+	/** Cancel and join the loop. */
 	suspend fun stopAndJoin() {
 		pollJob?.cancelAndJoin()
 	}
 
-	/** The Activity came on screen: the first pass since this transition tags its backlog as
-	 * arrived-unseen, and the failure streak restarts clean (see onForeground). */
+	/** Mark the resume backlog. */
 	fun onForegroundResume() {
 		resumeBacklogPending = true
 		pollFails = 0
 	}
 
-	/** A cursor claims what this device already holds, so one carried across a re-provision makes
-	 * the new Gateway ship nothing for that plane. */
+	/** Clear in-memory cursors. */
 	override suspend fun clearInMemory() = resetPlaneCursors()
 
-	/** Forget every presented plane version so the NEXT poll looks like a cold boot and the
-	 * Gateway ships current truth for every plane (see refreshTeams). */
+	/** Reset cursors for cold boot. */
 	suspend fun resetPlaneCursors() {
 		knownPresenceVersions = emptyList()
 		knownLinkedPeersVersion = null
@@ -154,32 +111,21 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		crossDomainVersionsMutex.withLock { knownCrossDomainPresenceVersions = emptyList() }
 	}
 
-	/** Drop cursors for Domains no longer in the linked roster (applyLinkedPeers' prune half). */
+	/** Prune removed Domain cursors. */
 	suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>) {
 		crossDomainVersionsMutex.withLock {
 			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions.filter { it.domainId in ownedDomainIds }
 		}
 	}
 
-	/** Fold a poll response's changed-subset versions in per domainId (applyCrossDomainPresence). */
+	/** Upsert changed Domain cursors. */
 	suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>) {
 		crossDomainVersionsMutex.withLock {
 			knownCrossDomainPresenceVersions = upsertKnownCrossDomainPresenceVersions(knownCrossDomainPresenceVersions, entries)
 		}
 	}
 
-	/** Runs [block] (the poll call), but abandons it early - returning null - if a focus transition
-	 * (declareFocus) or a manual refresh (refreshTeams) interrupts it mid-hold. The caller simply
-	 * loops again immediately with the fresh focus/knownPresenceVersions: an ordinary
-	 * abandoned-request disconnect from the Gateway's own side (nothing to reconcile - the
-	 * interrupted call never reached mailboxSync.advance at all). `select` races the poll against
-	 * the interrupt signal so the LOSER is cancelled by construction rather than hand-rolled
-	 * exception matching: coroutineScope waits for both children (the poll and the interrupt
-	 * watcher) to fully settle before this function returns, so a cancelled poll's underlying
-	 * OkHttp call is guaranteed torn down, never orphaned, before the loop re-issues a fresh one -
-	 * and since the CancellationException this produces never escapes past the `select` itself,
-	 * the outer poll loop's own teardown-detection (e.rethrowIfCancellation) never mistakes this
-	 * intentional, self-contained interrupt for the whole pollJob being torn down. */
+	/** Race the held poll against interruption. */
 	private suspend fun pollRacingFocusChange(block: suspend () -> ConsolePollResult): ConsolePollResult? =
 		coroutineScope {
 			val signal = CompletableDeferred<Unit>()
@@ -202,8 +148,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		if (pollJob?.isActive == true) return
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
-			// Render the roster the Router last sent before anything is asked for, so a cold start shows
-			// what it had rather than an empty list until the first answer lands.
+				// Restore cached roster first.
 			runCatching { repo.presence.restoreLastProjection() }
 			var lastDiscoveryAt = 0L
 			pollLoop@ while (isActive) {
@@ -211,10 +156,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					// Backgrounded only: the Router pushes the owner projection over the console socket,
-					// which is foreground-only, so the pull remains the sole source while the socket is
-					// down. Which gateways the Router can reach rides the same interval, being perishable
-					// for the same reason.
+					// Pull discovery while backgrounded.
 					val now = System.currentTimeMillis()
 					if (!repo.isVisible && now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
 						lastDiscoveryAt = now
@@ -222,9 +164,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						repo.presence.refreshConnectedGateways()
 					}
 					if (repo.pluginReportPending) repo.reportEnabledPlugins()
-					// Visible: long-poll (the hold IS the wait; re-poll immediately).
-					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
-					// ladder's decision, not a flat interval - the mailbox batches either way.
+					// Visible long-poll; backgrounded plain poll.
 					hold = if (repo.isVisible) ChatRepository.LONG_POLL_HOLD_MS else 0L
 					val started = System.currentTimeMillis()
 					val params = repo.mailboxSync.pollParams()
@@ -254,13 +194,9 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
 						continue@pollLoop
 					}
-					// Keyring sync: the route Gateway returns the snapshot only when it changed.
-					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
+					// Apply changed keyring snapshot.
 					mb.domain?.let { repo.applyDomainSync(it, mb.domainVersion ?: "") }
-					// Presence plane: the same piggyback shape as domainVersion above, generalized.
-					// Present only when at least one source's version differs from what this device
-					// presented - an empty presented list (this session's first poll) always ships
-					// everything (cold boot).
+					// Apply changed presence snapshot.
 					if (mb.presence != null || mb.presenceVersions != null) {
 						if (mb.presenceVersions != null) knownPresenceVersions = mb.presenceVersions
 						mb.presence?.let { rows ->
@@ -269,10 +205,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) })
 						}
 					}
-					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
-					// vs cold-boot distinction - see knownLinkedPeersVersion's own doc). A link/unlink/
-					// untrust bumps the Gateway's own plane synchronously, so this device's next poll
-					// reflects it.
+					// Apply changed linked peers.
 					if (mb.linkedPeers != null || mb.linkedPeersVersion != null) {
 						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
 						mb.linkedPeers?.let { peers ->
@@ -280,53 +213,25 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 							repo.presence.applyLinkedPeers(peers)
 						}
 					}
-					// Cross-Domain-presence plane: unlike every plane above, genuinely N independently-
-					// versioned planes (one per linked Domain, see knownCrossDomainPresenceVersions' own
-					// doc) - the response carries only the SUBSET of linked Domains whose plane actually
-					// changed, applied as a per-domainId upsert (applyCrossDomainPresence), never a
-					// wholesale replace.
+					// Apply changed Domains by upsert.
 					mb.crossDomainPresence?.let { entries ->
 						DebugLog.log("Plane", "crossDomainPresence settled=${mb.settled} rows=${entries.size}")
 						repo.presence.applyCrossDomainPresence(entries)
 					}
-					// Read-anchors plane: same generalized shape again, one plane per owner. The version
-					// bumps now, but applying the entries themselves waits until AFTER this poll's own
-					// fresh mailbox entries are folded into `_state.threads` below (applyReadAnchors
-					// resolves each synced position by ROW in that thread, so a message that arrived in
-					// this SAME response must already be appended before its own read-anchor bump can
-					// resolve).
+					// Apply read anchors after mailbox entries.
 					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
 					val pendingReadAnchors = mb.readAnchors
-					// The board comes from the Router now, so the poll only decides WHEN to look. A
-					// foregrounded app is poked instead; this is what covers the backgrounded one.
 					launch { runCatching { repo.boardOps.refreshBoard() } }
-					// The gateway-side queue still carries board attachments, which the Router does not
-					// take yet. Drained here rather than only from a chat send, or a queued attachment
-					// waits on unrelated traffic.
 					launch { runCatching { repo.boardOps.drainBoard() } }
-					// On the drain's own cadence, because that is the loop waiting on these bytes. Guarded
-					// against a second transfer of the same file, and a no-op when nothing is queued.
 					repo.boardOps.resumeBoardUploads()
-					// A send stranded by an outage that outlived its one-shot retry. Claimed once per
-					// process, so this is a no-op after the first connected pass.
 					launch { runCatching { repo.scheduled.replayJournaledSends() } }
-					// Restarts the wait for a goal armed before this process started, and retires an
-					// expired one. A no-op when none is armed.
 					repo.goals.tick()
-					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
-					// against the CURRENT tombstone set on every tick, fresh presence or not - see
-					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
-					// team locally on its own schedule rather than waiting for the next unrelated bump.
+					// Reapply cached teams for tombstone expiry.
 					repo.presence.reapplyCachedTeams()
-					// An old gateway ignores holdMs and returns empty instantly; floor
-					// the cadence so that degradation never becomes a tight spin.
+					// Floor legacy empty-poll cadence.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
 						System.currentTimeMillis() - started < ChatRepository.INSTANT_EMPTY_THRESHOLD_MS
-					// Fold the result through the durable cursor: epoch flip, seq dedupe (a
-					// lost-ack re-drain), and the dropped-gap DELTA all live in advance(), which
-					// returns only genuinely-fresh entries. commit() advances the cursor LAST,
-					// after the fresh entries are rendered + persisted (two-phase: a crash
-					// re-delivers rather than skips).
+					// Commit cursor after rendering and persistence.
 					val adv = repo.mailboxSync.advance(
 						SyncPollResult(mb.entries.map { Drained(it) }, mb.cursor, mb.epoch, mb.dropped),
 					)
@@ -335,37 +240,27 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					} else {
 						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
 					}
-					// A gap is a recovery event, not a process-lifetime health state.
 					repo._state.update { it.copy(gap = adv.gap) }
-					// Idle pushback: any genuinely-fresh entry is comms activity, resetting the silence
-					// clock back to the fast cadence.
+					// Fresh entries reset idle pushback.
 					if (adv.fresh.isNotEmpty()) repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
 					val burst = mutableMapOf<String, MutableList<Message>>()
 					val deviceAddr = repo.thisDeviceAddress()
 					for (d in adv.fresh) {
 						val e = d.entry
-						// Resolve the thread key for this entry; null means drop it. Notices thread under
-						// the sender's canonical address; conv sessions use the session address, except
-						// when that address is THIS device (an agent-initiated push to our own session
-						// threads under `from`, the sender, not under ourselves).
+						// Resolve the canonical thread key.
 						val team: String? = if (e.kind == "notice") {
-							// The store key's sender FIRST: it is qualified at the origin, while `from` may be
-							// bare (an older gateway), and qualifying a bare name here stamps THIS device's
-							// route Gateway onto a notice from another machine.
+							// Prefer the origin-qualified sender.
 							(parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
 								?: e.from?.let { repo.fromCanonical(it) }
 						} else {
 							when (val sk = parseStoreKey(e.session_id)) {
 								is SessionKey.Conv ->
 									if (deviceAddr != null && sk.address == deviceAddr) {
-										// Push to our own session: thread under the sender, falling back to our own
-										// self-address - a non-address `from` (a raw Device Name) would otherwise become
-										// an unsendable ghost-chat key.
+										// Own-session pushes use the sender thread.
 										e.from?.let { repo.fromCanonical(it) } ?: sk.address.canonical
 									} else {
 										sk.address.canonical
 									}
-								// Not a conv store key; fall back to `from` if present.
 								else -> e.from?.let { repo.fromCanonical(it) }
 							}
 						}
@@ -374,19 +269,17 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 							continue
 						}
 						val files = Attachments.decode(e.files)
-						// status-only entries still land (e.g. a wake-failure error
-						// with no body would otherwise vanish).
+						// Keep status-only entries.
 						val bodyText = e.body.orEmpty()
 						val snippet = bodyText.replace(Regex("\\s+"), " ").trim().take(80)
 						if (e.kind == "sent") {
-							// The owner's own outgoing message, mirrored to all their devices.
 							DebugLog.log("Drain", "seq=${e.seq} kind=sent session=${e.session_id} -> thread=$team (own mirror) opId=${e.opId} \"$snippet\"")
 							val echo = Message(true, bodyText, e.at, files = files, status = null, opId = e.opId, epoch = mb.epoch, seq = e.seq)
 							repo.reconcileSent(team, echo)
 							continue
 						}
 						if (e.kind == "plugin_action") {
-							// Never rendered as a chat message, so it never depends on a nonempty body.
+							// Plugin actions are not chat messages.
 							val pluginId = e.pluginId
 							val actionType = e.actionType
 							if (pluginId != null && actionType != null) {
@@ -409,17 +302,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
 								arrivedVisible = repo.isVisible && !resumeBacklogPending,
 							)
-							// appendInbound folds an at-least-once re-drain in place and returns
-							// false, so a redelivered entry never re-bumps unread or re-notifies. unread
-							// itself is recomputed from the anchor inside appendInbound's own state update
-							// (the single-writer derivation), not bumped here.
-							//
-							// Data-plane fan-out rides appendInbound's beforeCommit hook: synchronous, still
-							// inside the mailbox cursor's exactly-once, and ordered BEFORE the row reaches
-							// `_state` so a subscriber that feeds a render-time lookup (the references chip
-							// index) is always seeded before the main thread can serialize the row. A
-							// subscriber must never throw upward (a throw here would break the drain for
-							// every team), so a throw is caught and logged rather than escaping.
+							// Subscribers run synchronously before commit.
 							if (
 								repo.appendInbound(team, msg) {
 									inboundSubscribers.forEach { sub ->
@@ -434,38 +317,25 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
 					}
-					// Apply the read-anchors piggyback now that this poll's own fresh entries (if any)
-					// are already folded into `_state.threads` above - see pendingReadAnchors' own doc.
+					// Apply anchors after mailbox entries.
 					pendingReadAnchors?.let { entries ->
 						DebugLog.log("Plane", "readAnchors settled=${mb.settled} rows=${entries.size}")
 						repo.presence.applyReadAnchors(entries)
 					}
-					// Report this device's own local read advances (scroll-driven reads since the last
-					// cycle) back to the Gateway - the write half of the same plane. Never allowed to
-					// fail the poll itself (see reportLocalReadAdvances' own doc).
+					// Report local read advances.
 					repo.presence.reportLocalReadAdvances()
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
-						// Only spend synthesis on followed threads (open tabs); a
-						// never-opened or forgotten session is not in openTabs, so it
-						// notifies without preloading.
+						// Preload followed threads only.
 						val followed = team in repo._state.value.openTabs
 						val scope = pollScope
-						// Pre-generate and auto-play are independent: enter the launch
-						// path when either is active for this followed thread.
+						// Pre-generation and auto-play are independent.
 						val autoTier = repo.playback.autoPlayTier(repo.sttsAutoPlay)
 						val eligible =
 							scope != null && lastAgent != null && repo.sttsReady() && followed && (repo.sttsAutoGen || autoTier != null)
-						// EVERY agent message, in arrival order, addressed by the thread it actually
-						// lives in. A peer copy is NOT re-attributed to its `to`: the two mirror copies
-						// carry different timestamps, so (to, at) names a row that thread does not hold,
-						// and the engine would decline an entry the queue is waiting on.
-						//
-						// Claimed only by a thread that can actually speak. The peer dedupe hands the
-						// slot to the first claimant, so letting an ineligible thread run it would let a
-						// muted session silently suppress the followed one showing the same exchange.
+						// Queue messages by their owning thread.
 						val agentMsgs = if (!eligible) {
 							emptyList()
 						} else {
@@ -478,22 +348,12 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 							val ms = msgs
 							val at = lastAgent.at
 							val queueable = agentMsgs
-							// The message that will speak FIRST, which is the one worth waiting on.
-							// Warming the burst's last message instead would leave the one actually
-							// about to play as a live cache miss.
+							// Warm the first message.
 							val warm = agentMsgs.firstOrNull()?.let { (m, owner) -> owner to m.at } ?: (t to at)
 							burstJobs += scope.launch(Dispatchers.IO) {
-								// When pre-generate is on, wait fully for synthesis so the
-								// cache is warm when the notification lands. preloadMessage
-								// never throws and is bounded by the STTS client's own
-								// timeouts, so a failed or slow synth still falls through and
-								// the notification fires. The rest of the burst warms as the
-								// queue reaches it.
 								if (repo.sttsAutoGen) repo.playback.preloadMessage(warm.first, warm.second)
 								repo.onInbound?.invoke(t, ms)
-								// Hands-free: queue every arriving message in order. The queue
-								// speaks the first immediately and the rest as each terminal
-								// lands, so a burst is heard whole instead of only its last.
+								// Queue the full burst for hands-free playback.
 								if (autoTier != null) {
 									for ((msg, owner) in queueable) {
 										repo.playback.enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
@@ -505,46 +365,25 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						}
 					}
 					repo.mailboxSync.commit(adv.next)
-					// Idle pushback: decide() (the loop tail, below) can release the wakelock right after
-					// this pass in a deep tier. Join the launched notification/STTS work first so it can
-					// never get cut off mid-flight - most passes have an empty burst and skip this
-					// entirely; the rare pass with real content is the one worth joining on. Bounded: a
-					// stalled synth leaks that one coroutine rather than wedging every future pass - see
-					// BURST_JOIN_TIMEOUT_MS.
+					// Join burst work before idle pushback.
 					withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
-					// This pass's own drain (just committed) is the "first completed pass" the resume
-					// flag exists to cover; the NEXT pass's rows tag by live visibility again.
+					// Clear the resume backlog after this pass.
 					resumeBacklogPending = false
-					// Off the drain, never inside it: the rows are durable and on screen at this point,
-					// so their bytes can take as long as they take. Also the heal for a fetch that a
-					// process death cut short, since it re-derives what is outstanding every pass.
 					repo.attachments.fetchPendingAttachments()
 					pollFails = 0
 					if (repo._state.value.error != null || repo._state.value.pollFailStreak != 0) {
 						repo._state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
 					}
-					// Flush buffered debug lines to the ingest endpoint once per cycle.
 					DebugLog.flushToIngest()
 				} catch (e: Exception) {
-					// MUST be the first statement: cancellable transport (executeCancellable) throws
-					// CancellationException on teardown, and JVM CancellationException extends
-					// Exception - classifyConnError must never see one, and a swallowed cancel here
-					// would fall through to pushback.decide(..., lastPassFailed = true) and can
-					// re-acquire an already-released wakelock.
+					// Rethrow cancellation before classification.
 					e.rethrowIfCancellation()
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
-						// A relay-timeout during a hold is an empty long-poll, not an
-						// outage: the Router still on the shorter hold (upgrade window) or
-						// a transient gateway drop mid-hold. Back off, do not alarm.
+						// Treat held 504 as empty.
 						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
 						heldEmpty = true
 					} else {
-						// Name the SPECIFIC cause instead of a blanket "Connection issue". A
-						// TERMINAL cause (not enrolled, bridge not deployed, bad creds) cannot
-						// clear by retrying, so surface it on the first failure; a TRANSIENT blip
-						// waits for a second failure so one hiccup never alarms; an ENROLLING
-						// sync-lag shows the calm "Finishing up enrollment..." at once and the
-						// poll loop's own retry clears it the moment an op succeeds.
+						// Classify connection failures.
 						val (cause, kind) = classifyConnError(e)
 						DebugLog.log("Poll", "error streak=${pollFails + 1} [$kind]: ${e.message?.take(120)}")
 						failed = true
@@ -563,22 +402,11 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					}
 					DebugLog.flushToIngest()
 				}
-				// The wait tier (and its alarm/wakelock side effects) comes from the silence ladder.
-				// A foreground kick interrupts any wait so the user never stares at stale state;
-				// visible long-polls chain back-to-back, failures and ignored holds back off to 5s.
-				//
-				// An open tab is a declaration of interest, and the ladder is otherwise blind to a
-				// session working under one: it measures MAIL, and a working session sends none until
-				// it finishes. Read through `working`, which is the same presence-first answer the
-				// session tiles and the thread chip use, so the cadence cannot disagree with what the
-				// owner is being shown.
 				val watchedWorking = repo._state.value.let { s -> s.openTabs.any { tab -> s.working(tab) } }
 				when (val wait = repo.transportCoordinator.nextWait(repo.isVisible, failed, watchedWorking)) {
 					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
-					// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below
-					// is only a backstop against a lost alarm. Floored at 0 so a pass finishing near
-					// the mark never hands withTimeoutOrNull a negative duration.
+					// Alarm timeout is a backstop.
 					is PollWait.Alarm ->
 						withTimeoutOrNull((wait.atMillis - System.currentTimeMillis() + ChatRepository.PARK_SLACK_MS).coerceAtLeast(0)) { kick.receive() }
 				}

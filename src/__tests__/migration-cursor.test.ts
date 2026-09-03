@@ -18,14 +18,10 @@ describe("migration cursor translation", () => {
 		expect(translateCursor(at(4, 9), 7, map)).toEqual({ kind: "translated", cursor: { epoch: 7, seq: 2 } });
 	});
 
-	// Reading on would skip whatever sat between; starting over would re-deliver everything already
-	// read. Neither is safe, so it refuses and the phone asks again.
 	it("refuses a coordinate the map does not cover", () => {
 		expect(translateCursor(at(4, 5), 7, map)).toEqual({ kind: "unmapped" });
 	});
 
-	// Repeatable: the phone may die between hearing the answer and committing it, and must be able
-	// to ask again and get the same answer.
 	it("answers the same old cursor identically however often it is asked", () => {
 		const first = translateCursor(at(4, 3), 7, map);
 
@@ -33,8 +29,6 @@ describe("migration cursor translation", () => {
 		expect(translateCursor(at(4, 3), 7, map)).toEqual(first);
 	});
 
-	// The ordering is the load-bearing part: a kill between the welcome and the commit must replay
-	// to the same cursor rather than ack rows nobody was handed.
 	it("takes no rows on an old cursor until the translation is committed", () => {
 		const base = { welcomed: true, cursorEpoch: 4, migrationEpoch: 7 };
 

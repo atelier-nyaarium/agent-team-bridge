@@ -14,29 +14,15 @@ import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { WakeResult } from "../wake.js";
 import type { Sealer } from "./sealer.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** The subset of gateway HTTP routes the gateway-relay handler reuses. A federated op
- * runs against the same local routes a local sender would hit. */
 export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Response;
 	teams: () => Response;
-	/** What THIS machine offers beyond `host`. Answered only to a same-Domain caller. */
 	localSpawnPoints: () => GatewaySpawnPoints[];
-	/** Land a fully-composed mailbox entry on THIS Gateway's own owner mailbox - the console_push
-	 * landing side. Local-append only; never fans out further (see the FederatedOp doc comment). */
 	consolePush: (entry: ConsolePushEntry, dedupeKey: string) => { delivered: boolean };
-	/** Land a linked friend's presence_push - the cross-Domain-presence landing side. Local-append
-	 * only; never fans out further. `srcDomainId` is the sealer-VERIFIED sender, never a
-	 * payload-supplied value. */
 	landCrossDomainPresence: (srcDomainId: string, sessions: CrossDomainPresenceSession[]) => void;
 }
 
-/** The per-session share state the relay handler reads to enforce destination-side
- * scoping. `sessionTarget` is the canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId`
- * is the calling friend Domain. `touch` keeps a live cross-Domain share from auto-forgetting. */
 export interface RelayShareState {
 	isSharedTo(sessionTarget: string, domainId: string): boolean;
 	sharesFor(domainId: string): string[];
@@ -46,47 +32,23 @@ export interface RelayShareState {
 export interface GatewayRelayHandlerDeps {
 	routes: FederationRoutes;
 	tryWakeTeam: (team: string) => Promise<WakeResult>;
-	/** This Gateway's id and Domain id, used to compose a local `op.to` team field into the
-	 * canonical `domain.gateway.spawn.session` share key. Must match the canonical the share state
-	 * and the pending-job store produce, or shares silently stop matching. */
 	localGatewayId: string;
 	localDomainId: string;
-	/** The per-session share set, read to gate cross-Domain ops to shared sessions and to
-	 * filter a cross-Domain caller's list_teams. Absent when federation sharing is not wired. */
 	shareState?: RelayShareState;
-	/** The cross-Domain binding of a pending job by id. The cross-Domain reply and collision
-	 * gates compare the VERIFIED sender against the binding the local Gateway recorded when IT
-	 * created the job, never against the bare gateway id on the friend-controlled wire (it is
-	 * not unique across Domains). Absent when federation is not wired. */
 	crossDomainBinding?: (sessionId: string) => CrossDomainBinding | undefined;
-	/** Reads a bounded range out of this Gateway's byte store, for a peer fetching a blob this
-	 * Gateway holds. Absent when the byte store is not wired, which refuses the op rather than
-	 * answering an empty range. */
 	serveBlobRange?: (blobId: string, offset: number, length: number) => { chunk?: string; eof: boolean };
 }
 
 export interface GatewayRelayPumpDeps {
-	/** Runs a peer's op against the local routes. `srcDomainId` is non-null ONLY for a
-	 * verified cross-Domain peer, which the destination gate keys on. */
 	handleOp: (op: FederatedOp, srcGateway: string, srcDomainId: string | null) => Promise<unknown>;
-	/** Opens the inbound sealed op and seals the result back to the origin Gateway. */
 	sealer: Sealer;
-	/** Sends a gateway_relay_reply tool call back to the Router (correlated by relayId). */
 	sendReply: (reply: GatewayRelayReplyParams) => Promise<{ error?: string }>;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 const FAKE_REQ = new Request("http://gateway/federation");
 
-/** The single denial for any cross-Domain op that is not permitted (unknown session,
- * non-shareable kind, or not shared to the caller's Domain). One constant, so the two
- * cases are byte-identical and a friend cannot probe session existence / kind. */
 const XDOMAIN_TARGET_DENIED = "cross-Domain op denied";
 
-/** Runs a federated op a peer Gateway asked this Gateway to perform, against the local
- * routes. The reply value becomes the gateway_relay_reply `result`. */
 export function createGatewayRelayHandler({
 	routes,
 	tryWakeTeam,
@@ -96,14 +58,10 @@ export function createGatewayRelayHandler({
 	crossDomainBinding,
 	serveBlobRange,
 }: GatewayRelayHandlerDeps) {
-	/** The canonical Address of a LOCAL session by its team field, the form the share state is
-	 * keyed by (identical to routes' localAddress and the pending-job store's jobAddress). */
 	function localShareTarget(name: string): string {
 		const { project, session } = parseSessionName(name);
 		return Address.local(localDomainId, localGatewayId, project, session).canonical;
 	}
-	/** The kind of a LOCAL session by its bare name, from the same classification teams()
-	 * applies. Undefined for an unknown name. */
 	async function localKind(bareName: string): Promise<TeamInfo["kind"] | undefined> {
 		const teams = (await routes.teams().json()) as TeamInfo[];
 		return teams.find((t) => t.team === bareName)?.kind;
@@ -121,13 +79,7 @@ export function createGatewayRelayHandler({
 		return `${srcDomainId}.${srcGateway}`;
 	}
 
-	/** The destination-side scope gate, enforced INSIDE the relay handler (never in
-	 * discovery, since a trusted friend can craft op.to). A cross-Domain op may only reach a
-	 * session that is of kind devcontainer or loose (gateway/host/console kinds are agents-only)
-	 * and shared to the calling friend Domain. On a permitted delivery the share is touched so a
-	 * live cross-Domain thread does not auto-forget. Every denial throws ONE byte-identical,
-	 * name-free / kind-free / Domain-free error: distinct messages would be an existence oracle
-	 * letting a friend probe which session names exist or what kind they are. */
+	/** Cross-Domain scope gate. */
 	async function gateCrossDomainTarget(bareName: string, srcDomainId: string): Promise<void> {
 		const kind = await localKind(bareName);
 		const sessionTarget = localShareTarget(bareName);
@@ -138,15 +90,7 @@ export function createGatewayRelayHandler({
 		shareState.touch(sessionTarget);
 	}
 
-	/** Guard a cross-Domain inbound send's attacker-controlled return-route. The friend crafts
-	 * the whole FederatedOp, so without this it could (a) point srcGateway at a THIRD friend so
-	 * the shared agent's reply is sealed and relayed to that third friend (exfil), or (b) point
-	 * srcSession at an EXISTING job's key so create() overwrites that job's return-route,
-	 * hijacking an unrelated thread's reply. Both are bound to the CRYPTOGRAPHICALLY-VERIFIED
-	 * sender: the return-route's origin Gateway must BE the verified sender, and any pre-existing
-	 * job at that session key must belong to the SAME verified `(Domain, gateway)` origin. The
-	 * bare gateway id is compared only AFTER the Domain matches, since it is not unique across
-	 * Domains. */
+	/** Return routes match verified senders. */
 	function assertCrossDomainReturnRoute(
 		returnRoute: { srcGateway: string; srcSession: string },
 		srcGateway: string,
@@ -162,21 +106,14 @@ export function createGatewayRelayHandler({
 	}
 
 	async function handleOp(op: FederatedOp, srcGateway: string, srcDomainId: string | null): Promise<unknown> {
-		// Refused whole, before any branch lands anything. The sending gateway retries, and its own
-		// relay holds one opId across that sequence, so the retry stays one operation.
 		if (fenced()) return { ok: false, error: MIGRATING };
 		switch (op.kind) {
 			case "send": {
 				const sender = srcDomainId !== null ? verifiedSender(op.from, srcDomainId, srcGateway) : op.from;
-				// A cross-Domain send must pass the destination scope gate before it can land.
 				if (srcDomainId !== null) {
 					await gateCrossDomainTarget(op.to, srcDomainId);
 					assertCrossDomainReturnRoute(op.returnRoute, srcGateway, srcDomainId);
 				}
-				// Land the cross-Gateway send on the local team, keyed by the origin's session
-				// id, with the return-route pinned so respond forwards it back to the origin. For a
-				// cross-Domain send, stamp the VERIFIED origin Domain on the destination job so the
-				// reply and any colliding re-send are bound to the friend that originated it.
 				const res = await routes.send(
 					FAKE_REQ,
 					{
@@ -190,9 +127,6 @@ export function createGatewayRelayHandler({
 						...(srcDomainId !== null ? { dstDomainId: srcDomainId } : {}),
 						...(op.displayLabel ? { displayLabel: op.displayLabel } : {}),
 						...(op.disposition ? { disposition: op.disposition } : {}),
-						// Trusted internal path: this op was opened from a verified seal, so the
-						// inbound-only fields (sessionId/returnRoute/dstDomainId) above are honored. An
-						// external HTTP /send never sets this flag, so it can never forge them.
 					},
 					{ trustedInbound: true },
 				);
@@ -202,16 +136,8 @@ export function createGatewayRelayHandler({
 			}
 			case "list_teams": {
 				const teams = (await routes.teams().json()) as TeamInfo[];
-				// A cross-Domain caller sees ONLY the sessions shared to its Domain, never the
-				// full session list (that would leak every name). A same-Domain caller gets the
-				// full list. The share keys are canonical domain.gateway.spawn.session, so compare against each
-				// team's canonical target.
 				if (srcDomainId !== null) {
 					const shared = new Set(shareState?.sharesFor(srcDomainId) ?? []);
-					// No spawnPoints for a cross-Domain caller, deliberately. A host spawn point is a
-					// shell on this machine, not a session, so it is not shareable and naming it would
-					// tell a friend Domain what this machine runs. Same reason `host` has never had a
-					// presence row.
 					return {
 						teams: teams.filter((t) => shared.has(localShareTarget(t.team))),
 					};
@@ -219,34 +145,17 @@ export function createGatewayRelayHandler({
 				return { teams, spawnPoints: routes.localSpawnPoints() };
 			}
 			case "wake": {
-				// Waking is a side effect on a session, so a cross-Domain wake is gated the
-				// same as a send (only a shared devcontainer/loose session may be woken).
 				if (srcDomainId !== null) await gateCrossDomainTarget(op.team, srcDomainId);
 				const { ok } = await tryWakeTeam(op.team);
 				return { ok };
 			}
 			case "blob_fetch": {
-				// Serve a range of a blob this Gateway holds. Deliberately ungated beyond the relay's
-				// own admission check: a blobId is the digest of the content, so naming one is
-				// already proof of having the bytes it names. There is nothing to enumerate and no
-				// existence oracle worth having, since a caller who can name a blob can produce it.
-				// Reading a blob this Gateway does not hold throws, which the pump returns as an
-				// error rather than a silent empty range.
 				if (!serveBlobRange) throw new Error("blob transfer unavailable on this Gateway");
 				return serveBlobRange(op.blobId, op.offset, op.length);
 			}
 			case "response_push": {
-				// A reply pinned to the origin: deliver it to the local origin job, which pushes
-				// to the originating conversation (its returnRoute is null, so respond does not
-				// re-forward). A cross-Domain response_push arrives at the ORIGIN Gateway, so its
-				// session_id points at the REMOTE destination (`conv.<conv>.<friendDomain>.<friendGateway>.<spawn>.<session>`),
-				// which is NOT a local team, so the local-kind check does not apply. Gate instead on
-				// the origin anchor's recorded binding: the reply's VERIFIED Domain must equal the
-				// Domain the send was routed to, and the verified sender must equal the destination
-				// gateway in the job's own (origin-set, trusted) key. A friend who merely shares or
-				// matches a bare gateway id therefore cannot forge a reply into another friend's job;
-				// a local-origin job (binding null) hard-denies ANY cross-Domain reply.
 				if (srcDomainId !== null) {
+					// Cross-Domain replies require the recorded origin binding.
 					const binding = crossDomainBinding?.(op.session_id);
 					if (
 						!binding ||
@@ -269,8 +178,6 @@ export function createGatewayRelayHandler({
 						reason: op.reason,
 						files: op.files,
 					},
-					// Already authenticated: this arrived as a sealed, allowlist-verified relay frame,
-					// so the HTTP-side sender gates have nothing to add and no header to read.
 					{ trustedInbound: true },
 				);
 				const json = (await res.json()) as { error?: string };
@@ -278,24 +185,13 @@ export function createGatewayRelayHandler({
 				return { ok: true };
 			}
 			case "console_push": {
-				// Mandatory security gate: console_push writes directly into this Gateway's own
-				// owner mailbox with no session-sharing check of any kind - every other cross-Domain
-				// op at least requires a shared devcontainer/loose session (send/wake) or filters to
-				// shared sessions (list_teams), or binds to a recorded, verified job (response_push).
-				// Admitting a cross-Domain sender here would let a linked friend's Gateway inject
-				// attacker-chosen content straight onto this owner's phone - same-Domain only, no
-				// exceptions.
+				// Cross-Domain console pushes are always denied.
 				if (srcDomainId !== null) {
 					throw new Error("cross-Domain console_push denied");
 				}
 				return routes.consolePush(op.entry, op.dedupeKey);
 			}
 			case "presence_push": {
-				// The inverse gate from console_push above: presence_push is CROSS-DOMAIN ONLY (a
-				// same-Domain Gateway has no reason to push itself its own presence). Identity alone
-				// (already verified by the seal before handleOp ever runs) is the correct and
-				// sufficient gate here - see the FederatedOpSchema doc comment on this op for why its
-				// threat model differs from console_push's.
 				if (srcDomainId === null) {
 					throw new Error("presence_push requires a cross-Domain sender");
 				}
@@ -308,8 +204,6 @@ export function createGatewayRelayHandler({
 	return { handleOp };
 }
 
-/** Validates an inbound gateway_relay frame, runs its op, and ships the reply back
- * to the Router. Mirrors the console relay pump: one parse, one error surface. */
 export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayRelayPumpDeps) {
 	return function pump(raw: unknown): void {
 		void (async () => {
@@ -328,11 +222,6 @@ export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayR
 				return;
 			}
 			const frame = parsed.data;
-			// Open the E2E seal (verifies the origin Gateway's signature against the allowlist
-			// and decrypts) and parse the inner op. A non-admitted sender or a tampered seal is
-			// rejected without dispatching. openWithSource reports whether the verified sender was
-			// a cross-Domain peer (and which Domain), so the handler can scope a cross-Domain op
-			// without trusting the cleartext frame.
 			let op: FederatedOp;
 			let srcDomainId: string | null;
 			let body: unknown;
@@ -348,9 +237,6 @@ export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayR
 				});
 				return;
 			}
-			// Reported apart from the unseal above: a peer running an older wire shape verifies its
-			// seal perfectly and still lands here, and calling that "unseal failed" sends whoever
-			// debugs it after the crypto instead of the version skew.
 			try {
 				op = FederatedOpSchema.parse(body);
 			} catch (err) {
@@ -363,9 +249,6 @@ export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayR
 			}
 			try {
 				const result = await handleOp(op, frame.srcGateway, srcDomainId);
-				// Seal the result back to the origin Gateway (E2E both directions). A cross-Domain
-				// origin is sealed v2 by the full (domainId, gatewayId) pair (a bare string would
-				// only resolve a local peer); a same-Domain origin stays the bare-string v1 path.
 				const replyTarget =
 					srcDomainId !== null ? { domainId: srcDomainId, gatewayId: frame.srcGateway } : frame.srcGateway;
 				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(replyTarget, result) });

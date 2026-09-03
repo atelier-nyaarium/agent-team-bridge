@@ -35,6 +35,7 @@ export class ReferenceHeldStore {
 
 	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain?: number }) {}
 
+	// Idempotent by reference.
 	hold(domainId: string, blobId: string, ref: BlobReference): void {
 		const domain = this.domain(domainId);
 		let entry = domain.index.entries[blobId];
@@ -63,7 +64,7 @@ export class ReferenceHeldStore {
 		return [...(this.domain(domainId).index.entries[blobId]?.refs ?? [])];
 	}
 
-	/** References require complete blobs. */
+	/** Complete blobs only. */
 	has(domainId: string, blobId: string): boolean {
 		if (this.refs(domainId, blobId).length === 0) return false;
 		return this.domain(domainId).store.stat(blobId).complete;

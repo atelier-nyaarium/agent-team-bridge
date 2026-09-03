@@ -1,22 +1,20 @@
 package com.atelier_nyaarium.switchboard
 
-/** Routes socket frames by generation and acknowledges cursors after durable row handling. */
+/** Generation-routed frames and durable acknowledgements. */
 internal class ConsoleSocketDriver(
 	private val coordinator: ConsoleTransportCoordinator,
 	private val newClient: (ConsoleSocketListener) -> ConsoleSocketClient,
 	private val onRows: (List<com.atelier_nyaarium.switchboard.proto.InboxRow>, Long) -> Unit,
-	/** Payload is null for a plane that pokes rather than pushes; the reader re-reads on those. */
+	/** Null payload means re-read. */
 	private val onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 	private val onGap: (Long) -> Unit = {},
 	private val kick: () -> Unit = {},
-	/** Fires only for a socket that died before it was ever welcomed, the one signal meaning the
-	 * address is wrong rather than the connection unlucky. */
+	/** Fires for pre-welcome connection failure. */
 	private val onUnreachable: () -> Unit = {},
 ) {
 	private val lock = Any()
 
-	/** Held with the generation that opened it, so a superseded socket's close cannot clear the one
-	 * that replaced it. */
+	/** Generation fence prevents stale clears. */
 	private var client: Pair<Long, ConsoleSocketClient>? = null
 
 	fun connect() {
@@ -36,7 +34,7 @@ internal class ConsoleSocketDriver(
 		}
 	}
 
-	/** Closes the socket after handing the drain back to polling. */
+	/** Returns draining to polling. */
 	fun onBackground() {
 		coordinator.onVisibility(false)
 		disconnect()
@@ -58,6 +56,7 @@ internal class ConsoleSocketDriver(
 	private inner class Listener(private val gen: Long) : ConsoleSocketListener {
 		@Volatile private var welcomed = false
 
+		// Stale generations cannot consume, apply, or acknowledge.
 		override fun onFrame(frame: ConsoleSocketFrame) {
 			when (frame) {
 				is ConsoleSocketFrame.Welcome -> {

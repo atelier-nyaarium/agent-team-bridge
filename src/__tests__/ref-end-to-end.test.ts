@@ -8,10 +8,6 @@ import { appendRefArtifacts, setReferencesEnabled, setSessionFactory } from "../
 import { resetWorkspaceRoot } from "../mcp/references/refWorkspace.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
-// A snapshot's bytes travel the blob plane like any other file, so building one uploads.
 const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
@@ -36,7 +32,6 @@ const FILES = [
 	"src/cart.py",
 ];
 
-/** A marketplace clone leaves the submodule empty, and then there is no daemon to spawn. */
 const built = fs.existsSync(path.join(LEXICON, "dist", "daemon.js"));
 
 let root: string;
@@ -50,7 +45,6 @@ function git(args: string[]): void {
 	execFileSync("git", args, { cwd: root, stdio: "ignore" });
 }
 
-/** The snapshot key a reply carried for one ref, or the refusal it met. */
 async function attach(body: string) {
 	const result = await appendRefArtifacts(body, []);
 	if (!result.ok) return { refused: result.error, key: undefined, notices: [] as string[] };
@@ -70,9 +64,6 @@ async function refusalOf(uri: string): Promise<string> {
 	return refused;
 }
 
-////////////////////////////////
-//  Tests
-
 describe.skipIf(!built)("refs resolved on the index", () => {
 	beforeAll(async () => {
 		// os.tmpdir() reads TMPDIR, which mounting the wire repoints, so every root is taken first.
@@ -85,19 +76,16 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 		priorRoot = process.env.REFERENCE_ROOT;
 		priorState = process.env.XDG_STATE_HOME;
 		process.env.REFERENCE_ROOT = root;
-		// The spawned daemon records its install under the state home; a test's stays out of the machine's.
 		process.env.XDG_STATE_HOME = stateHome;
 		resetWorkspaceRoot();
 
 		session = await connect({ workspaceRoot: root, lexiconRoot: LEXICON, stateDir, patience: 120_000 });
-		// Warmed here, so no `it` pays the index.
 		for (const file of FILES) await session.awaitIndexed(file);
 		setSessionFactory(async () => session);
 	}, 180_000);
 
 	afterAll(async () => {
 		setSessionFactory(null);
-		// Undefined when setup failed, and then there is no daemon of ours to stop.
 		if (session !== undefined) await session.stopDaemon();
 		if (priorRoot === undefined) delete process.env.REFERENCE_ROOT;
 		else process.env.REFERENCE_ROOT = priorRoot;
@@ -137,7 +125,6 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 			expect(await keyOf(uri)).toMatchObject({ startLine, endLine, quality: "exact" });
 		});
 
-		// The four teaching texts are the contract with the agent; each fixture-backed example must hold.
 		it("resolves every fixture-backed example the teaching texts show", async () => {
 			const texts = [
 				path.join(REPO, "android", "app", "src", "main", "assets", "plugins", "references", "manifest.json"),
@@ -145,7 +132,7 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 				path.join(REPO, "AGENTS.md"),
 				path.join(REPO, "src", "mcp", "capabilities.ts"),
 			].map((file) => fs.readFileSync(file, "utf8"));
-			// Link destinations and backticked forms, so a `]` inside an ordinal stays part of the ref.
+			// Preserve punctuation-sensitive refs.
 			const examples = new Set(
 				texts.flatMap((text) => [
 					...[...text.matchAll(/\]\((ref:\/\/[^)\s]+)\)/g)].map((m) => m[1] as string),
@@ -246,7 +233,6 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 			expect(await keyOf("ref://src/cart.ts:Shop:Cart:clear")).toMatchObject({ quality: "exact", startLine: 11 });
 		});
 
-		// The file and the index both move between the read and the ask.
 		it("reads the file again when it moved under the reply", async () => {
 			let moved = false;
 			setSessionFactory(async () => ({
@@ -262,7 +248,6 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 			}));
 			try {
 				const key = await keyOf("ref://src/cart.ts:Shop:Cart:add");
-				// The lines describe the moved snapshot.
 				expect(key).toMatchObject({ startLine: 6, endLine: 11, quality: "exact" });
 			} finally {
 				setSessionFactory(async () => session);
@@ -276,7 +261,7 @@ describe.skipIf(!built)("refs resolved on the index", () => {
 				throw new Error("the daemon must not be asked for a ref with no chain");
 			});
 			try {
-				// Thirteen, since the trailing newline opens a last empty line, as the builder counts it.
+				// Trailing newline counts.
 				expect(await keyOf("ref://src/cart.ts")).toMatchObject({ startLine: 1, endLine: 13, quality: "exact" });
 				const matched = await keyOf("ref://src/cart.ts#reset()");
 				expect(matched.span).toMatchObject({ startLine: 8 });

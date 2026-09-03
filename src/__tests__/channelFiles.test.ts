@@ -12,11 +12,6 @@ import {
 import type { ChannelFile } from "../shared/types.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
-////////////////////////////////
-//  The blob plane under the subject
-//
-//  Landing a file means fetching its bytes, so the transfer routes have to be answered for real.
-
 const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
@@ -27,7 +22,6 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 	},
 }));
 
-/** Bytes a peer has already put on the plane, named the way a message would name them. */
 function staged(bytes: Buffer): string {
 	if (!h.wire) throw new Error("blob wire not mounted");
 	return h.wire.stage(bytes);
@@ -166,8 +160,6 @@ describe("renderFilesBlock", () => {
 	});
 
 	it("tells a failed fetch apart from a file that never carried bytes", () => {
-		// The agent's next move differs: one is worth asking to have re-sent, the other is gone. A
-		// single sentence for both had it give up on the recoverable case.
 		const block = renderFilesBlock({
 			files: [{ descriptiveKey: "staged.png", fetchFailed: true }, { descriptiveKey: "namedonly.pdf" }],
 		});
@@ -296,8 +288,6 @@ describe("emitChannelNotification", () => {
 	});
 
 	it("writes every attachment on a send, including one named like the old reserved manifest", async () => {
-		// Direction decides nothing and names decide nothing: only the declared role does, so a file
-		// the sender called switchboard-references.json is an ordinary attachment and lands.
 		const { emitChannelNotification } = await import("../mcp/channel/channelNotify.js");
 		const { server } = captureNotification();
 		const id = uniqueId();
@@ -443,8 +433,7 @@ describe("modifiedAt round trip", () => {
 				},
 			],
 		});
-		// Bounded on both sides: a one-sided floor would also pass for a file stamped centuries out,
-		// which is the failure this whole field is careful about.
+		// Bound mtime to now.
 		expect(statSync(meta.path!).mtime.getTime()).toBeGreaterThanOrEqual(before - 2000);
 		expect(statSync(meta.path!).mtime.getTime()).toBeLessThanOrEqual(Date.now() + 2000);
 	});

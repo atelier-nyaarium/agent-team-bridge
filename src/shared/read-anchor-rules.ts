@@ -1,7 +1,6 @@
 /** Bounds unauthenticated team keys accepted per owner. */
 export const MAX_TEAMS_PER_OWNER = 500;
 
-/** Per-owner plane prevents read positions crossing owner boundaries. */
 export function readAnchorsPlaneName(ownerId: string): string {
 	return `read-anchors:${ownerId}`;
 }
@@ -21,10 +20,10 @@ export function mergeReadAnchor(
 	const owner = state[ownerId] ?? {};
 	const cur = owner[team];
 	if (!cur && Object.keys(owner).length >= MAX_TEAMS_PER_OWNER) return { state, advanced: false };
-	// Mailbox epochs are random per instance and never ordered, so they compare for equality only.
-	// Same epoch, the seq decides. Across a re-mint no order exists at all: the gateway holds no
-	// thread to position the two rows against, and either side may be the dead instance. Last writer
-	// wins is the least-bad answer, and a stale anchor only over-counts until the next real advance.
+	// Epochs are random tags and compare only for equality.
+	// Sequence orders rows within an epoch. Across epochs, later report wins.
+	// Receiver stamps `at`; reporter time never orders cross-epoch merges.
+	// ReadAnchor.kt is the Kotlin twin and resolves by row position.
 	const advanced = !cur || (entry.epoch === cur.epoch ? entry.seq > cur.seq : entry.at > cur.at);
 	if (!advanced) return { state, advanced: false };
 	return { state: { ...state, [ownerId]: { ...owner, [team]: entry } }, advanced: true };

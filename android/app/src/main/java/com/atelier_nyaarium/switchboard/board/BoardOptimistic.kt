@@ -3,22 +3,16 @@ package com.atelier_nyaarium.switchboard.board
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import kotlinx.serialization.Serializable
 
-/** One journaled write still in flight, oldest first. No per-gateway lanes: the Router is one board. */
+/** One in-flight write, oldest first. */
 @Serializable
 data class PendingWrite(
 	val opId: String,
 	val intents: List<BoardIntent>,
-	/** Failed sends so far. Only changes what a row says, never whether the write survives. */
+	/** Failed sends so far. */
 	val attempts: Int = 0,
 )
 
-/**
- * The board as the owner should see it: the Router's entries with everything still in flight applied
- * on top, in the order it was queued.
- *
- * An intent for an entry the Router does not have is dropped rather than synthesized, except a
- * Create, which is the one that legitimately precedes its entry.
- */
+/** Applies queued intents in order. Missing entries are ignored except creates. */
 fun applyPending(entries: List<BoardEntry>, pending: List<PendingWrite>): List<BoardEntry> {
 	val byId = entries.associateByTo(LinkedHashMap()) { it.id }
 	for (write in pending) {

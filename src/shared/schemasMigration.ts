@@ -1,43 +1,33 @@
 import { z } from "zod";
-import { BoardEntrySchema, ContentEnvelopeSchema, MailboxEntrySchema } from "./schemas.js";
+import { BoardAttachmentSchema, BoardEntrySchema, ContentEnvelopeSchema, MailboxEntrySchema } from "./schemas.js";
 
 ////////////////////////////////
 //  Migration export
-//
-//  Written by the gateway, which is where the content key lives, and read by the Router's offline
-//  import. Board text and message bodies cross SEALED: the Router is a courier for them here as
-//  everywhere else.
 
-/** One board entry, with its session resolved to a full triple and its text sealed. */
 export const MigratedBoardEntrySchema = z
 	.object({
-		/** Clear structure only. The text fields are stripped: they travel in `sealed`. */
-		entry: BoardEntrySchema.omit({ title: true, body: true }),
-		/** What the Router carries and cannot read. Bound per entry, as everywhere else. */
+		/** Clear entry strips text fields. */
+		// Attachment filenames sealed. Other facts clear.
+		entry: BoardEntrySchema.omit({ title: true, body: true, attachments: true }).extend({
+			attachments: z.array(BoardAttachmentSchema.omit({ filename: true })).optional(),
+		}),
 		sealed: z.object({
 			title: ContentEnvelopeSchema,
 			body: ContentEnvelopeSchema.optional(),
 			names: z.record(z.string(), ContentEnvelopeSchema).optional(),
 		}),
-		// The exporting gateway's own (domainId, gatewayId). A bare sessionId means nothing at the
-		// Router, which serves every gateway.
 		session: z.object({ domainId: z.string(), gatewayId: z.string(), sessionId: z.string() }).optional(),
 	})
 	.meta({ id: "MigratedBoardEntry" });
 
-/** An entry whose session the exporting gateway does not hold. Named rather than guessed: stamping
- * this gateway onto a session it never had would move somebody else's work here. */
 export const MigrationRefusalSchema = z
 	.object({
 		entryId: z.string(),
 		sessionId: z.string(),
-		/** `unsealable` means this gateway holds no key for it, so its text could only have crossed
-		 * readable. Named rather than shipped in the clear. */
 		reason: z.enum(["session_unknown", "unsealable"]),
 	})
 	.meta({ id: "MigrationRefusal" });
 
-/** Where an old mailbox coordinate lands. The phone holds the old pair and needs the new one. */
 export const CursorMapEntrySchema = z
 	.object({
 		oldEpoch: z.number().int(),
@@ -47,11 +37,17 @@ export const CursorMapEntrySchema = z
 	})
 	.meta({ id: "CursorMapEntry" });
 
-/** A row with its body lifted out and sealed, so the Router carries text it cannot read. */
 export const MigratedRowSchema = z
 	.object({
-		row: MailboxEntrySchema.omit({ title: true, summary: true, body: true, fullSpoken: true }),
-		/** The four readable fields, sealed together so they cannot be separated in transit. */
+		row: MailboxEntrySchema.omit({
+			title: true,
+			summary: true,
+			body: true,
+			fullSpoken: true,
+			files: true,
+			payload: true,
+		}),
+		/** Text and filenames sealed. */
 		text: ContentEnvelopeSchema.optional(),
 	})
 	.meta({ id: "MigratedRow" });

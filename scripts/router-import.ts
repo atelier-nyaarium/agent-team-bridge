@@ -35,8 +35,7 @@ function main(): void {
 	if (!parsed.success) throw new Error(`invalid migration export: ${parsed.error.message}`);
 	const snapshot = parsed.data;
 	const digest = createHash("sha256").update(bytes).digest("hex");
-	// The cut's own record of what it wrote. An export the sums do not name, or one whose bytes
-	// disagree with them, is not a snapshot anyone can verify.
+	// Require a named, matching digest.
 	const sumsFile = path.join(path.dirname(file), "SHA256SUMS");
 	if (!fs.existsSync(sumsFile)) throw new Error(`no SHA256SUMS beside ${path.basename(file)}`);
 	const declared = declaredDigest(parseSums(fs.readFileSync(sumsFile, "utf8")), path.basename(file));
@@ -57,8 +56,7 @@ function main(): void {
 		throw new Error(`unmapped rows: ${missing.map((row) => `${row.conversationId}/${row.oldSeq}`).join(", ")}`);
 	const faults = structureFaults(snapshot);
 	if (faults.length) throw new Error(`board structure: ${faults.map((f) => `${f.entryId} ${f.fault}`).join(", ")}`);
-	// Claimed before the first write and dropped only once counts verify, so a crash in between
-	// leaves the Router refusing to serve rather than answering from a half-written tree.
+	// Keep the Router gated until verification.
 	beginImport(dataDir, `${snapshot.gatewayId}/${snapshot.epoch}`);
 	const federation = JSON.parse(fs.readFileSync(path.join(dataDir, "federation.json"), "utf8")) as {
 		enrollment?: Record<string, { ownerSignPub?: string | null }>;
@@ -80,7 +78,7 @@ function main(): void {
 		for (const owner of snapshot.owners)
 			if (owner.ownerId !== ownerId) throw new Error(`owner mismatch: ${owner.ownerId}`);
 		const { addresses } = applyImport(store as unknown as ImportStore, snapshot, ownerSignPub, dedupeRows);
-		// Read back, not counted as written: a counter only proves the loop ran.
+		// Verify persisted state.
 		const failures = verifyCounts(declaredCounts(snapshot), writtenCounts(store, addresses));
 		if (failures.length) throw new Error(`count verification failed: ${JSON.stringify(failures)}`);
 	} finally {

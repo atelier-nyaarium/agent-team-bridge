@@ -19,10 +19,8 @@ import type { OwnerStoreRegistry } from "./ownerStoreRegistry.js";
 type OpKeyInput = OpKey | { conversationId: string; opId: string; hash?: string };
 type AckOutcome = "delivered" | "waking" | "failed";
 type Terminal = "failed" | "expired" | "target_revoked";
-/** Current share generation, or null when unshared. */
 export type PeerRowGate = (dstDomainId: string, sessionTarget: string, srcDomainId: string) => number | null;
 
-/** Canonical `domain.gateway.spawn.session` target. */
 export function sessionTargetOf(address: InboxAddress): string | null {
 	return address.kind === "session" ? `${address.domainId}.${address.gatewayId}.${address.sessionId}` : null;
 }
@@ -39,7 +37,7 @@ export class InboxService {
 	private peerGate: PeerRowGate | null = null;
 	private readonly retiredListeners: Array<(domainId: string, address: string, row: InboxRow) => void> = [];
 
-	/** Fires once a row has left its inbox for good, delivered or retired. */
+	/** Final row transition. */
 	onRowRetired(listener: (domainId: string, address: string, row: InboxRow) => void): void {
 		this.retiredListeners.push(listener);
 	}
@@ -52,7 +50,7 @@ export class InboxService {
 		private readonly routerIdentity: { signPub: string; signPriv: string },
 	) {}
 
-	/** Check share state before releasing a peer row. */
+	/** Gate peer rows. */
 	setPeerGate(gate: PeerRowGate): void {
 		this.peerGate = gate;
 	}
@@ -85,6 +83,7 @@ export class InboxService {
 		}
 		if (existing) {
 			const clear = existing.clear;
+			// Matching op hash replays. Differing hash conflicts.
 			if (clear.opHash === opHash && clear.result && typeof clear.result === "object")
 				return clear.result as OpResultEnvelope & { row?: InboxRow };
 			return { opKey: key, outcome: "conflict" };
@@ -105,7 +104,6 @@ export class InboxService {
 		});
 	}
 
-	/** Retire undelivered rows whose share was revoked. */
 	retireRevokedPeerRows(domainId: string, sessionTarget: string, friendDomainId: string): number {
 		return this.guarded(() => {
 			const address = addressOfTarget(sessionTarget);
@@ -123,7 +121,7 @@ export class InboxService {
 	ack(input: {
 		address: InboxAddress;
 		seq: number;
-		/** Stale epochs reject the acknowledgement. */
+		/** Reject stale epochs. */
 		deliveryEpoch?: number;
 		outcome: AckOutcome;
 		reason?: string;
@@ -168,7 +166,6 @@ export class InboxService {
 		return { opKey: row.envelope.opKey, outcome: input.outcome, seq: input.seq };
 	}
 
-	/** Mark held rows as waiting for the gateway. */
 	markWaking(domainId: string, opKey: OpKey): void {
 		this.guarded(() => {
 			const store = this.registry.for(domainId);
@@ -186,7 +183,6 @@ export class InboxService {
 			.map((entry) => entry.row as unknown as InboxRow);
 	}
 
-	/** Compose a clear row through the producer ledger and caps. */
 	appendRouterRow(input: {
 		address: InboxAddress;
 		kind: "board_observation" | "scheduled_result" | "op_result";
@@ -228,7 +224,6 @@ export class InboxService {
 		}, []);
 	}
 
-	/** Retire peer rows revoked since acceptance. */
 	private stillShared(store: OwnerStateStore, domainId: string, addressText: string, row: InboxRow): boolean {
 		if (row.envelope.epoch !== "peer" || !this.peerGate) return true;
 		const address = parseInboxAddress(addressText);
@@ -254,6 +249,7 @@ export class InboxService {
 		const consumer = store.get("consumer", id);
 		const owner = this.ownerAddress(domainId);
 		const floor = this.floorOf(store, domainId);
+		// Mailbox epochs are random tags. Compare equality only across re-mints.
 		if (
 			!consumer ||
 			(cursorEpoch !== undefined && cursorEpoch !== Number(consumer.clear.cursorEpoch)) ||
@@ -346,7 +342,6 @@ export class InboxService {
 			store.put("session", id, current?.version ?? null, { clear: { ...value, lastSeen: this.now() } });
 		}, undefined);
 	}
-	/** Fail held rows and advance the epoch. */
 	forgetSession(domainId: string, gatewayId: string, sessionId: string): void {
 		this.guarded(() => {
 			const store = this.registry.for(domainId);
@@ -356,6 +351,7 @@ export class InboxService {
 			const address: InboxAddress = { kind: "session", domainId, gatewayId, sessionId };
 			for (const row of this.rows(address, 1, Number.MAX_SAFE_INTEGER))
 				this.retire(store, domainId, address, row, "failed", "session_forgotten");
+			// Forgetting fails rows and advances the epoch.
 			this.recreateAddress(address);
 		}, undefined);
 	}
@@ -454,7 +450,7 @@ export class InboxService {
 			throw error;
 		}
 	}
-	/** The lowest seq the owner inbox still holds. A consumer below it has lost rows. */
+	/** Below floor means dropped. */
 	ownerFloor(domainId: string): number {
 		return this.floorOf(this.registry.for(domainId), domainId);
 	}
@@ -517,7 +513,7 @@ export class InboxService {
 			size: Buffer.byteLength(canonicalJson(result)),
 		};
 	}
-	/** Atomically record the outcome, remove the row, and enqueue its result. */
+	/** Retire atomically. */
 	private retire(
 		store: OwnerStateStore,
 		domainId: string,

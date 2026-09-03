@@ -182,7 +182,6 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
-	// Shared file references survive edits.
 	it("keeps a file carried across an edit held", () => {
 		const { service, registry, released } = make();
 		service.schedule(
@@ -210,8 +209,7 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
-	// Fire and cancel release only the CURRENT set, so an edit landing mid-fire is the last chance to
-	// let a dropped file go.
+	// Release current set.
 	it("releases dropped files when the edit lands on a firing record", () => {
 		const { service, registry, released } = make();
 		service.schedule(

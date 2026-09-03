@@ -3,31 +3,20 @@ import { InboxRowSchema, OwnerOpSchema } from "./schemasInbox.js";
 
 ////////////////////////////////
 //  Console socket frames
-//
-//  The socket carries PUSH only. Every mutation stays an HTTP OwnerOp, so reach failover stays per
-//  call and there is one wire form for a write. What the socket buys is a row arriving without a
-//  poll, and a cursor the Router already owns.
 
-/** Opens the socket. Its `op.kind` is `hello`, and the one OwnerOp routine verifies it. */
-/**
- * A console that takes planes but does not read the owner inbox.
- *
- * It registers NO consumer on purpose. A cursor sitting at zero would hold the inbox floor down
- * forever, since compaction takes the minimum cursor across consumers, so a console that never
- * drains would stop the inbox being reclaimed at all.
- */
+/** Plane-only socket mode. */
 export const CONSOLE_PLANES_ONLY = "planes";
+
+// Plane-only sockets register no inbox consumer.
 
 export const ConsoleHelloFrameSchema = z
 	.object({
 		type: z.literal("hello"),
 		ownerOp: OwnerOpSchema,
-		/** Absent means this console reads the owner inbox. See [CONSOLE_PLANES_ONLY]. */
 		mode: z.enum([CONSOLE_PLANES_ONLY]).optional(),
 	})
 	.meta({ id: "ConsoleHelloFrame" });
 
-/** Advances the consumer cursor. The Router refuses one that is below the compaction floor. */
 export const ConsoleAckFrameSchema = z
 	.object({
 		type: z.literal("ack"),
@@ -45,8 +34,6 @@ export const ConsoleSocketInboundSchema = z
 	.discriminatedUnion("type", [ConsoleHelloFrameSchema, ConsoleAckFrameSchema, ConsolePingFrameSchema])
 	.meta({ id: "ConsoleSocketInbound" });
 
-/** Answers `hello`. `versions` is what the Router holds per plane, so a phone that already has a
- * version skips the payload. `floor` is the compaction floor its cursor may not fall below. */
 export const ConsoleWelcomeFrameSchema = z
 	.object({
 		type: z.literal("welcome"),
@@ -73,13 +60,10 @@ export const ConsolePlaneFrameSchema = z
 		incarnation: z.number().int().positive(),
 		name: z.string().min(1).max(64),
 		version: z.number().int().nonnegative(),
-		/** Absent for a plane that pokes rather than pushes, so the reader re-reads instead. */
 		payload: z.unknown().optional(),
 	})
 	.meta({ id: "ConsolePlaneFrame" });
 
-/** The socket closes after this. A cursor below the floor names the floor and the dropped count, so
- * the phone can show the gap rather than silently skipping rows. */
 export const ConsoleRefusedFrameSchema = z
 	.object({
 		type: z.literal("refused"),
@@ -103,10 +87,8 @@ export const ConsoleSocketOutboundSchema = z
 	])
 	.meta({ id: "ConsoleSocketOutbound" });
 
-/** Rows per push. A phone behind its cursor drains in batches rather than one frame. */
 export const CONSOLE_ROWS_PER_FRAME = 64;
 
-/** A socket that has not said hello by this deadline is closed. */
 export const CONSOLE_HELLO_DEADLINE_MS = 10_000;
 
 export type ConsoleSocketInbound = z.infer<typeof ConsoleSocketInboundSchema>;

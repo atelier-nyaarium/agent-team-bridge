@@ -34,14 +34,12 @@ export interface OwnerServicesDeps {
 	routerIdentity: { signPub: string; signPriv: string };
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
-	/** Where an owner row goes. Absent leaves owner rows waiting on their consumer's next read. */
+	/** Owner rows wait for the next read. */
 	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget">;
 }
 
-// Longer waits are chained because setTimeout has a maximum delay.
 const MAX_TIMER_MS = 2_147_483_647;
 
-/** Re-arms delays longer than setTimeout's maximum. */
 export function chainedTimer(delayMs: number, fn: () => void): { handle: () => ReturnType<typeof setTimeout> } {
 	let current: ReturnType<typeof setTimeout>;
 	const arm = (remaining: number) => {
@@ -78,8 +76,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		gatewayIncarnation: (domainId, gatewayId) => bridge.gatewayIncarnation(domainId, gatewayId),
 		connectedGateways: connected,
 	};
-	/** Deliver accepted rows or mark them waking. An OWNER row is never waking: its consumer reads
-	 * from a durable cursor on connect, so a push it missed costs nothing. */
+	/** Owner rows use durable cursors. */
 	const deliver = (domainId: string, address: InboxAddress, row: InboxRow): void => {
 		if (address.kind === "owner") {
 			deps.consoleSockets?.pushOwnerRow(domainId, null, row);
@@ -89,16 +86,12 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			inbox.markWaking(domainId, row.envelope.opKey);
 	};
 
-	// The console's own door onto the one OwnerOp routine. Answering the identity is the whole job:
-	// the intake already proved it, and the socket may not prove it a second way.
 	deps.intake.register("hello", (op) => ({
 		opKey: { conversationId: op.conversationId, opId: op.opId },
 		outcome: "complete" as const,
 		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
 	}));
 
-	// A VALUE op: the Router answers from its cache or forwards to the origin gateway, and a
-	// disconnected origin is unreachable at once rather than held.
 	deps.intake.register("blob_fetch", (op, value) =>
 		bridge.fetchBlobForOwner(op.domainId, OwnerBlobFetchParamsSchema.parse(value)),
 	);
@@ -106,7 +99,6 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	const share = createShareService({
 		registry,
 		isLinked: (domainId, friendDomainId) => deps.hasLinkEdge(domainId, friendDomainId),
-		// Link revocation arrives as its own enroll op.
 		dropLinkEdge: () => undefined,
 		retireRevokedPeerRows: (domainId, sessionTarget, friendDomainId) => {
 			inbox.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
@@ -114,7 +106,6 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		connectedGateways: connected,
 		now: () => registry.now(),
 	});
-	// Cross-Domain delivery keeps a share alive.
 	const peerGate = (dstDomainId: string, sessionTarget: string, srcDomainId: string): number | null => {
 		const generation = share.admitPeerRow(dstDomainId, sessionTarget, srcDomainId);
 		if (generation !== null) share.touch(dstDomainId, sessionTarget);
@@ -122,10 +113,8 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	};
 	inbox.setPeerGate(peerGate);
 	bridge.setPeerRowGate(peerGate);
-	// A gateway that has not completed this migration epoch may not write, whatever it believes.
 	const leases = createLeaseService({ registry, migrationEpoch: () => routerMigrationEpoch() });
 	bridge.setMigrationFence((domainId, gatewayId) => leases.fenced(domainId, gatewayId));
-	// A row that left its inbox no longer holds its files.
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
 		if (address?.kind !== "session") return;
@@ -240,7 +229,6 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			perDomain("board sweep", (domainId) => board.sweepTrash(domainId, now));
 			perDomain("capability sweep", (domainId) => capabilities.sweep(domainId, now));
 		},
-		/** Re-arm armed sends during boot. */
 		rearm(): void {
 			perDomain("presence rearm", (domainId) => presence.rearm(domainId));
 			perDomain("scheduled rearm", (domainId) => scheduled.rearm(domainId));

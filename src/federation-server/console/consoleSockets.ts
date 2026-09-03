@@ -1,12 +1,4 @@
-////////////////////////////////
-//  Console sockets
-//
-//  The first consumer the owner inbox has ever had. Rows accumulated there until now because
-//  nothing read them, so this is what makes an owner-addressed row mean anything.
-//
-//  A push here is an OPTIMIZATION, never the delivery guarantee. The cursor in the consumer
-//  registry is the durable part: a phone that was not connected reads from its cursor on hello and
-//  misses nothing, so an owner row is never marked waking the way a session row is.
+// Cursor guarantees delivery. Push is optimization.
 
 import {
 	CONSOLE_HELLO_DEADLINE_MS,
@@ -23,7 +15,7 @@ export interface ConsoleSocket {
 }
 
 export interface ConsoleSocketsDeps {
-	/** The one OwnerOp routine. A hello is verified by it and by nothing else. */
+	/** OwnerOp alone verifies hello. */
 	handleOwnerOp: (raw: unknown) => Promise<unknown>;
 	registerConsumer: (
 		domainId: string,
@@ -43,23 +35,22 @@ export interface ConsoleSocketsDeps {
 		cursor: number,
 		cursorEpoch: number,
 	) => { outcome: "ok" } | { outcome: "cursor_stale"; floor: number; dropped: number };
-	/** The lowest seq still held, so a phone below it can show the gap rather than skip it. */
+	/** Lowest retained sequence. */
 	ownerFloor: (domainId: string) => number;
-	/** Plane versions the Router holds, so a phone skips what it already has. */
+	/** Current plane versions. */
 	planeVersions?: (domainId: string, signerSignPub: string) => Record<string, number>;
 }
 
-/** What a verified hello establishes, and what every later frame is checked against. */
+/** Verified frame identity. */
 interface Bound {
 	domainId: string;
 	signerSignPub: string;
 	incarnation: number;
 	cursorEpoch: number;
-	/** Takes planes only. Gets no rows and holds no cursor. */
+	/** Plane delivery only. */
 	planesOnly: boolean;
 }
 
-/** The answer a hello handler hands back through the intake. */
 export interface ConsoleHelloAnswer {
 	domainId: string;
 	signerSignPub: string;
@@ -68,7 +59,7 @@ export interface ConsoleHelloAnswer {
 export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	const bound = new Map<ConsoleSocket, Bound>();
 	const pending = new Map<ConsoleSocket, ReturnType<typeof setTimeout>>();
-	// Monotonic per consumer, so a reconnect's frames are told apart from the socket it replaced.
+	// Distinguishes reconnects from replaced sockets.
 	const incarnations = new Map<string, number>();
 
 	const send = (socket: ConsoleSocket, frame: ConsoleSocketOutbound): void => {
@@ -85,7 +76,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		try {
 			socket.close();
 		} catch {
-			// A socket already gone needs no closing.
+			// Closing an absent socket is harmless.
 		}
 	};
 
@@ -102,8 +93,6 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		pending.set(socket, timer);
 	}
 
-	/** Everything the consumer has not acked, oldest first, in bounded frames. The cursor is the last
-	 * seq it acked, so the read starts ABOVE it or the acked row comes back. */
 	function drain(socket: ConsoleSocket, at: Bound, cursor: number): void {
 		const rows = deps.readOwner(at.domainId, at.signerSignPub, cursor + 1, CONSOLE_ROWS_PER_FRAME, at.cursorEpoch);
 		if (!Array.isArray(rows)) {
@@ -131,15 +120,14 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		const key = `${identity.domainId}/${identity.signerSignPub}`;
 		const incarnation = (incarnations.get(key) ?? 0) + 1;
 		incarnations.set(key, incarnation);
-		// No consumer for a planes-only console: registering one pins the compaction floor at a cursor
-		// that will never move.
+		// Planes-only consoles must not pin compaction.
 		const consumer = planesOnly
 			? { cursor: 0, cursorEpoch: 0 }
 			: deps.registerConsumer(identity.domainId, identity.signerSignPub, incarnation);
 		const timer = pending.get(socket);
 		if (timer) clearTimeout(timer);
 		pending.delete(socket);
-		// One socket per consumer: the older one is retired rather than left racing the new cursor.
+		// One socket per consumer.
 		for (const [other, at] of bound) {
 			if (at.domainId === identity.domainId && at.signerSignPub === identity.signerSignPub)
 				refuse(other, "superseded");
@@ -172,18 +160,18 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		}
 		const at = bound.get(socket);
 		if (frame.data.type === "hello") {
-			// A second hello on a bound socket is a client bug, not a re-auth.
+			// Bound sockets cannot re-authenticate.
 			if (at) refuse(socket, "already_bound");
 			else await hello(socket, frame.data.ownerOp, frame.data.mode === CONSOLE_PLANES_ONLY);
 			return;
 		}
-		// Stale means a frame from the socket this one replaced; it is dropped, never acted on.
+		// Stale frames are dropped.
 		if (!at || frame.data.incarnation !== at.incarnation) return;
 		if (frame.data.type === "ping") {
 			send(socket, { type: "pong", incarnation: at.incarnation });
 			return;
 		}
-		// A console holding no cursor cannot advance one.
+		// Planes-only consoles cannot advance cursors.
 		if (at.planesOnly) {
 			refuse(socket, "planes_only");
 			return;
@@ -196,7 +184,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		drain(socket, at, frame.data.cursor);
 	}
 
-	/** Best effort by design: an unreached console reads from its cursor on the next hello. */
+	/** Push is best effort. Hello drains the cursor. */
 	function pushOwnerRow(domainId: string, signerSignPub: string | null, row: InboxRow): void {
 		for (const [socket, at] of bound) {
 			if (at.domainId !== domainId || at.planesOnly) continue;
@@ -212,7 +200,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		}
 	}
 
-	/** A revoked console keeps no socket. */
+	/** Revoked consoles keep no socket. */
 	function forget(domainId: string, signerSignPub: string): void {
 		for (const [socket, at] of bound) {
 			if (at.domainId === domainId && at.signerSignPub === signerSignPub) refuse(socket, "revoked");

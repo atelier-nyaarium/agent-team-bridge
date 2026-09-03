@@ -1,5 +1,4 @@
-// Sole board crypto and key mapper. The Router holds the board and never sees its text, and only
-// this gateway's own sessions have a local key.
+// Sole board sealer and local-key mapper.
 
 import { BOARD_REFUSALS, type BoardRefusal } from "../../shared/board-authority.js";
 import type { CascadeChange } from "../../shared/board-cascade.js";
@@ -15,7 +14,6 @@ import {
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
 
-/** Clear operations before sealing. */
 export type ClearBoardOp =
 	| {
 			kind: "upsert";
@@ -41,11 +39,8 @@ export interface BoardView {
 	revision: number;
 	entries: BoardEntry[];
 	entry(id: string): BoardEntry | undefined;
-	/** Whether all sealed text opened. */
 	textIntact(id: string): boolean;
-	/** Live siblings for placement. */
 	siblings(parent: string | undefined, exclude?: string): BoardEntry[];
-	/** End rank and required rewrites. */
 	placeAtEnd(parent: string | undefined, exclude?: string): { rank: string; rebalanced: ClearBoardOp[] };
 }
 
@@ -68,11 +63,9 @@ export interface BoardClientDeps {
 	gatewayId: string;
 	ownerSignPub: () => string | null;
 	keys: Pick<ContentKeyStore, "seal" | "open">;
-	/** Maximum CAS rounds. */
 	attempts?: number;
 }
 
-/** Placeholder for unopened text. */
 const UNOPENED = "[unavailable]";
 
 const REFUSALS = new Set<string>(BOARD_REFUSALS);
@@ -107,20 +100,18 @@ export function createBoardClient(deps: BoardClientDeps) {
 		return opened.kind === "ok" ? opened.plaintext.toString("utf8") : null;
 	};
 
-	/** Maps a local key to a Router triple. */
 	const triple = (sessionKey: string) => ({
 		domainId: deps.domainId,
 		gatewayId: deps.gatewayId,
 		sessionId: sessionKey,
 	});
-	/** Maps own sessions locally and others opaquely. */
 	const localKey = (session: { domainId: string; gatewayId: string; sessionId: string } | undefined) => {
 		if (!session) return undefined;
 		if (session.domainId === deps.domainId && session.gatewayId === deps.gatewayId) return session.sessionId;
 		return `${session.domainId}/${session.gatewayId}/${session.sessionId}`;
 	};
 
-	/** Tracks unreadable text so edits cannot write placeholders. */
+	/** Prevents placeholder writeback. */
 	function openWhole(stored: BoardStoredEntry): { entry: BoardEntry; intact: boolean } {
 		let intact = true;
 		const names = stored.sealed.names ?? {};
@@ -161,7 +152,6 @@ export function createBoardClient(deps: BoardClientDeps) {
 		};
 	}
 
-	/** Null when sealing fails. */
 	function sealOp(op: ClearBoardOp): BoardOp | null {
 		if (op.kind === "upsert") {
 			const title = sealText(op.title, "board.title", op.id);
@@ -188,7 +178,7 @@ export function createBoardClient(deps: BoardClientDeps) {
 			};
 		}
 		if (op.kind === "set_attachments") {
-			// The Router keeps the stored names, keyed by blobId, so a new blobId lands unnamed.
+			// New blobIds have no stored names.
 			return { kind: "set_attachments", id: op.id, attachments: op.attachments.map(clearAttachment) };
 		}
 		if (op.kind === "set_session")
@@ -218,7 +208,6 @@ export function createBoardClient(deps: BoardClientDeps) {
 		};
 	}
 
-	/** Opens entries and records damaged text. */
 	function fold(stored: BoardStoredEntry[]): { entries: BoardEntry[]; damaged: Set<string> } {
 		const entries: BoardEntry[] = [];
 		const damaged = new Set<string>();
@@ -230,7 +219,6 @@ export function createBoardClient(deps: BoardClientDeps) {
 		return { entries, damaged };
 	}
 
-	/** Reads the board and damaged entries. */
 	async function readFolded(): Promise<
 		| { kind: "ok"; revision: number; entries: BoardEntry[]; damaged: Set<string> }
 		| { kind: "unavailable"; error: string }
@@ -286,7 +274,7 @@ export function createBoardClient(deps: BoardClientDeps) {
 					kind: "applied",
 					revision: result.revision,
 					entries: folded.entries,
-					// Cascades omit clear titles at the Router.
+					// Cascades omit clear titles.
 					cascaded: result.cascaded.map((c) => ({
 						...(c as CascadeChange),
 						title: titles.get(c.id) ?? UNOPENED,
@@ -294,7 +282,6 @@ export function createBoardClient(deps: BoardClientDeps) {
 				};
 			}
 			if (result.outcome === "refused") return { kind: "refused", refused: asRefusal(result.refusal) };
-			// Rebuild conflicts from the returned board.
 			revision = result.revision;
 			entries = folded.entries;
 			damaged = folded.damaged;

@@ -266,7 +266,6 @@ describe("routes", () => {
 		});
 
 		it("a rebuilt route table still replays a settled mutation instead of re-applying it", async () => {
-			// Rebuilds preserve the caller's reply record.
 			const { ctx, setTitle, calls } = makeBoardCtx();
 			const created = await call(createRoutes(ctx).taskBoard, {
 				from: "recipe-app",
@@ -285,7 +284,6 @@ describe("routes", () => {
 			};
 			await call(createRoutes(ctx).taskBoard, rename);
 			const writes = calls.filter((action) => action === "board_op").length;
-			// Replay must not overwrite a newer owner edit.
 			setTitle(id, "Owner's later edit");
 			await call(createRoutes(ctx).taskBoard, rename);
 			expect(calls.filter((action) => action === "board_op").length).toBe(writes);
@@ -296,7 +294,6 @@ describe("routes", () => {
 		});
 
 		it("every tool's request body is one the route accepts", async () => {
-			// Keep tool and route schemas aligned.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -321,14 +318,13 @@ describe("routes", () => {
 		});
 
 		it("a fetch mints no operation id, so it is never recorded for replay", () => {
-			// Replay keys cover writes that return attachment ids.
 			expect(boardRequestBody("attachments", { id: "bd_x" }).operationId).toBeUndefined();
 			expect(boardRequestBody("list").operationId).toBeUndefined();
 			expect(boardRequestBody("update", { id: "bd_x" }).operationId).toBeDefined();
 		});
 
 		it("the agent's list carries attachment names and never the ids that fetch them", async () => {
-			// Strip blob ids at the route boundary. They are bearer tokens.
+			// Blob IDs are bearer tokens.
 			const { ctx, board, seedEntry } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -364,7 +360,6 @@ describe("routes", () => {
 		});
 
 		it("a retried backlog create replays instead of refusing the caller its own entry", async () => {
-			// Derive the entry id from the operation id for retry idempotence.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const body = { from: "recipe-app", ...boardRequestBody("create", { title: "later", assignTo: "backlog" }) };
@@ -377,7 +372,6 @@ describe("routes", () => {
 		});
 
 		it("a retried update replays its recorded reply instead of re-applying an absolute set", async () => {
-			// Absolute writes must not regress newer state.
 			const { ctx, setState, board } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -394,7 +388,6 @@ describe("routes", () => {
 		});
 
 		it("an update naming no changed field still refuses an entry this session cannot see", async () => {
-			// Unknown and unauthorized ids share one response.
 			const { ctx, seedEntry } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			seedEntry("theirs", "t", "other");
@@ -485,7 +478,6 @@ describe("routes", () => {
 		});
 
 		it("one operation id reused across two actions replays neither into the other", async () => {
-			// Include the action in replay keys.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			const created = await call(taskBoard, {
@@ -687,7 +679,6 @@ describe("routes", () => {
 			const { taskBoard } = createRoutes(ctx);
 			const real = await callAs(taskBoard, { from: boundTeam, action: "list", scope: "all" });
 			const invented = await callAs(taskBoard, { from: "not-a-real-session", action: "list", scope: "all" });
-			// Unknown and unbound targets must not reveal board existence.
 			expect(invented.status).toBe(real.status);
 			expect(invented.body.error).toBe(real.body.error);
 		});
@@ -701,7 +692,6 @@ describe("routes", () => {
 		});
 
 		it("stays open where nothing is bound at all, the hand-launched deployment", async () => {
-			// A gateway without a bound session has no credential to check.
 			const { ctx } = makeBoardCtx();
 			const { taskBoard } = createRoutes(ctx);
 			expect((await callAs(taskBoard, { from: "recipe-app", action: "list", scope: "all" })).status).toBe(200);

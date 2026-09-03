@@ -20,8 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.Json
 
-/** The board's whole storage surface, so the manager is unit-testable without a Context.
- * [AppStateStore] implements it; see IdleSilenceStore for the same seam pattern. */
+/** Storage seam for tests. */
 interface BoardStore {
 	fun loadTaskBoard(): String?
 
@@ -30,35 +29,21 @@ interface BoardStore {
 	fun loadGatewayId(): String
 }
 
-/** The one call the drain makes, narrow enough for a test to stand in for the client. */
 interface BoardWriter {
-	/** Returns the attachment filenames the Gateway could not resolve and therefore did not store. */
 	suspend fun boardWrite(
 		op: ConsoleOp,
 		gatewayId: String,
 		opId: String = UUID.randomUUID().toString(),
 	): List<String>
 
-	/** Whether the Gateway holding the entry already has these bytes in full. A CHECK, never the
-	 * transfer itself: the drain is single-flight, so moving megabytes inside it would stall every
-	 * board write on every Gateway for the duration. */
+	/** Presence check only. */
 	suspend fun boardBytesReady(blobId: String, gatewayId: String): Boolean = true
 }
 
-/** One refused action's residue: the row marker's content, and the draft restore for an edit. */
-
-/**
- * Bytes a queued action is waiting on, and where to get them.
- *
- * NAMED rather than a Triple of three Strings. The positional version compiled fine when the shape
- * changed under a caller that kept reading the first element, which silently turned that caller's
- * guard into a constant false and left a move able to freeze a whole Gateway lane. Named fields make
- * that same mistake a compile error.
- */
+/** Named fields prevent positional misuse. */
 data class PendingFetch(val entryId: String, val blobId: String, val holder: String)
 
-/** The one line a session card and thread strip show while board work exists. `currentId` names the
- * entry the title came from, which is what lets a card show the branch that entry sits in. */
+/** `currentId` identifies the displayed branch. */
 data class BoardLiveLine(
 	val title: String,
 	val state: String,
@@ -67,47 +52,28 @@ data class BoardLiveLine(
 	val currentId: String? = null,
 )
 
-/**
- * The console's board half: the per-Gateway cache, the pending-action queue, and the drain.
- *
- * Local-first: every edit enqueues and the UI reads [mergedEntries], which re-applies the queue
- * over the cache - so there is no online mode and no offline mode, and a poll snapshot landing
- * mid-edit cannot revert it. Queue entries retire ONLY on the gateway's accept or a sealed refusal
- * ([BoardRefused]); every other failure stays queued and retries on a later drain.
- */
+/** Pending edits overlay snapshots until accepted or refused. */
 class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	private val json = Json { ignoreUnknownKeys = true }
 
-	/** False when a STORED board could not be decoded, as opposed to there being none yet. An empty
-	 * board and an unreadable one look identical afterwards, and one of them must not drive a delete.
-	 *
-	 * Declared ABOVE [blob] on purpose: properties initialize in declaration order, so below it this
-	 * field's own initializer would run after [load] and overwrite what load recorded. */
+	/** Unreadable storage cannot authorize deletion. Declared before [blob] for [load]. */
 	@Volatile private var loadedCleanly = true
 	@Volatile private var blob: BoardBlob = load()
 	private val drainMutex = Mutex()
 
-	/** Every read-modify-write of [blob] goes through here. Mutations arrive from the main thread
-	 * (a tap) and from Dispatchers.IO (the poll's snapshot apply and the drain), and an unguarded
-	 * compound would drop whichever change lost the race - silently discarding a queued action and
-	 * snapping the row back to Gateway truth. */
+	/** Guard every blob read-modify-write. */
 	private val stateLock = Any()
 
 	private fun mutate(transform: (BoardBlob) -> BoardBlob) {
 		synchronized(stateLock) { persist(transform(blob)) }
 	}
 
-	/** Bumped on every visible change; Compose reads it to re-derive rows. */
 	val revision = mutableLongStateOf(0L)
 
-	/** Notices awaiting the owner's dismissal, newest last. Snapshot state, so a row appears the moment
-	 * one lands rather than at some later unrelated recomposition; mirrored into the durable blob so a
-	 * notice minted by a backgrounded drain survives the process being reclaimed. */
+	/** Persist notices from background drains. */
 	val refusals = mutableStateListOf<BoardRefusal>()
 
 	init {
-		// A notice minted while the app was backgrounded is only useful if it is still here when the
-		// owner next looks.
 		refusals.addAll(blob.notices)
 	}
 
@@ -116,13 +82,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { it.copy(notices = it.notices + entry) }
 	}
 
-	/** A refused write snaps the row back to Router truth, so the owner is told why it did. */
 	fun noticeRefusal(entryId: String?, reason: String) {
 		notice(BoardRefusal(entryId, reason, BoardNoticeKind.REFUSED))
 	}
 
-	/** In memory only, the durable key having been wiped first. [mutate] persists a transform of
-	 * [blob], so a board left here is re-committed by the next owner's first write. */
+	/** Durable key cleared first. */
 	override suspend fun clearInMemory() {
 		synchronized(stateLock) {
 			blob = BoardBlob()
@@ -137,24 +101,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	private fun routeGatewayId(): String = store.loadGatewayId()
 
-	/**
-	 * Whether this device knows enough about the board to let it DELETE attachment bytes.
-	 *
-	 * A board with no entries is not evidence that no entry has attachments. It is what a failed local
-	 * decode looks like, and equally what a Gateway that lost its own board file answers over the
-	 * wire - and in that second case the phone's copies are the last ones anywhere, since the
-	 * Gateway's bytes survive with nothing left to name them.
-	 *
-	 * A Router revision of zero means this device has not landed the board even once, so the keep set
-	 * would be built from nothing and every bucket would look dead.
-	 *
-	 * EVERY gateway must have entries, not merely one of them: buckets are keyed by entry and the keep
-	 * set is built per gateway, so with two machines a snapshot loss on the second still drops its
-	 * buckets out of the keep set while the first keeps this answer true. Two machines is the ordinary
-	 * configuration. The cost of being conservative is that a genuinely empty board stops reclaiming
-	 * dead buckets until the board is known again, which is a leak that self-heals; deleted bytes do
-	 * not.
-	 */
+	/** Empty or incomplete state cannot authorize deletion. */
 	val boardIsKnown: Boolean
 		get() = loadedCleanly &&
 			blob.routerRevision > 0 &&
@@ -176,44 +123,30 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		revision.longValue++
 	}
 
-	/** The board as the UI should see one Gateway: snapshot with the pending queue re-applied. */
 	fun mergedEntries(gatewayId: String, now: Long = System.currentTimeMillis()): List<BoardEntry> =
 		mergeBoardSnapshot(blob.gateways[gatewayId]?.entries ?: emptyList(), blob.queue, gatewayId, now)
 
-	/** The Router's revision this device holds, and what a write must present for CAS. */
 	val routerRevision: Long
 		get() = blob.routerRevision
 
-	/** The Router board by entry id, which is what an intent is materialized against. */
 	fun storedById(): Map<String, BoardStoredEntry> = blob.stored.associateBy { it.clear.id }
 
-	/** Supplies the keyring view, wired after construction the way the scheduler is. Null before this
-	 * device has rooted a Domain, when there is no key to open board text with. */
+	/** Null before the device roots a Domain. */
 	@Volatile var sealing: (() -> BoardSealing?)? = null
 
-	/** The board the owner should see: the Router's entries with everything in flight applied on top. */
 	fun routerEntries(): List<BoardEntry> {
 		val open = sealing?.invoke() ?: return applyPending(emptyList(), blob.pending)
 		return applyPending(renderRouterBoard(open).entries, blob.pending)
 	}
 
-	/**
-	 * The durable record of board writes in flight.
-	 *
-	 * Deliberately here and not in the mutation journal. Landing a Router result and retiring the write
-	 * it answers has to be ONE durable transition, or a crash between them either replays a write that
-	 * already applied or drops the optimistic row while the board still lacks it. Only the store that
-	 * holds the board can make that atomic. The journal keeps the mutation kinds with no such pairing.
-	 */
 	fun pendingWrites(): List<PendingWrite> = blob.pending
 
-	/** Queues a write and answers the opId that spans it, including any crash replay. */
 	fun enqueueWrite(intents: List<BoardIntent>, opId: String = java.util.UUID.randomUUID().toString()): String {
 		mutate { it.copy(pending = it.pending + PendingWrite(opId, intents)) }
 		return opId
 	}
 
-	/** Lands the Router's answer and retires the write it answers in one durable transition. */
+	/** Settle and retire atomically. */
 	fun settleWrite(opId: String, revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()) {
 		synchronized(stateLock) {
 			val landed = if (revision >= blob.routerRevision) {
@@ -229,17 +162,13 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { blob -> blob.copy(pending = blob.pending.filterNot { it.opId == opId }) }
 	}
 
-	/** Counts a failed attempt so a struggling row can say so, without dropping the write. */
 	fun failWrite(opId: String) {
 		mutate { blob ->
 			blob.copy(pending = blob.pending.map { if (it.opId == opId) it.copy(attempts = it.attempts + 1) else it })
 		}
 	}
 
-	/**
-	 * Lands what the Router answered. An older revision is ignored, so a slow read cannot overwrite a
-	 * write result that already arrived.
-	 */
+	/** Ignore older revisions. */
 	fun applyRouterBoard(revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()): Boolean {
 		synchronized(stateLock) {
 			if (revision < blob.routerRevision) return false
@@ -248,28 +177,20 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Opens the Router board for the UI, remembering the text so a rotated-away epoch still renders. */
+	/** Cache rendered text across epoch rotation. */
 	fun renderRouterBoard(sealing: BoardSealing): BoardRendered {
 		val rendered = synchronized(stateLock) { renderBoard(blob.stored, sealing, blob.text) }
-		// Compared before mutating: this runs per derive, and an unchanged cache should not re-serialize
-		// the whole board.
 		if (rendered.cache != blob.text) mutate { it.copy(text = rendered.cache) }
 		return rendered
 	}
 
-	/** Failed sends after which a queued action is worth telling the owner about. It only changes what
-	 * a row SAYS, never whether the action survives. */
+	/** Retry threshold for row markers. */
 	private val STRUGGLING_AFTER = 8
 
-	/** Entry ids with a queued action that keeps failing to send. The row marks them, so a write that
-	 * is retrying forever is visible rather than looking applied. */
 	fun strugglingEntries(): Set<String> =
 		blob.queue.filter { it.attempts >= STRUGGLING_AFTER }.mapNotNull { entryIdOf(it.op) }.toSet()
 
-	/** Every Gateway the board must READ to render one truthful union: the ones holding a snapshot
-	 * PLUS any a pending action targets. Without the second set, a move to a Gateway never yet
-	 * read renders the entry zero times - the optimistic delete drops it from the origin while its
-	 * upsert has no column to appear in. */
+	/** Include queued target gateways. */
 	fun sourceGatewayIds(): List<String> =
 		(listOf(routeGatewayId()) + blob.gateways.keys + blob.queue.map { it.gatewayId }).filter { it.isNotEmpty() }.distinct()
 
@@ -280,7 +201,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { it.copy(notices = it.notices.filter { n -> n != refusal }) }
 	}
 
-	/** A plane snapshot (route Gateway) or a board_read reply (any Gateway) landed. */
 	fun applySnapshot(
 		gatewayId: String,
 		entries: List<BoardEntry>,
@@ -290,10 +210,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	) {
 		mutate { blob ->
 			val prior = blob.gateways[gatewayId]?.entries ?: emptyList()
-			// A truncated projection is an id-sorted PREFIX, so it is authoritative up to its own last
-			// id and says nothing past it. Carrying forward only that tail is what keeps a deletion a
-			// deletion: an id inside the covered range that the snapshot omits was removed, and
-			// re-adding it would resurrect every moved-away entry and every swept trash row forever.
+			// Truncated snapshots cover only ids through their last id.
 			val covered = entries.maxOfOrNull { it.id }
 			val merged = if (!truncated || prior.isEmpty() || covered == null) {
 				entries
@@ -305,19 +222,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/**
-	 * Drop the column of every Gateway the owner no longer admits, and every queued write bound for it.
-	 *
-	 * A column arrives from a Gateway and is never taken back by one: a purged machine is wiped and
-	 * gone, so its last snapshot would stay here forever, drawn as live work and read on every refresh
-	 * to a Gateway that answers nothing. The keyring is the one fact that says a Gateway is GONE rather
-	 * than merely down - a revocation is the owner's own signed word - so it is what this keys on.
-	 *
-	 * An EMPTY keyring prunes nothing. It is what a device knows before its first sync, and "an empty
-	 * answer is never permission to delete" holds here the way it does for attachment bytes. The
-	 * queue is pruned through [abandonBoardAction] so a move's linked half goes with it: an origin
-	 * delete must not become eligible because the write it waited on was dropped rather than refused.
-	 */
+	/** Revocation prunes columns and queued writes. */
 	fun retainGateways(admitted: Collection<String>) {
 		if (admitted.isEmpty()) return
 		val keep = admitted.toSet()
@@ -331,11 +236,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Gateways whose last snapshot was cut by the byte budget. The board says so rather than
-	 * presenting a partial column as complete. */
+	/** Gateways with truncated snapshots. */
 	fun truncatedGateways(): List<String> = blob.gateways.filterValues { it.truncated }.keys.toList()
 
-	/** Queue one mutation. The UI's next [mergedEntries] read already shows it applied. */
 	fun enqueue(
 		op: ConsoleOp,
 		gatewayId: String,
@@ -353,25 +256,12 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return opId
 	}
 
-	/** Every attachment bucket the board still needs on this device, for the orphan sweep's keep set.
-	 *
-	 * Queue sources only cover an action still in flight. Question 4 says the attaching device KEEPS
-	 * its copy so the peek stays instant, so the buckets a committed entry names have to be kept
-	 * explicitly or the next cold-start sweep takes them and the owner re-downloads their own picture. */
+	/** Attachment buckets protected from sweeping. */
 	fun attachmentBuckets(): Set<String> {
-		// MERGED, not the raw snapshot: a just-attached picture lives only in the queue until the
-		// gateway's next snapshot lands, and a cold-start sweep in that window would delete the bytes
-		// the queued action is still trying to upload.
-		// Every KNOWN entry, not only those whose list currently names files. The list is gateway
-		// metadata and the bytes are the phone's own copy, so tying one to the other means a gateway
-		// that loses or strips the field - a rollback, a truncated projection - takes the device's
-		// copy with it on the next sweep, which for a picture nothing else still holds is the silent
-		// disappearance this whole feature exists to prevent. A bucket whose files were legitimately
-		// removed is already emptied at the write, so keeping its name costs nothing.
+		// Include queued attachments.
+		// Keep every known entry bucket.
 		val fromEntries = (routerEntries() + blob.gateways.keys.flatMap { mergedEntries(it) })
 			.map { Attachments.boardBucket(it.id) }
-		// By entry rather than by parsing the stored paths: sources hold absolute paths for the upload,
-		// which are not the src shape bucketOf reads.
 		val fromQueue = blob.queue.filter { it.sources.isNotEmpty() }
 			.mapNotNull { entryIdOf(it.op) }
 			.map { Attachments.boardBucket(it) }
@@ -379,15 +269,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return (fromEntries + fromQueue + fromPending).toSet()
 	}
 
-	/** Drop queued writes for a session's entries, because the owner has just forgotten it.
-	 *
-	 * The disposition rides the forget op, so it is no longer a writer to race. The queue still is:
-	 * a queued edit is absolute, so draining it afterwards would overwrite the choice the gateway
-	 * just applied. Superseded by construction - the disposition is the owner's last word on those
-	 * entries - so it is dropped rather than ordered.
-	 *
-	 * Bounded by what this device can see, which is the honest limit: an entry it never polled has no
-	 * queued action here either. */
+	/** Forget supersedes queued edits. */
 	fun dropQueuedForSession(gatewayId: String, team: String): Int {
 		val key = sessionKeyOf(team)
 		val mine = mergedEntries(gatewayId).filter { it.sessionId == key }.mapTo(mutableSetOf()) { it.id }
@@ -407,17 +289,12 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return dropped
 	}
 
-	/** Fire every eligible queued action once. Runs on the poll loop's cadence; single-flight so a
-	 * slow lane cannot stack drains. Takes the narrow [BoardWriter] rather than the client, so the
-	 * drain is unit-testable without a live transport. */
+	/** Single-flight drain with independent gateway lanes. */
 	suspend fun drain(client: BoardWriter) {
 		if (blob.queue.isEmpty()) return
-		// Skip rather than queue: a drain already in flight will pick up whatever this one would
-		// have sent, and stacking them behind a slow lane only multiplies the timeouts.
+		// Skip overlapping drains.
 		if (!drainMutex.tryLock()) return
 		try {
-			// Each Gateway's lane runs to exhaustion; lanes are independent, so a dead Gateway never
-			// delays a live one.
 			coroutineScope {
 				for (gatewayId in blob.queue.map { it.gatewayId }.distinct()) {
 					launch { drainLane(client, gatewayId) }
@@ -433,36 +310,24 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		while (true) {
 			val action = eligibleBoardActions(blob.queue, STRUGGLING_AFTER).firstOrNull { it.gatewayId == gatewayId }
 				?: return
-			// One attempt per action per drain: a struggling head is skipped by the NEXT pass, not by
-			// this one, so a lane cannot spin over the same failing op inside a single drain.
+			// One attempt per action per drain.
 			if (!tried.add(action.opId)) return
 			try {
-				// Bytes first, and an unfinished upload CHARGES an attempt like any other retry. Not
-				// charging looks kinder and is the opposite: a head under the struggling threshold holds
-				// `laneClosed`, so an action that never reaches it blocks every other entry's writes on
-				// this Gateway forever, with no marker, and nothing can time it out. Charging is what
-				// lets `eligibleBoardActions` step past a slow transfer to unrelated work, and "not
-				// synced" is honest while a picture is still going up.
+				// Uploads count toward retry attempts.
 				uploadSources(client, action)
 				val dropped = client.boardWrite(action.op, action.gatewayId, action.opId)
 				mutate { it.copy(queue = retireBoardAction(it.queue, action.opId)) }
-				// Shown on the same row the owner already reads for a refused edit. The write applied,
-				// but these pictures existed on no machine and are gone, which they have to be told.
 				if (dropped.isNotEmpty()) {
 					notice(BoardRefusal(entryIdOf(action.op), dropped.joinToString(", "), BoardNoticeKind.DROPPED))
 				}
 			} catch (e: BoardRefused) {
 				DebugLog.log("Board", "action ${action.opId} refused: ${e.reason}")
 				notice(BoardRefusal(entryIdOf(action.op), e.reason))
-				// Abandon dependents too: a move's delete must not fire because its write was refused.
+				// Refusal abandons dependents.
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
 			} catch (e: Exception) {
-				// A cancellation is not a failed send. Without this the service teardown that cancels
-				// the poll scope would charge every in-flight action an attempt it never actually spent.
+				// Cancellation is not a failed send.
 				e.rethrowIfCancellation()
-				// The count is for the owner's marker only; it NEVER retires the action. An edit is
-				// discarded on a gateway refusal and on nothing else, so an outage that outlasts any
-				// ceiling still ends with the edit applied rather than silently dropped.
 				val attempts = action.attempts + 1
 				DebugLog.log("Board", "action ${action.opId} retrying (attempt $attempts): ${e.message?.take(80)}")
 				mutate { blob ->
@@ -473,53 +338,30 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/**
-	 * Get this action's bytes onto its Gateway. True when every source is up and the op may send.
-	 *
-	 * A source file that is GONE can never succeed, so it is abandoned locally rather than retried:
-	 * nothing else could ever retire it, and a queued action nothing retires eventually closes the
-	 * whole lane. That is a console-minted refusal, using the two calls the wire's own refusal branch
-	 * already makes - the console's [BoardRefusal] is a UI row with a free-form reason, not the
-	 * gateway's closed union, so this needs no wire shape.
-	 */
 	private suspend fun uploadSources(client: BoardWriter, action: PendingBoardAction) {
 		for ((blobId, source) in action.sources) {
 			if (client.boardBytesReady(blobId, action.gatewayId)) continue
-			// Not up yet, and the local copy is gone, so no transfer can ever finish it. Nothing else
-			// would retire this action, and a queued action nothing retires eventually closes the lane.
-			// A member being fetched from elsewhere has no local file YET, which is not the same as
-			// gone: a move carries pictures this device may never have opened.
+			// Missing local files may still be fetched.
 			if (!File(source).exists() && blobId !in action.fetchFrom) {
 				DebugLog.log("Board", "action ${action.opId} abandoned: ${source.substringAfterLast('/')} is gone")
 				notice(BoardRefusal(entryIdOf(action.op), "that file is no longer on this device"))
 				mutate { it.copy(queue = abandonBoardAction(it.queue, action.opId)) }
 			}
-			// Throwing is how the lane stops here without sending. The attempt the catch charges is
-			// meaningless for an action just abandoned (the queue no longer holds it) and is exactly
-			// right for one still transferring.
 			error("attachment $blobId is not on the Gateway yet")
 		}
 	}
 
-	/** Local sources for everything still queued, so a cold start can restart the transfers whose
-	 * in-memory kick died with the process. Keyed blobId to path, per Gateway. */
-	/** The queue in drain order. Its ORDER is behaviour, not internals: a move's origin delete landing
-	 * before the destination holds the bytes destroys the last copy. */
+	/** Queue order is behaviorally significant. */
 	val queuedActions: List<PendingBoardAction>
 		get() = blob.queue
 
-	/** Members a queued action must PULL before it can push, as (entry, blobId, holding gateway). The
-	 * ENTRY comes from the action rather than being re-found later: once the upsert half retires, no
-	 * cached view names that entry, so a search would answer nothing in exactly the window this
-	 * exists for. A move's attach cannot retire until these arrive, and its own kick dies with the
-	 * process, so the resume pass has to see them or the origin's linked delete blocks that lane. */
+	/** Entry id comes from the queued action. */
 	fun pendingFetches(): List<PendingFetch> =
 		blob.queue.flatMap { action ->
 			val entryId = entryIdOf(action.op) ?: return@flatMap emptyList()
 			action.fetchFrom.map { (blobId, gw) -> PendingFetch(entryId, blobId, gw) }
 		}
 
-	/** See [markFetchDead]'s own doc; this is its sole committer, keeping the queue single-writer. */
 	fun retireDeadFetch(entryId: String, blobId: String) {
 		mutate { it.copy(queue = markFetchDead(it.queue, entryId, blobId)) }
 	}
@@ -527,8 +369,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	fun pendingSources(): List<Triple<String, String, String>> =
 		blob.queue.flatMap { action -> action.sources.map { (blobId, src) -> Triple(blobId, src, action.gatewayId) } }
 
-	/** Refresh one Gateway's half through board_read (the non-route path; the route Gateway's half
-	 * arrives on the plane). Any failure leaves the cache as-is - the column just reads stale. */
 	suspend fun read(client: ConsoleClient, gatewayId: String) {
 		val result = try {
 			client.boardRead(gatewayId)
@@ -540,13 +380,9 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		applySnapshot(gatewayId, result.entries, version = blob.gateways[gatewayId]?.version, truncated = result.truncated == true)
 	}
 
-	/** The value an entry's `sessionId` actually holds, from a chat's `Team.name`. Every board writer
-	 * on the Gateway keys by the bare local field, while a Team.name is the fully-qualified address,
-	 * so a caller comparing the two raw would match nothing. The one place that conversion happens. */
+	/** Convert team names to local keys. */
 	fun sessionKeyOf(team: String): String = localFieldOrSelf(team)
 
-	/** How many of a session's live entries are still unfinished - what the forget prompt asks
-	 * about, and what decides whether it appears at all. */
 	fun undoneCount(team: String): Int {
 		val key = sessionKeyOf(team)
 		return routerEntries().count {
@@ -554,9 +390,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** One session's live line for the session card and thread strip: the task it is on (first
-	 * in-progress by rank, else first open), plus its finished-over-total count. Null when the
-	 * session has no live entries at all, so the card keeps its ordinary preview ladder. */
+	/** Select in-progress, then open, by rank. */
 	fun liveLine(team: String): BoardLiveLine? {
 		val key = sessionKeyOf(team)
 		val mine = routerEntries().filter { it.sessionId == key && it.trashedAt == null }
@@ -568,8 +402,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return BoardLiveLine(current?.title ?: "", current?.state ?: "open", finished, mine.size, current?.id)
 	}
 
-	/** The branch a session card draws: the top-level entry holding [BoardLiveLine.currentId], plus
-	 * everything under it. Empty when the session has no live board work. */
 	fun cardBranch(gatewayId: String, team: String, currentId: String?, max: Int = CARD_BRANCH_MAX): CardBranch {
 		val key = GroupKey(gatewayId, sessionKeyOf(team))
 		val group = flattenBoard(routerEntries())

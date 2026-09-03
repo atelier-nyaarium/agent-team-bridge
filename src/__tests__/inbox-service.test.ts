@@ -80,9 +80,7 @@ describe("InboxService", () => {
 		registry.close();
 	});
 
-	// A retried relay re-seals with a fresh ephemeral key, so its bytes differ every attempt. Without
-	// the producer's own hash the second attempt reads as a different operation under one key and is
-	// refused, telling the sender a message that landed had failed.
+	// Producer hash survives resealing.
 	it("replays the recorded result for a retry whose bytes changed but whose producer hash did not", () => {
 		const { service, registry, owner, producer } = make();
 		const address = ownerAddress(owner);

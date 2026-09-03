@@ -46,6 +46,7 @@ export type CacheStat =
 	| { kind: "miss"; origin?: BlobOrigin };
 export type CacheRead = Buffer | { kind: "miss"; origin?: BlobOrigin };
 
+// Sealed cache for key-bearing devices.
 export class RouterBlobCache {
 	private readonly domains = new Map<string, { store: BlobStore; index: CacheIndex }>();
 	private readonly now: () => number;
@@ -82,8 +83,7 @@ export class RouterBlobCache {
 			ciphertextSize > this.options.quotaBytesPerDomain
 		)
 			return { kind: "quota" };
-		// Fresh nonces change the ciphertext digest. A stale partial would make every retry fail
-		// final verification because writes at held offsets are no-ops.
+		// Digest changes discard partials.
 		if (entry?.ciphertextDigest !== undefined && entry.ciphertextDigest !== ciphertextDigest)
 			domain.store.remove(blobId);
 		const heldForBlob = Math.max(domain.store.stat(blobId).have, entry?.lease?.expectedSize ?? 0);
@@ -204,8 +204,7 @@ export class RouterBlobCache {
 				entry.ciphertextSize = stat.have;
 				delete entry.lease;
 			} else if (entry.lease.expiresAt <= now) {
-				// Retain the origin, stripped to exactly what evict leaves. The retained sweep only
-				// collects entries whose size is gone, so keeping it escapes MAX_RETAINED_ORIGINS.
+				// Retain origin without bytes.
 				domain.store.remove(blobId);
 				delete entry.lease;
 				delete entry.size;
@@ -254,8 +253,7 @@ export class RouterBlobCache {
 				if (name.endsWith(".part") || name.length !== 64) continue;
 				const blobId = `sha256-${name}`;
 				const file = path.join(root, fanout, name);
-				// An unreadable sidecar is transient. Keep ciphertext until the next open. Absent or
-				// invalid metadata condemns the file.
+				// Unreadable sidecars preserve ciphertext.
 				let recovery: CacheRecoveryEntry | null;
 				try {
 					recovery = this.readRecovery(domainId, blobId);
@@ -295,8 +293,7 @@ export class RouterBlobCache {
 		}
 	}
 
-	// Runs every sweep, not from evict. A retained origin holds no bytes, so it never creates the
-	// quota pressure evict needs to be called with, and the bound would never be reached.
+	// Bound retained origins separately.
 	private trimRetainedOrigins(domain: { store: BlobStore; index: CacheIndex }): void {
 		const retained = Object.entries(domain.index.entries)
 			.filter(
@@ -308,6 +305,7 @@ export class RouterBlobCache {
 	}
 
 	private used(domain: { store: BlobStore; index: CacheIndex }): number {
+		// Count on-disk bytes.
 		return Object.entries(domain.index.entries).reduce(
 			(sum, [blobId, entry]) => sum + Math.max(domain.store.stat(blobId).have, entry.lease?.expectedSize ?? 0),
 			0,
@@ -341,7 +339,7 @@ export class RouterBlobCache {
 		);
 	}
 
-	/** Null means absent or invalid metadata. Other read failures throw to preserve valid ciphertext. */
+	/** Null means invalid metadata. Other failures preserve ciphertext. */
 	private readRecovery(domainId: string, blobId: string): CacheRecoveryEntry | null {
 		let raw: string;
 		try {

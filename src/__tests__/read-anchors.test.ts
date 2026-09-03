@@ -23,7 +23,6 @@ describe("ReadAnchors", () => {
 		const registry = new PlaneRegistry();
 		const anchors = new ReadAnchors(registry, undefined);
 		anchors.report("alice", "team-a", { epoch: 1, seq: 50, at: 5000 });
-		// A second, slower device reports its own older position a moment later.
 		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 30, at: 6000 })).toBe(false);
 		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 1, seq: 50, at: 5000 });
 	});
@@ -35,8 +34,6 @@ describe("ReadAnchors", () => {
 		expect(anchors.report("alice", "team-a", { epoch: 1, seq: 50, at: 9000 })).toBe(false);
 	});
 
-	// A re-mint restarts seq numbering, so a seq from the previous instance does not outrank it
-	// however large. The epoch decides nothing here; only that it CHANGED.
 	it("a re-minted mailbox wins with a low seq against a huge one", () => {
 		const registry = new PlaneRegistry();
 		const anchors = new ReadAnchors(registry, undefined);
@@ -45,8 +42,6 @@ describe("ReadAnchors", () => {
 		expect(anchors.snapshot().alice["team-a"]).toEqual({ epoch: 2, seq: 1, at: 6000 });
 	});
 
-	// Epochs are minted at random, so a smaller number is not an older mailbox. Across a re-mint the
-	// report time decides, and a seq from a dead instance means nothing however large.
 	it("a numerically smaller epoch wins when its report is later", () => {
 		const registry = new PlaneRegistry();
 		const anchors = new ReadAnchors(registry, undefined);
@@ -101,10 +96,10 @@ describe("ReadAnchors", () => {
 			const bobBefore = registry.version(readAnchorsPlaneName("bob"));
 
 			anchors.report("alice", "team-a", { epoch: 1, seq: 10, at: 1000 });
-			registry.markDirty(readAnchorsPlaneName("alice")); // the caller's own responsibility, mirroring consoleHandler.ts
+			registry.markDirty(readAnchorsPlaneName("alice"));
 
 			expect(registry.version(readAnchorsPlaneName("alice"))?.counter).toBe((aliceBefore?.counter ?? 0) + 1);
-			expect(registry.version(readAnchorsPlaneName("bob"))).toEqual(bobBefore); // untouched
+			expect(registry.version(readAnchorsPlaneName("bob"))).toEqual(bobBefore);
 		});
 
 		it("a snapshot for one owner's plane never includes another owner's data", () => {
@@ -145,7 +140,6 @@ describe("ReadAnchors", () => {
 			const anchors = new ReadAnchors(registry, restoredPlanes);
 			anchors.restore({ alice: { "team-a": { epoch: 1, seq: 10, at: 1000 } } });
 			anchors.ensureRegistered("alice");
-			// Restored epoch/counter carried through, not reset to a fresh mint.
 			expect(registry.version(name)?.epoch).toBe(777);
 			expect(registry.version(name)?.counter).toBe(3);
 		});
@@ -153,9 +147,6 @@ describe("ReadAnchors", () => {
 
 	describe("abuse hardening", () => {
 		it("report_read's wire schema rejects an epoch outside the range a real device could ever mint", () => {
-			// mintEpoch (plane-registry.ts) caps at 0x7ffffffe - an unbounded epoch would let a single
-			// op permanently outrank every legitimate epoch this owner's real devices could ever send,
-			// with no reset path (see ReadAnchors.report's own monotonic merge).
 			const tooLarge = ConsoleOpSchema.safeParse({
 				kind: "report_read",
 				team: "team-a",
@@ -180,13 +171,10 @@ describe("ReadAnchors", () => {
 			for (let i = 0; i < 500; i++) {
 				expect(anchors.report("alice", `team-${i}`, { epoch: 1, seq: 1, at: 1000 })).toBe(true);
 			}
-			// The 501st distinct team is refused outright - never stored.
 			expect(anchors.report("alice", "team-500", { epoch: 1, seq: 1, at: 1000 })).toBe(false);
 			expect(anchors.snapshot().alice["team-500"]).toBeUndefined();
 			expect(Object.keys(anchors.snapshot().alice)).toHaveLength(500);
-			// An already-tracked team can still advance normally, unaffected by the cap.
 			expect(anchors.report("alice", "team-0", { epoch: 1, seq: 2, at: 2000 })).toBe(true);
-			// A different owner is entirely unaffected by this owner's cap.
 			expect(anchors.report("bob", "team-a", { epoch: 1, seq: 1, at: 1000 })).toBe(true);
 		});
 	});

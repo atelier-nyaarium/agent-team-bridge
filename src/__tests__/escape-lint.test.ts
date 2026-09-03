@@ -15,8 +15,6 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 
 const mockRouterPost = vi.mocked(routerPost);
 
-// No attachments anywhere in this file, so no blob plane: a plain router mock suffices.
-// Resets call history, so a test that asserts "did not post" still reads clean.
 function resetRouterPost(reply: unknown = {}): void {
 	mockRouterPost.mockReset();
 	mockRouterPost.mockImplementation(async () => reply);
@@ -27,7 +25,7 @@ beforeEach(() => {
 });
 
 describe("literalEscapeHazard (the escaped-newline lint)", () => {
-	const bs = "\\"; // one backslash character, so hazards below read as the agent would type them
+	const bs = "\\";
 
 	it("catches a literal escape used as a list break (the live incident's shape)", () => {
 		expect(literalEscapeHazard(`app, everywhere.${bs}n- **Phase 2** (4990554): the decorator`)).toContain("n- ");
@@ -45,7 +43,7 @@ describe("literalEscapeHazard (the escaped-newline lint)", () => {
 		expect(literalEscapeHazard(`look:\n\`\`\`\nprintf("a${bs}n- b");\n\`\`\`\ndone`)).toBeNull();
 		expect(literalEscapeHazard(`look:\n~~~\na${bs}n${bs}n b\n~~~\ndone`)).toBeNull();
 		expect(literalEscapeHazard(`the regex \`${bs}n|${bs}r\` splits lines`)).toBeNull();
-		// CommonMark treats an unterminated fence as code to end-of-string; so does the lint.
+		// Unclosed fences stay code.
 		expect(literalEscapeHazard(`look:\n\`\`\`\nprintf("a${bs}n- b");\nno closing fence`)).toBeNull();
 	});
 
@@ -54,21 +52,19 @@ describe("literalEscapeHazard (the escaped-newline lint)", () => {
 	});
 
 	it("does not manufacture a hazard by gluing text around stripped code", () => {
-		// Deleting a span outright would turn these into "...\n- ..." - blanking must not.
+		// Blanking preserves surrounding text.
 		expect(literalEscapeHazard(`hello${bs}n\`world\`- test`)).toBeNull();
 		expect(literalEscapeHazard(`Status codes:${bs}n\`404\`- Not Found`)).toBeNull();
 	});
 
 	it("follows CommonMark's strict closing-fence rule (delimiter plus whitespace only)", () => {
-		// A delimiter line with trailing text inside a fence is CODE CONTENT, not a closer - the
-		// renderer keeps the block open, so escapes there are exempt and the block runs on.
+		// Trailing text does not close fences.
 		expect(
 			literalEscapeHazard(`\`\`\`\nfirst\n\`\`\` not-a-closer\nsecond${bs}n- still code\n\`\`\`\nafter`),
 		).toBeNull();
-		// An escape glued onto a would-be closer line keeps the fence open the same way the
-		// renderer does - the whole tail stays code.
+		// Escaped tails do not close fences.
 		expect(literalEscapeHazard(`intro\n\`\`\`\ncode\n\`\`\`${bs}n- glued after delimiter`)).toBeNull();
-		// An opener's info string is never rendered; a tilde line cannot close a backtick fence.
+		// Fence types stay separate.
 		expect(
 			literalEscapeHazard(`\`\`\`js${bs}n- in the info string\ncode\n~~~\nstill code${bs}n- x\n\`\`\`\ndone`),
 		).toBeNull();
@@ -76,25 +72,22 @@ describe("literalEscapeHazard (the escaped-newline lint)", () => {
 
 	it("exempts double-backtick inline spans (run-length aware)", () => {
 		expect(literalEscapeHazard(`code: \`\`${bs}n- x\`\``)).toBeNull();
-		// A real hazard beside an unrelated double-backtick span is still caught.
+		// Adjacent spans leave hazards visible.
 		expect(literalEscapeHazard(`see \`\`code\`\` then${bs}n- REAL HAZARD`)).toContain("n- ");
 	});
 
 	it("is not derailed by a fence delimiter mentioned mid-line", () => {
-		// A prose mention of ``` (not at a line start) must not open a fence and swallow a
-		// later hazard.
+		// Fences do not open mid-line.
 		expect(
 			literalEscapeHazard(`Use \` \`\`\` \` to start a fence.\nmore prose${bs}n- bullet hazard after`),
 		).toContain("n- ");
 	});
 
 	it("produces a reject an agent can quote back verbatim without re-tripping the lint", () => {
-		// Every snippet shape must round-trip: plain, backtick-bearing (the apostrophe swap), and
-		// the double-escape shape.
+		// Reject snippets must round-trip.
 		for (const hazardous of [
 			`everywhere.${bs}n- Phase 2`,
-			// An UNPAIRED backtick survives span-blanking into the snippet - the apostrophe swap
-			// is what keeps the reject's own code span intact.
+			// Unpaired backticks need apostrophe substitution.
 			`an unpaired \` tick${bs}n- struct`,
 			`edges.${bs}n${bs}n**Accepted**`,
 		]) {
@@ -119,7 +112,7 @@ describe("postReply escape-lint enforcement", () => {
 		);
 		expect(result.isError).toBe(true);
 		expect(result.content[0].text).toContain('"response"');
-		// The error must SHOW the two-character sequence, not a real line break.
+		// Show literal escapes.
 		expect(result.content[0].text).toContain("\\n");
 		expect(mockRouterPost).not.toHaveBeenCalled();
 	});

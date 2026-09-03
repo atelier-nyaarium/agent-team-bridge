@@ -202,7 +202,6 @@ describe("blob uploader", () => {
 		expect(call.mock.calls[1][1]).not.toHaveProperty("ref");
 	});
 
-	// Final verification may delete the partial. complete:false must not report an uploaded blob.
 	it("reports failed when the Router does not verify the final ciphertext", async () => {
 		const bytes = Buffer.from("unverified");
 		const blobId = blobIdFor(bytes);

@@ -9,8 +9,6 @@ class SelfMigrationTest {
 	private fun record(opId: String, createdAt: Long = 0L) =
 		ScheduledSend("text", emptyList(), 100L, opId, null, createdAt)
 
-	// Releasing on anything but acceptance loses the send whenever the Router did not take it. The
-	// worst case has to be a send that fires locally, never one that never fires.
 	@Test
 	fun releasesTheLocalRecordOnlyWhenTheRouterAcceptedIt() {
 		assertTrue(releasesLocal(UploadOutcome.ACCEPTED))
@@ -18,8 +16,6 @@ class SelfMigrationTest {
 		assertFalse(releasesLocal(UploadOutcome.REFUSED))
 	}
 
-	// A fresh id per attempt would make each retry its own operation, so a record uploaded twice
-	// would land twice.
 	@Test
 	fun uploadsUnderTheRecordsOwnIdRatherThanAFreshOne() {
 		val rec = record("op-1")

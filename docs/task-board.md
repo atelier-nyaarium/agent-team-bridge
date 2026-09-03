@@ -6,26 +6,25 @@ The owner's board, its attachments, and edit awareness.
 
 Two paths, two stores.
 
-- **Agent path (Router-held).** `/task-board` reads and writes the Router's board over the gateway's
+- **Agent path (Router-held):** `/task-board` reads and writes the Router's board over the gateway's
   own WS. The Router stores clear structure with sealed title, body and attachment filenames. It
   never opens them.
-- **Console path (gateway-held).** The phone writes `gateway/boardStore.ts`. The two boards are
+- **Console path (gateway-held):** The phone writes `gateway/boardStore.ts`. The two boards are
   separate stores and do not sync.
 
 ## Router-held board
 
 `gateway/router/boardClient.ts` is the gateway's only door to it.
 
-- **It is the sole sealer and opener of board text.** Titles seal under `board.title`, bodies under
+- **It is the sole sealer and opener of board text:** Titles seal under `board.title`, bodies under
   `board.body`, filenames under `board.name` keyed by `blobId` so a reorder cannot mislabel a file.
-- **Every board kind binds the entry id into the AAD**, filenames binding the `blobId` after it. One
-  entry's ciphertext moved into another entry's slot fails to authenticate, so a Router that cannot
-  read board text cannot relabel it either. The phone builds the same kind in `BoardSealing`.
-- **It is the sole mapper between a local session key and the Router's triple.** Another gateway's
+- **Every board kind binds the entry id into the AAD:** filenames bind the `blobId` after it. The
+  phone builds the same kind in `BoardSealing`.
+- **It is the sole mapper between a local session key and the Router's triple:** Another gateway's
   session comes back as an opaque joined key, never as a local one.
 - Writes are CAS on `revision`. A conflict answer carries the board that won, so the mutation
   rebuilds against it without a second read.
-- **A Router that cannot answer is a transport fault, not a refusal.** The route answers 503. Only a
+- **A Router that cannot answer is a transport fault, not a refusal:** The route answers 503. Only a
   refusal retires the caller's write.
 - Text with no key held opens to a placeholder rather than dropping the entry.
 - An upsert that leaves attachments alone keeps their sealed names. Naming attachments replaces both.
@@ -39,23 +38,20 @@ Two paths, two stores.
 
 Stored by `gateway/boardStore.ts`. Entries use parent pointers and fractional ranks.
 
-- **The store is the sole validator.** `BoardRefusal` replies use the `refused: ` marker, the only
-  client-visible signal that retires a queued edit. `refusalError` is its sole producer;
-  `board-refusal-residue.test.ts` enforces this.
-- **A session end is one mutation.** `sessionEnded` applies its required `boardDisposition` to the
+- **The store is the sole validator:** `BoardRefusal` replies use the `refused: ` marker. `refusalError`
+  is its sole producer.
+- **A session end is one mutation:** `sessionEnded` applies its required `boardDisposition` to the
   complete server-side session set, and the reply is authoritative for console reporting.
 - The pending queue is a separate writer. Forgetting a session drops its queued writes and linked
   deletes. A lane may pass a persistently failing action, but never reorders another write to the
   same entry ahead of it.
-- **`forget` performs its own local-address check.** Its kill path swallows target-resolution errors,
-  so the guard prevents a foreign address from forgetting a colliding local session.
-- Invalid ranks are refused before durable persistence. Restore stays tolerant, because one poisoned
-  entry must not poison the board.
+- **`forget` performs its own local-address check:** Its kill path swallows target-resolution errors.
+- Invalid ranks are refused before durable persistence. Restore tolerates invalid entries.
 - Board mutations are absolute and replay through `DurableOpStore`. Retrying a lost reply must not
   reapply an older value over newer state.
-- Cascade is opt-in per write. The seed state is not rederived; `orphanedParents` comes from pre/post
-  state for parents whose child disappeared.
-- **A board session is `(gatewayId, sessionId)`.** The stored id is Gateway-local; `Team.name` is
+- Cascade is opt-in per write. `orphanedParents` comes from pre/post state for parents whose child
+  disappeared.
+- **A board session is `(gatewayId, sessionId)`:** The stored id is Gateway-local; `Team.name` is
   qualified. `consoleTargets.boardSessionKey` and `BoardManager.sessionKeyOf` are the sole
   directional converters, and unknown or foreign targets resolve to null.
 - A queued console edit retires on refusal only. Absolute writes must not be reordered.
@@ -83,7 +79,7 @@ Attachment bytes belong to entries in `src/shared/board-attachment-store.ts`, se
 blob cache. A Router-held entry may name only blobs the Router's reference-held store already holds; a
 write naming anything else is refused `attachment_missing`.
 
-- **`board_set_attachments` is the sole field committer.** `upsert` ignores incoming `attachments`.
+- **`board_set_attachments` is the sole field committer:** `upsert` ignores incoming `attachments`.
 - The op declares `supplied`. Durable or cached members are retained, uploading members cause retry,
   and unresolved members are dropped and reported.
 - Presence checks are durable-first, and every member resolves before any is adopted.
@@ -105,7 +101,7 @@ write naming anything else is refused `attachment_missing`.
 
 ## Awareness
 
-- **Awareness rides the next message.** The send route drains each session's bank into
+- **Awareness rides the next message:** The send route drains each session's bank into
   `channel_push`. Standalone pushes are only the `act_now` fallback.
 - The bank keeps the first pre-state and last post-state per identity, then diffs at flush.
   Intermediate edits, moves, and undo sequences collapse into one net fact.

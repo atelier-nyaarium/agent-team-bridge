@@ -32,6 +32,7 @@ import { WS_MAX_PAYLOAD_BYTES } from "./gatewayTransport.js";
 import { InboxService } from "./inbox/inboxService.js";
 import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
+import { decideServe } from "./migration/serveGate.js";
 import { DomainQuota } from "./owner/domainQuota.js";
 import { createOwnerServices } from "./ownerServices.js";
 import { PublicApproval } from "./publicApproval.js";
@@ -47,7 +48,7 @@ export interface RouterServerParams {
 	federationToken: string;
 	store: FileSecretStore;
 	tls?: RouterTls;
-	/** Reach data is served by the app-token-gated `reach` op, not public `/health`. */
+	/** Reach requires app token. */
 	reach?: RouterReachAnswer;
 }
 
@@ -187,6 +188,11 @@ export class RouterServer {
 			referenceHeld: this.referenceHeld,
 		});
 		this.sweepTimer = setInterval(() => {
+			// Refuse imports during service.
+			if (decideServe(params.dataDir).kind === "refuse") {
+				console.error(`[router] an import began while serving; exiting rather than answering from it`);
+				process.exit(1);
+			}
 			try {
 				this.inbox.sweep();
 				this.blobCache.sweep();
@@ -217,9 +223,7 @@ export class RouterServer {
 				socket.destroy();
 				return;
 			}
-			// A console proves itself by SIGNATURE in its first frame, which no header can carry. The
-			// app token still gates the upgrade, so an unsigned socket cannot be held open by anyone
-			// who merely reached the port.
+			// Console auth uses token and signature.
 			const authorized = console
 				? this.console.authorizeToken(request.headers[APP_TOKEN_HEADER])
 				: transport.authorizeUpgrade(request.headers.authorization);
@@ -408,7 +412,6 @@ export class RouterServer {
 		if (!result.ok) return result;
 		if (op.kind === "submit_revocation") {
 			this.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
-			// A revoked console keeps no socket either; its cursor is already gone.
 			this.consoleSockets.forget(domainId, op.revocation.revocation.signPub);
 		}
 		if (op.kind === "submit_admission" || op.kind === "submit_revocation") {
@@ -459,7 +462,7 @@ export class RouterServer {
 		return buildRoster(req.signerSignPub, domains, this.bridge.onlineDomainIds());
 	}
 
-	/** Return the bearer only for a fresh proof from a Domain root. */
+	/** Bearer requires fresh root proof. */
 	private handleTransport(req: TransportRequest): TransportResult {
 		const opaque: TransportResult = { ok: false, error: "not a member of this network" };
 		if (!verifyTransportRequest(req)) return opaque;
@@ -469,7 +472,6 @@ export class RouterServer {
 			if (Math.abs(now - at) > TRANSPORT_MAX_SKEW_MS) this.transportNonces.delete(nonce);
 		}
 		if (this.transportNonces.has(req.nonce)) return opaque;
-		// Only a Domain root may receive the bearer.
 		const roots = this.params.store
 			.listDomains()
 			.some(({ state }) => state.ownerSignPub && state.ownerSignPub === req.signerSignPub);

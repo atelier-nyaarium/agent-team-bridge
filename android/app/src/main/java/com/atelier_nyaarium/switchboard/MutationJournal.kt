@@ -56,13 +56,7 @@ internal class MutationJournal(
 	@Synchronized
 	fun pending(): List<MutationEntry> = entries.values.filter { it.state == MutationState.PENDING }
 
-	/**
-	 * Everything unsettled, claimed once per process at start, before any live send.
-	 *
-	 * SENT is included on purpose: a process that died after sending does not know whether the write
-	 * landed, and the opId makes re-sending it either a no-op or the recorded result. Leaving SENT
-	 * behind would silently drop exactly the writes a crash put at risk.
-	 */
+	/** Replay PENDING and SENT entries before live sends. */
 	@Synchronized
 	fun claimForReplay(): List<MutationEntry> {
 		val unsettled = entries.values.filter { it.state == MutationState.PENDING || it.state == MutationState.SENT }
@@ -79,6 +73,7 @@ internal class MutationJournal(
 			filesDir.mkdirs()
 			FileOutputStream(temp).use { output ->
 				keep.forEach { output.write(line(it).toByteArray(Charsets.UTF_8)) }
+				// Fsync before replacement.
 				output.fd.sync()
 			}
 			if (!temp.renameTo(file)) error("cannot replace mutation journal")
@@ -90,13 +85,7 @@ internal class MutationJournal(
 		}
 	}
 
-	/**
-	 * Replays the file, dropping a line that will not parse.
-	 *
-	 * A kill between the append and its fsync leaves a truncated final line, and this runs from the
-	 * constructor, so throwing on it would take the whole app down at launch and keep doing so until
-	 * the file was cleared by hand. Every complete line before the torn one is still recovered.
-	 */
+	/** Drop torn final lines during recovery. */
 	private fun recover() {
 		if (!file.isFile) return
 		var torn = 0
@@ -128,6 +117,7 @@ internal class MutationJournal(
 			filesDir.mkdirs()
 			FileOutputStream(file, true).use { output ->
 				output.write(line(entry).toByteArray(Charsets.UTF_8))
+				// Fsync before acknowledging the commit.
 				output.fd.sync()
 			}
 		} catch (error: Throwable) {

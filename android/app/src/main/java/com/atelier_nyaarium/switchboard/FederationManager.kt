@@ -38,21 +38,17 @@ import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.json.Json
 
-/** Admitted member shown on the management board. */
 data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
 
-/** Owner backup restore outcome. */
 enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 
-/** Public owner material for settings. */
 data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
 
-/** Domain trust anchor, console identity, and mirrored keyring. */
 class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }
 
-	/** Generates once and refuses to replace a corrupt stored identity. */
+	/** Refuses to replace a corrupt owner identity. */
 	@Synchronized
 	private fun ownerIdentity(): Crypto.Identity =
 		when (val load = store.loadOwnerIdentity()) {
@@ -61,7 +57,6 @@ class FederationManager(private val store: AppStateStore) {
 			IdentityLoad.Corrupt -> error("owner key corrupt - the stored owner root key did not decode; restore from backup or recover the Domain")
 		}
 
-	/** Generates and persists the console identity once. */
 	@Synchronized
 	fun consoleIdentity(): Crypto.Identity =
 		when (val load = store.loadIdentity()) {
@@ -70,13 +65,11 @@ class FederationManager(private val store: AppStateStore) {
 			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run setup.sh")
 		}
 
-	/** Returns public owner material, or null for a corrupt stored key. */
 	fun ownerKeysForDisplay(): OwnerKeysView? =
 		runCatching { ownerIdentity() }.getOrNull()?.let {
 			OwnerKeysView(it.sign.pub, it.box.pub, Crypto.fingerprint(it.sign.pub))
 		}
 
-	/** Checks ownership without minting a key. */
 	fun holdsDomainOwnerKey(): Boolean {
 		val held = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
 		val root = Keyring.parse(store.loadDomain())?.ownerSignPub ?: return true
@@ -87,7 +80,6 @@ class FederationManager(private val store: AppStateStore) {
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub
 
-	/** Ensure epoch 1 for the Domain root holder. */
 	fun ensureContentEpochs(domainId: String?) {
 		if (domainId == null) return
 		if (!holdsDomainOwnerKey()) return
@@ -95,14 +87,11 @@ class FederationManager(private val store: AppStateStore) {
 		ContentKeyring(store = store).ensureOwnerEpochs(owner, domainId)
 	}
 
-	/** The owner key fingerprint the admin confirms when rooting the Domain host-side. */
 	fun ownerSas(): String = Crypto.fingerprint(ownerIdentity().sign.pub)
 
-	/** A passphrase-encrypted backup of the owner root key, for offline safekeeping. */
 	fun exportOwnerBackup(passphrase: String): String =
 		OwnerBackup.export(json.encodeToString(Crypto.Identity.serializer(), ownerIdentity()), passphrase)
 
-	/** Restore the owner key under Domain-root ownership rules. */
 	@Synchronized
 	fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult {
 		val restored = runCatching { json.decodeFromString(Crypto.Identity.serializer(), OwnerBackup.restore(blob, passphrase)) }
@@ -135,8 +124,7 @@ class FederationManager(private val store: AppStateStore) {
 		return build(identity.sign.pub, nowMs, n, proof(identity.sign.pub, nowMs, n, identity.sign.priv))
 	}
 
-	/** This Console's own owner-signed kind:console admission, to submit to the Router so a
-	 * Gateway will trust its sealed ops. */
+	/** Owner-signed console admission. */
 	fun consoleAdmission(nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
 		val console = consoleIdentity()
@@ -144,48 +132,36 @@ class FederationManager(private val store: AppStateStore) {
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a kind:gateway admission for a scanned admit-gateway identity. */
 	fun admitGateway(gatewayId: String, signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
 		val admission = Admission("gateway", signPub, boxPub, gatewayId, nowMs, nonce())
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a kind:console admission for a freshly-approved second device's console keys (the
-	 * "Add a device" self-enroll). The owner attests the new device's identity so a Gateway trusts its
-	 * sealed ops, exactly like this console's own admission - only the subject keys differ. */
 	fun admitConsole(signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
 		val admission = Admission("console", signPub, boxPub, null, nowMs, nonce())
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Seal a console-transport bundle to a new device's box key, SIGNED BY THE OWNER key, so the new
-	 * device verifies the seal against the owner signPub it pinned from the QR before it provisions.
-	 * A forged sealed reply from the public ingress fails that signature check. */
+	/** Owner-signs the sealed transport bundle. */
 	fun sealConsoleTransport(recipientBoxPub: String, plaintext: ByteArray): SealedEnvelope {
 		val owner = ownerIdentity()
 		val sealed = Crypto.seal(plaintext, recipientBoxPub, owner.sign.priv)
 		return SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
 	}
 
-	/** Unseal the console-transport reply on the NEW device, verifying it against the owner signPub
-	 * pinned from the QR and decrypting with this device's own console box key. Throws on a bad
-	 * signature (a forged reply) or wrong recipient. */
+	/** Verify owner signature before unsealing. */
 	fun unsealConsoleTransport(sealed: SealedEnvelope, ownerSignPub: String): ByteArray {
 		val console = consoleIdentity()
 		val env = Crypto.SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
 		return Crypto.unseal(env, console.box.priv, ownerSignPub)
 	}
 
-	/** Owner-sign a revocation for a member's signing key. */
 	fun revoke(signPub: String, nowMs: Long): SignedRevocation =
 		AdmissionCrypto.signRevocation(Revocation(signPub, nowMs, nonce()), ownerIdentity().sign.priv, ownerIdentity().sign.pub)
 
-	/** Owner-sign a cross-Domain link edge: an attestation that traffic from this owner's
-	 * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked with.
-	 * the Router's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
-	 * exists. Content-blind: it names only the two Domain ids. */
+	/** Authorize cross-Domain relay. */
 	fun signXdomainLinkEdge(
 		srcDomainId: String,
 		dstDomainId: String,
@@ -193,27 +169,19 @@ class FederationManager(private val store: AppStateStore) {
 		edgeNonce: String? = null,
 	): SignedXDomainLinkEdge {
 		val owner = ownerIdentity()
-		// A caller may pin the nonce so a retry re-signs the same edge identity, which the Router
-		// dedupes by (srcDomainId, nonce); an unpinned caller mints a fresh one.
+		// Pinned nonce preserves retry identity.
 		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, edgeNonce ?: nonce())
 		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a cross-Domain link-edge revocation: withdraws the attestation above so
-	 * the Router drops the edge and its relay-affinity gate refuses the cross-Domain relay again.
-	 * The revocation prefix is distinct from the edge's, so neither signature replays as the
-	 * other. */
+	/** Revoke cross-Domain relay. */
 	fun signXdomainLinkRevocation(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkRevocation {
 		val owner = ownerIdentity()
 		val rev = XDomainLinkRevocation(srcDomainId, dstDomainId, nowMs, nonce())
 		return XDomainLinkCrypto.signRevocation(rev, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign this owner's side of a cross-Domain link, binding the friend Gateway's keys the
-	 * SAS confirmed out of band. The two sides are symmetric, each signed by its own phone-held
-	 * owner key; the friend's Gateway verifies this side under this owner key and persists it as
-	 * its cross-Domain peer. `nonce` is supplied so a retried confirm reuses the same signed link
-	 * rather than a fresh one the Gateway has not seen. */
+	/** Sign this owner's cross-Domain link side. */
 	fun signMyLink(
 		peerOwnerSignPub: String,
 		peerDomainId: String,
@@ -237,68 +205,45 @@ class FederationManager(private val store: AppStateStore) {
 		return XDomainLinkCrypto.signLink(link, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** A fresh base64 nonce for an owner-signed link side. Exposed so the wizard can pin it for
-	 * the lifetime of one pairing, keeping the signed link byte-stable across a retry. */
 	fun freshLinkNonce(): String = nonce()
 
-	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
-	 * signing key so the Router can scope the roster to this owner's network. */
 	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
 		return signRequest(RequestSigner.CONSOLE, nowMs, ProvisionOpsCrypto::signRosterRequest) { pub, at, n, signature ->
 			com.atelier_nyaarium.switchboard.proto.RosterRequest(pub, at, n, signature)
 		}
 	}
 
-	/** Build a signed gateway-bridge transport request. The owner key (not the console key) signs
-	 * the TRANSPORT_REQUEST proof, because the Router resolves the signer to a rooted owner and returns
-	 * that network's transport after verifying and scoping to this owner. */
+	/** Owner-signed transport request. */
 	fun signTransportRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TransportRequest {
 		return signRequest(RequestSigner.OWNER, nowMs, ProvisionOpsCrypto::signTransportRequest) { pub, at, n, signature ->
 			com.atelier_nyaarium.switchboard.proto.TransportRequest(pub, at, n, signature)
 		}
 	}
 
-	/** Build a signed "who armed trust toward me?" query. The arms are indexed by owner key, so the
-	 * owner key (not the console key) signs the TRUST_PENDING proof; the Router verifies and scopes to
-	 * this owner before listing the arms. */
+	/** Owner-signed pending-trust query. */
 	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
 		return signRequest(RequestSigner.OWNER, nowMs, ProvisionOpsCrypto::signTrustPendingRequest) { pub, at, n, signature ->
 			com.atelier_nyaarium.switchboard.proto.TrustPendingRequest(pub, at, n, signature)
 		}
 	}
 
-	/** A fresh rendezvous id for a trust arm (also the SAS pin both sides bind). Unguessable so a
-	 * third party cannot target a live rendezvous. */
 	fun freshRendezvousId(): String = nonce()
 
-	/** This owner's party for a trust compare: the owner keys plus the given local Domain. Reuses
-	 * the EnrollParty shape so the SAS/commitment machinery is shared. */
 	fun trustParty(domainId: String): com.atelier_nyaarium.switchboard.proto.EnrollParty {
 		val owner = ownerIdentity()
 		return com.atelier_nyaarium.switchboard.proto.EnrollParty(owner.sign.pub, owner.box.pub, domainId)
 	}
 
-	/** A fresh handshake id, minted by the admin into the enroll QR. Unguessable so a third party
-	 * who learned a Domain cannot target a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()
 
-	/** A fresh device-approval token (approvalId or nonce) for the "Add a device" rendezvous. Standard
-	 * base64 so it satisfies the wire's b64 field; unguessable so the public ingress cannot be probed. */
 	fun freshApprovalToken(): String = nonce()
 
-	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR out of band
-	 * and is never sent to the Router, so the untrusted broker cannot grind a candidate compare code; the
-	 * residual is the 6-digit blind online guess, not an offline search. */
 	fun freshEnrollPin(): String = nonce()
 
-	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (the Router learns
-	 * the peer's keys only at reveal, after it has had to commit to its own substitution). */
 	fun freshEnrollSalt(): String = nonce()
 
-	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
-	/** This device's content keyring, read fresh so a just-installed epoch is visible at once. */
 	fun contentKeyring(): ContentKeyring = ContentKeyring(consoleIdentity().box.priv, store)
 
 	@Synchronized
@@ -311,7 +256,7 @@ class FederationManager(private val store: AppStateStore) {
 		}
 	}
 
-	/** Seal transport and content keys for Gateway bootstrap. */
+	/** Seal Gateway bootstrap keys. */
 	fun sealBundle(
 		nonce: String,
 		transport: GatewayTransport,
@@ -320,13 +265,11 @@ class FederationManager(private val store: AppStateStore) {
 		domainId: String?,
 	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
-		// Register replies carry roster and revocations. Terminal paste fits three epochs.
 		val keyring = keyring()
 		val ring = keyring.snapshot
-		// Include the key signer's admission for roster-free resolution.
-		// Root holders mint it before keyring sync.
 		val consoleAdmission = keyring.signedConsoleAdmission(console.sign.pub)
 			?: if (holdsDomainOwnerKey()) consoleAdmission(System.currentTimeMillis()) else error("this console is not admitted")
+		// Include the signer admission for roster-free trust.
 		ensureContentEpochs(domainId)
 		val bundle = GatewayBootstrapBundle(
 			nonce = nonce,
@@ -350,18 +293,9 @@ class FederationManager(private val store: AppStateStore) {
 		)
 	}
 
-	/** Apply a snapshot synced from a Gateway, but ONLY when it is rooted at this device's own owner
-	 * key, so a relay that tampered with the root cannot swap the pinned owner out from under the
-	 * Console. The server snapshot is folded OVER the current one for both admissions and
-	 * revocations, deduped by signing key plus nonce and ordered by issue time. Both are append-only
-	 * owner-signed facts, so the union is safe and convergent: a member the owner just admitted or
-	 * revoked locally survives until the Router rebroadcasts it, then the dedupe makes the rebroadcast
-	 * idempotent. Taking revocations canonical-from-server alone would drop a locally-merged
-	 * revocation on the next poll, letting a just-revoked member reappear until the Router caught up. */
+	/** Merge local and remote facts only under this owner. */
 	@Synchronized
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String): Boolean {
-		// Read the owner key without minting one. A sync arriving before this device has an owner,
-		// or over a corrupt one, cannot be verified and must not seat a throwaway root.
 		val ownerPub = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
 		val current = keyring().snapshot
@@ -374,8 +308,6 @@ class FederationManager(private val store: AppStateStore) {
 		return true
 	}
 
-	/** The admitted members of the keyring (owner-verified, non-revoked), deduped by
-	 * signing key, for the management board. */
 	fun members(): List<MemberInfo> {
 		val k = keyring()
 		val mySign = consoleIdentity().sign.pub
@@ -389,9 +321,6 @@ class FederationManager(private val store: AppStateStore) {
 		return out
 	}
 
-	/** Fold a freshly owner-signed admission into the local keyring so the Console can seal to a
-	 * member it just admitted, before the Router's snapshot syncs back. Synchronized with applyDomainSync
-	 * so a concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeAdmission(signed: SignedAdmission) {
 		val current = keyring().snapshot
@@ -399,9 +328,6 @@ class FederationManager(private val store: AppStateStore) {
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 
-	/** Fold a freshly owner-signed revocation into the local keyring so the revoked member drops off
-	 * the board immediately, before the Router rebroadcasts it. Synchronized with applyDomainSync so a
-	 * concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeRevocation(signed: SignedRevocation) {
 		val current = keyring().snapshot
@@ -409,15 +335,6 @@ class FederationManager(private val store: AppStateStore) {
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 
-	////////////////////////////////
-	//  Friend cross-Domain onboarding (pending tenant + first-root + display name)
-
-	////////////////////////////////
-	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
-
-	/** The owners this owner has completed a trust ceremony with, by ownerSignPub. The persistent
-	 * friend edge, recorded even for a gateway-less person, distinct from the gateway-side
-	 * relay-affinity edges that enable actual cross-Domain traffic. */
 	@Synchronized
 	fun trustedOwners(): Set<String> {
 		val raw = store.loadTrustedOwners() ?: return emptySet()
@@ -427,23 +344,19 @@ class FederationManager(private val store: AppStateStore) {
 		}.getOrDefault(emptySet())
 	}
 
-	/** True iff this owner has trusted the given owner key. */
 	fun isTrusted(ownerSignPub: String): Boolean = ownerSignPub.isNotEmpty() && trustedOwners().contains(ownerSignPub)
 
-	/** Record a trust edge to an owner (idempotent). Called on a completed trust ceremony. */
 	@Synchronized
 	fun addTrustedOwner(ownerSignPub: String) {
 		if (ownerSignPub.isEmpty()) return
 		persistTrustedOwners(trustedOwners() + ownerSignPub)
 	}
 
-	/** Drop a trust edge to an owner (the untrust friend-graph half; the relay-edge revoke is separate). */
 	@Synchronized
 	fun removeTrustedOwner(ownerSignPub: String) {
 		persistTrustedOwners(trustedOwners() - ownerSignPub)
 	}
 
-	/** Owner-sign an untrust tombstone withdrawing trust in a peer owner (myOwner -> peerOwner). */
 	fun signUntrust(peerOwnerSignPub: String, nowMs: Long): com.atelier_nyaarium.switchboard.proto.SignedXDomainUntrust {
 		val owner = ownerIdentity()
 		val untrust = com.atelier_nyaarium.switchboard.proto.XDomainUntrust(
@@ -461,51 +374,36 @@ class FederationManager(private val store: AppStateStore) {
 		store.saveTrustedOwners(arr.toString())
 	}
 
-	/** A fresh opaque Domain id (lowercase hex, never shown to the human). 16 random bytes is well
-	 * under the 64-char slug bound and collides negligibly, so the admin never has to choose one. */
 	fun newDomainId(): String {
 		val bytes = ByteArray(16).also { rnd.nextBytes(it) }
 		return bytes.joinToString("") { "%02x".format(it) }
 	}
 
-	/** Self-sign this device's first-root of a PENDING Domain at its owner key. No admission exists
-	 * yet, so the artifact is self-signed (the verifier checks the signature against the embedded
-	 * ownerSignPub) and the one-time invite `nonce` from the scanned blob is the authorization. The
-	 * Router roots the Domain idempotently on the same key and refuses a re-root at a different one. */
+	/** Self-sign the pending Domain root. */
 	fun signFirstRoot(domainId: String, nonce: String, nowMs: Long): SignedFirstRoot {
 		val owner = ownerIdentity()
 		val firstRoot = FirstRoot(domainId, owner.sign.pub, owner.box.pub, nonce, nowMs)
 		return ProvisionOpsCrypto.signFirstRoot(firstRoot, owner.sign.priv)
 	}
 
-	/** Owner-sign a request to pre-stage a friend's PENDING tenant (an opaque domainId plus the
-	 * friend's display name, no owner root). The signing nonce is this request's anti-replay token;
-	 * the Router mints the separate one-time invite nonce carried in the QR and returns it. */
 	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
 		val provision = ProvisionTenant(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signProvision(provision, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a request to drop a tenant (pending or rooted) by its Domain id. */
 	fun signRemoveTenant(domainId: String, nowMs: Long): SignedRemoveTenant {
 		val owner = ownerIdentity()
 		val removal = RemoveTenant(domainId, nowMs, nonce())
 		return ProvisionOpsCrypto.signRemove(removal, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a rename of this owner's own display name. The Router CAS-merges it onto the Domain
-	 * record and pushes it to the Domain's gateways. The `domainId` is this owner's own rooted
-	 * Domain; the Router verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a request to purge this owner's OWN Domain (the app-only "Revoke and Delete Domain").
-	 * The Router verifies the signature against the Domain's rooted owner key before dropping the whole slice.
-	 * The `domainId` is this owner's own rooted Domain. */
 	fun signDeleteDomain(domainId: String, nowMs: Long): SignedDeleteDomain {
 		val owner = ownerIdentity()
 		val deletion = DeleteDomain(domainId, nowMs, nonce())

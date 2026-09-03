@@ -7,7 +7,6 @@ import { CrossDomainShareState } from "../src/gateway/federation/crossDomainShar
 import { loadOrCreateIdentity } from "../src/gateway/federation/identity.js";
 import { buildExport } from "../src/gateway/migration/exportSnapshot.js";
 import { ReadAnchors } from "../src/gateway/readAnchors.js";
-import { boardTextAadKind } from "../src/shared/content-envelope.js";
 import { DeviceMailboxStore } from "../src/shared/device-mailbox.js";
 import { resolveLocalDomainId } from "../src/shared/domain-id.js";
 import { DurableStore, openDurable } from "../src/shared/durable-store.js";
@@ -91,13 +90,10 @@ function main(): void {
 		{
 			domainId,
 			gatewayId,
-			// The gateway holds the key, which is why the export runs here rather than at the Router.
-			seal: (plaintext, kind, entryId) => {
-				const sealed = keys.seal(Buffer.from(plaintext, "utf8"), {
-					domainId,
-					ownerSignPub,
-					kind: kind === "inbox.body" ? "inbox.body" : boardTextAadKind(kind, entryId),
-				});
+			// Gateway-owned key access.
+			// Kinds are already bound.
+			seal: (plaintext, kind) => {
+				const sealed = keys.seal(Buffer.from(plaintext, "utf8"), { domainId, ownerSignPub, kind });
 				return sealed.kind === "ok" ? sealed.envelope : null;
 			},
 			ownerIds: () => [...owners],

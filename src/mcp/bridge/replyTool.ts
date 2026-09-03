@@ -8,10 +8,9 @@ import { uploadBlob } from "../blobTransfer.js";
 import { parseDsCard } from "../designer/dsCard.js";
 import { opLedgerRefusal, routerPost, unansweredHandshakeId } from "./helpers.js";
 
-// Advisory and derived; the gateway holds the real backstop.
+// Gateway enforces the backstop.
 const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
-// A missing extension falls back to octet-stream, and both renderers classify on the prefix alone.
 const MIME_BY_EXT: Record<string, string> = {
 	".png": "image/png",
 	".jpg": "image/jpeg",
@@ -35,11 +34,8 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-/** The marker leads the file, so this decides card-ness exactly. Only a late <title> is missed. */
 const CARD_SNIFF_BYTES = 8192;
 
-/** Compose-time is the one place allowed to read bytes for this, so an attached card docks like a
- * designer_push_card one. */
 async function sniffDsCard(filePath: string, filename: string, mime: string): Promise<ReturnType<typeof parseDsCard>> {
 	const html = mime.startsWith("text/html") || /\.html?$/i.test(filename);
 	if (!html) return null;
@@ -53,7 +49,6 @@ async function sniffDsCard(filePath: string, filename: string, mime: string): Pr
 	}
 }
 
-/** Unlike an inbound ChannelFile, this always names transferable bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
 	const filename = basename(filePath);
@@ -66,7 +61,6 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
 	const card = await sniffDsCard(filePath, filename, mime);
 	const blobId = await uploadBlob(filePath);
-	// Narrows the stale-size gap; nothing locks the file across the two stats.
 	const after = await stat(filePath).catch(() => stats);
 	return {
 		filename,
@@ -76,19 +70,17 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 		// getTime(), not mtimeMs: the fraction fails the wire schema's integer check.
 		...wireModifiedAt(after.mtime),
 		blobId,
-		// A literal, never an argument, except a marker-led html that declares itself a card.
 		...(card ? { role: "design-card" as const, ...card } : { role: "attachment" as const }),
 	};
 }
 
-/** Omission is a supported sender state; a null or NaN would fail the whole payload. */
+/** Omit invalid timestamps. */
 export function wireModifiedAt(mtime: Date): { modifiedAt?: number } {
 	const ms = mtime.getTime();
 	return Number.isFinite(ms) ? { modifiedAt: ms } : {};
 }
 
-/** Sequential, against ONE budget: the per-file cap alone lets N files push an unbounded total, and
- * concurrency would multiply the live transfer buffers for no gain. */
+/** Sequential transfer under one budget. */
 export async function readReplyAttachments(paths: string[]): Promise<ChannelFile[]> {
 	const out: ChannelFile[] = [];
 	let total = 0;
@@ -103,19 +95,11 @@ export async function readReplyAttachments(paths: string[]): Promise<ChannelFile
 	return out;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 export type ToolTextResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
-// A non-structural follow (a letter, as in a Windows path) is legitimate prose and passes.
 const ESCAPE_HAZARD_RE = /\\n(?:\\n|- |\* |\+ |#|\||>)/;
 
-/** A snippet around the first literal `\n` used as markdown structure, or null. The enforcing half
- * of the guard; REAL_NEWLINES_GUIDANCE in shared/schemas.ts is the visible half.
- *
- * Code is exempt, judged line by line per CommonMark's fence rules. Inline spans are BLANKED, not
- * deleted: deleting would glue their neighbors into an adjacency the author never wrote. */
+/** Find literal newline escapes outside code. */
 export function literalEscapeHazard(text: string): string | null {
 	let openFence: string | null = null;
 	for (const line of text.split("\n")) {
@@ -137,8 +121,7 @@ export function literalEscapeHazard(text: string): string | null {
 	return null;
 }
 
-/** The `\\n` spellings are deliberate: the message must SHOW the sequence. The snippet rides in a
- * code span so an agent quoting this back does not trip the lint again. */
+/** Explain the literal newline error. */
 export function literalEscapeReject(toolName: string, field: string, snippet: string): string {
 	const quotable = snippet.replace(/`/g, "'");
 	return (
@@ -149,20 +132,10 @@ export function literalEscapeReject(toolName: string, field: string, snippet: st
 	);
 }
 
-/** Reply-tool failures only. `connector/utils.ts` has its own for the connector subsystem. */
 export function toolError(text: string): ToolTextResult {
 	return { content: [{ type: "text" as const, text }], isError: true };
 }
 
-/**
- * The try/catch and tool-response shape every reply tool shares.
- *
- * Callers build `payload` explicitly rather than rest-spreading their args, since RespondBodySchema
- * is not `.strict()` and would silently drop a mistyped one.
- *
- * `files` is a THUNK, called only after the prose passes the lint, which is what makes "a refused
- * reply sends nothing" true for every tool at once rather than per call site.
- */
 export async function postReply(
 	payload: Record<string, unknown>,
 	{
@@ -177,8 +150,6 @@ export async function postReply(
 		files?: () => Promise<ChannelFile[]>;
 	},
 ): Promise<ToolTextResult> {
-	// Absent fields are clean, so a replyAsJson-only payload needs no special-casing. A reject names
-	// the TOOL-facing field, not the wire key it mapped to.
 	for (const field of [...SPOKEN_TIER_FIELDS, "response"]) {
 		const value = payload[field];
 		if (typeof value !== "string") continue;
@@ -192,7 +163,6 @@ export async function postReply(
 	if (refusal) return toolError(`Cannot reply: ${refusal}`);
 	try {
 		const staged = await files?.();
-		// Minted here rather than inside routerPost, so its retries share one id.
 		const withOpId = { opId: crypto.randomUUID(), ...payload };
 		await routerPost("/respond", staged?.length ? { ...withOpId, files: staged } : withOpId);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
@@ -203,10 +173,6 @@ export async function postReply(
 	}
 }
 
-/** The gateway refuses a reply whose own handshake is unconfirmed, and deliberately will not name
- * the pending id. That assumes the agent still holds it, which is exactly what fails: a compaction
- * or a turn boundary loses the push and leaves nothing to answer with. This process kept it, so it
- * says so here - naming to ourselves what the gateway pushed to us adds no reach a caller lacks. */
 function handshakeHint(message: string): string {
 	if (!/handshake/i.test(message)) return "";
 	const hsId = unansweredHandshakeId();

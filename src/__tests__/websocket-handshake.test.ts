@@ -12,9 +12,6 @@ import { HANDSHAKE_PENDING_TTL_MS } from "../gateway/wsTypes.js";
 import { SessionStore } from "../shared/session-store.js";
 import { authFor, createMockWs, handshakeIdFrom, handshakePushCount } from "./helpers/websocket.js";
 
-// The handshake confirm is the ceremony that establishes a durable session record: register only
-// stashes the reported ids, the confirm binds/creates and stamps liveTeam. These pin the binding
-// order, the register-time no-write, the readyState gate, and full socket eviction cleanup.
 describe("handshake-established session records", () => {
 	let intervals: ReturnType<typeof setInterval>[] = [];
 	afterEach(() => {
@@ -75,9 +72,6 @@ describe("handshake-established session records", () => {
 		const ws = createMockWs();
 		expect(announcePresenceDirty).not.toHaveBeenCalled();
 		register(handlers, ws, { team: "proj.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
-		// The row is already live in the raw registry at this point (resolveLiveIncarnation reads it
-		// directly) - a caller polling right now must see the plane recompute, not wait for the
-		// eventual handshake confirm (which may be seconds away) or the periodic tripwire.
 		expect(announcePresenceDirty).toHaveBeenCalledTimes(1);
 	});
 
@@ -148,7 +142,6 @@ describe("handshake-established session records", () => {
 		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
 		expect(sessionStore.getByTeam("proj.abc123")?.liveTeam).toEqual({ team: "proj.abc123", subId: "s1" });
 
-		// The same process reconnects: a fresh subId under the stable conversationId evicts ws1.
 		const ws2 = createMockWs();
 		register(handlers, ws2, { team: "proj.abc123", subId: "s2", conversationId: "conv-x" });
 		expect(ws1.close).toHaveBeenCalled();
@@ -167,9 +160,6 @@ describe("handshake-established session records", () => {
 		handlers.resolveHandshake(handshakeIdFrom(victim), { isMainOrLead: true });
 		expect(sessionStore.getByTeam("proj.victim-team")?.liveTeam).toEqual({ team: "proj.victim-team", subId: "s1" });
 
-		// conversationId rides verbatim in every session_id a caller has seen, so it is not a secret
-		// - a connection that merely learned it, under an unrelated team, must not be able to evict
-		// the real holder's live socket or steal its conversationRegistry slot.
 		const attacker = createMockWs();
 		register(handlers, attacker, { team: "proj.attacker-team", subId: "s1", conversationId: "conv-shared" });
 
@@ -189,7 +179,6 @@ describe("handshake-established session records", () => {
 		});
 		handlers.resolveHandshake(handshakeIdFrom(lead), { isMainOrLead: true });
 
-		// A separate sub-session under the same team answers as worker and is evicted.
 		const worker = createMockWs();
 		register(handlers, worker, { team: "proj.abc123", subId: "s2", conversationId: "conv-b" });
 		handlers.resolveHandshake(handshakeIdFrom(worker), { isMainOrLead: false });
@@ -205,7 +194,6 @@ describe("handshake-established session records", () => {
 		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
 		expect(sessionStore.getByTeam("proj.abc")?.liveTeam).toEqual({ team: "proj.abc", subId: "s1" });
 
-		// A second live socket under a DIFFERENT segment claims the same transcript while ws1 is live.
 		const ws2 = createMockWs();
 		register(handlers, ws2, { team: "proj.def", subId: "s2", claudeSessionId: "tx-1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
@@ -318,14 +306,12 @@ describe("handshake-established session records", () => {
 
 	it("a register carrying the remembered lead role confirms silently, with no handshake push at all, once the team has answered a real handshake before", () => {
 		const { handlers, registry, sessionStore } = setup();
-		// A genuine first connection answers the real challenge, so the team earns the shortcut.
 		const first = createMockWs();
 		register(handlers, first, { team: "recipe-app.abc123", subId: "s1", claudeSessionId: "tx-1" });
 		expect(handshakePushCount(first)).toBe(1);
 		handlers.resolveHandshake(handshakeIdFrom(first), { isMainOrLead: true });
 		handlers.close(first);
 
-		// A reconnect claiming the remembered role is now honored with no prompt.
 		const ws = createMockWs();
 		register(handlers, ws, {
 			team: "recipe-app.abc123",
@@ -354,28 +340,18 @@ describe("handshake-established session records", () => {
 	});
 
 	describe("repushHandshake (recovery from a lost hs-* notification)", () => {
-		// A wake mints the handshake at register, then the send path waits POST_WAKE_SETTLE_MS and
-		// delivers - and that delivery re-pushes the handshake of any still-unconfirmed recipient. So
-		// the dedupe window has to outlast the settle, or every wake-then-deliver duplicates the
-		// handshake. These were both 3000ms once, which made the nudge land ~1ms after the window
-		// opened and duplicated it every single time, so the coupling is asserted rather than trusted.
 		it("dedupe window outlasts the post-wake settle delay, so a wake cannot duplicate its own handshake", () => {
 			expect(HANDSHAKE_REPUSH_DEDUPE_MS).toBeGreaterThan(POST_WAKE_SETTLE_MS);
 		});
 
-		// Fakes ONLY Date (repushHandshake's guards read Date.now()), leaving setInterval/clearInterval
-		// real so the outer describe's heartbeatInterval tracking/cleanup is unaffected.
 		afterEach(() => {
 			vi.useRealTimers();
 		});
 
-		/** Move the faked clock forward by ms. */
 		function advance(ms: number): void {
 			vi.setSystemTime(Date.now() + ms);
 		}
 
-		/** Step just past the dedupe window. Derived from the constant, never a literal, so changing
-		 * the window cannot silently turn these assertions into tests of the wrong thing. */
 		function pastWindow(): void {
 			advance(HANDSHAKE_REPUSH_DEDUPE_MS + 1);
 		}
@@ -402,7 +378,6 @@ describe("handshake-established session records", () => {
 			expect(handshakePushCount(ws)).toBe(2);
 			expect(handshakeIdFrom(ws)).toBe(first);
 
-			// An immediate second attempt (e.g. a same-batch double 409) collapses into the push just sent.
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
 			expect(handshakePushCount(ws)).toBe(2);
 
@@ -423,8 +398,6 @@ describe("handshake-established session records", () => {
 			handlers.repushHandshake("recipe-app.abc123", "s1");
 			expect(handshakeIdFrom(ws)).toBe(first);
 
-			// Resolving the id ONCE fully clears it - an orphaned duplicate entry would leave a residual
-			// pending id behind, and repushHandshake would report "pushed"/"throttled" instead of this.
 			expect(handlers.resolveHandshake(first, { isMainOrLead: true })).toBe(true);
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("no-pending");
 		});
@@ -440,11 +413,11 @@ describe("handshake-established session records", () => {
 				pastWindow();
 				expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 			}
-			expect(handshakePushCount(ws)).toBe(6); // 1 mint + 5 repushes
+			expect(handshakePushCount(ws)).toBe(6);
 
 			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("capped");
-			expect(handshakePushCount(ws)).toBe(6); // no further push sent
+			expect(handshakePushCount(ws)).toBe(6);
 
 			expect(handshakeIdFrom(ws)).toBe(first);
 			expect(handlers.resolveHandshake(first, { isMainOrLead: true })).toBe(true);
@@ -490,8 +463,7 @@ describe("handshake-established session records", () => {
 		it("mintHandshake itself survives a register-time send failure, leaving the entry recoverable", () => {
 			const { handlers } = setup();
 			const ws = createMockWs();
-			// The challenge only, not the register answer: a socket that cannot take THAT is evicted.
-			// Persistent rather than once, or the register answer would consume it and nothing throws.
+			// Keep challenge pending after push failure.
 			(ws.send as ReturnType<typeof vi.fn>).mockImplementation((raw: string) => {
 				if (JSON.parse(raw).type === "channel_push") throw new Error("boom");
 			});
@@ -529,18 +501,16 @@ describe("handshake-established session records", () => {
 			register(handlers, ws2, { team: "recipe-app.abc123", subId: "s2" });
 
 			pastWindow();
-			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed"); // s1 attempt 1
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 
 			advance(100);
-			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed"); // s2 attempt 1 (exempt)
+			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed");
 
-			// s1's OWN per-entry window has cleared, but the team-wide window (measured from s2's more
-			// recent push, 100ms later) has not - only the team guard explains this.
 			advance(HANDSHAKE_REPUSH_DEDUPE_MS - 99);
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
 
 			advance(100);
-			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed"); // s1 attempt 2
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 		});
 	});
 });

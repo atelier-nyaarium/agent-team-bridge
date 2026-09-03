@@ -27,7 +27,7 @@ type ProjectionDeps = {
 };
 type FriendDeps = Pick<ProjectionDeps, "isShared">;
 
-// Gateway IDs cannot contain ":" or ".".
+// Gateway IDs exclude ":" and ".".
 const rowId = (gatewayId: string, sessionId: string): string => `presence.row:${gatewayId}/${sessionId}`;
 const rowPrefix = (gatewayId: string): string => `presence.row:${gatewayId}/`;
 const gatewayRecordId = (gatewayId: string): string => `presence.gateway:${gatewayId}`;
@@ -40,14 +40,13 @@ export function createPresenceService(deps: {
 	now?: () => number;
 	projection?: ProjectionDeps;
 	friend?: FriendDeps;
-	/** Keep cross-Domain shares alive for a live session. */
+	/** Keep live shares alive. */
 	touch?: (domainId: string, sessionTarget: string) => void;
-	/** The whole projection, pushed only when it actually changed. It replaces a bounded-interval
-	 * pull, so a console that had to re-read after the signal would gain nothing. */
+	/** Push changed projections. */
 	pokeOwner?: (domainId: string, version: number, projection: unknown) => void;
 }) {
 	const now = deps.now ?? (() => deps.registry.now());
-	// Set when the version moves, consumed once the projection around it is assembled.
+	// Consume after projection assembly.
 	let pokePending = false;
 
 	const write = (domainId: string, id: string, clear: Record<string, unknown>): void => {
@@ -72,7 +71,7 @@ export function createPresenceService(deps: {
 			.list("presence.row")
 			.filter((record) => record.id.startsWith("presence.gateway:"));
 
-	// Each Domain has one version record per audience.
+	// One version per audience.
 	const projectionPlane = (domainId: string, key: string, identity: string) => {
 		const store = deps.registry.for(domainId);
 		const current = store.get("presence.row", planeRecordId);
@@ -94,7 +93,7 @@ export function createPresenceService(deps: {
 		return { epoch, version };
 	};
 
-	/** Use registration identity, never payload fields. */
+	/** Rows follow registration incarnation. */
 	const ownedRow = (reg: GatewayRegistration, row: TeamInfo): PresenceRow => ({
 		...row,
 		gatewayId: reg.gatewayId,
@@ -132,7 +131,7 @@ export function createPresenceService(deps: {
 		if (parsed.incarnation !== reg.incarnation) return { resync: true as const };
 		const store = deps.registry.for(reg.domainId);
 		const record = store.get("presence.row", gatewayRecordId(reg.gatewayId));
-		// Without a baseline, every delta requests one.
+		// Deltas require a baseline.
 		if (
 			!record ||
 			record.clear.incarnation !== parsed.incarnation ||
@@ -161,8 +160,7 @@ export function createPresenceService(deps: {
 
 	const onGatewayDropped = (reg: GatewayRegistration): void => markUnreachable(reg.domainId, reg.gatewayId);
 
-	/** Restart leaves gateways disconnected until re-registration. Pushed, or a connected console
-	 * keeps showing everything online until something happens to pull. */
+	/** Restore persisted projection as unreachable. */
 	const rearm = (domainId: string): void => {
 		markUnreachable(domainId);
 		pushIfChanged(domainId);
@@ -231,7 +229,7 @@ export function createPresenceService(deps: {
 				lastRefreshedAt: now(),
 			};
 		});
-		// Without a baseline, the gateway has no spawn points to show.
+		// Spawn points require a baseline.
 		const spawnPoints = gatewayRecords(domainId)
 			.map((record) => record.clear.spawnPoints as SpawnPoints | undefined)
 			.filter((points): points is SpawnPoints => points !== undefined);
@@ -249,8 +247,6 @@ export function createPresenceService(deps: {
 			...rosterData,
 			spawnPoints,
 		});
-		// Pushed WHOLE, unlike the board's poke: a roster is small and a console that had to re-read it
-		// would still need the interval pull this replaces.
 		if (pokePending) {
 			pokePending = false;
 			deps.pokeOwner?.(domainId, plane.version, projection);
@@ -258,16 +254,10 @@ export function createPresenceService(deps: {
 		return projection;
 	};
 
-	/**
-	 * Recompute the owner projection so a change PUSHES.
-	 *
-	 * Called from every path that WRITES presence rows. Leaving it to the read handlers would mean the
-	 * push never fires until something else happened to pull, which is the pull it replaces. Building
-	 * the projection is what moves the version, and the version is what decides whether to push at all.
-	 */
+	/** Recompute and push the owner projection. */
 	const pushIfChanged = (domainId: string): void => {
 		if (!deps.pokeOwner || !deps.projection) return;
-		// A projection that cannot be built is not a reason to fail the write that triggered it.
+		// Projection failure must not fail writes.
 		try {
 			ownerProjection(domainId, deps.projection);
 		} catch {}
@@ -297,8 +287,7 @@ export function createPresenceService(deps: {
 				incarnation: reg.incarnation,
 				lastRegisteredAt: now(),
 			});
-			// The roster counts a connected gateway, so registering is a projection-visible change even
-			// before its baseline frame arrives.
+			// Registration changes the roster.
 			pushIfChanged(reg.domainId);
 		});
 		hooks.onGatewayDropped((reg) => {
@@ -309,7 +298,6 @@ export function createPresenceService(deps: {
 			forgetSession(reg, sessionId);
 			pushIfChanged(reg.domainId);
 		});
-		// Registration supplies the gateway's Domain.
 		hooks.gatewayFrame("presence_read", (reg) => {
 			if (!deps.projection) return { ok: false, error: "projection unavailable" };
 			return ownerProjection(reg.domainId, deps.projection);
@@ -318,7 +306,6 @@ export function createPresenceService(deps: {
 			if (!deps.projection) return { outcome: "refused", reason: "projection unavailable" };
 			return ownerProjection(op.domainId, deps.projection);
 		}) as OwnerOpHandler);
-		// Friend projections require a live link.
 		hooks.ownerOp("presence_read_friend", ((op, value) => {
 			const friendDomainId = String(value.toDomainId);
 			if (!deps.friend || !deps.projection?.linkedDomains(op.domainId).includes(friendDomainId))

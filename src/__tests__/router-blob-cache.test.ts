@@ -183,7 +183,6 @@ describe("RouterBlobCache", () => {
 		});
 	});
 
-	// Expired leases retain only origins.
 	it("strips an expired lease down to a retained origin", () => {
 		const cache = make();
 		const dataDir = roots[roots.length - 1];
@@ -318,8 +317,6 @@ describe("RouterBlobCache", () => {
 		expect(fs.existsSync(part)).toBe(false);
 	});
 
-	// Fresh nonces change the ciphertext digest. Retaining a stale partial makes every retry fail
-	// final verification because held offsets are no-ops.
 	it("discards a partial from an attempt that declared a different ciphertext", () => {
 		const cache = make();
 		const bytes = Buffer.from("interrupted upload");

@@ -3,13 +3,7 @@ import path from "node:path";
 import { contentAad } from "../src/shared/content-envelope.js";
 import { blobChunkAad, sealBlobChunk, sealedBlobSize } from "../src/shared/sealed-blob.js";
 
-/**
- * Writes the cross-runtime vectors for sealed blob framing.
- *
- * The AAD is the whole point: a single character of difference between the two runtimes means
- * nothing the Router holds can be opened, and no unit test inside one runtime can catch it, because
- * both sides of such a test share the same mistake.
- */
+/** Writes cross-runtime sealed-blob vectors. */
 const key = Buffer.alloc(32, 7);
 const context = { domainId: "domain-a", ownerSignPub: "owner-pub", epoch: 3, blobId: `sha256-${"a".repeat(64)}` };
 
@@ -19,7 +13,7 @@ const cases = [0, 1, 100].map((size) => {
 	const frames: string[] = [];
 	for (let index = 0; index < chunks; index++) {
 		const slice = plaintext.subarray(index * 1_048_576, (index + 1) * 1_048_576);
-		// A fixed nonce per index keeps the vector reproducible; production mints a fresh one.
+		// Fixed nonces keep vectors reproducible.
 		const nonce = Buffer.alloc(12, index + 1);
 		frames.push(sealBlobChunk(slice, key, context, index, index + 1 === chunks, nonce).toString("base64"));
 	}
@@ -38,5 +32,4 @@ const vectors = {
 const out = path.join(import.meta.dirname, "..", "tests", "fixtures", "sealed-blob");
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, "vectors.json"), `${JSON.stringify(vectors, null, "\t")}\n`);
-// Biome formats the corpus like any other file, so a regenerate that skips this fails `lint`.
 console.log(`wrote ${path.join(out, "vectors.json")} (${cases.length} cases). Run: bunx biome check --write on it.`);

@@ -1,6 +1,4 @@
-// The fence is guarded AT THE WRITER, never at its callers, so a route added later that reaches a
-// fenced writer is covered by construction. This test enumerates the WRITERS for that reason: a
-// route-shaped test would pass while a new caller walked straight past the fence.
+// Writer-local fence coverage.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -17,7 +15,7 @@ import { PlaneRegistry } from "../shared/plane-registry.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Every writer of migrated state S10 names, and the symbol the guard belongs in. */
+/** Named fenced writers. */
 const WRITERS: Array<{ file: string; symbol: string }> = [
 	{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },
 	{ file: "src/shared/pending-delivery-store.ts", symbol: "enqueue" },
@@ -48,8 +46,6 @@ describe("migration fence residue", () => {
 	it("every named writer calls the guard in its own body", () => {
 		const missing = WRITERS.filter(({ file, symbol }) => {
 			const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
-			// From the declaration to the next one at the same depth, so a guard elsewhere in the file
-			// cannot stand in for this writer's own.
 			const start = source.search(
 				new RegExp(
 					`^\\s*(?:(?:export|private|public|protected|static|async|function)\\s+)*${symbol}\\s*\\(`,
@@ -66,8 +62,6 @@ describe("migration fence residue", () => {
 	it("capabilityStore is deliberately unfenced", () => {
 		const source = fs.readFileSync(path.join(REPO_ROOT, "src/gateway/console/capabilityStore.ts"), "utf8");
 
-		// Capabilities are not migrated: phones re-report on first hub connect. Fencing them would
-		// refuse a report the migration never carries.
 		expect(source).not.toContain("fenced()");
 	});
 
@@ -99,8 +93,6 @@ describe("migration fence residue", () => {
 		expect(store.markInFlight("conv", "op-2")).toBeNull();
 	});
 
-	// The cut carries no op whose outcome nobody knows. A record is a marker rather than a request,
-	// so an in-flight one cannot be re-run here and is dropped for the client to re-run instead.
 	it("the settle drops in-flight records and keeps completed ones", () => {
 		const store = new DurableOpStore(fakeDurable());
 		store.markInFlight("conv", "done");
@@ -130,7 +122,6 @@ describe("migration fence residue", () => {
 
 		expect(state.unshare("alpha.gw.spawn.session", target)).toBe(false);
 		setMigrationEpoch(null);
-		// The one taken before the fence survives; the one attempted under it was never taken.
 		expect(state.unshare("alpha.gw.spawn.session", target)).toBe(true);
 		expect(state.unshare("alpha.gw.other.session", target)).toBe(false);
 	});

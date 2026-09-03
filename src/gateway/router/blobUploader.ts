@@ -30,10 +30,10 @@ export type UploadOutcome =
 	| { kind: "failed"; error: string };
 
 export function createBlobUploader(deps: BlobUploaderDeps) {
+	// Unwired. Router refuses upload frames.
 	async function upload(blobId: string, store: "cache" | "held", ref?: BlobRef): Promise<UploadOutcome> {
 		if (deps.incarnation() === null) return { kind: "failed", error: "Gateway is not registered" };
 		const stat = deps.blobs.stat(blobId);
-		// Copy complete blobs only.
 		if (!stat.complete || stat.size === undefined) return { kind: "absent" };
 		const size = stat.size;
 		const ownerSignPub = deps.ownerSignPub();
@@ -67,7 +67,6 @@ export function createBlobUploader(deps: BlobUploaderDeps) {
 		});
 		if (begun.error) return { kind: "failed", error: begun.error };
 		const answer = (begun.result ?? {}) as BeginAnswer;
-		// Existing blobs need no bytes.
 		if ("kind" in answer && answer.kind === "exists") return { kind: "already_held" };
 		if (!("kind" in answer) || answer.kind !== "lease")
 			return { kind: "failed", error: "error" in answer ? answer.error : "begin refused" };
@@ -88,16 +87,13 @@ export function createBlobUploader(deps: BlobUploaderDeps) {
 			});
 			if (sent.error) return { kind: "failed", error: sent.error };
 			const chunkAnswer = (sent.result ?? {}) as { kind?: string; error?: string; complete?: boolean };
-			// A kind on the answer names the refusal; success carries none.
 			if (chunkAnswer.error) return { kind: "failed", error: chunkAnswer.error };
 			if (chunkAnswer.kind) return { kind: "failed", error: chunkAnswer.kind };
-			// Final verification may delete the partial. complete:false must not report an uploaded blob.
 			if (final && chunkAnswer.complete !== true) return { kind: "failed", error: "ciphertext_unverified" };
 		}
 		return { kind: "uploaded" };
 	}
 
-	/** Skips absent blobs so receivers can use blob_fetch. */
 	async function uploadAll(blobIds: readonly string[], store: "cache" | "held", ref?: BlobRef): Promise<string[]> {
 		const held: string[] = [];
 		for (const blobId of blobIds) {

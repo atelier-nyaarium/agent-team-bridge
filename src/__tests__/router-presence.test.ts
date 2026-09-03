@@ -34,7 +34,6 @@ const make = (pokeOwner?: (domainId: string, version: number, projection: unknow
 			}),
 		now: () => 100,
 	});
-	// projection is what pushIfChanged builds from, so a poking service needs it the way production does.
 	return {
 		registry,
 		service: createPresenceService({ registry, pokeOwner, ...(pokeOwner ? { projection: projectionDeps } : {}) }),
@@ -74,8 +73,6 @@ describe("router presence slice", () => {
 		registry.close();
 	});
 
-	// This push is what lets the phone drop its bounded-interval discovery pull, so it has to fire on
-	// a real change, stay quiet otherwise, and carry the rows rather than a bare version.
 	it("pushes the whole projection to the owner only when it actually changed", () => {
 		const pokes: Array<{ domainId: string; version: number; teams: number }> = [];
 		const { registry, service } = make((domainId, version, projection) =>
@@ -90,7 +87,6 @@ describe("router presence slice", () => {
 
 		service.ownerProjection("domain", projectionDeps);
 		expect(pokes).toEqual([{ domainId: "domain", version: 0, teams: 1 }]);
-		// Same projection read twice: no change, so no second poke.
 		service.ownerProjection("domain", projectionDeps);
 		expect(pokes).toHaveLength(1);
 
@@ -333,9 +329,7 @@ describe("router presence slice", () => {
 		registry.close();
 	});
 
-	// The push has to fire from the WRITE. Computing the projection only inside the read handlers
-	// would mean nothing reaches a console until something else happened to pull, which is the pull
-	// this replaces.
+	// Push from writes.
 	it("pushes to the owner when a gateway frame changes presence", () => {
 		const pokes: number[] = [];
 		const { registry, service } = make((_domainId, version) => pokes.push(version));
@@ -359,7 +353,6 @@ describe("router presence slice", () => {
 		});
 
 		expect(pokes).toEqual([0]);
-		// A delta that changes nothing observable must not push again.
 		frames.get("presence_delta")!(reg, { incarnation: 1, seq: 1, upserts: [row("proj.main")], tombstones: [] });
 		expect(pokes).toEqual([0]);
 		frames.get("presence_delta")!(reg, {

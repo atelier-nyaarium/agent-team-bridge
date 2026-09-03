@@ -1,8 +1,4 @@
-// The Router's half of the cursor handshake.
-//
-// The map is kept for the whole migration window and answers the same old cursor with the same new
-// one however many times it is asked, because a phone that dies between hearing the answer and
-// committing it has to be able to ask again.
+// Cursor translations remain stable during migration.
 
 import { translateCursor } from "../../shared/migration-cursor.js";
 import type { CursorMapEntry } from "../../shared/schemasMigration.js";

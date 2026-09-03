@@ -6,24 +6,14 @@ import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 
-/**
- * The phone's one way to speak to the Router in its own name.
- *
- * Every op the Router accepts from a console is an OwnerOp: the Router resolves the signer to an
- * admitted console, checks the clock skew, and refuses a nonce it has seen. Nothing else the phone
- * sends carries an identity the Router can check on its own, which is why the socket's first frame
- * is one of these and why a mutation stays an HTTP POST rather than riding the socket.
- */
+/** Signed operations identify this console. */
+// Mutations use signed HTTP operations.
 class OwnerOps(private val repo: ChatRepository) {
 
-	/** Absent means this device has not rooted a Domain yet, so it can sign nothing for one. */
+	/** No domain means no signing. */
 	fun domainId(): String? = repo.confirmedDomainId()?.takeIf { it.isNotEmpty() }
 
-	/**
-	 * Signs [op] as this console. [op] is the whole operation body including its `kind`, and its
-	 * canonical hash is what the signature commits to, so a Router that re-canonicalizes reaches the
-	 * same bytes.
-	 */
+	/** Sign the complete canonical operation. */
 	fun sign(op: JsonObject, opId: String = UUID.randomUUID().toString()): OwnerOp? {
 		val domain = domainId() ?: return null
 		val identity = repo.federation.consoleIdentity()

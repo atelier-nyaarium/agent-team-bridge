@@ -32,7 +32,7 @@ import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.isComposite
 
-/** Process-lifetime repository so chat state survives Activity recreation. */
+/** Process-lifetime repository. */
 object Repo {
 	@Volatile private var instance: ChatRepository? = null
 
@@ -47,8 +47,7 @@ object Repo {
 			).also { instance = it }
 		}
 
-	/** Parse the bundled STTS provider catalog once. A corrupt/missing asset
-	 * yields an empty catalog, which keeps Play dark rather than crashing. */
+	/** Malformed catalog means empty. */
 	private fun loadSttsCatalog(app: Context): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> =
 		runCatching {
 			val json = app.assets.open("stts-providers.json").bufferedReader().use { it.readText() }
@@ -58,12 +57,10 @@ object Repo {
 		}.getOrDefault(emptyList())
 }
 
-// FragmentActivity (not ComponentActivity) so androidx.biometric can attach its prompt.
+// Biometric prompt requires FragmentActivity.
 class MainActivity : FragmentActivity() {
-	/** Team a notification tap asked to open; consumed by App, refreshed by onNewIntent. */
 	private val openTeamRequest = mutableStateOf<String?>(null)
 
-	/** The bubble or the transport notification asked for the queue list; consumed by App. */
 	private val openQueueRequest = mutableStateOf(false)
 
 	override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,13 +82,7 @@ class MainActivity : FragmentActivity() {
 		consume(intent)
 	}
 
-	/**
-	 * Read the one-shot extras and REMOVE them.
-	 *
-	 * Removal is the load-bearing half. The intent outlives the Activity, so every configuration
-	 * change re-runs onCreate against it - and an extra left in place is not a request, it is a
-	 * standing instruction to reopen the sheet and re-jump the thread on every rotation, forever.
-	 */
+	/** Remove one-shot extras after consumption. */
 	private fun consume(intent: Intent) {
 		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let {
 			openTeamRequest.value = it
@@ -116,51 +107,38 @@ fun App(
 	val context = LocalContext.current
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
-	// Bumped on every genuine "open this thread" gesture (notification tap, board tap, an
-	// already-selected tab tapped again) - never on an ordinary message arrival. Keys the reveal
-	// effect in ThreadWebView so it re-snaps to the first unread row on each such open, even when
-	// `openTeam` itself is unchanged (re-tapping a notification for the thread already on screen).
+	// Increment only on genuine opens.
 	var openNonce by remember { mutableStateOf(0) }
-	// Mirrored in composition so the drag is smooth; the store is the durable copy.
+	// Composition mirror; store persists.
 	var boardStripHeight by remember { mutableStateOf(repo.store.boardStripHeight) }
 	var boardModal by remember { mutableStateOf<Pair<String, String>?>(null) }
-	// (team, at) a queue tile asked to land on. Cleared once the reveal has been handed to the renderer,
-	// so re-opening the same thread later does not silently re-scroll to an old message.
+	// Clear reveal after handoff.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
 	var revealAt by revealAtState
-	// Read here as well as in the sheet: the board's own way in has to appear the moment a run starts
-	// and go when it ends, and that is a settled-state question like every other one in this feature.
-	// Keyed on the revision so the failures scan runs when the queue changes rather than on every
-	// unrelated recomposition of the board.
+	// Queue state keys on revision.
 	val queueRevision by repo.playback.queueRevision.collectAsState()
 	val queueState = remember(queueRevision) {
 		val (active, paused) = repo.playback.transportState()
 		when {
-			// The alert outranks the run: a message that was never spoken is the thing worth showing,
-			// and it is the state that outlives everything else.
+				// Alerts outrank playback.
 			repo.playback.failedRows().isNotEmpty() -> QueueGlance.ALERT
 			active && paused -> QueueGlance.PAUSED
 			active -> QueueGlance.SPEAKING
 			else -> QueueGlance.IDLE
 		}
 	}
-	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
-	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
+	// Save settings route across recreation.
 	var showSettings by rememberSaveable { mutableStateOf(false) }
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
-	// Every screen above the base layer, newest last (see Overlay.kt). Not saveable: a ceremony
-	// entry carries key material.
+	// Overlays are not saveable; they may contain key material.
 	var overlays by remember { mutableStateOf(emptyList<Overlay>()) }
 	val openOverlay = { overlay: Overlay -> overlays = overlays.pushOverlay(overlay) }
 	val closeOverlay = { overlays = overlays.popOverlay() }
-	// One-shot so the enrollee compare auto-pops once after first-root, never re-popping after a
-	// manual dismiss (the board keeps a "Verify with the admin" entry for that).
+	// Offer ceremony once.
 	var enrolleeCeremonyOffered by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
-	// The plugin framework boots with the app (not on first Settings open): an enabled plugin's
-	// contributions must be live for every surface that consults a registry, not only after the
-	// user happens to visit the toggle screen.
+	// Initialize plugins before registry reads.
 	val pluginManager = remember { Plugins.get(context) }
 
 	val viewerState = remember { mutableStateOf<OpenAttachment?>(null) }
@@ -172,9 +150,7 @@ fun App(
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
 	}
-	// Auto-pop the in-person enroll compare once the device first-roots an enroll invite (the admin is
-	// right there, mid-scan). One-shot: a dismiss does not re-pop it; the empty board keeps a manual
-	// "Verify with the admin" entry, and a completed compare latches it off.
+	// Offer pending ceremony once.
 	LaunchedEffect(state.provisioned, state.firstRooted) {
 		if (state.provisioned && !enrolleeCeremonyOffered) {
 			repo.ceremony.pendingEnrolleeCeremony()?.let {
@@ -183,8 +159,7 @@ fun App(
 			}
 		}
 	}
-	// The service owns the connection and poll loop; the Activity just makes sure
-	// it is running and asks for notification permission once provisioned.
+	// Service owns connection and polling.
 	val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 	LaunchedEffect(state.provisioned) {
 		if (state.provisioned) {
@@ -197,8 +172,7 @@ fun App(
 			}
 		}
 	}
-	// Visibility drives the poll cadence; a foreground transition also kicks an
-	// immediate poll and reconciles any sends stranded mid-flight.
+	// Foreground triggers poll and reconciliation.
 	androidx.lifecycle.compose.LifecycleStartEffect(Unit) {
 		repo.onForeground()
 		rendererPool.setVisible(true)
@@ -208,29 +182,21 @@ fun App(
 			rendererPool.setVisible(false)
 		}
 	}
-	// A notification tap routes straight to its thread.
 	LaunchedEffect(openTeamRequest.value) {
 		openTeamRequest.value?.let { team ->
 			val opened = repo.openThread(team)
-			// A tapped notification surfaces its thread, so nothing may stay above it: clearing the
-			// stack covers every overlay by construction, including ones added later.
+			// Clear overlays before notification navigation.
 			showSettings = false
 			settingsRoute = SettingsRoute.HUB
 			overlays = emptyList()
 			openTeam = opened
-			// A genuine open gesture - re-snap to the first unread row even if this thread is
-			// already the one on screen (openTeam unchanged does not recompose ThreadWebView).
+			// Increment nonce for genuine opens.
 			openNonce++
 			openTeamRequest.value = null
 		}
 	}
 
-	// Declares "board" focus while the board (not a thread/terminal) is what's on screen - the
-	// Gateway's intent tracker ramps every LIVE session's daemon-derivation cadence while this
-	// device is watching, so board tiles reflect a working/needsLogin flip from the presence
-	// plane (Team.working/needsLogin) with no per-session peek of this device's own. Superseded by
-	// TerminalView's own terminal-focus declaration while a specific session's terminal is open; an
-	// open thread declares its own, since its presence chip is daemon-derived as well.
+	// Board focus drives daemon cadence.
 	LaunchedEffect(openTeam) {
 		if (openTeam == null) repo.declareFocus(FocusIntent(screen = "board"))
 	}
@@ -240,8 +206,7 @@ fun App(
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
 	}
 
-	// System back navigates within the app instead of exiting. The arms are in RENDER order (see the
-	// `when` below), so back always dismisses what is actually on screen.
+	// Back follows render order.
 	BackHandler(enabled = overlays.isNotEmpty() || showSettings || openTeam != null) {
 		when {
 			overlays.isNotEmpty() -> closeOverlay()
@@ -255,15 +220,10 @@ fun App(
 	}
 
 	when {
-		// Lock wins over everything (a provisioned + locked session must show the lock, never a
-		// leftover overlay underneath it). An unprovisioned session is never locked.
+		// Lock takes precedence.
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
-		// One arm keyed on the stack top, so render order can never disagree with what is showing.
 		overlays.isNotEmpty() -> OverlayHost(overlays.last(), repo, state, openOverlay, closeOverlay)
-		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
-		// ProvisionScreen below (the setup screen's gear opens it). Overlays are entered from Settings
-		// without closing it, so they sit above.
-		// SettingsScreen gates its provisioned-only rows, so the unprovisioned hub shows only System.
+		// Settings remains reachable before provisioning.
 		showSettings ->
 			SettingsScreen(
 				state = state,
@@ -275,12 +235,9 @@ fun App(
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { openOverlay(Overlay.Manage) },
 				onYourDevices = { openOverlay(Overlay.YourDevices) },
-				// Users is the federation surface; the federation actions live in its top-bar menu.
 				onFederation = { openOverlay(Overlay.Users) },
 				onClear = {
-					// The wipe transaction (DomainAdminOps.deleteDomain / forgetDomain) owns the local wipe;
-					// drop plugin device state (e.g. the Designer index) alongside it, dismiss the notifications
-					// that named the old threads, then navigate home.
+					// Wipe plugins and notifications after local wipe.
 					pluginManager.host.accountWipeHandlers.forEachCaught(onError = ::logPluginThrow) { it.onWipe(context) }
 					ServiceNotifications.cancelProvisioningNotifications(context)
 					showSettings = false
@@ -305,51 +262,42 @@ fun App(
 				},
 			)
 		openTeam != null -> {
-			// Devcontainer names are the project identity; only loose peers take labels.
+			// Devcontainer names are fixed.
 			val session = state.sessions().firstOrNull { it.name == openTeam }
 			val kind = session?.kind
-			// Rename only when positively known loose; an unknown kind (team gone
-			// from the list) stays un-renameable rather than defaulting open.
+			// Rename only known loose sessions.
 			val presence = when {
 				session == null -> null
 				session.presence.isOnline -> when {
-					// Outranks "working...": the session reads as online while the dialog holds its pane,
-					// so without this a blocked session would present as healthy.
+						// Limit block outranks working.
 					session.presence.limitBlocked == true -> "limit hit"
 					state.needsLogin(session.name) -> "check terminal"
 					state.working(session.name) -> "working..."
 					else -> "live"
 				}
-				// A wake THIS device asked for reads as waking straight away. Without it a non-route
-				// Gateway's session sits on its stale "available" until discovery next runs.
+				// Local wake displays immediately.
 				session.presence.waking(System.currentTimeMillis()) -> "waking..."
 				!session.presence.isLive && !session.presence.hasEnded ->
 					if (state.working(session.name)) "waking..." else session.presence.word
 				else -> session.presence.word
 			}
-			// Everything a forget tears down BESIDE the repo's own record. Shared by both forget paths so
-			// the plugin sweep and the notification cancels cannot end up on only one of them. The repo
-			// calls it once the forget has landed, never before.
+				// Teardown after forget lands.
 			val forgetTeardown = { forgotten: String ->
 				pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 				SwitchboardService.cancelTeamNotification(context, forgotten)
 				SwitchboardService.cancelScheduledSendFailedNotification(context, forgotten)
-				// Only if THIS thread is still the open one: a slow disposition can finish long after
-				// the owner has moved on, and closing whatever they opened since is not the ask.
+					// Clear only the still-open thread.
 				if (openTeam == forgotten) openTeam = null
 			}
-			// This session's board slice for the strip. A non-route session's half is cadence-fresh
-			// through board_read, so entering its thread refreshes it (one of the three triggers).
+				// Refresh non-route board slice on entry.
 			val boardOn = pluginManager.isActive("taskboard")
 			val boardGateway = repo.boardOps.boardGatewayOf(openTeam)
-			// Keyed on boardGateway too: opening from a notification composes the thread before the
-			// teams roster lands, and without that key the non-route read would never fire at all.
+				// Key board gateway for notification opens.
 			LaunchedEffect(openTeam, boardOn, boardGateway) {
 				if (boardOn && repo.boardOps.isNonRouteSession(openTeam!!)) repo.boardOps.refreshBoard()
 			}
 			val boardRevision by repo.boardOps.boardRevision
-			// boardGateway is a key here for the same reason the effect above takes it: it answers the
-			// route Gateway until the roster lands, and a failed read never bumps the revision.
+				// Failed reads do not advance revision.
 			val boardStripFor = remember(openTeam, boardRevision, boardOn, boardGateway) {
 				if (!boardOn) null
 				else {
@@ -369,9 +317,7 @@ fun App(
 				tabLabel = { tabLabelFor(state, it) },
 				onReorderTabs = repo::reorderTabs,
 				messages = state.threads[openTeam].orEmpty(),
-				// During a wake the notice card already explains the wait, so suppress the auto-retry
-				// connection banner (the transient "... - retrying" causes). A real error (terminal
-				// causes never end in "retrying") still surfaces.
+					// Suppress retry banner during wake.
 				error = state.error?.takeUnless { presence == "waking..." && it.endsWith("retrying") },
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
@@ -389,15 +335,12 @@ fun App(
 				onRevealed = { revealAt = null },
 				unreadBoundary = repo::unreadBoundary,
 				onGateway = { t ->
-					// A tab switch onto a DIFFERENT thread is a genuine open (re-snap to its first
-					// unread); re-tapping the already-active tab is a no-op tap today, unchanged.
+						// Non-active tab switches are genuine opens.
 					if (t != openTeam) openNonce++
 					openTeam = t
 				},
 				onCloseTab = { t ->
-					// Move off the closing tab before dropping it from openTabs, so the
-					// retain() pass that destroys its renderer never targets the one
-					// still on screen.
+						// Leave closing tab before renderer removal.
 					if (t == openTeam) openTeam = state.openTabs.firstOrNull { it != t }
 					repo.closeTab(t)
 				},
@@ -409,8 +352,7 @@ fun App(
 					onTextChange = { repo.setDraftText(openTeam!!, it) },
 					onAddFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },
 					onRemoveFile = { src -> repo.removeDraftFile(openTeam!!, src) },
-					// A draft file resolves the same way a tapped transcript attachment does, so the
-					// viewer sees one shape of OpenAttachment no matter which surface opened it.
+						// Normalize draft and transcript attachments.
 					onOpenFile = { file ->
 						val rel = Attachments.relOf(file.src)
 						val resolved = Attachments.fileFor(context.filesDir, file.src)
@@ -422,8 +364,7 @@ fun App(
 								rel,
 								file.size,
 								file.modifiedAt,
-								// Only reachable from here: a draft is the one place a file has a source
-								// the user might want to check before it goes anywhere.
+								// Preserve draft file location.
 								location = state.drafts[openTeam!!]?.locations?.get(file.src),
 							)
 						}
@@ -448,31 +389,24 @@ fun App(
 					repo.sessions.forget(forgotten)
 					forgetTeardown(forgotten)
 				},
-				// The board gate: the same decision the sessions list asks for, so the two surfaces
-				// cannot disagree about when a forget is safe.
+				// Use the same board forget gate.
 				undoneTasks = if (boardOn) repo.boardOps.boardUndoneCountFor(openTeam!!) else 0,
 				onForgetWithTasks = { cancelThem ->
 					val forgotten = openTeam!!
 					repo.boardOps.forgetWithBoardDisposition(forgotten, cancelThem) { forgetTeardown(forgotten) }
 				},
 				terminal = TerminalState(
-					// A composite session on any of MY machines has a daemon-drivable pane: every terminal
-					// op routes to the session's own Gateway via targetGatewayOf. A linked friend's stays
-					// gated off, since their Gateway refuses the ops and the view would only render that.
+						// Local composite sessions permit terminal ops.
 					eligible = isComposite(localFieldOf(openTeam!!)) &&
 						run {
 							val admin = adminDomainId(state.sessions(), state.localGatewayId)
 							val dom = session?.domainId
 							dom.isNullOrEmpty() || admin.isEmpty() || dom == admin
 						},
-					// The whole presence answer, not a status word: the terminal's peek gate has to know
-					// what the value is WORTH (pushed by this session's own Gateway, pulled 30s ago, or
-					// from a machine we cannot reach at all), and a bare string cannot say.
+						// Peek uses presence freshness.
 					presence = session?.presence,
-					// Daemon-derived (presence plane), so it can be true even before "online" - a peeked
-					// pane stuck at a login prompt is knowable while the MCP handshake is still pending.
+						// Presence supplies login status before online.
 					needsLogin = session?.presence?.needsLogin == true,
-					// Also daemon-derived, so the chat view learns about a block with no peek of its own.
 					limitBlocked = session?.presence?.limitBlocked == true,
 					limitDetail = session?.presence?.limitDetail,
 					onWake = { repo.sessions.wakeSession(openTeam!!) },
@@ -487,25 +421,21 @@ fun App(
 		}
 		else -> {
 			val snackbarHostState = remember { SnackbarHostState() }
-			// One-shot: a create_session failure or abandonment surfaces here instead of the sticky
-			// connection-health state.error, so it never bleeds into an unrelated later health render.
+			// Transient failures use snackbar.
 			LaunchedEffect(state.transientMessages) {
 				state.transientMessages.firstOrNull()?.let {
 					repo.sessions.consumeTransientMessage()
 					snackbarHostState.showSnackbar(it)
 				}
 			}
-			// Folded ONCE per board revision, not per card per recomposition: each call replays the
-			// whole pending queue over the whole snapshot, and the session list recomposes on every
-			// poll (unread, snippet, presence).
+			// Fold board once per revision.
 			val boardOnHere = pluginManager.isActive("taskboard")
 			val boardRevisionForCards by repo.boardOps.boardRevision
 			val boardLines = remember(boardRevisionForCards, state.teams, boardOnHere) {
 				if (!boardOnHere) emptyMap()
 				else state.teams.associate { it.name to repo.boardOps.boardLiveLineFor(it.name) }
 			}
-			// Alongside the lines rather than inside the card, on the same revision key: the list
-			// recomposes on every poll and a per-card flatten would rebuild every session's tree each time.
+			// Compute branches once per revision.
 			val boardBranches = remember(boardRevisionForCards, state.teams, boardOnHere) {
 				if (!boardOnHere) emptyMap()
 				else state.teams.mapNotNull { team ->
@@ -519,8 +449,7 @@ fun App(
 				snackbarHostState = snackbarHostState,
 				onRefresh = {
 					repo.command { presence.refreshTeams() }
-					// The board's non-route columns have no live plane, so Refresh is their only
-					// manual retry.
+						// Refresh retries non-route columns.
 					repo.boardOps.refreshBoard()
 				},
 				onSettings = {
@@ -561,18 +490,13 @@ fun App(
 							SwitchboardService.cancelTeamNotification(context, team)
 							SwitchboardService.cancelScheduledSendFailedNotification(context, team)
 						},
-						// Fire the create and stay on the board: the gateway adopts the session's record
-						// synchronously and bumps the presence plane with it, so its own tile appears via
-						// this device's own next poll (spinner while it boots) with no separate refresh.
-						// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
+						// Spawn stays on board; next poll reveals session.
 						onSpawn = { target, label, workdir -> repo.command { sessions.spawnSession(target, label, workdir) } },
 						onListDirs = { path, hostTarget, spawn -> repo.sessions.listDirs(path, hostTarget, spawn) },
-						// Launch the enrollee compare from the empty board when one is still owed (the
-						// device rooted an enroll invite but has not completed the in-person trust step).
+						// Offer pending enrollment verification.
 						onVerifyEnroll = (if (state.provisioned) repo.ceremony.pendingEnrolleeCeremony() else null)
 							?.let { c -> { openOverlay(Overlay.EnrolleeCeremony(c)) } },
-						// Reaching a self-hosted Router precedes having any Gateway, so the empty board
-						// opens the Federation screen directly rather than making the owner find it.
+						// Router endpoint opens Federation.
 						onRouterEndpoint = {
 							settingsRoute = SettingsRoute.FEDERATION
 							showSettings = true
@@ -585,9 +509,7 @@ fun App(
 							} else 0
 						},
 						onForgetWithTasks = { team, cancelThem ->
-							// Plugin state and notifications die only once the forget has landed: a
-							// session whose forget never reached its Gateway still exists, and it must
-							// not come back with its design cards already destroyed.
+								// Clean up plugins after forget lands.
 							repo.boardOps.forgetWithBoardDisposition(team, cancelThem) {
 								pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) {
 									it.onForget(context, team)
@@ -605,15 +527,13 @@ fun App(
 	QueueOverlay(repo, openQueueRequest, locked, revealAtState, openTeamRequest)
 	AttachmentViewerOverlay(viewerState, rendererPool)
 	LinkMenuDialog(linkMenuState, linkMenuNoteState)
-	// Here rather than in the overlay stack: that one REPLACES the screen it is called from, so a
-	// dialog hosted there dims an empty window instead of the conversation.
+	// Board dialog replaces current screen.
 	boardModal?.let { (gatewayId, entryId) ->
 		BoardEntryDialog(state, repo, gatewayId, entryId) { boardModal = null }
 	}
 }
 
-/** Registry onError sink shared by every plugin-registry consultation site: a claim that threw
- * is logged and skipped, never fatal. */
+/** Log and skip plugin claim errors. */
 internal fun logPluginThrow(message: String, err: Throwable) {
 	DebugLog.log("Plugins", "$message: $err")
 }

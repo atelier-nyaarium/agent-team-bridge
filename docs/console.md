@@ -30,12 +30,12 @@ app-token gated and a hello OwnerOp proves identity; an incarnation fences a sup
   generation, so a superseded close cannot clear the live one. `onUnreachable` fires pre-welcome only.
 - The console registers NO consumer and takes planes only. A consumer cursor at zero would pin the
   owner inbox's compaction floor forever, since compaction takes the minimum across consumers.
-- Agent messages are session-addressed and still arrive through the Gateway. One drain for one source
-  waits on the mailbox migration.
+- Agent messages are session-addressed and arrive through the Gateway. One source has one drain, which
+  waits on mailbox migration.
 
 ## Add Device
 
-The new device signs `approvalId`, `nonce`, `newSignPub`, and `newBoxPub`. The held device refuses an unsigned or mis-signed join before admitting the device or sealing keys.
+The device signs `approvalId`, `nonce`, `newSignPub`, and `newBoxPub`. The held device refuses an unsigned or mis-signed join before admission or key sealing.
 
 The install writes the transport, the latches, the Domain snapshot, and the content keys in one store commit.
 
@@ -50,8 +50,7 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
   would let `story` select `story-2`.
 - `peekWithFallback` returns Docker logs before a pane exists. The result uses flat optional `kind`
   and `text`; a discriminated union does not work with the Kotlin wire model.
-- A fresh wake with no capturable pane is reported as failed, allowing `/send` to fail instead of
-  waiting forever.
+- A wake with no capturable pane is reported as failed, so `/send` fails instead of waiting forever.
 - The reserved `host` slot requires `HOST_WS_TOKEN`.
 
 ## Armed goals
@@ -76,14 +75,14 @@ A session's tools use separate console and daemon capability sources. The MCP re
 creating `McpServer`. The console source has a 14-day TTL and 500-device cap; the daemon source has
 no TTL.
 
-- **`/capabilities` keeps sources separate.** `enabledPlugins` and `daemonCapabilities` are disjoint
+- **`/capabilities` keeps sources separate:** `enabledPlugins` and `daemonCapabilities` are disjoint
   sections. Absent means no report, empty means affirmative none.
 - **A flat capability answer lifts into `console`,** and the route serves flat fields beside
   sections.
 - A daemon declaration counts only after the `HOST_WS_TOKEN` gate.
 - Offline fallback is the last answer that actually arrived. `GATED_CAPABILITY_IDS` drives both
   gates; the daemon id is pinned separately.
-- **Always-on instructions carry names, not guidance.** The harness caps `capabilityInstructions` and
+- **Always-on instructions carry names, not guidance:** The harness caps `capabilityInstructions` and
   silently truncates long guidance; `switchboard_capabilities` serves guidance per call.
 - That tool answers from the startup snapshot. A fresh read may warn about drift but must not
   describe tools absent from the session.

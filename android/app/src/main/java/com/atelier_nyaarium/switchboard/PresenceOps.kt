@@ -9,40 +9,24 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** The team roster and the plane snapshots that keep it true: presence, linked peers, cross-Domain
- * presence, and the cross-device read anchors reported back. Owns the raw-snapshot cache, the
- * last-reported anchors and the rebuild mutex, which is why it is a held delegate rather than
- * extensions the way the voice settings and the drafts are. */
+/** Presence planes and roster state. */
 internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovision {
-	// Serializes the projection version check, its save, and the apply that follows.
+	// Serialize projection check and apply.
 	private val projectionMutex = Mutex()
 
-	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw -
-	// never persisted (a fresh process starts with no cache and full-resyncs on its first poll).
-	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
-	// tombstone's own expiry resurrect a team locally without waiting for a fresh server push -
-	// see applyPresence.
-	// Not private: connect() (ChatRepositoryDomainLink.kt) seeds it from its own initial teams pull.
+	// Raw snapshot for tombstone-expiry recovery.
 	@Volatile var lastRawTeams: List<Team>? = null
 
-	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
-	// reports a team's local anchor only once per genuine local advance instead of every cycle.
-	// Never persisted: a fresh process starts empty, so its first cycle re-reports every team's
-	// current anchor - a harmless no-op on the Gateway if nothing actually changed (monotonic merge).
-	// Not private: SessionOps.forget drops a forgotten team's entry.
+	// Last reported anchor per team.
 	@Volatile var lastReportedReadAnchors: Map<String, ReadAnchor> = emptyMap()
 
-	/** reapplyCachedTeams runs every tick, so until a fresh poll lands the cached snapshot would
-	 * merge the previous owner's roster back in. */
+	/** Reapply cached teams each tick. */
 	override suspend fun clearInMemory() {
 		lastRawTeams = null
 		lastReportedReadAnchors = emptyMap()
 	}
 
-	/** Refresh the cached display name from discovery's LOCAL session (the gateway stamps each
-	 * session's displayName; the local Gateway's is this owner's own). A no-op when no local session
-	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
-	// Not private: connect() (ChatRepositoryDomainLink.kt) refreshes from its own initial teams pull.
+	/** Refresh the cached local display name. */
 	fun refreshDisplayNameFromTeams() {
 		val gw = repo.localGatewayId
 		val local = repo._state.value.teams.firstOrNull {
@@ -52,47 +36,27 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		if (local != repo._state.value.displayName) repo._state.update { it.copy(displayName = local) }
 	}
 
-	/** Apply the linked-peers plane's pushed snapshot into state, so TrustOps.linkedDomains() can union it
-	 * with discovery. The one writer of linkedPeerOwners - the poll loop calls this when a poll
-	 * response carries `linkedPeers` (a real change; see PlaneRegistry). Folds the per-gateway peer
-	 * rows to their distinct Domain ids (a Domain may run more than one gateway). */
+	/** Apply linked peers and prune removed Domains. */
 	suspend fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
-		// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
+		// One owner per Domain.
 		val owners = peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
 		repo._state.update {
 			it.copy(
 				linkedPeerOwners = owners,
-				// crossDomainPeerSessions is a per-domainId UPSERT (applyCrossDomainPresence), which has
-				// no other way to notice an unlinked/untrusted friend's cached entry should disappear -
-				// this roster change is the authoritative signal to prune it.
+				// Roster removal prunes cached peers.
 				crossDomainPeerSessions = it.crossDomainPeerSessions.filterKeys { domainId -> domainId in owners },
 			)
 		}
 		repo.drain.pruneCrossDomainVersions(owners.keys)
 	}
 
-	/** Apply the cross-Domain-presence plane's pushed/pulled entries into state: a per-domainId
-	 * UPSERT (never a wholesale replace - see crossDomainPeerSessions' own doc), since the wire only
-	 * carries the SUBSET of linked Domains whose plane actually changed this poll. The one writer of
-	 * crossDomainPeerSessions - the poll loop calls this when a poll response carries
-	 * `crossDomainPresence`. */
+	/** Upsert changed cross-Domain presence. */
 	suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
 		repo.drain.upsertCrossDomainVersions(entries)
 		repo._state.update { it.copy(crossDomainPeerSessions = it.crossDomainPeerSessions + entries.associateBy { e -> e.domainId }) }
 	}
 
-	/** Apply the read-anchors plane's pushed snapshot: another of this owner's OWN devices may have
-	 * read further than this one has locally recorded. Monotonic, mirroring the Gateway's own merge
-	 * (readAnchors.ts) but resolved by ROW POSITION rather than numeric epoch/seq (this device's
-	 * thread is its own local render order - see isAnchorAdvance's own doc on why equality/position,
-	 * not numeric comparison, is the sound check here). A synced entry whose row this device has not
-	 * drained yet simply does not resolve (isAnchorAdvance returns false) and is silently skipped -
-	 * low-stakes by design (see readAnchors.ts): it self-heals the moment this device's OWN reading
-	 * catches up and reports past it, so there is nothing to retry or queue here. Called AFTER this
-	 * poll's own fresh entries are folded into `_state.threads` (the poll loop's burst-append loop),
-	 * so a row that arrived in the SAME response as its own read-anchor bump already resolves. Marks
-	 * every applied entry as already-reported too, so the very next cycle's outbound report pass does
-	 * not immediately bounce a just-adopted synced value straight back to the Gateway. */
+	/** Apply read anchors by row position. Epochs are random tags, compared only for equality. */
 	fun applyReadAnchors(entries: List<com.atelier_nyaarium.switchboard.proto.ReadAnchorWireEntry>) {
 		var anyChanged = false
 		val next = repo._state.updateAndGet { s ->
@@ -112,14 +76,7 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		if (anyChanged) repo.persistence.persistReadAnchors(next.readAnchors)
 	}
 
-	/** Report every team whose local read anchor has advanced past what this device last told the
-	 * Gateway (see lastReportedReadAnchors). Fire-and-forget per team: a failure here must never
-	 * surface as a poll failure (it would wrongly trip the offline/reconnect UI for what is, per
-	 * readAnchors.ts, low-stakes data that self-heals on the next successful report), so each report
-	 * is individually caught and logged. Marks a team reported regardless of the Gateway's own
-	 * `advanced` verdict - even a false (another device already reported further) means THIS device
-	 * has successfully told the Gateway its own position, so re-sending it every cycle would be
-	 * pure waste. */
+	/** Report local anchor advances without failing the poll. */
 	suspend fun reportLocalReadAdvances() {
 		val anchors = repo._state.value.readAnchors
 		for (team in teamsNeedingReadReport(anchors, lastReportedReadAnchors)) {
@@ -130,56 +87,32 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		}
 	}
 
-	/** Pull-to-refresh: forget the known presence AND linked-peers
-	 * versions so the NEXT poll looks like a cold boot (ships everything for both planes), and
-	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
-	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
-	 * version clear underneath a still-running held poll would otherwise wait for that poll's own
-	 * natural expiry before the cleared version even reaches the server. Also pulls mesh-wide
-	 * discovery immediately (see refreshDiscovery) rather than waiting out its own bounded
-	 * interval, so a manual refresh covers everything a user would expect it to. */
+	/** Reset cursors and refresh immediately. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		repo.drain.resetPlaneCursors()
 		repo.drain.interrupt()
 		refreshDiscovery()
 	}
 
-	/** Mesh-wide discovery: this Gateway's own live relay to every other same-Domain gateway and
-	 * linked cross-Domain peer (routes.discover(), via the list_teams op). Unlike presence and
-	 * linked-peers, this has no push mechanism yet, so it needs an explicit pull, on the poll
-	 * loop's own bounded interval (DISCOVERY_REFRESH_MS) or immediately after an action that
-	 * changes what should be discoverable (a manual refresh, an unlink). Routes through the same
-	 * merge path as everything else (applyPresence), so tombstones/label-overrides/absence-streaks
-	 * apply uniformly regardless of source. Best-effort: a relay failure keeps the prior list. */
+	/** Best-effort mesh-wide discovery pull. */
 	suspend fun refreshDiscovery() {
 		runCatchingCancellable { repo.client().teams(repo.localGatewayId) }
 			.onSuccess { applyDiscovery(it) }
 	}
 
-	/**
-	 * Render the last projection the Router sent, so a cold start shows the roster it had rather than
-	 * an empty list until the socket connects. Absent before the first push, which is a fresh install.
-	 */
+	/** Restore the last Router projection. */
 	suspend fun restoreLastProjection() {
 		val slot = runCatching { repo.store.loadRouterState("presence") }.getOrNull() ?: return
 		val projection = runCatching {
 			wireJson.decodeFromJsonElement(OwnerPresenceProjection.serializer(), slot.payload)
 		}.getOrNull() ?: return
-		// The stored slot is not newer than itself, so it lands without the freshness gate.
+		// Restore without freshness gating.
 		projectionMutex.withLock { landProjection(projection) }
 	}
 
-	/**
-	 * Land the Router's pushed owner projection.
-	 *
-	 * It carries what discovery used to be pulled for, so it goes through the same merge path: the
-	 * unreachable holds, the tombstones and the absence streaks all apply regardless of source.
-	 */
+	/** Apply the Router's owner projection. */
 	suspend fun applyOwnerProjection(projection: OwnerPresenceProjection) = projectionMutex.withLock {
-		// Kept as a versioned envelope of what the Router last said, so a cold start renders the last
-		// roster instead of an empty list while the socket is still connecting. The version gates the
-		// live roster as well as the slot, and the whole check, save and apply run under one lock:
-		// repoScope is Dispatchers.IO, so two frames racing could otherwise land oldest last.
+		// Version check, save, and apply share one lock.
 		val stale = runCatching {
 			val slot = RouterStateSlot(
 				epoch = projection.plane.epoch,
@@ -189,7 +122,7 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			if (!newerRouterState(slot, repo.store.loadRouterState("presence"))) return@runCatching true
 			repo.store.saveRouterState("presence", slot)
 			false
-			// A storage fault must not block presence, so only a positive older verdict stops the apply.
+			// Storage faults do not block presence.
 		}.getOrDefault(false)
 		if (!stale) landProjection(projection)
 	}
@@ -205,21 +138,10 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		applyCrossDomainPresence(projection.linked)
 	}
 
-	/** Land a discovery answer, holding rows for gateways the answer names as unreachable: those
-	 * machines were not asked, so their sessions must not be swept as absent. An answer with no
-	 * coverage (an older gateway) replaces wholesale, the pre-coverage behavior. */
+	/** Apply discovery, preserving unreachable rows. */
 	suspend fun applyDiscovery(answer: TeamsAnswer) {
 		val keys = unreachableKeys(answer.coverage)
-		// Merged per Gateway rather than replaced wholesale, and only for the Gateways this answer
-		// actually spoke for. A null list is an older gateway saying nothing, which must not read as
-		// "no machine offers anything" and wipe what a previous answer established.
-		//
-		// A row for a gateway the answer names UNREACHABLE is DROPPED rather than held, which is the
-		// opposite of what happens to that gateway's session rows just below, and deliberately so. A
-		// held session row is worth keeping because it says what that machine WAS and the UI stamps it
-		// unreachable. A spawn point is not a status; it is an offer to launch something, and offering
-		// Windows on a machine that could not be reached this cycle is an invitation to a wake that
-		// cannot succeed. Absent means unknown here, and unknown correctly shows only `host`.
+		// Merge only gateways covered by this answer.
 		answer.spawnPoints?.let { fresh ->
 			val spoke = fresh.map { it.gatewayId }.toSet()
 			repo._state.update { s ->
@@ -230,25 +152,17 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		val fresh = if (keys.isEmpty()) {
 			answer.teams
 		} else {
-			// A held row from an unreachable gateway is re-stamped UNREACHABLE rather than kept at
-			// whatever it last claimed. That is the whole point of holding it: it says what that
-			// machine WAS, and nothing that costs a round trip to it should be attempted on that
-			// basis - which is what bounds a wake tap on a powered-off machine to zero peeks instead
-			// of one every couple of seconds.
+			// Held rows remain unreachable.
 			mergePresence(lastRawTeams ?: emptyList(), answer.teams) { rowOnUnreachable(it, keys, repo.localGatewayId) }
 				.map { if (rowOnUnreachable(it, keys, repo.localGatewayId)) it.withAuthority(Authority.UNREACHABLE) else it }
 		}
 		applyPresence(fresh)
 	}
 
-	/** Land a presence-plane push. The plane carries the ROUTE Gateway's own rows only, so it speaks
-	 * for that gateway and no other: replacing wholesale swept every remote machine's rows on each
-	 * local presence change, until the next discovery tick restored them. */
+	/** Apply route-Gateway presence rows. */
 	suspend fun applyPlanePresence(planeRows: List<Team>) {
 		val local = repo.localGatewayId
-		// The ONE place a row is called LIVE. These arrived on the push from the Gateway that owns
-		// them, so they are current as of this poll; every other row in the merged list keeps the
-		// POLLED that teamInfoToTeam stamped, because discovery cannot say more than that.
+		// Only pushed rows become LIVE.
 		val fresh = planeRows.map { it.withAuthority(Authority.LIVE) }
 		val planeDomain = fresh.firstOrNull()?.domainId
 		val merged = mergePresence(lastRawTeams ?: emptyList(), fresh) { row ->
@@ -258,20 +172,13 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		applyPresence(merged)
 	}
 
-	/** Which of this owner's Gateways the Router currently holds a connection for. Best-effort, and a
-	 * failure LEAVES the prior answer rather than clearing it: a momentary hiccup reporting every
-	 * machine offline is worse than a slightly stale roster, since offline is the state that makes the
-	 * board stop offering things. */
+	/** Refresh connected Gateways, preserving failures. */
 	suspend fun refreshConnectedGateways() {
 		val ids = runCatchingCancellable { repo.client().fetchConnectedGateways() }.getOrNull() ?: return
 		if (ids != repo._state.value.connectedGateways) repo._state.update { it.copy(connectedGateways = ids) }
 	}
 
-	/** The one plane-merge path: every fresh presence-plane snapshot lands in state through here
-	 * and only here. Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive
-	 * `teams` from it directly (see reapplyCachedTeams) without waiting for a fresh server push -
-	 * a failed or remote forget then resurrects locally on its own tombstone's schedule, not the
-	 * next unrelated bump. */
+	/** Cache raw presence before tombstone filtering. */
 	suspend fun applyPresence(fresh: List<Team>) {
 		lastRawTeams = fresh
 		reapplyCachedTeams()
@@ -279,15 +186,7 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 
 	private val freshTeamsMutex = Mutex()
 
-	/**
-	 * Attach this device's own outstanding request to a row, and retire it the moment the row itself
-	 * proves the point.
-	 *
-	 * Evidence beats a request, always. A receipt only ever answers the question "is something coming
-	 * that no Gateway has reported yet", so a row that already says the session is up retires it
-	 * rather than being overridden by it. An optimistic value that can outrank a real report is a UI
-	 * that lies, which is worse than one that is late.
-	 */
+	/** Prefer live evidence over receipts. */
 	private fun foldReceipt(row: Team): Team {
 		if (row.presence.isLive) {
 			repo.sessions.clearReceipt(row.name)
@@ -296,14 +195,11 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		return row.withReceipt(repo.sessions.receiptFor(row.name, System.currentTimeMillis()))
 	}
 
-	// Coalesces the discovery pulls that follow an action. Several taps, or a wake landing beside the
-	// loop's own tick, must not each fan `list_teams` out across every machine.
+	// Debounce action-triggered pulls.
 	private var lastActionPullAt = 0L
 	private val ACTION_PULL_DEBOUNCE_MS = 2_000L
 
-	/** Pull discovery right after an action whose effect this device cannot otherwise see for up to a
-	 * discovery interval: the action was sealed to the session's OWN Gateway, and only the route
-	 * Gateway's rows arrive by push. Debounced, and best-effort like every other discovery pull. */
+	/** Debounced post-action discovery. */
 	suspend fun refreshAfterAction() {
 		val now = System.currentTimeMillis()
 		if (now - lastActionPullAt < ACTION_PULL_DEBOUNCE_MS) return
@@ -311,17 +207,7 @@ internal class PresenceOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		refreshDiscovery()
 	}
 
-	/** Re-derives `teams` from the cached raw snapshot (see applyPresence) against the CURRENT
-	 * tombstone set: filterTombstoned's own sweep (forgottenUntil.entries.removeIf) means a
-	 * tombstone that has since expired no longer masks its team, so calling this on every poll
-	 * loop tick - fresh presence or not - is what makes a tombstone's expiry self-heal instead of
-	 * waiting for the next unrelated bump. Folds in ChatState.withFreshTeams' label-override
-	 * pruning + absence-streak rules. A no-op before anything has ever been cached. Serialized
-	 * against a concurrent call (the poll loop's own tick and a manual refreshTeams() both run on
-	 * Dispatchers.IO) so two overlapping snapshots cannot each persist their own labels/streaks
-	 * with no ordering guarantee between them - SharedPreferences.apply() only guarantees the
-	 * LAST-CALLED write for a key eventually wins, not that "last called" lines up with "computed
-	 * from the newer fetch" once two independent capture-then-persist sequences interleave. */
+	/** Reapply cached teams under the rebuild mutex. */
 	suspend fun reapplyCachedTeams() {
 		val raw = lastRawTeams ?: return
 		freshTeamsMutex.withLock {

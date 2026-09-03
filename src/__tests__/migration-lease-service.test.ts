@@ -45,7 +45,6 @@ describe("migration lease service", () => {
 		registry.close();
 	});
 
-	// One asleep machine cannot hold the fleet, and is fenced on reconnect instead.
 	it("lets an offline gateway pass authority while still fencing its writes", () => {
 		const { registry, service } = make();
 		service.put("alpha", "hosta", "active");
@@ -58,7 +57,6 @@ describe("migration lease service", () => {
 		registry.close();
 	});
 
-	// It cannot have completed a migration nobody recorded.
 	it("fences a gateway it has no lease for", () => {
 		const { registry, service } = make();
 
@@ -73,8 +71,6 @@ describe("migration lease service", () => {
 		registry.close();
 	});
 
-	// Repeatable by construction: the map is kept for the whole window, so a phone that dies between
-	// hearing the answer and committing it asks again and gets the same one.
 	it("answers a cursor translation from the stored map, the same way every time", () => {
 		const { registry } = make();
 		const cursors = createCursorService({ registry, migrationEpoch: () => 7 });

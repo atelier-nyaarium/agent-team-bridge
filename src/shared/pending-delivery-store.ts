@@ -1,78 +1,41 @@
 import { fenced, MIGRATING } from "./migration-fence.js";
 import type { ChannelFile, RidingAwareness } from "./types.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/**
- * One channel message accepted for a session that could not take it at the time.
- *
- * Everything needed to deliver it later lives HERE. A queued message whose reply anchor or file
- * bucket had to be reconstructed from live state would not survive the restart this store exists to
- * survive.
- */
+/** Queued message with delivery state. */
 export interface PendingDelivery {
-	/** Stable per-message identity. A retry of the same send reuses it, which is what makes replay
-	 * safe: the receiver acknowledges a duplicate without emitting a second notification. */
+	/** Stable retry identity. */
 	deliveryId: string;
-	/** The local canonical team this is for. */
 	team: string;
-	/** The reply anchor this message belongs to, so a reply still threads after a restart. */
 	channelJobId: string;
 	from: string;
 	body: string;
 	files?: ChannelFile[];
 	disposition?: string;
-	/** Reserved at enqueue rather than taken at delivery. Awareness is destructive to read, so
-	 * taking it at delivery would drop it on a crash and re-take it on a replay. */
+	/** Reserved before delivery. */
 	awareness?: RidingAwareness;
-	/** The file-materialization bucket key, minted with the message and not at delivery. */
+	/** Materialization bucket key. */
 	messageId?: string;
 	enqueuedAt: number;
 }
 
-/** Why an enqueue did not add a row. `duplicate` is a success for the caller: that exact message is
- * already queued, which is what a retry should find. */
 export type EnqueueOutcome = "enqueued" | "duplicate" | "refused" | "migrating";
 
 interface Snapshot {
 	deliveries: PendingDelivery[];
 }
 
-/** Somewhere to keep a snapshot. Narrower than `DurableStore`, which satisfies it structurally: this
- * store wants a sink, not the file mechanics behind one. */
 export interface DeliverySnapshotSink {
 	load(): unknown | null;
 	saveChecked(state: unknown): void;
 }
 
-////////////////////////////////
-//  Constants
-
-/** Retention. Deliberately its OWN constant: a session record's resume TTL is the same number
- * today, but a message outliving the session it addresses has nowhere to go, and the two answer
- * different questions. */
 export const PENDING_DELIVERY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Capacity. No honest derivation exists for these - they are capacity decisions, chosen so one
- * unreachable session cannot consume the queue every other session shares. */
 export const MAX_PENDING_DELIVERIES_PER_TEAM = 200;
 export const MAX_PENDING_DELIVERIES = 2_000;
 
-////////////////////////////////
-//  Class
-
-/**
- * Messages accepted for a session that was not ready, held until it acknowledges them.
- *
- * The point of the store is that acceptance is a PROMISE. Once a send has been told its message
- * landed, the message must reach the session or come back as an explicit failure; it must never
- * simply evaporate because the session was slow, restarting, or on a machine that was briefly gone.
- *
- * Rows leave on acknowledgement, never on the socket write. A write that succeeded proves the bytes
- * left this process, not that anything consumed them.
- */
 export class PendingDeliveryStore {
+	// Rows remain until acknowledgement.
 	private readonly byTeam = new Map<string, PendingDelivery[]>();
 	private readonly ids = new Set<string>();
 
@@ -90,12 +53,7 @@ export class PendingDeliveryStore {
 		return this.ids.size;
 	}
 
-	/**
-	 * Hold a message for a team.
-	 *
-	 * Refuses rather than evicting when full. Dropping somebody's older message to make room for a
-	 * newer one would break the same promise this store exists to keep, just more quietly.
-	 */
+	/** Refuses when full. */
 	enqueue(delivery: PendingDelivery): EnqueueOutcome {
 		if (fenced()) return MIGRATING;
 		if (this.ids.has(delivery.deliveryId)) return "duplicate";
@@ -109,13 +67,10 @@ export class PendingDeliveryStore {
 		return "enqueued";
 	}
 
-	/** What is waiting for a team, oldest first. Order is the order it was accepted in. */
 	listForTeam(team: string): readonly PendingDelivery[] {
 		return this.byTeam.get(team) ?? [];
 	}
 
-	/** Retire a delivery the receiver has confirmed. False when it was already retired, which a
-	 * duplicate acknowledgement is entitled to be. */
 	acknowledge(deliveryId: string): boolean {
 		if (!this.ids.delete(deliveryId)) return false;
 		for (const [team, queue] of this.byTeam) {
@@ -129,8 +84,6 @@ export class PendingDeliveryStore {
 		return true;
 	}
 
-	/** Give up on everything held for a team, handing the rows back so the caller can report each
-	 * one. For a session being forgotten, or a share being withdrawn. */
 	failTeam(team: string): PendingDelivery[] {
 		const queue = this.byTeam.get(team) ?? [];
 		if (queue.length === 0) return [];
@@ -140,7 +93,6 @@ export class PendingDeliveryStore {
 		return queue;
 	}
 
-	/** Drop what has aged out, returning it so expiry can be reported rather than silent. */
 	sweep(): PendingDelivery[] {
 		const cutoff = this.now() - this.ttlMs;
 		const expired: PendingDelivery[] = [];
@@ -158,14 +110,12 @@ export class PendingDeliveryStore {
 		return expired;
 	}
 
-	/** The snapshot shape, exposed so the boot log and tests can read it without reaching inside. */
 	snapshot(): Snapshot {
 		return { deliveries: [...this.byTeam.values()].flat() };
 	}
 
 	private persist(): void {
-		// Checked, not best-effort. Every caller here has already been told its message was accepted,
-		// so a write this store could not confirm has to reach that caller as a failure.
+		// Persistence failure must reach the caller.
 		this.durable?.saveChecked(this.snapshot());
 	}
 
@@ -185,11 +135,7 @@ export class PendingDeliveryStore {
 	}
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** A restored row is only as trustworthy as the file it came from, so every field a delivery
- * depends on is checked rather than assumed. A row that fails is skipped, never repaired. */
+/** Reject incomplete restored rows. */
 function isDelivery(row: unknown): row is PendingDelivery {
 	if (!row || typeof row !== "object") return false;
 	const d = row as Record<string, unknown>;

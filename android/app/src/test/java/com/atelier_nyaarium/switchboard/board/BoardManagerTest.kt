@@ -18,7 +18,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BoardManagerTest {
-	/** In-memory storage: the manager's whole persistence surface (see BoardStore). */
 	private class FakeStore(private var blob: String? = null) : BoardStore {
 		override fun loadTaskBoard(): String? = blob
 
@@ -34,7 +33,6 @@ class BoardManagerTest {
 	private fun entry(id: String, sessionId: String? = null, state: String = "open", trashedAt: Long? = null) =
 		BoardEntry(id = id, title = "t-$id", state = state, rank = "m", sessionId = sessionId, trashedAt = trashedAt)
 
-	/** Seeds the Router board, which is what the session-scoped reads answer from. */
 	private fun seedRouter(board: BoardManager, entries: List<BoardEntry>) {
 		val keyring = ContentKeyring(store = null)
 		keyring.deriveOwned(Crypto.generateIdentity(), "domain", 1)
@@ -67,7 +65,6 @@ class BoardManagerTest {
 		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
 		assertEquals("done", board.mergedEntries("gw-route").single().state)
 
-		// The gateway re-sends the pre-edit truth (our reply was lost); the queue still wins.
 		board.applySnapshot("gw-route", listOf(entry("a")), version = null, truncated = false)
 		assertEquals("done", board.mergedEntries("gw-route").single().state)
 	}
@@ -77,8 +74,6 @@ class BoardManagerTest {
 		val board = BoardManager(storeStub())
 		board.applySnapshot("gw-route", listOf(entry("a"), entry("b"), entry("c"), entry("z")), null, false)
 
-		// The projection is an id-sorted PREFIX, so ["a","c"] means: authoritative through "c", and
-		// silent past it. "b" was DELETED. "z" is beyond the cut and its cached copy stands.
 		board.applySnapshot("gw-route", listOf(entry("a"), entry("c")), null, truncated = true)
 		assertEquals(listOf("a", "c", "z"), board.mergedEntries("gw-route").map { it.id }.sorted())
 	}
@@ -124,7 +119,6 @@ class BoardManagerTest {
 			listOf<ConsoleOp>(ConsoleOp.BoardSetState("a", "done"), ConsoleOp.BoardSetState("b", "done")),
 			writer.sent,
 		)
-		// Both applied, so the snapshot alone is the truth again.
 		board.applySnapshot("gw-route", listOf(entry("a", state = "done"), entry("b", state = "done")), null, false)
 		assertTrue(board.mergedEntries("gw-route").all { it.state == "done" })
 	}
@@ -136,7 +130,6 @@ class BoardManagerTest {
 		board.enqueue(ConsoleOp.BoardSetState("a", "done"), "gw-route")
 
 		board.drain(RecordingWriter(fail = { error("offline") }))
-		// Still applied optimistically, and still queued - only a gateway refusal may discard it.
 		assertEquals("done", board.mergedEntries("gw-route").single().state)
 		val retry = RecordingWriter()
 		board.drain(retry)
@@ -168,7 +161,6 @@ class BoardManagerTest {
 
 		assertEquals(1, board.dropQueuedForSession("gw-route", "s1"))
 
-		// The forgotten session's edit is gone; an unrelated session's still drains.
 		val writer = RecordingWriter()
 		board.drain(writer)
 		assertEquals(listOf<ConsoleOp>(ConsoleOp.BoardSetState("theirs", "in_progress")), writer.sent)
@@ -189,8 +181,6 @@ class BoardManagerTest {
 
 	@Test
 	fun aDroppedAttachmentIsReportedToTheOwner() = runBlocking {
-		// Dropping is a normal outcome now, so an unreported one is indistinguishable from a picture
-		// vanishing on its own. It lands on the same row the owner already reads for a refused edit.
 		val manager = BoardManager(storeStub())
 		manager.enqueue(ConsoleOp.BoardSetAttachments("e1", emptyList()), "gw-route")
 
@@ -198,16 +188,13 @@ class BoardManagerTest {
 
 		assertEquals(1, manager.refusals.size)
 		assertTrue(manager.refusals.single().reason.contains("gone.png"))
-		// The write APPLIED, so the action retires rather than retrying.
+		// Applied writes retire.
 		assertTrue(manager.strugglingEntries().isEmpty())
 	}
 
 	@Test
 	fun oneGatewaysEmptySnapshotCannotDriveAByteDelete() {
-		// A Gateway that lost its own board file answers with an EMPTY list over the wire, and the
-		// phone then holds the last copies of its attachments. Buckets are keyed per entry and the keep
-		// set is built per gateway, so a second Gateway still having entries must not make this true -
-		// two machines is the ordinary configuration, not an edge case.
+		// Keep sets are gateway-scoped.
 		val json = Json { ignoreUnknownKeys = true }
 		val blob = BoardBlob(
 			gateways = mapOf(
@@ -220,8 +207,7 @@ class BoardManagerTest {
 		assertFalse("one gateway's loss is not permission to delete its bytes", manager.boardIsKnown)
 	}
 
-	// The board now comes from the Router, so a device that has not landed it once has no keep set at
-	// all. Answering known there would let the first sweep delete every board attachment on the phone.
+	// Unlanded boards have no keep set.
 	@Test
 	fun aBoardNeverLandedFromTheRouterIsNotKnown() {
 		val manager = BoardManager(storeStub())
@@ -235,18 +221,12 @@ class BoardManagerTest {
 
 	@Test
 	fun anUndecodableBoardIsNotAnEmptyOne() {
-		// The keep set is the only thing between every board picture on the device and the orphan
-		// sweep. A board that failed to decode answers the same empty set a genuinely empty one does,
-		// so without this distinction one bad prefs blob deletes every attachment in a single pass -
-		// the reclaim shape the gateway explicitly refuses, rebuilt on the console.
+		// Decode failure must not prune.
 		assertFalse("a stored board that will not parse is UNKNOWN", BoardManager(FakeStore("{not json")).boardIsKnown)
 	}
 
 	@Test
 	fun aRevokedGatewaysColumnAndItsQueuedWritesGoWithIt() {
-		// A purged machine is wiped and gone, but nothing ever takes a column BACK: its last snapshot
-		// would be drawn as live work forever and board_read on every refresh. The keyring is the one
-		// fact that says gone rather than down, so a Gateway it no longer admits loses its column here.
 		val board = BoardManager(storeStub())
 		board.applySnapshot("gw-route", listOf(entry("r1")), null, false)
 		board.applySnapshot("gw-gone", listOf(entry("g1")), null, false)
@@ -264,7 +244,6 @@ class BoardManagerTest {
 
 	@Test
 	fun anEmptyKeyringPrunesNothing() {
-		// What a device knows before its first sync. An empty answer is never permission to delete.
 		val board = BoardManager(storeStub())
 		board.applySnapshot("gw-a", listOf(entry("a1")), null, false)
 		board.retainGateways(emptyList())

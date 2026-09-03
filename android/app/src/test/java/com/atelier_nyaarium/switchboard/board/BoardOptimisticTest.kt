@@ -228,9 +228,7 @@ class BoardOptimisticTest {
 		assertTrue(posts.isEmpty())
 	}
 
-	// Assigning a parent takes its children with it, which is what the gateway op this replaced did.
-	// The Router sets one entry per set_session, so the subtree has to be fanned out by the caller and
-	// ride one write.
+	// Subtrees share one write.
 	@Test
 	fun assigningAParentCarriesItsSubtree() {
 		val target = BoardSession("domain", "gw-b", "sess-b")

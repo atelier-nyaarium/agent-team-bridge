@@ -17,14 +17,6 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 
 const mockRouterPost = vi.mocked(routerPost);
 
-////////////////////////////////
-//  The blob plane under the tools
-//
-//  Attaching a file stages its bytes on the gateway before the tool posts anything, so a router
-//  mock that answers everything with {} reports a failed transfer.
-
-// Per test, not per file. A shared store lets one test's upload satisfy the next test's dedup
-// check, so a transfer that never happened looks like one that did.
 let wire: BlobWire;
 
 beforeEach(() => {
@@ -35,8 +27,6 @@ afterEach(() => {
 	wire.dispose();
 });
 
-/** Point the router mock at a real blob store for the three transfer routes, and at [reply] for
- * everything else. Resets call history, so a test that asserts "did not post" still reads clean. */
 function resetRouterPost(reply: unknown = {}): void {
 	mockRouterPost.mockReset();
 	mockRouterPost.mockImplementation(async (route: string, body: unknown) =>
@@ -48,8 +38,6 @@ beforeEach(() => {
 	resetRouterPost();
 });
 
-/** The first post a tool made on its OWN behalf. An attachment's chunk transfers land ahead of it,
- * so the raw call list no longer starts with the call under test. */
 function firstToolPost<T>(): [string, T] {
 	const call = mockRouterPost.mock.calls.find(([route]) => !isBlobRoute(route as string));
 	if (!call) throw new Error("no non-blob post was made");
@@ -202,8 +190,6 @@ describe("modifiedAt on the wire", () => {
 		expect(wireModifiedAt(new Date(1_552_555_613_589))).toEqual({ modifiedAt: 1_552_555_613_589 });
 		expect(wireModifiedAt(new Date(NaN))).toEqual({});
 
-		// The reason omission is the only safe fallback: NaN serializes to null, and null is not an
-		// accepted value, so one odd file would sink the entire message rather than just its date.
 		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt", role: "attachment" };
 		expect(ChannelFilesSchema.safeParse([base]).success).toBe(true);
 		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: null }]).success).toBe(false);

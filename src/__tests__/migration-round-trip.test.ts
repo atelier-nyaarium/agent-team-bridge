@@ -1,6 +1,3 @@
-// The whole point of the phase, end to end: what the gateway exports is what the Router holds, and
-// running the import twice leaves the same state as running it once.
-
 import { describe, expect, it } from "vitest";
 import { applyImport, type ImportStore } from "../federation-server/migration/applyImport.js";
 import {
@@ -42,7 +39,6 @@ const sources = (over: Partial<ExportSources> = {}): ExportSources => ({
 	...over,
 });
 
-/** Enough of an owner store to observe what an import lands, with the store's own CAS behaviour. */
 function fakeStore(): ImportStore & { records: Map<string, unknown>; appended: Record<string, unknown>[] } {
 	const records = new Map<string, { version: number; value: unknown }>();
 	const appended: Record<string, unknown>[] = [];
@@ -53,7 +49,6 @@ function fakeStore(): ImportStore & { records: Map<string, unknown>; appended: R
 		put: (kind, id, expectedVersion, value) => {
 			const key = `${kind}/${id}`;
 			const current = records.get(key);
-			// The real store refuses a stale expectation rather than overwriting.
 			if (current && expectedVersion !== null && current.version !== expectedVersion) return { kind: "conflict" };
 			records.set(key, { version: (current?.version ?? 0) + 1, value });
 			return { kind: current && expectedVersion === null ? "conflict" : "ok" };
@@ -90,7 +85,6 @@ describe("migration round trip", () => {
 		).toEqual([]);
 	});
 
-	// S10 names this one: a second run must not double anything.
 	it("importing twice leaves the same state as importing once", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();
@@ -100,6 +94,22 @@ describe("migration round trip", () => {
 		applyImport(store, snapshot, "ownerkey", dedupeRows);
 
 		expect(store.appended.length).toBe(afterOne);
+	});
+
+	it("does not double a row that carries no dedupe key", () => {
+		const keyless = { seq: 1, at: 0, kind: "message", session_id: "conv.a.b.c.d", body: "hi" } as MailboxEntry;
+		const snapshot = buildExport(
+			sources({
+				mailboxes: () => [{ conversationId: "owner-1", epoch: 4, rows: [keyless], consumerCursors: [] }],
+			}),
+			7,
+		);
+		const store = fakeStore();
+
+		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, "ownerkey", dedupeRows);
+
+		expect(store.appended).toHaveLength(1);
 	});
 
 	it("carries the board, the anchors, the pending delivery and the cursor map", () => {
@@ -115,7 +125,6 @@ describe("migration round trip", () => {
 		expect(keys.some((key) => key.startsWith("inbox.address/"))).toBe(true);
 	});
 
-	// The Router holds what it cannot read, from the gateway all the way into the store.
 	it("never lands readable text", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();

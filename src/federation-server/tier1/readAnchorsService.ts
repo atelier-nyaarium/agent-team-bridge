@@ -9,7 +9,7 @@ export interface ReadAnchorsServiceDeps {
 	registry: OwnerStoreRegistry;
 }
 
-// Keep versions outside the `readAnchor:<team>` namespace.
+// Keep version outside team namespace.
 const VERSION_ID = "readAnchor.version";
 const anchorId = (team: string): string => `readAnchor:${team}`;
 const write = (result: WriteResult): void => {
@@ -81,8 +81,7 @@ export function createReadAnchorsService(deps: ReadAnchorsServiceDeps) {
 			hooks.ownerOp("report_read", async (op, value) => {
 				const parsed = ReportReadSchema.safeParse(value);
 				if (!parsed.success) throw new OwnerOpRefused("malformed");
-				// Stamped here, never taken from the reporter. It decides every cross-epoch merge, so a
-				// device with a fast clock would otherwise pin the anchor against every later report.
+				// Router stamps time; epochs use equality, never ordering.
 				const at = deps.registry.now();
 				return { advanced: report(op.domainId, parsed.data.team, { ...parsed.data, at }) };
 			});

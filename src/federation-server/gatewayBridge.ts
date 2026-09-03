@@ -41,19 +41,19 @@ import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./r
 export interface GatewayBridgeParams {
 	port: number;
 	authToken: string;
-	// Required to verify registrations.
+	// Four callbacks enforce registration trust.
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	getDomainMeta: (domainId: string) => DomainMeta | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	adminDomainId: () => string | null;
-	/** Register replies carry reach data because gateways cannot call the gated `reach` op. */
+	/** Registration carries reach because `reach` is gated. */
 	reach?: () => { publicHost?: string | null; publicPort?: number | null; lanAddresses?: string[] };
 	inbox?: InboxService;
 	blobCache?: RouterBlobCache;
 	referenceHeld?: ReferenceHeldStore;
 }
 
-/** The authenticated identity behind a gateway frame; the payload never names these. */
+/** Authenticated frame identity, not payload identity. */
 export interface GatewayRegistration {
 	domainId: string;
 	gatewayId: string;
@@ -65,7 +65,7 @@ export type GatewayFrameHandler = (
 	params: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
-/** A producer's stable identity for one operation, so its retries are not read as different ones. */
+/** Stable producer identity deduplicates retries. */
 const ProducerOpHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 const BUILT_IN_FRAMES = new Set([
@@ -92,13 +92,13 @@ export class GatewayBridge implements ToolProvider {
 	private readonly frameHandlers = new Map<string, GatewayFrameHandler>();
 	private readonly sessionForgottenListeners: Array<(reg: GatewayRegistration, sessionId: string) => void> = [];
 	private peerRowGate: PeerRowGate | null = null;
-	/** Answers whether a gateway must reconcile its migration epoch before it may write. */
+	/** Whether a gateway is migration-fenced. */
 	private migrationFenced: ((domainId: string, gatewayId: string) => boolean) | null = null;
 	private readonly registeredListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private readonly droppedListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private transport: GatewayTransport | null = null;
 	private gatewayConnections = new Map<string, Map<string, ConnectionId>>();
-	// No incarnation means the registration could not claim an inbox.
+	// Null incarnation means no inbox claim.
 	private connGateways = new Map<
 		ConnectionId,
 		{ domainId: string; gatewayId: string; signPub: string | null; incarnation: number | null }
@@ -198,7 +198,6 @@ export class GatewayBridge implements ToolProvider {
 		return this.connGateways.size;
 	}
 
-	/** Scope gateway listings to the requested Domain. */
 	public registeredGateways(domainId: string): { gatewayId: string; signPub: string | null }[] {
 		const out: { gatewayId: string; signPub: string | null }[] = [];
 		for (const reg of this.connGateways.values()) {
@@ -281,7 +280,7 @@ export class GatewayBridge implements ToolProvider {
 		});
 	}
 
-	/** Handlers receive connection identity, never payload identity. */
+	/** Handlers receive connection identity. */
 	public registerGatewayFrame(name: string, handler: GatewayFrameHandler): void {
 		if (this.frameHandlers.has(name) || BUILT_IN_FRAMES.has(name))
 			throw new Error(`gateway frame "${name}" already registered`);
@@ -296,12 +295,12 @@ export class GatewayBridge implements ToolProvider {
 		this.registeredListeners.push(listener);
 	}
 
-	/** Fires only for the connection holding the registration. */
+	/** Fires for the registered connection only. */
 	public onGatewayDropped(listener: (reg: GatewayRegistration) => void): void {
 		this.droppedListeners.push(listener);
 	}
 
-	/** Stamp the registration incarnation so gateways reject stale frames. */
+	/** Stamp frames with the registration incarnation. */
 	public pushFrameTo(domainId: string, gatewayId: string, frame: Record<string, unknown>): boolean {
 		const incarnation = this.gatewayIncarnation(domainId, gatewayId);
 		if (incarnation === null) return false;
@@ -418,7 +417,7 @@ export class GatewayBridge implements ToolProvider {
 				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
 				return { ok: false, error: "stale_incarnation" };
 			}
-			// A handler cannot trust an identity it never receives.
+			// Strip caller-supplied identity fields.
 			const { domainId: _domainId, gatewayId: _gatewayId, ...payload } = params;
 			return frameHandler(
 				{
@@ -551,7 +550,7 @@ export class GatewayBridge implements ToolProvider {
 			if (meta.displayName != null) reply.displayName = meta.displayName;
 		}
 		reply.isAdminDomain = domainId === this.adminDomain();
-		// Preserve learned reach when the reply is empty.
+		// Preserve cached reach when available.
 		const reach = this.reachGetter?.();
 		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
 		if (incarnation !== null) {
@@ -569,11 +568,10 @@ export class GatewayBridge implements ToolProvider {
 		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
 		const row = parsed.success ? InboxRowInputSchema.safeParse(parsed.data.row) : null;
 		if (!reg || !parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
-		// A gateway that slept through the cut has state the Router has since taken over. It reconciles
-		// its epoch before it may write again, whatever it believes about its own state.
+		// Migration-fenced gateways must reconcile before writing.
 		if (this.migrationFenced?.(reg.domainId, reg.gatewayId)) return { ok: false, error: "migrating" };
 		const origin = row.data.envelope.origin;
-		// Linked peers reach only registered sessions.
+		// Linked peers reach registered sessions only.
 		const allowedDomain =
 			address.domainId === reg.domainId ||
 			(origin.kind === "gateway" &&
@@ -589,7 +587,7 @@ export class GatewayBridge implements ToolProvider {
 					!!origin.sessionId &&
 					this.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
 		if (!allowedDomain || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
-		// Share state authorizes friend rows and supplies their generation.
+		// Share state authorizes friend rows and supplies generation.
 		let shareGeneration: number | undefined;
 		if (address.domainId !== reg.domainId && this.peerRowGate) {
 			const target = sessionTargetOf(address);
@@ -597,9 +595,7 @@ export class GatewayBridge implements ToolProvider {
 			if (generation === null) return { ok: false, error: "refused" };
 			shareGeneration = generation;
 		}
-		// The producer's identity for the operation, since its retries re-seal and the row's bytes
-		// differ each time. Only the hash is taken, on the row's OWN key, so a disagreeing params key
-		// expresses nothing.
+		// Hash only the row's operation key.
 		const hash = ProducerOpHashSchema.safeParse((parsed.data.opKey as { hash?: unknown })?.hash);
 		const result = this.inbox.appendRow({
 			address,
@@ -662,8 +658,7 @@ export class GatewayBridge implements ToolProvider {
 		return { ok: true };
 	}
 
-	/** The console's read, whose Domain its OwnerOp already proved. Same cross-Domain gate as a
-	 * gateway's, because the origin is a routing hint the caller supplies either way. */
+	/** Owner reads use the same cross-Domain gate. */
 	public fetchBlobForOwner(
 		domainId: string,
 		params: { opId: string; blobId: string; range?: { offset: number; length: number }; origin?: BlobOrigin },
@@ -758,7 +753,7 @@ export class GatewayBridge implements ToolProvider {
 		});
 	}
 
-	/** Redeliver held rows under the current incarnation. */
+	/** Redeliver held rows under current incarnation. */
 	private pushRegisteredRows(domainId: string, gatewayId: string, incarnation: number): void {
 		const inbox = this.inbox;
 		if (!inbox) return;
@@ -824,7 +819,6 @@ export class GatewayBridge implements ToolProvider {
 		let dstDomainId = senderDomainId;
 		let dstConnId = this.gatewayConnections.get(senderDomainId)?.get(dstGateway);
 		if (!dstConnId) {
-			// Link edges authorize foreign relays.
 			const foreign = this.resolveForeignGateway(senderDomainId, dstGateway);
 			if (foreign === "ambiguous") {
 				return Promise.resolve({
@@ -833,6 +827,7 @@ export class GatewayBridge implements ToolProvider {
 					error: `gateway "${dstGateway}" is ambiguous across Domains`,
 				});
 			}
+			// Link edges authorize cross-Domain relays.
 			if (foreign && this.hasLinkEdge(senderDomainId, foreign.domainId)) {
 				dstDomainId = foreign.domainId;
 				dstConnId = foreign.connId;
@@ -850,7 +845,6 @@ export class GatewayBridge implements ToolProvider {
 				ws.send(
 					JSON.stringify({
 						type: "gateway_relay",
-						// The destination schema requires the sender incarnation.
 						v: FEDERATION_PROTOCOL_VERSION,
 						relayId,
 						srcGateway,
@@ -1044,7 +1038,7 @@ export class GatewayBridge implements ToolProvider {
 
 	private handleListGateways(connId: ConnectionId): unknown {
 		const reg = this.connGateways.get(connId);
-		// Keep refusal distinct from an empty peer list.
+		// Preserve refusal versus an empty peer list.
 		if (!reg) throw new Error("not registered");
 		const { domainId, gatewayId: self } = reg;
 		const gateways = [...(this.gatewayConnections.get(domainId)?.keys() ?? [])]

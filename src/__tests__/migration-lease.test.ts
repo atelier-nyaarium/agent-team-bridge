@@ -15,8 +15,6 @@ describe("migration lease", () => {
 		expect(authorityReady([done, lease({ completedEpoch: 7 })], 7)).toBe(true);
 	});
 
-	// One asleep machine cannot hold the whole fleet. It is fenced on reconnect instead, which is
-	// what keeps it from writing to state the Router has taken over by then.
 	it("does not let an offline gateway block authority", () => {
 		expect(authorityReady([lease({ completedEpoch: 7 }), lease({ state: "offline" })], 7)).toBe(true);
 	});
@@ -25,7 +23,6 @@ describe("migration lease", () => {
 		expect(authorityReady([lease({ state: "retired" }), lease({ state: "excluded" })], 7)).toBe(true);
 	});
 
-	// A gateway that completed an EARLIER epoch has not completed this one.
 	it("counts completion per epoch rather than as a flag", () => {
 		expect(authorityReady([lease({ completedEpoch: 6 })], 7)).toBe(false);
 	});
@@ -36,7 +33,6 @@ describe("migration lease", () => {
 		expect(fenceOnReconnect(lease({ completedEpoch: 7 }), 7)).toBe(false);
 	});
 
-	// It cannot have completed a migration nobody recorded, so it does not get the benefit of doubt.
 	it("fences a gateway it has never heard of", () => {
 		expect(fenceOnReconnect(undefined, 7)).toBe(true);
 	});

@@ -157,9 +157,7 @@ describe("console sockets", () => {
 		fixture.registry.close();
 	});
 
-	// A planes-only console takes pushes without reading the inbox. Registering a consumer for one
-	// would pin the compaction floor at a cursor that never moves, so the inbox could never be
-	// reclaimed while it stayed connected.
+	// Avoid pinning compaction floor.
 	it("gives a planes-only console no rows and no consumer", async () => {
 		const fixture = setup();
 		row(fixture, domainA, "waiting");
@@ -172,7 +170,6 @@ describe("console sockets", () => {
 		expect(client.frames.some((frame) => frame.type === "inbox_rows")).toBe(false);
 		fixture.hub.pushOwnerRow(domainA, null, row(fixture, domainA, "pushed"));
 		expect(client.frames.some((frame) => frame.type === "inbox_rows")).toBe(false);
-		// Planes still arrive; that is the whole point of the mode.
 		fixture.hub.pushPlane(domainA, "presence", 3, { rows: [] });
 		expect(client.frames.at(-1)).toMatchObject({ type: "plane", name: "presence", version: 3 });
 		fixture.registry.close();
@@ -210,7 +207,6 @@ describe("console sockets", () => {
 			}),
 		);
 
-		// readOwner is inclusive of fromSeq, so "after the acked row" reads from one above it.
 		expect(
 			fixture.inbox.readOwner(
 				domainA,
@@ -282,7 +278,6 @@ describe("console sockets", () => {
 		);
 
 		expect(oldClient.frames.at(-1)).toEqual({ type: "refused", reason: "superseded" });
-		// The late ack changed nothing, so the row is still above the cursor and still unread.
 		expect(
 			fixture.inbox.readOwner(domainA, fixture.consoleIdentity.sign.pub, 1, 10, oldWelcome.cursorEpoch),
 		).toEqual([pending]);

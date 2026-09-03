@@ -59,8 +59,7 @@ class ConsoleSocketClientTest {
 		val client: ConsoleSocketClient,
 		val listener: WebSocketListener,
 		val sent: MutableList<String>,
-		/** The socket the factory handed back. onOpen sends on the socket it is GIVEN, so a test that
-		 * passes any other one records nothing. */
+		/** Socket handed to listener. */
 		val socket: WebSocket,
 	)
 

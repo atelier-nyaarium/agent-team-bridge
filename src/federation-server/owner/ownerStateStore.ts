@@ -138,7 +138,7 @@ export class OwnerStateStore {
 				try {
 					manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Manifest;
 				} catch {
-					// Keep the unreadable manifest; quarantine persists until restoration.
+					// Quarantine persists until restoration.
 					const to = OwnerStateStore.highestSeq(dir);
 					return new OwnerStateStore(dir, opts.quota, lock, now, empty(), manifest).quarantine({
 						from: 1,
@@ -243,7 +243,6 @@ export class OwnerStateStore {
 		}
 	}
 
-	/** Record the quarantined segment in the manifest. */
 	private static quarantineSegment(
 		dir: string,
 		quota: DomainQuota,
@@ -285,6 +284,7 @@ export class OwnerStateStore {
 	): WriteResult {
 		if (this.quarantinedState) return { kind: "quarantined", missing: this.quarantinedState };
 		const current = this.get(kind, id);
+		// CAS before journal append.
 		if ((expectedVersion === null && current) || (expectedVersion !== null && current?.version !== expectedVersion))
 			return { kind: "conflict", current };
 		const version = (current?.version ?? 0) + 1;
@@ -427,7 +427,7 @@ export class OwnerStateStore {
 		} catch (error) {
 			this.quota.release(this.dir, bytes.byteLength);
 			this.degradedState = true;
-			// Restore the pre-write length after a partial write.
+			// Restore pre-write length.
 			try {
 				fs.ftruncateSync(fd, start);
 			} catch (truncateError) {
@@ -440,11 +440,12 @@ export class OwnerStateStore {
 		try {
 			fs.fsyncSync(fd);
 		} catch (error) {
-			// Do not reuse the sequence after an fsync failure.
+			// Never reuse sequence after fsync failure.
 			this.degradedState = true;
 			uncertain = String(error);
 		}
 		const next = clone(this.state);
+		// Journal precedes state.
 		OwnerStateStore.apply(next, line);
 		next.seq = line.seq;
 		this.state = next;
