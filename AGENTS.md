@@ -22,7 +22,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/router/shareAttestor.ts` - share liveness attestation, coalesced
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
 - `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
-- `src/gateway/console/` - Android OwnerOp dispatch and capability store
+- `src/gateway/console/` - Android OwnerOp dispatch and capability store; `console-conversations` keeps each console conversation's owner so a late reply reaches the owner inbox after a restart
 - `src/gateway/consolePushOps.ts` - phone-bound rows, `deliverToOwner`, and durable `OwnerRowOutbox`
 - S8 retained endpoints: `/capabilities`, `/discover`, `/task-board`
 - `android/.../ChatRepository.kt` - console process singleton, OwnerOp client, and home Gateway state

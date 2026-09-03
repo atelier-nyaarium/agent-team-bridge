@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
+import { DurableStore } from "../shared/durable-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -70,6 +74,56 @@ describe("routes", () => {
 				delivered: true,
 				result: expect.objectContaining({ status: "completed", response: "done" }),
 			});
+		});
+
+		it("queues a console conversation's late reply as an owner inbox row", async () => {
+			const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "routes-respond-"));
+			const previous = process.env.DATA_DIR;
+			process.env.DATA_DIR = dataDir;
+			try {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("conv-late", "phone", "agent", { persistent: true, fromConversationId: "phone-conv" });
+				const ctx = makeCtx({
+					store,
+					consoleOwnerOf: (conversationId) => (conversationId === "phone-conv" ? "owner-1" : undefined),
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "conv-late",
+					status: "completed",
+					response: "late answer",
+				});
+				expect(await res.json()).toEqual({ delivered: true });
+				const queued = new DurableStore(dataDir, "owner-row-outbox").load() as Array<{
+					entry: { kind: string; session_id: string; body?: string };
+				}>;
+				expect(queued.map((item) => [item.entry.kind, item.entry.session_id, item.entry.body])).toEqual([
+					["reply", "conv-late", "late answer"],
+				]);
+			} finally {
+				if (previous === undefined) delete process.env.DATA_DIR;
+				else process.env.DATA_DIR = previous;
+			}
+		});
+
+		it("keeps a reply for an unknown offline conversation in the store", async () => {
+			const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "routes-respond-"));
+			const previous = process.env.DATA_DIR;
+			process.env.DATA_DIR = dataDir;
+			try {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("conv-agent", "asker", "agent", { persistent: true, fromConversationId: "agent-conv" });
+				const { respond } = createRoutes(makeCtx({ store, consoleOwnerOf: () => undefined }));
+				respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "conv-agent",
+					status: "completed",
+					response: "for the agent",
+				});
+				expect(new DurableStore(dataDir, "owner-row-outbox").load()).toBeNull();
+			} finally {
+				if (previous === undefined) delete process.env.DATA_DIR;
+				else process.env.DATA_DIR = previous;
+			}
 		});
 
 		it("rejects an oversized attachment payload with 413", () => {

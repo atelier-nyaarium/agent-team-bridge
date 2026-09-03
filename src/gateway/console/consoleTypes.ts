@@ -204,6 +204,8 @@ export interface ConsoleHandlerDeps {
 	 * opCache miss - see durableOpStore.ts. Absent disables the durable layer entirely (the
 	 * in-memory opCache alone still covers same-process retries, but not across a restart). */
 	durableOpStore?: DurableOpStore;
+	/** Console conversation owners, kept across restarts so late replies still reach the owner inbox. */
+	conversationOwners?: import("../../shared/durable-store.js").DurableStore;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A

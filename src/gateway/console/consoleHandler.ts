@@ -61,9 +61,28 @@ export function createConsoleDispatcher({
 	unlinkDomain,
 	untrustOwner,
 	durableOpStore,
+	conversationOwners,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
-	const ownerByConversation = new Map<string, string>();
+	const restoredOwners = conversationOwners?.load();
+	const ownerByConversation = new Map<string, string>(
+		Object.entries(
+			restoredOwners && typeof restoredOwners === "object" && !Array.isArray(restoredOwners)
+				? (restoredOwners as Record<string, unknown>)
+				: {},
+		).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+	);
+	function rememberOwner(conversationId: string, ownerId: string): void {
+		if (ownerByConversation.get(conversationId) === ownerId) return;
+		ownerByConversation.set(conversationId, ownerId);
+		try {
+			conversationOwners?.saveChecked(Object.fromEntries(ownerByConversation));
+		} catch (error) {
+			console.warn(
+				`[console] conversation owner save failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 	const appendIfLive = (
 		conversationId: string,
 		entry: import("../../shared/console-protocol.js").MailboxInput,
@@ -655,7 +674,7 @@ export function createConsoleDispatcher({
 		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
 		if (!VALUE_OP_KINDS.has(op.kind)) throw new Error("value op kind is not allowed");
-		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
+		rememberOwner(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
@@ -667,9 +686,11 @@ export function createConsoleDispatcher({
 		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
 		if (!DELIVERY_OP_KINDS.has(op.kind)) throw new Error("delivery op kind is not allowed");
-		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
+		rememberOwner(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
-	return { handleValue, handleDelivery };
+	const ownerOfConversation = (conversationId: string): string | undefined => ownerByConversation.get(conversationId);
+
+	return { handleValue, handleDelivery, ownerOfConversation };
 }

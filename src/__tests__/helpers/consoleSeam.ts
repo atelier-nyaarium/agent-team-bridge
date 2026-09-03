@@ -40,6 +40,7 @@ export interface ConsoleSeamOptions {
 	awaitRegister?: (team: string) => Promise<WakeResult>;
 	createSessionBoundMs?: number;
 	dropSessionResume?: (team: string, disposition: "release" | "cancel") => void;
+	conversationOwners?: DurableStore;
 }
 
 export function makeConsoleSeam(options: ConsoleSeamOptions = {}) {
@@ -85,6 +86,7 @@ export function makeConsoleSeam(options: ConsoleSeamOptions = {}) {
 		createSessionBoundMs: options.createSessionBoundMs,
 		dropSessionResume: options.dropSessionResume,
 		durableOpStore,
+		conversationOwners: options.conversationOwners,
 	});
 
 	async function dispatch(op: ConsoleOp, opId = "op1"): Promise<ConsoleOpResult> {

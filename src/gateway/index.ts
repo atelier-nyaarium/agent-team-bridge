@@ -220,6 +220,8 @@ export async function startGateway(): Promise<void> {
 		},
 	});
 	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
+	let consoleOwnerOf: ((conversationId: string) => string | undefined) | null = null;
+	let keyRequester: ReturnType<typeof createKeyRequester> | null = null;
 	let consoleDeliveryHandler:
 		| ((
 				op: import("../shared/console-protocol.js").ConsoleOp,
@@ -672,6 +674,8 @@ export async function startGateway(): Promise<void> {
 				presenceReporter?.baseline();
 				shareAttestor?.attest();
 				void inboxPump?.resendReceipts();
+				// The first epoch always exists; newer ones arrive with the rows sealed under them.
+				if (contentKeyStore.epochs().length === 0) keyRequester?.request(1);
 			},
 			onPresenceResync: () => presenceReporter?.resync(),
 			onUnlink: (frame) => {
@@ -745,6 +749,26 @@ export async function startGateway(): Promise<void> {
 			ownerSignPub: () => allowlist.ownerSignPub,
 			keys: contentKeyStore,
 		});
+		keyRequester = createKeyRequester({
+			domainId,
+			gatewayId: localGatewayId,
+			gatewaySignPub: federationIdentity.sign.pub,
+			gatewaySignPriv: federationIdentity.sign.priv,
+			send: (action, params) => routerClient.callInboxTool(action, params),
+			onError: (message) => {
+				routes.deliverToOwner({
+					entry: {
+						kind: "notice",
+						session_id: `gateway.${localGatewayId}.key-request`,
+						title: "Content key unavailable",
+						summary: message,
+						body: message,
+					},
+					dedupeKey: `key-request:${domainId}:${localGatewayId}`,
+					label: "key-request",
+				});
+			},
+		});
 		inboxPump = createInboxDeliveryPump({
 			claims: inboxClaims,
 			routerClient,
@@ -769,26 +793,7 @@ export async function startGateway(): Promise<void> {
 					: Promise.reject(new Error("console handler unavailable")),
 			producerSignPriv: federationIdentity.sign.priv,
 			allowlistSnapshot: () => allowlist.getSnapshot(),
-			keyRequester: createKeyRequester({
-				domainId,
-				gatewayId: localGatewayId,
-				gatewaySignPub: federationIdentity.sign.pub,
-				gatewaySignPriv: federationIdentity.sign.priv,
-				send: (action, params) => routerClient.callInboxTool(action, params),
-				onError: (message) => {
-					routes.deliverToOwner({
-						entry: {
-							kind: "notice",
-							session_id: `gateway.${localGatewayId}.key-request`,
-							title: "Content key unavailable",
-							summary: message,
-							body: message,
-						},
-						dedupeKey: `key-request:${domainId}:${localGatewayId}`,
-						label: "key-request",
-					});
-				},
-			}),
+			keyRequester,
 			sealer,
 			coordinator: channelDeliveries,
 			tryWakeTeam: (team) => wakeService.tryWakeTeam(team),
@@ -992,6 +997,7 @@ export async function startGateway(): Promise<void> {
 		const f = fed();
 		return createRoutes({
 			carryOver: routesCarryOver,
+			consoleOwnerOf: (conversationId) => consoleOwnerOf?.(conversationId),
 			registry,
 			conversationRegistry,
 			store,
@@ -1148,8 +1154,10 @@ export async function startGateway(): Promise<void> {
 				return { peersRemoved: removed, sharesDropped, jobsExpired };
 			},
 			durableOpStore,
+			conversationOwners: new DurableStore(DATA_DIR, "console-conversations"),
 		});
 		consoleDeliveryHandler = consoleHandler.handleDelivery;
+		consoleOwnerOf = consoleHandler.ownerOfConversation;
 		const valueOp = (raw: unknown): void => {
 			void (async () => {
 				const frame = ValueOpFrameSchema.safeParse(raw);

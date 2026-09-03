@@ -93,6 +93,8 @@ export interface RoutesDeps {
 	config: GatewayConfig;
 	producerSignPriv?: string;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
+	/** Owner of a console conversation; a reply to one lands in the owner inbox. */
+	consoleOwnerOf?: (conversationId: string) => string | undefined;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
@@ -208,6 +210,7 @@ export function createRoutes({
 	config,
 	producerSignPriv,
 	routerClient,
+	consoleOwnerOf,
 	sealer,
 	blobStore,
 	blobUploader,
@@ -1218,7 +1221,24 @@ export function createRoutes({
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
 			const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
-			if (senderWs && senderWs.readyState === 1) {
+			if (consoleOwnerOf?.(deliverResult.fromConversationId)) {
+				const delivered = deliverToOwner({
+					entry: {
+						kind: "reply",
+						session_id: respondSessionId,
+						body: response.response,
+						...pickTiers(response),
+						status: response.status,
+						files: files && files.length > 0 ? files : undefined,
+					},
+					dedupeKey: crypto.randomUUID(),
+					label: "respond",
+				});
+				pushedViaConversation = delivered === true;
+				console.log(
+					`[respond] ${delivered === true ? "appended to the owner inbox" : "owner inbox append refused"} for conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
+				);
+			} else if (senderWs && senderWs.readyState === 1) {
 				senderWs.send(pushMsg);
 				pushedViaConversation = true;
 				console.log(
