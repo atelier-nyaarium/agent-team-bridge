@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { opLedgerRefusal, routerPost } from "../mcp/bridge/helpers.js";
 import { handleChannelReply } from "../mcp/channel/channelReply.js";
 import { blobIdFor } from "../shared/blob-store.js";
@@ -19,6 +19,12 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 }));
 
 const mockRouterPost = vi.mocked(routerPost);
+let realRouterPost: typeof routerPost;
+
+beforeAll(async () => {
+	({ routerPost: realRouterPost } =
+		await vi.importActual<typeof import("../mcp/bridge/helpers.js")>("../mcp/bridge/helpers.js"));
+});
 
 // Reset blob state per test.
 let wire: BlobWire;
@@ -149,6 +155,25 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("retries the same send request body", async () => {
+		const bodies: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			bodies.push(String(init?.body));
+			if (bodies.length < 3) throw new Error("offline");
+			return new Response("{}", { status: 200 });
+		});
+		mockRouterPost.mockImplementation((route, body) =>
+			realRouterPost(route, body, { retries: 2, retryDelayMs: 0 }),
+		);
+		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
+		const tools = captureTools(registerBridgeSend);
+		await tools.crosstalk_send({ to: "a.b.c.d", body: "hello" } as never);
+		expect(bodies).toHaveLength(3);
+		expect(bodies[1]).toBe(bodies[0]);
+		expect(bodies[2]).toBe(bodies[0]);
+		fetchMock.mockRestore();
 	});
 
 	it("crosstalk_send with a session_id and attachments sends rather than polling", async () => {

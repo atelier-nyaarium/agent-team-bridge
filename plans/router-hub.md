@@ -1118,11 +1118,9 @@ gateway cannot silently strip the field and accept a retry twice. Verify against
 `registerBridgeDiscover`, Codex and Copilot dispatch, `host_op`, `presence_watch`, and
 `presence_derive`. The agent routes, session authority, and the daemon protocol are unchanged.
 
-**The fail-closed gate has a cold-start window.** `opLedgerProtocol` is learned from the register
-answer and never reset, so it is set for the life of the process after the first successful register.
-A tool call issued before that answer arrives refuses against a current gateway. One round trip at
-startup only, and the alternative (assuming the gateway is current until told otherwise) is the hole
-the gate exists to close.
+**The fail-closed gate has a cold-start window.** `opLedgerProtocol` is learned from each connection's
+`register_ok` answer and reset on close, so the refusal window is the round trip after every reconnect,
+not only at startup.
 
 ### Bug Classes
 

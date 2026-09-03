@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { routerPost } from "../mcp/bridge/helpers.js";
 import { readReplyAttachment } from "../mcp/bridge/replyTool.js";
 import {
@@ -25,6 +25,12 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 }));
 
 const mockRouterPost = vi.mocked(routerPost);
+let realRouterPost: typeof routerPost;
+
+beforeAll(async () => {
+	({ routerPost: realRouterPost } =
+		await vi.importActual<typeof import("../mcp/bridge/helpers.js")>("../mcp/bridge/helpers.js"));
+});
 
 let wire: BlobWire;
 
@@ -193,6 +199,31 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 			conversationId: "conv-1",
 		});
 		expect(result.isError).toBeUndefined();
+	});
+
+	it("retries the same reply request body", async () => {
+		const bodies: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			bodies.push(String(init?.body));
+			if (bodies.length < 3) throw new Error("offline");
+			return new Response("{}", { status: 200 });
+		});
+		mockRouterPost.mockImplementation((route, body) =>
+			realRouterPost(route, body, { retries: 2, retryDelayMs: 0 }),
+		);
+		await handleChannelReply(
+			ChannelReplySchema.parse({
+				session_id: "s1",
+				title: "T",
+				summary: "S.",
+				full: "Body.",
+				fullSpoken: "Spoken.",
+			}),
+		);
+		expect(bodies).toHaveLength(3);
+		expect(bodies[1]).toBe(bodies[0]);
+		expect(bodies[2]).toBe(bodies[0]);
+		fetchMock.mockRestore();
 	});
 
 	it("rejects an empty responseData without ever posting", async () => {

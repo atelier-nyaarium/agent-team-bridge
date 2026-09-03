@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
+import { generateIdentity } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import { channelWs, fakeRouter, makeCtx, registryWith, sealerA, sealerB, storeWith } from "./helpers/federation.js";
@@ -466,6 +467,76 @@ describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked 
 			expect(settled).toBe(false);
 			// 5 attempts total: the initial try plus 4 retries, backing off 2s/4s/8s/16s between them.
 			expect(calls).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps one opId across failed relay retries", async () => {
+		vi.useFakeTimers();
+		try {
+			const calls: string[] = [];
+			let failures = 0;
+			const identity = generateIdentity();
+			const client = {
+				isConnected: () => true,
+				stop: () => {},
+				callInboxTool: async (_action: string, params: Record<string, unknown>) => {
+					calls.push((params.row as { envelope: { opKey: { opId: string } } }).envelope.opKey.opId);
+					if (failures++ < 2) return { callId: "fake", error: "router unavailable" };
+					return { callId: "fake", result: { outcome: "accepted" } };
+				},
+			} as unknown as NonNullable<RoutesDeps["routerClient"]>;
+			const ctx = makeCtx("hostb", {
+				routerClient: client,
+				sealer: {
+					seal: () => ({ ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" }),
+				} as never,
+				producerSignPriv: identity.sign.priv,
+				crossDomainPeers: {
+					resolveByGateway: () => ({ friendDomainId: "beta" }),
+					all: () => [{ friendDomainId: "beta", friendGatewayId: "hosta" }],
+				} as never,
+				isSharedToForReply: () => true,
+			});
+			const srcSession = "conv.conv-1.alice.hostb.api.dev";
+			ctx.store.create(srcSession, "recipe-app.dev", "api.dev", {
+				persistent: true,
+				fromConversationId: "conv-1",
+				dstDomainId: "beta",
+				returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
+			});
+			const routes = createRoutes(ctx);
+			const respond = (opId?: string) =>
+				routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
+					session_id: srcSession,
+					status: "completed",
+					response: "all good",
+					...(opId ? { opId } : {}),
+				});
+			await respond();
+			for (let i = 0; i < 10; i++) await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(6_000);
+			expect(calls).toHaveLength(3);
+			expect(new Set(calls).size).toBe(1);
+
+			calls.length = 0;
+			failures = 0;
+			ctx.store.create(`${srcSession}-2`, "recipe-app.dev", "api.dev", {
+				persistent: true,
+				fromConversationId: "conv-1",
+				dstDomainId: "beta",
+				returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession: `${srcSession}-2` },
+			});
+			await routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
+				session_id: `${srcSession}-2`,
+				status: "completed",
+				response: "all good",
+				opId: "producer-op",
+			});
+			for (let i = 0; i < 10; i++) await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(6_000);
+			expect(calls).toEqual(["producer-op", "producer-op", "producer-op"]);
 		} finally {
 			vi.useRealTimers();
 		}
