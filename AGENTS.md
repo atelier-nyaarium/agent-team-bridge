@@ -23,6 +23,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
 - `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
 - `src/gateway/console/` - Android channel, op dispatch, capability store, relay, durable ops
+- `src/gateway/migration/` - Gateway export snapshots and blob artifacts
 - `android/.../ChatRepository.kt` - console process singleton and repository facade
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers
 - `android/.../ChatPersistence.kt` - JSON codec between repository state and AppStateStore
@@ -76,6 +77,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
+- `src/federation-server/migration/` - Router import, leases, serve gate, and cursor translation
 - `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
 - `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
   - **A mailbox epoch is a random tag, never a counter:** `mintEpoch` draws it. Compare epochs for
@@ -118,6 +120,9 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/` - Gradle/Kotlin console app; `proto/Protocol.kt` generated
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import
 - `scripts/lib/routerStart.ts` - sole Router `.env` and startup owner
+- `scripts/gateway-fence.ts` / `gateway-export.ts` / `gateway-cut.ts` / `router-import.ts` / `router-lease.ts` - migration fence, export, cut, import, and lease commands
+- `android/.../SelfMigration.kt` / `CursorTranslationOps.kt` - phone self-migration and consumer cursor translation
+- **Migration window readers:** `readGatewayMigrationWindow` and `readRouterMigrationWindow`. A present null epoch means an unreadable file
 - `tests/fixtures/` - shared golden wire and signing fixtures; manifests drive both runtimes
 - `skills/crosstalk/SKILL.md` - agent-facing tool reference
 

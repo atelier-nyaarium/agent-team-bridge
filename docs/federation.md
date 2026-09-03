@@ -119,3 +119,104 @@ gateway rather than sweeping them.
 - `src/gateway/router/pinnedSocket.ts` - TLS pinning.
 - `tests/fixtures/router-reach/vectors.json` - cross-runtime reach and pinning behavior.
 - `src/shared/crypto.ts` - federation sealing and signatures.
+
+## Migration
+
+### Preconditions
+
+Router live. Key backfill confirmed for every member. Leases set for every member.
+
+```bash
+bun run router:lease --domain <id> --gateway <id> --state active
+```
+
+Use `offline`, `retired`, or `excluded` for the corresponding Gateway state.
+
+### Gateway export
+
+Run for each Gateway in order.
+
+```bash
+bun run gateway:fence --epoch <N>
+```
+
+The Gateway writes `DATA_DIR/migration-epoch`. Phones and agents see `migrating` for fenced writes.
+Wait 60 seconds for in-flight operations to settle.
+
+```bash
+bun run gateway:export --epoch <N> --out <dir>
+```
+
+The export writes `<dir>/export-N.json`, `<dir>/blobs/`, `<dir>/blobs.json`, and
+`<dir>/SHA256SUMS`. The export uses `DATA_DIR` and `FEDERATION_DIR`.
+
+```bash
+bun run gateway:cut --epoch <N> --out <dir>
+```
+
+The cut writes `<dir>/cut-N.tar` and adds its digest to `<dir>/SHA256SUMS`. The archive contains
+the fenced `DATA_DIR` except the archive, temporary files, corrupt files, locks, and migration
+markers. The Gateway holds `DATA_DIR/export-in-progress` during export and cut. A dead pid marker
+is reclaimed before a rerun.
+
+### Router import
+
+Stop the Router before import.
+
+```bash
+bun run router:import --from <dir>/export-N.json
+```
+
+The import verifies `SHA256SUMS`, `blobs.json`, and `blobs/`, then writes owner state and reference-held
+blobs. It writes `import-in-progress` during the import, `import-marker.json` after completion, and
+the lease completion for the imported Gateway. The `migration-epoch` file is written with `N`.
+
+The serve gate detects `import-in-progress`. The Router exits rather than answering when its sweep
+sees the marker. A dead import pid is reclaimed. An already completed import with the same digest is
+idempotent. It clears a stale gate and reruns safely. A different digest for the same Gateway and
+epoch is refused.
+
+Start the Router after each import.
+
+```bash
+./start-federation.sh
+```
+
+### Authority
+
+Migration authority turns on when every `active` lease has `completedEpoch` equal to `N`. An
+`offline` Gateway stays fenced on reconnect until it completes. `retired` and `excluded` Gateways
+stay fenced on reconnect. Non-active leases do not block authority.
+
+### Phone
+
+The Router welcome carries `migrationEpoch`. The phone runs self-migration once per epoch, on any
+accepted welcome. Scheduled sends upload under their own opId; read anchors re-report. An unanswered
+upload retries on the next welcome. A refused record keeps its local alarm. A local record is
+released only after the Router accepts it.
+
+Cursor translation runs only for a consumer socket whose welcome `cursorEpoch` is behind the
+migration epoch. It translates the welcome's cursor, journals the result, commits, then acks. The
+Router socket is planes-only until the cutover. The Gateway poll remains the inbox source before
+cutover.
+
+### Recovery
+
+| Crash point | Safe rerun |
+|-------------|------------|
+| Fence before settle | Wait 60 seconds. Rerun export |
+| Export or cut marker present | Rerun the same export or cut. Dead pid markers are reclaimed |
+| Cut temporary archive present | Rerun cut with the same epoch and output directory |
+| Import marker present with a dead pid | Rerun import with the same export |
+| Import failed before completion marker | Rerun import with the same export |
+| Completion marker present | Rerun import. The same digest returns the completed result |
+| Router stopped after import | Start the Router |
+
+Lower the fence only after the cut and import are complete.
+
+```bash
+bun run gateway:fence --down
+```
+
+`--down` refuses before 60 seconds, with a malformed fence, or while a live export or cut marker
+exists. A missing fence also refuses.
