@@ -1137,7 +1137,7 @@ not only at startup.
   check every part of it against regeneration, rather than fixing the one part that is obviously an
   id.
 
-## Phase 8 - Migration
+## Phase 8 - Migration ✅ Done
 
 After the Router is live and the key backfill has confirmed every member, before any deletion.
 - Fence: a migration epoch every gateway write boundary checks. Phones and agents get "migrating"
@@ -2059,3 +2059,36 @@ What the phone shows, the current producer, and the hub's.
   missing and I rejected the finding, having checked it against the rendered copy rather than the
   plan file. Read the phase from `plans/router-hub.md` before judging any alignment finding; the step
   block is a convenience, not the spec.
+- **A fence at the mutator is an inventory, and the inventory was wrong three rounds running.** The
+  residue test derives fenced writers from each store's persist calls, so a mutator that persists
+  through a sibling (`DeviceMailbox.append`) and a caller that drops the typed answer
+  (`consoleHandler` after a slow route) were both invisible until an audit read the call sites. The
+  redesign (one writer surface per store, one fold every route must pass) is recorded under Phase 8's
+  Bug Classes and deferred, because Phase 9 deletes the fenced stores.
+- **Two runtimes, one name, three semantics.** `migrationEpoch()` on the gateway answered null for
+  no fence and 0 for an unreadable file; `routerMigrationEpoch()` answered 0 for no window and NaN
+  for unreadable. Three agents conflated them. Both are `MigrationWindow` readers now. Any
+  gateway-and-Router twin should carry its runtime in its name from the first commit.
+- **A default that lives only in the plan is invisible to code readers.** `ConsoleSocketClient.mode
+  = "planes"` was the Phase 7 narrowing, recorded in the plan and nowhere in code; three auditors read
+  a configurable string and assumed the consumer path was live. `ConsoleSocketMode.PLANES` is now
+  named at the construction site with the cutover comment.
+- **Allowlists fenced to files breed copies.** Five operator scripts each grew their own epoch grammar,
+  `DATA_DIR` resolution, path print, in-progress marker, and sums merge because each Luna could edit
+  only its script; one duplicated `writeBlobArtifacts` wholesale rather than touch the module the
+  tests covered. `router-import.ts` is a 240-line process adapter whose crash points are testable
+  only by spawning it. An allowlist should name the shared module first.
+- **"Delete comments that restate the code" strips every comment when the agent cannot tell which
+  restate.** A cleanup Luna removed 114 comments across 16 Kotlin files, most of them pre-existing
+  rule comments outside the diff, and edited the generated `Protocol.kt`. A sweep prompt has to bound
+  itself to the diff's own additions, and generated files need a header the sweep refuses.
+- **Persisted enum names make renames data migrations.** `MutationState.ACKED` is written into the
+  JSONL journal, so the rename to `ACCEPTED` the naming audit proposed is a file migration, not a
+  refactor. Rename assessments must check what a vocabulary is persisted into.
+- **A lock written as a JSON file took three rounds to become a lock.** Exclusive create broke the
+  stale takeover; the takeover then needed a rename-aside; the heartbeat could still overwrite a
+  successor through the path. Holding the descriptor from creation and comparing inodes was the shape
+  that closed it. Start there next time.
+- **One agent backend per rule, and no rule for its outage.** Codex answered 404 for two hours after
+  its limit reset; Copilot agents did the same mechanical rounds without incident. The standing
+  instruction named Luna only, so the substitution needed a judgment call and a channel note.
