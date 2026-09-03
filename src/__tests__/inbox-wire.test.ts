@@ -50,6 +50,12 @@ describe("inbox wire", () => {
 	it("round trips valid addresses and refuses malformed addresses", () => {
 		for (const address of [
 			{ kind: "owner" as const, domainId: "domain-a", ownerSignPub: signerSignPub },
+			// Standard base64 keys carry slashes about half the time.
+			{
+				kind: "owner" as const,
+				domainId: "domain-a",
+				ownerSignPub: "ab/cd+ef/ghijklmnopqrstuvwxyzABCDEFGHIJKLMN=",
+			},
 			{ kind: "session" as const, domainId: "domain-a", gatewayId: "gateway-a", sessionId: "session-a" },
 			{ kind: "gateway" as const, domainId: "domain-a", gatewayId: "gateway-a" },
 		]) {

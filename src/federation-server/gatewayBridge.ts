@@ -686,6 +686,13 @@ export class GatewayBridge implements ToolProvider {
 		this.peerRowGate = gate;
 	}
 
+	private ownerRowPush: ((domainId: string, row: InboxRow) => void) | null = null;
+
+	/** Owner rows a gateway appends reach the bound console sockets through this. */
+	public setOwnerRowPush(push: (domainId: string, row: InboxRow) => void): void {
+		this.ownerRowPush = push;
+	}
+
 	public setMigrationFence(fenced: (domainId: string, gatewayId: string) => boolean): void {
 		this.migrationFenced = fenced;
 	}
@@ -896,7 +903,11 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	private pushRow(address: InboxAddress, row: InboxRow): boolean {
-		if (address.kind === "owner") return true;
+		if (address.kind === "owner") {
+			// Bound console sockets get the row now; the cursor covers the rest.
+			this.ownerRowPush?.(address.domainId, row);
+			return true;
+		}
 		const connId = this.gatewayConnections.get(address.domainId)?.get(address.gatewayId);
 		const reg = connId ? this.connGateways.get(connId) : undefined;
 		if (!reg || reg.incarnation === null) return false;

@@ -10,7 +10,7 @@ import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js"
 import { signAdmission, signRegister } from "../shared/admission.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
-import { signRowEnvelope } from "../shared/schemasInbox.js";
+import { formatInboxAddress, signRowEnvelope } from "../shared/schemasInbox.js";
 import { sealBlobChunk, sealedBlobSize } from "../shared/sealed-blob.js";
 
 function socket() {
@@ -83,7 +83,7 @@ async function registered(inbox: never, hasLinkEdge = false, blobCache?: never, 
 		proofNonce: "proof",
 		proof: signRegister("gateway", proofAt, "proof", gateway.sign.priv),
 	});
-	return { bridge, ws, gateway, admission, reply };
+	return { bridge, ws, gateway, owner, admission, reply };
 }
 
 const signedRow = (envelope: Parameters<typeof signRowEnvelope>[0], signPriv: string, body: unknown) => ({
@@ -269,6 +269,39 @@ describe("GatewayBridge inbox", () => {
 		});
 
 		expect(answer).toMatchObject({ ok: false, error: "migrating" });
+	});
+
+	it("pushes an owner row a gateway appends to the bound console sockets", async () => {
+		const pushed: Array<{ domainId: string; seq: number }> = [];
+		const { bridge, gateway, owner } = await registered(
+			fakeInbox({
+				appendRow: (input: { row: Record<string, unknown> }) => ({
+					outcome: "accepted",
+					opKey: { conversationId: "c", opId: "o" },
+					seq: 14,
+					row: { ...input.row, seq: 14, acceptedAt: 1, size: 10 },
+				}),
+			}),
+		);
+		bridge.setOwnerRowPush((domainId, row) => pushed.push({ domainId, seq: row.seq }));
+		const row = signedRow(
+			{
+				origin: { kind: "gateway" as const, domainId: "domain", gatewayId: "gateway" },
+				opKey: { conversationId: "c", opId: "o" },
+				epoch: 1,
+				kind: "reply" as const,
+				contentRefs: [],
+			},
+			gateway.sign.priv,
+			{ v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" },
+		);
+		const answer = await bridge.handleCall("c1", "inbox_append", {
+			address: formatInboxAddress({ kind: "owner", domainId: "domain", ownerSignPub: owner.sign.pub }),
+			row,
+			incarnation: 1,
+		});
+		expect(answer).toMatchObject({ outcome: "accepted" });
+		expect(pushed).toEqual([{ domainId: "domain", seq: 14 }]);
 	});
 
 	// Producer hash defines operation identity.

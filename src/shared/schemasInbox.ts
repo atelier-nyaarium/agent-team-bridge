@@ -25,7 +25,8 @@ export type InboxAddress =
 	| { kind: "gateway"; domainId: string; gatewayId: string };
 
 export function parseInboxAddress(text: string): InboxAddress | null {
-	const owner = /^owner:([^/\r\n]+)\/([^/\r\n]+)$/.exec(text);
+	// Standard base64 keys may contain a slash; the Domain id never does.
+	const owner = /^owner:([^/\r\n]+)\/([^\r\n]+)$/.exec(text);
 	if (owner && domainIdField.safeParse(owner[1]).success && b64Field().safeParse(owner[2]).success) {
 		return { kind: "owner", domainId: owner[1], ownerSignPub: owner[2] };
 	}
