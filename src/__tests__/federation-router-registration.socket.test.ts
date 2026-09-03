@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
+import { FEDERATION_PROTOCOL_FLOOR, FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { callTool, openGateway, type RouterFixture, registerParams, startRouter } from "./helpers/federation-router.js";
 
 describe("federation router registration", () => {
@@ -19,7 +20,12 @@ describe("federation router registration", () => {
 		sockets.push(socket);
 		await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve(), { once: true }));
 		const result = await callTool(socket, "gateway_register", registerParams(fixture));
-		expect(result.result).toMatchObject({ ok: true, protocolVersion: 1, domainId: "admin" });
+		expect(result.result).toMatchObject({
+			ok: true,
+			protocolFloor: FEDERATION_PROTOCOL_FLOOR,
+			protocolVersion: FEDERATION_PROTOCOL_VERSION,
+			domainId: "admin",
+		});
 	});
 
 	it("refuses forged, corrupted, replayed, old, and pending registrations", async () => {

@@ -2,6 +2,7 @@ import { ZodError } from "zod";
 import type { SignedAdmission, SignedRevocation } from "../../shared/admission.js";
 import { REGISTER_MAX_SKEW_MS, resolveAdmittedConsole } from "../../shared/admission.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
+import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../../shared/router-protocol.js";
 import {
 	formatInboxAddress,
 	type InboxRow,
@@ -55,6 +56,7 @@ export class OwnerOpIntake {
 	private readonly nonces = new Map<string, { at: number; result?: unknown }>();
 	private readonly handlers = new Map<string, OwnerOpHandler>();
 	private readonly now: () => number;
+	private gatewayProtocol: ((domainId: string, gatewayId: string) => number | null) | undefined;
 
 	constructor(private readonly params: OwnerOpIntakeParams) {
 		this.now = params.now ?? Date.now;
@@ -65,6 +67,10 @@ export class OwnerOpIntake {
 		if (this.handlers.has(kind) || BUILT_IN_KINDS.has(kind))
 			throw new Error(`owner op "${kind}" already registered`);
 		this.handlers.set(kind, handler);
+	}
+
+	setGatewayProtocol(gatewayProtocol: (domainId: string, gatewayId: string) => number | null): void {
+		this.gatewayProtocol = gatewayProtocol;
 	}
 
 	async handle(raw: unknown): Promise<unknown> {
@@ -176,6 +182,14 @@ export class OwnerOpIntake {
 			row.data.envelope.origin.device !== op.device
 		)
 			return refused("row");
+		if (
+			address.kind === "session" &&
+			row.data.envelope.kind === "console_op" &&
+			(this.gatewayProtocol?.(op.domainId, address.gatewayId) ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION
+		) {
+			// Remove-by: Shim.
+			return refused("unsupported");
+		}
 		const result = this.params.inbox.appendRow({
 			address,
 			row: row.data,

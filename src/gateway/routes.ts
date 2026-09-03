@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import packageJson from "../../package.json";
 import { type BoardActor, mayWrite, visibleTo } from "../shared/board-authority.js";
 import {
 	type BoardReply,
@@ -17,6 +18,8 @@ import type { FederatedOp } from "../shared/federation-protocol.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
+import { OP_LEDGER_PROTOCOL } from "../shared/schemas.js";
 import { CapabilitySnapshotSchema } from "../shared/schemasCapability.js";
 import { signRowEnvelope } from "../shared/schemasInbox.js";
 import { OwnerPresenceProjectionSchema } from "../shared/schemasRouterPresence.js";
@@ -99,7 +102,7 @@ export interface RoutesDeps {
 	 * never move bytes, which makes a cross-Gateway fetch a clean refusal rather than a crash. */
 	blobStore?: import("../shared/blob-store.js").BlobStore;
 	blobUploader?: ReturnType<typeof import("./router/blobUploader.js").createBlobUploader>;
-	contentKeyStore?: Pick<import("./federation/contentKeyStore.js").ContentKeyStore, "keyFor">;
+	contentKeyStore?: Pick<import("./federation/contentKeyStore.js").ContentKeyStore, "keyFor" | "seal">;
 	ownerSignPub?: (() => string | null) | null;
 	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
@@ -466,6 +469,10 @@ export function createRoutes({
 		mailboxStore,
 		ownerId,
 		routerClient,
+		localDomainId: localDomainId ?? undefined,
+		producerSignPriv,
+		ownerSignPub,
+		contentKeyStore,
 		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
@@ -1341,6 +1348,11 @@ export function createRoutes({
 	function health(): Response {
 		return jsonResponse({
 			ok: true,
+			version: packageJson.version,
+			gatewayId: localGatewayId,
+			incarnation: routerClient?.incarnation() ?? null,
+			protocolVersion: FEDERATION_PROTOCOL_VERSION,
+			opLedgerProtocol: OP_LEDGER_PROTOCOL,
 			teams: registry.size,
 			pending_jobs: store.size,
 			router_connected: routerClient?.isConnected() ?? false,

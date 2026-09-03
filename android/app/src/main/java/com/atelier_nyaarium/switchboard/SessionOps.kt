@@ -240,7 +240,9 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// second instead of waiting out DISCOVERY_REFRESH_MS.
 		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
 		repo.drain.scope?.launch(Dispatchers.IO) {
-			runCatchingCancellable { repo.client().createSession(target = target, sessionName = t.session) }
+			runCatchingCancellable {
+				repo.client().wake(target, opId)
+		}
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
 					repo.presence.refreshAfterAction()

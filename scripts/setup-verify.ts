@@ -1,7 +1,10 @@
 import { $ } from "bun";
+import type WebSocket from "ws";
+import { pinnedDial, realWebSocket } from "../src/gateway/router/pinnedSocket.js";
 import { envGet, jparse, note } from "./lib/host.js";
 import { ROUTER_PORT, readPublicReach, routerHealth } from "./lib/routerStart.js";
 import { routerRunning } from "./lib/routerState.js";
+import { createVerifyChecks, summarize } from "./lib/verifyChecks.js";
 import { fetchRegisteredGateways, type RegisteredGateway } from "./setup-status.js";
 
 ////////////////////////////////
@@ -81,7 +84,73 @@ export async function verify(): Promise<void> {
 			"the Gateway believes it is connected but the Router holds NO registration - restart the Gateway",
 		);
 	}
-	note(`Gateway healthy and registered.`);
+	const gatewayReport = jparse<{
+		ok?: boolean;
+		version?: string;
+		gatewayId?: string;
+		incarnation?: number | null;
+		protocolVersion?: number;
+		opLedgerProtocol?: number;
+	}>(gwText.trim());
+	const routerUrl = `wss://${bind}:${ROUTER_PORT}`;
+	const checks = createVerifyChecks({
+		fetch,
+		dial: dialConsole,
+		env: process.env,
+		router,
+		gateway: gatewayReport ?? {},
+		registered: link.registered,
+		localGatewayId: gatewayReport?.gatewayId ?? "",
+		routerUrl,
+		gatewayUrl: "http://127.0.0.1:20000",
+	});
+	const results = [];
+	for (const check of checks) {
+		const answer = await check.run();
+		results.push(answer);
+		if (answer.ok) console.log(`PASS ${check.name}`);
+		else {
+			console.log(`FAIL ${check.name}: ${answer.detail}`);
+		}
+	}
+	const summary = summarize(results);
+	if (summary.summary) {
+		console.log(summary.summary);
+		process.exitCode = 1;
+	} else note(`Gateway healthy and registered.`);
+}
+
+async function dialConsole(url: string, expectedFingerprint: string): Promise<void> {
+	if (!url.startsWith("wss://")) throw new Error("refusing non-TLS Router URL");
+	const parsed = new URL(url);
+	const pin = pinnedDial(parsed.hostname, Number(parsed.port) || ROUTER_PORT, expectedFingerprint);
+	const WebSocket = realWebSocket();
+	await new Promise<void>((resolve, reject) => {
+		let ws: WebSocket | null = null;
+		const timeout = setTimeout(() => {
+			ws?.close();
+			reject(new Error("timeout"));
+		}, 10_000);
+		ws = new WebSocket(url, {
+			// Pinned adapter matches ws.
+			createConnection: pin.createConnection as WebSocket.ClientOptions["createConnection"],
+			headers: { "X-Console-Bridge-Token": `Bearer ${process.env.CONSOLE_BRIDGE_TOKEN ?? ""}` },
+		});
+		ws.once("open", () => {
+			clearTimeout(timeout);
+			if (pin.verdict() !== "match") {
+				ws.close();
+				reject(new Error("Router certificate was not pinned"));
+				return;
+			}
+			ws.close();
+			resolve();
+		});
+		ws.once("error", (error) => {
+			clearTimeout(timeout);
+			reject(error);
+		});
+	});
 }
 
 /** Poll until the Gateway says it is connected AND the Router holds a registration, or the wait

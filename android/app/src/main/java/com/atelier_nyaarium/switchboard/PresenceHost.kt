@@ -15,7 +15,7 @@ internal interface PresenceHost {
 	suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>)
 	suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>)
 	suspend fun reportRead(team: String, epoch: Long, seq: Long)
-	suspend fun fetchTeams(): TeamsAnswer
+	suspend fun fetchPresencePlanes(): com.atelier_nyaarium.switchboard.proto.PlanesReadResult?
 	fun fetchConnectedGateways(): List<String>?
 
 	fun loadRouterState(kind: String): RouterStateSlot?
@@ -43,7 +43,7 @@ internal class ChatRepositoryPresenceHost(private val repo: ChatRepository) : Pr
 	override suspend fun reportRead(team: String, epoch: Long, seq: Long) {
 		repo.client().reportRead(team, epoch, seq)
 	}
-	override suspend fun fetchTeams(): TeamsAnswer = repo.client().teams(repo.localGatewayId)
+	override suspend fun fetchPresencePlanes() = repo.client().planesRead(kotlinx.serialization.json.buildJsonObject {})
 	override fun fetchConnectedGateways(): List<String>? = repo.client().fetchConnectedGateways()
 	override fun loadRouterState(kind: String) = repo.store.loadRouterState(kind)
 	override fun saveRouterState(kind: String, slot: RouterStateSlot) = repo.store.saveRouterState(kind, slot)

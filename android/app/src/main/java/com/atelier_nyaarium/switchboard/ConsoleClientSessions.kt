@@ -7,8 +7,12 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRenameSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRespondResult
+import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 
 ////////////////////////////////
 //  Per-session ops
@@ -16,13 +20,36 @@ import kotlinx.serialization.json.decodeFromJsonElement
 //  Each seals to the Gateway that homes its subject, so work on another machine is reached E2E rather
 //  than through this device's route Gateway. reportRead is the exception and says why.
 
+suspend fun ConsoleClient.respond(
+	target: String,
+	status: String? = null,
+	response: String? = null,
+	replyAsJson: JsonObject? = null,
+	files: List<ChannelFile>? = null,
+	opId: String = UUID.randomUUID().toString(),
+): ConsoleRespondResult = deliveryResult(
+	sendDeliveryOp(
+		sessionAddressOf(target),
+		ConsoleOp.Respond(target, status, response, replyAsJson, files),
+		opId,
+	),
+	"respond",
+)
+
+suspend fun ConsoleClient.wake(target: String, opId: String = UUID.randomUUID().toString()) {
+	requireDelivery(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.Wake(target), opId), "wake")
+}
+
+suspend fun ConsoleClient.reloadPlugins(gatewayId: String, opId: String = UUID.randomUUID().toString()): com.atelier_nyaarium.switchboard.proto.ConsoleReloadPluginsResult =
+	valueResult<com.atelier_nyaarium.switchboard.proto.ConsoleReloadPluginsResult>(
+		sendValueOp(gatewayId, ConsoleOp.ReloadPlugins(gatewayId), opId),
+		"reload_plugins",
+	)
+
 /** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
  * Gateway returns unchanged=true (no ansi) for an idle pane. */
 suspend fun ConsoleClient.peek(target: String, sinceHash: String? = null): ConsolePeekResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.Peek(target = target, sinceHash = sinceHash), targetGateway = transport.targetGatewayOf(target)),
-		"peek",
-	)
+	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.Peek(target = target, sinceHash = sinceHash)), "peek")
 
 /** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
  * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
@@ -34,13 +61,10 @@ suspend fun ConsoleClient.tmuxSend(
 	submit: Boolean = true,
 	opId: String = UUID.randomUUID().toString(),
 ) {
-	val body =
-		transport.relay(
-			ConsoleOp.TmuxSend(target = target, text = text, key = key, submit = submit),
-			opId,
-			targetGateway = transport.targetGatewayOf(target),
-		)
-	if (!body.ok) error("tmux_send failed: ${body.error ?: "unknown error"}")
+	requireDelivery(
+		sendDeliveryOp(sessionAddressOf(target), ConsoleOp.TmuxSend(target = target, text = text, key = key, submit = submit), opId),
+		"tmux_send",
+	)
 }
 
 /** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
@@ -54,19 +78,14 @@ suspend fun ConsoleClient.forget(
 	opId: String = UUID.randomUUID().toString(),
 ): String? {
 	val op = ConsoleOp.Forget(target = target, boardDisposition = boardDisposition)
-	val body = transport.relay(op, opId, targetGateway = transport.targetGatewayOf(target))
-	if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
-	return body.result
-		?.let { runCatching { wireJson.decodeFromJsonElement<ConsoleForgetResult>(it) }.getOrNull() }
-		?.boardDisposition
+	return deliveryResult<ConsoleForgetResult>(sendDeliveryOp(sessionAddressOf(target), op, opId), "forget").boardDisposition
 }
 
 /** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
  * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
  * a wake is in flight, and reports a user-launched session rather than a false success. */
 suspend fun ConsoleClient.closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
-	val body = transport.relay(ConsoleOp.CloseSession(target = target), opId, targetGateway = transport.targetGatewayOf(target))
-	if (!body.ok) error("close failed: ${body.error ?: "unknown error"}")
+	requireDelivery(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.CloseSession(target = target), opId), "close")
 }
 
 /** Spawn a new session in a spawn-point project. A `displayLabel` lets the gateway mint the id
@@ -82,14 +101,7 @@ suspend fun ConsoleClient.createSession(
 	workdir: String? = null,
 	opId: String = UUID.randomUUID().toString(),
 ): ConsoleCreateSessionResult =
-	transport.resultOf(
-		transport.relay(
-			ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel, workdir = workdir),
-			opId,
-			targetGateway = transport.targetGatewayOf(target),
-		),
-		"create_session",
-	)
+	valueResult(sendValueOp(transport.targetGatewayOf(target), ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel, workdir = workdir), opId), "create_session")
 
 /** List the immediate subdirectories of one host directory (the create-session directory
  * picker's type-ahead). Read-only, fresh each call, like peek. The path must be absolute or
@@ -100,16 +112,7 @@ suspend fun ConsoleClient.createSession(
  * to the route gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
  * does not exist on the one the session will run on. */
 suspend fun ConsoleClient.listDirs(path: String, hostTarget: String, spawn: String): ConsoleListDirsResult =
-	transport.resultOf(
-		// `spawn` says which of that machine's filesystems, where `hostTarget` says which machine. Passed
-		// rather than re-parsed out of the target: it is the same value the target was built from, so
-		// two spellings could only ever disagree.
-		transport.relay(
-			ConsoleOp.ListDirs(path = path, spawn = spawn),
-			targetGateway = transport.targetGatewayOf(hostTarget),
-		),
-		"list_dirs",
-	)
+	valueResult(sendValueOp(transport.targetGatewayOf(hostTarget), ConsoleOp.ListDirs(path = path, spawn = spawn)), "list_dirs")
 
 /** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
  * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */
@@ -118,14 +121,7 @@ suspend fun ConsoleClient.renameSession(
 	sessionLabel: String,
 	opId: String = UUID.randomUUID().toString(),
 ): ConsoleRenameSessionResult =
-	transport.resultOf(
-		transport.relay(
-			ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel),
-			opId,
-			targetGateway = transport.targetGatewayOf(target),
-		),
-		"rename_session",
-	)
+	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId), "rename_session")
 
 /** Report this device's read position for a team, for the cross-device read-anchor sync plane
  * (monotonic per owner - see readAnchors.ts). No targetGateway override: this is owned by the
@@ -137,4 +133,12 @@ suspend fun ConsoleClient.reportRead(
 	seq: Long,
 	opId: String = UUID.randomUUID().toString(),
 ): ConsoleReportReadResult =
-	transport.resultOf(transport.relay(ConsoleOp.ReportRead(team = team, epoch = epoch, seq = seq), opId), "report_read")
+	wireJson.decodeFromJsonElement(
+		postSigned(
+			wireJson.encodeToJsonElement(
+				com.atelier_nyaarium.switchboard.proto.ReportRead.serializer(),
+				com.atelier_nyaarium.switchboard.proto.ReportRead(team = team, epoch = epoch, seq = seq, at = System.currentTimeMillis()),
+			).jsonObject,
+			opId,
+		) ?: error("report_read timed out"),
+	)

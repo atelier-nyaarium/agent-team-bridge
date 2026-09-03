@@ -8,8 +8,10 @@ import {
 	type InboxAddress,
 	type InboxRow,
 	type InboxRowInput,
+	InboxRowSchema,
 	type OpKey,
 	type OpResultEnvelope,
+	OpResultEnvelopeSchema,
 	parseInboxAddress,
 	signRowEnvelope,
 	verifyRowEnvelope,
@@ -87,11 +89,21 @@ export class InboxService {
 		}
 		if (existing) {
 			const clear = existing.clear;
+			if (row.envelope.kind === "op_result" && row.envelope.origin.kind === "gateway") {
+				if (clear.state === "complete" && clear.result && typeof clear.result === "object") {
+					const result = OpResultEnvelopeSchema.safeParse(clear.result);
+					if (result.success) return result.data;
+				}
+				if (clear.state === "accepted" && clear.address !== formatInboxAddress(address))
+					return this.appendResultRow(store, address, row, existing);
+			}
 			if (clear.address && clear.address !== formatInboxAddress(address))
 				return { opKey: key, outcome: "conflict" };
 			// Matching op hash replays. Differing hash conflicts.
-			if (clear.opHash === opHash && clear.result && typeof clear.result === "object")
-				return clear.result as OpResultEnvelope & { row?: InboxRow };
+			if (clear.opHash === opHash && clear.result && typeof clear.result === "object") {
+				const result = OpResultEnvelopeSchema.safeParse(clear.result);
+				if (result.success) return result.data;
+			}
 			return { opKey: key, outcome: "conflict" };
 		}
 		const size = Buffer.byteLength(canonicalJson(row));
@@ -114,6 +126,35 @@ export class InboxService {
 			},
 			input.nonce,
 		);
+	}
+
+	private appendResultRow(
+		store: OwnerStateStore,
+		address: InboxAddress,
+		input: InboxRowInput,
+		existing: { id: string; version: number; clear: Record<string, unknown> },
+	): OpResultEnvelope & { row?: InboxRow } {
+		const row = InboxRowSchema.parse({
+			...input,
+			seq: store.nextSeq(formatInboxAddress(address)),
+			acceptedAt: this.now(),
+			size: Buffer.byteLength(canonicalJson(input)),
+		});
+		const result: OpResultEnvelope = {
+			opKey: input.envelope.opKey,
+			outcome: "accepted",
+			seq: row.seq,
+			result: input.body,
+		};
+		const write = this.ledgerTransaction(store, (tx) => {
+			tx.put("op", existing.id, existing.version, {
+				clear: { ...existing.clear, state: "complete", seq: row.seq, result },
+			});
+			tx.append(formatInboxAddress(address), row);
+		});
+		const folded = foldWriteResult(write);
+		if (folded.applied) return { ...result, outcome: folded.outcome, row };
+		return { opKey: input.envelope.opKey, outcome: this.durabilityOutcome(write.kind) };
 	}
 
 	ownerOpNonce(domainId: string, signerSignPub: string, nonce: string): { at: number } | null {

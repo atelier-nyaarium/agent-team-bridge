@@ -15,6 +15,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.Base64
 import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
+import com.atelier_nyaarium.switchboard.inboxBodyAadKind
 
 class ContentEnvelopeVectorsTest {
 	private val json = Json { ignoreUnknownKeys = true }
@@ -29,6 +30,50 @@ class ContentEnvelopeVectorsTest {
 	@Test
 	fun derivationAndContentEnvelopesMatchNode() {
 		val root = vectors()
+		val ownerRowAad = root["ownerRowAad"]!!.jsonObject
+		assertEquals(
+			ownerRowAad["expected"]!!.jsonPrimitive.content,
+			inboxBodyAadKind(
+				ownerRowAad["conversationId"]!!.jsonPrimitive.content,
+				ownerRowAad["opId"]!!.jsonPrimitive.content,
+			),
+		)
+		val opResultAad = root["opResultAad"]!!.jsonObject
+		assertEquals(
+			opResultAad["expected"]!!.jsonPrimitive.content,
+			com.atelier_nyaarium.switchboard.opResultAadKind(
+				opResultAad["conversationId"]!!.jsonPrimitive.content,
+				opResultAad["opId"]!!.jsonPrimitive.content,
+			),
+		)
+		val valueResultAad = root["valueResultAad"]!!.jsonObject
+		assertEquals(
+			valueResultAad["expected"]!!.jsonPrimitive.content,
+			com.atelier_nyaarium.switchboard.board.valueResultAadKind(valueResultAad["opId"]!!.jsonPrimitive.content),
+		)
+		val ownerRowAadFull = root["ownerRowAadFull"]!!.jsonObject
+		assertEquals(
+			ownerRowAadFull["expected"]!!.jsonPrimitive.content,
+			Crypto.ContentAad(
+				ownerRowAadFull["domainId"]!!.jsonPrimitive.content,
+				ownerRowAadFull["ownerSignPub"]!!.jsonPrimitive.content,
+				ownerRowAadFull["epoch"]!!.jsonPrimitive.int,
+				inboxBodyAadKind(
+					ownerRowAadFull["conversationId"]!!.jsonPrimitive.content,
+					ownerRowAadFull["opId"]!!.jsonPrimitive.content,
+				),
+			).bytes().toString(Charsets.UTF_8),
+		)
+		val consoleOpPayloadAad = root["consoleOpPayloadAad"]!!.jsonObject
+		assertEquals(
+			consoleOpPayloadAad["expected"]!!.jsonPrimitive.content,
+			Crypto.ContentAad(
+				consoleOpPayloadAad["domainId"]!!.jsonPrimitive.content,
+				consoleOpPayloadAad["ownerSignPub"]!!.jsonPrimitive.content,
+				consoleOpPayloadAad["epoch"]!!.jsonPrimitive.int,
+				consoleOpPayloadAad["kind"]!!.jsonPrimitive.content,
+			).bytes().toString(Charsets.UTF_8),
+		)
 		for (entry in root["derivation"]!!.jsonArray) {
 			val value = entry.jsonObject
 			assertArrayEquals(

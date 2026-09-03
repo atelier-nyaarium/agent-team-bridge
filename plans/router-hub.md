@@ -1194,6 +1194,16 @@ This gates marketplace auto-update from installing a plugin ahead of its gateway
   carries a migration epoch.
 - Vault questionaire resumes on the new substrate.
 
+### Bug Classes
+
+**Mechanism: content AAD kinds across the two runtimes.** Defect class: a new sealed kind ships
+with the two sides disagreeing until a fixture vector pins it. The `console_op` payload was sealed
+under the inbox-body binding on the phone and opened as `op.payload` on the gateway; the owner-row
+AAD was sealed under a gateway mailbox sequence the receiver could not reconstruct. Each was found
+by a red team, not a test, and closed by a vector in `tests/fixtures/content-envelope/vectors.json`
+consumed by both runtimes. Rule going forward: a new AAD kind lands with its vector in the same
+slice, and the kind builder has one owner per runtime.
+
 # Specs
 
 Phase 1 output. Each names its residue test. Wire shapes land in `src/shared/schemas*.ts` with

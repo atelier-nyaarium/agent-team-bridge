@@ -168,6 +168,10 @@ export const ConsoleOpSchema = z
 			sessionLabel: z.string().min(1).max(64),
 		}),
 		z.object({
+			kind: z.literal("wake"),
+			target: z.string().min(1).max(128),
+		}),
+		z.object({
 			kind: z.literal("list_dirs"),
 			path: z.string().min(1).max(512),
 			spawn: z.string().min(1).max(64).optional(),
@@ -220,6 +224,37 @@ export const ConsoleOpSchema = z
 		}),
 	])
 	.meta({ id: "ConsoleOp" });
+
+export const DELIVERY_OP_KINDS = new Set([
+	"send",
+	"respond",
+	"peek",
+	"tmux_send",
+	"rename_session",
+	"close_session",
+	"forget",
+	"wake",
+]);
+
+export const VALUE_OP_KINDS = new Set([
+	"list_dirs",
+	"create_session",
+	"blob_stat",
+	"blob_put",
+	"blob_get",
+	"reload_plugins",
+	"cross_domain_listen",
+	"cross_domain_request",
+	"cross_domain_confirm",
+	"cross_domain_listen_state",
+	"cross_domain_cancel",
+	"cross_domain_share",
+	"cross_domain_unshare",
+	"cross_domain_list_shares",
+	"cross_domain_list_peers",
+	"cross_domain_unlink",
+	"cross_domain_untrust",
+]);
 
 ////////////////////////////////
 //  Console relay frame schema

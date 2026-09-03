@@ -232,6 +232,28 @@ describe("console sockets", () => {
 		fixture.registry.close();
 	});
 
+	it("reads changed planes from the welcome versions source", () => {
+		const fixture = setup({
+			planeVersions: (domainId): Record<string, number> => (domainId === domainA ? { board: 4 } : {}),
+		});
+		fixture.hub.pushPlane(domainA, "board", 4, { title: "updated" });
+		fixture.hub.pushPlane(domainB, "other", 9, { hidden: true });
+
+		expect(fixture.hub.readPlanes(domainA, fixture.consoleIdentity.sign.pub, {})).toEqual([
+			{ name: "board", version: 4, payload: { title: "updated" } },
+		]);
+		expect(fixture.hub.readPlanes(domainB, fixture.consoleIdentity.sign.pub, {})).toEqual([]);
+		expect(fixture.hub.readPlanes(domainA, fixture.consoleIdentity.sign.pub, { board: 4 })).toEqual([]);
+		expect(fixture.hub.readPlanes(domainA, fixture.consoleIdentity.sign.pub, { unknown: 99 })).toEqual([
+			{ name: "board", version: 4, payload: { title: "updated" } },
+		]);
+		fixture.hub.pushPlane(domainA, "presence", 3, { rows: [] });
+		expect(fixture.hub.readPlanes(domainA, fixture.consoleIdentity.sign.pub, {})).toEqual([
+			{ name: "board", version: 4, payload: { title: "updated" } },
+		]);
+		fixture.registry.close();
+	});
+
 	it("drops incarnation rows for revoked console signers", async () => {
 		const fixture = setup();
 		const first = socket();

@@ -59,6 +59,7 @@ export interface RouterClientConfig {
 	onPresenceResync?: (frame: unknown) => void;
 	onUnlink?: (frame: unknown) => void;
 	onBlobFetch?: (frame: unknown) => void;
+	onValueOp?: (frame: unknown) => void;
 	onDisconnect?: () => void;
 	// Test override for pending-Domain registration retry cadence.
 	pendingReregisterDelayMs?: number;
@@ -209,6 +210,10 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			}
 			if ((frame as { type?: string }).type === "blob_fetch") {
 				config.onBlobFetch?.(frame);
+				return;
+			}
+			if ((frame as { type?: string }).type === "value_op") {
+				config.onValueOp?.(frame);
 				return;
 			}
 

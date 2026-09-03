@@ -4,11 +4,15 @@ import { describe, expect, it } from "vitest";
 import { resolveAdmittedConsole, signAdmission } from "../shared/admission.js";
 import {
 	type ContentAad,
+	contentAad,
 	deriveContentKey,
+	inboxBodyAadKind,
 	openContent,
+	opResultAadKind,
 	scheduledBodyAadKind,
 	sealContentWithNonce,
 	unwrapContentKey,
+	valueResultAadKind,
 	wrapContentKey,
 } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
@@ -16,6 +20,24 @@ import { ContentEnvelopeSchema, KeyEnvelopeSchema } from "../shared/schemasConte
 
 type Fixture = {
 	v: 1;
+	ownerRowAad: { conversationId: string; opId: string; expected: string };
+	consoleOpPayloadAad: {
+		domainId: string;
+		ownerSignPub: string;
+		epoch: number;
+		kind: ContentAad["kind"];
+		expected: string;
+	};
+	opResultAad: { conversationId: string; opId: string; expected: string };
+	valueResultAad: { opId: string; expected: string };
+	ownerRowAadFull: {
+		domainId: string;
+		ownerSignPub: string;
+		epoch: number;
+		conversationId: string;
+		opId: string;
+		expected: string;
+	};
 	derivation: Array<{ ownerSignPrivB64: string; domainId: string; epoch: number; keyB64: string }>;
 	envelopes: Array<{
 		keyB64: string;
@@ -46,6 +68,30 @@ const fixture = JSON.parse(
 ) as Fixture;
 
 describe("content envelope", () => {
+	it("pins the owner row body AAD", () => {
+		const vector = fixture.ownerRowAad;
+		expect(inboxBodyAadKind(vector.conversationId, vector.opId)).toBe(vector.expected);
+	});
+
+	it("pins the console op payload AAD", () => {
+		const vector = fixture.consoleOpPayloadAad;
+		expect(contentAad(vector).toString("utf8")).toBe(vector.expected);
+	});
+
+	it("pins result and full owner row AADs", () => {
+		expect(opResultAadKind(fixture.opResultAad.conversationId, fixture.opResultAad.opId)).toBe(
+			fixture.opResultAad.expected,
+		);
+		expect(valueResultAadKind(fixture.valueResultAad.opId)).toBe(fixture.valueResultAad.expected);
+		const vector = fixture.ownerRowAadFull;
+		expect(
+			contentAad({
+				...vector,
+				kind: inboxBodyAadKind(vector.conversationId, vector.opId),
+			}).toString("utf8"),
+		).toBe(vector.expected);
+	});
+
 	it("opens every fixture and re-seals byte-identically", () => {
 		for (const vector of fixture.envelopes) {
 			const key = Buffer.from(vector.keyB64, "base64");

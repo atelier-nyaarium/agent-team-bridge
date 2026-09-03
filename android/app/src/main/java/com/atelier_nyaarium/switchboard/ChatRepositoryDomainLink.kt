@@ -17,10 +17,9 @@ import org.json.JSONObject
 suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) {
 	pluginReportPending = true
 	if (!_state.value.connected) return@withContext
-	runCatchingCancellable { client().register(enabledPlugins?.invoke()) }
+	runCatchingCancellable { reportCapabilitiesToRouter() }
 		.onSuccess { pluginReportPending = false }
-		.onFailure { DebugLog.log("Plugins", "re-register after toggle failed, retrying: ${it.message?.take(120)}") }
-	reportCapabilitiesToRouter()
+		.onFailure { DebugLog.log("Plugins", "capability report failed, retrying: ${it.message?.take(120)}") }
 	Unit
 }
 
@@ -31,7 +30,7 @@ private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 		put("kind", JsonPrimitive("capabilities_report"))
 		put("capabilities", wireJson.encodeToJsonElement(ListSerializer(EnabledPlugin.serializer()), plugins))
 	}
-	val signed = ownerOps.sign(op) ?: return
+	val signed = ownerOps.sign(op) ?: error("cannot sign capabilities report")
 	runCatchingCancellable { client().postOwnerOp(signed) }
 		.onFailure { DebugLog.log("Plugins", "capability report failed, retrying next toggle: ${it.message?.take(80)}") }
 }
@@ -154,25 +153,15 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			}
 			return@withContext
 		}
-		// MailboxSync owns the durable cursor.
-		val reg = client().register(enabledPlugins?.invoke())
-		pluginReportPending = false
-		DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
-		// One Router report covers every Gateway.
-		repoScope.launch { reportCapabilitiesToRouter() }
-		val id = reg.gatewayId
-		if (id.isNotEmpty() && id != localGatewayId) {
-			localGatewayId = id
+		val admitted = sessions.keyringGateways()
+		val id = _state.value.homeGatewayId.takeIf { it in admitted } ?: admitted.firstOrNull().orEmpty()
+		if (id != homeGatewayId) {
+			homeGatewayId = id
 			store.saveGatewayId(id)
 		}
-		// Pin subsequent relays to this Gateway.
-		client().routeGateway = localGatewayId.ifEmpty { null }
-		val discoveryIssuedAt = System.currentTimeMillis()
-		val answer = runCatchingCancellable { client().teams(localGatewayId) }.getOrElse {
-			DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
-			TeamsAnswer(_state.value.teams)
-		}
-		presence.applyDiscovery(answer, discoveryIssuedAt)
+		client().routeGateway = homeGatewayId.ifEmpty { null }
+		pluginReportPending = false
+		repoScope.launch { reportCapabilitiesToRouter() }
 		val teams = _state.value.teams
 		_state.update {
 			it.copy(
@@ -181,7 +170,8 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				error = null,
 				connected = true,
 				pollFailStreak = 0,
-				localGatewayId = localGatewayId,
+				localGatewayId = homeGatewayId,
+				homeGatewayId = homeGatewayId,
 				enrollingSince = 0L,
 				// Publish sessions and roster together.
 				admittedGateways = sessions.keyringGateways(),

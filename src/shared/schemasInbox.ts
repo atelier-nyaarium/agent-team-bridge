@@ -65,6 +65,11 @@ export const OpKeySchema = z
 	.object({
 		conversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
 		opId: opIdField,
+		hash: z
+			.string()
+			.length(64)
+			.regex(/^[0-9a-f]+$/)
+			.optional(),
 	})
 	.meta({ id: "OpKey" });
 
@@ -80,6 +85,7 @@ export const RowKindSchema = z.enum([
 	"key_grant",
 	"scheduled_result",
 	"board_observation",
+	"console_op",
 	"op_result",
 ]);
 
@@ -176,6 +182,30 @@ export const OwnerOpSchema = z
 export type OwnerOp = z.infer<typeof OwnerOpSchema>;
 export type OwnerOpFields = Omit<OwnerOp, "signature">;
 
+export const PlanesReadValueSchema = z
+	.object({ kind: z.literal("planes_read"), known: z.record(z.string(), z.number().int().nonnegative()) })
+	.meta({ id: "PlanesReadValue" });
+
+export const PlaneReadSchema = z
+	.object({ name: z.string(), version: z.number().int().nonnegative(), payload: z.unknown() })
+	.meta({ id: "PlaneRead" });
+
+export const PlanesReadResultSchema = z
+	.object({
+		planes: z.array(PlaneReadSchema),
+	})
+	.meta({ id: "PlanesReadResult" });
+
+export const GatewayValueOpSchema = z
+	.object({
+		kind: z.literal("gateway_value"),
+		gatewayId: gatewayIdField,
+		value: ContentEnvelopeSchema,
+	})
+	.meta({ id: "GatewayValueOp" });
+
+export type GatewayValueOp = z.infer<typeof GatewayValueOpSchema>;
+
 export function ownerOpSigningBytes(op: OwnerOpFields): Buffer {
 	return Buffer.from(
 		[
@@ -216,6 +246,7 @@ export const OpResultEnvelopeSchema = z
 	.object({
 		opKey: OpKeySchema,
 		outcome: OpOutcomeSchema,
+		result: z.unknown().optional(),
 		seq: z.number().int().min(1).optional(),
 		reason: z
 			.string()

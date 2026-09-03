@@ -4,9 +4,11 @@ import { OwnerBlobFetchParamsSchema } from "../shared/router-protocol.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import {
 	formatInboxAddress,
+	GatewayValueOpSchema,
 	type InboxAddress,
 	type InboxRow,
 	type OpKey,
+	PlanesReadValueSchema,
 	parseInboxAddress,
 	signRowEnvelope,
 } from "../shared/schemasInbox.js";
@@ -38,7 +40,7 @@ export interface OwnerServicesDeps {
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	linkEdgeId: (srcDomainId: string, dstDomainId: string) => string | null;
 	/** Owner rows wait for the next read. */
-	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget">;
+	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget" | "readPlanes">;
 	leases?: ReturnType<typeof createLeaseService>;
 }
 
@@ -59,6 +61,7 @@ export function chainedTimer(delayMs: number, fn: () => void): { handle: () => R
 
 export function createOwnerServices(deps: OwnerServicesDeps) {
 	const { registry, inbox, bridge, referenceHeld } = deps;
+	deps.intake.setGatewayProtocol((domainId, gatewayId) => bridge.gatewayProtocol(domainId, gatewayId));
 	referenceHeld.setReferenceExists((domainId, ref) => {
 		const store = registry.for(domainId);
 		if (ref.kind === "entry") return store.get("board.entry", ref.entryId) !== null;
@@ -109,6 +112,35 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	deps.intake.register("blob_fetch", (op, value) =>
 		bridge.fetchBlobForOwner(op.domainId, OwnerBlobFetchParamsSchema.parse(value)),
 	);
+	deps.intake.register("gateway_value", (op, value) => {
+		const parsed = GatewayValueOpSchema.parse(value);
+		return bridge
+			.forwardGatewayValue(op.domainId, {
+				opId: op.opId,
+				conversationId: op.conversationId,
+				signerSignPub: op.signerSignPub,
+				device: op.device,
+				...parsed,
+			})
+			.then((result) => {
+				const opKey = { conversationId: op.conversationId, opId: op.opId };
+				const outcome =
+					result && typeof result === "object" && "outcome" in result && typeof result.outcome === "string"
+						? result.outcome
+						: null;
+				if (outcome === "unreachable" || outcome === "timeout" || outcome === "unsupported")
+					return { opKey, outcome: "failed" as const, reason: outcome };
+				return { opKey, outcome: "accepted" as const, result };
+			});
+	});
+	deps.intake.register("planes_read", (op, value) => {
+		const parsed = PlanesReadValueSchema.parse(value);
+		return {
+			opKey: { conversationId: op.conversationId, opId: op.opId },
+			outcome: "accepted" as const,
+			result: { planes: deps.consoleSockets?.readPlanes(op.domainId, op.signerSignPub, parsed.known) ?? [] },
+		};
+	});
 
 	const share = createShareService({
 		registry,

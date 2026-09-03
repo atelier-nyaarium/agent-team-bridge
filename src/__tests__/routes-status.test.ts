@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
+import packageJson from "../../package.json";
 import { ROUTER_WS_MAX_PAYLOAD_BYTES } from "../gateway/router/routerClient.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES } from "../gateway/routes.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/router-protocol.js";
+import {
+	BLOB_CHUNK_BYTES,
+	FEDERATION_PROTOCOL_VERSION,
+	MAX_BLOB_BYTES,
+	MAX_RELAY_FRAME_BYTES,
+} from "../shared/router-protocol.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { makeCtx, makeRegistry } from "./helpers/routes.js";
@@ -159,6 +165,11 @@ describe("routes", () => {
 			const res = health();
 			expect(await res.json()).toEqual({
 				ok: true,
+				version: packageJson.version,
+				gatewayId: "test-host",
+				incarnation: null,
+				protocolVersion: FEDERATION_PROTOCOL_VERSION,
+				opLedgerProtocol: 1,
 				teams: 1,
 				pending_jobs: 1,
 				router_connected: false,

@@ -29,7 +29,7 @@ class PresenceOpsTest {
 		override suspend fun pruneCrossDomainVersions(ownedDomainIds: Set<String>) = Unit
 		override suspend fun upsertCrossDomainVersions(entries: List<CrossDomainPresenceEntry>) = Unit
 		override suspend fun reportRead(team: String, epoch: Long, seq: Long) = Unit
-		override suspend fun fetchTeams() = TeamsAnswer(emptyList())
+		override suspend fun fetchPresencePlanes() = null
 		override fun fetchConnectedGateways(): List<String>? = null
 		override fun loadRouterState(kind: String) = slot
 		override fun saveRouterState(kind: String, slot: RouterStateSlot) {

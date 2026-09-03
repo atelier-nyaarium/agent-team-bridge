@@ -98,8 +98,15 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 
 	/** Best-effort mesh-wide discovery pull. */
 	suspend fun refreshDiscovery() {
-		runCatchingCancellable { host.fetchTeams() }
-			.onSuccess { applyDiscovery(it) }
+		runCatchingCancellable { host.fetchPresencePlanes() }
+			.onSuccess { result ->
+				val payload = result?.planes?.firstOrNull { it.name == "presence" }?.payload ?: return@onSuccess
+				val projection = wireJson.decodeFromJsonElement(
+					com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(),
+					payload,
+				)
+				applyOwnerProjection(projection)
+			}
 	}
 
 	/** Restore the last Router projection. */

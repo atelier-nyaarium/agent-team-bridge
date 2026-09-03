@@ -1,6 +1,9 @@
 package com.atelier_nyaarium.switchboard
 
 import java.time.ZoneId
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -206,6 +209,22 @@ class ConsoleTransportCoordinatorTest {
 
 		assertFalse(coordinator.mayConsume(stale))
 		assertFalse(coordinator.commitTranslation(stale, 2L, 7L))
+	}
+
+	@Test
+	fun anOpResultCompletesItsWaitingCaller() = runBlocking {
+		val coordinator = newCoordinator()
+		val waiting = launch {
+			assertEquals(JsonPrimitive("ok"), coordinator.awaitOpResult("op", 1_000L))
+		}
+		kotlinx.coroutines.delay(10L)
+		assertTrue(coordinator.completeOpResult("op", JsonPrimitive("ok")))
+		waiting.join()
+	}
+
+	@Test
+	fun anOpResultWaiterTimesOut() = runBlocking {
+		assertEquals(null, newCoordinator().awaitOpResult("op", 1L))
 	}
 
 	private fun newCoordinator(): ConsoleTransportCoordinator {

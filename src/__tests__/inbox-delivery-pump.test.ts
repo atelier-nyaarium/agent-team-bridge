@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInboxClaims } from "../gateway/router/inboxClaims.js";
 import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
+import { generateIdentity } from "../shared/crypto.js";
 import type { PendingDelivery } from "../shared/pending-delivery-store.js";
 
 const roots: string[] = [];
@@ -54,7 +55,7 @@ const setup = (root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"))) 
 			isSessionLive: () => true,
 			...overrides,
 		});
-	return { calls, coordinator, pump };
+	return { calls, coordinator, pump, claims };
 };
 
 afterEach(() => {
@@ -165,6 +166,70 @@ describe("inbox delivery pump", () => {
 			"inbox.body\nconversation\noperation",
 			"op.payload",
 		]);
+	});
+
+	it("refuses a delivery whose target differs from the addressed session", async () => {
+		const setupResult = setup();
+		const identity = generateIdentity();
+		let dispatched = 0;
+		const delivery = setupResult.pump({
+			routerClient: {
+				callInboxTool: async (action: string, params: Record<string, unknown>) => {
+					setupResult.calls.push({ action, params });
+					return { result: { outcome: action === "inbox_append" ? "accepted" : "delivered" } };
+				},
+			},
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return { renamed: true };
+			},
+			contentKeyStore: {
+				open: () => ({ kind: "ok", plaintext: Buffer.from('{"kind":"rename_session","target":"other"}') }),
+				seal: () => ({ kind: "ok", envelope: row().body }),
+			} as never,
+		});
+		await delivery.onFrame({
+			address,
+			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			deliveryEpoch: 1,
+		});
+		expect(dispatched).toBe(0);
+		expect(setupResult.calls.map((call) => call.action)).toEqual(["inbox_append", "inbox_ack"]);
+		expect(setupResult.calls[1]).toMatchObject({ params: { outcome: "delivered" } });
+	});
+
+	it("answers a claimed delivery as lost without dispatching again", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"));
+		const first = setup(root);
+		const identity = generateIdentity();
+		const sealedBodies: unknown[] = [];
+		let dispatched = 0;
+		const overrides = {
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return { renamed: true };
+			},
+			contentKeyStore: {
+				open: () => ({ kind: "ok", plaintext: Buffer.from('{"kind":"rename_session","target":"other"}') }),
+				seal: (plaintext: Buffer) => {
+					sealedBodies.push(JSON.parse(plaintext.toString("utf8")));
+					return { kind: "ok", envelope: row().body };
+				},
+			} as never,
+		};
+		first.claims.claim(address, 1, 1);
+		const second = setup(root);
+		await second.pump(overrides).onFrame({
+			address,
+			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			deliveryEpoch: 1,
+		});
+		expect(dispatched).toBe(0);
+		expect(second.calls.map((call) => call.action)).toEqual(["inbox_append", "inbox_ack"]);
+		expect(sealedBodies.at(-1)).toEqual({ outcome: "failed", reason: "lost" });
+		expect(second.calls[0]).toMatchObject({ action: "inbox_append" });
 	});
 
 	it("keeps a failed Router ack claim and re-acks without offering again", async () => {

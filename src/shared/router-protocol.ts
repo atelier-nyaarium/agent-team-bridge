@@ -17,6 +17,16 @@ export const MAX_BLOB_CIPHERTEXT_BYTES =
 
 export const MAX_RELAY_FRAME_BYTES = 8_000_000;
 
+export const ValueOpFrameSchema = z.object({
+	type: z.literal("value_op"),
+	opId: z.string().min(1),
+	conversationId: z.string().min(1),
+	signerSignPub: z.string().min(1),
+	device: z.string().min(1),
+	value: z.unknown(),
+	incarnation: z.number().int().positive(),
+});
+
 export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("tool_result"),
@@ -60,6 +70,7 @@ export const RouterInboundFrameSchema = z.discriminatedUnion("type", [
 		range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().positive() }).optional(),
 		incarnation: z.number().int().positive(),
 	}),
+	ValueOpFrameSchema,
 	z.object({
 		type: z.literal("presence_resync"),
 		incarnation: z.number().int().positive(),
@@ -153,7 +164,17 @@ export const BlobFetchReplyParamsSchema = z.object({
 	incarnation: z.number().int().positive(),
 });
 
-export const FEDERATION_PROTOCOL_VERSION = 1;
+export const ValueResultParamsSchema = z.object({
+	type: z.literal("value_result"),
+	opId: z.string().min(1),
+	conversationId: z.string().min(1),
+	result: z.unknown(),
+	incarnation: z.number().int().positive(),
+});
+
+export const FEDERATION_PROTOCOL_FLOOR = 1;
+export const FEDERATION_PROTOCOL_VERSION = 2;
+export const FEDERATION_VALUE_PROTOCOL_VERSION = FEDERATION_PROTOCOL_VERSION;
 
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),

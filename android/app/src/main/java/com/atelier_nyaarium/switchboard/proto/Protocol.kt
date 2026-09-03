@@ -313,6 +313,12 @@ sealed class ConsoleOp {
 	) : ConsoleOp()
 
 	@Serializable
+	@SerialName("wake")
+	data class Wake(
+		val target: String,
+	) : ConsoleOp()
+
+	@Serializable
 	@SerialName("list_dirs")
 	data class ListDirs(
 		val path: String,
@@ -1025,6 +1031,33 @@ data class OwnerOp(
 )
 
 @Serializable
+data class GatewayValueOp(
+	@EncodeDefault
+	val kind: String = "gateway_value",
+	val gatewayId: String,
+	val value: ContentEnvelope,
+)
+
+@Serializable
+data class PlaneRead(
+	val name: String,
+	val version: Long,
+	val payload: JsonElement,
+)
+
+@Serializable
+data class PlanesReadResult(
+	val planes: List<PlaneRead>,
+)
+
+@Serializable
+data class PlanesReadValue(
+	@EncodeDefault
+	val kind: String = "planes_read",
+	val known: JsonObject,
+)
+
+@Serializable
 data class InboxRow(
 	val envelope: RowEnvelope,
 	val producerSig: String,
@@ -1062,6 +1095,7 @@ data class OpKey(
 data class OpResultEnvelope(
 	val opKey: OpKey,
 	val outcome: String,
+	val result: JsonElement? = null,
 	val seq: Long? = null,
 	val reason: String? = null,
 )

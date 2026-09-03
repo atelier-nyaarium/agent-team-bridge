@@ -57,26 +57,6 @@ class ConsoleSocketDriverTest {
 	}
 
 	@Test
-	fun planesOnlyKeyRowsAreDispatchedWithoutAck() {
-		val coordinator = newCoordinator()
-		var dispatched = false
-		var acks = 0
-		val h = harness(coordinator, onRows = { received, _ -> dispatched = received.single().envelope.kind == "key_grant" }, onAck = { acks++ })
-		h.driver.connect()
-		val clientListener = h.wireListeners.single()
-		clientListener.onMessage(h.socket, welcomeJson(cursor = 1L, epoch = 8L, floor = 2L))
-		val keyRow = row().copy(envelope = row().envelope.copy(kind = "key_grant"))
-
-		h.listenerListeners.single().onFrame(
-			ConsoleSocketFrame.InboxRows(ConsoleInboxRowsFrame(incarnation = 8L, rows = listOf(keyRow), cursor = 4L)),
-		)
-
-		assertTrue(dispatched)
-		assertEquals(0, acks)
-		assertEquals(1L, coordinator.cursor())
-	}
-
-	@Test
 	fun supersededRowsAreDropped() {
 		val coordinator = newCoordinator()
 		var rowsCalled = false
@@ -159,6 +139,17 @@ class ConsoleSocketDriverTest {
 		listener.onClosed(null, "revoked", null)
 
 		assertEquals(listOf(1_000L), reconnects)
+	}
+
+	@Test
+	fun cursorStaleSurfacesFloorAndDropped() {
+		val coordinator = newCoordinator()
+		val gaps = mutableListOf<Pair<Long, Long>>()
+		val h = harness(coordinator, onGapDetailed = { floor, dropped -> gaps += floor to dropped })
+		h.driver.connect()
+		h.wireListeners.single().onMessage(h.socket, "{\"type\":\"refused\",\"reason\":\"cursor_stale\",\"floor\":7,\"dropped\":3}")
+
+		assertEquals(listOf(7L to 3L), gaps)
 	}
 
 	@Test
@@ -339,6 +330,23 @@ class ConsoleSocketDriverTest {
 	}
 
 	@Test
+	fun inboxWelcomeInvokesRegistrationAndConsumes() {
+		val coordinator = newCoordinator()
+		var registrations = 0
+		val h = harness(
+			coordinator,
+			clientMode = ConsoleSocketMode.INBOX,
+			onConsumerWelcome = { _, _ -> registrations++ },
+		)
+		h.driver.connect()
+
+		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 3L, epoch = 2L, floor = 4L))
+
+		assertEquals(1, registrations)
+		assertTrue(coordinator.mayConsume(1L))
+	}
+
+	@Test
 	fun staleWelcomeDoesNotChangeMigrationEpochOrAwaitingState() {
 		val coordinator = newCoordinator()
 		coordinator.setMigrationEpoch(7L)
@@ -367,11 +375,13 @@ class ConsoleSocketDriverTest {
 		onRows: (List<InboxRow>, Long) -> Unit = { _, _ -> },
 		onPlane: (String, Long, kotlinx.serialization.json.JsonElement?) -> Unit = { _, _, _ -> },
 		onGap: (Long) -> Unit = {},
+		onGapDetailed: (Long, Long) -> Unit = { _, _ -> },
 		onAck: () -> Unit = {},
 		kick: () -> Unit = {},
 		onUnreachable: () -> Unit = {},
 		reconnect: (Long) -> Unit = {},
 		onWelcome: (Long, ConsoleWelcomeFrame) -> Unit = { _, _ -> },
+		onConsumerWelcome: (Long, ConsoleWelcomeFrame) -> Unit = { _, _ -> },
 	): Harness {
 		val listenerListeners = mutableListOf<ConsoleSocketListener>()
 		val wireListeners = mutableListOf<WebSocketListener>()
@@ -417,10 +427,12 @@ class ConsoleSocketDriverTest {
 			onRows = onRows,
 			onPlane = onPlane,
 			onGap = onGap,
+			onGapDetailed = onGapDetailed,
 			kick = kick,
 			onUnreachable = onUnreachable,
 			reconnect = reconnect,
-			onWelcome = onWelcome,
+				onWelcome = onWelcome,
+				onConsumerWelcome = onConsumerWelcome,
 		)
 		return Harness(driver, listenerListeners, wireListeners, socket, closeCalls, ackFrames)
 	}

@@ -67,6 +67,7 @@ export interface ConsoleHelloAnswer {
 export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	const bound = new Map<ConsoleSocket, Bound>();
 	const pending = new Map<ConsoleSocket, ReturnType<typeof setTimeout>>();
+	const latestPlanes = new Map<string, { version: number; payload: unknown }>();
 	// Distinguishes reconnects from replaced sockets.
 	const incarnations = new Map<string, number>();
 
@@ -157,7 +158,9 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			cursor: consumer.cursor,
 			cursorEpoch: consumer.cursorEpoch,
 			floor: deps.ownerFloor(identity.domainId),
-			versions: deps.planeVersions?.(identity.domainId, identity.signerSignPub) ?? {},
+			versions: Object.fromEntries(
+				readPlanes(identity.domainId, identity.signerSignPub, {}).map(({ name, version }) => [name, version]),
+			),
 			migrationEpoch: readRouterMigrationWindow().epoch ?? 0,
 		});
 		if (!planesOnly) drain(socket, at, consumer.cursor);
@@ -234,10 +237,18 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	}
 
 	function pushPlane(domainId: string, name: string, version: number, payload: unknown): void {
+		latestPlanes.set(`${domainId}/${name}`, { version, payload });
 		for (const [socket, at] of bound) {
 			if (at.domainId !== domainId) continue;
 			send(socket, { type: "plane", incarnation: at.incarnation, name, version, payload });
 		}
+	}
+
+	function readPlanes(domainId: string, signerSignPub: string, known: Record<string, number>) {
+		const versions = deps.planeVersions?.(domainId, signerSignPub) ?? {};
+		return Object.entries(versions)
+			.filter(([name, version]) => version > (known[name] ?? 0))
+			.map(([name, version]) => ({ name, version, payload: latestPlanes.get(`${domainId}/${name}`)?.payload }));
 	}
 
 	/** Revoked consoles keep no socket. */
@@ -254,6 +265,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		close: drop,
 		pushOwnerRow,
 		pushPlane,
+		readPlanes,
 		forget,
 		get boundCount() {
 			return bound.size;

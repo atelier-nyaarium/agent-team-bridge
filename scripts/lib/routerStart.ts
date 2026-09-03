@@ -11,6 +11,7 @@ import { routerRunning } from "./routerState.js";
 //  written here or by the provision prompt; nothing is left for the owner to hand-edit.
 
 export const ROUTER_PORT = 20001;
+export const ROUTER_CERT_FP_ENV = "FEDERATION_ROUTER_CERT_FP";
 /** The network both compose files declare EXTERNAL, so every path that starts a container has to
  * make sure it exists first. Named here because the Router creates it in the common case and the
  * gateway just joins it. */
@@ -48,6 +49,11 @@ export async function writePublicReach(publicHost: string, publicPort: number): 
 	secureFile(".env");
 }
 
+export async function writeRouterFingerprint(certFingerprint: string): Promise<void> {
+	await envSet(ROUTER_CERT_FP_ENV, certFingerprint);
+	secureFile(".env");
+}
+
 /** Mint what is missing and write the LAN bind from detection. Runs on every start, so a DHCP move
  * lands in .env before compose reads it rather than binding an address this machine no longer holds.
  * Offline, the previous bind is kept: it is still the address the phone last learned. */
@@ -68,11 +74,27 @@ export async function ensureRouterEnv(): Promise<RouterEnv> {
 
 /** The Router's /health, or null when it does not answer. Probes the BOUND address: a LAN bind
  * unbinds loopback, so a localhost probe would report a healthy Router as down. */
-export async function routerHealth(lan: string): Promise<{ certFingerprint: string; gateways: number } | null> {
+export async function routerHealth(lan: string): Promise<{
+	certFingerprint: string;
+	gateways: number;
+	version?: string;
+	protocolVersion?: number;
+} | null> {
 	const text = await $`curl -sk --max-time 5 https://${lan}:${ROUTER_PORT}/health`.quiet().nothrow().text();
-	const parsed = jparse<{ ok?: boolean; certFingerprint?: string; gateways?: number }>(text.trim());
+	const parsed = jparse<{
+		ok?: boolean;
+		certFingerprint?: string;
+		gateways?: number;
+		version?: string;
+		protocolVersion?: number;
+	}>(text.trim());
 	if (!parsed?.ok || !parsed.certFingerprint) return null;
-	return { certFingerprint: parsed.certFingerprint, gateways: parsed.gateways ?? 0 };
+	return {
+		certFingerprint: parsed.certFingerprint,
+		gateways: parsed.gateways ?? 0,
+		version: parsed.version,
+		protocolVersion: parsed.protocolVersion,
+	};
 }
 
 /** Bring the Router up on what .env now says. Waits for /health and returns it, plus whether the
@@ -101,7 +123,10 @@ export async function startRouter(
 	}
 	for (let i = 0; i < HEALTH_TRIES; i++) {
 		const health = await routerHealth(env.lan);
-		if (health) return { ...health, wasRunning };
+		if (health) {
+			await writeRouterFingerprint(health.certFingerprint);
+			return { ...health, wasRunning };
+		}
 		await Bun.sleep(HEALTH_INTERVAL_MS);
 	}
 	throw new Error("the Router did not become healthy within 60s - run: docker logs switchboard-federation");

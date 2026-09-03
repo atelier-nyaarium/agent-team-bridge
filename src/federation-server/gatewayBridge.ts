@@ -12,7 +12,9 @@ import {
 	CrossDomainHandshakeRevealReplyParamsSchema,
 	CrossDomainHandshakeRevealRouteSchema,
 	CrossDomainHandshakeRouteSchema,
+	FEDERATION_PROTOCOL_FLOOR,
 	FEDERATION_PROTOCOL_VERSION,
+	FEDERATION_VALUE_PROTOCOL_VERSION,
 	GatewayRegisterParamsSchema,
 	type GatewayRelayReplyParams,
 	GatewayRelayReplyParamsSchema,
@@ -21,6 +23,7 @@ import {
 	InboxAppendParamsSchema,
 	SessionForgetParamsSchema,
 	SessionUpsertParamsSchema,
+	ValueResultParamsSchema,
 } from "../shared/router-protocol.js";
 import {
 	formatInboxAddress,
@@ -62,6 +65,7 @@ export interface GatewayRegistration {
 	gatewayId: string;
 	signPub: string;
 	incarnation: number;
+	protocolVersion?: number;
 }
 export type GatewayFrameHandler = (
 	reg: GatewayRegistration,
@@ -106,12 +110,22 @@ export class GatewayBridge implements ToolProvider {
 	// Null incarnation means no inbox claim.
 	private connGateways = new Map<
 		ConnectionId,
-		{ domainId: string; gatewayId: string; signPub: string | null; incarnation: number | null }
+		{
+			domainId: string;
+			gatewayId: string;
+			signPub: string | null;
+			incarnation: number | null;
+			protocolVersion?: number;
+		}
 	>();
 	private readonly inbox: InboxService | null;
 	private readonly blobCache: RouterBlobCache | null;
 	private readonly referenceHeld: ReferenceHeldStore | null;
 	private readonly blobFetch: BlobFetchRoute | null;
+	private pendingValues = new Map<
+		string,
+		{ resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout>; connId: ConnectionId }
+	>();
 	private pendingRelays = new Map<
 		string,
 		{
@@ -206,12 +220,28 @@ export class GatewayBridge implements ToolProvider {
 		return this.connGateways.size;
 	}
 
-	public registeredGateways(domainId: string): { gatewayId: string; signPub: string | null }[] {
-		const out: { gatewayId: string; signPub: string | null }[] = [];
+	public registeredGateways(domainId: string): {
+		gatewayId: string;
+		signPub: string | null;
+		incarnation: number;
+		protocolVersion: number;
+	}[] {
+		const out: { gatewayId: string; signPub: string | null; incarnation: number; protocolVersion: number }[] = [];
 		for (const reg of this.connGateways.values()) {
-			if (reg.domainId === domainId) out.push({ gatewayId: reg.gatewayId, signPub: reg.signPub });
+			if (reg.domainId === domainId)
+				out.push({
+					gatewayId: reg.gatewayId,
+					signPub: reg.signPub,
+					incarnation: reg.incarnation ?? 0,
+					protocolVersion: reg.protocolVersion ?? 0,
+				});
 		}
 		return out.sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
+	}
+
+	public gatewayProtocol(domainId: string, gatewayId: string): number | null {
+		const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
+		return connId ? (this.connGateways.get(connId)?.protocolVersion ?? null) : null;
 	}
 
 	public stop(): void {
@@ -227,6 +257,11 @@ export class GatewayBridge implements ToolProvider {
 			pending.resolve({ handshakeId, ok: false, error: "gateway bridge shutting down" });
 		}
 		this.pendingHandshakes.clear();
+		for (const pending of this.pendingValues.values()) {
+			clearTimeout(pending.timer);
+			pending.resolve({ outcome: "timeout" });
+		}
+		this.pendingValues.clear();
 		this.handshakeAttempts.clear();
 		this.blobFetch?.stop();
 		this.gatewayConnections.clear();
@@ -279,6 +314,12 @@ export class GatewayBridge implements ToolProvider {
 		const connId = this.gatewayConnections.get(domainId)?.get(address.gatewayId);
 		const reg = connId ? this.connGateways.get(connId) : undefined;
 		if (!reg || reg.incarnation === null) return false;
+		if (
+			reg.protocolVersion !== undefined &&
+			reg.protocolVersion < FEDERATION_VALUE_PROTOCOL_VERSION &&
+			rows.some((row) => row.envelope.kind === "console_op")
+		)
+			return false;
 		return this.pushToGatewayInDomain(domainId, address.gatewayId, {
 			type: "inbox_deliver",
 			address: addressText,
@@ -400,6 +441,7 @@ export class GatewayBridge implements ToolProvider {
 				"blob_fetch_reply",
 				"blob_begin",
 				"blob_chunk",
+				"value_result",
 			].includes(name)
 		) {
 			const reg = this.connGateways.get(connId);
@@ -415,6 +457,7 @@ export class GatewayBridge implements ToolProvider {
 			if (name === "session_forget") return this.handleSessionForget(connId, params);
 			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
 			if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload(connId, name, params);
+			if (name === "value_result") return this.handleValueResult(connId, params);
 			return this.handleBlobFetchReply(connId, params);
 		}
 		const frameHandler = this.frameHandlers.get(name);
@@ -460,6 +503,12 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	public onDisconnect(connId: ConnectionId): void {
+		for (const [key, pending] of this.pendingValues) {
+			if (pending.connId !== connId) continue;
+			clearTimeout(pending.timer);
+			this.pendingValues.delete(key);
+			pending.resolve({ outcome: "unreachable" });
+		}
 		const reg = this.connGateways.get(connId);
 		const wasCurrent = reg ? this.gatewayConnections.get(reg.domainId)?.get(reg.gatewayId) === connId : false;
 		console.log(`[BridgeServer] Client disconnected${reg ? ` (gateway ${reg.domainId}/${reg.gatewayId})` : ""}`);
@@ -504,8 +553,8 @@ export class GatewayBridge implements ToolProvider {
 			return { ok: false, error: `invalid gateway_register: ${parsed.error.issues[0]?.message}` };
 		const { gatewayId, protocolVersion } = parsed.data;
 		const domainId = sanitizeDomainId(parsed.data.domainId);
-		if (protocolVersion < FEDERATION_PROTOCOL_VERSION) {
-			return { ok: false, error: "version_too_old", floor: FEDERATION_PROTOCOL_VERSION };
+		if (protocolVersion < FEDERATION_PROTOCOL_FLOOR) {
+			return { ok: false, error: "version_too_old", floor: FEDERATION_PROTOCOL_FLOOR };
 		}
 		const meta = this.getDomainMeta(domainId);
 		if (meta?.status === "pending") {
@@ -550,11 +599,18 @@ export class GatewayBridge implements ToolProvider {
 		const incarnation = !admitted ? null : this.inbox ? this.inbox.registerGateway(domainId, gatewayId) : 1;
 		if (admitted && incarnation === null)
 			console.warn(`[BridgeServer] inbox unavailable for ${domainId}/${gatewayId}; registered without it`);
-		this.connGateways.set(connId, { domainId, gatewayId, signPub: parsed.data.signPub ?? null, incarnation });
+		this.connGateways.set(connId, {
+			domainId,
+			gatewayId,
+			signPub: parsed.data.signPub ?? null,
+			incarnation,
+			protocolVersion,
+		});
 		console.log(`[BridgeServer] Gateway registered: ${domainId}/${gatewayId} (v${protocolVersion})`);
 		const peers = [...this.domainMap(domainId).keys()].filter((h) => h !== gatewayId);
 		const reply: Record<string, unknown> = {
 			ok: true,
+			protocolFloor: FEDERATION_PROTOCOL_FLOOR,
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
 			domainId,
 			gateways: peers,
@@ -596,6 +652,8 @@ export class GatewayBridge implements ToolProvider {
 				address.kind === "session" &&
 				this.hasLinkEdge(reg.domainId, address.domainId) &&
 				this.inbox.hasSession(address.domainId, address.gatewayId, address.sessionId));
+		const addressOwned =
+			address.kind === "owner" || address.domainId !== reg.domainId || address.gatewayId === reg.gatewayId;
 		const originAllowed =
 			origin.domainId === reg.domainId &&
 			origin.gatewayId === reg.gatewayId &&
@@ -603,7 +661,7 @@ export class GatewayBridge implements ToolProvider {
 				(origin.kind === "session" &&
 					!!origin.sessionId &&
 					this.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
-		if (!allowedDomain || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
+		if (!allowedDomain || !addressOwned || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
 		// Share state authorizes friend rows and supplies generation.
 		let shareGeneration: number | undefined;
 		if (address.domainId !== reg.domainId && this.peerRowGate) {
@@ -693,6 +751,59 @@ export class GatewayBridge implements ToolProvider {
 		if (origin && origin.domainId !== domainId && !this.hasLinkEdge(domainId, origin.domainId))
 			return Promise.resolve({ outcome: "unreachable" });
 		return this.blobFetch.fetch(domainId, { ...params, incarnation: 1 });
+	}
+
+	public forwardGatewayValue(
+		domainId: string,
+		params: {
+			opId: string;
+			conversationId: string;
+			signerSignPub: string;
+			device: string;
+			gatewayId: string;
+			value: unknown;
+		},
+	): Promise<unknown> {
+		const admitted = this.getDomain(domainId)?.admissions.some(
+			(entry) => entry.admission.kind === "gateway" && entry.admission.gatewayId === params.gatewayId,
+		);
+		if (!admitted) return Promise.resolve({ outcome: "unreachable" });
+		const connId = this.gatewayConnections.get(domainId)?.get(params.gatewayId);
+		const reg = connId ? this.connGateways.get(connId) : undefined;
+		const ws = connId ? this.transport?.getConnection(connId) : null;
+		if (reg && (reg.protocolVersion ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION) {
+			// Remove-by: Shim.
+			return Promise.resolve({ outcome: "unsupported" });
+		}
+		if (!connId || !reg || reg.incarnation === null || !ws) return Promise.resolve({ outcome: "unreachable" });
+		const key = `${domainId}/${params.gatewayId}/${params.conversationId}/${params.opId}`;
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				this.pendingValues.delete(key);
+				resolve({ outcome: "timeout" });
+			}, GATEWAY_RELAY_TIMEOUT_MS);
+			this.pendingValues.set(key, { resolve, timer, connId });
+			try {
+				ws.send(JSON.stringify({ type: "value_op", ...params, incarnation: reg.incarnation }));
+			} catch {
+				clearTimeout(timer);
+				this.pendingValues.delete(key);
+				resolve({ outcome: "unreachable" });
+			}
+		});
+	}
+
+	private handleValueResult(connId: ConnectionId, params: Record<string, unknown>): unknown {
+		const parsed = ValueResultParamsSchema.safeParse(params);
+		const reg = this.connGateways.get(connId);
+		if (!parsed.success || !reg || reg.incarnation !== parsed.data.incarnation) return { settled: false };
+		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
+		const pending = this.pendingValues.get(key);
+		if (!pending || pending.connId !== connId) return { settled: false };
+		clearTimeout(pending.timer);
+		this.pendingValues.delete(key);
+		pending.resolve(parsed.data.result);
+		return { settled: true };
 	}
 
 	private async handleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): Promise<unknown> {

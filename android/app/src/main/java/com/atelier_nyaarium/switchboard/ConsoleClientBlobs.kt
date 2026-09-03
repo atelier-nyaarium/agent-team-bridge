@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleBlobStatResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.File
+import java.util.Base64
 
 ////////////////////////////////
 //  Blob plane ops
@@ -13,7 +14,7 @@ import java.io.File
 /** How much of a blob the gateway already holds. `have` is the contiguous prefix, so it is also
  * the offset to resume from - no separate progress bookkeeping to get out of step. */
 suspend fun ConsoleClient.blobStat(blobId: String, targetGateway: String? = null): ConsoleBlobStatResult =
-	transport.resultOf(transport.relay(ConsoleOp.BlobStat(blobId = blobId), targetGateway = targetGateway), "blob_stat")
+	valueResult(sendValueOp(targetGateway ?: defaultGatewayId(), ConsoleOp.BlobStat(blobId = blobId)), "blob_stat")
 
 /** Send one bounded chunk. Re-sending an offset already held is a no-op at the store, because
  * the blob is named by its own digest, so a retry needs no idempotency key of its own.
@@ -27,22 +28,13 @@ suspend fun ConsoleClient.blobPut(
 	chunk: ByteArray,
 	final: Boolean,
 	targetGateway: String? = null,
-): ConsoleBlobPutResult =
-	transport.resultOf(
-		transport.relay(
-			ConsoleOp.BlobPut(
-				blobId = blobId,
-				offset = offset,
-				chunk = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP),
-				final = final,
-			),
-			targetGateway = targetGateway,
-			// callTimeoutMs = null: this is the op that carries bytes. A sealed chunk is a couple of
-			// MB, and a whole-call deadline on a slow link would fail every chunk alike, leaving the
-			// transfer unable to advance at all. Progress is bounded by writeTimeout's per-write
-			// inactivity check instead (buildPinnedClient), which is what actually detects a dead link.
-			callTimeoutMs = null,
-		),
+): ConsoleBlobPutResult = valueResult(
+		sendValueOp(targetGateway ?: defaultGatewayId(), ConsoleOp.BlobPut(
+			blobId = blobId,
+			offset = offset,
+			chunk = Base64.getEncoder().encodeToString(chunk),
+			final = final,
+		)),
 		"blob_put",
 	)
 
@@ -50,14 +42,10 @@ suspend fun ConsoleClient.blobPut(
 /** `fromGateway` names the Gateway holding the bytes. This device still only ever asks its own
  * route Gateway, which pulls the range in behind this call when it is not the holder. */
 suspend fun ConsoleClient.blobGet(blobId: String, offset: Long, length: Int, fromGateway: String? = null): ConsoleBlobGetResult =
-	transport.resultOf(
-		transport.relay(
-			ConsoleOp.BlobGet(
-				blobId = blobId,
-				offset = offset,
-				length = length.toLong(),
-				fromGateway = fromGateway,
-			),
+	valueResult(
+		sendValueOp(
+			defaultGatewayId(),
+			ConsoleOp.BlobGet(blobId = blobId, offset = offset, length = length.toLong(), fromGateway = fromGateway),
 		),
 		"blob_get",
 	)
@@ -128,7 +116,7 @@ suspend fun ConsoleClient.downloadBlob(blobId: String, fromGateway: String? = nu
 		// stream onto the phone's storage until it filled. Nothing legitimate crosses the ceiling.
 		if (offset > Protocol.MAX_BLOB_BYTES) error("blob $blobId exceeded ${Protocol.MAX_BLOB_BYTES} bytes")
 		val res = blobGet(blobId, offset, Protocol.BLOB_CHUNK_BYTES, fromGateway)
-		val bytes = res.chunk?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: ByteArray(0)
+		val bytes = res.chunk?.let { Base64.getDecoder().decode(it) } ?: ByteArray(0)
 		if (bytes.isEmpty() && res.absent == true) throw BlobAbsent(blobId)
 		// A short read that is not the end would otherwise spin here asking for the same offset.
 		if (bytes.isEmpty() && !res.eof) error("blob $blobId stalled at offset $offset")

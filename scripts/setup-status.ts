@@ -17,6 +17,8 @@ import { gatewayHostname, transportInstalled } from "./setup-gateway.js";
 export interface RegisteredGateway {
 	gatewayId: string;
 	signFp: string | null;
+	incarnation?: number;
+	protocolVersion?: number;
 }
 
 export interface SetupStatus {

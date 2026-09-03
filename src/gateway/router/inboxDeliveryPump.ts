@@ -1,9 +1,18 @@
-import { scheduledBodyAadKind } from "../../shared/content-envelope.js";
-import type { SealedEnvelope } from "../../shared/crypto.js";
+import type { ConsoleOp } from "../../shared/console-protocol.js";
+import { opResultAadKind, scheduledBodyAadKind } from "../../shared/content-envelope.js";
+import { SealedEnvelopeSchema } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
 import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
-import { type ContentEnvelope, KeyGrantSchema } from "../../shared/schemasContentKey.js";
-import { type InboxAddress, type InboxRow, InboxRowSchema, parseInboxAddress } from "../../shared/schemasInbox.js";
+import { ConsoleOpSchema, DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
+import { ContentEnvelopeSchema, KeyGrantSchema } from "../../shared/schemasContentKey.js";
+import {
+	formatInboxAddress,
+	type InboxAddress,
+	type InboxRow,
+	InboxRowSchema,
+	parseInboxAddress,
+	signRowEnvelope,
+} from "../../shared/schemasInbox.js";
 import type { ChannelDeliveryCoordinator } from "../channelDelivery.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
 import type { Sealer } from "../federation/sealer.js";
@@ -19,7 +28,7 @@ export interface InboxDeliveryPumpDeps {
 	incarnation?: () => number | null;
 	domainId: string;
 	ownerSignPub: () => string | null;
-	contentKeyStore: ContentKeyStore;
+	contentKeyStore: Pick<ContentKeyStore, "open" | "seal" | "epochs" | "install">;
 	keyRequester?: {
 		request: (epoch: number) => void;
 		installed: (epoch: number) => void;
@@ -34,6 +43,14 @@ export interface InboxDeliveryPumpDeps {
 		revocations: import("../../shared/admission.js").SignedRevocation[];
 	} | null;
 	sealer?: Pick<Sealer, "openWithSource">;
+	consoleDispatch?: (
+		op: ConsoleOp,
+		device: string,
+		conversationId: string,
+		opId: string,
+		ownerSignPub: string,
+	) => Promise<unknown>;
+	producerSignPriv?: string;
 	coordinator?: Pick<ChannelDeliveryCoordinator, "accept" | "acknowledge">;
 	tryWakeTeam?: (team: string) => Promise<{ ok: boolean; error?: string; errorKind?: string }>;
 	isSessionLive?: (sessionId: string) => boolean;
@@ -88,7 +105,17 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 
 	async function deliver(address: string, row: InboxRow, deliveryEpoch: number): Promise<void> {
 		const claim = deps.claims.claim(address, row.seq, deliveryEpoch);
-		if (claim) return ack(address, row.seq, deliveryEpoch, claim.outcome);
+		if (claim) {
+			if (row.envelope.kind === "console_op" && claim.outcome === "waking")
+				return appendConsoleResult(
+					address,
+					parseInboxAddress(address) as Extract<InboxAddress, { kind: "session" }>,
+					row,
+					deliveryEpoch,
+					{ outcome: "failed", reason: "lost" },
+				);
+			return ack(address, row.seq, deliveryEpoch, claim.outcome);
+		}
 		const parsed = parseInboxAddress(address);
 		if (!parsed || parsed.kind === "owner")
 			return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_address");
@@ -98,13 +125,19 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 				return ack(address, row.seq, deliveryEpoch, "failed", "clear_origin");
 			return land(address, parsed, row, deliveryEpoch, row.body);
 		}
+		if (row.envelope.kind === "console_op") {
+			if (parsed.kind !== "session") return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_address");
+			return deliverConsoleOp(address, parsed, row, deliveryEpoch);
+		}
 		const ownerSignPub = deps.ownerSignPub();
 		if (!ownerSignPub) return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
 		const kind =
 			row.envelope.origin.kind === "router" && row.envelope.kind === "message"
 				? scheduledBodyAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId)
 				: "op.payload";
-		const opened = deps.contentKeyStore.open(row.body as ContentEnvelope, {
+		const content = ContentEnvelopeSchema.safeParse(row.body);
+		if (!content.success) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+		const opened = deps.contentKeyStore.open(content.data, {
 			domainId: deps.domainId,
 			ownerSignPub,
 			epoch: row.envelope.epoch,
@@ -126,13 +159,114 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		return land(address, parsed, row, deliveryEpoch, body);
 	}
 
+	async function deliverConsoleOp(
+		address: string,
+		parsed: Extract<InboxAddress, { kind: "session" }>,
+		row: InboxRow,
+		deliveryEpoch: number,
+	): Promise<void> {
+		const ownerSignPub = deps.ownerSignPub();
+		if (!ownerSignPub || !deps.consoleDispatch || !deps.producerSignPriv)
+			return ack(address, row.seq, deliveryEpoch, "failed", "delivery_unavailable");
+		if (row.envelope.epoch === "peer" || row.envelope.epoch === "clear")
+			return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_envelope");
+		const content = ContentEnvelopeSchema.safeParse(row.body);
+		if (!content.success) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+		const opened = deps.contentKeyStore.open(content.data, {
+			domainId: deps.domainId,
+			ownerSignPub,
+			epoch: row.envelope.epoch,
+			kind: "op.payload",
+		});
+		if (opened.kind !== "ok") return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		let body: unknown;
+		try {
+			body = JSON.parse(opened.plaintext.toString("utf8"));
+		} catch {
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: false, error: "malformed_body" });
+		}
+		const op = ConsoleOpSchema.safeParse(body);
+		if (!op.success || !DELIVERY_OP_KINDS.has(op.data.kind) || VALUE_OP_KINDS.has(op.data.kind))
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
+				ok: false,
+				error: "delivery op kind is not allowed",
+			});
+		const target =
+			op.data.kind === "respond"
+				? op.data.session_id
+				: op.data.kind === "send"
+					? op.data.to
+					: (op.data as { target: string }).target;
+		const targetMatches = new Set([
+			parsed.sessionId,
+			`${parsed.gatewayId}.${parsed.sessionId}`,
+			`${parsed.gatewayId}/${parsed.sessionId}`,
+			`gateway/${parsed.gatewayId}/${parsed.sessionId}`,
+			`${parsed.domainId}/${parsed.gatewayId}/${parsed.sessionId}`,
+		]);
+		if (!targetMatches.has(target))
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
+				outcome: "failed",
+				reason: "target_mismatch",
+			});
+		try {
+			const result = await deps.consoleDispatch(
+				op.data,
+				row.envelope.origin.device ?? "",
+				row.envelope.opKey.conversationId,
+				row.envelope.opKey.opId,
+				ownerSignPub,
+			);
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: true, result });
+		} catch (error) {
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	async function appendConsoleResult(
+		address: string,
+		parsed: Extract<InboxAddress, { kind: "session" }>,
+		row: InboxRow,
+		deliveryEpoch: number,
+		resultBody: Record<string, unknown>,
+	): Promise<void> {
+		const ownerSignPub = deps.ownerSignPub();
+		if (!ownerSignPub || !deps.producerSignPriv)
+			return ack(address, row.seq, deliveryEpoch, "failed", "result_unavailable");
+		const sealed = deps.contentKeyStore.seal(Buffer.from(JSON.stringify(resultBody), "utf8"), {
+			domainId: deps.domainId,
+			ownerSignPub,
+			kind: opResultAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId),
+		});
+		if (sealed.kind !== "ok") return ack(address, row.seq, deliveryEpoch, "failed", "result_unavailable");
+		const envelope = {
+			origin: { kind: "gateway" as const, domainId: deps.domainId, gatewayId: deps.gatewayId },
+			opKey: row.envelope.opKey,
+			epoch: sealed.envelope.epoch,
+			kind: "op_result" as const,
+			contentRefs: [],
+		};
+		const reply = (await deps.routerClient.callInboxTool("inbox_append", {
+			address: formatInboxAddress({ kind: "owner", domainId: deps.domainId, ownerSignPub }),
+			row: { envelope, producerSig: signRowEnvelope(envelope, deps.producerSignPriv), body: sealed.envelope },
+		})) as AckReply | undefined;
+		const outcome = reply?.result?.outcome;
+		if (outcome !== "accepted" && outcome !== "conflict")
+			return ack(address, row.seq, deliveryEpoch, "waking", "result_pending", false);
+		return ack(address, row.seq, deliveryEpoch, "delivered");
+	}
+
 	async function deliverPeer(address: string, parsed: InboxAddress, row: InboxRow, deliveryEpoch: number) {
 		const origin = row.envelope.origin;
 		if (!deps.sealer || !deps.peerHandler || parsed.kind !== "session" || !origin.gatewayId)
 			return ack(address, row.seq, deliveryEpoch, "failed", "peer_unavailable");
 		let opened: ReturnType<Sealer["openWithSource"]>;
 		try {
-			opened = deps.sealer.openWithSource(origin.gatewayId, row.body as SealedEnvelope, origin.domainId, {
+			const sealed = SealedEnvelopeSchema.parse(row.body);
+			opened = deps.sealer.openWithSource(origin.gatewayId, sealed, origin.domainId, {
 				sealedAt: row.acceptedAt,
 			});
 		} catch {
@@ -183,7 +317,8 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		if (parsed.kind !== "session") return ack(address, row.seq, deliveryEpoch, "failed", "unsupported_address");
 		// No session reader handles this gateway's own result.
 		if (row.envelope.kind === "op_result") {
-			console.log(`[inbox] result for ${parsed.sessionId}: ${JSON.stringify(body)}`);
+			// Result rows complete ledger.
+			console.log(`[inbox] result op=${row.envelope.opKey.opId} kind=${row.envelope.kind} bytes=${row.size}`);
 			return ack(address, row.seq, deliveryEpoch, "delivered");
 		}
 		if (row.envelope.kind === "board_observation") {

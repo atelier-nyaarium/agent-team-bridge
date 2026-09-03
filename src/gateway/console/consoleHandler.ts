@@ -18,6 +18,7 @@ import {
 import { MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import { DomainStatusSchema } from "../../shared/schemas.js";
+import { DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
 import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { sanitizeLabel } from "../../shared/session-sanitize.js";
 import type { SessionRecord } from "../../shared/session-store.js";
@@ -659,6 +660,9 @@ export function createConsoleDispatcher({
 				const applied = sessionStore?.rename(name, op.sessionLabel) ?? null;
 				return { renamed: applied !== null, sessionLabel: applied ?? undefined };
 			}
+			case "wake":
+				if (!tryWakeTeam) throw new Error("wake is unavailable");
+				return tryWakeTeam(op.target);
 
 			case "cross_domain_listen": {
 				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
@@ -839,5 +843,27 @@ export function createConsoleDispatcher({
 		return promise;
 	}
 
-	return { handleFrame, ensurePeer: devices.ensurePeer, removePeer: devices.removePeer };
+	async function handleValue(
+		op: ConsoleOp,
+		device: string,
+		conversationId: string,
+		opId: string,
+		ownerSignPub: string,
+	) {
+		if (!VALUE_OP_KINDS.has(op.kind)) throw new Error("value op kind is not allowed");
+		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
+	}
+
+	async function handleDelivery(
+		op: ConsoleOp,
+		device: string,
+		conversationId: string,
+		opId: string,
+		ownerSignPub: string,
+	) {
+		if (!DELIVERY_OP_KINDS.has(op.kind)) throw new Error("delivery op kind is not allowed");
+		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
+	}
+
+	return { handleFrame, handleValue, handleDelivery, ensurePeer: devices.ensurePeer, removePeer: devices.removePeer };
 }

@@ -54,6 +54,10 @@ const BLOB_ROUTE_SCHEMAS = {
 	"/blob/get": BlobGetOpSchema,
 } as const;
 
+import { valueResultAadKind } from "../shared/content-envelope.js";
+import { ValueOpFrameSchema } from "../shared/router-protocol.js";
+import { ConsoleOpSchema } from "../shared/schemasConsoleOp.js";
+import { ContentEnvelopeSchema } from "../shared/schemasContentKey.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { CapabilityStore } from "./console/capabilityStore.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -223,6 +227,15 @@ export async function startGateway(): Promise<void> {
 		},
 	});
 	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
+	let consoleDeliveryHandler:
+		| ((
+				op: import("../shared/console-protocol.js").ConsoleOp,
+				device: string,
+				conversationId: string,
+				opId: string,
+				ownerSignPub: string,
+		  ) => Promise<unknown>)
+		| null = null;
 	let inboxPeerHandleOp: ReturnType<typeof createGatewayRelayHandler>["handleOp"] | null = null;
 	let presenceReporter: ReturnType<typeof createPresenceReporter> | null = null;
 	let shareAttestor: ReturnType<typeof createShareAttestor> | null = null;
@@ -639,6 +652,9 @@ export async function startGateway(): Promise<void> {
 			onGatewayRelay: (frame) => {
 				slice.handlers?.gatewayRelay(frame);
 			},
+			onValueOp: (frame) => {
+				slice.handlers?.valueOp(frame);
+			},
 			onCrossDomainHandshake: (frame) => {
 				slice.handlers?.crossDomainHandshake(frame);
 			},
@@ -773,6 +789,11 @@ export async function startGateway(): Promise<void> {
 			gatewaySignPub: federationIdentity.sign.pub,
 			ownerSignPub: () => allowlist.ownerSignPub,
 			contentKeyStore,
+			consoleDispatch: (op, device, conversationId, opId, ownerSignPub) =>
+				consoleDeliveryHandler
+					? consoleDeliveryHandler(op, device, conversationId, opId, ownerSignPub)
+					: Promise.reject(new Error("console handler unavailable")),
+			producerSignPriv: federationIdentity.sign.priv,
 			allowlistSnapshot: () => allowlist.getSnapshot(),
 			keyRequester: createKeyRequester({
 				domainId,
@@ -1162,12 +1183,68 @@ export async function startGateway(): Promise<void> {
 			},
 			durableOpStore,
 		});
+		consoleDeliveryHandler = consoleHandler.handleDelivery;
 		const consoleRelay = createConsoleRelayPump({
 			sealer: federation.consoleSealer,
 			handleFrame: consoleHandler.handleFrame,
 			sendReply: (reply) =>
 				federation.routerClient.callTool("console_relay_reply", reply as unknown as Record<string, unknown>),
 		});
+		const valueOp = (raw: unknown): void => {
+			void (async () => {
+				const frame = ValueOpFrameSchema.safeParse(raw);
+				if (!frame.success) return;
+				const ownerSignPub = federation.allowlist.ownerSignPub;
+				const domainId = localDomainId;
+				const incarnation = federation.routerClient.incarnation();
+				if (!ownerSignPub || !domainId || incarnation === null) return;
+				const value = ContentEnvelopeSchema.safeParse(frame.data.value);
+				if (!value.success) return;
+				const opened = federation.contentKeyStore.open(value.data, {
+					domainId,
+					ownerSignPub,
+					epoch: value.data.epoch,
+					kind: "op.payload",
+				});
+				let result: unknown;
+				if (opened.kind !== "ok") result = { kind: "refusal", reason: "content key unavailable" };
+				else {
+					try {
+						const op = ConsoleOpSchema.parse(JSON.parse(opened.plaintext.toString("utf8")));
+						result = {
+							kind: "ok",
+							result: await consoleHandler.handleValue(
+								op,
+								frame.data.device,
+								frame.data.conversationId,
+								frame.data.opId,
+								frame.data.signerSignPub,
+							),
+						};
+					} catch (error) {
+						result = { kind: "refusal", reason: (error as Error).message };
+					}
+				}
+				if (result && (result as { kind?: string }).kind === "ok") {
+					const sealed = federation.contentKeyStore.seal(
+						Buffer.from(JSON.stringify((result as { result: unknown }).result)),
+						{
+							domainId,
+							ownerSignPub,
+							kind: valueResultAadKind(frame.data.opId),
+						},
+					);
+					result =
+						sealed.kind === "ok" ? sealed.envelope : { kind: "refusal", reason: "content key unavailable" };
+				}
+				await federation.routerClient.callTool("value_result", {
+					opId: frame.data.opId,
+					conversationId: frame.data.conversationId,
+					result,
+					incarnation,
+				});
+			})().catch(() => undefined);
+		};
 
 		const gatewayRelayHandler = createGatewayRelayHandler({
 			routes,
@@ -1212,6 +1289,7 @@ export async function startGateway(): Promise<void> {
 		return {
 			consoleRelay,
 			gatewayRelay,
+			valueOp,
 			crossDomainHandshake,
 			evictConsolePeer: (conversationId) => consoleHandler.removePeer(conversationId),
 			presenceSource,

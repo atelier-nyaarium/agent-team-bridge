@@ -172,6 +172,34 @@ describe("OwnerOpIntake", () => {
 		expect(fixture.waking).toHaveLength(1);
 	});
 
+	it("refuses console delivery to an old gateway protocol", async () => {
+		const fixture = setup();
+		const row = {
+			envelope: {
+				origin: { kind: "console" as const, domainId: "domain", device: "phone" },
+				opKey: { conversationId: "c", opId: "o-old-console" },
+				epoch: "peer" as const,
+				kind: "console_op" as const,
+				contentRefs: [],
+			},
+			producerSig: "",
+			body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
+		};
+		row.producerSig = signRowEnvelope(row.envelope, fixture.consoleIdentity.sign.priv);
+		fixture.intake.setGatewayProtocol(() => 1);
+		expect(
+			await fixture.intake.handle(
+				op(fixture, "deliver", "old-console", {
+					value: { address: "session:domain/gateway/session", row },
+				}),
+			),
+		).toEqual({
+			opKey: { conversationId: "c", opId: "o-old-console" },
+			outcome: "refused",
+			reason: "unsupported",
+		});
+	});
+
 	it("answers durability uncertainty for a quarantined inbox", async () => {
 		const fixture = setup({ quarantined: true });
 		const row = {

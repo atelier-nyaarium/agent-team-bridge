@@ -1,5 +1,34 @@
 {
 	"v": 1,
+	"ownerRowAad": {
+		"conversationId": "owner-session",
+		"opId": "owner-op",
+		"expected": "inbox.body\nowner-session\nowner-op"
+	},
+	"consoleOpPayloadAad": {
+		"domainId": "alice",
+		"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+		"epoch": 1,
+		"kind": "op.payload",
+		"expected": "switchboard-content-v1\nalice\nEMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=\n1\nop.payload"
+	},
+	"opResultAad": {
+		"conversationId": "conversation",
+		"opId": "operation",
+		"expected": "op.result\nconversation\noperation"
+	},
+	"valueResultAad": {
+		"opId": "value-operation",
+		"expected": "op.result\nvalue-operation"
+	},
+	"ownerRowAadFull": {
+		"domainId": "alice",
+		"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+		"epoch": 1,
+		"conversationId": "owner-session",
+		"opId": "owner-op",
+		"expected": "switchboard-content-v1\nalice\nEMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=\n1\ninbox.body\nowner-session\nowner-op"
+	},
 	"keyRequest": {
 		"value": {
 			"v": 1,

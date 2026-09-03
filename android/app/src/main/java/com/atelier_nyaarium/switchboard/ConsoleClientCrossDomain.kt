@@ -27,7 +27,7 @@ import java.util.UUID
 /** RECEIVER: open a listening window. Returns the short token to read to the friend plus
  * this Gateway's keys (for the SAS) and the window's expiry. */
 suspend fun ConsoleClient.crossDomainListen(): CrossDomainListenResult =
-	transport.resultOf(transport.relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListen), "cross_domain_listen")
 
 /** REQUESTER: pair against the friend's listening token. The Gateway runs the full
  * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
@@ -39,17 +39,14 @@ suspend fun ConsoleClient.crossDomainRequest(
 	requesterGatewayId: String,
 	opId: String = UUID.randomUUID().toString(),
 ): CrossDomainRequestResult =
-	transport.resultOf(
-		transport.relay(
-			ConsoleOp.CrossDomainRequest(
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainRequest(
 				listeningToken = listeningToken,
 				pin = pin,
 				requesterOwnerSignPub = requesterOwnerSignPub,
 				requesterDomainId = requesterDomainId,
 				requesterGatewayId = requesterGatewayId,
-			),
-			opId,
-		),
+		), opId),
 		"cross_domain_request",
 	)
 
@@ -61,8 +58,8 @@ suspend fun ConsoleClient.crossDomainConfirm(
 	mySignedLink: SignedXDomainLink,
 	opId: String = UUID.randomUUID().toString(),
 ): CrossDomainConfirmResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.CrossDomainConfirm(pin = pin, mySignedLink = mySignedLink), opId),
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainConfirm(pin = pin, mySignedLink = mySignedLink), opId),
 		"cross_domain_confirm",
 	)
 
@@ -70,16 +67,16 @@ suspend fun ConsoleClient.crossDomainConfirm(
  * pairingArrived=false; once the requester's exchange lands, it carries the SAS + the friend's
  * keys the receiver phone owner-signs its link over. A fresh read each call (never cached). */
 suspend fun ConsoleClient.crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)),
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)),
 		"cross_domain_listen_state",
 	)
 
 /** EITHER ROLE: cancel a listening window (receiver token) and/or a pending pairing (pin)
  * when the owner leaves the pairing screen, so a stale request cannot complete. */
 suspend fun ConsoleClient.crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)),
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)),
 		"cross_domain_cancel",
 	)
 
@@ -89,8 +86,8 @@ suspend fun ConsoleClient.crossDomainShare(
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
 ): CrossDomainShareResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
 		"cross_domain_share",
 	)
 
@@ -100,21 +97,21 @@ suspend fun ConsoleClient.crossDomainUnshare(
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
 ): CrossDomainUnshareResult =
-	transport.resultOf(
-		transport.relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
 		"cross_domain_unshare",
 	)
 
 /** This owner's current shares, so the UI can render the per-session checkmarks. */
 suspend fun ConsoleClient.crossDomainListShares(): CrossDomainListSharesResult =
-	transport.resultOf(transport.relay(ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
 
 /** The linked friend Domains from the route Gateway's cross-Domain peer set, so a just-linked
  * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
  * fresh read each call (never cached). */
 suspend fun ConsoleClient.crossDomainListPeers(): CrossDomainListPeersResult =
-	transport.resultOf(transport.relay(ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
 
 /** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
 suspend fun ConsoleClient.crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
-	transport.resultOf(transport.relay(ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")

@@ -1,5 +1,9 @@
 package com.atelier_nyaarium.switchboard
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonElement
+
 internal enum class ConsoleLink { SOCKET, POLL }
 
 internal sealed interface ConsoleAdoption {
@@ -26,8 +30,10 @@ internal class ConsoleTransportCoordinator(
 	private var link = ConsoleLink.POLL
 	private var cursor = 0L
 	private var cursorEpoch = 0L
+	private var incarnation = 0L
 	private var migrationEpoch = 0L
 	private var awaitingTranslation = false
+	private val opResults = mutableMapOf<String, CompletableDeferred<JsonElement?>>()
 
 	@Volatile var dropped = 0L
 		private set
@@ -40,6 +46,8 @@ internal class ConsoleTransportCoordinator(
 
 	fun migrationEpoch(): Long = synchronized(lock) { migrationEpoch }
 
+	fun incarnation(): Long = synchronized(lock) { incarnation }
+
 	fun awaitingTranslation(): Boolean = synchronized(lock) { awaitingTranslation }
 
 	fun beginSocket(): Long = synchronized(lock) {
@@ -48,9 +56,17 @@ internal class ConsoleTransportCoordinator(
 		generation
 	}
 
-	fun onWelcome(gen: Long, cursor: Long, cursorEpoch: Long, floor: Long, migrationEpoch: Long? = null): ConsoleAdoption =
+	fun onWelcome(
+		gen: Long,
+		cursor: Long,
+		cursorEpoch: Long,
+		floor: Long,
+		migrationEpoch: Long? = null,
+		incarnation: Long? = null,
+	): ConsoleAdoption =
 		synchronized(lock) {
 			if (gen != live) return ConsoleAdoption.Stale
+			if (incarnation != null) this.incarnation = incarnation
 			if (migrationEpoch != null) {
 				if (migrationEpoch == 0L) awaitingTranslation = false
 				else this.migrationEpoch = migrationEpoch
@@ -76,6 +92,16 @@ internal class ConsoleTransportCoordinator(
 		gen == live && link == ConsoleLink.SOCKET && !awaitingTranslation
 	}
 
+	fun mayPoll(): Boolean = synchronized(lock) { link == ConsoleLink.POLL && !awaitingTranslation }
+
+	fun polled(cursor: Long, epoch: Long): Boolean = synchronized(lock) {
+		if (link != ConsoleLink.POLL || awaitingTranslation) return false
+		if (cursor <= this.cursor && epoch == cursorEpoch) return false
+		this.cursor = cursor
+		cursorEpoch = epoch
+		true
+	}
+
 	fun commitTranslation(gen: Long, cursor: Long, epoch: Long): Boolean = synchronized(lock) {
 		if (gen != live) return false
 		// Advance only after durable commit.
@@ -85,7 +111,37 @@ internal class ConsoleTransportCoordinator(
 		true
 	}
 
+	fun adoptFloor(floor: Long) = synchronized(lock) {
+		cursor = floor
+	}
+
 	fun owns(gen: Long): Boolean = synchronized(lock) { gen == live && link == ConsoleLink.SOCKET }
+
+	suspend fun awaitOpResult(opId: String, timeoutMs: Long): JsonElement? {
+		val waiter = synchronized(lock) { opResults.getOrPut(opId) { CompletableDeferred() } }
+		return try {
+			withTimeoutOrNull(timeoutMs) { waiter.await() }
+		} finally {
+			synchronized(lock) {
+				if (opResults[opId] === waiter) opResults.remove(opId)
+			}
+		}
+	}
+
+	fun prepareOpResult(opId: String) {
+		synchronized(lock) { opResults.getOrPut(opId) { CompletableDeferred() } }
+	}
+
+	fun discardOpResult(opId: String) {
+		synchronized(lock) { opResults.remove(opId) }
+	}
+
+	fun completeOpResult(opId: String, result: JsonElement?): Boolean = synchronized(lock) {
+		val waiter = opResults[opId] ?: return false
+		waiter.complete(result)
+		opResults.remove(opId)
+		true
+	}
 
 	fun acked(gen: Long, cursor: Long): Boolean = synchronized(lock) {
 		if (gen != live) return false

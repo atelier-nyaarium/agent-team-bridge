@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
+import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.SessionKey
@@ -25,6 +26,89 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
+
+internal data class TickOutcome(
+	val rowsDrained: Int,
+	val planesApplied: Int,
+	val inboxAdvanceSent: Boolean,
+	val known: Map<String, Long>,
+	val cursorStale: Boolean = false,
+)
+
+internal suspend fun drainTick(
+	client: ConsoleClient,
+	coordinator: ConsoleTransportCoordinator,
+	known: Map<String, Long>,
+	onRows: suspend (List<com.atelier_nyaarium.switchboard.proto.InboxRow>) -> Unit,
+	onPlane: suspend (String, Long, kotlinx.serialization.json.JsonElement?) -> Boolean,
+): TickOutcome {
+	var rowsDrained = 0
+	var inboxAdvanceSent = false
+	if (!coordinator.mayPoll()) return TickOutcome(0, 0, false, known)
+	val answer = client.inboxRead(coordinator.cursor() + 1, coordinator.cursorEpoch())
+	if (answer is JsonArray) {
+		val rows = answer.mapNotNull { element ->
+			val decoded = runCatching {
+				wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.InboxRow.serializer(), element)
+			}.getOrNull()
+			if (decoded != null) return@mapNotNull decoded
+			val objectValue = element as? JsonObject
+			val primitive = fun(name: String): String? = runCatching {
+				objectValue?.get(name)?.jsonPrimitive?.content
+			}.getOrNull()
+			val seq = primitive("seq")?.toLongOrNull()
+			DebugLog.log("Poll", "inbox row decode failed seq=${seq ?: "unknown"}")
+			val envelope = objectValue?.get("envelope")?.let { value ->
+				runCatching {
+					wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.RowEnvelope.serializer(), value)
+				}.getOrNull()
+			}
+			if (objectValue == null || envelope == null) return@mapNotNull null
+			com.atelier_nyaarium.switchboard.proto.InboxRow(
+				envelope = envelope,
+				producerSig = primitive("producerSig") ?: "",
+				body = objectValue["body"] ?: JsonNull,
+				seq = seq ?: 0L,
+				acceptedAt = primitive("acceptedAt")?.toLongOrNull() ?: 0L,
+				size = primitive("size")?.toLongOrNull() ?: 0L,
+			)
+		}
+		if (rows.isNotEmpty()) {
+			onRows(rows)
+			rowsDrained = rows.size
+			val cursor = rows.maxOf { it.seq }
+			val epoch = coordinator.cursorEpoch()
+			if (coordinator.polled(cursor, epoch)) {
+				val advance = client.inboxAdvance(cursor, epoch)
+				inboxAdvanceSent = true
+				if (advance is JsonObject && advance["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
+					coordinator.adoptFloor(advance["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
+					return TickOutcome(rowsDrained, 0, true, known, true)
+				}
+			}
+		}
+	} else if (answer is JsonObject && answer["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
+		coordinator.adoptFloor(answer["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
+		return TickOutcome(0, 0, false, known, true)
+	}
+	var nextKnown = known
+	var planesApplied = 0
+	val knownJson = buildJsonObject { nextKnown.forEach { (name, version) -> put(name, version) } }
+	client.planesRead(knownJson)?.planes?.forEach { plane ->
+		if (plane.version > (nextKnown[plane.name] ?: 0L) && onPlane(plane.name, plane.version, plane.payload)) {
+			nextKnown = nextKnown + (plane.name to plane.version)
+			planesApplied++
+		}
+	}
+	return TickOutcome(rowsDrained, planesApplied, inboxAdvanceSent, nextKnown)
+}
 
 /** Four plane cursors and drain-gate subscribers. */
 internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision {
@@ -55,6 +139,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	// Per-domain versions. Upsert, never replace.
 	@Volatile private var knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion> = emptyList()
+	@Volatile private var knownPlaneVersions: Map<String, Long> = emptyMap()
 
 	/** Serialize per-domain version updates. */
 	private val crossDomainVersionsMutex = Mutex()
@@ -108,7 +193,96 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		knownPresenceVersions = emptyList()
 		knownLinkedPeersVersion = null
 		knownReadAnchorsVersion = null
+		knownPlaneVersions = emptyMap()
 		crossDomainVersionsMutex.withLock { knownCrossDomainPresenceVersions = emptyList() }
+	}
+
+	internal fun notePlane(name: String, version: Long) {
+		knownPlaneVersions = knownPlaneVersions + (name to maxOf(version, knownPlaneVersions[name] ?: 0L))
+	}
+
+	internal fun seedPlaneVersions(versions: JsonObject) {
+		knownPlaneVersions = knownPlaneVersions + versions.mapNotNull { (name, value) ->
+			value.jsonPrimitive.content.toLongOrNull()?.let { name to it }
+		}.toMap().mapValues { (name, version) -> maxOf(version, knownPlaneVersions[name] ?: 0L) }
+	}
+
+	internal fun mayApplyPlane(name: String, version: Long): Boolean = version > (knownPlaneVersions[name] ?: 0L)
+
+	internal suspend fun processEntries(entries: List<MailboxEntry>, cursor: Long, epoch: Long, dropped: Long) {
+		val advanced = repo.mailboxSync.advance(SyncPollResult(entries.map { Drained(it) }, cursor, epoch, dropped))
+		repo._state.update { it.copy(gap = advanced.gap) }
+		if (advanced.fresh.isNotEmpty()) repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
+		val burst = mutableMapOf<String, MutableList<Message>>()
+		val deviceAddr = repo.thisDeviceAddress()
+		for (drained in advanced.fresh) {
+			val entry = drained.entry
+			val team = if (entry.kind == "notice") {
+				(parseStoreKey(entry.session_id) as? SessionKey.Notice)?.sender?.canonical ?: entry.from?.let(repo::fromCanonical)
+			} else {
+				when (val key = parseStoreKey(entry.session_id)) {
+					is SessionKey.Conv -> if (deviceAddr != null && key.address == deviceAddr) {
+						entry.from?.let(repo::fromCanonical) ?: key.address.canonical
+					} else key.address.canonical
+					else -> entry.from?.let(repo::fromCanonical)
+				}
+			}
+			if (team == null) continue
+			val files = Attachments.decode(entry.files)
+			val body = entry.body.orEmpty()
+			if (entry.kind == "sent") {
+				repo.reconcileSent(team, Message(true, body, entry.at, files = files, opId = entry.opId, epoch = epoch, seq = entry.seq))
+				continue
+			}
+			if (entry.kind == "plugin_action") {
+				if (entry.pluginId != null && entry.actionType != null) {
+					pluginActionSubscribers.forEach { subscriber ->
+						runCatching { subscriber.onAction(team, entry.pluginId, entry.actionType, entry.payload) }
+							.onFailure { DebugLog.log("Drain", "plugin action failed seq=${entry.seq}") }
+					}
+				}
+				continue
+			}
+			if (body.isEmpty() && files.isEmpty() && entry.status == null) continue
+			val attribution = resolveMessageAttribution(entry.kind, entry.from, entry.to, team, repo::fromCanonical)
+			val message = Message(
+				false, body, entry.at, files = files, status = entry.status,
+				title = entry.title.tierOrNull(), summary = entry.summary.tierOrNull(), fullSpoken = entry.fullSpoken.tierOrNull(),
+				epoch = epoch, seq = entry.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
+				arrivedVisible = repo.isVisible && !resumeBacklogPending,
+			)
+			if (repo.appendInbound(team, message) {
+				inboundSubscribers.forEach { subscriber ->
+					runCatching { subscriber.onMessage(team, message) }
+						.onFailure { DebugLog.log("Drain", "inbound subscriber failed seq=${entry.seq}") }
+				}
+			}) burst.getOrPut(team) { mutableListOf() }.add(message)
+		}
+		val burstJobs = mutableListOf<Job>()
+		val autoPlayedPeerPairs = mutableSetOf<String>()
+		for ((team, messages) in burst) {
+			val lastAgent = messages.lastOrNull { !it.fromMe }
+			val scope = pollScope
+			val autoTier = repo.playback.autoPlayTier(repo.sttsAutoPlay)
+			val followed = team in repo._state.value.openTabs
+			val eligible = scope != null && lastAgent != null && repo.sttsReady() && followed &&
+				(repo.sttsAutoGen || autoTier != null)
+			val queueable = if (!eligible) emptyList() else messages.filter { !it.fromMe }
+				.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
+			if (eligible && queueable.isNotEmpty()) {
+				val warm = queueable.first()
+				burstJobs += scope!!.launch(Dispatchers.IO) {
+					if (repo.sttsAutoGen) repo.playback.preloadMessage(team, warm.at)
+					repo.onInbound?.invoke(team, messages)
+					if (autoTier != null) queueable.forEach { repo.playback.enqueueForPlay(team, it.at, autoTier, announceRun = true) }
+				}
+			} else {
+				repo.onInbound?.invoke(team, messages)
+			}
+		}
+		repo.mailboxSync.commit(advanced.next)
+		withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
+		repo.attachments.fetchPendingAttachments()
 	}
 
 	/** Prune removed Domain cursors. */
@@ -144,238 +318,41 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 			}
 		}
 
+	private suspend fun drainOwnerInbox() {
+		withDrainMutex {
+			val outcome = drainTick(
+				repo.client(),
+				repo.transportCoordinator,
+				knownPlaneVersions,
+				onRows = { repo.dispatchInboxRows(it) },
+				onPlane = { name, _, payload -> repo.applyPlane(name, payload) },
+			)
+			knownPlaneVersions = outcome.known
+			if (outcome.cursorStale) repo._state.update { it.copy(gap = true) }
+		}
+	}
+
 	fun start(scope: CoroutineScope) {
 		if (pollJob?.isActive == true) return
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
 				// Restore cached roster first.
-			runCatching { repo.presence.restoreLastProjection() }
-			var lastDiscoveryAt = 0L
+				runCatching { repo.presence.restoreLastProjection() }
 			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					// Pull discovery while backgrounded.
-					val now = System.currentTimeMillis()
-					if (repo.transportCoordinator.plan(repo.isVisible, repo.transportCoordinator.link() == ConsoleLink.SOCKET, false).pullDiscovery && now - lastDiscoveryAt >= ChatRepository.DISCOVERY_REFRESH_MS) {
-						lastDiscoveryAt = now
-						repo.presence.refreshDiscovery()
-						repo.presence.refreshConnectedGateways()
-					}
-					if (repo.pluginReportPending) repo.reportEnabledPlugins()
-					// Visible long-poll; backgrounded plain poll.
-					hold = if (repo.isVisible) ChatRepository.LONG_POLL_HOLD_MS else 0L
-					val started = System.currentTimeMillis()
-					val params = repo.mailboxSync.pollParams()
-					val focus = repo.currentFocus
-					val presented = knownPresenceVersions
-					val presentedLinkedPeers = knownLinkedPeersVersion
-					val presentedReadAnchors = knownReadAnchorsVersion
-					val presentedCrossDomainPresence = knownCrossDomainPresenceVersions
-					val presentedTaskBoard = repo.boardOps.knownBoardVersion
-					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
-					val mb = if (hold > 0) {
-						pollRacingFocusChange {
-							repo.client().poll(
-								params.cursor, params.epoch, hold, presented, focus,
-								presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
-								presentedTaskBoard,
-							)
-						}
-					} else {
-						repo.client().poll(
-							params.cursor, params.epoch, hold, presented, focus,
-							presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
-							presentedTaskBoard,
-						)
-					}
-					if (mb == null) {
-						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
+					if (repo.isVisible) {
+						withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 						continue@pollLoop
 					}
-					// Apply changed keyring snapshot.
-					mb.domain?.let { repo.applyDomainSync(it, mb.domainVersion ?: "") }
-					// Apply changed presence snapshot.
-					if (mb.presence != null || mb.presenceVersions != null) {
-						if (mb.presenceVersions != null) knownPresenceVersions = mb.presenceVersions
-						mb.presence?.let { rows ->
-							val bumpAt = System.currentTimeMillis()
-							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
-							repo.presence.applyPlanePresence(rows.map { teamInfoToTeam(it, repo.localGatewayId) }, started)
-						}
+					if (!repo.isVisible && repo.transportCoordinator.link() == ConsoleLink.POLL) {
+						drainOwnerInbox()
+						withTimeoutOrNull(ChatRepository.DISCOVERY_REFRESH_MS) { kick.receive() }
+						continue@pollLoop
 					}
-					// Apply changed linked peers.
-					if (mb.linkedPeers != null || mb.linkedPeersVersion != null) {
-						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
-						mb.linkedPeers?.let { peers ->
-							DebugLog.log("Plane", "linkedPeers settled=${mb.settled} rows=${peers.size}")
-							repo.presence.applyLinkedPeers(peers)
-						}
-					}
-					// Apply changed Domains by upsert.
-					mb.crossDomainPresence?.let { entries ->
-						DebugLog.log("Plane", "crossDomainPresence settled=${mb.settled} rows=${entries.size}")
-						repo.presence.applyCrossDomainPresence(entries)
-					}
-					// Apply read anchors after mailbox entries.
-					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
-					val pendingReadAnchors = mb.readAnchors
-					launch { runCatching { repo.boardOps.refreshBoard() } }
-					launch { runCatching { repo.boardOps.drainBoard() } }
-					repo.boardOps.resumeBoardUploads()
-					launch { runCatching { repo.scheduled.replayJournaledSends() } }
-					repo.goals.tick()
-					// Reapply cached teams for tombstone expiry.
-					repo.presence.reapplyCachedTeams()
-					// Floor legacy empty-poll cadence.
-					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
-						System.currentTimeMillis() - started < ChatRepository.INSTANT_EMPTY_THRESHOLD_MS
-					// Commit cursor after rendering and persistence.
-					val adv = repo.mailboxSync.advance(
-						SyncPollResult(mb.entries.map { Drained(it) }, mb.cursor, mb.epoch, mb.dropped),
-					)
-					if (mb.entries.isEmpty()) {
-						DebugLog.log("Poll", "empty (held=$heldEmpty epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped})")
-					} else {
-						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
-					}
-					repo._state.update { it.copy(gap = adv.gap) }
-					// Fresh entries reset idle pushback.
-					if (adv.fresh.isNotEmpty()) repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
-					val burst = mutableMapOf<String, MutableList<Message>>()
-					val deviceAddr = repo.thisDeviceAddress()
-					for (d in adv.fresh) {
-						val e = d.entry
-						// Resolve the canonical thread key.
-						val team: String? = if (e.kind == "notice") {
-							// Prefer the origin-qualified sender.
-							(parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
-								?: e.from?.let { repo.fromCanonical(it) }
-						} else {
-							when (val sk = parseStoreKey(e.session_id)) {
-								is SessionKey.Conv ->
-									if (deviceAddr != null && sk.address == deviceAddr) {
-										// Own-session pushes use the sender thread.
-										e.from?.let { repo.fromCanonical(it) } ?: sk.address.canonical
-									} else {
-										sk.address.canonical
-									}
-								else -> e.from?.let { repo.fromCanonical(it) }
-							}
-						}
-						if (team == null) {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} from=${e.from} -> DROPPED (unresolvable team)")
-							continue
-						}
-						val files = Attachments.decode(e.files)
-						// Keep status-only entries.
-						val bodyText = e.body.orEmpty()
-						val snippet = bodyText.replace(Regex("\\s+"), " ").trim().take(80)
-						if (e.kind == "sent") {
-							DebugLog.log("Drain", "seq=${e.seq} kind=sent session=${e.session_id} -> thread=$team (own mirror) opId=${e.opId} \"$snippet\"")
-							val echo = Message(true, bodyText, e.at, files = files, status = null, opId = e.opId, epoch = mb.epoch, seq = e.seq)
-							repo.reconcileSent(team, echo)
-							continue
-						}
-						if (e.kind == "plugin_action") {
-							// Plugin actions are not chat messages.
-							val pluginId = e.pluginId
-							val actionType = e.actionType
-							if (pluginId != null && actionType != null) {
-								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action session=${e.session_id} -> thread=$team $pluginId:$actionType")
-								pluginActionSubscribers.forEach { sub ->
-									runCatching { sub.onAction(team, pluginId, actionType, e.payload) }
-										.onFailure { DebugLog.log("Drain", "plugin action subscriber threw: $it") }
-								}
-							} else {
-								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action -> DROPPED (missing plugin id or action type)")
-							}
-							continue
-						}
-						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
-							val attribution = resolveMessageAttribution(e.kind, e.from, e.to, team, repo::fromCanonical)
-							val msg = Message(
-								false, bodyText, e.at, files = files, status = e.status,
-								title = e.title.tierOrNull(), summary = e.summary.tierOrNull(), fullSpoken = e.fullSpoken.tierOrNull(),
-								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
-								arrivedVisible = repo.isVisible && !resumeBacklogPending,
-							)
-							// Subscribers run synchronously before commit.
-							if (
-								repo.appendInbound(team, msg) {
-									inboundSubscribers.forEach { sub ->
-										runCatching { sub.onMessage(team, msg) }
-											.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
-									}
-								}
-							) {
-								burst.getOrPut(team) { mutableListOf() }.add(msg)
-							}
-						} else {
-							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
-						}
-					}
-					// Apply anchors after mailbox entries.
-					pendingReadAnchors?.let { entries ->
-						DebugLog.log("Plane", "readAnchors settled=${mb.settled} rows=${entries.size}")
-						repo.presence.applyReadAnchors(entries)
-					}
-					// Report local read advances.
-					repo.presence.reportLocalReadAdvances()
-					val burstJobs = mutableListOf<Job>()
-					val autoPlayedPeerPairs = mutableSetOf<String>()
-					for ((team, msgs) in burst) {
-						val lastAgent = msgs.lastOrNull { !it.fromMe }
-						// Preload followed threads only.
-						val followed = team in repo._state.value.openTabs
-						val scope = pollScope
-						// Pre-generation and auto-play are independent.
-						val autoTier = repo.playback.autoPlayTier(repo.sttsAutoPlay)
-						val eligible =
-							scope != null && lastAgent != null && repo.sttsReady() && followed && (repo.sttsAutoGen || autoTier != null)
-						// Queue messages by their owning thread.
-						val agentMsgs = if (!eligible) {
-							emptyList()
-						} else {
-							msgs.filter { !it.fromMe }
-								.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
-								.map { it to team }
-						}
-						if (eligible && agentMsgs.isNotEmpty()) {
-							val t = team
-							val ms = msgs
-							val at = lastAgent.at
-							val queueable = agentMsgs
-							// Warm the first message.
-							val warm = agentMsgs.firstOrNull()?.let { (m, owner) -> owner to m.at } ?: (t to at)
-							burstJobs += scope.launch(Dispatchers.IO) {
-								if (repo.sttsAutoGen) repo.playback.preloadMessage(warm.first, warm.second)
-								repo.onInbound?.invoke(t, ms)
-								// Queue the full burst for hands-free playback.
-								if (autoTier != null) {
-									for ((msg, owner) in queueable) {
-										repo.playback.enqueueForPlay(owner, msg.at, autoTier, announceRun = true)
-									}
-								}
-							}
-						} else {
-							repo.onInbound?.invoke(team, msgs)
-						}
-					}
-					repo.mailboxSync.commit(adv.next)
-					// Join burst work before idle pushback.
-					withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
-					// Clear the resume backlog after this pass.
-					resumeBacklogPending = false
-					repo.attachments.fetchPendingAttachments()
-					pollFails = 0
-					if (repo._state.value.error != null || repo._state.value.pollFailStreak != 0) {
-						repo._state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
-					}
-					DebugLog.flushToIngest()
-				} catch (e: Exception) {
+					} catch (e: Exception) {
 					// Rethrow cancellation before classification.
 					e.rethrowIfCancellation()
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {

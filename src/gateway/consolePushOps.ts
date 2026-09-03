@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
+import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
+import { inboxBodyAadKind } from "../shared/content-envelope.js";
 import type { MailboxProvenance } from "../shared/device-mailbox.js";
 import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
 import { fenced, MIGRATING } from "../shared/migration-fence.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
+import { formatInboxAddress, OpResultEnvelopeSchema, signRowEnvelope } from "../shared/schemasInbox.js";
 import { type Address, storeKey } from "../shared/session-id.js";
 import type { ChannelFile } from "../shared/types.js";
 import {
@@ -37,6 +40,10 @@ export interface ConsolePushOpsDeps {
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	localGatewayId: string;
+	localDomainId?: string;
+	producerSignPriv?: string;
+	ownerSignPub?: (() => string | null) | null;
+	contentKeyStore?: Pick<import("./federation/contentKeyStore.js").ContentKeyStore, "seal">;
 	localAddress: (name: string) => Address;
 	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
@@ -54,6 +61,10 @@ export function createConsolePushOps({
 	routerClient,
 	resolvesLocalGateway,
 	localGatewayId,
+	localDomainId,
+	producerSignPriv,
+	ownerSignPub,
+	contentKeyStore,
 	localAddress,
 	cacheBlobs,
 	refuseImpersonation,
@@ -93,6 +104,8 @@ export function createConsolePushOps({
 		try {
 			const appended = mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
 			if ("outcome" in appended) return MIGRATING;
+			if (origin === "local" && entry.kind !== "peer")
+				void appendOwnerRow(appended, entry.opId ?? dedupeKey, label);
 		} catch (err) {
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
@@ -102,6 +115,44 @@ export function createConsolePushOps({
 		if (blobIds.length > 0) cacheBlobs?.(blobIds);
 		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
 		return true;
+	}
+
+	async function appendOwnerRow(
+		entry: import("../shared/console-protocol.js").MailboxEntry,
+		opId: string,
+		label: string,
+	): Promise<void> {
+		if (!routerClient?.isConnected() || (routerClient.isRegistered && !routerClient.isRegistered())) return;
+		const domainId = localDomainId;
+		const ownerSign = ownerSignPub?.();
+		if (!domainId || !ownerSign || !producerSignPriv || !contentKeyStore) return;
+		const conversationId = sha256Hex(entry.session_id);
+		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(entry), "utf8"), {
+			domainId,
+			ownerSignPub: ownerSign,
+			kind: inboxBodyAadKind(conversationId, opId),
+		});
+		if (sealed.kind !== "ok") return;
+		const envelope = {
+			origin: { kind: "gateway" as const, domainId, gatewayId: localGatewayId },
+			opKey: { conversationId, opId },
+			epoch: sealed.envelope.epoch,
+			kind: entry.kind,
+			contentRefs: [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))],
+		};
+		try {
+			const result = await routerClient.callInboxTool("inbox_append", {
+				address: formatInboxAddress({ kind: "owner", domainId, ownerSignPub: ownerSign }),
+				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed.envelope },
+				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ entry, opId })) },
+			});
+			const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
+			if (result.error || ["refused", "durability_failure", "durability_uncertain"].includes(outcome ?? "")) {
+				console.warn(`[${label}] owner inbox append refused: ${result.error ?? outcome}`);
+			}
+		} catch (err) {
+			console.warn(`[${label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** Mirrors peer display entries. */

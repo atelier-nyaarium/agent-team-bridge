@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
+import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
@@ -54,7 +55,14 @@ class ChatRepository(
 	/** Task board state. */
 	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
 
-	@Volatile internal var localGatewayId: String = store.loadGatewayId()
+	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
+	internal var localGatewayId: String
+		get() = homeGatewayId
+		set(value) { homeGatewayId = value }
+	@Volatile internal var gapFloor: Long = 0L
+	@Volatile internal var gapDropped: Long = 0L
+	internal var onScheduledResult: (com.atelier_nyaarium.switchboard.proto.ScheduledResultRow) -> Unit = {}
+	internal var onBoardObservation: (com.atelier_nyaarium.switchboard.proto.BoardObservationRow) -> Unit = {}
 
 	/** JSON persistence codec. */
 	internal val persistence = ChatPersistence(store)
@@ -83,7 +91,8 @@ class ChatRepository(
 			deviceName = currentDeviceName(),
 			labels = persistence.loadPersistedLabels(),
 			teamAbsenceStreaks = persistence.loadPersistedAbsenceStreaks(),
-			localGatewayId = localGatewayId,
+			localGatewayId = homeGatewayId,
+			homeGatewayId = homeGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
 			lastProjectByGateway = store.lastProjectByGateway,
@@ -149,11 +158,29 @@ class ChatRepository(
 	internal val socket: ConsoleSocketDriver = ConsoleSocketDriver(
 		coordinator = transportCoordinator,
 		newClient = { listener ->
-			// INBOX is the cutover; until then the poll drains the gateway mailbox.
-			ConsoleSocketClient(client().transport, ownerOps, listener, socketMode = ConsoleSocketMode.PLANES)
+				ConsoleSocketClient(client().transport, ownerOps, listener, socketMode = ConsoleSocketMode.INBOX)
 		},
-		onRows = { rows, _ -> repoScope.launch(Dispatchers.IO) { dispatchKeyRows(rows) } },
-		onPlane = { name, _, payload -> applyPlane(name, payload) },
+		onRows = { rows, _ -> repoScope.launch(Dispatchers.IO) { dispatchInboxRows(rows) } },
+		drainRows = { rows, cursor, complete ->
+			repoScope.launch(Dispatchers.IO) {
+				drain.withDrainMutex {
+					dispatchInboxRows(rows)
+					complete()
+				}
+			}
+		},
+		onPlane = { name, version, payload ->
+			repoScope.launch(Dispatchers.IO) {
+				drain.withDrainMutex {
+					if (drain.mayApplyPlane(name, version) && applyPlane(name, payload)) drain.notePlane(name, version)
+				}
+			}
+		},
+		onGapDetailed = { floor, dropped ->
+			gapFloor = floor
+			gapDropped = dropped
+			_state.update { it.copy(gap = true) }
+		},
 		kick = { drain.kickPoll() },
 		onUnreachable = { client().transport.unreachable(client().transport.proxyBase) },
 		visible = { isVisible },
@@ -161,28 +188,46 @@ class ChatRepository(
 			kotlinx.coroutines.delay(delay)
 			if (isVisible && transportCoordinator.link() != ConsoleLink.SOCKET) runCatching { socket.connect() }
 		} },
-			onWelcome = { gen, welcome ->
-				val epoch = welcome.migrationEpoch ?: 0L
+				onWelcome = { gen, welcome ->
+					drain.seedPlaneVersions(welcome.versions)
+					val epoch = welcome.migrationEpoch ?: 0L
 				if (epoch != 0L) repoScope.launch {
 					if (transportCoordinator.awaitingTranslation()) {
 						cursorTranslation.onWelcome(gen, epoch, welcome.cursor, welcome.cursorEpoch)
 					}
 					selfMigration.run(epoch)
-			}
-		},
+				}
+			},
+			onConsumerWelcome = { _, _ ->
+				repoScope.launch {
+					client().consumerRegister(transportCoordinator.incarnation())
+					reportConsumerCapabilities()
+				}
+			},
 	)
 
-	private fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?) {
+	private suspend fun reportConsumerCapabilities() {
+		val plugins = enabledPlugins?.invoke() ?: return
+		val op = buildJsonObject {
+			put("kind", "capabilities_report")
+			put("capabilities", wireJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(com.atelier_nyaarium.switchboard.proto.EnabledPlugin.serializer()), plugins))
+		}
+		val signed = ownerOps.sign(op) ?: return
+		client().postOwnerOp(signed)
+	}
+
+	internal suspend fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?): Boolean {
 		// Board pushes carry revisions only.
 		if (name == "taskBoard") {
 			boardOps.refreshBoard()
-			return
+			return true
 		}
-		if (name != "presence" || payload == null) return
+		if (name != "presence" || payload == null) return false
 		val projection = runCatching {
 			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
-		}.getOrNull() ?: return
-		repoScope.launch { presence.applyOwnerProjection(projection) }
+		}.getOrNull() ?: return false
+		presence.applyOwnerProjection(projection)
+		return true
 	}
 
 	private suspend fun dispatchKeyRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
@@ -196,6 +241,97 @@ class ChatRepository(
 				}.onFailure { DebugLog.log("KeyDelivery", "row parse failed kind=key_grant") }
 			}
 		}
+	}
+
+	private fun unavailableEntry(row: com.atelier_nyaarium.switchboard.proto.InboxRow): MailboxEntry =
+		MailboxEntry(
+			seq = row.seq,
+			at = row.acceptedAt,
+			kind = row.envelope.kind,
+			session_id = row.envelope.opKey.conversationId,
+			body = "Unavailable on this device",
+			status = "error",
+			title = "Unavailable",
+		)
+
+	internal suspend fun dispatchInboxRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
+		val entries = mutableListOf<MailboxEntry>()
+		for (row in rows) {
+			val epochText = (row.envelope.epoch as? JsonPrimitive)?.content
+			if (epochText == "clear" && row.envelope.kind in setOf("scheduled_result", "board_observation")) {
+				when (row.envelope.kind) {
+					"scheduled_result" -> runCatching {
+						wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.ScheduledResultRow.serializer(), row.body)
+					}.onSuccess(onScheduledResult).onFailure {
+						DebugLog.log("Inbox", "scheduled result parse failed seq=${row.seq}")
+						entries += unavailableEntry(row)
+					}
+					"board_observation" -> runCatching {
+						wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.BoardObservationRow.serializer(), row.body)
+					}.onSuccess(onBoardObservation).onFailure {
+						DebugLog.log("Inbox", "board observation parse failed seq=${row.seq}")
+						entries += unavailableEntry(row)
+					}
+				}
+				continue
+			}
+			if (row.envelope.kind == "op_result") {
+				val result = runCatching {
+					val body = wireJson.decodeFromJsonElement(
+						com.atelier_nyaarium.switchboard.proto.ContentEnvelope.serializer(),
+						row.body,
+					)
+					val epoch = body.epoch.toInt()
+					val key = federation.contentKeyring().keyFor(epoch) ?: return@runCatching null
+					val plain = com.atelier_nyaarium.switchboard.crypto.Crypto.openContent(
+						body,
+						key,
+						com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
+							localDomain(),
+							federation.ownerSignPub(),
+							epoch,
+							opResultAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId),
+						),
+					)
+					wireJson.parseToJsonElement(plain.toString(Charsets.UTF_8))
+					}.onFailure { DebugLog.log("Inbox", "op_result open failed opId=${row.envelope.opKey.opId}") }.getOrNull()
+					transportCoordinator.completeOpResult(row.envelope.opKey.opId, result)
+					continue
+				}
+				if (row.envelope.kind == "key_request" || row.envelope.kind == "key_grant") {
+					dispatchKeyRows(listOf(row))
+					continue
+				}
+				val entry = runCatching {
+					val envelope = wireJson.decodeFromJsonElement(ContentEnvelope.serializer(), row.body)
+					val epoch = envelope.epoch.toInt()
+					val key = federation.contentKeyring().keyFor(epoch) ?: run {
+						keyDelivery.requestMissing(epoch)
+						return@runCatching unavailableEntry(row)
+					}
+					val plain = com.atelier_nyaarium.switchboard.crypto.Crypto.openContent(
+						envelope,
+						key,
+						com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
+							localDomain(),
+							federation.ownerSignPub(),
+							epoch,
+							com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind(
+								row.envelope.opKey.conversationId,
+								row.envelope.opKey.opId,
+							),
+						),
+					)
+					wireJson.decodeFromString(MailboxEntry.serializer(), plain.toString(Charsets.UTF_8)).copy(seq = row.seq, kind = row.envelope.kind)
+				}.onFailure {
+					DebugLog.log("Inbox", "row open failed seq=${row.seq}")
+					(row.envelope.epoch as? JsonPrimitive)?.content?.toIntOrNull()?.let { keyDelivery.requestMissing(it) }
+					entries += unavailableEntry(row)
+				}.getOrNull()
+				entry?.let { entries += it }
+		}
+		val last = rows.maxByOrNull { it.seq } ?: return
+		drain.processEntries(entries, last.seq, transportCoordinator.cursorEpoch(), 0L)
 	}
 
 	/** Read one opened Router blob chunk. */
@@ -228,7 +364,7 @@ class ChatRepository(
 			}
 		}
 		val signed = ownerOps.sign(op) ?: return null
-		val answer = runCatching { client().postOwnerOp(signed).jsonObject }.getOrNull() ?: return null
+		val answer = runCatching { client().postOwnerOp(signed)?.jsonObject }.getOrNull() ?: return null
 		if (answer["outcome"]?.jsonPrimitive?.content != "fetched") return null
 		val bytes = answer["bytes"]?.jsonPrimitive?.content
 			?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: return null
@@ -257,7 +393,7 @@ class ChatRepository(
 	/** Board Router writer. */
 	val boardRouter = BoardRouterWriter(
 		board = board,
-		signAndPost = { op, opId -> client().postOwnerOp(ownerOps.sign(op, opId) ?: error("cannot sign board op")) },
+		signAndPost = { op, opId -> client().postOwnerOp(ownerOps.sign(op, opId) ?: error("cannot sign board op")) ?: error("owner op post failed") },
 		decode = { wireJson.decodeFromJsonElement(BoardWriteResult.serializer(), it) },
 	)
 
@@ -288,7 +424,13 @@ class ChatRepository(
 	/** Refresh admitted Gateways. */
 	internal fun refreshAdmittedGateways() {
 		val ids = sessions.keyringGateways()
-		if (ids != _state.value.admittedGateways) _state.update { it.copy(admittedGateways = ids) }
+		val nextHome = homeGatewayId.takeIf { it in ids } ?: ids.firstOrNull().orEmpty()
+		if (nextHome != homeGatewayId) {
+			homeGatewayId = nextHome
+			store.saveGatewayId(nextHome)
+		}
+		if (ids != _state.value.admittedGateways || nextHome != _state.value.homeGatewayId)
+			_state.update { it.copy(admittedGateways = ids, localGatewayId = nextHome, homeGatewayId = nextHome) }
 		// Remove revoked Gateway columns.
 		board.retainGateways(ids)
 	}
@@ -429,7 +571,16 @@ class ChatRepository(
 	internal fun client(): ConsoleClient {
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
-		return ConsoleClient(Provisioning.parse(blob), store).also { client = it }
+		return ConsoleClient(
+			Provisioning.parse(blob),
+			store,
+			coordinator = transportCoordinator,
+			signOwnerOp = { op, opId -> ownerOps.sign(op, opId) },
+				domainId = { confirmedDomainId() },
+				ownerSignPub = { federation.ownerSignPub() },
+			homeGatewayId = { homeGatewayId },
+				contentKeyring = { federation.contentKeyring() },
+		).also { client = it }
 	}
 
 	/** Capabilities reported at register. */

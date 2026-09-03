@@ -18,6 +18,7 @@ import {
 	shortFp,
 	startRouter,
 	writePublicReach,
+	writeRouterFingerprint,
 } from "./lib/routerStart.js";
 import { readRouterFed, routerRunning, writeRouterFed } from "./lib/routerState.js";
 import { BLOB_FILE, INVITE_TTL_MS } from "./setup-constants.js";
@@ -63,6 +64,7 @@ async function ensureRouter(): Promise<void> {
 	if (wasRunning && unchanged) {
 		const health = await routerHealth(env.lan);
 		if (health) {
+			await writeRouterFingerprint(health.certFingerprint);
 			note(`Router running. Fingerprint ${shortFp(health.certFingerprint)}`);
 			return;
 		}

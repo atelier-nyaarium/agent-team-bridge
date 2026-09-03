@@ -33,6 +33,7 @@ export interface DomainMeta {
 export interface RouterHandlers {
 	consoleRelay: (frame: unknown) => void;
 	gatewayRelay: (frame: unknown) => void;
+	valueOp: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
 	evictConsolePeer: (conversationId: string) => void;
 	presenceSource: CrossDomainPresenceSource;

@@ -46,12 +46,22 @@ export function boardTextAadKind(kind: BoardTextKind, entryId: string): `${Board
 }
 
 /** Inbox kinds require row IDs. */
-export function inboxBodyAadKind(conversationId: string, seq: number): `inbox.body\n${string}` {
-	return `inbox.body\n${conversationId}\n${seq}`;
+export function inboxBodyAadKind(conversationId: string, opId: string | number): `inbox.body\n${string}` {
+	return `inbox.body\n${conversationId}\n${opId}`;
 }
 
 export function scheduledBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
 	return `inbox.body\n${conversationId}\n${opId}`;
+}
+
+const resultAadKind = (...parts: string[]): `op.result\n${string}` => `op.result\n${parts.join("\n")}`;
+
+export function valueResultAadKind(opId: string): `op.result\n${string}` {
+	return resultAadKind(opId);
+}
+
+export function opResultAadKind(conversationId: string, opId: string): `op.result\n${string}` {
+	return resultAadKind(conversationId, opId);
 }
 
 export interface ContentAad {
@@ -64,6 +74,7 @@ export interface ContentAad {
 		| Exclude<ContentKind, BoardTextKind | "inbox.body">
 		| `${BoardTextKind}\n${string}`
 		| `inbox.body\n${string}`
+		| `op.result\n${string}`
 		| `blob\n${string}\n${number}\n${0 | 1}`;
 }
 

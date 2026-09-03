@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import packageJson from "../../package.json";
 import { resolveAdmitted } from "../shared/admission.js";
 import { fingerprint } from "../shared/crypto.js";
 import type { EnrollOp } from "../shared/federation-lifecycle.js";
@@ -20,6 +21,7 @@ import {
 	verifyTransportRequest,
 	verifyTrustPendingRequest,
 } from "../shared/federation-proofs.js";
+import { FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type ConsoleSockets, createConsoleSockets } from "./console/consoleSockets.js";
@@ -221,6 +223,8 @@ export class RouterServer {
 					gateways: this.bridge.registeredGateways(adminDomainId).map((g) => ({
 						gatewayId: g.gatewayId,
 						signFp: g.signPub ? fingerprint(g.signPub) : null,
+						incarnation: g.incarnation,
+						protocolVersion: g.protocolVersion,
 					})),
 				};
 			},
@@ -370,6 +374,8 @@ export class RouterServer {
 			return new Response(
 				JSON.stringify({
 					ok: true,
+					version: packageJson.version,
+					protocolVersion: FEDERATION_PROTOCOL_VERSION,
 					certFingerprint: this.tls.certFp,
 					gateways: this.bridge.registeredGatewayCount,
 					...this.ownerRegistry.health(),
