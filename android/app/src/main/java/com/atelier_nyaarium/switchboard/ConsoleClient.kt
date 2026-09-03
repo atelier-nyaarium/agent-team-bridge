@@ -82,8 +82,20 @@ class ConsoleClient internal constructor(
 		)
 	}
 
-	internal suspend fun postSigned(op: kotlinx.serialization.json.JsonObject, opId: String = UUID.randomUUID().toString()): JsonElement? =
-		signOwnerOp?.invoke(op, opId)?.let { postOwnerOp(it) }
+	internal suspend fun postSigned(op: kotlinx.serialization.json.JsonObject, opId: String = UUID.randomUUID().toString()): JsonElement? {
+		val signed = signOwnerOp?.invoke(op, opId)
+		val answer = signed?.let { postOwnerOp(it) }
+		// #region debug: owner op
+		val outcome = when {
+			signed == null -> "unsigned"
+			answer == null -> "no answer"
+			answer is kotlinx.serialization.json.JsonArray -> "rows=${answer.size}"
+			else -> (answer as? JsonObject)?.get("outcome")?.jsonPrimitive?.content ?: "answered"
+		}
+		DebugLog.log("OwnerOp", "${op["kind"]?.jsonPrimitive?.content} -> $outcome")
+		// #endregion
+		return answer
+	}
 
 	internal suspend fun consumerRegister(incarnation: Long): JsonElement? = postSigned(buildJsonObject {
 		put("kind", "consumer_register")

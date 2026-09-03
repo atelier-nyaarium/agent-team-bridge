@@ -46,6 +46,9 @@ android {
 		versionName = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
 			.find(rootProject.file("../package.json").readText())
 			?.groupValues?.get(1) ?: "0.0.0"
+		// CI stamps the commit; a local build says so.
+		val buildSha = System.getenv("GITHUB_SHA")?.take(8)?.takeIf { it.isNotBlank() } ?: "local"
+		buildConfigField("String", "BUILD_SHA", "\"$buildSha\"")
 	}
 
 	buildTypes {

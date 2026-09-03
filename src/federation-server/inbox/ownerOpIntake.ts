@@ -44,6 +44,25 @@ export const OWNER_STATE_MUTATION_KINDS = new Set([
 	"deliver",
 ]);
 
+/** One line per answered op: kind, device, outcome, and row or plane counts. Never a body. */
+function logOwnerOp(op: OwnerOp, result: unknown): void {
+	let detail = "answered";
+	if (Array.isArray(result)) detail = `rows=${result.length}`;
+	else if (result && typeof result === "object") {
+		const record = result as {
+			outcome?: unknown;
+			reason?: unknown;
+			result?: { planes?: { name: string; version: number }[] };
+		};
+		if (record.outcome === "refused") return;
+		detail = String(record.outcome ?? "answered");
+		const planes = record.result?.planes;
+		if (Array.isArray(planes))
+			detail += ` planes=${planes.map((plane) => `${plane.name}:${plane.version}`).join(",")}`;
+	}
+	console.log(`[owner-op] ${String(op.op.kind)} dev=${op.device} -> ${detail}`);
+}
+
 /** Handler error for a `refused` result. */
 export class OwnerOpRefused extends Error {
 	constructor(readonly reason: string) {
@@ -78,11 +97,10 @@ export class OwnerOpIntake {
 		if (!parsed.success) return { malformed: true };
 		const op = parsed.data;
 		const domain = this.params.getDomain(op.domainId);
-		const refused = (reason: string): OpResultEnvelope => ({
-			opKey: { conversationId: op.conversationId, opId: op.opId },
-			outcome: "refused",
-			reason,
-		});
+		const refused = (reason: string): OpResultEnvelope => {
+			console.log(`[owner-op] ${String(op.op.kind)} dev=${op.device} -> refused:${reason}`);
+			return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "refused", reason };
+		};
 		if (
 			!domain ||
 			!verifyOwnerOp(op) ||
@@ -101,6 +119,7 @@ export class OwnerOpIntake {
 		this.nonces.set(nonceKey, { at: op.at });
 		try {
 			const result = await this.dispatch(op, refused);
+			logOwnerOp(op, result);
 			if (result && typeof result === "object" && (result as Record<string, unknown>).reason === "migrating") {
 				this.nonces.delete(nonceKey);
 				return result;

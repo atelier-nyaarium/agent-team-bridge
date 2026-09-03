@@ -58,7 +58,7 @@ object DebugLog {
 			Thread { sweepSpilledLogs(ctx) }.apply { isDaemon = true }.start()
 			log(
 				"DebugLog",
-				"init build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}",
+				"init build ${BuildConfig.VERSION_NAME}+${BuildConfig.BUILD_SHA} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}",
 			)
 
 			// Surface an otherwise-silent crash to logcat (and the ring, on debug) before the app dies.

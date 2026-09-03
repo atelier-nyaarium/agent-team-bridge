@@ -81,6 +81,7 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 			);
 			try {
 				await deps.send("key_request", { request });
+				console.log(`[key-requester] requested epochs ${epochs.join(",")}`);
 			} catch {
 				console.warn(`[key-requester] request send failed for epochs ${epochs.join(",")}`);
 			}

@@ -195,7 +195,11 @@ class ChatRepository(
 					// The welcome carries versions only; fetch the payloads.
 					repoScope.launch(Dispatchers.IO) {
 						drain.withDrainMutex {
-							client().planesRead(drain.knownPlanesJson())?.planes?.forEach { plane ->
+							val planes = client().planesRead(drain.knownPlanesJson())?.planes
+							// #region debug: welcome planes
+							DebugLog.log("Welcome", "planes ${planes?.joinToString(",") { "${it.name}:${it.version}:${it.payload != null}" } ?: "none"}")
+							// #endregion
+							planes?.forEach { plane ->
 								if (drain.mayApplyPlane(plane.name, plane.version) && applyPlane(plane.name, plane.payload)) {
 									drain.notePlane(plane.name, plane.version)
 								}
@@ -222,6 +226,7 @@ class ChatRepository(
 		val plugins = enabledPlugins?.invoke() ?: return
 		val op = buildJsonObject {
 			put("kind", "capabilities_report")
+			put("clientVersion", "${BuildConfig.VERSION_NAME}+${BuildConfig.BUILD_SHA}")
 			put("capabilities", wireJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(com.atelier_nyaarium.switchboard.proto.EnabledPlugin.serializer()), plugins))
 		}
 		val signed = ownerOps.sign(op) ?: return
@@ -267,6 +272,9 @@ class ChatRepository(
 		)
 
 	internal suspend fun dispatchInboxRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
+		// #region debug: inbox rows
+		DebugLog.log("Inbox", "rows " + rows.joinToString(",") { "${it.envelope.kind}#${it.seq}" }.take(300))
+		// #endregion
 		val entries = mutableListOf<MailboxEntry>()
 		for (row in rows) {
 			val epochText = (row.envelope.epoch as? JsonPrimitive)?.content
@@ -307,7 +315,10 @@ class ChatRepository(
 					)
 					wireJson.parseToJsonElement(plain.toString(Charsets.UTF_8))
 					}.onFailure { DebugLog.log("Inbox", "op_result open failed opId=${row.envelope.opKey.opId}") }.getOrNull()
-					transportCoordinator.completeOpResult(row.envelope.opKey.opId, result)
+					val completed = transportCoordinator.completeOpResult(row.envelope.opKey.opId, result)
+					// #region debug: op result
+					DebugLog.log("Inbox", "op_result opId=${row.envelope.opKey.opId} opened=${result != null} waiter=$completed")
+					// #endregion
 					continue
 				}
 				if (row.envelope.kind == "key_request" || row.envelope.kind == "key_grant") {

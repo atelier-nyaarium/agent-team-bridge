@@ -300,6 +300,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 				if (!snapshot || !deps.keyRequester)
 					return ack(address, row.seq, deliveryEpoch, "failed", "key_refused");
 				const result = deps.contentKeyStore.install(grant.data.envelope, snapshot);
+				console.log(`[inbox] key grant epoch ${grant.data.envelope.epoch}: ${result}`);
 				if (result === "refused") return ack(address, row.seq, deliveryEpoch, "failed", "key_refused");
 				try {
 					await deps.keyRequester.sendReceipt(grant.data.envelope.epoch);

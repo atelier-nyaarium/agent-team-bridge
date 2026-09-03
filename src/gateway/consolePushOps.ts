@@ -134,21 +134,34 @@ export function createConsolePushOps({
 		return { payload, opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ entry, opId })) } };
 	}
 
+	let lastWait = "";
+	function waiting(reason: string): void {
+		const line = `${reason} (depth ${outbox.length})`;
+		if (line === lastWait) return;
+		lastWait = line;
+		console.log(`[owner-outbox] waiting: ${line}`);
+	}
+
 	async function drainOutbox(): Promise<void> {
+		if (draining) return;
 		if (
-			draining ||
 			!routerClient ||
 			typeof routerClient.isConnected !== "function" ||
 			!routerClient.isConnected() ||
 			(routerClient.isRegistered && !routerClient.isRegistered())
-		)
+		) {
+			if (outbox.length > 0) waiting("router link down");
 			return;
+		}
 		draining = true;
 		try {
 			while (outbox.length > 0) {
 				const item = outbox[0];
 				const sealed = sealOwnerRow(item.entry, item.opId);
-				if (!sealed) break;
+				if (!sealed) {
+					waiting("no content key");
+					break;
+				}
 				let result: Awaited<ReturnType<NonNullable<typeof routerClient>["callInboxTool"]>>;
 				try {
 					result = await routerClient.callInboxTool("inbox_append", {
@@ -162,7 +175,10 @@ export function createConsolePushOps({
 					break;
 				}
 				const parsed = result.error ? null : OpResultEnvelopeSchema.safeParse(result.result).data;
-				if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) break;
+				if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) {
+					waiting(`answer ${parsed?.outcome ?? result.error ?? "unparsed"}`);
+					break;
+				}
 				if (parsed.outcome === "refused") {
 					console.warn(`[${item.label}] owner row ${item.opId} refused: ${parsed.reason ?? "refused"}`);
 				}
@@ -175,6 +191,8 @@ export function createConsolePushOps({
 					break;
 				}
 				outbox.shift();
+				lastWait = "";
+				console.log(`[owner-outbox] sent ${item.entry.kind} opId=${item.opId} ${parsed.outcome}`);
 			}
 		} finally {
 			draining = false;
