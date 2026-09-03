@@ -47,6 +47,8 @@ object DebugLog {
 	@Volatile private var ingestConversationId: String? = null
 	// exact trust and transport the real one does.
 	@Volatile private var ingestClient: okhttp3.OkHttpClient? = null
+	@Volatile private var flusher: Thread? = null
+	private const val FLUSH_INTERVAL_MS = 5_000L
 
 	fun init(context: Context) {
 		val ctx = context.applicationContext
@@ -102,6 +104,22 @@ object DebugLog {
 			ingestClient = runCatching { ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp) }.getOrNull()
 			val host = runCatching { java.net.URI(baseUrl()).host }.getOrNull() ?: "?"
 			log("Ingest", "attached host=$host client=${ingestClient != null}")
+			// The poll loop flushes only on its error path; a clock covers a healthy socket.
+			if (flusher == null) {
+				flusher = Thread {
+					while (true) {
+						try {
+							Thread.sleep(FLUSH_INTERVAL_MS)
+						} catch (_: InterruptedException) {
+							return@Thread
+						}
+						runCatching { flushToIngest() }
+					}
+				}.apply {
+					isDaemon = true
+					start()
+				}
+			}
 		}
 	}
 
