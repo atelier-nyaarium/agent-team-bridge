@@ -96,6 +96,13 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 		}
 		}
 
+	fun wrapFor(epochs: List<Int>, recipientBoxPub: String, senderSignPub: String, senderSignPriv: String): List<KeyEnvelope> =
+		check(load !is ContentKeysLoad.Corrupt) { "content key slot is corrupt" }.let {
+			epochs.distinct().filter { it in keys }.map { epoch ->
+				Crypto.wrapContentKey(keys.getValue(epoch), epoch, recipientBoxPub, senderSignPub, senderSignPriv)
+			}
+		}
+
 	private fun installed(next: Map<Int, ByteArray>): Merge.Installed =
 		Merge.Installed(next.mapValues { it.value.copyOf() }, next.keys.sorted())
 }

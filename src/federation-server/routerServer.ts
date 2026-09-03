@@ -131,6 +131,9 @@ export class RouterServer {
 				this.inbox.registerConsumer(domainId, signerSignPub, incarnation),
 			readOwner: (domainId, signerSignPub, fromSeq, limit, cursorEpoch) =>
 				this.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch),
+			readOwnerKeyRows: (domainId, ownerSignPub, sinceMs) =>
+				this.inbox.readOwnerKeyRows(domainId, ownerSignPub, sinceMs),
+			now: () => this.ownerRegistry.now(),
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
 				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
 			ownerFloor: (domainId) => this.inbox.ownerFloor(domainId),

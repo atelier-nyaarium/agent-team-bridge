@@ -14,7 +14,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
-import { writeFileAtomic } from "../../shared/atomic-write.js";
+import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 
 ////////////////////////////////
 //  Schemas
@@ -31,6 +31,16 @@ export type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
 //  Class
 
 export const ALLOWLIST_FILE = "federation-allowlist.json";
+
+export class AllowlistCorruptError extends Error {
+	readonly asidePath: string;
+
+	constructor(asidePath: string) {
+		super(`allowlist is corrupt; moved aside to ${asidePath}`);
+		this.name = "AllowlistCorruptError";
+		this.asidePath = asidePath;
+	}
+}
 
 /** The mirrored Domain allowlist on a Gateway: the owner root plus the
  * owner-signed admissions / revocations, persisted to the Gateway's volume so a
@@ -57,8 +67,10 @@ export class Allowlist {
 			const parsed = AllowlistFileSchema.safeParse(JSON.parse(raw));
 			if (parsed.success) return parsed.data;
 		} catch {}
-		console.warn(`[allowlist] invalid allowlist file ${this.file}`);
-		return { ownerSignPub: null, admissions: [], revocations: [] };
+		const aside = `${this.file}.corrupt-${Date.now()}`;
+		renameFileSync(this.file, aside);
+		console.warn(`[allowlist] invalid allowlist; moved aside to ${aside}`);
+		throw new AllowlistCorruptError(aside);
 	}
 
 	static writeFile(file: string, state: AllowlistFile): void {

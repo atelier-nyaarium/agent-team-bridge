@@ -13,11 +13,11 @@ import {
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 } from "../../shared/schemas.js";
-import { ALLOWLIST_FILE, Allowlist } from "./allowlist.js";
-import { ContentKeyStore } from "./contentKeyStore.js";
+import { ALLOWLIST_FILE, Allowlist, AllowlistCorruptError } from "./allowlist.js";
+import { CONTENT_KEYS_FILE, ContentKeyStore } from "./contentKeyStore.js";
 
 const STAGING_DIR = "staging";
-const ARTIFACTS = [ALLOWLIST_FILE, "domain-id", "content-keys.json", "transport.json"] as const;
+const ARTIFACTS = [ALLOWLIST_FILE, "domain-id", CONTENT_KEYS_FILE, "transport.json"] as const;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -97,7 +97,7 @@ export function stageBootstrap(
 			fsyncFile: true,
 			fsyncDirectory: true,
 		});
-		ContentKeyStore.writeFile(path.join(stagingDir, "content-keys.json"), keyResult.map);
+		ContentKeyStore.writeFile(path.join(stagingDir, CONTENT_KEYS_FILE), keyResult.map);
 		writeFileAtomic(path.join(stagingDir, "INSTALLED"), "", { mode: 0o600, fsyncFile: true, fsyncDirectory: true });
 	} catch (error) {
 		fs.rmSync(stagingDir, { recursive: true, force: true });
@@ -157,7 +157,15 @@ export function recoverStaging(federationDir: string): void {
 	const stagingDir = path.join(federationDir, STAGING_DIR);
 	if (!fs.existsSync(stagingDir)) return;
 	if (fs.existsSync(path.join(stagingDir, "INSTALLED"))) {
-		const stagedAllowlist = new Allowlist(stagingDir);
+		let stagedAllowlist: Allowlist;
+		try {
+			stagedAllowlist = new Allowlist(stagingDir);
+		} catch (error) {
+			if (!(error instanceof AllowlistCorruptError)) throw error;
+			fs.rmSync(stagingDir, { recursive: true, force: true });
+			console.warn("[bootstrap] discarded corrupt staging");
+			return;
+		}
 		const liveAllowlist = new Allowlist(federationDir);
 		if (
 			!stagedIsWhole(federationDir) ||

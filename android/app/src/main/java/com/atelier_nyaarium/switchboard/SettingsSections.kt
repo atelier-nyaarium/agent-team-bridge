@@ -347,6 +347,38 @@ internal fun FederationSettings(repo: ChatRepository) {
 	RouterEndpointCard(repo)
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
+	ContentKeyDeliveryCard(repo)
+}
+
+@Composable
+private fun ContentKeyDeliveryCard(repo: ChatRepository) {
+	val scope = rememberCoroutineScope()
+	var busy by remember { mutableStateOf(false) }
+	var lines by remember { mutableStateOf<List<String>>(emptyList()) }
+	Text("Content keys", style = MaterialTheme.typography.titleSmall)
+	Button(
+		enabled = !busy,
+		onClick = hapticClick {
+			busy = true
+			scope.launch {
+				try {
+					lines = repo.keyDelivery.redeliverAll()
+						.groupBy { it.signPub }
+						.map { (member, rows) ->
+							val confirmed = rows.filter { it.confirmed }.joinToString(",") { it.epoch.toString() }
+							val missing = rows.filterNot { it.confirmed }.joinToString(",") { it.epoch.toString() }
+							"${rows.first().kind} ${member.take(8)}: confirmed ${confirmed.ifEmpty { "none" }}; missing ${missing.ifEmpty { "none" }}"
+						}
+				} catch (error: Exception) {
+					lines = listOf(error.message ?: error.javaClass.simpleName)
+				} finally {
+					busy = false
+				}
+			}
+		},
+		modifier = Modifier.fillMaxWidth(),
+	) { Text("Re-deliver content keys") }
+	lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 /** Point this console at a self-hosted Router. Editing here repoints the transport only: it never
@@ -441,4 +473,3 @@ internal fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> 
 		style = MaterialTheme.typography.bodySmall,
 	)
 }
-

@@ -93,6 +93,7 @@ import { createBlobUploader } from "./router/blobUploader.js";
 import { createBoardClient } from "./router/boardClient.js";
 import { createInboxClaims } from "./router/inboxClaims.js";
 import { createInboxDeliveryPump } from "./router/inboxDeliveryPump.js";
+import { createKeyRequester } from "./router/keyRequester.js";
 import { createPresenceReporter } from "./router/presenceReporter.js";
 import { startRouterClient } from "./router/routerClient.js";
 import { createSessionRegistryReporter } from "./router/sessionRegistryReporter.js";
@@ -655,6 +656,7 @@ export async function startGateway(): Promise<void> {
 				sessionReporter.reconcile();
 				presenceReporter?.baseline();
 				shareAttestor?.attest();
+				void inboxPump?.resendReceipts();
 			},
 			onPresenceResync: () => presenceReporter?.resync(),
 			onUnlink: (frame) => {
@@ -742,8 +744,33 @@ export async function startGateway(): Promise<void> {
 				]),
 			incarnation: () => routerClient.incarnation(),
 			domainId,
+			gatewayId: localGatewayId,
+			gatewaySignPub: federationIdentity.sign.pub,
 			ownerSignPub: () => allowlist.ownerSignPub,
 			contentKeyStore,
+			allowlistSnapshot: () => allowlist.getSnapshot(),
+			keyRequester: createKeyRequester({
+				domainId,
+				gatewayId: localGatewayId,
+				gatewaySignPub: federationIdentity.sign.pub,
+				gatewaySignPriv: federationIdentity.sign.priv,
+				send: (action, params) => routerClient.callInboxTool(action, params),
+				onError: (message) => {
+					routes.deliverToOwner({
+						entry: {
+							kind: "notice",
+							session_id: `gateway.${localGatewayId}.key-request`,
+							title: "Content key unavailable",
+							summary: message,
+							body: message,
+						},
+						dedupeKey: `key-request:${domainId}:${localGatewayId}`,
+						provenance: "message",
+						origin: "local",
+						label: "key-request",
+					});
+				},
+			}),
 			sealer,
 			coordinator: channelDeliveries,
 			tryWakeTeam: (team) => wakeService.tryWakeTeam(team),

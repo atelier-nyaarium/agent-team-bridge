@@ -29,6 +29,8 @@ export interface ConsoleSocketsDeps {
 		limit: number,
 		cursorEpoch?: number,
 	) => InboxRow[] | { outcome: "cursor_stale"; floor: number; dropped: number };
+	readOwnerKeyRows: (domainId: string, ownerSignPub: string, sinceMs: number) => InboxRow[];
+	now?: () => number;
 	advanceCursor: (
 		domainId: string,
 		signerSignPub: string,
@@ -143,6 +145,22 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			versions: deps.planeVersions?.(identity.domainId, identity.signerSignPub) ?? {},
 		});
 		if (!planesOnly) drain(socket, at, consumer.cursor);
+		if (planesOnly) {
+			const rows = deps.readOwnerKeyRows(
+				identity.domainId,
+				identity.signerSignPub,
+				(deps.now?.() ?? Date.now()) - 24 * 60 * 60 * 1000,
+			);
+			for (let from = 0; from < rows.length; from += CONSOLE_ROWS_PER_FRAME) {
+				const batch = rows.slice(from, from + CONSOLE_ROWS_PER_FRAME);
+				send(socket, {
+					type: "inbox_rows",
+					incarnation: at.incarnation,
+					rows: batch,
+					cursor: batch[batch.length - 1].seq,
+				});
+			}
+		}
 	}
 
 	async function message(socket: ConsoleSocket, data: string): Promise<void> {
@@ -187,7 +205,8 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	/** Push is best effort. Hello drains the cursor. */
 	function pushOwnerRow(domainId: string, signerSignPub: string | null, row: InboxRow): void {
 		for (const [socket, at] of bound) {
-			if (at.domainId !== domainId || at.planesOnly) continue;
+			if (at.domainId !== domainId) continue;
+			if (at.planesOnly && row.envelope.kind !== "key_request" && row.envelope.kind !== "key_grant") continue;
 			if (signerSignPub !== null && at.signerSignPub !== signerSignPub) continue;
 			send(socket, { type: "inbox_rows", incarnation: at.incarnation, rows: [row], cursor: row.seq });
 		}

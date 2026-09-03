@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { Allowlist } from "../gateway/federation/allowlist.js";
+import { Allowlist, AllowlistCorruptError } from "../gateway/federation/allowlist.js";
 import { activateStaged, recoverStaging, stageBootstrap } from "../gateway/federation/bootstrapInstall.js";
 import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { signAdmission, signRevocation } from "../shared/admission.js";
@@ -526,5 +526,29 @@ describe("staged bootstrap install", () => {
 		recoverStaging(dir);
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
+	});
+
+	it("rolls back a corrupt staged allowlist", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
+		const { bundle: base, gateway } = bundle();
+		stageBootstrap(dir, base, gateway, new ContentKeyStore(dir, gateway.box.priv));
+		const stagedFile = path.join(dir, "staging", "federation-allowlist.json");
+		fs.writeFileSync(stagedFile, "corrupt");
+
+		recoverStaging(dir);
+
+		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
+		expect(fs.existsSync(path.join(dir, "federation-allowlist.json"))).toBe(false);
+	});
+
+	it("propagates a corrupt live allowlist during recovery", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
+		const initial = bundle();
+		stageBootstrap(dir, initial.bundle, initial.gateway, new ContentKeyStore(dir, initial.gateway.box.priv));
+		const liveFile = path.join(dir, "federation-allowlist.json");
+		fs.writeFileSync(liveFile, "corrupt live");
+
+		expect(() => recoverStaging(dir)).toThrow(AllowlistCorruptError);
+		expect(fs.existsSync(path.join(dir, "federation-allowlist.json"))).toBe(false);
 	});
 });

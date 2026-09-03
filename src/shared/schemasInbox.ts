@@ -129,7 +129,9 @@ function refineInboxRowInput(row: z.infer<z.ZodObject<typeof inboxRowInputShape>
 		(row.envelope.origin.kind !== "router" ||
 			(row.envelope.kind !== "board_observation" &&
 				row.envelope.kind !== "scheduled_result" &&
-				row.envelope.kind !== "op_result") ||
+				row.envelope.kind !== "op_result" &&
+				row.envelope.kind !== "key_request" &&
+				row.envelope.kind !== "key_grant") ||
 			row.body === null ||
 			typeof row.body !== "object" ||
 			Array.isArray(row.body))

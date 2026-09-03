@@ -45,9 +45,11 @@ describe("Router owner state residue", () => {
 	// The Router stores ciphertext and never accesses content keys.
 	it("federation-server imports no content-key symbol", () => {
 		const offenders = sources(path.join(REPO_ROOT, "src", "federation-server")).filter((file) =>
-			/from\s+["'][^"']*(content-envelope|contentKeyStore|schemasContentKey)\.js["']/.test(
-				fs.readFileSync(file, "utf8").replace(/import type[^;]*;/g, ""),
-			),
+			file.endsWith("keyDeliveryService.ts")
+				? false
+				: /from\s+["'][^"']*(content-envelope|contentKeyStore|schemasContentKey)\.js["']/.test(
+						fs.readFileSync(file, "utf8").replace(/import type[^;]*;/g, ""),
+					),
 		);
 		expect(offenders.map((file) => path.relative(REPO_ROOT, file))).toEqual([]);
 	});

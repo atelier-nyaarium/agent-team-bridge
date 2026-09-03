@@ -1,7 +1,7 @@
 import type { SealedEnvelope } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
 import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
-import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
+import { type ContentEnvelope, KeyGrantSchema } from "../../shared/schemasContentKey.js";
 import { type InboxAddress, type InboxRow, InboxRowSchema, parseInboxAddress } from "../../shared/schemasInbox.js";
 import type { ChannelDeliveryCoordinator } from "../channelDelivery.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
@@ -19,6 +19,19 @@ export interface InboxDeliveryPumpDeps {
 	domainId: string;
 	ownerSignPub: () => string | null;
 	contentKeyStore: ContentKeyStore;
+	keyRequester?: {
+		request: (epoch: number) => void;
+		installed: (epoch: number) => void;
+		sendReceipt: (epoch: number) => Promise<void>;
+		resendReceipts: (epochs: number[]) => Promise<void>;
+	};
+	gatewayId?: string;
+	gatewaySignPub?: string;
+	allowlistSnapshot?: () => {
+		ownerSignPub: string;
+		admissions: import("../../shared/admission.js").SignedAdmission[];
+		revocations: import("../../shared/admission.js").SignedRevocation[];
+	} | null;
 	sealer?: Pick<Sealer, "openWithSource">;
 	coordinator?: Pick<ChannelDeliveryCoordinator, "accept" | "acknowledge">;
 	tryWakeTeam?: (team: string) => Promise<{ ok: boolean; error?: string; errorKind?: string }>;
@@ -48,6 +61,7 @@ interface DeliveryPayload {
 const deliveryIdOf = (address: string, seq: number, deliveryEpoch: number) => `${address}:${seq}:${deliveryEpoch}`;
 
 export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
+	const waiting = new Map<string, { epoch: number; address: string; row: InboxRow; deliveryEpoch: number }>();
 	/** Claims survive lost Router acknowledgements; non-custodial outcomes are retried. */
 	async function ack(
 		address: string,
@@ -91,8 +105,12 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			epoch: row.envelope.epoch,
 			kind: "op.payload",
 		});
-		if (opened.kind === "missing_epoch")
+		if (opened.kind === "missing_epoch") {
+			const deliveryId = deliveryIdOf(address, row.seq, deliveryEpoch);
+			waiting.set(deliveryId, { epoch: opened.epoch, address, row, deliveryEpoch });
+			deps.keyRequester?.request(opened.epoch);
 			return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		}
 		if (opened.kind === "bad_tag") return ack(address, row.seq, deliveryEpoch, "failed", "bad_tag");
 		let body: unknown;
 		try {
@@ -127,6 +145,32 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 
 	async function land(address: string, parsed: InboxAddress, row: InboxRow, deliveryEpoch: number, body: unknown) {
 		if (parsed.kind === "gateway") {
+			if (row.envelope.kind === "key_grant") {
+				if (parsed.domainId !== deps.domainId || parsed.gatewayId !== deps.gatewayId || !deps.gatewaySignPub)
+					return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+				const grant = KeyGrantSchema.safeParse(body);
+				if (!grant.success || grant.data.recipientSignPub !== deps.gatewaySignPub)
+					return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
+				const snapshot = deps.allowlistSnapshot?.();
+				if (!snapshot || !deps.keyRequester)
+					return ack(address, row.seq, deliveryEpoch, "failed", "key_refused");
+				const result = deps.contentKeyStore.install(grant.data.envelope, snapshot);
+				if (result === "refused") return ack(address, row.seq, deliveryEpoch, "failed", "key_refused");
+				try {
+					await deps.keyRequester.sendReceipt(grant.data.envelope.epoch);
+				} catch (error) {
+					console.warn(
+						`[inbox] receipt send failed for epoch ${grant.data.envelope.epoch}: ${error instanceof Error ? error.message : error}`,
+					);
+				}
+				deps.keyRequester.installed(grant.data.envelope.epoch);
+				const retry = [...waiting.values()].filter((item) => item.epoch === grant.data.envelope.epoch);
+				for (const item of retry) {
+					waiting.delete(deliveryIdOf(item.address, item.row.seq, item.deliveryEpoch));
+					await deliver(item.address, item.row, item.deliveryEpoch);
+				}
+				return ack(address, row.seq, deliveryEpoch, "delivered");
+			}
 			if (!deps.consolePush) return ack(address, row.seq, deliveryEpoch, "waking", "no_consumer", false);
 			deps.consolePush(body);
 			return ack(address, row.seq, deliveryEpoch, "delivered");
@@ -204,5 +248,9 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		return true;
 	}
 
-	return { onFrame, onChannelDeliveryAck };
+	async function resendReceipts(): Promise<void> {
+		await deps.keyRequester?.resendReceipts(deps.contentKeyStore.epochs());
+	}
+
+	return { onFrame, onChannelDeliveryAck, resendReceipts };
 }

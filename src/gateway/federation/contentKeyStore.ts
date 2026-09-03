@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { resolveAdmittedConsole, type SignedAdmission, type SignedRevocation } from "../../shared/admission.js";
-import { writeFileAtomic } from "../../shared/atomic-write.js";
+import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 import { type ContentAad, openContent, sealContent, unwrapContentKey } from "../../shared/content-envelope.js";
+import { b64Field } from "../../shared/crypto.js";
 import {
 	type ContentEnvelope,
 	ContentEnvelopeSchema,
@@ -11,7 +12,7 @@ import {
 	KeyEnvelopeSchema,
 } from "../../shared/schemasContentKey.js";
 
-const renameFileSync = Reflect.get(fs, "renameSync") as typeof fs.renameSync;
+export const CONTENT_KEYS_FILE = "content-keys.json";
 
 const ContentKeyFileSchema = z.object({
 	v: z.literal(1),
@@ -20,7 +21,7 @@ const ContentKeyFileSchema = z.object({
 			.string()
 			.regex(/^[1-9][0-9]*$/)
 			.refine((value) => Number(value) <= 2147483647),
-		z.string().refine((value) => Buffer.from(value, "base64").length === 32),
+		b64Field().refine((value) => Buffer.from(value, "base64").length === 32, "key must decode to exactly 32 bytes"),
 	),
 });
 
@@ -42,7 +43,7 @@ export class ContentKeyStore {
 	private readonly keys: Map<number, Buffer>;
 
 	constructor(dir: string, recipientBoxPriv: string | (() => string) = "") {
-		this.file = path.join(dir, "content-keys.json");
+		this.file = path.join(dir, CONTENT_KEYS_FILE);
 		this.recipientBoxPriv = recipientBoxPriv;
 		this.keys = this.read();
 	}

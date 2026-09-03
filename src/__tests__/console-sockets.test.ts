@@ -9,7 +9,7 @@ import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistr
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
-import { signOwnerOp } from "../shared/schemasInbox.js";
+import { formatInboxAddress, signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
 
 const domainA = "domain-a";
 const domainB = "domain-b";
@@ -33,6 +33,7 @@ function socket(): FakeSocket {
 function setup() {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "console-sockets-"));
 	roots.push(dataDir);
+	let now = Date.now();
 	let owner = generateIdentity();
 	while (owner.sign.pub.includes("/")) owner = generateIdentity();
 	const consoleIdentity = generateIdentity();
@@ -42,7 +43,7 @@ function setup() {
 		ownerOf: () => owner.sign.pub,
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => 100,
+		now: () => now,
 	});
 	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 	const admission = signAdmission(
@@ -60,7 +61,7 @@ function setup() {
 		inbox,
 		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
 		push: () => true,
-		now: () => 100,
+		now: () => now,
 	});
 	intake.register("hello", (op) => ({
 		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
@@ -69,11 +70,13 @@ function setup() {
 		handleOwnerOp: (raw) => intake.handle(raw),
 		registerConsumer: inbox.registerConsumer.bind(inbox),
 		readOwner: inbox.readOwner.bind(inbox),
+		readOwnerKeyRows: inbox.readOwnerKeyRows.bind(inbox),
 		advanceCursor: inbox.advanceCursor.bind(inbox),
 		ownerFloor: inbox.ownerFloor.bind(inbox),
 		planeVersions: () => ({ board: 4 }),
+		now: () => now,
 	});
-	return { consoleIdentity, inbox, hub, owner, registry };
+	return { consoleIdentity, inbox, hub, owner, router, registry, setNow: (value: number) => (now = value) };
 }
 
 function hello(fixture: ReturnType<typeof setup>, domainId = domainA, nonce = `hello-${Math.random()}`) {
@@ -85,7 +88,7 @@ function hello(fixture: ReturnType<typeof setup>, domainId = domainA, nonce = `h
 			conversationId: "console",
 			device: "phone",
 			opId: nonce,
-			at: 100,
+			at: fixture.registry.now(),
 			nonce: Buffer.from(nonce).toString("base64"),
 			op: { kind: "hello" },
 		},
@@ -99,6 +102,27 @@ function row(fixture: ReturnType<typeof setup>, domainId = domainA, opId = `row-
 		kind: "op_result",
 		opKey: { conversationId: "router", opId },
 		body: { outcome: "accepted" },
+	}).row as NonNullable<ReturnType<typeof fixture.inbox.appendRouterRow>["row"]>;
+}
+
+function keyRow(
+	fixture: ReturnType<typeof setup>,
+	kind: "key_request" | "key_grant",
+	domainId = domainA,
+	opId = `key-${Math.random()}`,
+) {
+	const address = { kind: "owner" as const, domainId, ownerSignPub: fixture.owner.sign.pub };
+	const envelope = {
+		origin: { kind: "router" as const, domainId },
+		opKey: { conversationId: "router", opId },
+		epoch: "clear" as const,
+		kind,
+		contentRefs: [],
+	};
+	return fixture.inbox.appendRow({
+		address,
+		row: { envelope, producerSig: signRowEnvelope(envelope, fixture.router.sign.priv), body: { kind } },
+		producerSignPub: fixture.router.sign.pub,
 	}).row as NonNullable<ReturnType<typeof fixture.inbox.appendRouterRow>["row"]>;
 }
 
@@ -173,6 +197,40 @@ describe("console sockets", () => {
 		fixture.hub.pushPlane(domainA, "presence", 3, { rows: [] });
 		expect(client.frames.at(-1)).toMatchObject({ type: "plane", name: "presence", version: 3 });
 		fixture.registry.close();
+	});
+
+	it("pushes key rows to planes-only consoles but skips message rows", async () => {
+		const fixture = setup();
+		const client = socket();
+		fixture.hub.open(client);
+		await fixture.hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture), mode: "planes" }));
+		const key = keyRow(fixture, "key_grant", domainA, "pushed-key");
+		const message = row(fixture, domainA, "pushed-message");
+
+		fixture.hub.pushOwnerRow(domainA, null, key);
+		fixture.hub.pushOwnerRow(domainA, null, message);
+
+		expect(client.frames.at(-1)).toMatchObject({ type: "inbox_rows", rows: [key] });
+		expect(client.frames.filter((frame) => frame.type === "inbox_rows")).toHaveLength(1);
+		fixture.registry.close();
+	});
+
+	it("replays only recent key rows to planes-only consoles", async () => {
+		const fixture = setup();
+		const now = fixture.registry.now();
+		fixture.setNow(now - 60 * 60 * 1000);
+		const recent = keyRow(fixture, "key_request", domainA, "recent-key");
+		fixture.setNow(now - 2 * 24 * 60 * 60 * 1000);
+		keyRow(fixture, "key_grant", domainA, "old-key");
+		row(fixture, domainA, "old-message");
+		fixture.setNow(now);
+		const client = socket();
+		fixture.hub.open(client);
+
+		await fixture.hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture), mode: "planes" }));
+
+		expect(client.frames.filter((frame) => frame.type === "inbox_rows")).toHaveLength(1);
+		expect(client.frames.at(-1)).toMatchObject({ type: "inbox_rows", rows: [recent] });
 	});
 
 	it("refuses an ack from a console that holds no cursor", async () => {

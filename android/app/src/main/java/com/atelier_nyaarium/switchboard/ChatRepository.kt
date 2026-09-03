@@ -121,10 +121,21 @@ class ChatRepository(
 	/** Signs this console's operations. */
 	val ownerOps = OwnerOps(this)
 
+	internal val keyDelivery = KeyDeliveryOps(
+		domainId = { ownerOps.domainId() },
+		keyring = { federation.keyring() },
+		contentKeyring = { federation.contentKeyring() },
+		consoleIdentity = { federation.consoleIdentity() },
+		signOwnerOp = { ownerOps.sign(it) },
+		sendOwnerOp = { client().postOwnerOp(it) },
+	)
+
 	/** Board sealing context. */
 	fun boardSealing(): BoardSealing? {
 		val domain = ownerOps.domainId() ?: return null
-		return BoardSealing(federation.contentKeyring(), domain, federation.ownerSignPub())
+		return BoardSealing(federation.contentKeyring(), domain, federation.ownerSignPub()) { epoch ->
+			repoScope.launch(Dispatchers.IO) { keyDelivery.requestMissing(epoch) }
+		}
 	}
 
 	init {
@@ -135,7 +146,7 @@ class ChatRepository(
 	internal val socket = ConsoleSocketDriver(
 		coordinator = transportCoordinator,
 		newClient = { listener -> ConsoleSocketClient(client().transport, ownerOps, listener) },
-		onRows = { _, _ -> },
+		onRows = { rows, _ -> repoScope.launch(Dispatchers.IO) { dispatchKeyRows(rows) } },
 		onPlane = { name, _, payload -> applyPlane(name, payload) },
 		kick = { drain.kickPoll() },
 		onUnreachable = { client().transport.unreachable(client().transport.proxyBase) },
@@ -152,6 +163,19 @@ class ChatRepository(
 			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
 		}.getOrNull() ?: return
 		repoScope.launch { presence.applyOwnerProjection(projection) }
+	}
+
+	private suspend fun dispatchKeyRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
+		for (row in rows) {
+			when (row.envelope.kind) {
+				"key_request" -> runCatching {
+					keyDelivery.onKeyRequest(wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.KeyRequest.serializer(), row.body))
+				}.onFailure { DebugLog.log("KeyDelivery", "row parse failed kind=key_request") }
+				"key_grant" -> runCatching {
+					keyDelivery.onKeyGrant(wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.KeyGrant.serializer(), row.body))
+				}.onFailure { DebugLog.log("KeyDelivery", "row parse failed kind=key_grant") }
+			}
+		}
 	}
 
 	/** Read one opened Router blob chunk. */

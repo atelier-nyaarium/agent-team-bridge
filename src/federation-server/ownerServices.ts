@@ -16,6 +16,7 @@ import type { GatewayBridge } from "./gatewayBridge.js";
 import type { InboxService } from "./inbox/inboxService.js";
 import type { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
+import { createKeyDeliveryService } from "./keyDeliveryService.js";
 import { createCursorService } from "./migration/cursorService.js";
 import { createLeaseService, routerMigrationEpoch } from "./migration/leaseService.js";
 import type { OwnerServiceHooks } from "./ownerServiceHooks.js";
@@ -170,6 +171,14 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		if (result.row) deliver(domainId, address, result.row);
 		return result;
 	};
+	const keyDelivery = createKeyDeliveryService({
+		registry,
+		inbox,
+		intake: deps.intake,
+		routerIdentity: deps.routerIdentity,
+		getDomain: deps.getDomain,
+		deliver,
+	});
 	const scheduled = createScheduledService({
 		registry,
 		inbox,
@@ -190,7 +199,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	const readAnchors = createReadAnchorsService({ registry });
 
 	const cursors = createCursorService({ registry, migrationEpoch: () => routerMigrationEpoch() });
-	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors])
+	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery])
 		service.register(hooks);
 
 	const perDomain = (label: string, fn: (domainId: string) => void): void => {

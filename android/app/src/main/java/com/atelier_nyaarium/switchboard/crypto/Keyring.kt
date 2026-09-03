@@ -30,6 +30,10 @@ class Keyring(val snapshot: DomainSnapshot) {
 	fun resolveAdmittedConsole(subjectSignPub: String): Admission? =
 		signedConsoleAdmission(subjectSignPub)?.admission
 
+	fun liveAdmissions(): List<Admission> = snapshot.admissions.mapNotNull { signed ->
+		resolveSubject(signed.admission.signPub)?.takeIf { it.issuedAt == signed.admission.issuedAt }
+	}.distinctBy { it.signPub }
+
 	/** Match gateway order: newest admission, then console kind. */
 	fun signedConsoleAdmission(subjectSignPub: String): SignedAdmission? =
 		resolveSigned { it.signPub == subjectSignPub }?.takeIf { it.admission.kind == "console" }

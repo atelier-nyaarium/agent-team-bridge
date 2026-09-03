@@ -56,6 +56,26 @@ class ConsoleSocketDriverTest {
 	}
 
 	@Test
+	fun planesOnlyKeyRowsAreDispatchedWithoutAck() {
+		val coordinator = newCoordinator()
+		var dispatched = false
+		var acks = 0
+		val h = harness(coordinator, onRows = { received, _ -> dispatched = received.single().envelope.kind == "key_grant" }, onAck = { acks++ })
+		h.driver.connect()
+		val clientListener = h.wireListeners.single()
+		clientListener.onMessage(h.socket, welcomeJson(cursor = 1L, epoch = 8L, floor = 2L))
+		val keyRow = row().copy(envelope = row().envelope.copy(kind = "key_grant"))
+
+		h.listenerListeners.single().onFrame(
+			ConsoleSocketFrame.InboxRows(ConsoleInboxRowsFrame(incarnation = 8L, rows = listOf(keyRow), cursor = 4L)),
+		)
+
+		assertTrue(dispatched)
+		assertEquals(0, acks)
+		assertEquals(1L, coordinator.cursor())
+	}
+
+	@Test
 	fun supersededRowsAreDropped() {
 		val coordinator = newCoordinator()
 		var rowsCalled = false

@@ -243,4 +243,62 @@ describe("inbox delivery pump", () => {
 		expect(handled).toEqual([[{ kind: "list_teams" }, "origin", "friend"]]);
 		expect(peer.calls.at(-1)).toMatchObject({ action: "inbox_ack", params: { outcome: "delivered" } });
 	});
+
+	it("replaces duplicate missing rows before retrying after installation", async () => {
+		const setupResult = setup();
+		let installed = false;
+		const requester = {
+			request: () => {},
+			installed: () => {},
+			sendReceipt: async () => {},
+			resendReceipts: async () => {},
+		};
+		const deliveryPump = setupResult.pump({
+			gatewayId: "gateway",
+			gatewaySignPub: "Z2F0ZXdheS1zaWdu",
+			keyRequester: requester,
+			allowlistSnapshot: () => ({ ownerSignPub: "owner", admissions: [], revocations: [] }),
+			contentKeyStore: {
+				open: () =>
+					installed
+						? { kind: "ok", plaintext: Buffer.from('{"to":"session","from":"source","body":"hi"}') }
+						: { kind: "missing_epoch", epoch: 2 },
+				install: () => {
+					installed = true;
+					return "installed";
+				},
+			} as never,
+		});
+		const missing = row(2);
+		await deliveryPump.onFrame({ address, rows: [missing], deliveryEpoch: 1 });
+		await deliveryPump.onFrame({ address, rows: [missing], deliveryEpoch: 1 });
+		await deliveryPump.onFrame({
+			address: "gateway:domain/gateway",
+			rows: [
+				{
+					seq: 2,
+					acceptedAt: 10,
+					size: 1,
+					envelope: {
+						...envelope("clear"),
+						kind: "key_grant",
+						origin: { kind: "router", domainId: "domain" },
+					},
+					producerSig: "c2ln",
+					body: {
+						v: 1,
+						recipientSignPub: "Z2F0ZXdheS1zaWdu",
+						envelope: {
+							epoch: 2,
+							signerSignPub: "signer",
+							sealed: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
+						},
+						at: 10,
+					},
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		expect(setupResult.coordinator.accepted).toHaveLength(1);
+	});
 });

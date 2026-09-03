@@ -67,9 +67,45 @@ export const KeyReceiptSchema = z
 	})
 	.meta({ id: "KeyReceipt" });
 
+export const KeyRequestOpSchema = z
+	.object({ kind: z.literal("key_request"), request: KeyRequestSchema })
+	.meta({ id: "KeyRequestOp" });
+
+export const KeyGrantOpSchema = z
+	.object({ kind: z.literal("key_grant"), grant: KeyGrantSchema })
+	.meta({ id: "KeyGrantOp" });
+
+export const KeyReceiptOpSchema = z
+	.object({ kind: z.literal("key_receipt"), receipt: KeyReceiptSchema })
+	.meta({ id: "KeyReceiptOp" });
+
+export const KeyReceiptsReadOpSchema = z
+	.object({ kind: z.literal("key_receipts_read") })
+	.meta({ id: "KeyReceiptsReadOp" });
+
+export const KeyReceiptEntrySchema = z
+	.object({
+		recipientSignPub: b64Field(),
+		epoch: z.number().int().min(1).max(2147483647),
+		at: z.number().int().nonnegative(),
+	})
+	.meta({ id: "KeyReceiptEntry" });
+
+export const KeyReceiptsReadResultSchema = z
+	.object({ receipts: z.array(KeyReceiptEntrySchema) })
+	.meta({ id: "KeyReceiptsReadResult" });
+
+export const KeyRequestFrameSchema = z.object({ request: KeyRequestSchema }).meta({ id: "KeyRequestFrame" });
+export const KeyReceiptFrameSchema = z.object({ receipt: KeyReceiptSchema }).meta({ id: "KeyReceiptFrame" });
+
 export type ContentKind = z.infer<typeof ContentKindSchema>;
 export type ContentEnvelope = z.infer<typeof ContentEnvelopeSchema>;
 export type KeyEnvelope = z.infer<typeof KeyEnvelopeSchema>;
 export type KeyRequest = z.infer<typeof KeyRequestSchema>;
 export type KeyGrant = z.infer<typeof KeyGrantSchema>;
 export type KeyReceipt = z.infer<typeof KeyReceiptSchema>;
+export type KeyRequestOp = z.infer<typeof KeyRequestOpSchema>;
+export type KeyGrantOp = z.infer<typeof KeyGrantOpSchema>;
+export type KeyReceiptOp = z.infer<typeof KeyReceiptOpSchema>;
+export type KeyReceiptsReadOp = z.infer<typeof KeyReceiptsReadOpSchema>;
+export type KeyReceiptsReadResult = z.infer<typeof KeyReceiptsReadResultSchema>;

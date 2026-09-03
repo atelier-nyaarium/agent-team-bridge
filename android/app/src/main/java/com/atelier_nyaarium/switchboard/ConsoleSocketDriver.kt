@@ -67,8 +67,12 @@ internal class ConsoleSocketDriver(
 					if (adopted.dropped > 0) onGap(adopted.dropped)
 				}
 				is ConsoleSocketFrame.InboxRows -> {
-					if (!coordinator.mayConsume(gen)) return
 					val v = frame.value
+					if (coordinator.owns(gen) && socketOf()?.mode == "planes" && v.rows.isNotEmpty() && v.rows.all { it.envelope.kind in KEY_ROW_KINDS }) {
+						onRows(v.rows, v.cursor)
+						return
+					}
+					if (!coordinator.mayConsume(gen)) return
 					onRows(v.rows, v.cursor)
 					if (coordinator.acked(gen, v.cursor)) socketOf()?.ack(v.cursor)
 				}
@@ -89,5 +93,9 @@ internal class ConsoleSocketDriver(
 		}
 
 		private fun socketOf(): ConsoleSocketClient? = synchronized(lock) { client?.takeIf { it.first == gen }?.second }
+	}
+
+	private companion object {
+		val KEY_ROW_KINDS = setOf("key_request", "key_grant")
 	}
 }

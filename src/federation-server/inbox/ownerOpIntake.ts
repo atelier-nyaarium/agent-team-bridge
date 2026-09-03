@@ -38,7 +38,7 @@ export class OwnerOpRefused extends Error {
 }
 
 export class OwnerOpIntake {
-	private readonly nonces = new Map<string, number>();
+	private readonly nonces = new Map<string, { at: number; result?: unknown }>();
 	private readonly handlers = new Map<string, OwnerOpHandler>();
 	private readonly now: () => number;
 
@@ -70,11 +70,19 @@ export class OwnerOpIntake {
 		)
 			return refused("not admitted");
 		if (Math.abs(this.now() - op.at) > REGISTER_MAX_SKEW_MS) return refused("stale");
-		for (const [nonce, at] of this.nonces) if (this.now() - at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
-		if (this.nonces.has(op.nonce)) return refused("replay");
-		this.nonces.set(op.nonce, op.at);
+		for (const [nonce, entry] of this.nonces)
+			if (this.now() - entry.at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
+		const replay = this.nonces.get(`${op.signerSignPub}/${op.nonce}`);
+		if (replay) return replay.result ?? refused("replay");
+		const nonceKey = `${op.signerSignPub}/${op.nonce}`;
+		this.nonces.set(nonceKey, { at: op.at });
 		try {
-			return await this.dispatch(op, refused);
+			const result = await this.dispatch(op, refused);
+			this.nonces.set(nonceKey, {
+				at: op.at,
+				...(op.op.kind === "key_request" || op.op.kind === "key_receipt" ? { result } : {}),
+			});
+			return result;
 		} catch (error) {
 			if (error instanceof OwnerQuarantined)
 				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };

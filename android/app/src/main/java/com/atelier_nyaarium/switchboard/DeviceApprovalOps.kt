@@ -11,6 +11,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
+internal fun verifyDeviceJoin(approvalId: String, nonce: String, join: ConsoleApprovalJoin): Boolean {
+	val signature = join.joinSig ?: return false
+	return runCatching {
+		Crypto.verify(
+			Crypto.deviceJoinSigningBytes(approvalId, nonce, join.newSignPub, join.newBoxPub),
+			signature,
+			join.newSignPub,
+		)
+	}.getOrDefault(false)
+}
+
 /** The "Add a device" surface: a held device arms a one-time approval window and a fresh device
  * joins it, all keyed off the console-approval broker (no admin round trip). */
 internal class DeviceApprovalOps(private val repo: ChatRepository) {
@@ -63,13 +74,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			if (!result.ok) error(result.error ?: "approval window closed")
 			val join = result.join ?: return@runCatchingCancellable null
 			val nonce = approvalNonces[approvalId] ?: error("approval nonce unavailable")
-			require(
-				join.joinSig != null && Crypto.verify(
-					Crypto.deviceJoinSigningBytes(approvalId, nonce, join.newSignPub, join.newBoxPub),
-					join.joinSig!!,
-					join.newSignPub,
-				),
-			) {
+			require(verifyDeviceJoin(approvalId, nonce, join)) {
 				"device join signature is invalid"
 			}
 			join
@@ -81,13 +86,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	 * and parks it for the device to fetch. The biometric gate is applied at the UI call site. */
 	suspend fun approveDevice(approvalId: String, nonce: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			require(
-				join.joinSig != null && Crypto.verify(
-					Crypto.deviceJoinSigningBytes(approvalId, nonce, join.newSignPub, join.newBoxPub),
-					join.joinSig!!,
-					join.newSignPub,
-				),
-			) {
+			require(verifyDeviceJoin(approvalId, nonce, join)) {
 				"device join signature is invalid"
 			}
 			val transport = buildConsoleTransport(join.newBoxPub)

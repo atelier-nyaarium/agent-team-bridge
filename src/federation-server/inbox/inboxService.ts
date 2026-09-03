@@ -261,6 +261,13 @@ export class InboxService {
 		return this.rows(owner, fromSeq, limit);
 	}
 
+	readOwnerKeyRows(domainId: string, _signerSignPub: string, sinceMs: number): InboxRow[] {
+		return this.rows(this.ownerAddress(domainId), 1, Number.MAX_SAFE_INTEGER).filter(
+			(row) =>
+				(row.envelope.kind === "key_request" || row.envelope.kind === "key_grant") && row.acceptedAt >= sinceMs,
+		);
+	}
+
 	advanceCursor(
 		domainId: string,
 		signerSignPub: string,

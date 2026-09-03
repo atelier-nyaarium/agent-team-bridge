@@ -873,6 +873,45 @@ data class KeyReceipt(
 )
 
 @Serializable
+data class KeyRequestOp(
+	@EncodeDefault
+	val kind: String = "key_request",
+	val request: KeyRequest,
+)
+
+@Serializable
+data class KeyGrantOp(
+	@EncodeDefault
+	val kind: String = "key_grant",
+	val grant: KeyGrant,
+)
+
+@Serializable
+data class KeyReceiptOp(
+	@EncodeDefault
+	val kind: String = "key_receipt",
+	val receipt: KeyReceipt,
+)
+
+@Serializable
+data class KeyReceiptsReadOp(
+	@EncodeDefault
+	val kind: String = "key_receipts_read",
+)
+
+@Serializable
+data class KeyReceiptEntry(
+	val recipientSignPub: String,
+	val epoch: Long,
+	val at: Long,
+)
+
+@Serializable
+data class KeyReceiptsReadResult(
+	val receipts: List<KeyReceiptEntry>,
+)
+
+@Serializable
 data class SignedXDomainUntrust(
 	val untrust: XDomainUntrust,
 	val ownerSignPub: String,

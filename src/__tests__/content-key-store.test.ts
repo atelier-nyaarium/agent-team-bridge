@@ -238,6 +238,24 @@ describe("ContentKeyStore", () => {
 			}),
 		],
 		["short key", JSON.stringify({ v: 1, keys: { "1": Buffer.alloc(31).toString("base64") } })],
+		[
+			"whitespace in key",
+			JSON.stringify({
+				v: 1,
+				keys: {
+					"1": `${Buffer.alloc(32).toString("base64").slice(0, 20)} ${Buffer.alloc(32).toString("base64").slice(20)}`,
+				},
+			}),
+		],
+		[
+			"illegal character in key",
+			JSON.stringify({
+				v: 1,
+				keys: {
+					"1": `${Buffer.alloc(32).toString("base64").slice(0, 20)}!${Buffer.alloc(32).toString("base64").slice(21)}`,
+				},
+			}),
+		],
 	])("quarantines %s key files", (_reason, contents) => {
 		const dir = tempDir();
 		const file = path.join(dir, "content-keys.json");

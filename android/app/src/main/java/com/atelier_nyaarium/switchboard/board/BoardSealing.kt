@@ -13,10 +13,11 @@ class BoardSealing(
 	private val keyring: ContentKeyring,
 	private val domainId: String,
 	private val ownerSignPub: String,
+	private val onMissingEpoch: (Int) -> Unit = {},
 ) {
 	fun seal(text: String, kind: String, entryId: String): ContentEnvelope? {
 		val epoch = keyring.epochs().maxOrNull() ?: return null
-		val key = keyring.keyFor(epoch) ?: return null
+		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		return Crypto.sealContent(text.toByteArray(Charsets.UTF_8), key, aad(epoch, kind, entryId))
 	}
 
