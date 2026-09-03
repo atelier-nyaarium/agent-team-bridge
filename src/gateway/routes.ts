@@ -354,11 +354,16 @@ export function createRoutes({
 			return { ok: false, error: (err as Error).message };
 		}
 		// The cache is sealed to THIS Domain's key, so it serves this Domain's own devices and nobody.
-		if (blobUploader && (op.kind === "send" || op.kind === "response_push"))
-			await blobUploader.uploadAll(
-				[...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])],
-				"cache",
-			);
+		if (blobUploader && (op.kind === "send" || op.kind === "response_push")) {
+			const blobIds = [...new Set(op.files?.flatMap((file) => (file.blobId ? [file.blobId] : [])) ?? [])];
+			try {
+				await blobUploader.uploadAll(blobIds, "cache");
+			} catch (error) {
+				console.warn(
+					`[blob-cache] failed to warm ${blobIds.join(",")}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
 		if (typeof target !== "string" && (op.kind === "send" || op.kind === "response_push") && producerSignPriv) {
 			// Not advertised to the peer: it holds none of this Domain's content keys, so naming them.
 			const contentRefs: string[] = [];

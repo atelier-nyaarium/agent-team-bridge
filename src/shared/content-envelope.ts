@@ -41,6 +41,10 @@ export function inboxBodyAadKind(conversationId: string, seq: number): `inbox.bo
 	return `inbox.body\n${conversationId}\n${seq}`;
 }
 
+export function scheduledBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
+	return `inbox.body\n${conversationId}\n${opId}`;
+}
+
 export interface ContentAad {
 	domainId: string;
 	ownerSignPub: string;

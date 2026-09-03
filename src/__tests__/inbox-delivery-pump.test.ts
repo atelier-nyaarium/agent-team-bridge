@@ -114,6 +114,59 @@ describe("inbox delivery pump", () => {
 		});
 	});
 
+	it("opens Router scheduled messages with the operation AAD", async () => {
+		const kinds: string[] = [];
+		const payloadCiphertext = "AgICAgICAgICAgICAgICAg==";
+		const scheduledCiphertext = "AQEBAQEBAQEBAQEBAQEBAQ==";
+		const contentBody = (ciphertext: string) => ({ v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext });
+		const open = (body: unknown, aad: { kind: string }) => {
+			kinds.push(aad.kind);
+			if (aad.kind.startsWith("inbox.body") && (body as { ciphertext: string }).ciphertext === payloadCiphertext)
+				return { kind: "bad_tag" };
+			return { kind: "ok", plaintext: Buffer.from('{"to":"session","from":"source","body":"hi"}') };
+		};
+		const routerMessage = setup().pump({ contentKeyStore: { open } } as never);
+		await routerMessage.onFrame({
+			address,
+			rows: [
+				{
+					...row(1, contentBody(scheduledCiphertext)),
+					envelope: { ...envelope(1), origin: { kind: "router", domainId: "domain" } },
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		const failedSetup = setup();
+		const failed = failedSetup.pump({ contentKeyStore: { open } } as never);
+		await failed.onFrame({
+			address,
+			rows: [
+				{
+					...row(1, contentBody(payloadCiphertext)),
+					envelope: { ...envelope(1), origin: { kind: "router", domainId: "domain" } },
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		expect(failedSetup.calls.at(-1)).toMatchObject({ params: { outcome: "failed", reason: "bad_tag" } });
+		const consoleMessage = setup().pump({ contentKeyStore: { open } } as never);
+		await consoleMessage.onFrame({
+			address,
+			rows: [
+				{
+					...row(1, contentBody(payloadCiphertext)),
+					envelope: { ...envelope(1), origin: { kind: "console", domainId: "domain" } },
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		expect(kinds).toEqual([
+			"inbox.body\nconversation\noperation",
+			"inbox.body\nconversation\noperation",
+			"op.payload",
+		]);
+	});
+
 	it("keeps a failed Router ack claim and re-acks without offering again", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"));
 		const first = setup(root);

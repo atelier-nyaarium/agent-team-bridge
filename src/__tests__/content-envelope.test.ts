@@ -6,6 +6,7 @@ import {
 	type ContentAad,
 	deriveContentKey,
 	openContent,
+	scheduledBodyAadKind,
 	sealContentWithNonce,
 	unwrapContentKey,
 	wrapContentKey,
@@ -94,6 +95,13 @@ describe("content envelope", () => {
 		const ciphertext = Buffer.from(vector.ciphertextB64, "base64");
 		ciphertext[0] ^= 1;
 		expect(() => openContent({ ...env, ciphertext: ciphertext.toString("base64") }, key, vector)).toThrow();
+	});
+
+	it("pins the scheduled inbox body AAD", () => {
+		const vector = fixture.envelopes.find((entry) => entry.plaintextUtf8 === "fixture scheduled inbox.body");
+		const aad = scheduledBodyAadKind("conversation", "scheduled-op");
+		expect(vector?.kind).toBe(aad);
+		expect([...Buffer.from(aad, "utf8")].filter((byte) => byte === 0x0a)).toEqual([0x0a, 0x0a]);
 	});
 
 	it("wraps and unwraps a content key", () => {

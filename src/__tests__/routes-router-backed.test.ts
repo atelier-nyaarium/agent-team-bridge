@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { createRoutes } from "../gateway/routes.js";
+import { describe, expect, it, vi } from "vitest";
+import { createRoutes, createRoutesCarryOver } from "../gateway/routes.js";
+import { generateIdentity } from "../shared/crypto.js";
 import { makeCtx } from "./helpers/federation.js";
 
 const projection = {
@@ -115,5 +116,62 @@ describe("Router-backed gateway routes", () => {
 		const routes = createRoutes({ ...local, routerClient: router(unknown) });
 
 		expect(await (await routes.capabilities()).json()).toMatchObject({ console: localSnapshot });
+	});
+
+	it("settles capabilities at the Router deadline", async () => {
+		vi.useFakeTimers();
+		const local = makeCtx("hosta");
+		const routes = createRoutes({
+			...local,
+			routerClient: {
+				isRegistered: () => true,
+				callInboxTool: (_action: string, _params: Record<string, unknown>) => new Promise(() => {}),
+			} as never,
+		});
+		const answer = routes.capabilities();
+		await vi.advanceTimersByTimeAsync(1_000);
+		await expect(answer).resolves.toBeInstanceOf(Response);
+		vi.useRealTimers();
+	});
+
+	it("continues a send when cache warming fails", async () => {
+		const identity = generateIdentity();
+		const blobId = `sha256-${"a".repeat(64)}`;
+		const calls: string[] = [];
+		const routes = createRoutes({
+			...makeCtx("hosta"),
+			carryOver: createRoutesCarryOver(),
+			routerClient: {
+				isConnected: () => true,
+				callInboxTool: async (action: string) => {
+					calls.push(action);
+					return { result: { outcome: "accepted" } };
+				},
+			} as never,
+			producerSignPriv: identity.sign.priv,
+			blobUploader: {
+				uploadAll: async () => {
+					throw new Error("evicted");
+				},
+			} as never,
+			sealer: {
+				seal: () => ({ ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" }),
+			} as never,
+			crossDomainPeers: {
+				resolveByGateway: () => ({ friendDomainId: "beta" }),
+				all: () => [{ friendDomainId: "beta", friendGatewayId: "hostb" }],
+			} as never,
+		});
+		const response = await routes.send(new Request("http://gateway/send"), {
+			from: "source.dev",
+			fromConversationId: "conversation",
+			to: "beta.hostb.target.dev",
+			body: "hello",
+			files: [{ filename: "x", mime: "text/plain", size: 1, descriptiveKey: "x", blobId, role: "attachment" }],
+			channelOnly: true,
+		});
+
+		expect(response.status).toBe(200);
+		expect(calls).toEqual(["inbox_append"]);
 	});
 });

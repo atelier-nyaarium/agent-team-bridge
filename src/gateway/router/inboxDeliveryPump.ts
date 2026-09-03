@@ -1,3 +1,4 @@
+import { scheduledBodyAadKind } from "../../shared/content-envelope.js";
 import type { SealedEnvelope } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
 import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
@@ -99,11 +100,15 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		}
 		const ownerSignPub = deps.ownerSignPub();
 		if (!ownerSignPub) return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		const kind =
+			row.envelope.origin.kind === "router" && row.envelope.kind === "message"
+				? scheduledBodyAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId)
+				: "op.payload";
 		const opened = deps.contentKeyStore.open(row.body as ContentEnvelope, {
 			domainId: deps.domainId,
 			ownerSignPub,
 			epoch: row.envelope.epoch,
-			kind: "op.payload",
+			kind,
 		});
 		if (opened.kind === "missing_epoch") {
 			const deliveryId = deliveryIdOf(address, row.seq, deliveryEpoch);

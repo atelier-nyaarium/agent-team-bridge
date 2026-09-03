@@ -41,6 +41,80 @@ describe("session registry reporter", () => {
 		expect(sent.at(-1)).toMatchObject({ action: "session_forget", params: { sessionId: "host.one" } });
 	});
 
+	it("reports a forgotten session after reconnecting", async () => {
+		const store = new SessionStore({ idGen: () => "one" });
+		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
+		let incarnation: number | null = 3;
+		const reporter = createSessionRegistryReporter({
+			sessionStore: store,
+			send: async (action, params) => sent.push({ action, params }),
+			incarnation: () => incarnation,
+			localGatewayId: "gateway",
+		});
+		reporter.attach();
+		const record = store.mint({ spawn: "host" });
+		await flush();
+		incarnation = null;
+		store.forget(store.teamOf(record));
+		incarnation = 4;
+		reporter.reconcile();
+		await flush();
+
+		expect(sent.filter((entry) => entry.action === "session_forget")).toHaveLength(1);
+	});
+
+	it("retries a rejected tombstone", async () => {
+		const store = new SessionStore({ idGen: () => "one" });
+		const sent: string[] = [];
+		let incarnation: number | null = 3;
+		const reporter = createSessionRegistryReporter({
+			sessionStore: store,
+			send: async (action) => {
+				sent.push(action);
+				return { result: { ok: false, error: "x" } };
+			},
+			incarnation: () => incarnation,
+			localGatewayId: "gateway",
+		});
+		reporter.attach();
+		incarnation = null;
+		const record = store.mint({ spawn: "host" });
+		store.forget(store.teamOf(record));
+		incarnation = 4;
+		reporter.reconcile();
+		await flush();
+		reporter.reconcile();
+		await flush();
+
+		expect(sent.filter((action) => action === "session_forget")).toHaveLength(2);
+	});
+
+	it("cancels a pending tombstone when the session is recreated", async () => {
+		const store = new SessionStore({ idGen: () => "one" });
+		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
+		let incarnation: number | null = 3;
+		const reporter = createSessionRegistryReporter({
+			sessionStore: store,
+			send: async (action, params) => {
+				sent.push({ action, params });
+				return { result: { ok: true } };
+			},
+			incarnation: () => incarnation,
+			localGatewayId: "gateway",
+		});
+		reporter.attach();
+		incarnation = null;
+		const record = store.mint({ spawn: "host" });
+		store.forget(store.teamOf(record));
+		store.mint({ spawn: "host" });
+		incarnation = 4;
+		reporter.reconcile();
+		await flush();
+
+		expect(sent.filter((entry) => entry.action === "session_upsert")).toHaveLength(1);
+		expect(sent.filter((entry) => entry.action === "session_forget")).toHaveLength(0);
+	});
+
 	it("reconcile reports records that vanished", async () => {
 		const store = new SessionStore({ idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];

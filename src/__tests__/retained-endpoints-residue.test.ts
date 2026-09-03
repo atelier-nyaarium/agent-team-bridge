@@ -79,6 +79,30 @@ describe("retained gateway endpoint residue", () => {
 		expect(ConsoleListTeamsResultSchema.safeParse(covered).success).toBe(true);
 	});
 
+	it("does not retain spawn points in discovery responses", async () => {
+		const routes = createRoutes({
+			...makeCtx(),
+			routerClient: {
+				isRegistered: () => true,
+				callInboxTool: async () => ({
+					result: {
+						plane: { epoch: 1, version: 1 },
+						rows: [],
+						linked: [],
+						roster: [],
+						coverage: { rosterKnown: true, asked: 1, answered: 1 },
+						spawnPoints: [{ domainId: "alice", gatewayId: "remote", hostSpawns: ["linux"] }],
+					},
+				}),
+			} as never,
+		});
+		const bare = await json(await routes.discover(new URL("http://localhost/discover")));
+		const covered = await json(await routes.discover(new URL("http://localhost/discover?coverage=1")));
+
+		expect(JSON.stringify(bare)).not.toContain("spawnPoints");
+		expect(JSON.stringify(covered)).not.toContain("spawnPoints");
+	});
+
 	it("keeps board list entries schema-safe and attachment bearer fields separate", async () => {
 		const entries: BoardEntry[] = [];
 		const ctx = makeCtx({ boardClient: boardClient(entries) });

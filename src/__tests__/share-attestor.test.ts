@@ -61,4 +61,21 @@ describe("share attestor", () => {
 		attestor.stop();
 		vi.useRealTimers();
 	});
+
+	it("resends live jobs on each registered interval", () => {
+		vi.useFakeTimers();
+		const send = vi.fn(async () => ({}));
+		const attestor = createShareAttestor({
+			shares: () => ["domain.gateway.team.session"],
+			liveJobIds: () => ["job-1"],
+			send,
+			incarnation: () => 1,
+			intervalMs: 100,
+		});
+		attestor.start();
+		vi.advanceTimersByTime(200);
+		expect(send).toHaveBeenCalledTimes(2);
+		attestor.stop();
+		vi.useRealTimers();
+	});
 });

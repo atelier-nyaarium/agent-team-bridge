@@ -9,10 +9,12 @@ export interface SessionRegistryReporterDeps {
 
 export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps) {
 	const known = new Set<string>();
+	const pendingTombstones = new Set<string>();
 	const sessionIdOf = (record: SessionRecord) => `${record.spawn}.${record.id}`;
 
 	function report(record: SessionRecord): void {
 		const sessionId = sessionIdOf(record);
+		pendingTombstones.delete(sessionId);
 		known.add(sessionId);
 		const incarnation = deps.incarnation();
 		if (incarnation === null) return;
@@ -29,8 +31,22 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		const sessionId = sessionIdOf(record);
 		known.delete(sessionId);
 		const incarnation = deps.incarnation();
-		if (incarnation === null) return;
-		void deps.send("session_forget", { sessionId, incarnation });
+		if (incarnation === null) {
+			pendingTombstones.add(sessionId);
+			return;
+		}
+		void sendForget(sessionId, incarnation);
+	}
+
+	async function sendForget(sessionId: string, incarnation: number): Promise<void> {
+		try {
+			const result = (await deps.send("session_forget", { sessionId, incarnation })) as
+				| { error?: unknown; result?: { ok?: boolean } }
+				| undefined;
+			if (!result?.error && result?.result?.ok === true) pendingTombstones.delete(sessionId);
+		} catch {
+			return;
+		}
 	}
 
 	function attach(): void {
@@ -75,9 +91,10 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		}
 		const incarnation = deps.incarnation();
 		if (incarnation !== null) {
+			for (const sessionId of pendingTombstones) void sendForget(sessionId, incarnation);
 			for (const sessionId of known) {
 				if (current.has(sessionId)) continue;
-				void deps.send("session_forget", { sessionId, incarnation });
+				void sendForget(sessionId, incarnation);
 			}
 		}
 		known.clear();

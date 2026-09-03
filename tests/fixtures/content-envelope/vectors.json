@@ -111,6 +111,16 @@
 			"nonceB64": "BgYGBgYGBgYGBgYG",
 			"plaintextUtf8": "fixture op.result",
 			"ciphertextB64": "/rQoZvVMVDSZIyDlerK2N2jw7WQIkJAiChqU18hl/OD2"
+		},
+		{
+			"keyB64": "/Eswroxpqbrdkyxts6uLhAMbp10uAZ3TT4/TkAn5pqo=",
+			"domainId": "alice",
+			"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",
+			"epoch": 2,
+			"kind": "inbox.body\nconversation\nscheduled-op",
+			"nonceB64": "BwcHBwcHBwcHBwcH",
+			"plaintextUtf8": "fixture scheduled inbox.body",
+			"ciphertextB64": "JNQNeiRaKYGeOC42brszccZJyd8eg5RQ2SZHCKgHEIzxkK6PSWE8WQtHfuU="
 		}
 	],
 	"keyEnvelope": {
