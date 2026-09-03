@@ -1,7 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
+import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
+import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
-import { signAdmission } from "../shared/admission.js";
+import { REGISTER_MAX_SKEW_MS, signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
 
@@ -187,5 +193,79 @@ describe("OwnerOpIntake", () => {
 				}),
 			),
 		).toMatchObject({ outcome: "durability_uncertain" });
+	});
+
+	it("refuses a nonce accepted by a previous intake over the same store", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-nonce-"));
+		const owner = generateIdentity();
+		const consoleIdentity = generateIdentity();
+		const admission = signAdmission(
+			{
+				kind: "console",
+				signPub: consoleIdentity.sign.pub,
+				boxPub: consoleIdentity.box.pub,
+				issuedAt: 1,
+				nonce: "admit",
+			},
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		const registry = new OwnerStoreRegistry({
+			dataDir: root,
+			ownerOf: () => owner.sign.pub,
+			quotaFor: () =>
+				new DomainQuota({ dir: root, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
+			now: () => 1_000_000,
+		});
+		const router = generateIdentity();
+		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
+		const params = {
+			inbox,
+			getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
+			push: () => true,
+			now: () => 1_000_000,
+		};
+		const first = new OwnerOpIntake(params);
+		const second = new OwnerOpIntake(params);
+		const fixture = { owner, consoleIdentity, gateway: generateIdentity() } as ReturnType<typeof setup>;
+		expect(
+			await first.handle(op(fixture, "consumer_register", "durable", { signer: consoleIdentity.sign.pub })),
+		).toMatchObject({
+			cursor: 0,
+		});
+		expect(
+			await second.handle(op(fixture, "consumer_register", "durable", { signer: consoleIdentity.sign.pub })),
+		).toMatchObject({
+			outcome: "refused",
+			reason: "replay",
+		});
+		registry.close();
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+
+	it("sweeps only nonces older than the skew window", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-sweep-"));
+		let now = 1_000_000;
+		const owner = generateIdentity();
+		const registry = new OwnerStoreRegistry({
+			dataDir: root,
+			ownerOf: () => owner.sign.pub,
+			quotaFor: () =>
+				new DomainQuota({ dir: root, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
+			now: () => now,
+		});
+		const router = generateIdentity();
+		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
+		inbox.acceptOwnerOpNonce("domain", "exact", "n", now - REGISTER_MAX_SKEW_MS);
+		inbox.acceptOwnerOpNonce("domain", "past", "n", now - REGISTER_MAX_SKEW_MS - 1);
+		inbox.acceptOwnerOpNonce("domain", "inside", "n", now - REGISTER_MAX_SKEW_MS + 1);
+		inbox.sweep(now);
+		expect(inbox.ownerOpNonce("domain", "exact", "n")).not.toBeNull();
+		expect(inbox.ownerOpNonce("domain", "past", "n")).toBeNull();
+		expect(inbox.ownerOpNonce("domain", "inside", "n")).not.toBeNull();
+		inbox.sweep(now);
+		expect(inbox.ownerOpNonce("domain", "inside", "n")).not.toBeNull();
+		registry.close();
+		fs.rmSync(root, { recursive: true, force: true });
 	});
 });

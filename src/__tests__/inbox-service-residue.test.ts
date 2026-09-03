@@ -4,15 +4,16 @@ import { describe, expect, it } from "vitest";
 import type { InboxAddress } from "../shared/schemasInbox.js";
 
 describe("inbox service residue", () => {
-	it("keeps store append and batch calls in the ledger transaction helper", () => {
-		const dir = path.join(process.cwd(), "src/federation-server/inbox");
-		const source = fs
-			.readdirSync(dir)
-			.filter((name) => name.endsWith(".ts"))
-			.map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
-			.join("\n");
-		const calls = [...source.matchAll(/store\.(append|batch)\s*\(/g)];
-		expect(calls).toHaveLength(1);
+	it("keeps direct store appends in the ledger transaction helper", () => {
+		const dir = path.join(process.cwd(), "src/federation-server");
+		const files = fs
+			.readdirSync(dir, { recursive: true })
+			.filter((name): name is string => typeof name === "string" && name.endsWith(".ts"));
+		const calls = files.flatMap((name) => {
+			const source = fs.readFileSync(path.join(dir, name), "utf8");
+			return [...source.matchAll(/store\.append\s*\(/g)].map(() => name);
+		});
+		expect(calls).toEqual(["migration/applyImport.ts"]);
 	});
 
 	it("exposes Domain-bearing addresses for public address methods", () => {

@@ -19,7 +19,7 @@ export class BlobFetchRoute {
 		private readonly resolveOrigin: (
 			domainId: string,
 			gatewayId: string,
-		) => { connId: string; send: (frame: Record<string, unknown>) => void } | null,
+		) => { connId: string; incarnation?: number; send: (frame: Record<string, unknown>) => void } | null,
 		private readonly timeoutMs = GATEWAY_RELAY_TIMEOUT_MS,
 	) {}
 
@@ -70,7 +70,7 @@ export class BlobFetchRoute {
 					opId: params.opId,
 					blobId: params.blobId,
 					range: params.range,
-					incarnation: params.incarnation,
+					incarnation: target.incarnation ?? params.incarnation,
 				});
 			} catch {
 				clearTimeout(timer);

@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler } from "../federation-server/gatewayBridge.js";
 import { type OwnerOpHandler, OwnerOpRefused } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../federation-server/ownerServiceHooks.js";
 import { createCapabilitiesService } from "../federation-server/tier1/capabilitiesService.js";
 import { createReadAnchorsService } from "../federation-server/tier1/readAnchorsService.js";
@@ -49,6 +50,22 @@ afterEach(() => {
 });
 
 describe("Router tier 1 services", () => {
+	it("returns uncertainty from the capabilities read frame", async () => {
+		const { registry } = make();
+		const service = createCapabilitiesService({ registry });
+		const { hooks, gatewayFrames } = makeHooks();
+		service.register(hooks);
+		const store = registry.for("a");
+		vi.spyOn(store, "list").mockImplementation(() => {
+			throw new OwnerQuarantined({ from: 1, to: 1 });
+		});
+		expect(
+			await gatewayFrames.get("capabilities_read")?.({ domainId: "a" } as Parameters<GatewayFrameHandler>[0], {
+				kind: "capabilities_read",
+			}),
+		).toEqual({ outcome: "durability_uncertain" });
+		registry.close();
+	});
 	it("folds capabilities by report time and sweeps idle devices", () => {
 		const { registry, setNow } = make();
 		const service = createCapabilitiesService({ registry, ttlMs: 10_000 });

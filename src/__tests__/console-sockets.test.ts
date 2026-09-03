@@ -9,7 +9,7 @@ import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistr
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
-import { formatInboxAddress, signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
+import { signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
 
 const domainA = "domain-a";
 const domainB = "domain-b";
@@ -132,6 +132,23 @@ afterEach(() => {
 });
 
 describe("console sockets", () => {
+	it("keeps a bound socket open when an owner read is uncertain", async () => {
+		const fixture = setup();
+		const client = socket();
+		const hub = createConsoleSockets({
+			handleOwnerOp: async () => ({ hello: { domainId: domainA, signerSignPub: "console" } }),
+			registerConsumer: () => ({ cursor: 0, cursorEpoch: 1 }),
+			readOwner: () => ({ outcome: "durability_uncertain" as const }),
+			readOwnerKeyRows: () => [],
+			advanceCursor: () => ({ outcome: "ok" as const }),
+			ownerFloor: () => 1,
+		});
+		hub.open(client);
+		await hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture) }));
+		expect(client.frames.at(-1)).toEqual({ type: "refused", reason: "durability_uncertain" });
+		expect(client.closeCount).toBe(0);
+		expect(hub.boundCount).toBe(1);
+	});
 	it("closes a silent socket after the hello deadline", () => {
 		vi.useFakeTimers();
 		const fixture = setup();
@@ -173,10 +190,14 @@ describe("console sockets", () => {
 		expect(client.frames[0]).toMatchObject({
 			type: "welcome",
 			cursor: 0,
-			cursorEpoch: 1,
 			floor: 1,
 			versions: { board: 4 },
 		});
+		const welcome = client.frames[0] as { cursorEpoch: number };
+		const consumer = fixture.registry.for(domainA).get("consumer", `consumer:${fixture.consoleIdentity.sign.pub}`);
+		expect(Number.isInteger(welcome.cursorEpoch)).toBe(true);
+		expect(welcome.cursorEpoch).toBeGreaterThan(0);
+		expect(welcome.cursorEpoch).toBe(consumer?.clear.cursorEpoch);
 		expect(client.frames[1]).toMatchObject({ type: "inbox_rows", cursor: 2, rows: waiting });
 		fixture.registry.close();
 	});

@@ -1,3 +1,4 @@
+import type { BlobReference } from "../../shared/blob-reference.js";
 import { type BoardActor, mayTake, mayWrite } from "../../shared/board-authority.js";
 import { applyCascade } from "../../shared/board-cascade.js";
 import { observationsFor } from "../../shared/board-observations.js";
@@ -21,12 +22,13 @@ import type { InboxAddress, InboxRow } from "../../shared/schemasInbox.js";
 import type { InboxService } from "../inbox/inboxService.js";
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
+import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { GatewayRegistration, OwnerServiceHooks } from "../ownerServiceHooks.js";
 
 type RefHeld = {
 	has(domainId: string, blobId: string): boolean;
-	hold(domainId: string, blobId: string, entryId: string): void;
-	release(domainId: string, blobId: string, entryId: string): void;
+	applyRefs?(domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]): void;
+	[key: string]: unknown;
 };
 type Deps = {
 	registry: OwnerStoreRegistry;
@@ -37,7 +39,6 @@ type Deps = {
 	now?: () => number;
 };
 type Board = { revision: number; entries: Map<string, BoardEntry> };
-type RefChange = { action: "hold" | "release"; blobId: string; entryId: string };
 type BoardReplay = {
 	hash: string;
 	createdAt: number;
@@ -147,7 +148,6 @@ export function createBoardService(deps: Deps) {
 		const next = copy(before);
 		const touched = new Set<string>();
 		// Apply references after commit.
-		const refChanges: RefChange[] = [];
 		const removedIds = new Set(input.ops.filter((op) => op.kind === "remove").map((op) => op.id));
 		const refuse = (reason: string) => ({
 			outcome: "refused" as const,
@@ -172,9 +172,6 @@ export function createBoardService(deps: Deps) {
 			return result;
 		};
 		const replaceAttachments = (e: BoardEntry, attachments: NonNullable<BoardEntry["attachments"]>) => {
-			for (const x of e.attachments ?? [])
-				refChanges.push({ action: "release", blobId: x.blobId, entryId: e.id });
-			for (const x of attachments) refChanges.push({ action: "hold", blobId: x.blobId, entryId: e.id });
 			e.attachments = attachments;
 		};
 		for (const op of input.ops) {
@@ -238,8 +235,6 @@ export function createBoardService(deps: Deps) {
 					(child) => child.parent === op.id && child.trashedAt === undefined,
 				);
 				if (liveChildren.some((child) => !removedIds.has(child.id))) return rememberRefusal("would_orphan");
-				for (const x of e.attachments ?? [])
-					refChanges.push({ action: "release", blobId: x.blobId, entryId: e.id });
 				next.entries.delete(op.id);
 				touched.add(op.id);
 			} else if (op.kind === "set_session") {
@@ -328,15 +323,11 @@ export function createBoardService(deps: Deps) {
 		// Durability uncertainty still applied.
 		if (result.kind !== "ok" && result.kind !== "durability_uncertain")
 			return rememberRefusal("durability_failure");
-		// Membership diff prevents premature deletion.
-		const netted = new Map<string, RefChange>();
-		for (const change of refChanges) netted.set(`${change.entryId}|${change.blobId}`, change);
-		// Hold before release.
-		const ordered = [...netted.values()].sort((a, b) => (a.action === b.action ? 0 : a.action === "hold" ? -1 : 1));
-		for (const change of ordered) {
-			if (change.action === "hold") deps.referenceHeld.hold(domainId, change.blobId, change.entryId);
-			else deps.referenceHeld.release(domainId, change.blobId, change.entryId);
-		}
+		const refSets = [...touched].map((id) => ({
+			ref: { kind: "entry" as const, entryId: id },
+			blobIds: next.entries.get(id)?.attachments?.map((attachment) => attachment.blobId) ?? [],
+		}));
+		if (deps.referenceHeld.applyRefs) deps.referenceHeld.applyRefs(domainId, refSets);
 		for (const o of observationsFor(before, next, touched, a)) {
 			const s = parseKey(o.sessionKey);
 			if (!deps.inbox.hasSession(domainId, s.gatewayId, s.sessionId)) continue;
@@ -417,7 +408,14 @@ export function createBoardService(deps: Deps) {
 				p.opId,
 			);
 		});
-		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => read(reg.domainId));
+		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => {
+			try {
+				return read(reg.domainId);
+			} catch (error) {
+				if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
+				throw error;
+			}
+		});
 	};
 	return { read, write, sweepTrash, register };
 }

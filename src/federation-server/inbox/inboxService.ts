@@ -1,4 +1,6 @@
+import { REGISTER_MAX_SKEW_MS } from "../../shared/admission.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
+import { mintEpoch } from "../../shared/epoch.js";
 import {
 	CONSUMER_IDLE_TTL_MS,
 	formatInboxAddress,
@@ -61,6 +63,7 @@ export class InboxService {
 		producerSignPub: string;
 		opKey?: OpKeyInput;
 		shareGeneration?: number;
+		nonce?: { signerSignPub: string; nonce: string; at: number };
 	}): OpResultEnvelope & { row?: InboxRow } {
 		const { address, row } = input;
 		const key = row.envelope.opKey;
@@ -83,6 +86,8 @@ export class InboxService {
 		}
 		if (existing) {
 			const clear = existing.clear;
+			if (clear.address && clear.address !== formatInboxAddress(address))
+				return { opKey: key, outcome: "conflict" };
 			// Matching op hash replays. Differing hash conflicts.
 			if (clear.opHash === opHash && clear.result && typeof clear.result === "object")
 				return clear.result as OpResultEnvelope & { row?: InboxRow };
@@ -96,12 +101,36 @@ export class InboxService {
 			return { opKey: key, outcome: "durability_uncertain" };
 		}
 		if (refusal) return { opKey: key, outcome: "refused", reason: refusal };
-		return this.appendLedgerTransaction(store, address, row, {
-			state: "accepted",
-			opHash,
-			at: this.now(),
-			...(input.shareGeneration !== undefined ? { shareGeneration: input.shareGeneration } : {}),
-		});
+		return this.appendLedgerTransaction(
+			store,
+			address,
+			row,
+			{
+				state: "accepted",
+				opHash,
+				at: this.now(),
+				...(input.shareGeneration !== undefined ? { shareGeneration: input.shareGeneration } : {}),
+			},
+			input.nonce,
+		);
+	}
+
+	ownerOpNonce(domainId: string, signerSignPub: string, nonce: string): { at: number } | null {
+		return (
+			(this.registry.for(domainId).get("nonce", `${signerSignPub}/${nonce}`)?.clear as
+				| { at: number }
+				| undefined) ?? null
+		);
+	}
+
+	acceptOwnerOpNonce(domainId: string, signerSignPub: string, nonce: string, at: number): boolean {
+		const store = this.registry.for(domainId);
+		return store.put("nonce", `${signerSignPub}/${nonce}`, null, { clear: { at } }).kind === "ok";
+	}
+
+	private sweepOwnerOpNonces(store: OwnerStateStore, now: number): void {
+		for (const record of store.list("nonce"))
+			if (now - Number(record.clear.at) > REGISTER_MAX_SKEW_MS) store.del("nonce", record.id, record.version);
 	}
 
 	retireRevokedPeerRows(domainId: string, sessionTarget: string, friendDomainId: string): number {
@@ -293,13 +322,14 @@ export class InboxService {
 		const floor = Math.min(...consumers.map((r) => Number(r.clear.cursor)));
 		const ownerAddress = formatInboxAddress(this.ownerAddress(domainId));
 		if (floor + 1 <= this.floorOf(store, domainId)) return;
+		const retired = store.retire(ownerAddress, floor);
+		if (retired.kind !== "ok") return;
 		const floorRecord = store.get("inbox.address", ownerAddress);
 		this.ledgerTransaction(store, (tx) => {
 			tx.put("inbox.address", ownerAddress, floorRecord?.version ?? null, {
 				clear: { ...floorRecord?.clear, floor: floor + 1 },
 			});
 		});
-		store.retire(ownerAddress, floor);
 	}
 
 	forgetConsumer(domainId: string, signerSignPub: string): void {
@@ -319,9 +349,7 @@ export class InboxService {
 		const current = store.get("consumer", id);
 		const ownerAddress = formatInboxAddress(this.ownerAddress(domainId));
 		const metadata = store.get("inbox.address", ownerAddress);
-		const cursorEpoch = current
-			? Number(current.clear.cursorEpoch)
-			: Number(metadata?.clear.nextCursorEpoch ?? 0) + 1;
+		const cursorEpoch = current ? Number(current.clear.cursorEpoch) : mintEpoch();
 		this.ledgerTransaction(store, (tx) => {
 			tx.put("consumer", id, current?.version ?? null, {
 				clear: { cursor: Number(current?.clear.cursor ?? 0), cursorEpoch, lastSeen: this.now(), incarnation },
@@ -329,7 +357,7 @@ export class InboxService {
 			tx.put("inbox.address", ownerAddress, metadata?.version ?? null, {
 				clear: {
 					...metadata?.clear,
-					nextCursorEpoch: Math.max(Number(metadata?.clear.nextCursorEpoch ?? 0), cursorEpoch),
+					nextCursorEpoch: metadata?.clear.nextCursorEpoch,
 				},
 			});
 		});
@@ -400,7 +428,7 @@ export class InboxService {
 		const store = this.registry.for(address.domainId);
 		const id = formatInboxAddress(address);
 		const current = store.get("inbox.address", id);
-		const epoch = Number(current?.clear.epoch ?? 0) + 1;
+		const epoch = mintEpoch();
 		store.put("inbox.address", id, current?.version ?? null, { clear: { ...current?.clear, epoch } });
 		return epoch;
 	}
@@ -425,6 +453,7 @@ export class InboxService {
 	private sweepDomain(domainId: string, now: number): void {
 		const store = this.registry.for(domainId);
 		if (store.health().quarantined) return;
+		this.sweepOwnerOpNonces(store, now);
 		for (const record of store.list("consumer"))
 			if (now - Number(record.clear.lastSeen) > CONSUMER_IDLE_TTL_MS)
 				this.forgetConsumer(domainId, record.id.slice("consumer:".length));
@@ -539,6 +568,13 @@ export class InboxService {
 		const addressText = formatInboxAddress(address);
 		const ownerAddress = formatInboxAddress(this.ownerAddress(domainId));
 		const floorRecord = addressText === ownerAddress ? store.get("inbox.address", ownerAddress) : undefined;
+		if (sender && resultRow && senderStore && senderStore !== store) {
+			const senderWrite = this.ledgerTransaction(senderStore, (tx) => tx.append(sender.address, resultRow));
+			if (senderWrite.kind !== "ok" && senderWrite.kind !== "durability_uncertain") {
+				console.warn(`[inbox] result for ${sender.address} seq ${row.seq} not written`);
+				return null;
+			}
+		}
 		const write = this.ledgerTransaction(store, (tx) => {
 			if (ledger) tx.put("op", ledger.id, ledger.version, { clear: { ...ledger.clear, state: outcome, result } });
 			if (sender && resultRow && senderStore === store) tx.append(sender.address, resultRow);
@@ -553,13 +589,6 @@ export class InboxService {
 		});
 		if (write.kind !== "ok") return null;
 		this.rowRetired(domainId, addressText, row);
-		if (sender && resultRow && senderStore && senderStore !== store) {
-			const cross = this.ledgerTransaction(senderStore, (tx) => tx.append(sender.address, resultRow));
-			if (cross.kind !== "ok")
-				console.warn(
-					`[inbox] result for ${opKey.conversationId}/${opKey.opId} not written to ${sender.domainId}`,
-				);
-		}
 		return result;
 	}
 	private appendLedgerTransaction(
@@ -567,6 +596,7 @@ export class InboxService {
 		address: InboxAddress,
 		input: InboxRowInput,
 		ledger: { state: string; opHash: string; at: number; shareGeneration?: number },
+		nonce?: { signerSignPub: string; nonce: string; at: number },
 	): OpResultEnvelope & { row?: InboxRow } {
 		const row = {
 			...input,
@@ -577,8 +607,9 @@ export class InboxService {
 		const result = { opKey: input.envelope.opKey, outcome: "accepted" as const, seq: row.seq };
 		const write = this.ledgerTransaction(store, (tx) => {
 			tx.put("op", recordId(input.envelope.opKey, this.registry.ownerKey(address.domainId).ownerSignPub), null, {
-				clear: { ...ledger, seq: row.seq, result },
+				clear: { ...ledger, address: formatInboxAddress(address), seq: row.seq, result },
 			});
+			if (nonce) tx.put("nonce", `${nonce.signerSignPub}/${nonce.nonce}`, null, { clear: { at: nonce.at } });
 			tx.append(formatInboxAddress(address), row);
 		});
 		if (write.kind === "ok") return { ...result, row };

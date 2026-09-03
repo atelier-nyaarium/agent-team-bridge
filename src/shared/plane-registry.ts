@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { mintEpoch } from "./epoch.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -35,10 +36,6 @@ interface Waiter {
 //  Functions & Helpers
 
 /** Mirrors device-mailbox.ts's mintEpoch. Equality-only, never ordering. */
-function mintEpoch(): number {
-	return 1 + Math.floor(Math.random() * 0x7ffffffe);
-}
-
 /** Keys sorted, arrays NOT: array order is assumed meaningful, so `identityOf` must sort its own
  * unordered collections before hashing. */
 export function stableHash(value: unknown): string {

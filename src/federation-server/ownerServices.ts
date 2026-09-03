@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../shared/admission.js";
+import type { BlobReference } from "../shared/blob-reference.js";
 import { OwnerBlobFetchParamsSchema } from "../shared/router-protocol.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import {
@@ -56,6 +57,16 @@ export function chainedTimer(delayMs: number, fn: () => void): { handle: () => R
 
 export function createOwnerServices(deps: OwnerServicesDeps) {
 	const { registry, inbox, bridge, referenceHeld } = deps;
+	referenceHeld.setReferenceExists((domainId, ref) => {
+		const store = registry.for(domainId);
+		if (ref.kind === "entry") return store.get("board.entry", ref.entryId) !== null;
+		if (ref.kind === "scheduled")
+			return (
+				store.get("scheduled", `${ref.target.domainId}/${ref.target.gatewayId}/${ref.target.sessionId}`) !==
+				null
+			);
+		return store.rows(formatInboxAddress(ref.address), ref.seq, 1).some((row) => row.seq === ref.seq);
+	});
 	const connected = (domainId: string): string[] => bridge.registeredGateways(domainId).map((g) => g.gatewayId);
 	const admittedGateways = (domainId: string): string[] => {
 		const snapshot = deps.getDomain(domainId);
@@ -119,13 +130,11 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
 		if (address?.kind !== "session") return;
-		const id = `${address.domainId}/${address.gatewayId}/${address.sessionId}:${row.seq}`;
-		for (const blobId of row.envelope.contentRefs) {
-			try {
-				referenceHeld.release(domainId, blobId, { kind: "row", id });
-			} catch (error) {
-				console.warn(`[router] row reference release failed for ${blobId}: ${(error as Error).message}`);
-			}
+		const ref: BlobReference = { kind: "row", address, seq: row.seq };
+		try {
+			referenceHeld.applyRefs(domainId, [{ ref, blobIds: [] }]);
+		} catch (error) {
+			console.warn(`[router] row reference release failed: ${(error as Error).message}`);
 		}
 	});
 
@@ -145,8 +154,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		inbox,
 		referenceHeld: {
 			has: (domainId, blobId) => referenceHeld.has(domainId, blobId),
-			hold: (domainId, blobId, id) => referenceHeld.hold(domainId, blobId, { kind: "entry", id }),
-			release: (domainId, blobId, id) => referenceHeld.release(domainId, blobId, { kind: "entry", id }),
+			applyRefs: (domainId, sets) => referenceHeld.applyRefs(domainId, sets),
 		},
 		deliver,
 		pokeOwner: (domainId, revision) => deps.consoleSockets?.pushPlane(domainId, "taskBoard", revision, undefined),
@@ -185,8 +193,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		appendScheduledMessage,
 		referenceHeld: {
 			has: (domainId, blobId) => referenceHeld.has(domainId, blobId),
-			hold: (domainId, blobId, ref) => referenceHeld.hold(domainId, blobId, ref),
-			release: (domainId, blobId, ref) => referenceHeld.release(domainId, blobId, ref),
+			applyRefs: (domainId, sets) => referenceHeld.applyRefs(domainId, sets),
 		},
 		scheduler: {
 			set: (ms, fn) => chainedTimer(ms, fn),
@@ -223,13 +230,15 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			perDomain("reference reconcile", (domainId) => {
 				const store = registry.for(domainId);
 				referenceHeld.reconcile(domainId, (ref) => {
-					if (ref.kind === "entry") return store.get("board.entry", ref.id) !== null;
-					if (ref.kind === "scheduled") return store.get("scheduled", ref.id) !== null;
-					const split = ref.id.lastIndexOf(":");
-					if (split <= 0) return false;
-					const address = `session:${ref.id.slice(0, split)}`;
-					const seq = Number(ref.id.slice(split + 1));
-					return Number.isSafeInteger(seq) && store.rows(address, seq, 1).some((row) => row.seq === seq);
+					if (ref.kind === "entry") return store.get("board.entry", ref.entryId) !== null;
+					if (ref.kind === "scheduled")
+						return (
+							store.get(
+								"scheduled",
+								`${ref.target.domainId}/${ref.target.gatewayId}/${ref.target.sessionId}`,
+							) !== null
+						);
+					return store.rows(formatInboxAddress(ref.address), ref.seq, 1).some((row) => row.seq === ref.seq);
 				});
 			});
 		},

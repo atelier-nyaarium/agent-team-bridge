@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { createScheduledService, type ScheduledDeps } from "../federation-server/scheduled/scheduledService.js";
+import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
+import { formatInboxAddress } from "../shared/schemasInbox.js";
 import type { ScheduledTarget } from "../shared/schemasScheduled.js";
 
 const roots: string[] = [];
@@ -37,6 +39,16 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 	const rows: unknown[] = [];
 	const held: unknown[] = [];
 	const released: unknown[] = [];
+	const memberships = new Map<string, Set<string>>();
+	const legacyRef = (ref: BlobReference) => {
+		if (ref.kind === "entry") return { kind: ref.kind, id: ref.entryId };
+		if (ref.kind === "scheduled")
+			return { kind: ref.kind, id: formatBlobReference(ref).slice("scheduled:".length) };
+		return {
+			kind: ref.kind,
+			id: `${formatInboxAddress(ref.address).slice("session:".length)}:${ref.seq}`,
+		};
+	};
 	const deps: ScheduledDeps = {
 		registry,
 		inbox: {
@@ -55,8 +67,17 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 		},
 		referenceHeld: {
 			has: () => options.held ?? true,
-			hold: (_domainId, blobId, ref) => held.push({ blobId, ref }),
-			release: (_domainId, blobId, ref) => released.push({ blobId, ref }),
+			applyRefs: (_domainId, sets) => {
+				for (const set of sets) {
+					const key = formatBlobReference(set.ref);
+					const next = new Set(set.blobIds);
+					const prior = memberships.get(key) ?? new Set<string>();
+					for (const blobId of prior)
+						if (!next.has(blobId)) released.push({ blobId, ref: legacyRef(set.ref) });
+					for (const blobId of next) if (!prior.has(blobId)) held.push({ blobId, ref: legacyRef(set.ref) });
+					memberships.set(key, next);
+				}
+			},
 		},
 		scheduler: {
 			set: (ms, fn) => {
@@ -81,6 +102,7 @@ function make(options: { appendOutcome?: "accepted" | "refused"; held?: boolean 
 		rows,
 		held,
 		released,
+		memberships,
 		timerDelays,
 		deps,
 	};
@@ -210,7 +232,7 @@ describe("scheduled service", () => {
 	});
 
 	// Release current set.
-	it("releases dropped files when the edit lands on a firing record", () => {
+	it("conflicts when an edit lands on a firing record", () => {
 		const { service, registry, released } = make();
 		service.schedule(
 			"domain-a",
@@ -235,9 +257,26 @@ describe("scheduled service", () => {
 			},
 		);
 
-		expect(released).toEqual([
-			{ blobId: "dropped", ref: { kind: "scheduled", id: "domain-a/gateway-a/spawn.session" } },
-		]);
+		expect(released).toEqual([]);
+		registry.close();
+	});
+
+	it("keeps scheduled references when the final fire CAS loses", async () => {
+		const { service, registry, released, memberships } = make();
+		service.schedule(
+			"domain-a",
+			{ conversationId: "conversation", device: "phone", opId: "op-1" },
+			{ kind: "schedule_send", target, fireAt: 200, opId: "op-1", files: ["blob-1"], body },
+		);
+		const store = registry.for("domain-a");
+		const put = store.put.bind(store);
+		vi.spyOn(store, "put").mockImplementation((kind, id, expected, record) => {
+			if (record.clear.state === "fired") return { kind: "conflict", current: store.get(kind, id) };
+			return put(kind, id, expected, record);
+		});
+		await service.fire("domain-a", target);
+		expect(released).toEqual([]);
+		expect(memberships.get(formatBlobReference({ kind: "scheduled", target }))).toEqual(new Set(["blob-1"]));
 		registry.close();
 	});
 

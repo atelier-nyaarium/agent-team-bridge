@@ -253,11 +253,13 @@ export class RouterBlobCache {
 				if (name.endsWith(".part") || name.length !== 64) continue;
 				const blobId = `sha256-${name}`;
 				const file = path.join(root, fanout, name);
-				// Unreadable sidecars preserve ciphertext.
 				let recovery: CacheRecoveryEntry | null;
 				try {
 					recovery = this.readRecovery(domainId, blobId);
 				} catch {
+					console.warn(`[router-blob-cache] unreadable recovery ${blobId}`);
+					fs.rmSync(file, { force: true });
+					fs.rmSync(this.recoveryPath(domainId, blobId), { recursive: true, force: true });
 					continue;
 				}
 				if (

@@ -7,6 +7,8 @@ import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStor
 import { createBoardService } from "../federation-server/board/boardService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
+import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { InboxAddress, InboxRow } from "../shared/schemasInbox.js";
@@ -22,8 +24,7 @@ const envelope = (kind: "board.title" | "board.body" | "board.name" = "board.tit
 });
 type ReferenceHeld = {
 	has(domainId: string, blobId: string): boolean;
-	hold(domainId: string, blobId: string, entryId: string): void;
-	release(domainId: string, blobId: string, entryId: string): void;
+	applyRefs(domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]): void;
 };
 const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-"));
@@ -42,7 +43,7 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 	const rows: Array<{ address: InboxAddress; row: InboxRow }> = [];
 	const delivered: Array<{ address: InboxAddress; row: InboxRow }> = [];
 	const references = new Set<string>();
-	const referenceCalls: Array<{ action: "hold" | "release"; blobId: string; entryId: string }> = [];
+	const memberships = new Map<string, Set<string>>();
 	const service = createBoardService({
 		registry,
 		inbox: {
@@ -66,17 +67,29 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld) => {
 		deliver: (domainId, address, row) => delivered.push({ address: { ...address, domainId }, row }),
 		referenceHeld: referenceHeld ?? {
 			has: (_domainId, blobId) => blobId !== "missing" && references.has(blobId),
-			hold: (domainId, blobId, entryId) => {
-				references.add(blobId);
-				referenceCalls.push({ action: "hold", blobId, entryId });
-			},
-			release: (_domainId, blobId, entryId) => {
-				references.delete(blobId);
-				referenceCalls.push({ action: "release", blobId, entryId });
+			applyRefs: (_domainId, sets) => {
+				const desired = new Map<string, Set<string>>();
+				for (const set of sets) desired.set(formatBlobReference(set.ref), new Set(set.blobIds));
+				const affected = new Set<string>(desired.values().flatMap((blobIds) => [...blobIds]));
+				for (const [blobId, refs] of memberships) {
+					if ([...desired.keys()].some((entryId) => refs.has(entryId))) affected.add(blobId);
+				}
+				for (const blobId of affected) {
+					const refs = memberships.get(blobId) ?? new Set<string>();
+					for (const entryId of desired.keys()) refs.delete(entryId);
+					for (const [entryId, blobIds] of desired) if (blobIds.has(blobId)) refs.add(entryId);
+					if (refs.size === 0) {
+						memberships.delete(blobId);
+						references.delete(blobId);
+					} else {
+						memberships.set(blobId, refs);
+						references.add(blobId);
+					}
+				}
 			},
 		},
 	});
-	return { service, registry, rows, delivered, references, referenceCalls };
+	return { service, registry, rows, delivered, references };
 };
 const entry = (id: string, extra: Record<string, unknown> = {}) => ({
 	kind: "upsert" as const,
@@ -157,19 +170,18 @@ describe("router board service", () => {
 		const held = new ReferenceHeldStore({ dataDir: root });
 		const wrap: ReferenceHeld = {
 			has: (domainId, blobId) => held.has(domainId, blobId),
-			hold: (domainId, blobId, entryId) => held.hold(domainId, blobId, { kind: "entry", id: entryId }),
-			release: (domainId, blobId, entryId) => held.release(domainId, blobId, { kind: "entry", id: entryId }),
+			applyRefs: (domainId, sets) => held.applyRefs(domainId, sets),
 		};
 		const { service, registry } = make(true, wrap);
 		const bytesA = Buffer.from("A");
 		const bytesB = Buffer.from("B");
 		const blobA = blobIdFor(bytesA);
 		const blobB = blobIdFor(bytesB);
+		held.applyRefs("a", [{ ref: { kind: "entry", entryId: "one" }, blobIds: [blobA, blobB] }]);
 		for (const [blobId, bytes] of [
 			[blobA, bytesA],
 			[blobB, bytesB],
 		] as const) {
-			held.hold("a", blobId, { kind: "entry", id: "one" });
 			const ciphertext = sealBlobChunk(
 				bytes,
 				Buffer.alloc(32, 1),
@@ -200,20 +212,18 @@ describe("router board service", () => {
 		registry.close();
 	});
 
-	// Hold before release.
 	it("keeps attachment bytes when one blob moves between entries in a single write", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-move-"));
 		roots.push(root);
 		const held = new ReferenceHeldStore({ dataDir: root });
 		const wrap: ReferenceHeld = {
 			has: (domainId, blobId) => held.has(domainId, blobId),
-			hold: (domainId, blobId, entryId) => held.hold(domainId, blobId, { kind: "entry", id: entryId }),
-			release: (domainId, blobId, entryId) => held.release(domainId, blobId, { kind: "entry", id: entryId }),
+			applyRefs: (domainId, sets) => held.applyRefs(domainId, sets),
 		};
 		const { service, registry } = make(true, wrap);
 		const bytes = Buffer.from("moved");
 		const blob = blobIdFor(bytes);
-		held.hold("a", blob, { kind: "entry", id: "one" });
+		held.applyRefs("a", [{ ref: { kind: "entry", entryId: "one" }, blobIds: [blob] }]);
 		const ciphertext = sealBlobChunk(
 			bytes,
 			Buffer.alloc(32, 1),
@@ -541,7 +551,7 @@ describe("router board service", () => {
 	});
 
 	it("requires held attachments and replaces their entry references", () => {
-		const { service, registry, references, referenceCalls } = make();
+		const { service, registry, references } = make();
 		references.add("old");
 		service.write(
 			"a",
@@ -584,16 +594,13 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		expect(applied.outcome).toBe("applied");
-		// Hold before release.
-		expect(referenceCalls.slice(-2)).toEqual([
-			{ action: "hold", blobId: "new", entryId: "one" },
-			{ action: "release", blobId: "old", entryId: "one" },
-		]);
+		expect(references.has("new")).toBe(true);
+		expect(references.has("old")).toBe(false);
 		registry.close();
 	});
 
 	it("does not move references for a refused write", () => {
-		const { service, registry, references, referenceCalls } = make();
+		const { service, registry, references } = make();
 		references.add("blob");
 		const result = service.write(
 			"a",
@@ -607,13 +614,12 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		expect(result.outcome).toBe("refused");
-		expect(referenceCalls).toEqual([]);
 		expect(references.has("blob")).toBe(true);
 		registry.close();
 	});
 
 	it("holds every attachment on an applied upsert", () => {
-		const { service, registry, references, referenceCalls } = make();
+		const { service, registry, references } = make();
 		references.add("one");
 		references.add("two");
 		const result = service.write(
@@ -632,10 +638,8 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		expect(result.outcome).toBe("applied");
-		expect(referenceCalls).toEqual([
-			{ action: "hold", blobId: "one", entryId: "one" },
-			{ action: "hold", blobId: "two", entryId: "one" },
-		]);
+		expect(references.has("one")).toBe(true);
+		expect(references.has("two")).toBe(true);
 		registry.close();
 	});
 
@@ -749,7 +753,7 @@ describe("router board service", () => {
 	});
 
 	it("sweeps expired trash and releases its blobs", () => {
-		const { service, registry, references, referenceCalls } = make();
+		const { service, registry, references } = make();
 		references.add("blob");
 		service.write(
 			"a",
@@ -772,7 +776,7 @@ describe("router board service", () => {
 		expect(trashed.outcome).toBe("applied");
 		expect(service.sweepTrash("a", 100 + 30 * 24 * 60 * 60 * 1000 + 1)).toBe(1);
 		expect(service.read("a").entries).toHaveLength(0);
-		expect(referenceCalls.at(-1)).toEqual({ action: "release", blobId: "blob", entryId: "one" });
+		expect(references.has("blob")).toBe(false);
 		registry.close();
 	});
 
@@ -839,6 +843,29 @@ describe("router board service", () => {
 				},
 			),
 		).toThrow();
+		registry.close();
+	});
+
+	it("returns durability uncertainty for a quarantined board read", () => {
+		const { service, registry } = make();
+		const store = registry.for("a");
+		vi.spyOn(store, "get").mockImplementation(() => {
+			throw new OwnerQuarantined({ from: 2, to: 3 });
+		});
+		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
+		service.register({
+			ownerOp: () => undefined,
+			gatewayFrame: (name, registered) => {
+				if (name === "board_read") handler = registered as typeof handler;
+			},
+			onGatewayRegistered: () => undefined,
+			onGatewayDropped: () => undefined,
+			onSessionForgotten: () => undefined,
+			pushFrameTo: () => false,
+			gatewayIncarnation: () => null,
+			connectedGateways: () => [],
+		});
+		expect(handler?.({ domainId: "a" }, {})).toEqual({ outcome: "durability_uncertain" });
 		registry.close();
 	});
 });

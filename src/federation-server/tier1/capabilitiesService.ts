@@ -4,6 +4,7 @@ import { CapabilitiesReadSchema, CapabilitiesReportSchema } from "../../shared/s
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 import type { StateRecord, WriteResult } from "../owner/ownerStateStore.js";
+import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
 
 const DEVICE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -107,7 +108,12 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 			});
 			hooks.gatewayFrame("capabilities_read", async (reg, value) => {
 				if (!CapabilitiesReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");
-				return snapshot(reg.domainId);
+				try {
+					return snapshot(reg.domainId);
+				} catch (error) {
+					if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
+					throw error;
+				}
 			});
 		},
 	};

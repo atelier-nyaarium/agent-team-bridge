@@ -198,7 +198,7 @@ describe("Router owner state residue", () => {
 					producerSignPub: router.sign.pub,
 				});
 			},
-			referenceHeld: { has: () => true, hold: () => undefined, release: () => undefined },
+			referenceHeld: { has: () => true, applyRefs: () => undefined },
 			scheduler: { set: (_ms, fn) => timers.push(fn) - 1, clear: () => undefined },
 			now: () => 100,
 		});

@@ -34,6 +34,7 @@ import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
 import { decideServe } from "./migration/serveGate.js";
 import { DomainQuota } from "./owner/domainQuota.js";
+import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { createOwnerServices } from "./ownerServices.js";
 import { PublicApproval } from "./publicApproval.js";
 import { buildRoster, type RosterDomain } from "./roster.js";
@@ -129,10 +130,22 @@ export class RouterServer {
 			handleOwnerOp: (raw) => this.ownerOps.handle(raw),
 			registerConsumer: (domainId, signerSignPub, incarnation) =>
 				this.inbox.registerConsumer(domainId, signerSignPub, incarnation),
-			readOwner: (domainId, signerSignPub, fromSeq, limit, cursorEpoch) =>
-				this.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch),
-			readOwnerKeyRows: (domainId, ownerSignPub, sinceMs) =>
-				this.inbox.readOwnerKeyRows(domainId, ownerSignPub, sinceMs),
+			readOwner: (domainId, signerSignPub, fromSeq, limit, cursorEpoch) => {
+				try {
+					return this.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch);
+				} catch (error) {
+					if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
+					throw error;
+				}
+			},
+			readOwnerKeyRows: (domainId, ownerSignPub, sinceMs) => {
+				try {
+					return this.inbox.readOwnerKeyRows(domainId, ownerSignPub, sinceMs);
+				} catch (error) {
+					if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
+					throw error;
+				}
+			},
 			now: () => this.ownerRegistry.now(),
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
 				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),

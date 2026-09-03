@@ -17,6 +17,7 @@ const make = (options: { now?: () => number; ownerOf?: (domainId: string) => str
 	let owner = generateIdentity();
 	while (owner.sign.pub.includes("/")) owner = generateIdentity();
 	const producer = generateIdentity();
+	const producer2 = generateIdentity();
 	const router = generateIdentity();
 	const registry = new OwnerStoreRegistry({
 		dataDir,
@@ -30,6 +31,7 @@ const make = (options: { now?: () => number; ownerOf?: (domainId: string) => str
 		registry,
 		owner,
 		producer,
+		producer2,
 		router,
 	};
 };
@@ -76,6 +78,34 @@ describe("InboxService", () => {
 				producerSignPub: producer.sign.pub,
 			}),
 		).toMatchObject({ outcome: "conflict" });
+		expect(service.rows(address, 1, 10)).toHaveLength(1);
+		registry.close();
+	});
+
+	it("conflicts when an op key is reused at another address", () => {
+		const { service, registry, owner, producer } = make();
+		const firstAddress = ownerAddress(owner);
+		const secondAddress: InboxAddress = { kind: "gateway", domainId, gatewayId: "gateway" };
+		const row = rowFor(producer, "same-address");
+		expect(service.appendRow({ address: firstAddress, row, producerSignPub: producer.sign.pub }).outcome).toBe(
+			"accepted",
+		);
+		expect(service.appendRow({ address: secondAddress, row, producerSignPub: producer.sign.pub }).outcome).toBe(
+			"conflict",
+		);
+		expect(service.rows(firstAddress, 1, 10)).toHaveLength(1);
+		expect(service.rows(secondAddress, 1, 10)).toHaveLength(0);
+		registry.close();
+	});
+
+	it("deduplicates one op through two producers", () => {
+		const { service, registry, owner, producer, producer2 } = make();
+		const address = ownerAddress(owner);
+		const first = rowFor(producer, "two-connections");
+		const second = rowFor(producer2, "two-connections");
+		const accepted = service.appendRow({ address, row: first, producerSignPub: producer.sign.pub });
+		const replay = service.appendRow({ address, row: second, producerSignPub: producer2.sign.pub });
+		expect(replay).toMatchObject({ opKey: accepted.opKey, outcome: accepted.outcome, seq: accepted.seq });
 		expect(service.rows(address, 1, 10)).toHaveLength(1);
 		registry.close();
 	});
@@ -210,7 +240,7 @@ describe("InboxService", () => {
 			outcome: "cursor_stale",
 		});
 		const second = service.registerConsumer(domainId, "phone", 2);
-		expect(second.cursorEpoch).toBeGreaterThan(first.cursorEpoch);
+		expect(second.cursorEpoch).not.toBe(first.cursorEpoch);
 		const accepted = service.appendRow({
 			address,
 			row: rowFor(producer, "after"),
@@ -224,6 +254,80 @@ describe("InboxService", () => {
 			producerSignPub: producer.sign.pub,
 		});
 		expect(later.seq).toBeGreaterThan(accepted.seq as number);
+		registry.close();
+	});
+
+	it("retries retirement after a crash before the compaction floor write", () => {
+		const { service, registry, owner, producer } = make();
+		const address = ownerAddress(owner);
+		const consumer = service.registerConsumer(domainId, "phone", 1);
+		const accepted = service.appendRow({
+			address,
+			row: rowFor(producer, "compact"),
+			producerSignPub: producer.sign.pub,
+		});
+		service.advanceCursor(domainId, "phone", accepted.seq as number, consumer.cursorEpoch);
+		const store = registry.for(domainId);
+		vi.spyOn(store, "retire").mockImplementationOnce(() => {
+			throw new Error("crash");
+		});
+		expect(() => service.compactOwnerInbox(domainId)).toThrow("crash");
+		service.compactOwnerInbox(domainId);
+		expect(service.rows(address, 1, 10)).toHaveLength(0);
+		registry.close();
+	});
+
+	it("does not retire a cross-Domain row when the sender result is refused", () => {
+		const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-cross-retire-"));
+		roots.push(dataDir);
+		const destinationOwner = generateIdentity();
+		const senderOwner = generateIdentity();
+		const router = generateIdentity();
+		const producer = generateIdentity();
+		const registry = new OwnerStoreRegistry({
+			dataDir,
+			ownerOf: (id) =>
+				id === "destination" ? destinationOwner.sign.pub : id === "sender" ? senderOwner.sign.pub : null,
+			quotaFor: () =>
+				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
+		});
+		const service = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
+		const address: InboxAddress = {
+			kind: "session",
+			domainId: "destination",
+			gatewayId: "gateway",
+			sessionId: "session",
+		};
+		service.upsertSession("destination", "gateway", "session", { kind: "shell", label: "x", recordExists: true });
+		const sourceRow = rowFor(producer, "cross", {
+			kind: "session",
+			domainId: "sender",
+			gatewayId: "gateway",
+			sessionId: "session",
+		});
+		const peerEnvelope = { ...sourceRow.envelope, epoch: "peer" as const };
+		const peerRow = {
+			...sourceRow,
+			envelope: peerEnvelope,
+			producerSig: signRowEnvelope(peerEnvelope, producer.sign.priv),
+		};
+		const accepted = service.appendRow({
+			address,
+			row: peerRow,
+			producerSignPub: producer.sign.pub,
+		});
+		const destinationStore = registry.for("destination");
+		const before = destinationStore.get(
+			"op",
+			`op:destination/${accepted.opKey.conversationId}/${accepted.opKey.opId}`,
+		);
+		const senderStore = registry.for("sender");
+		vi.spyOn(senderStore, "batch").mockReturnValue({ kind: "durability_failure", reason: "refused" });
+		service.retireRevokedPeerRows("destination", "destination.gateway.session", "sender");
+		expect(service.rows(address, 1, 10)).toHaveLength(1);
+		expect(
+			destinationStore.get("op", `op:destination/${accepted.opKey.conversationId}/${accepted.opKey.opId}`),
+		).toEqual(before);
 		registry.close();
 	});
 
@@ -362,7 +466,7 @@ describe("InboxService", () => {
 		});
 		const before = service.deliveryEpoch(address);
 		service.forgetSession(domainId, "gateway", "session");
-		expect(service.deliveryEpoch(address)).toBeGreaterThan(before);
+		expect(service.deliveryEpoch(address)).not.toBe(before);
 		expect(service.rows(address, 1, 10).at(0)?.body).toMatchObject({ outcome: "failed" });
 		expect(service.hasSession(domainId, "gateway", "session")).toBe(false);
 		registry.close();

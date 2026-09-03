@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
+import { parseBlobReference } from "../shared/blob-reference.js";
 import {
 	BlobBeginParamsSchema,
 	BlobChunkParamsSchema,
@@ -35,6 +36,7 @@ import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewa
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
 import { type InboxService, type PeerRowGate, sessionTargetOf } from "./inbox/inboxService.js";
+import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { verifyRegistrationClaim } from "./registrationVerification.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
 
@@ -162,7 +164,10 @@ export class GatewayBridge implements ToolProvider {
 			? new BlobFetchRoute(blobCache, (domainId, gatewayId) => {
 					const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
 					const ws = connId ? this.transport?.getConnection(connId) : null;
-					return connId && ws ? { connId, send: (frame) => ws.send(JSON.stringify(frame)) } : null;
+					const incarnation = connId ? this.connGateways.get(connId)?.incarnation : null;
+					return connId && ws && incarnation !== null && incarnation !== undefined
+						? { connId, incarnation, send: (frame) => ws.send(JSON.stringify(frame)) }
+						: null;
 				})
 			: null;
 		this.handleCall = this.handleCall.bind(this);
@@ -700,6 +705,17 @@ export class GatewayBridge implements ToolProvider {
 				);
 			}
 			if (!this.referenceHeld || !value.ref) return { ok: false, error: "held blob requires a reference" };
+			const ref = parseBlobReference(value.ref.id);
+			if (!ref || ref.kind !== value.ref.kind) return { ok: false, error: "reference missing" };
+			let referenceExists = false;
+			try {
+				referenceExists = this.referenceHeld.hasReference(reg.domainId, ref);
+			} catch (error) {
+				if (error instanceof OwnerQuarantined)
+					return { ok: false, error: "refused", reason: "durability_uncertain" };
+				throw error;
+			}
+			if (!referenceExists) return { ok: false, error: "reference missing" };
 			const begun = this.referenceHeld.begin(
 				reg.domainId,
 				value.blobId,
@@ -708,13 +724,17 @@ export class GatewayBridge implements ToolProvider {
 				value.ciphertextDigest,
 				value.epoch,
 			);
-			if (begun.kind !== "quota") this.referenceHeld.hold(reg.domainId, value.blobId, value.ref);
+			if (begun.kind !== "quota") this.referenceHeld.applyRefs(reg.domainId, [{ ref, blobIds: [value.blobId] }]);
 			return begun;
 		}
 		const parsed = BlobChunkParamsSchema.safeParse(params);
 		if (!parsed.success) return { ok: false, error: "invalid blob_chunk" };
 		const value = parsed.data;
 		const bytes = Buffer.from(value.bytes, "base64");
+		const renewed =
+			value.store === "cache" ? this.blobCache?.renew(reg.domainId, value.blobId, value.lease.id) : null;
+		if (value.store === "cache" && (!renewed || renewed.kind === "lease_expired"))
+			return { ok: false, error: "lease_expired" };
 		return value.store === "cache"
 			? (this.blobCache?.commitChunk(
 					reg.domainId,

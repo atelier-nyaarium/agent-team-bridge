@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler, GatewayRegistration } from "../federation-server/gatewayBridge.js";
 import type { OwnerOpHandler } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import { createPresenceService } from "../federation-server/presence/presenceService.js";
 import { TeamInfoSchema } from "../shared/schemasPresence.js";
 
@@ -52,6 +53,27 @@ afterEach(() => {
 });
 
 describe("router presence slice", () => {
+	it("returns uncertainty from the presence read frame", () => {
+		const { registry } = make();
+		const service = createPresenceService({ registry, projection: projectionDeps });
+		const frames = new Map<string, GatewayFrameHandler>();
+		service.register({
+			ownerOp: () => undefined,
+			gatewayFrame: (name, handler) => frames.set(name, handler),
+			onGatewayRegistered: () => undefined,
+			onGatewayDropped: () => undefined,
+			onSessionForgotten: () => undefined,
+			pushFrameTo: () => false,
+			gatewayIncarnation: () => 1,
+			connectedGateways: () => [],
+		});
+		const store = registry.for("domain");
+		vi.spyOn(store, "get").mockImplementation(() => {
+			throw new OwnerQuarantined({ from: 1, to: 1 });
+		});
+		expect(frames.get("presence_read")!(reg, {})).toEqual({ outcome: "durability_uncertain" });
+		registry.close();
+	});
 	it("applies ordered deltas and bumps the persisted projection version", () => {
 		const { registry, service } = make();
 		service.applyBaseline(reg, {

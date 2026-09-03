@@ -1,18 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { writeFileAtomic } from "../../shared/atomic-write.js";
+import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
+import { type BlobReference, formatBlobReference, parseBlobReference } from "../../shared/blob-reference.js";
 import { BlobStore } from "../../shared/blob-store.js";
 import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
 import { sealedBlobSize } from "../../shared/sealed-blob.js";
 import type { BlobLease } from "./blobLease.js";
 
-export interface BlobReference {
-	kind: "entry" | "row" | "scheduled";
-	id: string;
-}
-
 interface HeldEntry {
-	refs: BlobReference[];
+	refs: string[];
 	size?: number;
 	ciphertextSize?: number;
 	ciphertextDigest?: string;
@@ -30,30 +26,50 @@ export type HeldCommit =
 	| { have: number; complete: boolean }
 	| { kind: "generation_mismatch" | "gap" | "too_large" | "size_mismatch" };
 
+export class CorruptHeldIndexError extends Error {
+	readonly code = "CORRUPT_HELD_INDEX";
+}
+
 export class ReferenceHeldStore {
 	private readonly domains = new Map<string, { store: BlobStore; index: HeldIndex }>();
+	private referenceExists: ((domainId: string, ref: BlobReference) => boolean) | null = null;
 
 	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain?: number }) {}
 
-	// Idempotent by reference.
-	hold(domainId: string, blobId: string, ref: BlobReference): void {
-		const domain = this.domain(domainId);
-		let entry = domain.index.entries[blobId];
-		if (!entry) {
-			entry = { refs: [] };
-			domain.index.entries[blobId] = entry;
-		}
-		if (!entry.refs.some((candidate) => candidate.kind === ref.kind && candidate.id === ref.id))
-			entry.refs.push(ref);
-		this.persist(domainId, domain.index);
+	setReferenceExists(check: (domainId: string, ref: BlobReference) => boolean): void {
+		this.referenceExists = check;
 	}
 
-	release(domainId: string, blobId: string, ref: BlobReference): void {
+	hasReference(domainId: string, ref: BlobReference): boolean {
+		return this.referenceExists?.(domainId, ref) ?? true;
+	}
+
+	applyRefs(domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]): void {
 		const domain = this.domain(domainId);
-		const entry = domain.index.entries[blobId];
-		if (!entry) return;
-		entry.refs = entry.refs.filter((candidate) => candidate.kind !== ref.kind || candidate.id !== ref.id);
-		if (entry.refs.length === 0) {
+		const desired = new Map<string, Set<string>>();
+		for (const set of sets) {
+			const refId = formatBlobReference(set.ref);
+			let blobs = desired.get(refId);
+			if (!blobs) {
+				blobs = new Set();
+				desired.set(refId, blobs);
+			}
+			for (const blobId of set.blobIds) blobs.add(blobId);
+		}
+		const affected = new Set<string>();
+		for (const [blobId, entry] of Object.entries(domain.index.entries))
+			if (entry.refs.some((ref) => desired.has(ref))) affected.add(blobId);
+		for (const blobs of desired.values()) for (const blobId of blobs) affected.add(blobId);
+		const empty: string[] = [];
+		for (const blobId of affected) {
+			const entry = domain.index.entries[blobId] ?? { refs: [] };
+			const refs = entry.refs.filter((ref) => !desired.has(ref));
+			for (const [refId, blobs] of desired) if (blobs.has(blobId)) refs.push(refId);
+			entry.refs = [...new Set(refs)];
+			if (entry.refs.length === 0) empty.push(blobId);
+			else domain.index.entries[blobId] = entry;
+		}
+		for (const blobId of empty) {
 			domain.store.remove(blobId);
 			delete domain.index.entries[blobId];
 		}
@@ -61,7 +77,9 @@ export class ReferenceHeldStore {
 	}
 
 	refs(domainId: string, blobId: string): BlobReference[] {
-		return [...(this.domain(domainId).index.entries[blobId]?.refs ?? [])];
+		return (this.domain(domainId).index.entries[blobId]?.refs ?? [])
+			.map((id) => parseBlobReference(id))
+			.filter((ref): ref is BlobReference => ref !== null);
 	}
 
 	/** Complete blobs only. */
@@ -90,6 +108,8 @@ export class ReferenceHeldStore {
 				return { kind: "exists" };
 			domain.store.remove(blobId);
 		}
+		if (entry?.ciphertextDigest !== undefined && entry.ciphertextDigest !== ciphertextDigest)
+			domain.store.remove(blobId);
 		if (size < 0 || size > MAX_BLOB_BYTES || ciphertextSize !== sealedBlobSize(size)) {
 			throw new Error("invalid sealed blob size");
 		}
@@ -150,7 +170,14 @@ export class ReferenceHeldStore {
 	reconcile(domainId: string, alive: (ref: BlobReference) => boolean): void {
 		const domain = this.domain(domainId);
 		for (const [blobId, entry] of Object.entries(domain.index.entries)) {
-			entry.refs = entry.refs.filter(alive);
+			entry.refs = entry.refs.filter((id) => {
+				const ref = parseBlobReference(id);
+				if (!ref) {
+					console.warn(`[router] unknown blob reference ${id}`);
+					return true;
+				}
+				return alive(ref);
+			});
 			if (entry.refs.length === 0) {
 				domain.store.remove(blobId);
 				delete domain.index.entries[blobId];
@@ -164,11 +191,30 @@ export class ReferenceHeldStore {
 		if (existing) return existing;
 		const root = path.join(this.options.dataDir, "blobs", domainId, "held");
 		const file = path.join(root, "index.json");
+		fs.mkdirSync(root, { recursive: true });
 		let index: HeldIndex = { entries: {} };
 		try {
 			index = JSON.parse(fs.readFileSync(file, "utf8")) as HeldIndex;
 			if (!index || typeof index.entries !== "object") throw new Error("invalid index");
-		} catch {
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				const corrupt = `${file}.corrupt-${Date.now()}`;
+				renameFileSync(file, corrupt);
+				throw new CorruptHeldIndexError(`held index moved to ${corrupt}`);
+			}
+			const aside = fs
+				.readdirSync(root, { withFileTypes: true })
+				.find((entry) => entry.name.startsWith("index.json.corrupt-"));
+			const hasBlobs = fs
+				.readdirSync(root, { withFileTypes: true })
+				.filter((entry) => entry.isDirectory())
+				.some((fanout) =>
+					fs.readdirSync(path.join(root, fanout.name)).some((name) => /^[0-9a-f]{64}(\.part)?$/.test(name)),
+				);
+			if (aside || hasBlobs) {
+				const location = aside ? path.join(root, aside.name) : file;
+				throw new CorruptHeldIndexError(`held index quarantine requires restore: ${location}`);
+			}
 			index = { entries: {} };
 			this.persist(domainId, index);
 		}

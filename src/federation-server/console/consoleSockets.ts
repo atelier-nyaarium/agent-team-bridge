@@ -28,8 +28,12 @@ export interface ConsoleSocketsDeps {
 		fromSeq: number,
 		limit: number,
 		cursorEpoch?: number,
-	) => InboxRow[] | { outcome: "cursor_stale"; floor: number; dropped: number };
-	readOwnerKeyRows: (domainId: string, ownerSignPub: string, sinceMs: number) => InboxRow[];
+	) => InboxRow[] | { outcome: "cursor_stale"; floor: number; dropped: number } | { outcome: "durability_uncertain" };
+	readOwnerKeyRows: (
+		domainId: string,
+		ownerSignPub: string,
+		sinceMs: number,
+	) => InboxRow[] | { outcome: "durability_uncertain" };
 	now?: () => number;
 	advanceCursor: (
 		domainId: string,
@@ -97,6 +101,10 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 
 	function drain(socket: ConsoleSocket, at: Bound, cursor: number): void {
 		const rows = deps.readOwner(at.domainId, at.signerSignPub, cursor + 1, CONSOLE_ROWS_PER_FRAME, at.cursorEpoch);
+		if (!Array.isArray(rows) && rows.outcome === "durability_uncertain") {
+			send(socket, { type: "refused", reason: "durability_uncertain" });
+			return;
+		}
 		if (!Array.isArray(rows)) {
 			refuse(socket, "cursor_stale", { floor: rows.floor, dropped: rows.dropped });
 			return;
@@ -151,6 +159,10 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 				identity.signerSignPub,
 				(deps.now?.() ?? Date.now()) - 24 * 60 * 60 * 1000,
 			);
+			if (!Array.isArray(rows)) {
+				send(socket, { type: "refused", reason: "durability_uncertain" });
+				return;
+			}
 			for (let from = 0; from < rows.length; from += CONSOLE_ROWS_PER_FRAME) {
 				const batch = rows.slice(from, from + CONSOLE_ROWS_PER_FRAME);
 				send(socket, {

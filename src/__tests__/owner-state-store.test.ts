@@ -158,6 +158,30 @@ describe("OwnerStateStore", () => {
 		store.close();
 	});
 
+	it("replays a journal landed before the compact manifest rename", () => {
+		const dir = root();
+		let store = open(dir);
+		store.put("share", "before", null, { clear: { value: 1 } });
+		store.batch((tx) => {
+			tx.put("share", "landed", null, { clear: { value: 2 } });
+		});
+		const original = atomicWrite.writeFileAtomic;
+		vi.spyOn(atomicWrite, "writeFileAtomic").mockImplementation((file, source, options) => {
+			if (path.basename(file) === "MANIFEST.json") {
+				fs.writeFileSync([file, ".tmp.", String(process.pid)].join(""), source as string);
+				throw new Error("crash before manifest rename");
+			}
+			original(file, source, options);
+		});
+		expect(() => store.compact()).toThrow("crash before manifest rename");
+		store.close();
+		vi.restoreAllMocks();
+		store = open(dir);
+		expect(store.get("share", "before")).toMatchObject({ clear: { value: 1 } });
+		expect(store.get("share", "landed")).toMatchObject({ clear: { value: 2 } });
+		store.close();
+	});
+
 	it("quarantines corrupt segments and refuses reads and writes", () => {
 		const dir = root();
 		let store = open(dir);

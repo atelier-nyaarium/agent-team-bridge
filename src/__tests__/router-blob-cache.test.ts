@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { BLOB_CHUNK_BYTES, BlobChunkParamsSchema } from "../shared/router-protocol.js";
@@ -245,6 +245,38 @@ describe("RouterBlobCache", () => {
 			ciphertextSize: sealed.ciphertext.length,
 			epoch: 2,
 		});
+	});
+
+	it("removes ciphertext and logs an unreadable recovery sidecar", () => {
+		const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-cache-sidecar-"));
+		roots.push(dataDir);
+		const bytes = Buffer.from("unreadable recovery");
+		const blobId = blobIdFor(bytes);
+		const sealed = sealBlob(bytes, blobId);
+		const cache = new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const begun = cache.begin(
+			"domain",
+			blobId,
+			{ domainId: "domain", gatewayId: "gateway" },
+			bytes.length,
+			sealed.ciphertext.length,
+			sealed.ciphertextDigest,
+			2,
+		);
+		if (begun.kind !== "lease") throw new Error("expected lease");
+		cache.commitChunk("domain", blobId, begun.lease, 0, sealed.ciphertext, true);
+		fs.rmSync(path.join(dataDir, "blobs", "domain", "cache", "index.json"));
+		const hash = blobId.slice("sha256-".length);
+		const ciphertext = path.join(dataDir, "blobs", "domain", "cache", hash.slice(0, 2), hash);
+		const sidecar = path.join(dataDir, "blob-cache-metadata", "domain", hash.slice(0, 2), `${hash}.json`);
+		fs.rmSync(sidecar);
+		fs.mkdirSync(sidecar);
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock }).stat("domain", blobId);
+		expect(fs.existsSync(ciphertext)).toBe(false);
+		expect(fs.existsSync(sidecar)).toBe(false);
+		expect(warning).toHaveBeenCalledWith(`[router-blob-cache] unreadable recovery ${blobId}`);
+		warning.mockRestore();
 	});
 
 	it("refuses a chunk that crosses the blob ceiling", () => {

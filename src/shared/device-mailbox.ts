@@ -1,5 +1,6 @@
 import { capFifo } from "./cap-fifo.js";
 import type { MailboxEntry, MailboxInput } from "./console-protocol.js";
+import { mintEpoch } from "./epoch.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -54,10 +55,6 @@ function servable(entry: MailboxEntry): boolean {
 }
 
 /** Never re-mints an epoch a console still holds, or a stale cursor acks away fresh mail. */
-function mintEpoch(): number {
-	return 1 + Math.floor(Math.random() * 0x7ffffffe);
-}
-
 ////////////////////////////////
 //  Class
 

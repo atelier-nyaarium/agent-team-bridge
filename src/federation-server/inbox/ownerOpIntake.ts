@@ -26,6 +26,7 @@ export interface OwnerOpIntakeParams {
 
 /** Verified, admitted, fresh operation. */
 export type OwnerOpHandler = (op: OwnerOp, value: Record<string, unknown>) => unknown | Promise<unknown>;
+type DurableNonceStore = Pick<InboxService, "ownerOpNonce" | "acceptOwnerOpNonce">;
 
 const BUILT_IN_KINDS = new Set(["deliver", "consumer_register", "inbox_read", "inbox_advance", "op_result"]);
 
@@ -75,9 +76,18 @@ export class OwnerOpIntake {
 		const replay = this.nonces.get(`${op.signerSignPub}/${op.nonce}`);
 		if (replay) return replay.result ?? refused("replay");
 		const nonceKey = `${op.signerSignPub}/${op.nonce}`;
+		const nonceStore = this.params.inbox as InboxService & Partial<DurableNonceStore>;
+		const durable = nonceStore.ownerOpNonce?.(op.domainId, op.signerSignPub, op.nonce);
+		if (durable) return refused("replay");
 		this.nonces.set(nonceKey, { at: op.at });
 		try {
 			const result = await this.dispatch(op, refused);
+			if (
+				op.op.kind !== "deliver" &&
+				nonceStore.acceptOwnerOpNonce &&
+				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
+			)
+				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
 			this.nonces.set(nonceKey, {
 				at: op.at,
 				...(op.op.kind === "key_request" || op.op.kind === "key_receipt" ? { result } : {}),
@@ -151,6 +161,7 @@ export class OwnerOpIntake {
 			row: row.data,
 			producerSignPub: op.signerSignPub,
 			opKey: { conversationId: op.conversationId, opId: op.opId, hash: sha256Hex(canonicalJson(op.op)) },
+			nonce: { signerSignPub: op.signerSignPub, nonce: op.nonce, at: op.at },
 		});
 		if (result.row && !this.params.push(op.domainId, formatInboxAddress(address), [result.row]))
 			this.params.inbox.markWaking(op.domainId, result.opKey);

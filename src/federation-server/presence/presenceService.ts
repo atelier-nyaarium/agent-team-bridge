@@ -14,6 +14,7 @@ import type { TeamInfo } from "../../shared/types.js";
 import type { GatewayRegistration } from "../gatewayBridge.js";
 import type { OwnerOpHandler } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
+import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
 
 type SpawnPoints = typeof GatewaySpawnPointsSchema._output;
@@ -300,7 +301,12 @@ export function createPresenceService(deps: {
 		});
 		hooks.gatewayFrame("presence_read", (reg) => {
 			if (!deps.projection) return { ok: false, error: "projection unavailable" };
-			return ownerProjection(reg.domainId, deps.projection);
+			try {
+				return ownerProjection(reg.domainId, deps.projection);
+			} catch (error) {
+				if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
+				throw error;
+			}
 		});
 		hooks.ownerOp("presence_read", ((op) => {
 			if (!deps.projection) return { outcome: "refused", reason: "projection unavailable" };

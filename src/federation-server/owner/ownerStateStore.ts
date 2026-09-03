@@ -26,6 +26,7 @@ export type RecordKind =
 	| "inbox.address"
 	| "migration"
 	| "keyReceipt"
+	| "nonce"
 	| "gateway";
 export interface StateRecord {
 	kind: RecordKind;

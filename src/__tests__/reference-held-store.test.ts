@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CorruptHeldIndexError, ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
+import type { BlobReference } from "../shared/blob-reference.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { sealBlobChunk } from "../shared/sealed-blob.js";
 
@@ -27,16 +28,22 @@ describe("ReferenceHeldStore", () => {
 			true,
 		);
 		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
-		const entry = { kind: "entry" as const, id: "entry-1" };
-		const row = { kind: "row" as const, id: "row-1" };
-		store.hold("domain", blobId, entry);
-		store.hold("domain", blobId, row);
+		const entry: BlobReference = { kind: "entry", entryId: "entry-1" };
+		const row: BlobReference = {
+			kind: "row",
+			address: { kind: "gateway", domainId: "domain", gatewayId: "gateway" },
+			seq: 1,
+		};
+		store.applyRefs("domain", [
+			{ ref: entry, blobIds: [blobId] },
+			{ ref: row, blobIds: [blobId] },
+		]);
 		const begun = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
 		if (begun.kind !== "lease") throw new Error("expected lease");
 		expect(store.commitChunk("domain", blobId, begun.lease, 0, bytes, true)).toMatchObject({ complete: true });
-		store.release("domain", blobId, entry);
+		store.applyRefs("domain", [{ ref: entry, blobIds: [] }]);
 		expect(store.has("domain", blobId)).toBe(true);
-		store.release("domain", blobId, row);
+		store.applyRefs("domain", [{ ref: row, blobIds: [] }]);
 		expect(store.has("domain", blobId)).toBe(false);
 	});
 
@@ -54,7 +61,7 @@ describe("ReferenceHeldStore", () => {
 			true,
 		);
 		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
-		store.hold("domain", blobId, { kind: "entry", id: "gone" });
+		store.applyRefs("domain", [{ ref: { kind: "entry", entryId: "gone" }, blobIds: [blobId] }]);
 		const begun = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
 		if (begun.kind !== "lease") throw new Error("expected lease");
 		store.commitChunk("domain", blobId, begun.lease, 0, bytes.subarray(0, 4), false);
@@ -77,7 +84,7 @@ describe("ReferenceHeldStore", () => {
 			true,
 		);
 		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
-		store.hold("domain", blobId, { kind: "entry", id: "entry-1" });
+		store.applyRefs("domain", [{ ref: { kind: "entry", entryId: "entry-1" }, blobIds: [blobId] }]);
 		expect(store.has("domain", blobId)).toBe(false);
 		const begun = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
 		if (begun.kind !== "lease") throw new Error("expected lease");
@@ -101,16 +108,113 @@ describe("ReferenceHeldStore", () => {
 			true,
 		);
 		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
-		const live = { kind: "scheduled" as const, id: "live" };
-		const dead = { kind: "row" as const, id: "dead" };
-		store.hold("domain", blobId, live);
-		store.hold("domain", blobId, dead);
+		const live: BlobReference = {
+			kind: "scheduled",
+			target: { domainId: "domain", gatewayId: "gateway", sessionId: "live" },
+		};
+		const dead: BlobReference = {
+			kind: "row",
+			address: { kind: "gateway", domainId: "domain", gatewayId: "gateway" },
+			seq: 2,
+		};
+		store.applyRefs("domain", [
+			{ ref: live, blobIds: [blobId] },
+			{ ref: dead, blobIds: [blobId] },
+		]);
 		const begun = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
 		if (begun.kind !== "lease") throw new Error("expected lease");
 		store.commitChunk("domain", blobId, begun.lease, 0, bytes, true);
-		store.reconcile("domain", (ref) => ref.id === "live");
+		store.reconcile("domain", (ref) => ref.kind === "scheduled");
 		expect(store.refs("domain", blobId)).toEqual([live]);
 		store.reconcile("domain", () => false);
 		expect(store.has("domain", blobId)).toBe(false);
+	});
+
+	it("replacing one reference with a larger set keeps existing bytes", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const store = new ReferenceHeldStore({ dataDir: root });
+		const plain = Buffer.from("replace");
+		const blobId = blobIdFor(plain);
+		const bytes = sealBlobChunk(
+			plain,
+			Buffer.alloc(32, 4),
+			{ domainId: "domain", ownerSignPub: "owner", epoch: 1, blobId },
+			0,
+			true,
+		);
+		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+		const ref: BlobReference = { kind: "entry", entryId: "entry" };
+		store.applyRefs("domain", [{ ref, blobIds: [blobId] }]);
+		const lease = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		store.commitChunk("domain", blobId, lease.lease, 0, bytes, true);
+		store.applyRefs("domain", [{ ref, blobIds: [blobId, "another"] }]);
+		expect(store.has("domain", blobId)).toBe(true);
+	});
+
+	it("moves one blob between references in one batch without deleting it", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const store = new ReferenceHeldStore({ dataDir: root });
+		const plain = Buffer.from("move");
+		const blobId = blobIdFor(plain);
+		const bytes = sealBlobChunk(
+			plain,
+			Buffer.alloc(32, 4),
+			{ domainId: "domain", ownerSignPub: "owner", epoch: 1, blobId },
+			0,
+			true,
+		);
+		const digest = `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+		const from: BlobReference = { kind: "entry", entryId: "from" };
+		const to: BlobReference = { kind: "entry", entryId: "to" };
+		store.applyRefs("domain", [{ ref: from, blobIds: [blobId] }]);
+		const lease = store.begin("domain", blobId, plain.length, bytes.length, digest, 1);
+		if (lease.kind !== "lease") throw new Error("expected lease");
+		store.commitChunk("domain", blobId, lease.lease, 0, bytes, true);
+		store.applyRefs("domain", [
+			{ ref: from, blobIds: [] },
+			{ ref: to, blobIds: [blobId] },
+		]);
+		expect(store.has("domain", blobId)).toBe(true);
+		expect(store.refs("domain", blobId)).toEqual([to]);
+	});
+
+	it("keeps an unparseable stored reference and logs it during reconcile", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const indexDir = path.join(root, "blobs", "domain", "held");
+		fs.mkdirSync(indexDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(indexDir, "index.json"),
+			JSON.stringify({ entries: { blob: { refs: ["not-a-reference"] } } }),
+		);
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const store = new ReferenceHeldStore({ dataDir: root });
+		store.reconcile("domain", () => false);
+		expect(warning).toHaveBeenCalledWith("[router] unknown blob reference not-a-reference");
+		expect(JSON.parse(fs.readFileSync(path.join(indexDir, "index.json"), "utf8")).entries.blob.refs).toEqual([
+			"not-a-reference",
+		]);
+		warning.mockRestore();
+	});
+
+	it("keeps the index quarantined across repeated opens", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
+		roots.push(root);
+		const file = path.join(root, "blobs", "domain", "held", "index.json");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "corrupt");
+		const store = new ReferenceHeldStore({ dataDir: root });
+		let first: unknown;
+		try {
+			store.refs("domain", `sha256-${"0".repeat(64)}`);
+		} catch (error) {
+			first = error;
+		}
+		expect(first).toBeInstanceOf(CorruptHeldIndexError);
+		expect(() => store.refs("domain", `sha256-${"0".repeat(64)}`)).toThrow(CorruptHeldIndexError);
+		expect(fs.existsSync(file)).toBe(false);
 	});
 });

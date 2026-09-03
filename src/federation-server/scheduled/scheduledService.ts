@@ -1,3 +1,4 @@
+import type { BlobReference } from "../../shared/blob-reference.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
 import type { InboxAddress, OpKey, OpResultEnvelope, OwnerOp } from "../../shared/schemasInbox.js";
 import {
@@ -30,8 +31,7 @@ export interface ScheduledDeps {
 	) => OpResultEnvelope & { seq?: number };
 	referenceHeld: {
 		has(domainId: string, blobId: string): boolean;
-		hold(domainId: string, blobId: string, ref: { kind: "scheduled" | "row"; id: string }): void;
-		release(domainId: string, blobId: string, ref: { kind: "scheduled"; id: string }): void;
+		applyRefs(domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]): void;
 	};
 	scheduler: ScheduledScheduler;
 	now: () => number;
@@ -80,9 +80,9 @@ export function createScheduledService(deps: ScheduledDeps) {
 			body: { opId: record.opId, outcome, ...(seq === undefined ? {} : { seq }), body: record.body },
 			contentRefs: record.files,
 		});
-	const scheduledRef = (target: ScheduledTarget) => ({ kind: "scheduled" as const, id: recordId(target) });
-	const releaseFiles = (domainId: string, record: { target: ScheduledTarget; files: string[] }) => {
-		for (const blobId of record.files) deps.referenceHeld.release(domainId, blobId, scheduledRef(record.target));
+	const scheduledRef = (target: ScheduledTarget): BlobReference => ({ kind: "scheduled", target });
+	const applyRefs = (domainId: string, sets: readonly { ref: BlobReference; blobIds: readonly string[] }[]) => {
+		deps.referenceHeld.applyRefs(domainId, sets);
 	};
 	const timerKey = (domainId: string, target: ScheduledTarget) => `${domainId}/${recordId(target)}`;
 	const clearTimer = (domainId: string, target: ScheduledTarget) => {
@@ -116,12 +116,10 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const store = deps.registry.for(domainId);
 		const id = recordId(input.target);
 		const current = store.get("scheduled", id);
+		if (current?.clear.state === "firing") return envelope(sender, "conflict", { version: current.version });
 		const expected = current ? (input.expectedVersion ?? null) : null;
 		if (current ? expected !== current.version : input.expectedVersion !== undefined)
 			return envelope(sender, "conflict", { version: current?.version });
-		const previous = current
-			? ScheduledRecordSchema.safeParse({ ...current.clear, version: current.version })
-			: null;
 		const record = {
 			target: input.target,
 			fireAt: input.fireAt,
@@ -136,15 +134,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const write = store.put("scheduled", id, current ? expected : null, { clear: record });
 		if (write.kind !== "ok")
 			return envelope(sender, write.kind === "conflict" ? "conflict" : "durability_uncertain");
-		// Release only membership diffs; holds are idempotent.
-		if (previous?.success) {
-			const kept = new Set(input.files);
-			releaseFiles(domainId, {
-				...previous.data,
-				files: previous.data.files.filter((blobId) => !kept.has(blobId)),
-			});
-		}
-		for (const blobId of input.files) deps.referenceHeld.hold(domainId, blobId, scheduledRef(input.target));
+		applyRefs(domainId, [{ ref: scheduledRef(input.target), blobIds: input.files }]);
 		scheduleTimer(domainId, input.target, input.fireAt);
 		const pending = resultRow(domainId, { ...record, version: write.version } as ScheduledRecord, "pending");
 		if (pending.outcome !== "accepted") return envelope(sender, "durability_uncertain");
@@ -156,6 +146,8 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const current = store.get("scheduled", recordId(target));
 		if (!current || current.version !== expectedVersion)
 			return { outcome: "refused", reason: "conflict", version: current?.version };
+		if (current.clear.state === "firing")
+			return { outcome: "refused", reason: "conflict", version: current.version };
 		if (TERMINAL.has(String(current.clear.state))) return { outcome: "refused", reason: "settled" };
 		const record = ScheduledRecordSchema.parse({
 			...current.clear,
@@ -165,7 +157,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const write = store.put("scheduled", current.id, expectedVersion, { clear: record });
 		if (write.kind !== "ok") return { outcome: "refused", reason: "conflict" };
 		clearTimer(domainId, target);
-		releaseFiles(domainId, record);
+		applyRefs(domainId, [{ ref: scheduledRef(target), blobIds: [] }]);
 		return { outcome: "accepted", version: write.version };
 	}
 
@@ -201,16 +193,17 @@ export function createScheduledService(deps: ScheduledDeps) {
 			record.files,
 		);
 		if (sent.outcome === "accepted") {
-			// Row holds files; release schedule hold.
-			if (sent.seq !== undefined)
-				for (const blobId of record.files)
-					deps.referenceHeld.hold(domainId, blobId, { kind: "row", id: `${recordId(target)}:${sent.seq}` });
-			releaseFiles(domainId, record);
 			const done = store.put("scheduled", current.id, firing.version, {
 				clear: { ...record, state: "fired", attempts: record.attempts + 1 },
 			});
-			if (done.kind === "ok") resultRow(domainId, record, "sent", sent.seq);
-			else retryLater(domainId, target);
+			if (done.kind === "ok") {
+				if (sent.seq !== undefined)
+					applyRefs(domainId, [
+						{ ref: scheduledRef(target), blobIds: [] },
+						{ ref: { kind: "row", address: addressOf(target), seq: sent.seq }, blobIds: record.files },
+					]);
+				resultRow(domainId, record, "sent", sent.seq);
+			} else retryLater(domainId, target);
 			return sent;
 		}
 		const attempts = record.attempts + 1;
@@ -228,7 +221,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 			retryLater(domainId, target);
 			return sent;
 		}
-		releaseFiles(domainId, record);
+		applyRefs(domainId, [{ ref: scheduledRef(target), blobIds: [] }]);
 		resultRow(domainId, record, "failed");
 		return sent;
 	}

@@ -2,14 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { GatewayBridge } from "../federation-server/gatewayBridge.js";
+import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import { signAdmission, signRegister } from "../shared/admission.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signRowEnvelope } from "../shared/schemasInbox.js";
-import { sealBlobChunk } from "../shared/sealed-blob.js";
+import { sealBlobChunk, sealedBlobSize } from "../shared/sealed-blob.js";
 
 function socket() {
 	const sent: Record<string, unknown>[] = [];
@@ -40,7 +42,7 @@ const fakeInbox = (overrides: Record<string, unknown> = {}) =>
 		...overrides,
 	}) as never;
 
-async function registered(inbox: never, hasLinkEdge = false, blobCache?: never) {
+async function registered(inbox: never, hasLinkEdge = false, blobCache?: never, referenceHeld?: ReferenceHeldStore) {
 	const owner = generateIdentity();
 	const gateway = generateIdentity();
 	const admission = signAdmission(
@@ -64,6 +66,7 @@ async function registered(inbox: never, hasLinkEdge = false, blobCache?: never) 
 		adminDomainId: () => "domain",
 		inbox,
 		blobCache,
+		referenceHeld,
 	});
 	bridge.attach();
 	const ws = socket();
@@ -90,6 +93,52 @@ const signedRow = (envelope: Parameters<typeof signRowEnvelope>[0], signPriv: st
 });
 
 describe("GatewayBridge inbox", () => {
+	it("refuses a held blob begin for a missing record", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-held-"));
+		try {
+			const held = new ReferenceHeldStore({ dataDir: root });
+			held.setReferenceExists(() => false);
+			const { bridge } = await registered(fakeInbox(), false, undefined, held);
+			const answer = await bridge.handleCall("c1", "blob_begin", {
+				blobId: "blob",
+				size: 1,
+				ciphertextSize: sealedBlobSize(1),
+				ciphertextDigest: `sha256-${"0".repeat(64)}`,
+				epoch: 1,
+				store: "held",
+				ref: { kind: "entry", id: "entry:missing" },
+				incarnation: 1,
+			});
+			expect(answer).toEqual({ ok: false, error: "reference missing" });
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a held blob begin when the owner is quarantined", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-held-"));
+		try {
+			const held = new ReferenceHeldStore({ dataDir: root });
+			held.setReferenceExists(() => {
+				throw new OwnerQuarantined({ from: 1, to: 2 });
+			});
+			const { bridge } = await registered(fakeInbox(), false, undefined, held);
+			const answer = await bridge.handleCall("c1", "blob_begin", {
+				blobId: "blob",
+				size: 1,
+				ciphertextSize: sealedBlobSize(1),
+				ciphertextDigest: `sha256-${"0".repeat(64)}`,
+				epoch: 1,
+				store: "held",
+				ref: { kind: "entry", id: "entry:missing" },
+				incarnation: 1,
+			});
+			expect(answer).toEqual({ ok: false, error: "refused", reason: "durability_uncertain" });
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts sealed cache begin and chunk frames", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-blob-"));
 		try {
@@ -115,6 +164,7 @@ describe("GatewayBridge inbox", () => {
 				incarnation: 1,
 			})) as { kind: string; lease: { id: string; generation: number } };
 			expect(begun.kind).toBe("lease");
+			const renew = vi.spyOn(cache, "renew");
 			expect(
 				await bridge.handleCall("c1", "blob_chunk", {
 					blobId,
@@ -126,6 +176,7 @@ describe("GatewayBridge inbox", () => {
 					incarnation: 1,
 				}),
 			).toMatchObject({ complete: true });
+			expect(renew).toHaveBeenCalledWith("domain", blobId, begun.lease.id);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
