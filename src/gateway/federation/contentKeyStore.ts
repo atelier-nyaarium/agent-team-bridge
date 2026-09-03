@@ -162,12 +162,13 @@ export class ContentKeyStore {
 		return "installed";
 	}
 
-	/** Seals under the newest held epoch. */
+	/** Seals under a held epoch. */
 	seal(
 		plaintext: Buffer,
 		aad: Omit<ContentAad, "epoch">,
+		explicitEpoch?: number,
 	): { kind: "ok"; envelope: ContentEnvelope } | { kind: "no_key" } {
-		const epoch = this.epochs().at(-1);
+		const epoch = explicitEpoch ?? this.epochs().at(-1);
 		const key = epoch === undefined ? null : this.keyFor(epoch);
 		if (epoch === undefined || !key) return { kind: "no_key" };
 		return { kind: "ok", envelope: sealContent(plaintext, key, { ...aad, epoch }) };

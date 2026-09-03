@@ -11,7 +11,13 @@ import { DeviceMailboxStore } from "../src/shared/device-mailbox.js";
 import { resolveLocalDomainId } from "../src/shared/domain-id.js";
 import { DurableStore, openDurable } from "../src/shared/durable-store.js";
 import { resolveLocalGatewayId } from "../src/shared/gateway-id.js";
-import { fenced, useMigrationEpochFile } from "../src/shared/migration-fence.js";
+import {
+	fenced,
+	MIGRATION_SETTLE_MS,
+	migrationEpoch,
+	migrationFenceRaisedAt,
+	useMigrationEpochFile,
+} from "../src/shared/migration-fence.js";
 import { ownerKeyId } from "../src/shared/owner-id.js";
 import { PendingDeliveryStore } from "../src/shared/pending-delivery-store.js";
 import type { PlanePersistedState } from "../src/shared/plane-registry.js";
@@ -46,6 +52,13 @@ function main(): void {
 	const outDir = process.argv.includes("--out") ? argument("--out") : dataDir;
 	useMigrationEpochFile(dataDir);
 	if (!fenced()) throw new Error("migration fence is not up; refusing to export live state");
+	if (migrationEpoch() !== epoch)
+		throw new Error(`migration epoch mismatch: fence=${migrationEpoch()} argument=${epoch}`);
+	const raisedAt = migrationFenceRaisedAt();
+	if (raisedAt === null || Date.now() - raisedAt < MIGRATION_SETTLE_MS)
+		throw new Error(
+			`migration fence has not settled; remaining seconds: ${Math.ceil((MIGRATION_SETTLE_MS - (raisedAt === null ? 0 : Date.now() - raisedAt)) / 1000)}`,
+		);
 
 	const federationDir = process.env.FEDERATION_DIR || path.join(dataDir, "federation");
 	const domainId = resolveLocalDomainId(federationDir);
@@ -93,7 +106,8 @@ function main(): void {
 			// Gateway-owned key access.
 			// Kinds are already bound.
 			seal: (plaintext, kind) => {
-				const sealed = keys.seal(Buffer.from(plaintext, "utf8"), { domainId, ownerSignPub, kind });
+				const sealed = keys.seal(Buffer.from(plaintext, "utf8"), { domainId, ownerSignPub, kind }, 1);
+				if (sealed.kind === "no_key") throw new Error("migration export requires content key epoch 1");
 				return sealed.kind === "ok" ? sealed.envelope : null;
 			},
 			ownerIds: () => [...owners],
@@ -133,7 +147,6 @@ function main(): void {
 		board: snapshot.owners.reduce((n, owner) => n + owner.board.length, 0),
 		mailboxes: snapshot.owners.reduce((n, owner) => n + owner.mailboxes.length, 0),
 		rows: snapshot.owners.reduce((n, owner) => n + owner.mailboxes.reduce((m, box) => m + box.rows.length, 0), 0),
-		pending: snapshot.owners.reduce((n, owner) => n + owner.pending.length, 0),
 		shares: snapshot.shares.length,
 		refusals: snapshot.owners.reduce((n, owner) => n + owner.refusals.length, 0),
 	};

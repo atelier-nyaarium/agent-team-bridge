@@ -4,7 +4,13 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fenced, useMigrationEpochFile } from "../src/shared/migration-fence.js";
+import {
+	fenced,
+	MIGRATION_SETTLE_MS,
+	migrationEpoch,
+	migrationFenceRaisedAt,
+	useMigrationEpochFile,
+} from "../src/shared/migration-fence.js";
 
 const dataDir = process.env.DATA_DIR || "/app/data";
 
@@ -22,6 +28,13 @@ function main(): void {
 	useMigrationEpochFile(dataDir);
 	// Refuse torn archives.
 	if (!fenced()) throw new Error("migration fence is not up; refusing to cut live state");
+	if (migrationEpoch() !== epoch)
+		throw new Error(`migration epoch mismatch: fence=${migrationEpoch()} argument=${epoch}`);
+	const raisedAt = migrationFenceRaisedAt();
+	if (raisedAt === null || Date.now() - raisedAt < MIGRATION_SETTLE_MS)
+		throw new Error(
+			`migration fence has not settled; remaining seconds: ${Math.ceil((MIGRATION_SETTLE_MS - (raisedAt === null ? 0 : Date.now() - raisedAt)) / 1000)}`,
+		);
 
 	fs.mkdirSync(outDir, { recursive: true });
 	const name = `cut-${epoch}.tar`;

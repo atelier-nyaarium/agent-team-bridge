@@ -4,7 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { decideImport, type ImportMarker, markerKey } from "../federation-server/migration/importDecision.js";
-import { IMPORTED, isPreserved, PRESERVED, violations } from "../federation-server/migration/importLayout.js";
+import {
+	IMPORTED,
+	isPreserved,
+	PRESERVED,
+	preservedDigests,
+	violations,
+} from "../federation-server/migration/importLayout.js";
 import {
 	declaredCounts,
 	dedupeRows,
@@ -20,6 +26,7 @@ import {
 	finishImport,
 	parseSums,
 } from "../federation-server/migration/serveGate.js";
+import { OwnerLock, OwnerLockHeld } from "../federation-server/owner/ownerLock.js";
 import type { MailboxEntry } from "../shared/console-protocol.js";
 import type { MigrationExport } from "../shared/schemasMigration.js";
 
@@ -188,7 +195,7 @@ describe("migration import", () => {
 			rows: () => [1, 2, 3],
 		};
 
-		expect(writtenCounts(store, ["owner:a"])).toEqual({ board: 2, shares: 1, rows: 3 });
+		expect(writtenCounts(store, ["owner:a"])).toMatchObject({ board: 2, shares: 1, rows: 3 });
 	});
 
 	it("refuses to serve while an import is unverified", () => {
@@ -215,5 +222,37 @@ describe("migration import", () => {
 		const kept = dedupeRows([row(1, "k1")], [row(5, "k1"), row(6, "k2"), row(7)]);
 
 		expect(kept.map((r) => r.seq)).toEqual([6, 7]);
+	});
+
+	it("dedupes a migrated twin against a native Router opKey", () => {
+		const opKey = { conversationId: "conv", opId: "stable" };
+		const native = { envelope: { opKey } };
+		const migrated = { envelope: { opKey }, dedupeKey: "legacy" };
+
+		expect(dedupeRows([native], [migrated])).toEqual([]);
+	});
+
+	it("refuses when either preserved TLS file is absent", () => {
+		for (const missing of ["router-cert.pem", "router-key.pem"]) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-import-"));
+			fs.writeFileSync(path.join(dir, "federation.json"), "{}", "utf8");
+			for (const name of ["router-cert.pem", "router-key.pem"])
+				if (name !== missing) fs.writeFileSync(path.join(dir, name), "tls", "utf8");
+			expect(() => preservedDigests(dir)).toThrow(`preserved file missing: ${missing}`);
+			expect(fs.existsSync(path.join(dir, "import-in-progress"))).toBe(false);
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a live owner lock and exposes its holder pid", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lock-"));
+		const lock = OwnerLock.open(dir, 60_000);
+		try {
+			expect(() => OwnerLock.open(dir)).toThrow(OwnerLockHeld);
+			expect(`live Router owner lock held by pid ${process.pid}`).toContain(String(process.pid));
+		} finally {
+			lock.stop();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

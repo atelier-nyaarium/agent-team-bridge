@@ -1,19 +1,68 @@
+import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
+import { CONVERSATION_ID_RE } from "../../shared/host-op.js";
+import { formatInboxAddress, parseInboxAddress, signRowEnvelope } from "../../shared/schemasInbox.js";
 import type { MigrationExport } from "../../shared/schemasMigration.js";
 
 export interface ImportStore {
-	get(kind: "board.entry" | "inbox.address" | "readAnchor" | "share", id: string): { version: number } | null;
-	put(
-		kind: "board.entry" | "inbox.address" | "readAnchor" | "share" | "inbox.row",
-		id: string,
-		expectedVersion: number | null,
-		value: Record<string, unknown>,
-	): { kind: string };
-	append(address: string, row: Record<string, unknown>): { kind: string };
-	rows(address: string, from: number, to: number): Array<{ row: { dedupeKey?: string; seq?: number } }>;
+	get(kind: string, id: string): { version: number; clear?: Record<string, unknown> } | null;
+	put(kind: string, id: string, expectedVersion: number | null, value: Record<string, unknown>): { kind: string };
+	append(address: string, row: Record<string, unknown>): { kind: string; seq?: number };
+	rows(address: string, from: number, to: number): Array<{ seq?: number; row: Record<string, unknown> }>;
+	nextSeq?(address: string): number;
 }
 
 export interface ApplyResult {
 	addresses: string[];
+}
+
+function opId(address: string, row: { dedupeKey?: string; seq?: number }, oldEpoch: number): string {
+	return sha256Hex(canonicalJson(row.dedupeKey ?? [address, oldEpoch, row.seq])).slice(0, 128);
+}
+
+function legacyConversationId(row: Record<string, unknown>): string {
+	const conversationId = row.conversationId;
+	return typeof conversationId === "string" && CONVERSATION_ID_RE.test(conversationId) ? conversationId : "migrated";
+}
+
+function contentRefs(row: Record<string, unknown>): string[] {
+	const files = Array.isArray(row.files) ? row.files : [];
+	return files.flatMap((file) => {
+		if (!file || typeof file !== "object") return [];
+		const blobId = (file as Record<string, unknown>).blobId;
+		return typeof blobId === "string" ? [blobId] : [];
+	});
+}
+
+function routerRow(
+	row: { row: Record<string, unknown>; text?: Record<string, unknown> },
+	address: string,
+	conversationId: string,
+	oldEpoch: number,
+	domainId: string,
+	seq: number,
+	routerSignPriv: string,
+	routerSignPub: string,
+): Record<string, unknown> {
+	if (!row.text) throw new Error(`row ${conversationId}/${String(row.row.seq)} has no sealed body`);
+	const legacyId = legacyConversationId(row.row);
+	const envelope = {
+		origin: { kind: "router" as const, domainId },
+		opKey: {
+			conversationId: legacyId,
+			opId: opId(address, row.row, oldEpoch),
+		},
+		epoch: row.text.epoch,
+		kind: row.row.kind,
+		contentRefs: contentRefs(row.row),
+	} as Parameters<typeof signRowEnvelope>[0];
+	return {
+		envelope,
+		producerSig: signRowEnvelope(envelope, routerSignPriv),
+		body: row.text,
+		seq,
+		acceptedAt: Number(row.row.at ?? 0),
+		size: Buffer.byteLength(canonicalJson({ envelope, body: row.text })),
+	};
 }
 
 export function applyImport(
@@ -24,8 +73,42 @@ export function applyImport(
 		existing: readonly { dedupeKey?: string; seq?: number }[],
 		incoming: readonly T[],
 	) => T[],
+	routerSignPriv: string,
+	routerSignPub: string,
 ): ApplyResult {
+	if (!routerSignPriv || !routerSignPub) throw new Error("Router signing identity is required for migration import");
 	const addresses: string[] = [];
+	const planned = new Map<string, number>();
+	const mailboxPlans: Array<{
+		owner: MigrationExport["owners"][number];
+		box: MigrationExport["owners"][number]["mailboxes"][number];
+		address: string;
+		start: number;
+		expected: number[];
+	}> = [];
+	for (const owner of snapshot.owners) {
+		for (const box of owner.mailboxes) {
+			const addressText = (box as typeof box & { address?: string }).address ?? box.conversationId;
+			const parsed = parseInboxAddress(addressText);
+			if (!parsed) throw new Error(`invalid mailbox address: ${addressText}`);
+			const address = formatInboxAddress(parsed);
+			const start = planned.get(address) ?? store.nextSeq?.(address) ?? 1;
+			const expected: number[] = [];
+			for (const item of box.rows) {
+				const mapped = box.cursorMap.find(
+					(entry) => entry.oldEpoch === box.epoch && entry.oldSeq === item.row.seq,
+				);
+				if (!mapped) throw new Error(`unmapped row: ${address}/${item.row.seq}`);
+				const seq = start + expected.length;
+				if (mapped.epoch !== snapshot.epoch || mapped.seq !== seq)
+					throw new Error(`cursor sequence mismatch at ${address}/${mapped.seq}`);
+				expected.push(seq);
+			}
+			planned.set(address, start + box.rows.length);
+			mailboxPlans.push({ owner, box, address, start, expected });
+		}
+	}
+	planned.clear();
 	for (const owner of snapshot.owners) {
 		for (const item of owner.board) {
 			const entry = item.entry;
@@ -34,27 +117,58 @@ export function applyImport(
 				state: entry.state,
 				rank: entry.rank,
 				...(entry.parent ? { parent: entry.parent } : {}),
-				...(item.session ? { session: item.session } : {}),
+				...(entry.trashedAt !== undefined ? { trashedAt: entry.trashedAt } : {}),
+				...(entry.attachments ? { attachments: entry.attachments } : {}),
 			};
 			const result = store.put("board.entry", entry.id, null, { clear, sealed: item.sealed });
 			if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`board write ${result.kind}`);
 		}
-		for (const box of owner.mailboxes) {
-			const address = `owner:${snapshot.domainId}/${ownerSignPub}`;
-			const existing = store.rows(address, 1, Number.MAX_SAFE_INTEGER).map((row) => row.row);
-			// Keyless rows use their sequence identity.
-			const incoming = box.rows.map((entry) => ({
-				...entry,
-				dedupeKey: entry.row.dedupeKey,
-				seq: entry.row.seq,
-			}));
-			for (const row of dedupe(existing, incoming)) {
-				const result = store.append(address, row as unknown as Record<string, unknown>);
-				if (result.kind !== "ok") throw new Error(`mailbox write ${result.kind}`);
+		for (const plan of mailboxPlans.filter((candidate) => candidate.owner === owner)) {
+			const { box, address, expected } = plan;
+			const existing = store.rows(address, 1, Number.MAX_SAFE_INTEGER).map((item) => item.row);
+			for (const item of box.rows) {
+				const incoming = routerRow(
+					item,
+					address,
+					box.conversationId,
+					box.epoch,
+					snapshot.domainId,
+					expected[box.rows.indexOf(item)]!,
+					routerSignPriv,
+					routerSignPub,
+				);
+				const candidate = { ...incoming, seq: item.row.seq, dedupeKey: item.row.dedupeKey };
+				for (const _row of dedupe(existing, [candidate])) {
+					const result = store.append(address, incoming);
+					if (
+						result.kind !== "ok" ||
+						(result.seq !== undefined && result.seq !== expected[box.rows.indexOf(item)])
+					)
+						throw new Error(`mailbox write ${result.kind}`);
+				}
 			}
-			store.put("inbox.address", address, store.get("inbox.address", address)?.version ?? null, {
-				clear: { epoch: box.epoch, cursorMap: box.cursorMap, consumerCursors: box.consumerCursors },
-			});
+			const addressResult = store.put(
+				"inbox.address",
+				address,
+				store.get("inbox.address", address)?.version ?? null,
+				{
+					clear: { epoch: snapshot.epoch, deliveryEpoch: snapshot.epoch, cursorMap: box.cursorMap },
+				},
+			);
+			if (addressResult.kind !== "ok" && addressResult.kind !== "conflict")
+				throw new Error(`address write ${addressResult.kind}`);
+			for (const [device, seq] of box.consumerCursors) {
+				const result = store.put(
+					"consumer",
+					`${address}/${device}`,
+					store.get("consumer", `${address}/${device}`)?.version ?? null,
+					{
+						clear: { address, device, seq },
+					},
+				);
+				if (result.kind !== "ok" && result.kind !== "conflict")
+					throw new Error(`consumer write ${result.kind}`);
+			}
 			addresses.push(address);
 		}
 		for (const [team, anchor] of Object.entries(owner.readAnchors)) {
@@ -63,10 +177,9 @@ export function applyImport(
 				clear: anchor as Record<string, unknown>,
 			});
 		}
-		for (const delivery of owner.pending as Array<Record<string, unknown>>) {
-			const id = String(delivery.deliveryId ?? "");
-			if (!id) throw new Error("pending delivery without an id");
-			store.put("inbox.row", `pending:${id}`, null, { clear: delivery });
+		for (const refusal of owner.refusals) {
+			const id = `refusal:${owner.ownerId}:${refusal.entryId}`;
+			store.put("migration", id, null, { clear: refusal as Record<string, unknown> });
 		}
 	}
 	for (const share of snapshot.shares as Array<Record<string, unknown>>) {

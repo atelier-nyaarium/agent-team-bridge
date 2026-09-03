@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "../../shared/atomic-write.js";
 
 /** Marker present means refuse serving. */
 export const IN_PROGRESS = "import-in-progress";
@@ -13,12 +14,22 @@ export function decideServe(dataDir: string): ServeVerdict {
 }
 
 export function beginImport(dataDir: string, note: string): void {
-	fs.writeFileSync(path.join(dataDir, IN_PROGRESS), note, { mode: 0o600 });
+	writeFileAtomic(path.join(dataDir, IN_PROGRESS), note, { mode: 0o600, fsyncFile: true, fsyncDirectory: true });
 }
 
 /** Clear only after verification. */
 export function finishImport(dataDir: string): void {
-	fs.rmSync(path.join(dataDir, IN_PROGRESS), { force: true });
+	// Directory fsync makes removal durable.
+	const marker = path.join(dataDir, IN_PROGRESS);
+	fs.rmSync(marker, { force: true });
+	if (process.platform !== "win32") {
+		const fd = fs.openSync(dataDir, "r");
+		try {
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
+		}
+	}
 }
 
 export function parseSums(contents: string): Record<string, string> {

@@ -14,6 +14,7 @@ const POLL_MS = 1000;
 export const MIGRATION_SETTLE_MS = 60_000;
 
 let read: () => number | null = () => null;
+let raisedAt: () => number | null = () => null;
 let cachedEpoch: number | null = null;
 let cachedAt = -Infinity;
 let clock: () => number = () => Date.now();
@@ -30,12 +31,21 @@ export function useMigrationEpochFile(dataDir: string): void {
 			return fs.existsSync(file) ? 0 : null;
 		}
 	};
+	raisedAt = () => {
+		try {
+			const stat = fs.statSync(file);
+			return stat.mtimeMs;
+		} catch {
+			return null;
+		}
+	};
 	invalidate();
 }
 
 /** Set the fence directly. */
 export function setMigrationEpoch(epoch: number | null): void {
 	read = () => epoch;
+	raisedAt = () => null;
 	invalidate();
 }
 
@@ -62,4 +72,12 @@ export function migrationEpoch(): number | null {
 /** Whether migrated state is fenced. */
 export function fenced(): boolean {
 	return migrationEpoch() !== null;
+}
+
+// Decimal epoch. Mtime marks raising.
+// Grammar: bare decimal epoch; settle age uses the operator's clock and file mtime.
+export function migrationFenceRaisedAt(): number | null {
+	const now = clock();
+	if (now - cachedAt >= POLL_MS) migrationEpoch();
+	return raisedAt();
 }

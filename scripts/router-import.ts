@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyImport, type ImportStore } from "../src/federation-server/migration/applyImport.js";
 import { decideImport, type ImportMarker, markerKey } from "../src/federation-server/migration/importDecision.js";
-import { PRESERVED, violations } from "../src/federation-server/migration/importLayout.js";
+import { preservedDigests, violations } from "../src/federation-server/migration/importLayout.js";
 import {
 	declaredCounts,
 	dedupeRows,
@@ -14,7 +14,9 @@ import {
 } from "../src/federation-server/migration/importVerify.js";
 import { beginImport, declaredDigest, finishImport, parseSums } from "../src/federation-server/migration/serveGate.js";
 import { DomainQuota } from "../src/federation-server/owner/domainQuota.js";
+import { OwnerLockHeld } from "../src/federation-server/owner/ownerLock.js";
 import { OwnerStateStore } from "../src/federation-server/owner/ownerStateStore.js";
+import { writeFileAtomic } from "../src/shared/atomic-write.js";
 import { ownerKeyId } from "../src/shared/owner-id.js";
 import { MigrationExportSchema } from "../src/shared/schemasMigration.js";
 
@@ -28,7 +30,7 @@ function fromFile(): string {
 	return file;
 }
 
-function main(): void {
+async function main(): Promise<void> {
 	const file = fromFile();
 	const bytes = fs.readFileSync(file);
 	const parsed = MigrationExportSchema.safeParse(JSON.parse(bytes.toString("utf8")));
@@ -56,49 +58,78 @@ function main(): void {
 		throw new Error(`unmapped rows: ${missing.map((row) => `${row.conversationId}/${row.oldSeq}`).join(", ")}`);
 	const faults = structureFaults(snapshot);
 	if (faults.length) throw new Error(`board structure: ${faults.map((f) => `${f.entryId} ${f.fault}`).join(", ")}`);
-	// Keep the Router gated until verification.
-	beginImport(dataDir, `${snapshot.gatewayId}/${snapshot.epoch}`);
 	const federation = JSON.parse(fs.readFileSync(path.join(dataDir, "federation.json"), "utf8")) as {
 		enrollment?: Record<string, { ownerSignPub?: string | null }>;
 	};
 	const ownerSignPub = federation.enrollment?.[snapshot.domainId]?.ownerSignPub;
 	if (!ownerSignPub) throw new Error(`domain is not rooted: ${snapshot.domainId}`);
 	const ownerId = ownerKeyId(ownerSignPub);
-	const before: Record<string, string> = {};
-	for (const name of PRESERVED) {
-		const target = path.join(dataDir, name);
-		before[name] = fs.existsSync(target) ? createHash("sha256").update(fs.readFileSync(target)).digest("hex") : "";
-	}
+	const before = preservedDigests(dataDir);
+	// Keep the Router gated until verification.
+	beginImport(dataDir, `${snapshot.gatewayId}/${snapshot.epoch}`);
 	const quota = new DomainQuota({
 		dir: dataDir,
 		limitBytes: Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024),
 	});
-	const store = OwnerStateStore.open({ dataDir, key: { domainId: snapshot.domainId, ownerSignPub }, quota });
+	let store: OwnerStateStore;
+	try {
+		store = OwnerStateStore.open({ dataDir, key: { domainId: snapshot.domainId, ownerSignPub }, quota });
+	} catch (error) {
+		if (error instanceof OwnerLockHeld)
+			throw new Error(
+				`live Router owner lock held by pid ${readLockPid(dataDir, snapshot.domainId, ownerSignPub)}`,
+			);
+		throw error;
+	}
 	try {
 		for (const owner of snapshot.owners)
 			if (owner.ownerId !== ownerId) throw new Error(`owner mismatch: ${owner.ownerId}`);
-		const { addresses } = applyImport(store as unknown as ImportStore, snapshot, ownerSignPub, dedupeRows);
+		const { addresses } = applyImport(
+			store as unknown as ImportStore,
+			snapshot,
+			ownerSignPub,
+			dedupeRows,
+			(
+				JSON.parse(fs.readFileSync(path.join(dataDir, "federation.json"), "utf8")) as {
+					identity: { sign: { priv: string; pub: string } };
+				}
+			).identity.sign.priv,
+			(
+				JSON.parse(fs.readFileSync(path.join(dataDir, "federation.json"), "utf8")) as {
+					identity: { sign: { priv: string; pub: string } };
+				}
+			).identity.sign.pub,
+		);
 		// Verify persisted state.
 		const failures = verifyCounts(declaredCounts(snapshot), writtenCounts(store, addresses));
 		if (failures.length) throw new Error(`count verification failed: ${JSON.stringify(failures)}`);
 	} finally {
 		store.close();
 	}
-	const after: Record<string, string> = {};
-	for (const name of PRESERVED) {
-		const target = path.join(dataDir, name);
-		after[name] = fs.existsSync(target) ? createHash("sha256").update(fs.readFileSync(target)).digest("hex") : "";
-	}
+	const after = preservedDigests(dataDir);
 	const changed = violations(before, after);
 	if (changed.length) throw new Error(`preserved files changed: ${changed.join(", ")}`);
 	markers[key] = { digest, epoch: snapshot.epoch, gatewayId: snapshot.gatewayId, counts: declaredCounts(snapshot) };
-	fs.writeFileSync(markerFile, JSON.stringify(markers, null, "\t"), { mode: 0o600 });
+	writeFileAtomic(markerFile, JSON.stringify(markers, null, "\t"), {
+		mode: 0o600,
+		fsyncFile: true,
+		fsyncDirectory: true,
+	});
 	finishImport(dataDir);
 	console.log(JSON.stringify(markers[key]));
 }
 
+function readLockPid(dataDir: string, domainId: string, ownerSignPub: string): string {
+	const file = path.join(dataDir, "owner", domainId, ownerKeyId(ownerSignPub), "owner.lock");
+	try {
+		return String((JSON.parse(fs.readFileSync(file, "utf8")) as { pid?: number }).pid ?? "unknown");
+	} catch {
+		return "unknown";
+	}
+}
+
 try {
-	main();
+	await main();
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;

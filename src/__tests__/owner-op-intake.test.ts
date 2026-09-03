@@ -245,7 +245,7 @@ describe("OwnerOpIntake", () => {
 
 	it("sweeps only nonces older than the skew window", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-sweep-"));
-		let now = 1_000_000;
+		const now = 1_000_000;
 		const owner = generateIdentity();
 		const registry = new OwnerStoreRegistry({
 			dataDir: root,

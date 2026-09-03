@@ -87,6 +87,7 @@ export class CrossDomainShareState {
 	}
 
 	touch(sessionTarget: string): void {
+		if (fenced()) return;
 		const before = this.state.shares;
 		this.state = touchShares(this.state, sessionTarget, Date.now());
 		const changed = this.state.shares.some((s, i) => s.lastSeenAt !== before[i]?.lastSeenAt);
@@ -94,6 +95,7 @@ export class CrossDomainShareState {
 	}
 
 	dropDomain(toDomainId: string): number {
+		if (fenced()) return 0;
 		const result = dropShareDomain(this.state, toDomainId);
 		this.state = result.state;
 		const removed = result.removed;

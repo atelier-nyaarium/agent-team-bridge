@@ -15,17 +15,44 @@ import { PlaneRegistry } from "../shared/plane-registry.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Named fenced writers. */
-const WRITERS: Array<{ file: string; symbol: string }> = [
-	{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },
-	{ file: "src/shared/pending-delivery-store.ts", symbol: "enqueue" },
-	{ file: "src/gateway/boardStore.ts", symbol: "mutate" },
-	{ file: "src/gateway/console/durableOpStore.ts", symbol: "markInFlight" },
-	{ file: "src/gateway/readAnchors.ts", symbol: "report" },
-	{ file: "src/gateway/federation/crossDomainShareState.ts", symbol: "share" },
-	{ file: "src/gateway/federation/crossDomainShareState.ts", symbol: "unshare" },
-	{ file: "src/gateway/federation/gatewayRelay.ts", symbol: "handleOp" },
-];
+const STORE_FILES = ["src/gateway/console/durableOpStore.ts", "src/gateway/federation/crossDomainShareState.ts"];
+
+function writers(): Array<{ file: string; symbol: string }> {
+	const found: Array<{ file: string; symbol: string }> = [];
+	for (const file of STORE_FILES) {
+		const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+		const methods = [
+			...source.matchAll(
+				/^\s*(?:(?:export|private|public|protected|static|async|function)\s+)*(?!(?:if|for|while|switch|catch)\s*\()(\w+)\s*\([^)]*\)[^{]*\{/gm,
+			),
+		].map((match, index, all) => ({
+			symbol: match[1],
+			body: source.slice(match.index, all[index + 1]?.index ?? source.length),
+		}));
+		const helpers = new Set(
+			methods
+				.filter(
+					({ body, symbol }) =>
+						symbol !== "persist" && (body.includes("this.persist(") || body.includes("fenced()")),
+				)
+				.map(({ symbol }) => symbol),
+		);
+		helpers.delete("write");
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const method of methods) {
+				if (helpers.has(method.symbol)) continue;
+				if ([...helpers].some((helper) => method.body.includes(`this.${helper}(`))) {
+					helpers.add(method.symbol);
+					changed = true;
+				}
+			}
+		}
+		for (const symbol of helpers) found.push({ file, symbol });
+	}
+	return found;
+}
 
 const roots: string[] = [];
 
@@ -44,7 +71,28 @@ afterEach(() => {
 
 describe("migration fence residue", () => {
 	it("every named writer calls the guard in its own body", () => {
-		const missing = WRITERS.filter(({ file, symbol }) => {
+		const floor = [
+			{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },
+			{ file: "src/shared/pending-delivery-store.ts", symbol: "enqueue" },
+			{ file: "src/gateway/boardStore.ts", symbol: "mutate" },
+			{ file: "src/gateway/readAnchors.ts", symbol: "report" },
+			{ file: "src/gateway/federation/gatewayRelay.ts", symbol: "handleOp" },
+		];
+		const derived = writers();
+		expect(
+			floor.every(({ file, symbol }) => {
+				const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+				const start = source.search(
+					new RegExp(
+						`^\\s*(?:(?:export|private|public|protected|static|async|function)\\s+)*${symbol}\\s*\\(`,
+						"m",
+					),
+				);
+				return start >= 0 && source.slice(start, start + 900).includes("fenced()");
+			}),
+		).toBe(true);
+		const missing = [...floor, ...derived].filter(({ file, symbol }) => {
+			if (!derived.some((candidate) => candidate.file === file && candidate.symbol === symbol)) return false;
 			const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
 			const start = source.search(
 				new RegExp(

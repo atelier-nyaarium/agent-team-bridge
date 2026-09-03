@@ -8,6 +8,11 @@ import {
 } from "../federation-server/migration/importVerify.js";
 import { buildExport, type ExportSources } from "../gateway/migration/exportSnapshot.js";
 import type { BoardEntry, MailboxEntry } from "../shared/console-protocol.js";
+import { generateIdentity } from "../shared/crypto.js";
+import { InboxRowSchema, verifyRowEnvelope } from "../shared/schemasInbox.js";
+
+const router = generateIdentity();
+const ownerSignPub = Buffer.alloc(32, 1).toString("base64");
 
 const envelope = (plaintext: string) => ({
 	v: 1 as const,
@@ -30,7 +35,12 @@ const sources = (over: Partial<ExportSources> = {}): ExportSources => ({
 	boardEntries: () => [entry("a"), entry("b", { parent: "a" })],
 	holdsSession: () => true,
 	mailboxes: () => [
-		{ conversationId: "owner-1", epoch: 4, rows: [row(1, "k1"), row(2, "k2")], consumerCursors: [["dev", 1]] },
+		{
+			conversationId: `owner:alpha/${ownerSignPub}`,
+			epoch: 4,
+			rows: [row(1, "k1"), row(2, "k2")],
+			consumerCursors: [["dev", 1]],
+		},
 	],
 	pending: () => [{ deliveryId: "d1" }],
 	readAnchors: () => ({ team: { epoch: 4, seq: 2, at: 10 } }),
@@ -66,7 +76,7 @@ describe("migration round trip", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();
 
-		const { addresses } = applyImport(store, snapshot, "ownerkey", dedupeRows);
+		const { addresses } = applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 
 		expect(
 			verifyCounts(
@@ -74,9 +84,13 @@ describe("migration round trip", () => {
 				writtenCounts(
 					{
 						list: (kind) =>
-							[...(store.records as Map<string, unknown>).keys()].filter((key) =>
-								key.startsWith(`${kind}/`),
-							),
+							[
+								...(
+									store.records as Map<string, { value: { clear?: Record<string, unknown> } }>
+								).entries(),
+							]
+								.filter(([key]) => key.startsWith(`${kind}/`))
+								.map(([key, record]) => ({ id: key.slice(kind.length + 1), ...record.value })),
 						rows: () => store.appended,
 					},
 					addresses,
@@ -89,9 +103,9 @@ describe("migration round trip", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();
 
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 		const afterOne = store.appended.length;
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 
 		expect(store.appended.length).toBe(afterOne);
 	});
@@ -100,14 +114,16 @@ describe("migration round trip", () => {
 		const keyless = { seq: 1, at: 0, kind: "message", session_id: "conv.a.b.c.d", body: "hi" } as MailboxEntry;
 		const snapshot = buildExport(
 			sources({
-				mailboxes: () => [{ conversationId: "owner-1", epoch: 4, rows: [keyless], consumerCursors: [] }],
+				mailboxes: () => [
+					{ conversationId: `owner:alpha/${ownerSignPub}`, epoch: 4, rows: [keyless], consumerCursors: [] },
+				],
 			}),
 			7,
 		);
 		const store = fakeStore();
 
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 
 		expect(store.appended).toHaveLength(1);
 	});
@@ -116,12 +132,14 @@ describe("migration round trip", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();
 
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 
 		const keys = [...(store.records as Map<string, unknown>).keys()];
 		expect(keys).toContain("board.entry/a");
 		expect(keys).toContain("readAnchor/readAnchor:team");
-		expect(keys).toContain("inbox.row/pending:d1");
+		expect(
+			store.appended.some((row) => (row.envelope as { origin?: { kind?: string } }).origin?.kind === "router"),
+		).toBe(true);
 		expect(keys.some((key) => key.startsWith("inbox.address/"))).toBe(true);
 	});
 
@@ -129,10 +147,57 @@ describe("migration round trip", () => {
 		const snapshot = buildExport(sources(), 7);
 		const store = fakeStore();
 
-		applyImport(store, snapshot, "ownerkey", dedupeRows);
+		applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
 
 		const wire = JSON.stringify([...(store.records as Map<string, unknown>).entries(), store.appended]);
 		expect(wire).not.toContain("title-a");
 		expect(wire).not.toContain("body-1");
+	});
+
+	it("writes signed Router rows in the mailbox address", () => {
+		const snapshot = buildExport(
+			sources({
+				mailboxes: () => [
+					{
+						conversationId: `owner:alpha/${ownerSignPub}`,
+						epoch: 4,
+						rows: [row(1, "owner")],
+						consumerCursors: [],
+					},
+					{
+						conversationId: "session:alpha/hosta/session-1",
+						epoch: 4,
+						rows: [row(1, "session")],
+						consumerCursors: [],
+					},
+				],
+			}),
+			7,
+		);
+		const store = fakeStore();
+		const { addresses } = applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub);
+
+		expect(addresses).toEqual([`owner:alpha/${ownerSignPub}`, "session:alpha/hosta/session-1"]);
+		for (const appended of store.appended) {
+			const parsed = InboxRowSchema.parse(appended);
+			expect(verifyRowEnvelope(parsed.envelope, parsed.producerSig, router.sign.pub)).toBe(true);
+		}
+	});
+
+	it("rejects missing and incorrect cursor targets before appending", () => {
+		for (const change of [
+			(snapshot: ReturnType<typeof buildExport>) => snapshot.owners[0]!.mailboxes[0]!.cursorMap.pop(),
+			(snapshot: ReturnType<typeof buildExport>) => {
+				snapshot.owners[0]!.mailboxes[0]!.cursorMap[0]!.seq = 9;
+			},
+		]) {
+			const snapshot = buildExport(sources(), 7);
+			change(snapshot);
+			const store = fakeStore();
+			expect(() =>
+				applyImport(store, snapshot, ownerSignPub, dedupeRows, router.sign.priv, router.sign.pub),
+			).toThrow();
+			expect(store.appended).toHaveLength(0);
+		}
 	});
 });

@@ -344,8 +344,18 @@ export async function startGateway(): Promise<void> {
 	const runPersistSteps = createPersistRunner();
 	const persistDelivery = (cleanShutdown: boolean) =>
 		runPersistSteps([
-			{ name: "pending-jobs", run: () => jobsDurable.save(store.snapshot()) },
-			{ name: "mailboxes", run: () => mailboxDurable.save(mailboxStore.snapshot()) },
+			{
+				name: "pending-jobs",
+				run: () =>
+					cleanShutdown ? jobsDurable.saveChecked(store.snapshot()) : jobsDurable.save(store.snapshot()),
+			},
+			{
+				name: "mailboxes",
+				run: () =>
+					cleanShutdown
+						? mailboxDurable.saveChecked(mailboxStore.snapshot())
+						: mailboxDurable.save(mailboxStore.snapshot()),
+			},
 			{
 				name: "session-sweep",
 				run: () => {
@@ -369,7 +379,13 @@ export async function startGateway(): Promise<void> {
 					if (freed > 0) console.error(`[blobs] swept ${freed} bytes`);
 				},
 			},
-			{ name: "session-resume", run: () => sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown)) },
+			{
+				name: "session-resume",
+				run: () =>
+					cleanShutdown
+						? sessionResumeDurable.saveChecked(sessionResumeSnapshot(cleanShutdown))
+						: sessionResumeDurable.save(sessionResumeSnapshot(cleanShutdown)),
+			},
 			{ name: "replay-guard", run: () => fed()?.replayPersist() },
 		]);
 	// Shutdown flush persists under the fence. Shut down before cutting.
@@ -385,12 +401,21 @@ export async function startGateway(): Promise<void> {
 		fencedSince ??= Date.now();
 		if (settled || Date.now() - fencedSince < MIGRATION_SETTLE_MS) return;
 		settled = true;
-		const dropped = durableOpStore.failInFlight();
+		const dropped = durableOpStore.failInFlight(true);
 		console.log(`[migration] settled: ${dropped} in-flight op(s) dropped for the client to re-run`);
 	}, 3_000);
 	persistTimer.unref?.();
 	const shutdown = () => {
-		persistDelivery(true);
+		try {
+			jobsDurable.saveChecked(store.snapshot());
+			mailboxDurable.saveChecked(mailboxStore.snapshot());
+			sessionResumeDurable.saveChecked(sessionResumeSnapshot(true));
+			persistDelivery(true);
+		} catch (err) {
+			console.error(`[gateway] shutdown persist failed: ${err instanceof Error ? err.message : String(err)}`);
+			process.exitCode = 1;
+			return;
+		}
 		fed()?.routerClient.stop();
 		process.exit(0);
 	};

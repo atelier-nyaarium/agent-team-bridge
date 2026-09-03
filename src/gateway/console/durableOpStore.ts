@@ -67,6 +67,7 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 
 	/** First successful result wins. */
 	public markComplete(conversationId: string, opId: string, result: Result): void {
+		if (fenced()) return;
 		const existing = this.byConversation.get(conversationId)?.get(opId);
 		if (existing?.record.state === "complete") {
 			// Duplicate success is observable.
@@ -80,6 +81,7 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 
 	/** Clears only the matching generation. */
 	public clear(conversationId: string, opId: string, generation: number): boolean {
+		if (fenced()) return false;
 		const perConv = this.byConversation.get(conversationId);
 		const entry = perConv?.get(opId);
 		if (!perConv || !entry) return true;
@@ -99,6 +101,7 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 	}
 
 	public sweep(): boolean {
+		if (fenced()) return false;
 		const t = this.now();
 		let removedAny = false;
 		for (const [conv, perConv] of this.byConversation) {
@@ -116,7 +119,8 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 
 	/** Drops in-flight markers; complete results survive. */
 	// Markers contain no requests, so retries re-execute them.
-	public failInFlight(): number {
+	public failInFlight(allowFenced = false): number {
+		if (fenced() && !allowFenced) return 0;
 		let dropped = 0;
 		for (const [conv, perConv] of this.byConversation) {
 			for (const [opId, entry] of perConv) {

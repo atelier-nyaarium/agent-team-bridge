@@ -24,7 +24,7 @@ export const MigrationRefusalSchema = z
 	.object({
 		entryId: z.string(),
 		sessionId: z.string(),
-		reason: z.enum(["session_unknown", "unsealable"]),
+		reason: z.enum(["session_unknown", "unsealable", "unparseable_pending"]),
 	})
 	.meta({ id: "MigrationRefusal" });
 
@@ -75,7 +75,6 @@ export const MigrationExportSchema = z
 				board: z.array(MigratedBoardEntrySchema),
 				refusals: z.array(MigrationRefusalSchema),
 				mailboxes: z.array(MigratedMailboxSchema),
-				pending: z.array(z.unknown()),
 				readAnchors: z.record(z.string(), z.unknown()),
 			}),
 		),

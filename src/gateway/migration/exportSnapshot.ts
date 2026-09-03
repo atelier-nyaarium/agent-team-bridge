@@ -1,5 +1,6 @@
 import type { BoardEntry, MailboxEntry } from "../../shared/console-protocol.js";
 import { boardTextAadKind, type ContentAad, inboxBodyAadKind } from "../../shared/content-envelope.js";
+import type { PendingDelivery } from "../../shared/pending-delivery-store.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
 import type {
 	CursorMapEntry,
@@ -29,7 +30,37 @@ export interface ExportSources {
 
 /** Cursor rows renumber from one. */
 export function cursorMapFor(epoch: number, rows: readonly MailboxEntry[], newEpoch: number): CursorMapEntry[] {
-	return rows.map((row, index) => ({ oldEpoch: epoch, oldSeq: row.seq, epoch: newEpoch, seq: index + 1 }));
+	const mapped = rows.map((row, index) => ({ oldEpoch: epoch, oldSeq: row.seq, epoch: newEpoch, seq: index + 1 }));
+	return mapped;
+}
+
+function cursorTranslation(
+	epoch: number,
+	cursor: number,
+	rows: readonly MailboxEntry[],
+	newEpoch: number,
+): CursorMapEntry {
+	const row = rows.filter((candidate) => candidate.seq <= cursor).at(-1);
+	const mapped = row ? rows.indexOf(row) + 1 : 0;
+	return { oldEpoch: epoch, oldSeq: cursor, epoch: newEpoch, seq: mapped };
+}
+
+function pendingRow(delivery: PendingDelivery, seq: number): MailboxEntry {
+	return {
+		seq,
+		at: delivery.enqueuedAt,
+		kind: "message",
+		session_id: delivery.channelJobId,
+		body: delivery.body,
+		files: delivery.files,
+		payload: {
+			delivery_id: delivery.deliveryId,
+			from: delivery.from,
+			...(delivery.awareness ? { awareness: delivery.awareness } : {}),
+			...(delivery.disposition ? { disposition: delivery.disposition } : {}),
+			...(delivery.messageId ? { message_id: delivery.messageId } : {}),
+		},
+	} as MailboxEntry;
 }
 
 /** Half-sealed entries never ship. */
@@ -67,6 +98,25 @@ export function buildExport(sources: ExportSources, epoch: number): MigrationExp
 	const owners = sources.ownerIds().map((ownerId) => {
 		const board: MigratedBoardEntry[] = [];
 		const refusals: MigrationRefusal[] = [];
+		const mailboxSources = [...sources.mailboxes(ownerId)];
+		const pendingSource = sources.pending(ownerId);
+		const pending = pendingSource.filter(isPendingDelivery);
+		for (const delivery of pendingSource.filter((candidate) => !isPendingDelivery(candidate))) {
+			const value = delivery as Record<string, unknown>;
+			refusals.push({
+				entryId: typeof value.deliveryId === "string" ? value.deliveryId : "",
+				sessionId: typeof value.team === "string" ? value.team : "",
+				reason: "unparseable_pending",
+			});
+		}
+		for (const [index, delivery] of pending.entries()) {
+			mailboxSources.push({
+				conversationId: `session:${sources.domainId}/${sources.gatewayId}/${delivery.team}`,
+				epoch,
+				rows: [pendingRow(delivery, index + 1)],
+				consumerCursors: [],
+			});
+		}
 		for (const entry of sources.boardEntries(ownerId)) {
 			if (entry.sessionId && !sources.holdsSession(entry.sessionId)) {
 				refusals.push({ entryId: entry.id, sessionId: entry.sessionId, reason: "session_unknown" });
@@ -100,19 +150,24 @@ export function buildExport(sources: ExportSources, epoch: number): MigrationExp
 			ownerId,
 			board,
 			refusals,
-			mailboxes: sources.mailboxes(ownerId).map((box) => {
+			mailboxes: mailboxSources.map((box) => {
 				const sealed = box.rows.map((row) => sealRow(sources, row, box.conversationId));
 				// One unsealable row fails its mailbox.
 				if (sealed.some((entry) => entry === null)) throw new Error(`cannot seal ${box.conversationId}`);
+				const cursorMap = cursorMapFor(box.epoch, box.rows, epoch);
+				const consumerCursors = box.consumerCursors;
+				for (const [_device, cursor] of consumerCursors) {
+					if (!cursorMap.some((entry) => entry.oldEpoch === box.epoch && entry.oldSeq === cursor))
+						cursorMap.push(cursorTranslation(box.epoch, cursor, box.rows, epoch));
+				}
 				return {
 					conversationId: box.conversationId,
 					epoch: box.epoch,
 					rows: sealed as NonNullable<(typeof sealed)[number]>[],
-					cursorMap: cursorMapFor(box.epoch, box.rows, epoch),
-					consumerCursors: box.consumerCursors,
+					cursorMap,
+					consumerCursors,
 				};
 			}),
-			pending: sources.pending(ownerId),
 			readAnchors: sources.readAnchors(ownerId),
 		};
 	});
@@ -126,4 +181,10 @@ export function buildExport(sources: ExportSources, epoch: number): MigrationExp
 		owners,
 		shares: sources.shares(),
 	};
+}
+
+function isPendingDelivery(value: unknown): value is PendingDelivery {
+	if (!value || typeof value !== "object") return false;
+	const row = value as Partial<PendingDelivery>;
+	return typeof row.deliveryId === "string" && typeof row.team === "string" && typeof row.body === "string";
 }
