@@ -122,7 +122,7 @@ internal class ConsoleRouterTransport(
 			}.toString().toRequestBody(ConsoleHttp.JSON)
 			val req = Request.Builder()
 				.url("$base/console")
-				.header("X-Console-Bridge-Token", "******")
+				.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 				.post(body)
 				.build()
 			val resp = ConsoleHttp.executeCancellable(clientFor(base), req)
