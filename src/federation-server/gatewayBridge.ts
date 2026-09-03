@@ -32,6 +32,7 @@ import {
 	InboxRowInputSchema,
 	parseInboxAddress,
 } from "../shared/schemasInbox.js";
+import { OP_LEDGER_PROTOCOL } from "../shared/schemasRegister.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
@@ -123,7 +124,7 @@ export class GatewayBridge implements ToolProvider {
 	private readonly blobFetch: BlobFetchRoute | null;
 	private pendingValues = new Map<
 		string,
-		{ resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout>; connId: ConnectionId }
+		{ resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout>; connId: ConnectionId }[]
 	>();
 	private pendingRelays = new Map<
 		string,
@@ -256,8 +257,10 @@ export class GatewayBridge implements ToolProvider {
 		}
 		this.pendingHandshakes.clear();
 		for (const pending of this.pendingValues.values()) {
-			clearTimeout(pending.timer);
-			pending.resolve({ outcome: "timeout" });
+			for (const waiter of pending) {
+				clearTimeout(waiter.timer);
+				waiter.resolve({ outcome: "timeout" });
+			}
 		}
 		this.pendingValues.clear();
 		this.handshakeAttempts.clear();
@@ -494,10 +497,15 @@ export class GatewayBridge implements ToolProvider {
 
 	public onDisconnect(connId: ConnectionId): void {
 		for (const [key, pending] of this.pendingValues) {
-			if (pending.connId !== connId) continue;
-			clearTimeout(pending.timer);
-			this.pendingValues.delete(key);
-			pending.resolve({ outcome: "unreachable" });
+			const remaining = pending.filter((waiter) => waiter.connId !== connId);
+			if (remaining.length === pending.length) continue;
+			for (const waiter of pending) {
+				if (waiter.connId !== connId) continue;
+				clearTimeout(waiter.timer);
+				waiter.resolve({ outcome: "unreachable" });
+			}
+			if (remaining.length) this.pendingValues.set(key, remaining);
+			else this.pendingValues.delete(key);
 		}
 		const reg = this.connGateways.get(connId);
 		const wasCurrent = reg ? this.gatewayConnections.get(reg.domainId)?.get(reg.gatewayId) === connId : false;
@@ -602,6 +610,7 @@ export class GatewayBridge implements ToolProvider {
 			ok: true,
 			protocolFloor: FEDERATION_PROTOCOL_FLOOR,
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
+			opLedgerProtocol: OP_LEDGER_PROTOCOL,
 			domainId,
 			gateways: peers,
 			...(incarnation !== null ? { incarnation } : {}),
@@ -762,22 +771,28 @@ export class GatewayBridge implements ToolProvider {
 		const reg = connId ? this.connGateways.get(connId) : undefined;
 		const ws = connId ? this.transport?.getConnection(connId) : null;
 		if (reg && (reg.protocolVersion ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION) {
-			// Remove-by: Shim.
+			// Remove-by: every registered gateway reports protocol 2.
 			return Promise.resolve({ outcome: "unsupported" });
 		}
 		if (!connId || !reg || reg.incarnation === null || !ws) return Promise.resolve({ outcome: "unreachable" });
 		const key = `${domainId}/${params.gatewayId}/${params.conversationId}/${params.opId}`;
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
-				this.pendingValues.delete(key);
+				const waiters = this.pendingValues.get(key) ?? [];
+				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
+				if (remaining.length) this.pendingValues.set(key, remaining);
+				else this.pendingValues.delete(key);
 				resolve({ outcome: "timeout" });
 			}, GATEWAY_RELAY_TIMEOUT_MS);
-			this.pendingValues.set(key, { resolve, timer, connId });
+			this.pendingValues.set(key, [...(this.pendingValues.get(key) ?? []), { resolve, timer, connId }]);
 			try {
 				ws.send(JSON.stringify({ type: "value_op", ...params, incarnation: reg.incarnation }));
 			} catch {
 				clearTimeout(timer);
-				this.pendingValues.delete(key);
+				const waiters = this.pendingValues.get(key) ?? [];
+				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
+				if (remaining.length) this.pendingValues.set(key, remaining);
+				else this.pendingValues.delete(key);
 				resolve({ outcome: "unreachable" });
 			}
 		});
@@ -789,10 +804,10 @@ export class GatewayBridge implements ToolProvider {
 		if (!parsed.success || !reg || reg.incarnation !== parsed.data.incarnation) return { settled: false };
 		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
 		const pending = this.pendingValues.get(key);
-		if (!pending || pending.connId !== connId) return { settled: false };
-		clearTimeout(pending.timer);
+		if (!pending || pending.every((waiter) => waiter.connId !== connId)) return { settled: false };
+		for (const waiter of pending) clearTimeout(waiter.timer);
 		this.pendingValues.delete(key);
-		pending.resolve(parsed.data.result);
+		for (const waiter of pending) waiter.resolve(parsed.data.result);
 		return { settled: true };
 	}
 

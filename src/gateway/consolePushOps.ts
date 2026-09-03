@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import { z } from "zod";
 import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
 import { inboxBodyAadKind } from "../shared/content-envelope.js";
 import { DurableStore } from "../shared/durable-store.js";
-import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
+import { type ConsolePushEntry, ConsolePushEntrySchema } from "../shared/federation-protocol.js";
 import { fenced, MIGRATING } from "../shared/migration-fence.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
 import { formatInboxAddress, OpResultEnvelopeSchema, signRowEnvelope } from "../shared/schemasInbox.js";
@@ -24,8 +25,6 @@ export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
 	/** Caller-chosen deduplication key. */
 	dedupeKey: string;
-	/** Only local pushes fan out. */
-	origin: "local" | "relay";
 	label?: string;
 }
 
@@ -35,7 +34,6 @@ export type DeliverToOwner = (opts: DeliverToOwnerOptions) => DeliverToOwnerResu
 export interface ConsolePushOpsDeps {
 	ownerId?: (() => string | null) | null;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
-	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	localGatewayId: string;
 	localDomainId?: string;
 	producerSignPriv?: string;
@@ -44,12 +42,6 @@ export interface ConsolePushOpsDeps {
 	localAddress: (name: string) => Address;
 	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
-	relayWithRetry: (
-		dstGateway: string,
-		op: FederatedOp,
-		label: string,
-		dstDomain?: string,
-	) => Promise<{ ok: boolean; error?: string }>;
 }
 
 type OwnerRowOutboxItem = {
@@ -61,7 +53,6 @@ type OwnerRowOutboxItem = {
 export function createConsolePushOps({
 	ownerId,
 	routerClient,
-	resolvesLocalGateway,
 	localGatewayId,
 	localDomainId,
 	producerSignPriv,
@@ -70,10 +61,22 @@ export function createConsolePushOps({
 	localAddress,
 	cacheBlobs,
 	refuseImpersonation,
-	relayWithRetry,
 }: ConsolePushOpsDeps) {
 	const outboxStore = new DurableStore(process.env.DATA_DIR || "/app/data", "owner-row-outbox");
-	const outbox = (outboxStore.load() as OwnerRowOutboxItem[] | null) ?? [];
+	const restored = outboxStore.load();
+	const restoredOutbox = z
+		.array(
+			z.object({
+				entry: ConsolePushEntrySchema,
+				opId: z.string().min(1),
+				label: z.string().min(1),
+			}),
+		)
+		.safeParse(restored);
+	const outbox: OwnerRowOutboxItem[] = restored === null ? [] : restoredOutbox.success ? restoredOutbox.data : [];
+	if (restored !== null && !restoredOutbox.success) {
+		console.warn("[owner-row-outbox] invalid stored value, starting empty");
+	}
 	let draining = false;
 
 	const opKeyFor = (entry: ConsolePushEntry, opId: string) => ({
@@ -131,30 +134,6 @@ export function createConsolePushOps({
 		return { payload, opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ entry, opId })) } };
 	}
 
-	async function sendOwnerRow(
-		item: OwnerRowOutboxItem,
-		sealed: NonNullable<ReturnType<typeof sealOwnerRow>>,
-	): Promise<void> {
-		if (!routerClient) return;
-		try {
-			const result = await routerClient.callInboxTool("inbox_append", { ...sealed.payload, opKey: sealed.opKey });
-			const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
-			if (outcome === "refused") {
-				const reason =
-					OpResultEnvelopeSchema.safeParse(result.result).data?.reason ?? result.error ?? "refused";
-				console.warn(`[${item.label}] owner row ${item.opId} refused: ${reason}`);
-				return;
-			}
-			if (result.error || ["durability_failure", "durability_uncertain"].includes(outcome ?? ""))
-				queueOutbox(item);
-		} catch (err) {
-			queueOutbox(item);
-			console.warn(
-				`[${item.label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
 	async function drainOutbox(): Promise<void> {
 		if (
 			draining ||
@@ -170,22 +149,32 @@ export function createConsolePushOps({
 				const item = outbox[0];
 				const sealed = sealOwnerRow(item.entry, item.opId);
 				if (!sealed) break;
-				const result = await routerClient.callInboxTool("inbox_append", {
-					...sealed.payload,
-					opKey: sealed.opKey,
-				});
-				const outcome = OpResultEnvelopeSchema.safeParse(result.result).data?.outcome;
-				if (outcome === "refused") {
-					const reason =
-						OpResultEnvelopeSchema.safeParse(result.result).data?.reason ?? result.error ?? "refused";
-					console.warn(`[${item.label}] owner row ${item.opId} refused: ${reason}`);
-					outbox.shift();
-					outboxStore.save(outbox);
-					continue;
+				let result: Awaited<ReturnType<NonNullable<typeof routerClient>["callInboxTool"]>>;
+				try {
+					result = await routerClient.callInboxTool("inbox_append", {
+						...sealed.payload,
+						opKey: sealed.opKey,
+					});
+				} catch (err) {
+					console.warn(
+						`[${item.label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					break;
 				}
-				if (result.error || ["durability_failure", "durability_uncertain"].includes(outcome ?? "")) break;
+				const parsed = result.error ? null : OpResultEnvelopeSchema.safeParse(result.result).data;
+				if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) break;
+				if (parsed.outcome === "refused") {
+					console.warn(`[${item.label}] owner row ${item.opId} refused: ${parsed.reason ?? "refused"}`);
+				}
+				try {
+					outboxStore.saveChecked(outbox.slice(1));
+				} catch (err) {
+					console.warn(
+						`[${item.label}] owner row outbox save failed: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					break;
+				}
 				outbox.shift();
-				outboxStore.save(outbox);
 			}
 		} finally {
 			draining = false;
@@ -194,12 +183,7 @@ export function createConsolePushOps({
 
 	setInterval(() => void drainOutbox(), 1000).unref?.();
 
-	function deliverToOwner({
-		entry,
-		dedupeKey,
-		origin,
-		label = "deliver",
-	}: DeliverToOwnerOptions): DeliverToOwnerResult {
+	function deliverToOwner({ entry, dedupeKey, label = "deliver" }: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {
 			console.warn(`[${label}] refused: migrating`);
 			return MIGRATING;
@@ -214,20 +198,16 @@ export function createConsolePushOps({
 			);
 			return false;
 		}
-		if (entry.kind !== "peer" && !appendOwnerRow(entry, entry.opId ?? dedupeKey, label)) return false;
+		if (!appendOwnerRow(entry, entry.opId ?? dedupeKey, label)) return false;
 		const blobIds = [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))];
 		if (blobIds.length > 0) cacheBlobs?.(blobIds);
-		if (origin === "local" && entry.session_id) void fanOutConsolePush(entry, dedupeKey);
 		return true;
 	}
 
 	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string): boolean {
 		const item = { entry, opId, label };
-		const sealed = sealOwnerRow(entry, opId);
-		if (!sealed) return queueOutbox(item);
-		if (!routerClient?.isConnected() || (routerClient.isRegistered && !routerClient.isRegistered()))
-			return queueOutbox(item);
-		void sendOwnerRow(item, sealed);
+		if (!queueOutbox(item)) return false;
+		void drainOutbox();
 		return true;
 	}
 
@@ -254,42 +234,9 @@ export function createConsolePushOps({
 				to,
 				...payload,
 			};
-			deliverToOwner({ entry, dedupeKey, origin: "local", label: "mirror" });
+			deliverToOwner({ entry, dedupeKey, label: "mirror" });
 		} catch (err) {
 			console.warn(`[mirror] dropped: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
-	/** Lands relayed entries without fan-out. */
-	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean; error?: typeof MIGRATING } {
-		const delivered = deliverToOwner({
-			entry,
-			dedupeKey,
-			origin: "relay",
-			label: "console_push",
-		});
-		return delivered === MIGRATING ? { delivered: false, error: MIGRATING } : { delivered };
-	}
-
-	/** Fans out local entries only. */
-	async function fanOutConsolePush(entry: ConsolePushEntry, dedupeKey: string): Promise<void> {
-		if (!routerClient?.isConnected()) return;
-		if (!resolvesLocalGateway) {
-			// Mailbox writes require the allowlist.
-			console.warn("[console_push] fan-out running with no allowlist filter (resolvesLocalGateway unset)");
-		}
-		try {
-			const rosterCall = await routerClient.callTool("list_gateways", {});
-			const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
-			for (const { gatewayId } of roster) {
-				if (gatewayId === localGatewayId) continue;
-				if (resolvesLocalGateway && !resolvesLocalGateway(gatewayId)) continue;
-				void relayWithRetry(gatewayId, { kind: "console_push", entry, dedupeKey }, "console_push");
-			}
-		} catch (err) {
-			console.warn(
-				`[console_push] fan-out roster fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
 		}
 	}
 
@@ -328,7 +275,7 @@ export function createConsolePushOps({
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		const delivered = deliverToOwner({ entry, dedupeKey, origin: "local", label: "notify" });
+		const delivered = deliverToOwner({ entry, dedupeKey, label: "notify" });
 		if (delivered === MIGRATING) return jsonResponse({ error: MIGRATING }, 503);
 		if (!delivered) {
 			return jsonResponse({ error: "failed to store notice" }, 500);
@@ -367,7 +314,6 @@ export function createConsolePushOps({
 		const delivered = deliverToOwner({
 			entry,
 			dedupeKey,
-			origin: "local",
 			label: "plugin_action",
 		});
 		if (delivered === MIGRATING) return jsonResponse({ error: MIGRATING }, 503);
@@ -378,5 +324,5 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	return { mirrorPeer, consolePush, humanNotify, pluginAction, fanOutConsolePush, deliverToOwner, drainOutbox };
+	return { mirrorPeer, humanNotify, pluginAction, deliverToOwner, drainOutbox };
 }

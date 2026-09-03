@@ -187,7 +187,7 @@ export class OwnerOpIntake {
 			row.data.envelope.kind === "console_op" &&
 			(this.gatewayProtocol?.(op.domainId, address.gatewayId) ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION
 		) {
-			// Remove-by: Shim.
+			// Remove-by: every registered gateway reports protocol 2.
 			return refused("unsupported");
 		}
 		const result = this.params.inbox.appendRow({

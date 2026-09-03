@@ -206,7 +206,6 @@ export function memBinding(
 export function gateRoutes(teams: TeamInfoLite[]) {
 	const sendCalls: Record<string, unknown>[] = [];
 	const respondCalls: Record<string, unknown>[] = [];
-	const consolePushCalls: Array<{ entry: unknown; dedupeKey: string }> = [];
 	const routes = {
 		teams: () => new Response(JSON.stringify(teams), { headers: { "content-type": "application/json" } }),
 		// Answered only to a same-Domain caller; the cross-Domain branch returns before reading it.
@@ -223,12 +222,8 @@ export function gateRoutes(teams: TeamInfoLite[]) {
 				headers: { "content-type": "application/json" },
 			});
 		},
-		consolePush: (entry: unknown, dedupeKey: string) => {
-			consolePushCalls.push({ entry, dedupeKey });
-			return { delivered: true };
-		},
 	};
-	return { routes, sendCalls, respondCalls, consolePushCalls };
+	return { routes, sendCalls, respondCalls };
 }
 
 // The bare teams a routes.teams() stub returns. gw matches the handler's localGatewayId

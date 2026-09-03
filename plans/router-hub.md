@@ -1204,6 +1204,17 @@ by a red team, not a test, and closed by a vector in `tests/fixtures/content-env
 consumed by both runtimes. Rule going forward: a new AAD kind lands with its vector in the same
 slice, and the kind builder has one owner per runtime.
 
+**Post-plan audit (Sol plus one read of the durability and trust code).** Five classes, each fixed
+in the audit commit. A fast path beside a durable queue: owner rows were sent before they were
+persisted, so the queue only ever saw failures. A cursor floor whose meaning lived on the other side:
+the Router's floor is the first retained row, and the phone adopted it as the last consumed one. A
+production constructor omitting an optional dependency that every test injected: `planeVersions`
+was never wired, so `planes_read` answered nothing outside a live socket. An exclusion outliving
+its mechanism: peer rows were skipped at cutover because the mailbox still carried them, then the
+mailbox was deleted. A takeover that renames by path: the owner lock could move a successor's fresh
+lock aside. Left open: `router:import` has no producer at HEAD and its expected bundle layout never
+matched the deleted exporter's, so the deferred migration redesign starts from the importer.
+
 # Specs
 
 Phase 1 output. Each names its residue test. Wire shapes land in `src/shared/schemas*.ts` with

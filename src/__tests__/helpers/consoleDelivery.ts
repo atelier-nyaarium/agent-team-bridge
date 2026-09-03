@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createConsoleDispatcher } from "../../gateway/console/consoleHandler.js";
 import type {
 	ConsoleRoutes,
@@ -135,6 +138,7 @@ export function makePushRoutes(
 		ownerId?: string | null;
 	} = {},
 ) {
+	process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "console-delivery-"));
 	const identity = generateIdentity();
 	const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
 	const routerClient = {
@@ -150,7 +154,7 @@ export function makePushRoutes(
 		},
 		callInboxTool: async (action: string, params: Record<string, unknown>) => {
 			calls.push({ action, params });
-			return { result: { outcome: "accepted", seq: calls.length } };
+			return { result: { opKey: params.opKey, outcome: "accepted", seq: calls.length } };
 		},
 	};
 	const ctx = makeCtx("hosta", {

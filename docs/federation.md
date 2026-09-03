@@ -2,6 +2,8 @@
 
 The self-hosted Router, how a Gateway reaches it, and the trust model.
 
+**Compatibility:** Protocol version 2. Protocol-1 Gateways receive `unsupported` for value and delivery ops.
+
 ## Self-hosted Router
 
 `src/federation-server/` is the Router. Three surfaces share one TLS port: bearer-gated gateway WS,
@@ -87,7 +89,8 @@ Gateway, so revocation still applies while the Router is unreachable.
 - A row is `{ seq, acceptedAt, size, envelope, producerSig, body }`. The producer signs the envelope; the Router adds seq, acceptedAt, and size.
 - The op ledger keys on `(owner, conversationId, opId)`. A repeat with the same hash answers the recorded result; a different hash answers `conflict`.
 - **A retry is one operation:** The producer mints `opId` once per invocation, and every retry carries it. The identity hash covers the CLEAR operation.
-- The phone uses protocol version 2. A protocol-1 Gateway receives `unsupported` for removed paths through the `Remove-by` shims.
+- The phone uses protocol version 2. A protocol-1 Gateway still registers but receives `unsupported`
+  for value ops and delivery ops.
 - Capacity refuses before storage: the row cap answers `refused`, the Domain quota answers `durability_failure`, a failed fsync answers `durability_uncertain`.
 - Gateway frames name only themselves. The Router takes the Domain and gateway from the connection; a session origin must be in the session registry; a peer row into another Domain needs a link edge.
 - `gateway_register` returns an incarnation. Every inbox frame carries it; a stale one is refused.
@@ -141,31 +144,6 @@ bun run gateway:fence --epoch <N>
 The Gateway writes `DATA_DIR/migration-epoch`. Phones and agents see `migrating` for fenced writes.
 Wait 60 seconds for in-flight operations to settle.
 
-The export bundle format remains the input format for `router:import`.
-
-### Router import
-
-Stop the Router before import.
-
-```bash
-bun run router:import --from <dir>/export-N.json
-```
-
-The import verifies `SHA256SUMS`, `blobs.json`, and `blobs/`, then writes owner state and reference-held
-blobs. It writes `import-in-progress` during the import, `import-marker.json` after completion, and
-the lease completion for the imported Gateway. The `migration-epoch` file is written with `N`.
-
-The serve gate detects `import-in-progress`. The Router exits rather than answering when its sweep
-sees the marker. A dead import pid is reclaimed. An already completed import with the same digest is
-idempotent. It clears a stale gate and reruns safely. A different digest for the same Gateway and
-epoch is refused.
-
-Start the Router after each import.
-
-```bash
-./start-federation.sh
-```
-
 ### Authority
 
 Migration authority turns on when every `active` lease has `completedEpoch` equal to `N`. An
@@ -183,14 +161,7 @@ released only after the Router accepts it.
 
 | Crash point | Safe rerun |
 |-------------|------------|
-| Fence before settle | Wait 60 seconds. Use the export bundle |
-| Export bundle present | Rerun import with the same bundle |
-| Import marker present with a dead pid | Rerun import with the same export |
-| Import failed before completion marker | Rerun import with the same export |
-| Completion marker present | Rerun import. The same digest returns the completed result |
-| Router stopped after import | Start the Router |
-
-Lower the fence only after import is complete.
+| Fence before settle | Wait 60 seconds |
 
 ```bash
 bun run gateway:fence --down

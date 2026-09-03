@@ -9,7 +9,7 @@ import { ADDRESS_SEP, isSlug } from "./session-id.js";
 export const OP_LEDGER_PROTOCOL = 1;
 
 export const GatewayRegisterAnswerSchema = z
-	.object({ ok: z.boolean(), migrationFenced: z.boolean().optional() })
+	.object({ ok: z.boolean(), migrationFenced: z.boolean().optional(), opLedgerProtocol: z.number().int().optional() })
 	.passthrough();
 
 export const WsRegisterSchema = z.object({

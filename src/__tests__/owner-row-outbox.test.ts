@@ -23,6 +23,7 @@ function makePush(
 		connected: boolean;
 		results: RouterToolCallResult[];
 		calls: Array<Record<string, unknown>>;
+		beforeCall?: () => void;
 	},
 	seal: () =>
 		| { kind: "ok"; envelope: { v: 1; epoch: number; nonce: string; ciphertext: string } }
@@ -37,10 +38,14 @@ function makePush(
 		routerClient: {
 			isConnected: () => router.connected,
 			isRegistered: () => router.connected,
+			acceptedOpLedgerProtocol: () => null,
 			callTool: async () => ({ callId: "call", result: { gateways: [] } }),
 			callInboxTool: async (_action, params) => {
+				router.beforeCall?.();
 				router.calls.push(params);
-				return router.results.shift() ?? { callId: "call", result: { outcome: "accepted" } };
+				return (
+					router.results.shift() ?? { callId: "call", result: { opKey: params.opKey, outcome: "accepted" } }
+				);
 			},
 			incarnation: () => 1,
 			stop: () => undefined,
@@ -54,7 +59,6 @@ function makePush(
 		},
 		localAddress: () => Address.local("domain", "gateway", "spawn", "session"),
 		refuseImpersonation: () => null,
-		relayWithRetry: async () => ({ ok: true }),
 	});
 }
 
@@ -74,7 +78,7 @@ describe.sequential("OwnerRowOutbox", () => {
 		roots.push(root);
 		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
 		const first = makePush(root, disconnected);
-		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one", origin: "relay" });
+		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one" });
 		await flush();
 
 		const router = { connected: true, results: [], calls: [] as Array<Record<string, unknown>> };
@@ -87,13 +91,64 @@ describe.sequential("OwnerRowOutbox", () => {
 		expect(router.calls).toHaveLength(1);
 	});
 
+	it("persists a row before calling the Router", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
+		roots.push(root);
+		let persisted = false;
+		const router = {
+			connected: true,
+			results: [],
+			calls: [] as Array<Record<string, unknown>>,
+			beforeCall: () => {
+				persisted = fs.existsSync(path.join(root, "owner-row-outbox.json"));
+			},
+		};
+		const push = makePush(root, router);
+		push.deliverToOwner({ entry: entry("before-send"), dedupeKey: "before-send" });
+		expect(persisted).toBe(true);
+	});
+
+	it("keeps a row after an unparseable Router answer", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
+		roots.push(root);
+		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
+		makePush(root, disconnected).deliverToOwner({ entry: entry("unparseable"), dedupeKey: "unparseable" });
+		const router = {
+			connected: true,
+			results: [{ callId: "call", result: {} }],
+			calls: [] as Array<Record<string, unknown>>,
+		};
+		const push = makePush(root, router);
+		await push.drainOutbox();
+		expect(router.calls).toHaveLength(1);
+		const stored = JSON.parse(fs.readFileSync(path.join(root, "owner-row-outbox.json"), "utf8")) as unknown[];
+		expect(stored).toHaveLength(1);
+	});
+
+	it("appends mirrorPeer entries to the owner outbox", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
+		roots.push(root);
+		const router = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
+		makePush(root, router).mirrorPeer(
+			Address.local("domain", "gateway", "spawn", "session"),
+			"from",
+			"to",
+			{ body: "peer" },
+			"peer-row",
+		);
+		const stored = JSON.parse(fs.readFileSync(path.join(root, "owner-row-outbox.json"), "utf8")) as Array<{
+			entry: { kind: string };
+		}>;
+		expect(stored[0]?.entry.kind).toBe("peer");
+	});
+
 	it("drains queued rows in order", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
 		roots.push(root);
 		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
 		const first = makePush(root, disconnected);
-		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one", origin: "relay" });
-		first.deliverToOwner({ entry: entry("two"), dedupeKey: "two", origin: "relay" });
+		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one" });
+		first.deliverToOwner({ entry: entry("two"), dedupeKey: "two" });
 		await flush();
 
 		const router = { connected: true, results: [], calls: [] as Array<Record<string, unknown>> };
@@ -106,7 +161,7 @@ describe.sequential("OwnerRowOutbox", () => {
 		roots.push(root);
 		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
 		const first = makePush(root, disconnected);
-		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one", origin: "relay" });
+		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one" });
 		await flush();
 
 		const router = {
@@ -132,7 +187,7 @@ describe.sequential("OwnerRowOutbox", () => {
 		roots.push(root);
 		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
 		const first = makePush(root, disconnected);
-		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one", origin: "relay" });
+		first.deliverToOwner({ entry: entry("one"), dedupeKey: "one" });
 		await flush();
 
 		const router = { connected: true, results: [], calls: [] as Array<Record<string, unknown>> };
@@ -149,8 +204,8 @@ describe.sequential("OwnerRowOutbox", () => {
 		const first = makePush(root, disconnected);
 		const firstEntry = entry("one");
 		const secondEntry = { ...firstEntry, body: "two" };
-		first.deliverToOwner({ entry: firstEntry, dedupeKey: "same", origin: "relay" });
-		first.deliverToOwner({ entry: secondEntry, dedupeKey: "same", origin: "relay" });
+		first.deliverToOwner({ entry: firstEntry, dedupeKey: "same" });
+		first.deliverToOwner({ entry: secondEntry, dedupeKey: "same" });
 
 		const router = { connected: true, results: [], calls: [] as Array<Record<string, unknown>> };
 		await makePush(root, router).drainOutbox();
@@ -189,8 +244,8 @@ describe.sequential("OwnerRowOutbox", () => {
 		roots.push(root);
 		const disconnected = { connected: false, results: [], calls: [] as Array<Record<string, unknown>> };
 		const first = makePush(root, disconnected);
-		first.deliverToOwner({ entry: entry("refused"), dedupeKey: "refused", origin: "relay" });
-		first.deliverToOwner({ entry: entry("uncertain"), dedupeKey: "uncertain", origin: "relay" });
+		first.deliverToOwner({ entry: entry("refused"), dedupeKey: "refused" });
+		first.deliverToOwner({ entry: entry("uncertain"), dedupeKey: "uncertain" });
 
 		const router = {
 			connected: true,

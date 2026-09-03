@@ -44,17 +44,29 @@ export class OwnerLock {
 		fs.mkdirSync(directory, { recursive: true });
 		const file = path.join(directory, "owner.lock");
 		let prior: LockFile | undefined;
+		let priorIno: number | undefined;
 		try {
+			priorIno = fs.statSync(file).ino;
 			prior = JSON.parse(fs.readFileSync(file, "utf8")) as LockFile;
 		} catch {}
 		if (prior && alive(prior.pid) && Date.now() - prior.heartbeatAt <= staleMs) throw new OwnerLockHeld(prior.pid);
 		const generation = (prior?.generation ?? 0) + 1;
-		// One taker renames stale locks.
-		if (fs.existsSync(file)) {
-			const aside = `${file}.stale`;
+		// Move aside only the inspected lock.
+		if (priorIno !== undefined) {
+			const aside = `${file}.stale.${process.pid}`;
 			try {
 				renameFileSync(file, aside);
 			} catch {}
+			let movedIno: number | undefined;
+			try {
+				movedIno = fs.statSync(aside).ino;
+			} catch {}
+			if (movedIno !== undefined && movedIno !== priorIno) {
+				try {
+					renameFileSync(aside, file);
+				} catch {}
+				throw new OwnerLockHeld();
+			}
 			fs.rmSync(aside, { force: true });
 		}
 		try {

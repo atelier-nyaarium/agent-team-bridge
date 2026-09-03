@@ -90,6 +90,7 @@ function setup(
 			},
 		},
 		domainId: "test-domain",
+		gatewayId: "test-host",
 		ownerSignPub: () => identity.sign.pub,
 		contentKeyStore: {
 			open: opened,

@@ -22,8 +22,7 @@ The Android console reaches the Router through signed OwnerOps.
 appended by the Gateway through `deliverToOwner`. `src/gateway/consolePushOps.ts` owns the durable
 `OwnerRowOutbox` for disconnected or uncertain appends.
 
-Protocol-1 gateways receive `unsupported` refusals for the removed protocol paths. The
-`Remove-by` shims are in `gatewayBridge.ts` and `ownerOpIntake.ts`.
+Protocol-1 gateways receive `unsupported` for value and delivery ops.
 
 ## Add Device
 

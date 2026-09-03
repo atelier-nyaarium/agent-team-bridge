@@ -46,6 +46,7 @@ export interface ConsoleSocketsDeps {
 	ownerFloor: (domainId: string) => number;
 	/** Current plane versions. */
 	planeVersions?: (domainId: string, signerSignPub: string) => Record<string, number>;
+	readPlane?: (domainId: string, signerSignPub: string, name: string) => unknown;
 	admittedConsoleSigners?: (domainId: string) => string[];
 }
 
@@ -67,7 +68,6 @@ export interface ConsoleHelloAnswer {
 export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	const bound = new Map<ConsoleSocket, Bound>();
 	const pending = new Map<ConsoleSocket, ReturnType<typeof setTimeout>>();
-	const latestPlanes = new Map<string, { version: number; payload: unknown }>();
 	// Distinguishes reconnects from replaced sockets.
 	const incarnations = new Map<string, number>();
 
@@ -237,7 +237,6 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 	}
 
 	function pushPlane(domainId: string, name: string, version: number, payload: unknown): void {
-		latestPlanes.set(`${domainId}/${name}`, { version, payload });
 		for (const [socket, at] of bound) {
 			if (at.domainId !== domainId) continue;
 			send(socket, { type: "plane", incarnation: at.incarnation, name, version, payload });
@@ -248,7 +247,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		const versions = deps.planeVersions?.(domainId, signerSignPub) ?? {};
 		return Object.entries(versions)
 			.filter(([name, version]) => version > (known[name] ?? 0))
-			.map(([name, version]) => ({ name, version, payload: latestPlanes.get(`${domainId}/${name}`)?.payload }));
+			.map(([name, version]) => ({ name, version, payload: deps.readPlane?.(domainId, signerSignPub, name) }));
 	}
 
 	/** Revoked consoles keep no socket. */

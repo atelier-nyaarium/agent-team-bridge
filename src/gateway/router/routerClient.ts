@@ -13,6 +13,7 @@ import {
 	reachCandidates,
 	reachHost,
 } from "../../shared/router-reach.js";
+import { GatewayRegisterAnswerSchema } from "../../shared/schemasRegister.js";
 import { pinnedDial, pinRefusal, realWebSocket } from "./pinnedSocket.js";
 
 // Shared relay-frame ceiling. The peer transport and tests use the same value.
@@ -72,6 +73,7 @@ export interface RouterClient {
 	isConnected: () => boolean;
 	/** True while registration is accepted. */
 	isRegistered: () => boolean;
+	acceptedOpLedgerProtocol: () => number | null;
 	stop: () => void;
 }
 
@@ -104,6 +106,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	// Registration can be refused while the socket remains open.
 	let registered = false;
 	let gatewayIncarnation: number | null = null;
+	let opLedgerProtocol: number | null = null;
 	// One socket fails over through the advertised address ring.
 	let reach: RouterReach = config.reach ?? {};
 	let candidateIndex = 0;
@@ -281,6 +284,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			stopHeartbeat();
 			registered = false;
 			gatewayIncarnation = null;
+			opLedgerProtocol = null;
 			// Advance after a failed candidate.
 			if (!opened) candidateIndex = (candidateIndex + 1) % Math.max(1, ring.length);
 			// Do not register through a dead socket.
@@ -334,12 +338,14 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				if (res.error) {
 					registered = false;
 					gatewayIncarnation = null;
+					opLedgerProtocol = null;
 					console.error(`[router-client] gateway_register failed: ${res.error}`);
 					return;
 				}
 				if (r?.ok === false) {
 					registered = false;
 					gatewayIncarnation = null;
+					opLedgerProtocol = null;
 					// Pending registration is retried; other refusals are terminal.
 					if (r.pending) schedulePendingRetry(r.error);
 					else console.error(`[router-client] Router rejected registration: ${r.error}`);
@@ -348,6 +354,8 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				// Successful registration clears pending retries.
 				clearPendingRetry();
 				registered = true;
+				const registerAnswer = GatewayRegisterAnswerSchema.safeParse(r);
+				opLedgerProtocol = registerAnswer.success ? (registerAnswer.data.opLedgerProtocol ?? null) : null;
 				gatewayIncarnation = typeof r?.incarnation === "number" ? r.incarnation : null;
 				const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 				console.log(`[router-client] registered as Gateway "${config.gatewayId}"${peers}`);
@@ -483,5 +491,13 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		return registered && isConnected();
 	}
 
-	return { callTool, callInboxTool, incarnation: () => gatewayIncarnation, isConnected, isRegistered, stop };
+	return {
+		callTool,
+		callInboxTool,
+		incarnation: () => gatewayIncarnation,
+		isConnected,
+		isRegistered,
+		acceptedOpLedgerProtocol: () => opLedgerProtocol,
+		stop,
+	};
 }

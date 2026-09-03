@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import packageJson from "../../package.json";
 import { createVerifyChecks, summarize } from "../../scripts/lib/verifyChecks.js";
@@ -17,7 +18,12 @@ const currentGateway = {
 	opLedgerProtocol: 1,
 };
 
-function checks(gateway: Record<string, unknown>, coverage: Record<string, unknown> | null = {}) {
+function checks(
+	gateway: Record<string, unknown>,
+	coverage: Record<string, unknown> | null = {},
+	dial: (url: string, expectedFingerprint: string) => Promise<void> = async () => {},
+	env: Record<string, string | undefined> = { FEDERATION_ROUTER_CERT_FP: "fp" },
+) {
 	const fetch = vi.fn(async (input: RequestInfo | URL) => {
 		const url = String(input);
 		if (url.endsWith("/capabilities")) return Response.json({ console: capabilities, daemon: capabilities });
@@ -27,8 +33,8 @@ function checks(gateway: Record<string, unknown>, coverage: Record<string, unkno
 	});
 	return createVerifyChecks({
 		fetch: fetch as (input: RequestInfo | URL) => Promise<Response>,
-		dial: async () => {},
-		env: { FEDERATION_ROUTER_CERT_FP: "fp" },
+		dial,
+		env,
 		router: { certFingerprint: "fp", version: packageJson.version, protocolVersion: FEDERATION_PROTOCOL_VERSION },
 		gateway,
 		registered: [{ gatewayId: "gateway", incarnation: 4, protocolVersion: FEDERATION_PROTOCOL_VERSION }],
@@ -58,6 +64,28 @@ describe("setup verify checks", () => {
 			checks({ ...currentGateway, opLedgerProtocol: 2 }, currentCoverage).map((check) => check.run()),
 		);
 		expect(answers[5]).toEqual({ ok: false, detail: "expected 1, got 2" });
+	});
+
+	it("uses the persisted pin for console WS", async () => {
+		const dial = vi.fn(async () => {});
+		const answers = await Promise.all(checks(currentGateway, currentCoverage, dial).map((check) => check.run()));
+		expect(dial).toHaveBeenCalledWith("wss://router:20001/console", "fp");
+		expect(answers[6]?.ok).toBe(true);
+	});
+
+	it("fails console WS when the persisted pin is missing", async () => {
+		const context = checks(currentGateway, currentCoverage, async () => {}, {});
+		const consoleCheck = context.find((check) => check.name === "console-ws");
+		const answers = await consoleCheck?.run();
+		expect(answers).toEqual({ ok: false, detail: "FEDERATION_ROUTER_CERT_FP is missing" });
+	});
+
+	it("keeps a Gateway-only setup verify branch", async () => {
+		const source = await readFile(new URL("../../scripts/setup-verify.ts", import.meta.url), "utf8");
+		expect(source).toContain("if (localRouter)");
+		expect(source).toContain("FEDERATION_ROUTER_HOST");
+		expect(source).toContain("pinnedRouterHealth");
+		expect(source).toContain("if (!gatewayReport.router_connected)");
 	});
 
 	it("validates the in-process retained route handlers", async () => {

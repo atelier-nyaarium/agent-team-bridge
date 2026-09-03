@@ -1,5 +1,4 @@
 import {
-	type ConsolePushEntry,
 	type CrossDomainPresenceSession,
 	type FederatedOp,
 	FederatedOpSchema,
@@ -19,7 +18,6 @@ export interface FederationRoutes {
 	respond: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Response;
 	teams: () => Response;
 	localSpawnPoints: () => GatewaySpawnPoints[];
-	consolePush: (entry: ConsolePushEntry, dedupeKey: string) => { delivered: boolean };
 	landCrossDomainPresence: (srcDomainId: string, sessions: CrossDomainPresenceSession[]) => void;
 }
 
@@ -183,13 +181,6 @@ export function createGatewayRelayHandler({
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "response_push delivery failed");
 				return { ok: true };
-			}
-			case "console_push": {
-				// Cross-Domain console pushes are always denied.
-				if (srcDomainId !== null) {
-					throw new Error("cross-Domain console_push denied");
-				}
-				return routes.consolePush(op.entry, op.dedupeKey);
 			}
 			case "presence_push": {
 				if (srcDomainId === null) {

@@ -60,42 +60,4 @@ describe("phone-bound console delivery", () => {
 		const append = h.calls.find((call) => call.action === "inbox_append");
 		expect(append?.params).toMatchObject({ row: { envelope: { kind: "plugin_action" } } });
 	});
-
-	it("keeps the primary notice successful when a sibling mirror fails", async () => {
-		const h = makePushRoutes({
-			roster: ["hosta", "hostb"],
-			onCall: (action) => {
-				if (action === "list_gateways") return { gateways: [{ gatewayId: "hosta" }, { gatewayId: "hostb" }] };
-				return { outcome: "accepted" };
-			},
-		});
-		const response = h.routes.humanNotify(new Request("http://gateway/human/notify"), {
-			from: "recipe-app",
-			title: "done",
-			summary: "s",
-			full: "body",
-		});
-		expect(response.status).toBe(200);
-		await vi.waitFor(() => expect(h.calls.some((call) => call.action === "list_gateways")).toBe(true));
-	});
-
-	it("fans out local notices only to admitted sibling Gateways and never gossips a relayed copy", async () => {
-		const h = makePushRoutes({
-			roster: ["hosta", "hostb", "unadmitted"],
-			onCall: (action) => {
-				if (action === "list_gateways")
-					return { gateways: [{ gatewayId: "hosta" }, { gatewayId: "hostb" }, { gatewayId: "unadmitted" }] };
-				return { outcome: "accepted" };
-			},
-		});
-		const response = h.routes.humanNotify(new Request("http://gateway/human/notify"), {
-			from: "recipe-app",
-			title: "done",
-			summary: "s",
-			full: "body",
-		});
-		expect(response.status).toBe(200);
-		await vi.waitFor(() => expect(h.calls.filter((call) => call.action === "gateway_relay")).toHaveLength(1));
-		expect(h.calls.find((call) => call.action === "gateway_relay")?.params).toMatchObject({ dstGateway: "hostb" });
-	});
 });

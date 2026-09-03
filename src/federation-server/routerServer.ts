@@ -157,6 +157,9 @@ export class RouterServer {
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
 				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
 			ownerFloor: (domainId) => this.inbox.ownerFloor(domainId),
+			planeVersions: (domainId, signerSignPub) =>
+				this.ownerServices?.planeVersions(domainId, signerSignPub) ?? {},
+			readPlane: (domainId, signerSignPub, name) => this.ownerServices?.readPlane(domainId, signerSignPub, name),
 			admittedConsoleSigners: (domainId) => {
 				const domain = this.coordinatorFor(domainId)?.getDomainSnapshot();
 				if (!domain) return [];

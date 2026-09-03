@@ -169,7 +169,7 @@ describe("routes", () => {
 				gatewayId: "test-host",
 				incarnation: null,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
-				opLedgerProtocol: 1,
+				opLedgerProtocol: null,
 				teams: 1,
 				pending_jobs: 1,
 				router_connected: false,

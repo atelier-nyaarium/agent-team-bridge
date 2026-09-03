@@ -19,7 +19,6 @@ import type { HostSpawnState } from "../shared/host-spawn.js";
 import { pickTiers } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
-import { OP_LEDGER_PROTOCOL } from "../shared/schemas.js";
 import { CapabilitySnapshotSchema } from "../shared/schemasCapability.js";
 import { signRowEnvelope } from "../shared/schemasInbox.js";
 import { OwnerPresenceProjectionSchema } from "../shared/schemasRouterPresence.js";
@@ -438,10 +437,6 @@ export function createRoutes({
 				try {
 					const r = await relayToGateway(dstGateway, op, dstDomain, opId);
 					if (r.ok) {
-						// A landing-side refusal (an oversized console_push the sibling dropped) answers ok.
-						if (op.kind === "console_push" && (r.result as { delivered?: boolean })?.delivered === false) {
-							console.warn(`[relay] ${label} to ${dstGateway} landed but was refused (delivered: false)`);
-						}
 						resolveOutcome({ ok: true });
 						return;
 					}
@@ -462,14 +457,13 @@ export function createRoutes({
 	}
 
 	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session).
-	const { mirrorPeer, consolePush, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
+	const { mirrorPeer, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
 		ownerId,
 		routerClient,
 		localDomainId: localDomainId ?? undefined,
 		producerSignPriv,
 		ownerSignPub,
 		contentKeyStore,
-		resolvesLocalGateway,
 		localGatewayId,
 		localAddress,
 		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's.
@@ -483,7 +477,6 @@ export function createRoutes({
 				}
 			: null,
 		refuseImpersonation,
-		relayWithRetry,
 	});
 	const { fetchBlobFromGateway } = createBlobFetcher({
 		blobStore,
@@ -1319,7 +1312,7 @@ export function createRoutes({
 			gatewayId: localGatewayId,
 			incarnation: routerClient?.incarnation() ?? null,
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
-			opLedgerProtocol: OP_LEDGER_PROTOCOL,
+			opLedgerProtocol: routerClient?.acceptedOpLedgerProtocol() ?? null,
 			teams: registry.size,
 			pending_jobs: store.size,
 			router_connected: routerClient?.isConnected() ?? false,
@@ -1611,7 +1604,6 @@ export function createRoutes({
 		fetchBlobFromGateway,
 		health,
 		humanNotify,
-		consolePush,
 		deliverToOwner,
 		pluginAction,
 		taskBoard,

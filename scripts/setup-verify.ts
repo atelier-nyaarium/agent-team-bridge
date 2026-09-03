@@ -1,3 +1,4 @@
+import https from "node:https";
 import { $ } from "bun";
 import type WebSocket from "ws";
 import { pinnedDial, realWebSocket } from "../src/gateway/router/pinnedSocket.js";
@@ -7,83 +8,77 @@ import { routerRunning } from "./lib/routerState.js";
 import { createVerifyChecks, summarize } from "./lib/verifyChecks.js";
 import { fetchRegisteredGateways, type RegisteredGateway } from "./setup-status.js";
 
-////////////////////////////////
-//  Constants
-//
-//  Health-probe the local federation Router and this Gateway's link to it: that the Router answers,
-//  what it advertises, and that the Gateway is actually registered rather than merely running.
+// Local Router checks.
 
 const GATEWAY_HEALTH = "http://127.0.0.1:20000/health";
-// A dropped Gateway reconnects on a backoff that reaches a few seconds; 30s covers it with room.
+// Allow reconnect backoff.
 const LINK_TRIES = 15;
 const LINK_INTERVAL_MS = 2000;
 
-////////////////////////////////
-//  Functions & Helpers
+// Check helpers.
 
-/** Probe the Router and the Gateway, reporting each leg separately. Throws on the first leg that
- * fails, since a later one cannot be meaningful without it. */
+/** Probe Router links. */
 export async function verify(): Promise<void> {
-	if (!(await routerRunning())) throw new Error("the federation Router is not running - run ./start-federation.sh");
-
-	// -k, not a pin: this probe runs on the host beside the Router, so there is no peer to
-	// authenticate. It reports the fingerprint for the operator to compare against their devices.
-	// Probes the BOUND address: a LAN bind unbinds loopback.
-	const bind = await envGet("FEDERATION_BIND");
-	if (!bind) throw new Error("no LAN bind in .env - run ./start-federation.sh");
-	const router = await routerHealth(bind);
-	if (!router) throw new Error(`the Router at ${bind}:${ROUTER_PORT} did not answer /health`);
-	note(`Router healthy. TLS fingerprint ${router.certFingerprint}`);
-
-	// The reach a console will steer by rides the app-token-gated `reach` op, not /health, so
-	// asking for it here also proves the token in .env is the one the Router holds.
-	const appToken = await envGet("CONSOLE_BRIDGE_TOKEN");
-	if (!appToken) throw new Error("CONSOLE_BRIDGE_TOKEN missing from .env");
-	const consoleUrl = `https://${bind}:${ROUTER_PORT}/console`;
-	const bearer = `X-Console-Bridge-Token: Bearer ${appToken}`;
-	const reachText =
-		await $`curl -sk --max-time 5 -X POST ${consoleUrl} -H ${bearer} -H ${"Content-Type: application/json"} -d ${'{"reach":{}}'}`
-			.quiet()
-			.nothrow()
-			.text();
-	const reach = jparse<{ publicHost?: string | null; publicPort?: number; lanAddresses?: string[]; error?: string }>(
-		reachText.trim(),
-	);
-	if (!reach || reach.error) {
-		throw new Error(
-			`the Router refused the reach op (${reach?.error ?? (reachText.trim().slice(0, 120) || "no answer")}) - is CONSOLE_BRIDGE_TOKEN in .env the one the Router runs with?`,
-		);
+	const localRouter = await routerRunning();
+	let bind = "";
+	let router;
+	if (localRouter) {
+		// Local probe skips pinning.
+		bind = await envGet("FEDERATION_BIND");
+		if (!bind) throw new Error("no LAN bind in .env - run ./start-federation.sh");
+		router = await routerHealth(bind);
+		if (!router) throw new Error(`the Router at ${bind}:${ROUTER_PORT} did not answer /health`);
+		note(`Router healthy. TLS fingerprint ${router.certFingerprint}`);
+	} else {
+		const host = (await envGet("FEDERATION_ROUTER_HOST"))?.trim();
+		const port = Number(await envGet("FEDERATION_ROUTER_PORT")) || ROUTER_PORT;
+		const persisted = (await envGet("FEDERATION_ROUTER_CERT_FP"))?.trim().toLowerCase();
+		if (!host) throw new Error("FEDERATION_ROUTER_HOST missing from .env");
+		if (!persisted) throw new Error("FEDERATION_ROUTER_CERT_FP missing from .env");
+		const routerUrl = `https://${host}:${port}`;
+		router = await pinnedRouterHealth(routerUrl, persisted);
+		if (!router) throw new Error(`the Router at ${routerUrl} did not answer pinned /health`);
+		note(`Remote Router healthy. TLS fingerprint ${router.certFingerprint}`);
 	}
-	const publicShown = reach.publicHost ? `${reach.publicHost}:${reach.publicPort ?? ROUTER_PORT}` : "(none)";
-	const lanShown = reach.lanAddresses?.length ? reach.lanAddresses.join(", ") : "(none)";
-	note(`Router advertises: public ${publicShown}, LAN ${lanShown}`);
-	// The Router's advertised reach and .env should agree, since the same file fed both. They differ
-	// only when the Router is running on an older .env, which a restart fixes.
-	const env = await readPublicReach();
-	if ((reach.publicHost ?? "") !== env.publicHost || (reach.publicPort ?? ROUTER_PORT) !== env.publicPort) {
-		note("The running Router advertises an older public address than .env holds - restart ./start-federation.sh");
+
+	if (localRouter) {
+		// Verify advertised reach.
+		const appToken = await envGet("CONSOLE_BRIDGE_TOKEN");
+		if (!appToken) throw new Error("CONSOLE_BRIDGE_TOKEN missing from .env");
+		const consoleUrl = `https://${bind}:${ROUTER_PORT}/console`;
+		const bearer = `X-Console-Bridge-Token: Bearer ${appToken}`;
+		const reachText =
+			await $`curl -sk --max-time 5 -X POST ${consoleUrl} -H ${bearer} -H ${"Content-Type: application/json"} -d ${'{"reach":{}}'}`
+				.quiet()
+				.nothrow()
+				.text();
+		const reach = jparse<{
+			publicHost?: string | null;
+			publicPort?: number;
+			lanAddresses?: string[];
+			error?: string;
+		}>(reachText.trim());
+		if (!reach || reach.error) {
+			throw new Error(
+				`the Router refused the reach op (${reach?.error ?? (reachText.trim().slice(0, 120) || "no answer")}) - is CONSOLE_BRIDGE_TOKEN in .env the one the Router runs with?`,
+			);
+		}
+		const publicShown = reach.publicHost ? `${reach.publicHost}:${reach.publicPort ?? ROUTER_PORT}` : "(none)";
+		const lanShown = reach.lanAddresses?.length ? reach.lanAddresses.join(", ") : "(none)";
+		note(`Router advertises: public ${publicShown}, LAN ${lanShown}`);
+		// Compare reach with .env.
+		const env = await readPublicReach();
+		if ((reach.publicHost ?? "") !== env.publicHost || (reach.publicPort ?? ROUTER_PORT) !== env.publicPort) {
+			note(
+				"The running Router advertises an older public address than .env holds - restart ./start-federation.sh",
+			);
+		}
 	}
 
 	const gwText = await $`curl -s --max-time 5 ${GATEWAY_HEALTH}`.quiet().nothrow().text();
 	const gateway = jparse<{ ok?: boolean }>(gwText.trim());
 	if (!gateway?.ok) throw new Error("the Gateway did not answer /health - run ./start-gateway.sh");
 
-	// The link is checked on BOTH sides, and given time. A Gateway reads `router_connected` off its
-	// own socket, which stays OPEN across a half-open connection, so it can claim a link the Router
-	// Both sides must report the link.
-	// And a Router that was just (re)started drops the Gateway, which reconnects on a backoff of a
-	// few seconds; a single read in that window reports an outage that is already healing.
-	const link = await awaitGatewayLink(bind);
-	if (link.registered.length === 0) note("Gateways: none registered");
-	else for (const g of link.registered) note(`Gateway ${g.gatewayId}: ${g.signFp ?? "(no identity presented)"}`);
-	if (!link.connected) {
-		throw new Error("the Gateway is up but NOT connected to the Router - check its transport.json and its log");
-	}
-	if (!link.held) {
-		throw new Error(
-			"the Gateway believes it is connected but the Router holds NO registration - restart the Gateway",
-		);
-	}
 	const gatewayReport = jparse<{
 		ok?: boolean;
 		version?: string;
@@ -91,15 +86,46 @@ export async function verify(): Promise<void> {
 		incarnation?: number | null;
 		protocolVersion?: number;
 		opLedgerProtocol?: number;
+		router_connected?: boolean;
 	}>(gwText.trim());
-	const routerUrl = `wss://${bind}:${ROUTER_PORT}`;
+	let registered: Array<{ gatewayId: string; incarnation?: number; protocolVersion?: number }> = [];
+	if (localRouter) {
+		// Verify both link views.
+		// Allow reconnect backoff.
+		const link = await awaitGatewayLink(bind);
+		if (link.registered.length === 0) note("Gateways: none registered");
+		else for (const g of link.registered) note(`Gateway ${g.gatewayId}: ${g.signFp ?? "(no identity presented)"}`);
+		if (!link.connected) {
+			throw new Error("the Gateway is up but NOT connected to the Router - check its transport.json and its log");
+		}
+		if (!link.held) {
+			throw new Error(
+				"the Gateway believes it is connected but the Router holds NO registration - restart the Gateway",
+			);
+		}
+		registered = link.registered;
+	} else if (gatewayReport?.gatewayId) {
+		registered = [
+			{
+				gatewayId: gatewayReport.gatewayId,
+				incarnation: gatewayReport.incarnation ?? undefined,
+				protocolVersion: gatewayReport.protocolVersion,
+			},
+		];
+		if (!gatewayReport.router_connected) {
+			throw new Error("the Gateway is up but NOT connected to the Router - check its transport.json and its log");
+		}
+	}
+	const routerHost = localRouter ? bind : (await envGet("FEDERATION_ROUTER_HOST"))?.trim();
+	const routerPort = localRouter ? ROUTER_PORT : Number(await envGet("FEDERATION_ROUTER_PORT")) || ROUTER_PORT;
+	const routerUrl = `wss://${routerHost}:${routerPort}`;
 	const checks = createVerifyChecks({
 		fetch,
 		dial: dialConsole,
 		env: process.env,
 		router,
 		gateway: gatewayReport ?? {},
-		registered: link.registered,
+		registered,
 		localGatewayId: gatewayReport?.gatewayId ?? "",
 		routerUrl,
 		gatewayUrl: "http://127.0.0.1:20000",
@@ -120,6 +146,48 @@ export async function verify(): Promise<void> {
 	} else note(`Gateway healthy and registered.`);
 }
 
+async function pinnedRouterHealth(
+	url: string,
+	expectedFingerprint: string,
+): Promise<Awaited<ReturnType<typeof routerHealth>>> {
+	const parsed = new URL(`${url}/health`);
+	const pin = pinnedDial(parsed.hostname, Number(parsed.port) || ROUTER_PORT, expectedFingerprint);
+	const text = await new Promise<string>((resolve, reject) => {
+		const request = https.get(
+			parsed,
+			{
+				rejectUnauthorized: false,
+				createConnection: pin.createConnection as never,
+			},
+			(response) => {
+				let body = "";
+				response.setEncoding("utf8");
+				response.on("data", (chunk: string) => {
+					body += chunk;
+				});
+				response.on("end", () => resolve(body));
+			},
+		);
+		request.setTimeout(10_000, () => request.destroy(new Error("timeout")));
+		request.once("error", reject);
+	});
+	if (pin.verdict() !== "match") throw new Error("Router certificate was not pinned");
+	const health = jparse<{
+		ok?: boolean;
+		certFingerprint?: string;
+		gateways?: number;
+		version?: string;
+		protocolVersion?: number;
+	}>(text.trim());
+	if (!health?.ok || !health.certFingerprint) return null;
+	return {
+		certFingerprint: health.certFingerprint,
+		gateways: health.gateways ?? 0,
+		version: health.version,
+		protocolVersion: health.protocolVersion,
+	};
+}
+
 async function dialConsole(url: string, expectedFingerprint: string): Promise<void> {
 	if (!url.startsWith("wss://")) throw new Error("refusing non-TLS Router URL");
 	const parsed = new URL(url);
@@ -132,7 +200,7 @@ async function dialConsole(url: string, expectedFingerprint: string): Promise<vo
 			reject(new Error("timeout"));
 		}, 10_000);
 		ws = new WebSocket(url, {
-			// Pinned adapter matches ws.
+			// Match the WebSocket adapter.
 			createConnection: pin.createConnection as WebSocket.ClientOptions["createConnection"],
 			headers: { "X-Console-Bridge-Token": `Bearer ${process.env.CONSOLE_BRIDGE_TOKEN ?? ""}` },
 		});
@@ -153,8 +221,7 @@ async function dialConsole(url: string, expectedFingerprint: string): Promise<vo
 	});
 }
 
-/** Poll until the Gateway says it is connected AND the Router holds a registration, or the wait
- * runs out. Returns the last thing each side said, so the caller reports which leg is missing. */
+/** Poll Gateway links. */
 async function awaitGatewayLink(
 	bind: string,
 ): Promise<{ connected: boolean; held: boolean; registered: RegisteredGateway[] }> {

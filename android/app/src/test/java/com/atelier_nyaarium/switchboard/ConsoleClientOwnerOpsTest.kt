@@ -222,6 +222,53 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	@Test
+	fun aFailedInboxAdvanceIsRetriedBeforeTheNextRead() = runBlocking {
+		val retryCoordinator = newCoordinator()
+		var advances = 0
+		val retryClient = newClient(retryCoordinator) { op ->
+			if (op.op["kind"]?.jsonPrimitive?.content == "inbox_advance" && advances++ == 0) {
+				sent += op
+				null
+			} else {
+				answer(op, retryCoordinator)
+			}
+		}
+
+		drainTick(retryClient, retryCoordinator, emptyMap(), {}, { _, _, _ -> true })
+		assertEquals(PendingInboxAdvance(2L, 0L), retryCoordinator.pendingAdvance())
+		drainTick(retryClient, retryCoordinator, emptyMap(), {}, { _, _, _ -> true })
+
+		assertEquals(
+			listOf("inbox_read", "inbox_advance", "planes_read", "inbox_advance", "inbox_read", "planes_read"),
+			sent.map { it.op["kind"]?.jsonPrimitive?.content },
+		)
+		assertEquals(null, retryCoordinator.pendingAdvance())
+	}
+
+	@Test
+	fun aCursorStaleFloorIsReadOnTheNextTick() = runBlocking {
+		val floorCoordinator = newCoordinator()
+		var reads = 0
+		val floorClient = newClient(floorCoordinator) { op ->
+			if (op.op["kind"]?.jsonPrimitive?.content == "inbox_read" && reads++ == 0) {
+				sent += op
+				buildJsonObject { put("outcome", "cursor_stale"); put("floor", 5) }
+			} else {
+				answer(op, floorCoordinator)
+			}
+		}
+
+		val first = drainTick(floorClient, floorCoordinator, emptyMap(), {}, { _, _, _ -> true })
+		drainTick(floorClient, floorCoordinator, first.known, {}, { _, _, _ -> true })
+
+		assertEquals(
+			listOf(1L, 5L),
+			sent.filter { it.op["kind"]?.jsonPrimitive?.content == "inbox_read" }
+				.map { it.op["fromSeq"]?.jsonPrimitive?.content?.toLong() },
+		)
+	}
+
+	@Test
 	fun anAnsweredPlaneAppliesOnceThroughTheSocketReducer() = runBlocking {
 		var applied = 0
 		val first = drainTick(client, coordinator, emptyMap(), {}, { _, _, _ -> applied++; true })
@@ -294,7 +341,7 @@ class ConsoleClientOwnerOpsTest {
 			}
 			"gateway_value" -> valueAnswer(op)
 			"inbox_read" -> buildJsonArray { add(wireJson.encodeToJsonElement(InboxRow.serializer(), tickRow())) }
-			"inbox_advance" -> buildJsonObject { put("outcome", "accepted") }
+			"inbox_advance" -> buildJsonObject { put("outcome", "ok") }
 			"planes_read" -> buildJsonObject {
 				put(
 					"result",

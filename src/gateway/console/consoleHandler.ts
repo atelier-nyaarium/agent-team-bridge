@@ -75,7 +75,6 @@ export function createConsoleDispatcher({
 		const delivered = routes.deliverToOwner({
 			entry: entry as import("../../shared/federation-protocol.js").ConsolePushEntry,
 			dedupeKey: dedupeKey ?? crypto.randomUUID(),
-			origin: "local",
 			label: "console-device",
 		});
 		return delivered ? undefined : fenced() ? MIGRATING : undefined;

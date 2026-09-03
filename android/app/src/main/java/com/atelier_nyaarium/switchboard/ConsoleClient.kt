@@ -19,7 +19,6 @@ import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
 import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
 import java.util.UUID
-import kotlinx.coroutines.async
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -30,6 +29,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.Serializable
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.withTimeoutOrNull
 
 @Serializable
 internal data class OwnerOpAnswer(val ok: Boolean, val result: JsonElement? = null, val error: String? = null)
@@ -156,20 +156,17 @@ class ConsoleClient internal constructor(
 				failureAnswer(posted)
 			} else posted
 		} else kotlinx.coroutines.coroutineScope {
-			coordinator.prepareOpResult(opId)
+			val waiter = coordinator.prepareOpResult(opId)
 			try {
-				val waiter = async { coordinator.awaitOpResult(opId, timeoutMs) }
 				val posted = postOwnerOp(ownerOp)
 				when {
 					posted == null -> {
-						waiter.cancel()
 						transportFailureAnswer()
 					}
 					posted.jsonObject["outcome"]?.jsonPrimitive?.content?.let { it != "accepted" } == true -> {
-						waiter.cancel()
 						failureAnswer(posted)
 					}
-					else -> waiter.await()
+					else -> withTimeoutOrNull(timeoutMs) { waiter.await() }
 				}
 			} finally {
 				coordinator.discardOpResult(opId)

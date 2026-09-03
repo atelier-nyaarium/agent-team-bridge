@@ -172,11 +172,13 @@ describe("inbox delivery pump", () => {
 		]);
 	});
 
-	it("refuses a delivery whose target differs from the addressed session", async () => {
+	it("refuses console delivery addressed to another Domain or Gateway", async () => {
 		const setupResult = setup();
 		const identity = generateIdentity();
 		let dispatched = 0;
+		const sealedResults: unknown[] = [];
 		const delivery = setupResult.pump({
+			gatewayId: "gateway",
 			routerClient: {
 				callInboxTool: async (action: string, params: Record<string, unknown>) => {
 					setupResult.calls.push({ action, params });
@@ -189,18 +191,143 @@ describe("inbox delivery pump", () => {
 				return { renamed: true };
 			},
 			contentKeyStore: {
-				open: () => ({ kind: "ok", plaintext: Buffer.from('{"kind":"rename_session","target":"other"}') }),
+				open: () => ({
+					kind: "ok",
+					plaintext: Buffer.from('{"kind":"rename_session","target":"session","sessionLabel":"renamed"}'),
+				}),
+				seal: (plaintext: Buffer) => {
+					sealedResults.push(JSON.parse(plaintext.toString("utf8")));
+					return { kind: "ok", envelope: row().body };
+				},
+			} as never,
+		});
+		for (const foreignAddress of ["session:other-domain/gateway/session", "session:domain/other-gateway/session"]) {
+			await delivery.onFrame({
+				address: foreignAddress,
+				rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+				deliveryEpoch: 1,
+			});
+		}
+		expect(dispatched).toBe(0);
+		expect(sealedResults).toEqual([
+			{ outcome: "failed", reason: "target_mismatch" },
+			{ outcome: "failed", reason: "target_mismatch" },
+		]);
+		expect(setupResult.calls).toHaveLength(4);
+		expect(setupResult.calls.filter((call) => call.action === "inbox_ack")).toHaveLength(2);
+		expect(setupResult.calls.at(-1)).toMatchObject({ params: { outcome: "delivered" } });
+	});
+
+	it("requests a missing console-op epoch and retries after the key grant", async () => {
+		const setupResult = setup();
+		const identity = generateIdentity();
+		let installed = false;
+		let dispatched = 0;
+		const requested: number[] = [];
+		const delivery = setupResult.pump({
+			gatewayId: "gateway",
+			gatewaySignPub: "Z2F0ZXdheS1zaWdu",
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return { renamed: true };
+			},
+			keyRequester: {
+				request: (epoch: number) => requested.push(epoch),
+				installed: () => {},
+				sendReceipt: async () => {},
+				resendReceipts: async () => {},
+			},
+			allowlistSnapshot: () => ({ ownerSignPub: "owner", admissions: [], revocations: [] }),
+			contentKeyStore: {
+				open: () =>
+					installed
+						? {
+								kind: "ok",
+								plaintext: Buffer.from(
+									'{"kind":"rename_session","target":"session","sessionLabel":"renamed"}',
+								),
+							}
+						: { kind: "missing_epoch", epoch: 2 },
+				install: () => {
+					installed = true;
+					return "installed";
+				},
 				seal: () => ({ kind: "ok", envelope: row().body }),
 			} as never,
 		});
 		await delivery.onFrame({
 			address,
-			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			rows: [{ ...row(2), envelope: { ...envelope(2), kind: "console_op" } }],
 			deliveryEpoch: 1,
 		});
+		expect(requested).toEqual([2]);
 		expect(dispatched).toBe(0);
-		expect(setupResult.calls.map((call) => call.action)).toEqual(["inbox_append", "inbox_ack"]);
-		expect(setupResult.calls[1]).toMatchObject({ params: { outcome: "delivered" } });
+		await delivery.onFrame({
+			address: "gateway:domain/gateway",
+			rows: [
+				{
+					...row(1),
+					seq: 2,
+					envelope: {
+						...envelope("clear"),
+						kind: "key_grant",
+						origin: { kind: "router", domainId: "domain" },
+					},
+					body: {
+						v: 1,
+						recipientSignPub: "Z2F0ZXdheS1zaWdu",
+						envelope: {
+							epoch: 2,
+							signerSignPub: "signer",
+							sealed: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
+						},
+						at: 10,
+					},
+				},
+			],
+			deliveryEpoch: 1,
+		});
+		expect(dispatched).toBe(1);
+		expect(setupResult.calls).toContainEqual(
+			expect.objectContaining({ action: "inbox_ack", params: expect.objectContaining({ outcome: "delivered" }) }),
+		);
+	});
+
+	it("fails a bad-tag console op without waiting", async () => {
+		const setupResult = setup();
+		const identity = generateIdentity();
+		const requested: number[] = [];
+		let dispatched = 0;
+		await setupResult
+			.pump({
+				gatewayId: "gateway",
+				producerSignPriv: identity.sign.priv,
+				consoleDispatch: async () => {
+					dispatched++;
+					return {};
+				},
+				keyRequester: {
+					request: (epoch: number) => requested.push(epoch),
+					installed: () => {},
+					sendReceipt: async () => {},
+					resendReceipts: async () => {},
+				},
+				contentKeyStore: { open: () => ({ kind: "bad_tag" }) } as never,
+			})
+			.onFrame({
+				address,
+				rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+				deliveryEpoch: 1,
+			});
+		expect(dispatched).toBe(0);
+		expect(requested).toEqual([]);
+		expect(setupResult.calls).toEqual([
+			expect.objectContaining({
+				action: "inbox_ack",
+				params: { address, seq: 1, deliveryEpoch: 1, outcome: "failed", reason: "bad_tag" },
+			}),
+		]);
 	});
 
 	it("answers a claimed delivery as lost without dispatching again", async () => {

@@ -269,6 +269,24 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		scheduled,
 		capabilities,
 		readAnchors,
+		planeVersions(domainId: string, _signerSignPub: string): Record<string, number> {
+			const projection = presence.ownerProjection(domainId, {
+				admittedGateways,
+				linkedDomains,
+				isShared,
+				connected,
+			});
+			return {
+				presence: "outcome" in projection ? 0 : projection.plane.version,
+				taskBoard: board.read(domainId).revision,
+			};
+		},
+		readPlane(domainId: string, _signerSignPub: string, name: string): unknown {
+			if (name === "presence")
+				return presence.ownerProjection(domainId, { admittedGateways, linkedDomains, isShared, connected });
+			// Board planes carry revisions.
+			return undefined;
+		},
 		reconcileReferences(): void {
 			perDomain("reference reconcile", (domainId) => {
 				const store = registry.for(domainId);

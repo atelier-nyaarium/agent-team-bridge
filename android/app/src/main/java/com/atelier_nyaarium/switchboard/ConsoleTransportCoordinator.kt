@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 
 internal enum class ConsoleLink { SOCKET, POLL }
@@ -18,8 +17,10 @@ internal data class ConsoleTransportPlan(
 	val pullDiscovery: Boolean,
 )
 
+internal data class PendingInboxAdvance(val cursor: Long, val cursorEpoch: Long)
+
 /** One Router consumer across transports. */
-// One cursor permits one drain at a time.
+// One cursor gates draining.
 internal class ConsoleTransportCoordinator(
 	private val pushback: IdlePushbackManager,
 	private val now: () -> Long = System::currentTimeMillis,
@@ -33,6 +34,7 @@ internal class ConsoleTransportCoordinator(
 	private var incarnation = 0L
 	private var migrationEpoch = 0L
 	private var awaitingTranslation = false
+	private var pendingAdvance: PendingInboxAdvance? = null
 	private val opResults = mutableMapOf<String, CompletableDeferred<JsonElement?>>()
 
 	@Volatile var dropped = 0L
@@ -72,10 +74,10 @@ internal class ConsoleTransportCoordinator(
 				else this.migrationEpoch = migrationEpoch
 			}
 			val lost = (floor - (cursor + 1)).coerceAtLeast(0)
-			// A higher floor means intervening rows are gone.
+			// Skip compacted rows.
 			this.cursor = cursor
 			this.cursorEpoch = cursorEpoch
-			// Do not consume until coordinate translation commits.
+			// Wait for translation.
 			if (migrationEpoch == null) awaitingTranslation = this.migrationEpoch != 0L && cursorEpoch != this.migrationEpoch
 			else if (migrationEpoch != 0L) awaitingTranslation = cursorEpoch != migrationEpoch
 			dropped += lost
@@ -104,7 +106,7 @@ internal class ConsoleTransportCoordinator(
 
 	fun commitTranslation(gen: Long, cursor: Long, epoch: Long): Boolean = synchronized(lock) {
 		if (gen != live) return false
-		// Advance only after durable commit.
+		// Advance after commit.
 		this.cursor = cursor
 		cursorEpoch = epoch
 		awaitingTranslation = false
@@ -112,24 +114,23 @@ internal class ConsoleTransportCoordinator(
 	}
 
 	fun adoptFloor(floor: Long) = synchronized(lock) {
-		cursor = floor
+		cursor = (floor - 1).coerceAtLeast(0)
 	}
 
 	fun owns(gen: Long): Boolean = synchronized(lock) { gen == live && link == ConsoleLink.SOCKET }
 
-	suspend fun awaitOpResult(opId: String, timeoutMs: Long): JsonElement? {
-		val waiter = synchronized(lock) { opResults.getOrPut(opId) { CompletableDeferred() } }
-		return try {
-			withTimeoutOrNull(timeoutMs) { waiter.await() }
-		} finally {
-			synchronized(lock) {
-				if (opResults[opId] === waiter) opResults.remove(opId)
-			}
-		}
+	fun pendingAdvance(): PendingInboxAdvance? = synchronized(lock) { pendingAdvance }
+
+	fun recordPendingAdvance(cursor: Long, cursorEpoch: Long) = synchronized(lock) {
+		pendingAdvance = PendingInboxAdvance(cursor, cursorEpoch)
 	}
 
-	fun prepareOpResult(opId: String) {
-		synchronized(lock) { opResults.getOrPut(opId) { CompletableDeferred() } }
+	fun clearPendingAdvance() = synchronized(lock) {
+		pendingAdvance = null
+	}
+
+	fun prepareOpResult(opId: String): CompletableDeferred<JsonElement?> {
+		return synchronized(lock) { opResults.getOrPut(opId) { CompletableDeferred() } }
 	}
 
 	fun discardOpResult(opId: String) {
@@ -139,7 +140,6 @@ internal class ConsoleTransportCoordinator(
 	fun completeOpResult(opId: String, result: JsonElement?): Boolean = synchronized(lock) {
 		val waiter = opResults[opId] ?: return false
 		waiter.complete(result)
-		opResults.remove(opId)
 		true
 	}
 

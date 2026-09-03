@@ -153,7 +153,9 @@ export function createVerifyChecks(context: VerifyCheckContext): VerifyCheck[] {
 			run: async () => {
 				try {
 					if (!context.routerUrl.startsWith("wss://")) throw new Error("refusing non-TLS Router URL");
-					await context.dial(`${context.routerUrl}/console`, router.certFingerprint);
+					const persisted = context.env.FEDERATION_ROUTER_CERT_FP?.trim().toLowerCase();
+					if (!persisted) throw new Error("FEDERATION_ROUTER_CERT_FP is missing");
+					await context.dial(`${context.routerUrl}/console`, persisted);
 					return { ok: true, detail: "" };
 				} catch (error) {
 					return { ok: false, detail: error instanceof Error ? error.message : "console WS failed" };

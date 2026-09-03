@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js";
-import { type FederatedOp, FederatedOpSchema } from "../shared/federation-protocol.js";
 import {
 	consoleTeam,
 	crossSend,
@@ -235,89 +234,6 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		expect(r.status).toBe("running");
 		expect(sendCalls).toHaveLength(1);
 		expect(share.touched).toEqual([]); // never touched on a same-Domain op
-	});
-
-	const consolePushOp: FederatedOp = {
-		kind: "console_push",
-		entry: { kind: "notice", session_id: "notice.alice.hostb.recipe-app.claude", from: "recipe-app", body: "hi" },
-		dedupeKey: "dk-1",
-	};
-
-	// Mandatory security gate: console_push writes directly into the receiving
-	// Gateway's own owner mailbox with no session-sharing check of any kind - unlike every other
-	// FederatedOp kind, which at minimum requires a shared devcontainer/loose session or a
-	// recorded, verified job binding. A cross-Domain sender must be refused outright.
-	it("MANDATORY: DENIES a cross-Domain console_push unconditionally, never reaching routes.consolePush", async () => {
-		const { routes, consolePushCalls } = gateRoutes([]);
-		const { handleOp } = createGatewayRelayHandler({
-			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve({ ok: false }),
-			localGatewayId: "hostb",
-			localDomainId: "alice",
-		});
-		await expect(handleOp(consolePushOp, "carol-gw", "carol")).rejects.toThrow(/cross-Domain console_push denied/);
-		expect(consolePushCalls).toHaveLength(0);
-	});
-
-	it("ALLOWS a SAME-DOMAIN console_push and lands it via routes.consolePush", async () => {
-		const { routes, consolePushCalls } = gateRoutes([]);
-		const { handleOp } = createGatewayRelayHandler({
-			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve({ ok: false }),
-			localGatewayId: "hostb",
-			localDomainId: "alice",
-		});
-		const r = (await handleOp(consolePushOp, "hostb-peer", null)) as { delivered: boolean };
-		expect(r.delivered).toBe(true);
-		expect(consolePushCalls).toEqual([{ entry: consolePushOp.entry, dedupeKey: "dk-1" }]);
-	});
-
-	it("the wire schema rejects an entry.kind outside the relayable set, and truncates an over-long title", () => {
-		for (const smuggledKind of ["bogus", "board", ""]) {
-			expect(
-				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: smuggledKind } })
-					.success,
-			).toBe(false);
-		}
-		// message/reply/sent all joined the set when remote-held conversations gained convergence: a
-		// send sealed to another Gateway files its echo there too, so the owner's other devices only
-		// ever see their own message through this.
-		for (const relayable of ["message", "reply", "sent"]) {
-			expect(
-				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: relayable } })
-					.success,
-			).toBe(true);
-		}
-		// An over-long title TRUNCATES rather than rejecting. Intake caps no title, so rejecting here
-		// would strand on one gateway an entry that already landed there.
-		const overlong = FederatedOpSchema.safeParse({
-			...consolePushOp,
-			entry: { ...consolePushOp.entry, title: "x".repeat(201) },
-		});
-		expect(overlong.success).toBe(true);
-		expect((overlong.data as { entry: { title: string } }).entry.title).toHaveLength(200);
-		// 200 chars (the notice contract's own bound) passes through unchanged.
-		expect(
-			FederatedOpSchema.safeParse({
-				...consolePushOp,
-				entry: { ...consolePushOp.entry, title: "x".repeat(200) },
-			}).success,
-		).toBe(true);
-	});
-
-	it("accepts a plugin_action entry, carrying pluginId/actionType/payload", () => {
-		expect(
-			FederatedOpSchema.safeParse({
-				...consolePushOp,
-				entry: {
-					kind: "plugin_action",
-					session_id: consolePushOp.entry.session_id,
-					pluginId: "designer",
-					actionType: "delete-card",
-					payload: { fileName: "x.html" },
-				},
-			}).success,
-		).toBe(true);
 	});
 });
 

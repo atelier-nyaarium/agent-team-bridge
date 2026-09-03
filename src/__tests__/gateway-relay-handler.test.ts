@@ -12,7 +12,6 @@ function makeHandler(respond: FederationRoutes["respond"]) {
 		respond,
 		teams: () => new Response(JSON.stringify([])),
 		localSpawnPoints: () => [{ domainId: "alice", gatewayId: "test-host", hostSpawns: [] }],
-		consolePush: () => ({ delivered: false }),
 		landCrossDomainPresence: () => {},
 	};
 	return createGatewayRelayHandler({

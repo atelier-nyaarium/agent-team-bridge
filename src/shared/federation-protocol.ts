@@ -67,6 +67,32 @@ export const ReturnRouteSchema = z.object({
 	srcSession: z.string().min(1).max(MAX_STORE_KEY_LEN),
 });
 
+export const ConsolePushEntrySchema = z.object({
+	kind: z.enum(["notice", "peer", "plugin_action", "message", "reply", "sent"]),
+	session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
+	from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
+	to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
+	...NoticeTierWireFields,
+	title: z
+		.string()
+		.min(1)
+		.transform((value) => value.slice(0, NOTICE_TITLE_MAX))
+		.optional(),
+	body: z.string().optional(),
+	status: z.string().optional(),
+	opId: z.string().min(1).max(MAX_STORE_KEY_LEN).optional(),
+	files: ChannelFilesSchema.optional(),
+	pluginId: z
+		.string()
+		.optional()
+		.refine((s) => !s || isSlug(s), "pluginId must be a slug"),
+	actionType: z
+		.string()
+		.optional()
+		.refine((s) => !s || isSlug(s), "actionType must be a slug"),
+	payload: z.record(z.string(), z.unknown()).optional(),
+});
+
 /** The op a Gateway executes on a peer's behalf. Always carried E2E-sealed inside the
  * gateway_relay payload (`sealer.ts`); the Router relays the envelope but never sees the op. */
 export const FederatedOpSchema = z.discriminatedUnion("kind", [
@@ -100,9 +126,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		offset: z.number().int().nonnegative(),
 		length: z.number().int().positive().max(BLOB_CHUNK_BYTES),
 	}),
-	// Wake-across-Gateways: bring up a sleeping devcontainer on the destination.
 	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(MAX_ADDRESS_LEN) }),
-	// The destination's reply, pinned to the origin: delivered to `session_id` on the origin.
 	z.object({
 		kind: z.literal("response_push"),
 		session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
@@ -113,63 +137,6 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		question: z.string().optional(),
 		reason: z.string().optional(),
 		files: ChannelFilesSchema.optional(),
-	}),
-	// Multi-gateway console-bound delivery: the ORIGIN Gateway (the one that composed a
-	// peer-mirror row or a notify_human notice) hands a fully-composed mailbox entry to a
-	// same-Domain sibling Gateway so it lands wherever the owner's console actually polls, not
-	// just wherever the entry originated. SAME-DOMAIN ONLY - this writes directly into the
-	// receiving Gateway's own owner mailbox with no session-sharing gate of any kind (unlike
-	// every other op here), so a cross-Domain sender must never reach it; the destination gate
-	// enforces this as a hard, unconditional deny. Carries no further routing information (no
-	// return-route, no session target), so a receiving Gateway has nothing to re-forward -
-	// origin-only fan-out, never re-broadcast on receipt.
-	z.object({
-		kind: z.literal("console_push"),
-		entry: z.object({
-			// message/reply/sent: a console send to a session on ANOTHER Gateway seals directly there, so
-			// that Gateway holds the conversation - and the reply landed in a mailbox the console never
-			// polls. Relaying them is what makes a remote conversation's answers reach the phone at all.
-			kind: z.enum(["notice", "peer", "plugin_action", "message", "reply", "sent"]),
-			session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
-			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
-			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
-			...NoticeTierWireFields,
-			// The title override holds the spread field to the notice contract's own bound
-			// (notice.ts) - the notification-bar headline, never a long-winded body. summary/body
-			// are deliberately NOT length-capped here, matching NoticeSummary/NoticeFull's own
-			// established design (the notice contract has never bounded these) and HumanNotifySchema's
-			// identical posture; this op does not introduce a new text-size policy, only relays what
-			// those already-accepted contracts allow.
-			//
-			// TRUNCATES rather than rejects: intake (RespondBodySchema) caps no title, so rejecting
-			// here would strand an entry that landed locally on this one gateway forever, burning the
-			// relay's retries as "unseal failed". Mid-mesh validation must not be stricter than intake.
-			title: z
-				.string()
-				.min(1)
-				.transform((value) => value.slice(0, NOTICE_TITLE_MAX))
-				.optional(),
-			body: z.string().optional(),
-			status: z.string().optional(),
-			// A `sent` echo only. Without it a zod parse strips the field and the sending device
-			// cannot match its optimistic row, so the owner's own message renders twice.
-			opId: z.string().min(1).max(MAX_STORE_KEY_LEN).optional(),
-			files: ChannelFilesSchema.optional(),
-			// Slug-constrained (like every composite-key identifier elsewhere) so a relayed entry from
-			// a peer Gateway can never carry a colon-ambiguous pluginId/actionType pair, belt-and-
-			// suspenders alongside the same constraint the origin's PluginActionRequestSchema enforces.
-			pluginId: z
-				.string()
-				.optional()
-				.refine((s) => !s || isSlug(s), "pluginId must be a slug"),
-			actionType: z
-				.string()
-				.optional()
-				.refine((s) => !s || isSlug(s), "actionType must be a slug"),
-			payload: z.record(z.string(), z.unknown()).optional(),
-		}),
-		// Stable across retries so the destination can deduplicate the delivery.
-		dedupeKey: z.string().min(1).max(128),
 	}),
 	// Cross-Domain presence push: the SOURCE Gateway proactively sends what a linked friend
 	// Domain currently sees of its own sessions (the exact filter list_teams's cross-Domain leg
@@ -217,7 +184,7 @@ export const GatewayRelayFrameSchema = z.object({
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;
 export type FederatedOpKind = FederatedOp["kind"];
-export type ConsolePushEntry = Extract<FederatedOp, { kind: "console_push" }>["entry"];
+export type ConsolePushEntry = z.infer<typeof ConsolePushEntrySchema>;
 export type GatewayRelayPayload = z.infer<typeof GatewayRelayPayloadSchema>;
 export type GatewayRelayFrame = z.infer<typeof GatewayRelayFrameSchema>;
 

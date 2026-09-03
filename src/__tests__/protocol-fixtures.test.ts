@@ -68,7 +68,7 @@ describe("protocol fixtures", () => {
 	});
 
 	it("accepts additive fields without exposing them", () => {
-		const op = { ...(fixture("console-op-send.json") as object), futureField: true };
+		const op = { ...(fixture("console-op-create-session.json") as object), futureField: true };
 		const result = ConsoleOpSchema.parse(op);
 		expect(result).not.toHaveProperty("futureField");
 	});

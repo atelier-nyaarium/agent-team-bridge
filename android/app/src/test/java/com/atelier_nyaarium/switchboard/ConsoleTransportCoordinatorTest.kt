@@ -112,7 +112,7 @@ class ConsoleTransportCoordinatorTest {
 		assertEquals(ConsoleLink.POLL, coordinator.link())
 	}
 
-	// Independent socket and poll.
+	// Socket and poll share state.
 	@Test
 	fun nextWaitFollowsTheLadderEvenWithASocketLive() {
 		var now = 0L
@@ -142,7 +142,7 @@ class ConsoleTransportCoordinatorTest {
 		assertFalse(coordinator.owns(generation))
 	}
 
-	// Crash before translation replays.
+	// Translation gates reads.
 	@Test
 	fun takesNoRowsOnAPreMigrationCursorUntilTheTranslationCommits() {
 		val coordinator = newCoordinator()
@@ -188,6 +188,17 @@ class ConsoleTransportCoordinatorTest {
 	}
 
 	@Test
+	fun adoptingFloorReadsTheFirstRetainedRowNext() {
+		val coordinator = newCoordinator()
+
+		coordinator.adoptFloor(12L)
+
+		assertEquals(11L, coordinator.cursor())
+		coordinator.adoptFloor(0L)
+		assertEquals(0L, coordinator.cursor())
+	}
+
+	@Test
 	fun ackedRefusesWhenTranslationBecomesAwaited() {
 		val coordinator = newCoordinator()
 		val generation = coordinator.beginSocket()
@@ -214,8 +225,9 @@ class ConsoleTransportCoordinatorTest {
 	@Test
 	fun anOpResultCompletesItsWaitingCaller() = runBlocking {
 		val coordinator = newCoordinator()
+		val waiter = coordinator.prepareOpResult("op")
 		val waiting = launch {
-			assertEquals(JsonPrimitive("ok"), coordinator.awaitOpResult("op", 1_000L))
+			assertEquals(JsonPrimitive("ok"), kotlinx.coroutines.withTimeoutOrNull(1_000L) { waiter.await() })
 		}
 		kotlinx.coroutines.delay(10L)
 		assertTrue(coordinator.completeOpResult("op", JsonPrimitive("ok")))
@@ -223,8 +235,18 @@ class ConsoleTransportCoordinatorTest {
 	}
 
 	@Test
+	fun anOpResultCompletedBeforeTheWaiterAttachesIsReturned() = runBlocking {
+		val coordinator = newCoordinator()
+		val waiter = coordinator.prepareOpResult("op")
+
+		assertTrue(coordinator.completeOpResult("op", JsonPrimitive("ok")))
+		assertEquals(JsonPrimitive("ok"), kotlinx.coroutines.withTimeoutOrNull(1_000L) { waiter.await() })
+		coordinator.discardOpResult("op")
+	}
+
+	@Test
 	fun anOpResultWaiterTimesOut() = runBlocking {
-		assertEquals(null, newCoordinator().awaitOpResult("op", 1L))
+		assertEquals(null, kotlinx.coroutines.withTimeoutOrNull(1L) { newCoordinator().prepareOpResult("op").await() })
 	}
 
 	private fun newCoordinator(): ConsoleTransportCoordinator {

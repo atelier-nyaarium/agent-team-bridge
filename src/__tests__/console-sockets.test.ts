@@ -235,6 +235,8 @@ describe("console sockets", () => {
 	it("reads changed planes from the welcome versions source", () => {
 		const fixture = setup({
 			planeVersions: (domainId): Record<string, number> => (domainId === domainA ? { board: 4 } : {}),
+			readPlane: (domainId, _signerSignPub, name) =>
+				domainId === domainA && name === "board" ? { title: "updated" } : undefined,
 		});
 		fixture.hub.pushPlane(domainA, "board", 4, { title: "updated" });
 		fixture.hub.pushPlane(domainB, "other", 9, { hidden: true });

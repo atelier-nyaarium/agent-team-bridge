@@ -785,7 +785,6 @@ export async function startGateway(): Promise<void> {
 							body: message,
 						},
 						dedupeKey: `key-request:${domainId}:${localGatewayId}`,
-						origin: "local",
 						label: "key-request",
 					});
 				},

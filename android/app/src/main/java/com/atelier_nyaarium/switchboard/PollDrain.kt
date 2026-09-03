@@ -42,6 +42,18 @@ internal suspend fun drainTick(
 	var rowsDrained = 0
 	var inboxAdvanceSent = false
 	if (!coordinator.mayPoll()) return TickOutcome(0, 0, false, known)
+	coordinator.pendingAdvance()?.let { pending ->
+		val advance = client.inboxAdvance(pending.cursor, pending.cursorEpoch)
+		inboxAdvanceSent = true
+		when (advanceOutcome(advance)) {
+			"ok" -> coordinator.clearPendingAdvance()
+			"cursor_stale" -> {
+				coordinator.clearPendingAdvance()
+				coordinator.adoptFloor(advanceFloor(advance, coordinator.cursor()))
+				return TickOutcome(0, 0, true, known, true)
+			}
+		}
+	}
 	val answer = client.inboxRead(coordinator.cursor() + 1, coordinator.cursorEpoch())
 	if (answer is JsonArray) {
 		val rows = answer.mapNotNull { element ->
@@ -78,12 +90,16 @@ internal suspend fun drainTick(
 			if (coordinator.polled(cursor, epoch)) {
 				val advance = client.inboxAdvance(cursor, epoch)
 				inboxAdvanceSent = true
-				if (advance is JsonObject && advance["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
-					coordinator.adoptFloor(advance["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
-					return TickOutcome(rowsDrained, 0, true, known, true)
+				when (advanceOutcome(advance)) {
+					"ok" -> coordinator.clearPendingAdvance()
+					"cursor_stale" -> {
+						coordinator.clearPendingAdvance()
+						coordinator.adoptFloor(advanceFloor(advance, coordinator.cursor()))
+						return TickOutcome(rowsDrained, 0, true, known, true)
+					}
+					else -> coordinator.recordPendingAdvance(cursor, epoch)
 				}
 			}
-		}
 	} else if (answer is JsonObject && answer["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
 		coordinator.adoptFloor(answer["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
 		return TickOutcome(0, 0, false, known, true)
@@ -99,6 +115,12 @@ internal suspend fun drainTick(
 	}
 	return TickOutcome(rowsDrained, planesApplied, inboxAdvanceSent, nextKnown)
 }
+
+private fun advanceOutcome(answer: kotlinx.serialization.json.JsonElement?): String? =
+	(answer as? JsonObject)?.get("outcome")?.jsonPrimitive?.content
+
+private fun advanceFloor(answer: kotlinx.serialization.json.JsonElement?, fallback: Long): Long =
+	(answer as? JsonObject)?.get("floor")?.jsonPrimitive?.content?.toLongOrNull() ?: fallback
 
 /** Four plane cursors and drain-gate subscribers. */
 internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision {

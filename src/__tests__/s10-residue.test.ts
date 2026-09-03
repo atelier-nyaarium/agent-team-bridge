@@ -61,7 +61,6 @@ describe("S10 process fence", () => {
 			localGatewayId: "gateway",
 			localAddress: (() => ({ canonical: "domain.gateway.team.session" })) as never,
 			refuseImpersonation: () => null,
-			relayWithRetry: async () => ({ ok: true }),
 		});
 		const relay = createGatewayRelayHandler({
 			routes: {
@@ -69,7 +68,6 @@ describe("S10 process fence", () => {
 				respond: () => new Response("{}"),
 				teams: () => new Response("[]"),
 				localSpawnPoints: () => [],
-				consolePush: () => ({ delivered: false }),
 				landCrossDomainPresence: () => {},
 			},
 			tryWakeTeam: async () => ({ ok: true }),
@@ -92,7 +90,6 @@ describe("S10 process fence", () => {
 			push.deliverToOwner({
 				entry: { kind: "notice" } as never,
 				dedupeKey: "fenced-push",
-				origin: "relay",
 			}),
 		).toBe(MIGRATING);
 		expect(await relay.handleOp({ kind: "wake", team: "team" }, "peer", null)).toEqual({
@@ -112,7 +109,6 @@ describe("S10 process fence", () => {
 			push.deliverToOwner({
 				entry: { kind: "notice" } as never,
 				dedupeKey: "live-push",
-				origin: "relay",
 			}),
 		).toBe(true);
 		expect(await relay.handleOp({ kind: "wake", team: "team" }, "peer", null)).toEqual({ ok: true });

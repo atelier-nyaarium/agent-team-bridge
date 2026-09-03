@@ -178,7 +178,13 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			epoch: row.envelope.epoch,
 			kind: opPayloadAadKind(),
 		});
-		if (opened.kind !== "ok") return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		if (opened.kind === "missing_epoch") {
+			const deliveryId = deliveryIdOf(address, row.seq, deliveryEpoch);
+			waiting.set(deliveryId, { epoch: opened.epoch, address, row, deliveryEpoch });
+			deps.keyRequester?.request(opened.epoch);
+			return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
+		}
+		if (opened.kind === "bad_tag") return ack(address, row.seq, deliveryEpoch, "failed", "bad_tag");
 		let body: unknown;
 		try {
 			body = JSON.parse(opened.plaintext.toString("utf8"));
@@ -204,7 +210,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			`gateway/${parsed.gatewayId}/${parsed.sessionId}`,
 			`${parsed.domainId}/${parsed.gatewayId}/${parsed.sessionId}`,
 		]);
-		if (!targetMatches.has(target))
+		if (parsed.domainId !== deps.domainId || parsed.gatewayId !== deps.gatewayId || !targetMatches.has(target))
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
 				outcome: "failed",
 				reason: "target_mismatch",

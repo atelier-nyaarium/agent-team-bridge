@@ -98,7 +98,7 @@ class PostRouterDirectTest {
 		call()
 		val recorded = server.takeRequest()
 		assertEquals("POST", recorded.method)
-		assertEquals("/relay", recorded.path)
+		assertEquals("/console", recorded.path)
 		assertEquals("Bearer app-token", recorded.getHeader("X-Console-Bridge-Token"))
 		// The Router gates on the app token alone; nothing carries a second credential.
 		assertNull(recorded.getHeader("Authorization"))
