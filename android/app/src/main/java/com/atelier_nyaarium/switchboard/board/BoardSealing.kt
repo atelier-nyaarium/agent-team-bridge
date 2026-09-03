@@ -2,16 +2,14 @@ package com.atelier_nyaarium.switchboard.board
 
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.BOARD_BODY_KIND
+import com.atelier_nyaarium.switchboard.crypto.BOARD_TITLE_KIND
+import com.atelier_nyaarium.switchboard.crypto.BOARD_NAME_KIND
+import com.atelier_nyaarium.switchboard.crypto.boardTextAadKind
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 
-/** Separate AAD kinds prevent slot confusion. */
-const val BOARD_KIND_TITLE = "board.title"
-const val BOARD_KIND_BODY = "board.body"
-
-fun scheduledBodyAadKind(conversationId: String, opId: String): String =
-	"inbox.body\n$conversationId\n$opId"
-
-fun valueResultAadKind(opId: String): String = "op.result\n$opId"
+const val BOARD_KIND_TITLE = BOARD_TITLE_KIND
+const val BOARD_KIND_BODY = BOARD_BODY_KIND
 
 /** Uses the domain root key for AAD. */
 class BoardSealing(
@@ -36,5 +34,5 @@ class BoardSealing(
 
 	// Match boardTextAadKind byte for byte; revision stays unbound.
 	private fun aad(epoch: Int, kind: String, entryId: String) =
-		Crypto.ContentAad(domainId, ownerSignPub, epoch, "$kind\n$entryId")
+		Crypto.ContentAad(domainId, ownerSignPub, epoch, boardTextAadKind(kind, entryId))
 }

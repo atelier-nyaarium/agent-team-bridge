@@ -20,7 +20,7 @@ internal interface ConsoleSocketTransport {
 	fun unreachable(base: String): Boolean = false
 }
 
-internal class ConsoleRelayTransport(
+internal class ConsoleRouterTransport(
 	internal val prov: Provisioning,
 	internal val store: AppStateStore,
 	private val homeGatewayId: (() -> String?)? = null,

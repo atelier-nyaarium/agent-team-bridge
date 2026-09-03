@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
@@ -14,7 +13,11 @@ import com.atelier_nyaarium.switchboard.proto.GatewayValueOp
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.canonicalJson
-import com.atelier_nyaarium.switchboard.board.valueResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.inboxBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.opPayloadAadKind
+import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
 import java.util.UUID
 import kotlinx.coroutines.async
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -28,15 +31,10 @@ import kotlinx.serialization.Serializable
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-internal fun inboxBodyAadKind(conversationId: String, opId: String): String = scheduledBodyAadKind(conversationId, opId)
-
-internal fun opResultAadKind(conversationId: String, opId: String): String =
-	"op.result\n$conversationId\n$opId"
-
 @Serializable
 internal data class OwnerOpAnswer(val ok: Boolean, val result: JsonElement? = null, val error: String? = null)
 
-/** Console bridge client. */
+/** Signed OwnerOp client for the Router console surface. */
 class ConsoleClient internal constructor(
 	prov: Provisioning,
 	store: AppStateStore,
@@ -49,7 +47,7 @@ class ConsoleClient internal constructor(
 	private val postOwnerOpSender: (suspend (OwnerOp) -> JsonElement?)? = null,
 	private val rowSigner: ((RowEnvelope) -> String?)? = null,
 ) {
-	internal val transport = ConsoleRelayTransport(prov, store, homeGatewayId)
+	internal val transport = ConsoleRouterTransport(prov, store, homeGatewayId)
 
 	/** Content-addressed blob staging. */
 	internal val blobs = BlobStore(BlobStore.root(store.filesDir))
@@ -128,7 +126,7 @@ class ConsoleClient internal constructor(
 		val conversationId = transport.prov.conversationId
 		val sealed = sealOwnerPayload(
 			wireJson.encodeToString(ConsoleOp.serializer(), op).toByteArray(Charsets.UTF_8),
-			"op.payload",
+			opPayloadAadKind(),
 		) ?: return null
 		val (epoch, body) = sealed
 		val domain = domainId() ?: return null
@@ -217,7 +215,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		if (gatewayId.isBlank()) return null
 		val sealed = sealOwnerPayload(
 			wireJson.encodeToString(ConsoleOp.serializer(), op).toByteArray(Charsets.UTF_8),
-			"op.payload",
+			opPayloadAadKind(),
 		) ?: return null
 		val value = GatewayValueOp(gatewayId = gatewayId, value = sealed.second)
 		val ownerOp = signOwnerOp?.invoke(

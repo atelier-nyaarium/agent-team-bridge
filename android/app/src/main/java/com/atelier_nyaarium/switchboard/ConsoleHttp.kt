@@ -27,9 +27,9 @@ internal object ConsoleHttp {
 	internal val JSON = "application/json".toMediaType()
 
 	// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
-	// against these from a separate test class, and FORGET_TOMBSTONE_MS derives from
-	// gets its own pin against the gateway's SEND_BOUND_MS, the relationship its own comment
-	// on buildPinnedClient already describes.
+	// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
+	// against these from a separate test class.
+	// FORGET_TOMBSTONE_MS is pinned against the gateway's SEND_BOUND_MS.
 	internal const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
 	internal const val PINNED_READ_TIMEOUT_MS = 35_000L
 	private const val PINNED_WRITE_TIMEOUT_MS = 600_000L

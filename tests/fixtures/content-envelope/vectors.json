@@ -1,9 +1,33 @@
 {
 	"v": 1,
+	"boardTitleAad": {
+		"kind": "board.title",
+		"entryId": "entry-1",
+		"expected": "board.title\nentry-1"
+	},
+	"boardBodyAad": {
+		"kind": "board.body",
+		"entryId": "entry-1",
+		"expected": "board.body\nentry-1"
+	},
+	"boardNameAad": {
+		"kind": "board.name",
+		"entryId": "entry-1",
+		"attachmentId": "blob-1",
+		"expected": "board.name\nentry-1\nblob-1"
+	},
 	"ownerRowAad": {
 		"conversationId": "owner-session",
 		"opId": "owner-op",
 		"expected": "inbox.body\nowner-session\nowner-op"
+	},
+	"scheduledBodyAad": {
+		"conversationId": "conversation",
+		"opId": "scheduled-op",
+		"expected": "inbox.body\nconversation\nscheduled-op"
+	},
+	"opPayloadAad": {
+		"expected": "op.payload"
 	},
 	"consoleOpPayloadAad": {
 		"domainId": "alice",

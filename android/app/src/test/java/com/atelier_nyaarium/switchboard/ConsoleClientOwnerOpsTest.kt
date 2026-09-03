@@ -1,8 +1,10 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.board.valueResultAadKind
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.opPayloadAadKind
+import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.InboxRow
@@ -353,7 +355,7 @@ class ConsoleClientOwnerOpsTest {
 		val plain = Crypto.openContent(
 			envelope,
 			requireNotNull(ring.keyFor(envelope.epoch.toInt())),
-			Crypto.ContentAad("domain", "owner", envelope.epoch.toInt(), "op.payload"),
+			Crypto.ContentAad("domain", "owner", envelope.epoch.toInt(), opPayloadAadKind()),
 		)
 		return wireJson.decodeFromString(ConsoleOp.serializer(), plain.toString(Charsets.UTF_8))
 	}

@@ -6,7 +6,7 @@ import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { createInboxClaims } from "../gateway/router/inboxClaims.js";
 import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
 import { signAdmission } from "../shared/admission.js";
-import { sealContent, wrapContentKey } from "../shared/content-envelope.js";
+import { opPayloadAadKind, sealContent, wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 
 const root = path.resolve(import.meta.dirname, "../..");
@@ -72,7 +72,7 @@ describe("content key boundaries", () => {
 		const sealed = store.seal(Buffer.from("payload"), {
 			domainId: "domain",
 			ownerSignPub: owner.sign.pub,
-			kind: "op.payload",
+			kind: opPayloadAadKind(),
 		});
 		expect(sealed.kind).toBe("ok");
 		if (sealed.kind !== "ok") return;
@@ -81,7 +81,7 @@ describe("content key boundaries", () => {
 				domainId: "domain",
 				ownerSignPub: owner.sign.pub,
 				epoch: 1,
-				kind: "op.payload",
+				kind: opPayloadAadKind(),
 			}).kind,
 		).toBe("ok");
 		const missingEnvelope = sealContent(
@@ -91,7 +91,7 @@ describe("content key boundaries", () => {
 				domainId: "domain",
 				ownerSignPub: owner.sign.pub,
 				epoch: 2,
-				kind: "op.payload",
+				kind: opPayloadAadKind(),
 			},
 		);
 		const grantEnvelope = wrapContentKey(missingKey, 2, gateway.box.pub, owner.sign.pub, owner.sign.priv);

@@ -24,7 +24,7 @@ export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
 	/** Caller-chosen deduplication key. */
 	dedupeKey: string;
-	/** Relays never fan out. */
+	/** Only local pushes fan out. */
 	origin: "local" | "relay";
 	label?: string;
 }

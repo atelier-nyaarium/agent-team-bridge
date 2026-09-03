@@ -1,5 +1,5 @@
 import type { ConsoleOp } from "../../shared/console-protocol.js";
-import { opResultAadKind, scheduledBodyAadKind } from "../../shared/content-envelope.js";
+import { opPayloadAadKind, opResultAadKind, scheduledBodyAadKind } from "../../shared/content-envelope.js";
 import { SealedEnvelopeSchema } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
 import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
@@ -134,7 +134,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		const kind =
 			row.envelope.origin.kind === "router" && row.envelope.kind === "message"
 				? scheduledBodyAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId)
-				: "op.payload";
+				: opPayloadAadKind();
 		const content = ContentEnvelopeSchema.safeParse(row.body);
 		if (!content.success) return ack(address, row.seq, deliveryEpoch, "failed", "malformed_body");
 		const opened = deps.contentKeyStore.open(content.data, {
@@ -176,7 +176,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			domainId: deps.domainId,
 			ownerSignPub,
 			epoch: row.envelope.epoch,
-			kind: "op.payload",
+			kind: opPayloadAadKind(),
 		});
 		if (opened.kind !== "ok") return ack(address, row.seq, deliveryEpoch, "waking", "missing_epoch", false);
 		let body: unknown;

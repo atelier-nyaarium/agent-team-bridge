@@ -1882,8 +1882,9 @@ Phone symbols that assume a route gateway, by file. Action per Phase 6.
 - `ConsoleClient.kt`: `routeGateway` delete; `apiReachable`, `fetchReach` keep;
   `reportPluginsTo`, `teams`, `listTeams`, `boardRead` delete; `send`, `poll`, `boardWrite`,
   `boardBytesReady`, `fetchConnectedGateways` rewrite.
-- `ConsoleRelayTransport.kt`: `routeGateway`, `resolveGatewayId` delete; `relay`,
-  `gatewayOfTarget`, `targetGatewayOf`, `buildSealedFrame` rewrite.
+- `ConsoleRouterTransport.kt` (the former relay transport): `routeGateway`, `resolveGatewayId`,
+  `relay`, `buildSealedFrame` deleted; `gatewayOfTarget`, `targetGatewayOf` kept; `postOwnerOp`
+  to `/console` is the one Router post.
 - `ConsoleClientSessions.kt`: `peek`, `tmuxSend`, `forget`, `closeSession`, `createSession`,
   `listDirs`, `renameSession` rewrite to Router-routed ops with a qualified target;
   `reportRead` rewrite to an OwnerOp.

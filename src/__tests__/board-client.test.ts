@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { type BoardMutation, createBoardClient } from "../gateway/router/boardClient.js";
 import type { BoardAttachment } from "../shared/console-protocol.js";
-import { boardTextAadKind, type ContentAad, openContent, sealContent } from "../shared/content-envelope.js";
+import {
+	BOARD_BODY_KIND,
+	BOARD_NAME_KIND,
+	BOARD_TITLE_KIND,
+	boardTextAadKind,
+	type ContentAad,
+	openContent,
+	sealContent,
+} from "../shared/content-envelope.js";
 import type { BoardStoredEntry } from "../shared/schemasBoardState.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 
@@ -43,7 +51,7 @@ const sealed = (text: string, kind: ContentAad["kind"], epoch = 1): ContentEnvel
 
 const stored = (id: string, title: string, extra: Partial<BoardStoredEntry["clear"]> = {}): BoardStoredEntry => ({
 	clear: { id, state: "open", rank: "A", version: 1, ...extra },
-	sealed: { title: sealed(title, boardTextAadKind("board.title", id)) },
+	sealed: { title: sealed(title, boardTextAadKind(BOARD_TITLE_KIND, id)) },
 });
 
 const clearAttachment = ({ blobId, size, mime, blobGateway }: BoardAttachment) => ({
@@ -56,14 +64,14 @@ const clearAttachment = ({ blobId, size, mime, blobGateway }: BoardAttachment) =
 const storedWithText = (id: string, title: string, body: string, attachment?: BoardAttachment): BoardStoredEntry => ({
 	...stored(id, title, attachment ? { attachments: [clearAttachment(attachment)] } : {}),
 	sealed: {
-		title: sealed(title, boardTextAadKind("board.title", id)),
-		body: sealed(body, boardTextAadKind("board.body", id)),
+		title: sealed(title, boardTextAadKind(BOARD_TITLE_KIND, id)),
+		body: sealed(body, boardTextAadKind(BOARD_BODY_KIND, id)),
 		...(attachment
 			? {
 					names: {
 						[attachment.blobId]: sealed(
 							attachment.filename,
-							boardTextAadKind("board.name", `${id}\n${attachment.blobId}`),
+							boardTextAadKind(BOARD_NAME_KIND, id, attachment.blobId),
 						),
 					},
 				}
@@ -107,7 +115,7 @@ describe("board client", () => {
 
 	it("keeps entries whose title epoch is unavailable", async () => {
 		const entry = stored("one", "ignored");
-		entry.sealed.title = sealed("hidden", boardTextAadKind("board.title", "one"), 2);
+		entry.sealed.title = sealed("hidden", boardTextAadKind(BOARD_TITLE_KIND, "one"), 2);
 		const call = vi.fn().mockResolvedValue(readAnswer(1, [entry]));
 
 		expect(await client(call).read()).toEqual({

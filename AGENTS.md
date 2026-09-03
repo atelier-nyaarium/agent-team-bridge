@@ -151,7 +151,7 @@ How each subsystem works lives in `docs/`:
 |---|---|
 | `docs/architecture.md` | Addressing, host spawn points, sessions and wake, identity binding, state planes |
 | `docs/federation.md` | Router, reach failover, TLS pinning, trust |
-| `docs/console.md` | Console bridge, terminal view, armed goals, capability union, Android app |
+| `docs/console.md` | Console OwnerOp client, terminal view, armed goals, capability union, Android app |
 | `docs/agents.md` | Codex and Copilot delegation, local agent mode |
 | `docs/task-board.md` | Board, attachments, awareness |
 | `docs/references.md` | `ref://` grammar and matchers |

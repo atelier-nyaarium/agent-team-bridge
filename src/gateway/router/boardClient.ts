@@ -4,7 +4,13 @@ import { BOARD_REFUSALS, type BoardRefusal } from "../../shared/board-authority.
 import type { CascadeChange } from "../../shared/board-cascade.js";
 import { isValidRank, placeAtEnd } from "../../shared/board-rank.js";
 import type { BoardAttachment, BoardEntry } from "../../shared/console-protocol.js";
-import { type BoardTextKind, boardTextAadKind } from "../../shared/content-envelope.js";
+import {
+	BOARD_BODY_KIND,
+	BOARD_NAME_KIND,
+	BOARD_TITLE_KIND,
+	type BoardTextKind,
+	boardTextAadKind,
+} from "../../shared/content-envelope.js";
 import {
 	type BoardOp,
 	BoardReadResultSchema,
@@ -77,25 +83,35 @@ const asRefusal = (value: unknown): BoardRefusal =>
 export function createBoardClient(deps: BoardClientDeps) {
 	const attempts = deps.attempts ?? 4;
 
-	const sealText = (text: string, kind: BoardTextKind, entryId: string): ContentEnvelope | null => {
+	const sealText = (
+		text: string,
+		kind: BoardTextKind,
+		entryId: string,
+		attachmentId?: string,
+	): ContentEnvelope | null => {
 		const ownerSignPub = deps.ownerSignPub();
 		if (!ownerSignPub) return null;
 		const sealed = deps.keys.seal(Buffer.from(text, "utf8"), {
 			domainId: deps.domainId,
 			ownerSignPub,
-			kind: boardTextAadKind(kind, entryId),
+			kind: boardTextAadKind(kind, entryId, attachmentId),
 		});
 		return sealed.kind === "ok" ? sealed.envelope : null;
 	};
 
-	const openText = (envelope: ContentEnvelope | undefined, kind: BoardTextKind, entryId: string): string | null => {
+	const openText = (
+		envelope: ContentEnvelope | undefined,
+		kind: BoardTextKind,
+		entryId: string,
+		attachmentId?: string,
+	): string | null => {
 		const ownerSignPub = deps.ownerSignPub();
 		if (!envelope || !ownerSignPub) return null;
 		const opened = deps.keys.open(envelope, {
 			domainId: deps.domainId,
 			ownerSignPub,
 			epoch: envelope.epoch,
-			kind: boardTextAadKind(kind, entryId),
+			kind: boardTextAadKind(kind, entryId, attachmentId),
 		});
 		return opened.kind === "ok" ? opened.plaintext.toString("utf8") : null;
 	};
@@ -117,13 +133,13 @@ export function createBoardClient(deps: BoardClientDeps) {
 		const names = stored.sealed.names ?? {};
 		const id = stored.clear.id;
 		const attachments = (stored.clear.attachments ?? []).map((a) => {
-			const filename = openText(names[a.blobId], "board.name", `${id}\n${a.blobId}`);
+			const filename = openText(names[a.blobId], BOARD_NAME_KIND, id, a.blobId);
 			if (filename === null) intact = false;
 			return { ...a, filename: filename ?? UNOPENED };
 		});
-		const body = openText(stored.sealed.body, "board.body", id);
+		const body = openText(stored.sealed.body, BOARD_BODY_KIND, id);
 		if (stored.sealed.body && body === null) intact = false;
-		const title = openText(stored.sealed.title, "board.title", id);
+		const title = openText(stored.sealed.title, BOARD_TITLE_KIND, id);
 		if (title === null) intact = false;
 		return { entry: entryOf(stored, title ?? UNOPENED, body, attachments), intact };
 	}
@@ -154,13 +170,13 @@ export function createBoardClient(deps: BoardClientDeps) {
 
 	function sealOp(op: ClearBoardOp): BoardOp | null {
 		if (op.kind === "upsert") {
-			const title = sealText(op.title, "board.title", op.id);
+			const title = sealText(op.title, BOARD_TITLE_KIND, op.id);
 			if (!title) return null;
-			const body = op.body === undefined ? undefined : sealText(op.body, "board.body", op.id);
+			const body = op.body === undefined ? undefined : sealText(op.body, BOARD_BODY_KIND, op.id);
 			if (op.body !== undefined && !body) return null;
 			const names: Record<string, ContentEnvelope> = {};
 			for (const a of op.attachments ?? []) {
-				const name = sealText(a.filename, "board.name", `${op.id}\n${a.blobId}`);
+				const name = sealText(a.filename, BOARD_NAME_KIND, op.id, a.blobId);
 				if (!name) return null;
 				names[a.blobId] = name;
 			}

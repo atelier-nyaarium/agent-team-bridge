@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
 import com.atelier_nyaarium.switchboard.board.BoardSealing
 import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
+import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -317,7 +319,7 @@ class ChatRepository(
 							localDomain(),
 							federation.ownerSignPub(),
 							epoch,
-							com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind(
+							scheduledBodyAadKind(
 								row.envelope.opKey.conversationId,
 								row.envelope.opKey.opId,
 							),

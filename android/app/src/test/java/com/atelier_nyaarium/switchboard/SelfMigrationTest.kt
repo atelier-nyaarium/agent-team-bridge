@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import com.atelier_nyaarium.switchboard.proto.ScheduledTarget
 import java.nio.file.Files
@@ -146,9 +147,8 @@ class SelfMigrationTest {
 		migration.run(9L)
 		val ring = ContentKeyring().also { it.deriveOwned(identity, "domain", 2) }
 
-		assertEquals("inbox.body\nconversation\nold", com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind("conversation", "old"))
 		assertTrue(
-			Crypto.openContent(body!!, ring.keyFor(2)!!, Crypto.ContentAad("domain", "owner", 2, com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind("conversation", "old"))).isNotEmpty(),
+			Crypto.openContent(body!!, ring.keyFor(2)!!, Crypto.ContentAad("domain", "owner", 2, scheduledBodyAadKind("conversation", "old"))).isNotEmpty(),
 		)
 	}
 

@@ -3,11 +3,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAdmittedConsole, signAdmission } from "../shared/admission.js";
 import {
+	BOARD_BODY_KIND,
+	BOARD_NAME_KIND,
+	BOARD_TITLE_KIND,
+	type BoardTextKind,
+	boardTextAadKind,
 	type ContentAad,
 	contentAad,
 	deriveContentKey,
 	inboxBodyAadKind,
 	openContent,
+	opPayloadAadKind,
 	opResultAadKind,
 	scheduledBodyAadKind,
 	sealContentWithNonce,
@@ -20,7 +26,12 @@ import { ContentEnvelopeSchema, KeyEnvelopeSchema } from "../shared/schemasConte
 
 type Fixture = {
 	v: 1;
+	boardTitleAad: { kind: BoardTextKind; entryId: string; expected: string };
+	boardBodyAad: { kind: BoardTextKind; entryId: string; expected: string };
+	boardNameAad: { kind: BoardTextKind; entryId: string; attachmentId: string; expected: string };
 	ownerRowAad: { conversationId: string; opId: string; expected: string };
+	scheduledBodyAad: { conversationId: string; opId: string; expected: string };
+	opPayloadAad: { expected: string };
 	consoleOpPayloadAad: {
 		domainId: string;
 		ownerSignPub: string;
@@ -68,9 +79,27 @@ const fixture = JSON.parse(
 ) as Fixture;
 
 describe("content envelope", () => {
-	it("pins the owner row body AAD", () => {
-		const vector = fixture.ownerRowAad;
-		expect(inboxBodyAadKind(vector.conversationId, vector.opId)).toBe(vector.expected);
+	it("pins every named AAD kind vector", () => {
+		const actual = {
+			boardTitleAad: boardTextAadKind(fixture.boardTitleAad.kind, fixture.boardTitleAad.entryId),
+			boardBodyAad: boardTextAadKind(fixture.boardBodyAad.kind, fixture.boardBodyAad.entryId),
+			boardNameAad: boardTextAadKind(
+				fixture.boardNameAad.kind,
+				fixture.boardNameAad.entryId,
+				fixture.boardNameAad.attachmentId,
+			),
+			ownerRowAad: inboxBodyAadKind(fixture.ownerRowAad.conversationId, fixture.ownerRowAad.opId),
+			scheduledBodyAad: scheduledBodyAadKind(
+				fixture.scheduledBodyAad.conversationId,
+				fixture.scheduledBodyAad.opId,
+			),
+			opPayloadAad: opPayloadAadKind(),
+			valueResultAad: valueResultAadKind(fixture.valueResultAad.opId),
+			opResultAad: opResultAadKind(fixture.opResultAad.conversationId, fixture.opResultAad.opId),
+		};
+		for (const [name, value] of Object.entries(actual)) {
+			expect(value).toBe((fixture[name as keyof Fixture] as { expected: string }).expected);
+		}
 	});
 
 	it("pins the console op payload AAD", () => {
@@ -131,8 +160,8 @@ describe("content envelope", () => {
 		};
 		const key = Buffer.from(vector.keyB64, "base64");
 		for (const changed of [
-			{ kind: "board.body\nentry-1" as const },
-			{ kind: "board.title\nentry-2" as const },
+			{ kind: boardTextAadKind(BOARD_BODY_KIND, "entry-1") },
+			{ kind: boardTextAadKind(BOARD_TITLE_KIND, "entry-2") },
 			{ epoch: vector.epoch + 1 },
 			{ domainId: `${vector.domainId}-other` },
 		]) {
@@ -144,10 +173,23 @@ describe("content envelope", () => {
 	});
 
 	it("pins the scheduled inbox body AAD", () => {
-		const vector = fixture.envelopes.find((entry) => entry.plaintextUtf8 === "fixture scheduled inbox.body");
-		const aad = scheduledBodyAadKind("conversation", "scheduled-op");
+		const aad = scheduledBodyAadKind(fixture.scheduledBodyAad.conversationId, fixture.scheduledBodyAad.opId);
+		const vector = fixture.envelopes.find((entry) => entry.kind === aad);
 		expect(vector?.kind).toBe(aad);
 		expect([...Buffer.from(aad, "utf8")].filter((byte) => byte === 0x0a)).toEqual([0x0a, 0x0a]);
+	});
+
+	it("rejects newlines in every AAD argument", () => {
+		expect(() => boardTextAadKind(BOARD_TITLE_KIND, "entry\n1")).toThrow();
+		expect(() => boardTextAadKind("board\ntitle" as BoardTextKind, "entry-1")).toThrow();
+		expect(() => boardTextAadKind(BOARD_NAME_KIND, "entry-1", "blob\n1")).toThrow();
+		expect(() => inboxBodyAadKind("conversation\n1", "operation")).toThrow();
+		expect(() => inboxBodyAadKind("conversation", "operation\n1")).toThrow();
+		expect(() => scheduledBodyAadKind("conversation\n1", "operation")).toThrow();
+		expect(() => scheduledBodyAadKind("conversation", "operation\n1")).toThrow();
+		expect(() => valueResultAadKind("operation\n1")).toThrow();
+		expect(() => opResultAadKind("conversation\n1", "operation")).toThrow();
+		expect(() => opResultAadKind("conversation", "operation\n1")).toThrow();
 	});
 
 	it("wraps and unwraps a content key", () => {

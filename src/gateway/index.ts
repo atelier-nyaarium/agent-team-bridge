@@ -53,7 +53,7 @@ const BLOB_ROUTE_SCHEMAS = {
 	"/blob/get": BlobGetOpSchema,
 } as const;
 
-import { valueResultAadKind } from "../shared/content-envelope.js";
+import { opPayloadAadKind, valueResultAadKind } from "../shared/content-envelope.js";
 import { ValueOpFrameSchema } from "../shared/router-protocol.js";
 import { ConsoleOpSchema } from "../shared/schemasConsoleOp.js";
 import { ContentEnvelopeSchema } from "../shared/schemasContentKey.js";
@@ -1165,7 +1165,7 @@ export async function startGateway(): Promise<void> {
 					domainId,
 					ownerSignPub,
 					epoch: value.data.epoch,
-					kind: "op.payload",
+					kind: opPayloadAadKind(),
 				});
 				let result: unknown;
 				if (opened.kind !== "ok") result = { kind: "refusal", reason: "content key unavailable" };

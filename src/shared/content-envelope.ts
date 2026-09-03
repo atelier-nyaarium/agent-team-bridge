@@ -39,28 +39,50 @@ export function deriveContentKey(ownerSignPrivB64: string, domainId: string, epo
 }
 
 export type BoardTextKind = "board.title" | "board.body" | "board.name";
+export const BOARD_TITLE_KIND: BoardTextKind = "board.title";
+export const BOARD_BODY_KIND: BoardTextKind = "board.body";
+export const BOARD_NAME_KIND: BoardTextKind = "board.name";
+
+export function assertNewlineFree(...values: readonly string[]): void {
+	if (values.some((value) => /[\r\n]/.test(value))) throw new Error("AAD fields must be newline-free");
+}
 
 /** Board kinds require entry IDs. */
-export function boardTextAadKind(kind: BoardTextKind, entryId: string): `${BoardTextKind}\n${string}` {
-	return `${kind}\n${entryId}`;
+export function boardTextAadKind(
+	kind: BoardTextKind,
+	entryId: string,
+	attachmentId?: string,
+): `${BoardTextKind}\n${string}` {
+	assertNewlineFree(kind, entryId, ...(attachmentId === undefined ? [] : [attachmentId]));
+	return [kind, entryId, attachmentId]
+		.filter((value): value is string => value !== undefined)
+		.join("\n") as `${BoardTextKind}\n${string}`;
 }
 
 /** Inbox kinds require row IDs. */
-export function inboxBodyAadKind(conversationId: string, opId: string | number): `inbox.body\n${string}` {
+export function inboxBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
+	assertNewlineFree(conversationId, opId);
 	return `inbox.body\n${conversationId}\n${opId}`;
 }
 
 export function scheduledBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
+	assertNewlineFree(conversationId, opId);
 	return `inbox.body\n${conversationId}\n${opId}`;
+}
+
+export function opPayloadAadKind(): "op.payload" {
+	return "op.payload";
 }
 
 const resultAadKind = (...parts: string[]): `op.result\n${string}` => `op.result\n${parts.join("\n")}`;
 
 export function valueResultAadKind(opId: string): `op.result\n${string}` {
+	assertNewlineFree(opId);
 	return resultAadKind(opId);
 }
 
 export function opResultAadKind(conversationId: string, opId: string): `op.result\n${string}` {
+	assertNewlineFree(conversationId, opId);
 	return resultAadKind(conversationId, opId);
 }
 

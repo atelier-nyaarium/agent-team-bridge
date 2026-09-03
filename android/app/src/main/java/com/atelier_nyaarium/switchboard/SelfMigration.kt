@@ -1,6 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope

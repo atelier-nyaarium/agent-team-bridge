@@ -70,7 +70,7 @@ internal class ConsoleSocketClient(
 	var socketMode: ConsoleSocketMode = ConsoleSocketMode.PLANES
 
 	constructor(
-		transport: ConsoleRelayTransport,
+		transport: ConsoleRouterTransport,
 		ownerOps: OwnerOps,
 		listener: ConsoleSocketListener,
 		socketMode: ConsoleSocketMode = ConsoleSocketMode.PLANES,

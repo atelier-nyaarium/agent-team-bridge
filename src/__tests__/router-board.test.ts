@@ -11,12 +11,13 @@ import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { blobIdFor } from "../shared/blob-store.js";
+import { BOARD_BODY_KIND, BOARD_NAME_KIND, BOARD_TITLE_KIND, type BoardTextKind } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { InboxAddress, InboxRow } from "../shared/schemasInbox.js";
 import { sealBlobChunk } from "../shared/sealed-blob.js";
 
 const roots: string[] = [];
-const envelope = (kind: "board.title" | "board.body" | "board.name" = "board.title") => ({
+const envelope = (kind: BoardTextKind = BOARD_TITLE_KIND) => ({
 	v: 1 as const,
 	epoch: 1,
 	nonce: Buffer.alloc(12).toString("base64"),
@@ -545,8 +546,8 @@ describe("router board service", () => {
 	it("round-trips every sealed upsert field through read", () => {
 		const { service, registry } = make();
 		const title = envelope();
-		const body = envelope("board.body");
-		const names = { alice: envelope("board.name"), bob: envelope("board.name") };
+		const body = envelope(BOARD_BODY_KIND);
+		const names = { alice: envelope(BOARD_NAME_KIND), bob: envelope(BOARD_NAME_KIND) };
 		service.write(
 			"a",
 			{
@@ -564,7 +565,7 @@ describe("router board service", () => {
 		references.add("keep");
 		references.add("drop");
 		const attachments = (blobId: string) => ({ blobId, size: 1, mime: "text/plain", blobGateway: "g" });
-		const names = { keep: envelope("board.name"), drop: envelope("board.name") };
+		const names = { keep: envelope(BOARD_NAME_KIND), drop: envelope(BOARD_NAME_KIND) };
 		service.write(
 			"a",
 			{

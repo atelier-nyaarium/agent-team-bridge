@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInboxClaims } from "../gateway/router/inboxClaims.js";
 import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
+import { inboxBodyAadKind, opPayloadAadKind } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { PendingDelivery } from "../shared/pending-delivery-store.js";
 
@@ -122,7 +123,10 @@ describe("inbox delivery pump", () => {
 		const contentBody = (ciphertext: string) => ({ v: 1, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext });
 		const open = (body: unknown, aad: { kind: string }) => {
 			kinds.push(aad.kind);
-			if (aad.kind.startsWith("inbox.body") && (body as { ciphertext: string }).ciphertext === payloadCiphertext)
+			if (
+				aad.kind.startsWith(inboxBodyAadKind("", "").split("\n")[0]) &&
+				(body as { ciphertext: string }).ciphertext === payloadCiphertext
+			)
 				return { kind: "bad_tag" };
 			return { kind: "ok", plaintext: Buffer.from('{"to":"session","from":"source","body":"hi"}') };
 		};
@@ -162,9 +166,9 @@ describe("inbox delivery pump", () => {
 			deliveryEpoch: 1,
 		});
 		expect(kinds).toEqual([
-			"inbox.body\nconversation\noperation",
-			"inbox.body\nconversation\noperation",
-			"op.payload",
+			inboxBodyAadKind("conversation", "operation"),
+			inboxBodyAadKind("conversation", "operation"),
+			opPayloadAadKind(),
 		]);
 	});
 

@@ -58,7 +58,7 @@ Gateway, so revocation still applies while the Router is unreachable.
   Node, Bun, and Android.
 - Registration requires keys, an owner-signed admission, and fresh possession proof. No bearer
   fallback.
-- A Gateway without a Domain starts standalone for `/health` and `/enroll`; the bridge activates only
+- A Gateway without a Domain starts standalone for `/health` and `/enroll`; the Gateway federation bridge activates only
   when both transport and Domain resolve.
 - Enrollment roots the first owner key through a single atomic CAS write. The owner root private key
   never leaves the phone.

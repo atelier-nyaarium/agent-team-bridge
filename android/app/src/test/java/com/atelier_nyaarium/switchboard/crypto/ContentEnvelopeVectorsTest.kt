@@ -14,8 +14,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.Base64
-import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
-import com.atelier_nyaarium.switchboard.inboxBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.boardTextAadKind
+import com.atelier_nyaarium.switchboard.crypto.inboxBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.opPayloadAadKind
+import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
+import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
 
 class ContentEnvelopeVectorsTest {
 	private val json = Json { ignoreUnknownKeys = true }
@@ -26,6 +30,36 @@ class ContentEnvelopeVectorsTest {
 		).jsonObject
 
 	private fun bytes(value: String): ByteArray = Base64.getDecoder().decode(value)
+
+	@Test
+	fun allNamedAadKindVectorsMatch() {
+		val root = vectors()
+		val actual = mapOf(
+			"boardTitleAad" to boardTextAadKind(root["boardTitleAad"]!!.jsonObject["kind"]!!.jsonPrimitive.content, root["boardTitleAad"]!!.jsonObject["entryId"]!!.jsonPrimitive.content),
+			"boardBodyAad" to boardTextAadKind(root["boardBodyAad"]!!.jsonObject["kind"]!!.jsonPrimitive.content, root["boardBodyAad"]!!.jsonObject["entryId"]!!.jsonPrimitive.content),
+			"boardNameAad" to boardTextAadKind(root["boardNameAad"]!!.jsonObject["kind"]!!.jsonPrimitive.content, root["boardNameAad"]!!.jsonObject["entryId"]!!.jsonPrimitive.content, root["boardNameAad"]!!.jsonObject["attachmentId"]!!.jsonPrimitive.content),
+			"ownerRowAad" to inboxBodyAadKind(root["ownerRowAad"]!!.jsonObject["conversationId"]!!.jsonPrimitive.content, root["ownerRowAad"]!!.jsonObject["opId"]!!.jsonPrimitive.content),
+			"scheduledBodyAad" to scheduledBodyAadKind(root["scheduledBodyAad"]!!.jsonObject["conversationId"]!!.jsonPrimitive.content, root["scheduledBodyAad"]!!.jsonObject["opId"]!!.jsonPrimitive.content),
+			"opPayloadAad" to opPayloadAadKind(),
+			"valueResultAad" to valueResultAadKind(root["valueResultAad"]!!.jsonObject["opId"]!!.jsonPrimitive.content),
+			"opResultAad" to opResultAadKind(root["opResultAad"]!!.jsonObject["conversationId"]!!.jsonPrimitive.content, root["opResultAad"]!!.jsonObject["opId"]!!.jsonPrimitive.content),
+		)
+		for ((name, value) in actual) assertEquals(root[name]!!.jsonObject["expected"]!!.jsonPrimitive.content, value)
+	}
+
+	@Test
+	fun aadKindsRejectNewlinesInEveryArgument() {
+		org.junit.Assert.assertThrows(Exception::class.java) { boardTextAadKind("board.title", "entry\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { boardTextAadKind("board\ntitle", "entry-1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { boardTextAadKind("board.name", "entry-1", "blob\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { inboxBodyAadKind("conversation\n1", "operation") }
+		org.junit.Assert.assertThrows(Exception::class.java) { inboxBodyAadKind("conversation", "operation\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { scheduledBodyAadKind("conversation\n1", "operation") }
+		org.junit.Assert.assertThrows(Exception::class.java) { scheduledBodyAadKind("conversation", "operation\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { valueResultAadKind("operation\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { opResultAadKind("conversation\n1", "operation") }
+		org.junit.Assert.assertThrows(Exception::class.java) { opResultAadKind("conversation", "operation\n1") }
+	}
 
 	@Test
 	fun derivationAndContentEnvelopesMatchNode() {
@@ -41,7 +75,7 @@ class ContentEnvelopeVectorsTest {
 		val opResultAad = root["opResultAad"]!!.jsonObject
 		assertEquals(
 			opResultAad["expected"]!!.jsonPrimitive.content,
-			com.atelier_nyaarium.switchboard.opResultAadKind(
+			opResultAadKind(
 				opResultAad["conversationId"]!!.jsonPrimitive.content,
 				opResultAad["opId"]!!.jsonPrimitive.content,
 			),
@@ -49,7 +83,7 @@ class ContentEnvelopeVectorsTest {
 		val valueResultAad = root["valueResultAad"]!!.jsonObject
 		assertEquals(
 			valueResultAad["expected"]!!.jsonPrimitive.content,
-			com.atelier_nyaarium.switchboard.board.valueResultAadKind(valueResultAad["opId"]!!.jsonPrimitive.content),
+			valueResultAadKind(valueResultAad["opId"]!!.jsonPrimitive.content),
 		)
 		val ownerRowAadFull = root["ownerRowAadFull"]!!.jsonObject
 		assertEquals(
@@ -95,7 +129,8 @@ class ContentEnvelopeVectorsTest {
 				value["kind"]!!.jsonPrimitive.content,
 			)
 			if (value["plaintextUtf8"]!!.jsonPrimitive.content == "fixture scheduled inbox.body") {
-				assertEquals("inbox.body\nconversation\nscheduled-op", scheduledBodyAadKind("conversation", "scheduled-op"))
+				val scheduled = root["scheduledBodyAad"]!!.jsonObject
+				assertEquals(scheduled["expected"]!!.jsonPrimitive.content, scheduledBodyAadKind(scheduled["conversationId"]!!.jsonPrimitive.content, scheduled["opId"]!!.jsonPrimitive.content))
 			}
 			val envelope = ContentEnvelope(
 				v = 1L,
@@ -284,7 +319,7 @@ class ContentEnvelopeVectorsTest {
 	@Test
 	fun contentCryptoRefusesWrongKeyAndNonceLengths() {
 		val identity = Crypto.generateIdentity()
-		val aad = Crypto.ContentAad("alice", identity.sign.pub, 1, "board.title")
+		val aad = Crypto.ContentAad("alice", identity.sign.pub, 1, BOARD_TITLE_KIND)
 		val key = ByteArray(32)
 		assertThrows(IllegalArgumentException::class.java) {
 			Crypto.sealContent("text".toByteArray(), ByteArray(31), aad, ByteArray(12))

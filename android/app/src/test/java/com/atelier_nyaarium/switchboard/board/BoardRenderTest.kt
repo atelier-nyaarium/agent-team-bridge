@@ -2,6 +2,8 @@ package com.atelier_nyaarium.switchboard.board
 
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.BOARD_TITLE_KIND
+import com.atelier_nyaarium.switchboard.crypto.boardTextAadKind
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.BoardEntryClear
 import com.atelier_nyaarium.switchboard.proto.BoardEntrySealed
@@ -48,7 +50,7 @@ class BoardRenderTest {
 		val opened = Crypto.openContent(
 			envelope,
 			key,
-			Crypto.ContentAad(domainId, owner.sign.pub, 1, "board.title\nentry-1"),
+			Crypto.ContentAad(domainId, owner.sign.pub, 1, boardTextAadKind(BOARD_TITLE_KIND, "entry-1")),
 		)
 
 		assertEquals("title", opened.toString(Charsets.UTF_8))
