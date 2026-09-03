@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.JsonArray
@@ -161,8 +164,17 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	private val drainMutex = Mutex()
 
-	/** One drain at a time, whichever transport carried the payload. */
-	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T = drainMutex.withLock { block() }
+	/** Marks the coroutine holding the drain mutex. */
+	private object DrainHolder : CoroutineContext.Element {
+		override val key: CoroutineContext.Key<*> get() = Key
+
+		object Key : CoroutineContext.Key<DrainHolder>
+	}
+
+	/** One drain at a time, whichever transport carried the payload; the holder may re-enter. */
+	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T =
+		if (coroutineContext[DrainHolder.Key] != null) block()
+		else drainMutex.withLock { withContext(DrainHolder) { block() } }
 
 	/** Synchronous, pre-commit delivery. */
 	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
