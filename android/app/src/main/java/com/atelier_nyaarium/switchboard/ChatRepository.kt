@@ -192,7 +192,16 @@ class ChatRepository(
 			if (isVisible && transportCoordinator.link() != ConsoleLink.SOCKET) runCatching { socket.connect() }
 		} },
 				onWelcome = { gen, welcome ->
-					drain.seedPlaneVersions(welcome.versions)
+					// The welcome carries versions only; fetch the payloads.
+					repoScope.launch(Dispatchers.IO) {
+						drain.withDrainMutex {
+							client().planesRead(drain.knownPlanesJson())?.planes?.forEach { plane ->
+								if (drain.mayApplyPlane(plane.name, plane.version) && applyPlane(plane.name, plane.payload)) {
+									drain.notePlane(plane.name, plane.version)
+								}
+							}
+						}
+					}
 					val epoch = welcome.migrationEpoch ?: 0L
 				if (epoch != 0L) repoScope.launch {
 					if (transportCoordinator.awaitingTranslation()) {

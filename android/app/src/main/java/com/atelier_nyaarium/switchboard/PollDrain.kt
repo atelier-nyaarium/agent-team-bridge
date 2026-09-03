@@ -189,11 +189,9 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		knownPlaneVersions = knownPlaneVersions + (name to maxOf(version, knownPlaneVersions[name] ?: 0L))
 	}
 
-	internal fun seedPlaneVersions(versions: JsonObject) {
-		knownPlaneVersions = knownPlaneVersions + versions.mapNotNull { (name, value) ->
-			value.jsonPrimitive.content.toLongOrNull()?.let { name to it }
-		}.toMap().mapValues { (name, version) -> maxOf(version, knownPlaneVersions[name] ?: 0L) }
-	}
+	/** Planes newer than these are fetched on welcome. */
+	internal fun knownPlanesJson(): JsonObject =
+		buildJsonObject { knownPlaneVersions.forEach { (name, version) -> put(name, version) } }
 
 	internal fun mayApplyPlane(name: String, version: Long): Boolean = version > (knownPlaneVersions[name] ?: 0L)
 
