@@ -83,13 +83,21 @@ export function createConsoleDispatcher({
 			);
 		}
 	}
+	/** A console known to the capability store belongs to the Domain owner. */
+	function ownerOfConversation(conversationId: string): string | undefined {
+		const remembered = ownerByConversation.get(conversationId);
+		if (remembered) return remembered;
+		if (!capabilityStore?.knows(conversationId)) return undefined;
+		const ownerSignPub = domain?.()?.snapshot.ownerSignPub;
+		return ownerSignPub ? ownerKeyId(ownerSignPub) : undefined;
+	}
 	const appendIfLive = (
 		conversationId: string,
 		entry: import("../../shared/console-protocol.js").MailboxInput,
 		dedupeKey?: string,
 	): undefined | typeof MIGRATING => {
 		if (fenced()) return MIGRATING;
-		const ownerId = ownerByConversation.get(conversationId);
+		const ownerId = ownerOfConversation(conversationId);
 		if (!ownerId) return;
 		const delivered = routes.deliverToOwner({
 			entry: entry as import("../../shared/federation-protocol.js").ConsolePushEntry,
@@ -689,8 +697,6 @@ export function createConsoleDispatcher({
 		rememberOwner(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
-
-	const ownerOfConversation = (conversationId: string): string | undefined => ownerByConversation.get(conversationId);
 
 	return { handleValue, handleDelivery, ownerOfConversation };
 }

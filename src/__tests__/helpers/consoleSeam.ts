@@ -41,6 +41,8 @@ export interface ConsoleSeamOptions {
 	createSessionBoundMs?: number;
 	dropSessionResume?: (team: string, disposition: "release" | "cancel") => void;
 	conversationOwners?: DurableStore;
+	capabilityStore?: ConsoleHandlerDeps["capabilityStore"];
+	domain?: ConsoleHandlerDeps["domain"];
 }
 
 export function makeConsoleSeam(options: ConsoleSeamOptions = {}) {
@@ -87,6 +89,8 @@ export function makeConsoleSeam(options: ConsoleSeamOptions = {}) {
 		dropSessionResume: options.dropSessionResume,
 		durableOpStore,
 		conversationOwners: options.conversationOwners,
+		capabilityStore: options.capabilityStore,
+		domain: options.domain,
 	});
 
 	async function dispatch(op: ConsoleOp, opId = "op1"): Promise<ConsoleOpResult> {

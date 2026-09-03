@@ -22,4 +22,13 @@ describe("console conversation owners", () => {
 		const seam = makeConsoleSeam({ conversationOwners: owners });
 		expect(seam.handler.ownerOfConversation(CONVERSATION)).toBeUndefined();
 	});
+
+	it("falls back to the Domain owner for a console the capability store knows", () => {
+		const seam = makeConsoleSeam({
+			capabilityStore: { report() {}, touch() {}, forget() {}, knows: (id) => id === "phone-uuid" },
+			domain: () => ({ version: "v1", snapshot: { ownerSignPub: OWNER_PUB } as never }),
+		});
+		expect(seam.handler.ownerOfConversation("phone-uuid")).toBe(ownerKeyId(OWNER_PUB));
+		expect(seam.handler.ownerOfConversation("stranger")).toBeUndefined();
+	});
 });
