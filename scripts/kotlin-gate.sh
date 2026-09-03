@@ -9,5 +9,8 @@ cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=/dev/null
 [ -f ~/android-dev/env.sh ] && . ~/android-dev/env.sh
 
+# CI runs the same guard.
+bun scripts/check-kotlin-imports.ts || exit 1
+
 cd android || exit 1
 exec ./gradlew :app:testDebugUnitTest --console=plain "$@"

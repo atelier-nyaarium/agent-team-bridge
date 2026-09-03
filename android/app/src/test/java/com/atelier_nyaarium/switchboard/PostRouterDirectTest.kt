@@ -52,7 +52,7 @@ class PostRouterDirectTest {
 
 	private suspend fun call(logBody: Boolean = true): EnrollResult = ConsoleHttp.postRouterDirect(
 		client,
-		server.url("/relay").toString(),
+		server.url("/console").toString(),
 		"app-token",
 		"Test",
 		"case",
@@ -111,7 +111,7 @@ class PostRouterDirectTest {
 		runBlocking {
 			val dead = MockWebServer()
 			dead.start()
-			val deadUrl = dead.url("/relay").toString()
+			val deadUrl = dead.url("/console").toString()
 			dead.shutdown()
 			ConsoleHttp.postRouterDirect(client, deadUrl, "app-token", "Test", "case", emptyJsonBody(), true, ::taggedFail)
 		}
@@ -142,7 +142,7 @@ class PostRouterDirectTest {
 
 	// ---- executeCancellable (Phase D: cancellability) ----
 
-	private fun relayRequest() = Request.Builder().url(server.url("/relay")).post(emptyJsonBody()).build()
+	private fun relayRequest() = Request.Builder().url(server.url("/console")).post(emptyJsonBody()).build()
 
 	@Test
 	fun executeCancellable_cancellingTheJobUnwindsPromptlyInsteadOfWaitingOutTheDelay() = runBlocking {
@@ -155,7 +155,7 @@ class PostRouterDirectTest {
 			// The server holds the response far longer than any reasonable test timeout; a correct
 			// cancellable wrapper unwinds on cancel long before this delay would ever elapse.
 			slow.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}""").setBodyDelay(30, TimeUnit.SECONDS))
-			val req = Request.Builder().url(slow.url("/relay")).post(emptyJsonBody()).build()
+			val req = Request.Builder().url(slow.url("/console")).post(emptyJsonBody()).build()
 			var caughtCancellation = false
 			val started = System.nanoTime()
 			val job = launch(Dispatchers.IO) {

@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.board.BoardManager
 import com.atelier_nyaarium.switchboard.board.BoardStore
 import org.junit.Assert.assertEquals
 import org.junit.Test

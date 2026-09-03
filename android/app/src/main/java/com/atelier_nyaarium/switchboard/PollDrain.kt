@@ -100,6 +100,7 @@ internal suspend fun drainTick(
 					else -> coordinator.recordPendingAdvance(cursor, epoch)
 				}
 			}
+		}
 	} else if (answer is JsonObject && answer["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
 		coordinator.adoptFloor(answer["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
 		return TickOutcome(0, 0, false, known, true)

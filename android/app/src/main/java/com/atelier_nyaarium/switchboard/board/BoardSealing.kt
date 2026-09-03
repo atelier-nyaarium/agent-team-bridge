@@ -4,7 +4,6 @@ import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.BOARD_BODY_KIND
 import com.atelier_nyaarium.switchboard.crypto.BOARD_TITLE_KIND
-import com.atelier_nyaarium.switchboard.crypto.BOARD_NAME_KIND
 import com.atelier_nyaarium.switchboard.crypto.boardTextAadKind
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 

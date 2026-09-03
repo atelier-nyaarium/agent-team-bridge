@@ -5,7 +5,6 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardEntryClear
 import com.atelier_nyaarium.switchboard.proto.BoardEntrySealed
-import com.atelier_nyaarium.switchboard.proto.BoardOp
 import com.atelier_nyaarium.switchboard.proto.BoardSession
 import com.atelier_nyaarium.switchboard.proto.BoardStateAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry

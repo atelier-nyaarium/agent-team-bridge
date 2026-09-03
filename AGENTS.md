@@ -261,7 +261,7 @@ stays independently usable; a Gateway-only machine runs `./start-gateway.sh` alo
 ./start-all.sh
 ```
 
-`start-federation.sh` does not rebuild the Router. Use `--build` for new Router code.
+`start-federation.sh` rebuilds the Router image on every start.
 `start-host-daemon.sh` restarts the daemon. Declining a restart leaves the running build serving.
 `./setup.sh --verify` checks Router reachability and Gateway registration.
 

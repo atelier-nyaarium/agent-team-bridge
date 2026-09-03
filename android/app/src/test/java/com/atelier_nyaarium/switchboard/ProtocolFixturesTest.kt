@@ -53,7 +53,7 @@ class ProtocolFixturesTest {
 			val expectPass = obj["expect"]!!.jsonPrimitive.content == "pass"
 			val decoded = runCatching { decodeAs(schema, fixture(file)) }
 			assertEquals("$file decode result", expectPass, decoded.isSuccess)
-			assertNotNull("$file decoded as $schema", decoded.getOrNull())
+			if (expectPass) assertNotNull("$file decoded as $schema", decoded.getOrNull())
 		}
 	}
 
