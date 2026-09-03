@@ -87,7 +87,7 @@ export interface ConsoleHandlerDeps {
 	 * an available asleep session. */
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
 	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
-	capabilityStore?: Pick<CapabilityStore, "report" | "touch" | "forget" | "knows">;
+	capabilityStore?: Pick<CapabilityStore, "report" | "touch" | "forget">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
 	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
 	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
@@ -204,8 +204,6 @@ export interface ConsoleHandlerDeps {
 	 * opCache miss - see durableOpStore.ts. Absent disables the durable layer entirely (the
 	 * in-memory opCache alone still covers same-process retries, but not across a restart). */
 	durableOpStore?: DurableOpStore;
-	/** Console conversation owners, kept across restarts so late replies still reach the owner inbox. */
-	conversationOwners?: import("../../shared/durable-store.js").DurableStore;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A

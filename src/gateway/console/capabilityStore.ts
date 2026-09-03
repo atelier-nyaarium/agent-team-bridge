@@ -93,10 +93,6 @@ export class CapabilityStore {
 		if (this.devices.delete(conversationId)) this.persist();
 	}
 
-	knows(conversationId: string): boolean {
-		return this.devices.has(conversationId);
-	}
-
 	/**
 	 * The union across every device still within its TTL. On conflicting instruction text for one
 	 * capability id, the most recently REPORTED wins - `lastSeen` deliberately does not count, or a

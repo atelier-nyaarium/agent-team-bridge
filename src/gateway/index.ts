@@ -220,7 +220,6 @@ export async function startGateway(): Promise<void> {
 		},
 	});
 	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
-	let consoleOwnerOf: ((conversationId: string) => string | undefined) | null = null;
 	let keyRequester: ReturnType<typeof createKeyRequester> | null = null;
 	let consoleDeliveryHandler:
 		| ((
@@ -997,7 +996,6 @@ export async function startGateway(): Promise<void> {
 		const f = fed();
 		return createRoutes({
 			carryOver: routesCarryOver,
-			consoleOwnerOf: (conversationId) => consoleOwnerOf?.(conversationId),
 			registry,
 			conversationRegistry,
 			store,
@@ -1154,10 +1152,8 @@ export async function startGateway(): Promise<void> {
 				return { peersRemoved: removed, sharesDropped, jobsExpired };
 			},
 			durableOpStore,
-			conversationOwners: new DurableStore(DATA_DIR, "console-conversations"),
 		});
 		consoleDeliveryHandler = consoleHandler.handleDelivery;
-		consoleOwnerOf = consoleHandler.ownerOfConversation;
 		const valueOp = (raw: unknown): void => {
 			void (async () => {
 				const frame = ValueOpFrameSchema.safeParse(raw);

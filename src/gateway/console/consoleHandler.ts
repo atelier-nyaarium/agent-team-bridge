@@ -61,43 +61,16 @@ export function createConsoleDispatcher({
 	unlinkDomain,
 	untrustOwner,
 	durableOpStore,
-	conversationOwners,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
-	const restoredOwners = conversationOwners?.load();
-	const ownerByConversation = new Map<string, string>(
-		Object.entries(
-			restoredOwners && typeof restoredOwners === "object" && !Array.isArray(restoredOwners)
-				? (restoredOwners as Record<string, unknown>)
-				: {},
-		).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-	);
-	function rememberOwner(conversationId: string, ownerId: string): void {
-		if (ownerByConversation.get(conversationId) === ownerId) return;
-		ownerByConversation.set(conversationId, ownerId);
-		try {
-			conversationOwners?.saveChecked(Object.fromEntries(ownerByConversation));
-		} catch (error) {
-			console.warn(
-				`[console] conversation owner save failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-	/** A console known to the capability store belongs to the Domain owner. */
-	function ownerOfConversation(conversationId: string): string | undefined {
-		const remembered = ownerByConversation.get(conversationId);
-		if (remembered) return remembered;
-		if (!capabilityStore?.knows(conversationId)) return undefined;
-		const ownerSignPub = domain?.()?.snapshot.ownerSignPub;
-		return ownerSignPub ? ownerKeyId(ownerSignPub) : undefined;
-	}
+	const ownerByConversation = new Map<string, string>();
 	const appendIfLive = (
 		conversationId: string,
 		entry: import("../../shared/console-protocol.js").MailboxInput,
 		dedupeKey?: string,
 	): undefined | typeof MIGRATING => {
 		if (fenced()) return MIGRATING;
-		const ownerId = ownerOfConversation(conversationId);
+		const ownerId = ownerByConversation.get(conversationId);
 		if (!ownerId) return;
 		const delivered = routes.deliverToOwner({
 			entry: entry as import("../../shared/federation-protocol.js").ConsolePushEntry,
@@ -682,7 +655,7 @@ export function createConsoleDispatcher({
 		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
 		if (!VALUE_OP_KINDS.has(op.kind)) throw new Error("value op kind is not allowed");
-		rememberOwner(conversationId, ownerKeyId(ownerSignPub));
+		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
@@ -694,9 +667,9 @@ export function createConsoleDispatcher({
 		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
 		if (!DELIVERY_OP_KINDS.has(op.kind)) throw new Error("delivery op kind is not allowed");
-		rememberOwner(conversationId, ownerKeyId(ownerSignPub));
+		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}
 
-	return { handleValue, handleDelivery, ownerOfConversation };
+	return { handleValue, handleDelivery };
 }

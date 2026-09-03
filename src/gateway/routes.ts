@@ -93,8 +93,6 @@ export interface RoutesDeps {
 	config: GatewayConfig;
 	producerSignPriv?: string;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
-	/** Owner of a console conversation; a reply to one lands in the owner inbox. */
-	consoleOwnerOf?: (conversationId: string) => string | undefined;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
@@ -210,7 +208,6 @@ export function createRoutes({
 	config,
 	producerSignPriv,
 	routerClient,
-	consoleOwnerOf,
 	sealer,
 	blobStore,
 	blobUploader,
@@ -1221,7 +1218,8 @@ export function createRoutes({
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
 			const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
-			if (consoleOwnerOf?.(deliverResult.fromConversationId)) {
+			// Console threads carry the owner id as their conversation id.
+			if (deliverResult.fromConversationId === ownerId?.()) {
 				const delivered = deliverToOwner({
 					entry: {
 						kind: "reply",

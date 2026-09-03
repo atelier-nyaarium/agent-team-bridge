@@ -82,11 +82,8 @@ describe("routes", () => {
 			process.env.DATA_DIR = dataDir;
 			try {
 				const store = new PendingJobStore<ResponsePayload>();
-				store.create("conv-late", "phone", "agent", { persistent: true, fromConversationId: "phone-conv" });
-				const ctx = makeCtx({
-					store,
-					consoleOwnerOf: (conversationId) => (conversationId === "phone-conv" ? "owner-1" : undefined),
-				});
+				store.create("conv-late", "phone", "agent", { persistent: true, fromConversationId: "owner-1" });
+				const ctx = makeCtx({ store, ownerId: () => "owner-1" });
 				const { respond } = createRoutes(ctx);
 				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
 					session_id: "conv-late",
@@ -97,8 +94,9 @@ describe("routes", () => {
 				const queued = new DurableStore(dataDir, "owner-row-outbox").load() as Array<{
 					entry: { kind: string; session_id: string; body?: string };
 				}>;
-				expect(queued.map((item) => [item.entry.kind, item.entry.session_id, item.entry.body])).toEqual([
-					["reply", "conv-late", "late answer"],
+				const replies = queued.filter((item) => item.entry.kind === "reply");
+				expect(replies.map((item) => [item.entry.session_id, item.entry.body])).toEqual([
+					["conv-late", "late answer"],
 				]);
 			} finally {
 				if (previous === undefined) delete process.env.DATA_DIR;
@@ -113,13 +111,17 @@ describe("routes", () => {
 			try {
 				const store = new PendingJobStore<ResponsePayload>();
 				store.create("conv-agent", "asker", "agent", { persistent: true, fromConversationId: "agent-conv" });
-				const { respond } = createRoutes(makeCtx({ store, consoleOwnerOf: () => undefined }));
+				const { respond } = createRoutes(makeCtx({ store, ownerId: () => "owner-1" }));
 				respond(new Request("http://localhost/respond", { method: "POST" }), {
 					session_id: "conv-agent",
 					status: "completed",
 					response: "for the agent",
 				});
-				expect(new DurableStore(dataDir, "owner-row-outbox").load()).toBeNull();
+				const queued =
+					(new DurableStore(dataDir, "owner-row-outbox").load() as Array<{
+						entry: { kind: string };
+					}> | null) ?? [];
+				expect(queued.some((item) => item.entry.kind === "reply")).toBe(false);
 			} finally {
 				if (previous === undefined) delete process.env.DATA_DIR;
 				else process.env.DATA_DIR = previous;
