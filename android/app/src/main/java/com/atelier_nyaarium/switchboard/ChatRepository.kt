@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
 /** Mailbox entry with cursor sequence. */
+
 internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 	override val seq: Long get() = entry.seq
 }
@@ -117,6 +118,8 @@ class ChatRepository(
 	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
 
 	internal val transportCoordinator = ConsoleTransportCoordinator(pushback)
+	internal lateinit var cursorTranslation: CursorTranslationOps
+	internal lateinit var selfMigration: SelfMigration
 
 	/** Signs this console's operations. */
 	val ownerOps = OwnerOps(this)
@@ -155,6 +158,15 @@ class ChatRepository(
 			kotlinx.coroutines.delay(delay)
 			if (isVisible && transportCoordinator.link() != ConsoleLink.SOCKET) runCatching { socket.connect() }
 		} },
+			onWelcome = { gen, welcome ->
+				val epoch = welcome.migrationEpoch ?: 0L
+				if (epoch != 0L) repoScope.launch {
+					if (transportCoordinator.awaitingTranslation()) {
+						cursorTranslation.onWelcome(gen, epoch, welcome.cursor, welcome.cursorEpoch)
+					}
+					selfMigration.run(epoch)
+			}
+		},
 	)
 
 	private fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?) {
@@ -287,6 +299,54 @@ class ChatRepository(
 	internal val boardOps = BoardOps(this)
 	internal val attachments = AttachmentOps(this)
 	internal val scheduled = ScheduledSendOps(this)
+	init {
+		cursorTranslation = CursorTranslationOps(
+			coordinator = transportCoordinator,
+			journal = mutationJournal,
+			address = { "owner:${localDomain()}/${federation.ownerSignPub()}" },
+			heldCursor = { mailboxSync.pollParams().epoch to mailboxSync.pollParams().cursor },
+			sign = { op, opId -> ownerOps.sign(op, opId) },
+			send = { client().postOwnerOp(it) },
+			reportError = { message -> _state.update { it.copy(error = message) } },
+			commit = { gen, cursor, epoch -> socket.commitTranslation(gen, cursor, epoch) },
+			)
+		selfMigration = SelfMigration(
+			records = { _state.value.scheduledSends },
+			readAnchors = { _state.value.readAnchors },
+			journal = mutationJournal,
+			domainId = { localDomain() },
+			ownerSignPub = { federation.ownerSignPub() },
+			conversationId = { client().transport.prov.conversationId },
+			contentKeyring = { federation.contentKeyring() },
+			target = { team, _ ->
+				val parsed = parseTarget(team, localDomain(), localGatewayId) as com.atelier_nyaarium.switchboard.proto.Address
+				com.atelier_nyaarium.switchboard.proto.ScheduledTarget(parsed.domain, parsed.gateway, parsed.spawn + "." + parsed.session)
+			},
+			uploadFile = { file -> client().uploadBlob(Attachments.fileFor(filesDir, file.src) ?: error("missing scheduled file")) },
+			sign = { op, opId -> ownerOps.sign(op, opId) },
+			send = { client().postOwnerOp(it) },
+				reportRead = { team, anchor ->
+				val op = com.atelier_nyaarium.switchboard.proto.ReportRead(
+					team = team, epoch = anchor.epoch, seq = anchor.seq, at = System.currentTimeMillis(),
+				)
+				val signed = ownerOps.sign(wireJson.encodeToJsonElement(com.atelier_nyaarium.switchboard.proto.ReportRead.serializer(), op).jsonObject)
+					if (signed == null) null else client().postOwnerOp(signed)
+				},
+				reportError = { message -> _state.update { it.copy(error = message) } },
+				releaseLocal = { team, opId ->
+				scheduled.releaseMigrated(
+					team,
+					opId,
+					{ scheduled.scheduledSendScheduler?.cancelNext() },
+					{ target ->
+						_state.update { it.copy(scheduledSends = it.scheduledSends - target) }
+						persistence.persistScheduledSends(_state.value.scheduledSends)
+						scheduled.rearmAfterMigration()
+					},
+				)
+			},
+		)
+	}
 	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
 	internal val presence = PresenceOps(presenceHost)
 	internal val sessions = SessionOps(this)
@@ -295,7 +355,6 @@ class ChatRepository(
 	@Volatile internal var sttsClient: SttsClient? = null
 
 	// Re-provision wipe.
-
 	/** State holders cleared by [clearAll]. */
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
 		get() = listOf(this, board, presence, trust, drain, playback)
@@ -426,6 +485,7 @@ class ChatRepository(
 		_state.update { it.copy(biometricLock = enabled) }
 	}
 
+	/** Append inbound messages. */
 	internal fun append(team: String, msg: Message): Long {
 		var newId = 0L
 		val threads = _state.updateAndGet { s ->
@@ -438,12 +498,11 @@ class ChatRepository(
 		return newId
 	}
 
-	/** Append inbound messages. */
 	/** Prepare indexes before state commit. */
 	internal fun appendInbound(team: String, msg: Message, beforeCommit: () -> Unit = {}): Boolean {
 		if (!msg.isPeer) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
-		// Deduplicate by mailbox epoch and sequence.
 		if (msg.seq > 0) {
+			// Deduplicate by mailbox epoch and sequence.
 			var folded = false
 			val updated = _state.updateAndGet { s ->
 				val thread = s.threads[team].orEmpty()
@@ -451,8 +510,8 @@ class ChatRepository(
 				if (idx >= 0) {
 					folded = true
 					val old = thread[idx]
-					// Preserve landed attachment paths.
-					val merged = msg.copy(id = old.id, files = Attachments.mergeSentEchoFiles(old.files, msg.files).files)
+						val merged = msg.copy(id = old.id, files = Attachments.mergeSentEchoFiles(old.files, msg.files).files)
+						// Preserve landed attachment paths.
 					val next = thread.toMutableList().also { it[idx] = merged }
 					s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 				} else {
@@ -472,10 +531,10 @@ class ChatRepository(
 
 	/** Fold a sent echo. */
 	internal fun reconcileSent(team: String, echo: Message) {
-		// Reset captured values on every CAS attempt.
 		var handled = false
 		var deleteSrcs: List<String> = emptyList()
-		val threads = _state.updateAndGet { s ->
+			val threads = _state.updateAndGet { s ->
+				// Reset captured values on every CAS attempt.
 			val thread = s.threads[team].orEmpty()
 			val idx = sentEchoMatch(thread, echo)
 			if (idx >= 0) {
@@ -493,8 +552,8 @@ class ChatRepository(
 		}.threads
 		if (handled) {
 			persistence.persistThreads(threads)
-			// Delete orphaned attachment copies.
-			attachments.scheduleAttachmentDelete(deleteSrcs)
+				// Delete orphaned attachment copies.
+				attachments.scheduleAttachmentDelete(deleteSrcs)
 		} else {
 			append(team, echo)
 		}

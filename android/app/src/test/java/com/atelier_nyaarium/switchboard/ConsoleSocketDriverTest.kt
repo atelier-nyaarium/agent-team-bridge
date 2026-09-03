@@ -283,12 +283,82 @@ class ConsoleSocketDriverTest {
 		assertEquals(listOf(Triple("taskBoard", 4L, true)), seen)
 	}
 
+	@Test
+	fun ackAfterTranslationCarriesTheCommittedEpoch() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(9L)
+		val h = harness(coordinator, clientMode = null)
+		h.driver.connect()
+		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 1L, epoch = 4L, floor = 2L, migrationEpoch = 9L))
+		assertTrue(h.driver.commitTranslation(1L, 7L, 9L))
+
+		assertEquals(1, h.ackFrames.size)
+		assertTrue(h.ackFrames.single().contains("\"cursorEpoch\":9"))
+	}
+
+	@Test
+	fun planesOnlyWelcomeIgnoresMigrationEpoch() {
+		val coordinator = newCoordinator()
+		val h = harness(coordinator)
+		h.driver.connect()
+
+		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 0L, epoch = 0L, floor = 1L, migrationEpoch = 9L))
+
+		assertEquals(0L, coordinator.migrationEpoch())
+		assertFalse(coordinator.awaitingTranslation())
+	}
+
+	@Test
+	fun planesOnlyWelcomesRunMigrationCallbackAcrossReconnects() {
+		val coordinator = newCoordinator()
+		var migrations = 0
+		val h = harness(coordinator, onWelcome = { _, _ -> migrations++ })
+		h.driver.connect()
+		h.wireListeners.first().onMessage(h.socket, welcomeJson(cursor = 0L, epoch = 0L, floor = 1L, migrationEpoch = 9L))
+		h.driver.connect()
+		h.wireListeners.last().onMessage(h.socket, welcomeJson(cursor = 0L, epoch = 0L, floor = 1L, migrationEpoch = 9L))
+
+		assertEquals(2, migrations)
+		assertEquals(0L, coordinator.migrationEpoch())
+		assertFalse(coordinator.awaitingTranslation())
+	}
+
+	@Test
+	fun consumerWelcomeBehindEpochAwaitsTranslationAndInvokesMigration() {
+		val coordinator = newCoordinator()
+		var migrations = 0
+		val h = harness(coordinator, clientMode = null, onWelcome = { _, _ -> migrations++ })
+		h.driver.connect()
+
+		h.wireListeners.single().onMessage(h.socket, welcomeJson(cursor = 11L, epoch = 4L, floor = 12L, migrationEpoch = 9L))
+
+		assertTrue(coordinator.awaitingTranslation())
+		assertEquals(9L, coordinator.migrationEpoch())
+		assertEquals(1, migrations)
+		assertTrue(h.ackFrames.isEmpty())
+	}
+
+	@Test
+	fun staleWelcomeDoesNotChangeMigrationEpochOrAwaitingState() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(7L)
+		val h = harness(coordinator, clientMode = null)
+		h.driver.connect()
+		h.driver.connect()
+
+		h.wireListeners.first().onMessage(h.socket, welcomeJson(cursor = 0L, epoch = 0L, floor = 1L, migrationEpoch = 9L))
+
+		assertEquals(7L, coordinator.migrationEpoch())
+		assertFalse(coordinator.awaitingTranslation())
+	}
+
 	private data class Harness(
 		val driver: ConsoleSocketDriver,
 		val listenerListeners: MutableList<ConsoleSocketListener>,
 		val wireListeners: MutableList<WebSocketListener>,
 		val socket: WebSocket,
 		val closeCalls: IntArray,
+		val ackFrames: MutableList<String>,
 	)
 
 	private fun harness(
@@ -301,17 +371,22 @@ class ConsoleSocketDriverTest {
 		kick: () -> Unit = {},
 		onUnreachable: () -> Unit = {},
 		reconnect: (Long) -> Unit = {},
+		onWelcome: (Long, ConsoleWelcomeFrame) -> Unit = { _, _ -> },
 	): Harness {
 		val listenerListeners = mutableListOf<ConsoleSocketListener>()
 		val wireListeners = mutableListOf<WebSocketListener>()
 		val closeCalls = intArrayOf(0)
+		val ackFrames = mutableListOf<String>()
 		val socket = Proxy.newProxyInstance(
 			WebSocket::class.java.classLoader,
 			arrayOf(WebSocket::class.java),
 		) { _, method, args ->
 			when (method.name) {
 				"send" -> {
-					if (args!![0].toString().contains("\"type\":\"ack\"")) onAck()
+					if (args!![0].toString().contains("\"type\":\"ack\"")) {
+						ackFrames += args[0].toString()
+						onAck()
+					}
 					true
 				}
 				"close" -> {
@@ -345,16 +420,17 @@ class ConsoleSocketDriverTest {
 			kick = kick,
 			onUnreachable = onUnreachable,
 			reconnect = reconnect,
+			onWelcome = onWelcome,
 		)
-		return Harness(driver, listenerListeners, wireListeners, socket, closeCalls)
+		return Harness(driver, listenerListeners, wireListeners, socket, closeCalls, ackFrames)
 	}
 
 	private fun newCoordinator() = ConsoleTransportCoordinator(
 		IdlePushbackManager(FakeStore(), 0L) { java.time.ZoneId.of("UTC") },
 	)
 
-	private fun welcomeJson(cursor: Long, epoch: Long, floor: Long) =
-		"{\"type\":\"welcome\",\"incarnation\":8,\"cursor\":$cursor,\"cursorEpoch\":$epoch,\"floor\":$floor,\"versions\":{}}"
+	private fun welcomeJson(cursor: Long, epoch: Long, floor: Long, migrationEpoch: Long? = null) =
+		"{\"type\":\"welcome\",\"incarnation\":8,\"cursor\":$cursor,\"cursorEpoch\":$epoch,\"floor\":$floor,\"versions\":{}${migrationEpoch?.let { ",\"migrationEpoch\":$it" } ?: ""}}"
 
 	private fun row() = InboxRow(
 		envelope = RowEnvelope(

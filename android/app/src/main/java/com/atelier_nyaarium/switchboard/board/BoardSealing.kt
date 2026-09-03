@@ -8,6 +8,9 @@ import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 const val BOARD_KIND_TITLE = "board.title"
 const val BOARD_KIND_BODY = "board.body"
 
+fun scheduledBodyAadKind(conversationId: String, opId: String): String =
+	"inbox.body\n$conversationId\n$opId"
+
 /** Uses the domain root key for AAD. */
 class BoardSealing(
 	private val keyring: ContentKeyring,

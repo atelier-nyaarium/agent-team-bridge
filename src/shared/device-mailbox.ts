@@ -1,6 +1,7 @@
 import { capFifo } from "./cap-fifo.js";
 import type { MailboxEntry, MailboxInput } from "./console-protocol.js";
 import { mintEpoch } from "./epoch.js";
+import { fenced, MIGRATING } from "./migration-fence.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -11,6 +12,11 @@ export interface MailboxSnapshot {
 	dropped: number;
 	epoch: number;
 }
+
+export type MailboxMigrationRefusal = { outcome: typeof MIGRATING };
+export type MailboxDrainResult = MailboxSnapshot & { outcome?: typeof MIGRATING };
+export type AdvanceConsumerResult = undefined | MailboxMigrationRefusal;
+export type MailboxAppendResult = MailboxEntry & { outcome?: typeof MIGRATING };
 
 export type MailboxProvenance = "peer" | "message";
 
@@ -107,7 +113,8 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 	}
 
-	append(input: MailboxInput, dedupeKey?: string, provenance: MailboxProvenance = "message"): MailboxEntry {
+	append(input: MailboxInput, dedupeKey?: string, provenance: MailboxProvenance = "message"): MailboxAppendResult {
+		if (fenced()) return { outcome: MIGRATING } as MailboxAppendResult;
 		if (dedupeKey !== undefined) {
 			const seenSeq = this.seenKeys.get(dedupeKey);
 			if (seenSeq !== undefined) {
@@ -190,7 +197,8 @@ export class DeviceMailbox {
 	 * Epoch-gated: a cursor from an evicted instance must never ack away the new one's entries.
 	 * `dropped` is cumulative, never reset, so a lost poll response cannot hide a gap.
 	 */
-	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
+	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxDrainResult {
+		if (fenced()) return { outcome: MIGRATING } as MailboxDrainResult;
 		// Alive on every poll, floored at 0 on first sight.
 		if (consumerId !== undefined) {
 			this.consumerLastSeen.set(consumerId, Date.now());
@@ -201,7 +209,8 @@ export class DeviceMailbox {
 		if (cursor > 0 && epochOk) {
 			if (consumerId !== undefined) {
 				// Compacts only to the slowest registered device.
-				this.advanceConsumer(consumerId, cursor);
+				const advanced = this.advanceConsumer(consumerId, cursor);
+				if (advanced) return advanced as MailboxDrainResult;
 				this.trimToMinCursor();
 			} else {
 				this.ack(cursor);
@@ -212,7 +221,8 @@ export class DeviceMailbox {
 	}
 
 	/** Monotonic. The min across devices drives compaction. */
-	advanceConsumer(consumerId: string, seq: number): void {
+	advanceConsumer(consumerId: string, seq: number): AdvanceConsumerResult {
+		if (fenced()) return { outcome: MIGRATING };
 		this.consumerCursors.set(consumerId, Math.max(this.consumerCursors.get(consumerId) ?? 0, seq));
 	}
 

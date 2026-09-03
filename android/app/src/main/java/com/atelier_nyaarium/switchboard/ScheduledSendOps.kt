@@ -100,6 +100,7 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 		val prior = repo._state.value.scheduledSends[team] ?: return null
 		val next = repo._state.updateAndGet { s -> s.copy(scheduledSends = s.scheduledSends - team) }.scheduledSends
 		repo.persistence.persistScheduledSends(next)
+		repo.mutationJournal.remove(prior.opId)
 		rearmScheduledSendAlarm(next)
 		return prior
 	}
@@ -109,6 +110,17 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 		val next = current.values.minOfOrNull { it.fireAtMillis }
 		if (next != null) scheduledSendScheduler?.scheduleNext(next) else scheduledSendScheduler?.cancelNext()
 	}
+
+	internal fun rearmAfterMigration() = rearmScheduledSendAlarm()
+
+	internal suspend fun releaseMigrated(team: String, opId: String, cancelAlarm: (String) -> Unit, tombstone: (String) -> Unit): Boolean =
+		scheduledSendFireMutex.withLock {
+			if (repo._state.value.scheduledSends[team]?.opId != opId) return@withLock false
+			cancelAlarm(team)
+			tombstone(team)
+			repo.mutationJournal.remove(opId)
+			true
+		}
 
 	/** Waits briefly for service wiring. */
 	private suspend fun awaitSchedulerWired() {
@@ -138,19 +150,20 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 
 	/** Fires one record idempotently by opId. */
 	private suspend fun fireOne(team: String, rec: ScheduledSend): ScheduledSendFireFailure? {
+		if (repo._state.value.scheduledSends[team]?.opId != rec.opId) return null
 		val alreadyFired = repo._state.value.threads[team]?.any { it.opId == rec.opId } == true
 		if (!alreadyFired) {
 			val echoId = repo.append(
 				team,
 				Message(true, rec.text, System.currentTimeMillis(), files = rec.fileRefs, status = "pending", opId = rec.opId),
 			)
-			// The live row now owns these attachments.
-			clearScheduledSendRecord(team)
+				// The live row now owns these attachments.
+				clearScheduledSendRecord(team)
 			val (picked, _) = repo.rebuildFiles(rec.fileRefs)
 			repo.deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
 			if (repo._state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
-				// Journal failures beyond the alarm retry.
-					val journaled = journalPendingSend(team, rec)
+						// Journal failures beyond the alarm retry.
+						val journaled = journalPendingSend(team, rec)
 					val at = System.currentTimeMillis() + ChatRepository.SCHEDULED_SEND_RETRY_DELAY_MS
 					scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
 					if (!scheduledSendJournalDecision(journaled)) return ScheduledSendFireFailure(rec.opId)

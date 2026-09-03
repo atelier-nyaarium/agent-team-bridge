@@ -12,6 +12,7 @@ const POLL_MS = 1000;
 
 /** Mid-flight settle window. */
 export const MIGRATION_SETTLE_MS = 60_000;
+export const MIGRATION_IN_PROGRESS = "export-in-progress";
 
 let read: () => number | null = () => null;
 let raisedAt: () => number | null = () => null;
@@ -24,8 +25,10 @@ export function useMigrationEpochFile(dataDir: string): void {
 	const file = path.join(dataDir, "migration-epoch");
 	read = () => {
 		try {
-			const epoch = Number.parseInt(fs.readFileSync(file, "utf8").trim(), 10);
-			return Number.isFinite(epoch) ? epoch : null;
+			const raw = fs.readFileSync(file, "utf8").trim();
+			if (!/^[1-9][0-9]*$/.test(raw)) return 0;
+			const epoch = Number(raw);
+			return Number.isSafeInteger(epoch) ? epoch : 0;
 		} catch {
 			// Unreadable epoch files fence like present ones.
 			return fs.existsSync(file) ? 0 : null;
@@ -40,6 +43,26 @@ export function useMigrationEpochFile(dataDir: string): void {
 		}
 	};
 	invalidate();
+}
+
+export function readMigrationEpochFile(dataDir: string): number | null {
+	const file = path.join(dataDir, "migration-epoch");
+	try {
+		const raw = fs.readFileSync(file, "utf8").trim();
+		if (!/^[1-9][0-9]*$/.test(raw)) return 0;
+		const epoch = Number(raw);
+		return Number.isSafeInteger(epoch) ? epoch : 0;
+	} catch {
+		return fs.existsSync(file) ? 0 : null;
+	}
+}
+
+export function readMigrationFenceRaisedAt(dataDir: string): number | null {
+	try {
+		return fs.statSync(path.join(dataDir, "migration-epoch")).mtimeMs;
+	} catch {
+		return null;
+	}
 }
 
 /** Set the fence directly. */
@@ -72,6 +95,61 @@ export function migrationEpoch(): number | null {
 /** Whether migrated state is fenced. */
 export function fenced(): boolean {
 	return migrationEpoch() !== null;
+}
+
+export function migrationInProgressFile(dataDir: string): string {
+	return path.join(dataDir, MIGRATION_IN_PROGRESS);
+}
+
+function markerPid(marker: string): number | null {
+	try {
+		const value = Number.parseInt(fs.readFileSync(marker, "utf8").trim(), 10);
+		return Number.isInteger(value) && value > 0 ? value : null;
+	} catch {
+		return null;
+	}
+}
+
+function processAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+export function assertNoMigrationInProgress(dataDir: string): void {
+	const marker = migrationInProgressFile(dataDir);
+	if (!fs.existsSync(marker)) return;
+	const pid = markerPid(marker);
+	if (pid !== null && processAlive(pid))
+		throw new Error(`migration operation already in progress: ${MIGRATION_IN_PROGRESS} pid ${pid}`);
+	fs.rmSync(marker, { force: true });
+}
+
+export function withMigrationInProgress<T>(dataDir: string, operation: () => T): T {
+	const marker = migrationInProgressFile(dataDir);
+	fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+	while (true) {
+		try {
+			const descriptor = fs.openSync(marker, "wx", 0o600);
+			try {
+				fs.writeFileSync(descriptor, `${process.pid}\n`);
+			} finally {
+				fs.closeSync(descriptor);
+			}
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			assertNoMigrationInProgress(dataDir);
+		}
+	}
+	try {
+		return operation();
+	} finally {
+		fs.rmSync(marker, { force: true });
+	}
 }
 
 // Decimal epoch. Mtime marks raising.

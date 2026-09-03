@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { createCursorService } from "../federation-server/migration/cursorService.js";
-import { createLeaseService } from "../federation-server/migration/leaseService.js";
+import { createLeaseService, routerMigrationEpoch } from "../federation-server/migration/leaseService.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { translateCursor } from "../shared/migration-cursor.js";
@@ -30,6 +30,27 @@ afterEach(() => {
 });
 
 describe("migration lease service", () => {
+	it("prefers the file epoch over the environment fallback", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lease-file-"));
+		roots.push(dir);
+		fs.writeFileSync(path.join(dir, "migration-epoch"), "9\n");
+		const previousDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		process.env.ROUTER_MIGRATION_EPOCH = "3";
+		try {
+			expect(routerMigrationEpoch()).toBe(9);
+			fs.rmSync(path.join(dir, "migration-epoch"));
+			expect(routerMigrationEpoch()).toBe(3);
+			fs.writeFileSync(path.join(dir, "migration-epoch"), "9-suffix\n");
+			expect(routerMigrationEpoch()).toBeNaN();
+		} finally {
+			if (previousDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+		}
+	});
 	it("holds authority until every active gateway completes", () => {
 		const { registry, service } = make();
 		service.put("alpha", "hosta", "active");
@@ -68,6 +89,13 @@ describe("migration lease service", () => {
 		const { registry, service } = make(0);
 
 		expect(service.fenced("alpha", "stranger")).toBe(false);
+		registry.close();
+	});
+
+	it("fails closed when the Router fence epoch is unknown", () => {
+		const { registry, service } = make(Number.NaN);
+		expect(service.ready("alpha")).toBe(false);
+		expect(service.fenced("alpha", "hosta")).toBe(true);
 		registry.close();
 	});
 

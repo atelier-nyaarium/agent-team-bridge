@@ -174,6 +174,29 @@ class ConsoleTransportCoordinatorTest {
 	}
 
 	@Test
+	fun welcomeAtMigrationEpochConsumesWithoutTranslation() {
+		val coordinator = newCoordinator()
+		coordinator.setMigrationEpoch(7L)
+		val generation = coordinator.beginSocket()
+		coordinator.onWelcome(generation, 5L, 7L, 0L)
+
+		assertTrue(coordinator.mayConsume(generation))
+		assertFalse(coordinator.awaitingTranslation())
+	}
+
+	@Test
+	fun ackedRefusesWhenTranslationBecomesAwaited() {
+		val coordinator = newCoordinator()
+		val generation = coordinator.beginSocket()
+		coordinator.onWelcome(generation, 1L, 7L, 0L)
+		assertTrue(coordinator.acked(generation, 2L))
+
+		coordinator.setMigrationEpoch(9L)
+
+		assertFalse(coordinator.acked(generation, 3L))
+	}
+
+	@Test
 	fun aSupersededGenerationNeitherConsumesNorCommits() {
 		val coordinator = newCoordinator()
 		coordinator.setMigrationEpoch(7L)

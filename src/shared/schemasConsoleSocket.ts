@@ -42,6 +42,8 @@ export const ConsoleWelcomeFrameSchema = z
 		cursorEpoch: z.number().int().nonnegative(),
 		floor: z.number().int().nonnegative(),
 		versions: z.record(z.string(), z.number().int().nonnegative()),
+		// Zero outside migration.
+		migrationEpoch: z.number().int().nonnegative().optional(),
 	})
 	.meta({ id: "ConsoleWelcomeFrame" });
 

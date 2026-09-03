@@ -110,4 +110,16 @@ class MutationJournalTest {
 		assertTrue(File(dir, "mutation-journal.jsonl").readText().contains("pending"))
 		assertTrue(!File(dir, "mutation-journal.jsonl").readText().contains("acked"))
 	}
+
+	@Test
+	fun deletingARefusedScheduledRecordRemovesItsJournalEntry() {
+		val dir = Files.createTempDirectory("journal-delete").toFile()
+		val journal = MutationJournal(dir)
+		journal.append("op-1", "scheduled_send", JSONObject())
+		journal.transition("op-1", MutationState.REFUSED)
+		journal.remove("op-1")
+		journal.compact()
+
+		assertTrue(MutationJournal(dir).entries("scheduled_send").isEmpty())
+	}
 }

@@ -36,21 +36,32 @@ internal class ConsoleTransportCoordinator(
 
 	fun cursor(): Long = synchronized(lock) { cursor }
 
+	fun cursorEpoch(): Long = synchronized(lock) { cursorEpoch }
+
+	fun migrationEpoch(): Long = synchronized(lock) { migrationEpoch }
+
+	fun awaitingTranslation(): Boolean = synchronized(lock) { awaitingTranslation }
+
 	fun beginSocket(): Long = synchronized(lock) {
 		generation += 1
 		live = generation
 		generation
 	}
 
-	fun onWelcome(gen: Long, cursor: Long, cursorEpoch: Long, floor: Long): ConsoleAdoption =
+	fun onWelcome(gen: Long, cursor: Long, cursorEpoch: Long, floor: Long, migrationEpoch: Long? = null): ConsoleAdoption =
 		synchronized(lock) {
 			if (gen != live) return ConsoleAdoption.Stale
+			if (migrationEpoch != null) {
+				if (migrationEpoch == 0L) awaitingTranslation = false
+				else this.migrationEpoch = migrationEpoch
+			}
 			val lost = (floor - (cursor + 1)).coerceAtLeast(0)
 			// A higher floor means intervening rows are gone.
 			this.cursor = cursor
 			this.cursorEpoch = cursorEpoch
 			// Do not consume until coordinate translation commits.
-			awaitingTranslation = migrationEpoch != 0L && cursorEpoch != migrationEpoch
+			if (migrationEpoch == null) awaitingTranslation = this.migrationEpoch != 0L && cursorEpoch != this.migrationEpoch
+			else if (migrationEpoch != 0L) awaitingTranslation = cursorEpoch != migrationEpoch
 			dropped += lost
 			link = ConsoleLink.SOCKET
 			ConsoleAdoption.Adopted(cursor, cursorEpoch, lost)
@@ -67,6 +78,7 @@ internal class ConsoleTransportCoordinator(
 
 	fun commitTranslation(gen: Long, cursor: Long, epoch: Long): Boolean = synchronized(lock) {
 		if (gen != live) return false
+		// Advance only after durable commit.
 		this.cursor = cursor
 		cursorEpoch = epoch
 		awaitingTranslation = false
@@ -77,8 +89,8 @@ internal class ConsoleTransportCoordinator(
 
 	fun acked(gen: Long, cursor: Long): Boolean = synchronized(lock) {
 		if (gen != live) return false
+		if (awaitingTranslation) return false
 		if (cursor <= this.cursor) return false
-		// Advance only after durable commit.
 		this.cursor = cursor
 		true
 	}

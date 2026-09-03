@@ -1,4 +1,5 @@
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
+import { sign, verify } from "../../shared/crypto.js";
 import { CONVERSATION_ID_RE } from "../../shared/host-op.js";
 import { formatInboxAddress, parseInboxAddress, signRowEnvelope } from "../../shared/schemasInbox.js";
 import type { MigrationExport } from "../../shared/schemasMigration.js";
@@ -13,6 +14,7 @@ export interface ImportStore {
 
 export interface ApplyResult {
 	addresses: string[];
+	blobReferences: Map<string, string[]>;
 }
 
 function opId(address: string, row: { dedupeKey?: string; seq?: number }, oldEpoch: number): string {
@@ -77,7 +79,19 @@ export function applyImport(
 	routerSignPub: string,
 ): ApplyResult {
 	if (!routerSignPriv || !routerSignPub) throw new Error("Router signing identity is required for migration import");
+	try {
+		if (!verify(Buffer.alloc(0), sign(Buffer.alloc(0), routerSignPriv), routerSignPub))
+			throw new Error("Router signing identity mismatch");
+	} catch {
+		throw new Error("Router signing identity mismatch");
+	}
 	const addresses: string[] = [];
+	const blobReferences = new Map<string, string[]>();
+	const addBlobReference = (blobId: string, reference: string) => {
+		const refs = blobReferences.get(blobId) ?? [];
+		refs.push(reference);
+		blobReferences.set(blobId, refs);
+	};
 	const planned = new Map<string, number>();
 	const mailboxPlans: Array<{
 		owner: MigrationExport["owners"][number];
@@ -109,24 +123,60 @@ export function applyImport(
 		}
 	}
 	planned.clear();
+	const manifestIds = new Set((snapshot.blobs ?? []).map((blob) => blob.blobId));
 	for (const owner of snapshot.owners) {
 		for (const item of owner.board) {
 			const entry = item.entry;
+			const attachments = entry.attachments?.filter((attachment) => manifestIds.has(attachment.blobId));
+			for (const attachment of entry.attachments ?? []) {
+				if (!manifestIds.has(attachment.blobId)) {
+					owner.refusals.push({
+						entryId: item.entry.id,
+						sessionId: item.session?.sessionId ?? "",
+						reason: "blob_missing",
+					});
+				}
+			}
+			const sealedNames = item.sealed.names
+				? Object.fromEntries(Object.entries(item.sealed.names).filter(([blobId]) => manifestIds.has(blobId)))
+				: undefined;
 			const clear = {
 				id: entry.id,
 				state: entry.state,
 				rank: entry.rank,
 				...(entry.parent ? { parent: entry.parent } : {}),
 				...(entry.trashedAt !== undefined ? { trashedAt: entry.trashedAt } : {}),
-				...(entry.attachments ? { attachments: entry.attachments } : {}),
+				...(attachments?.length ? { attachments } : {}),
 			};
-			const result = store.put("board.entry", entry.id, null, { clear, sealed: item.sealed });
+			const sealed = {
+				...item.sealed,
+				...(sealedNames && Object.keys(sealedNames).length ? { names: sealedNames } : { names: undefined }),
+			};
+			const result = store.put("board.entry", entry.id, null, { clear, sealed });
 			if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`board write ${result.kind}`);
+			if (result.kind === "ok")
+				for (const attachment of attachments ?? [])
+					addBlobReference(attachment.blobId, `entry:${encodeURIComponent(entry.id)}`);
 		}
 		for (const plan of mailboxPlans.filter((candidate) => candidate.owner === owner)) {
 			const { box, address, expected } = plan;
 			const existing = store.rows(address, 1, Number.MAX_SAFE_INTEGER).map((item) => item.row);
 			for (const item of box.rows) {
+				const rawRow = item.row as Record<string, unknown> & { files?: unknown };
+				const manifestIds = new Set((snapshot.blobs ?? []).map((blob) => blob.blobId));
+				const files = Array.isArray(rawRow.files) ? rawRow.files : [];
+				const keptFiles = files.filter((file) => {
+					const blobId =
+						file && typeof file === "object" ? (file as Record<string, unknown>).blobId : undefined;
+					if (typeof blobId !== "string" || manifestIds.has(blobId)) return true;
+					owner.refusals.push({
+						entryId: `${address}/${item.row.seq}`,
+						sessionId: "",
+						reason: "blob_missing",
+					});
+					return false;
+				});
+				rawRow.files = keptFiles;
 				const incoming = routerRow(
 					item,
 					address,
@@ -138,14 +188,23 @@ export function applyImport(
 					routerSignPub,
 				);
 				const candidate = { ...incoming, seq: item.row.seq, dedupeKey: item.row.dedupeKey };
+				let wrote = false;
 				for (const _row of dedupe(existing, [candidate])) {
-					const result = store.append(address, incoming);
+					const result = store.append(address, { ...incoming, dedupeKey: item.row.dedupeKey });
 					if (
 						result.kind !== "ok" ||
 						(result.seq !== undefined && result.seq !== expected[box.rows.indexOf(item)])
 					)
 						throw new Error(`mailbox write ${result.kind}`);
+					wrote = true;
 				}
+				if (wrote)
+					for (const file of keptFiles) {
+						const blobId =
+							file && typeof file === "object" ? (file as Record<string, unknown>).blobId : undefined;
+						if (typeof blobId === "string" && manifestIds.has(blobId))
+							addBlobReference(blobId, `row:${address}:${expected[box.rows.indexOf(item)]}`);
+					}
 			}
 			const addressResult = store.put(
 				"inbox.address",
@@ -158,12 +217,14 @@ export function applyImport(
 			if (addressResult.kind !== "ok" && addressResult.kind !== "conflict")
 				throw new Error(`address write ${addressResult.kind}`);
 			for (const [device, seq] of box.consumerCursors) {
+				const mapped = box.cursorMap.find((entry) => entry.oldEpoch === box.epoch && entry.oldSeq === seq);
+				if (!mapped) throw new Error(`unmapped consumer cursor: ${address}/${device}/${seq}`);
 				const result = store.put(
 					"consumer",
 					`${address}/${device}`,
 					store.get("consumer", `${address}/${device}`)?.version ?? null,
 					{
-						clear: { address, device, seq },
+						clear: { address, device, epoch: mapped.epoch, seq: mapped.seq },
 					},
 				);
 				if (result.kind !== "ok" && result.kind !== "conflict")
@@ -187,5 +248,5 @@ export function applyImport(
 		const result = store.put("share", id, null, { clear: share });
 		if (result.kind !== "ok" && result.kind !== "conflict") throw new Error(`share write ${result.kind}`);
 	}
-	return { addresses: [...new Set(addresses)] };
+	return { addresses: [...new Set(addresses)], blobReferences };
 }

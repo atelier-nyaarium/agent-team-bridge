@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { MailboxInput } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore, entryBytes } from "../shared/device-mailbox.js";
+import { MIGRATING, setMigrationEpoch } from "../shared/migration-fence.js";
 
 function message(session_id: string, body: string): MailboxInput {
 	return { kind: "message", session_id, from: "team-a", body };
 }
 
 describe("DeviceMailbox", () => {
+	it("refuses append under the migration fence", () => {
+		const box = new DeviceMailbox(1);
+		setMigrationEpoch(7);
+		expect(box.append(message("s1", "blocked"))).toEqual({ outcome: MIGRATING });
+		setMigrationEpoch(null);
+		expect(box.append(message("s1", "landed"))).toMatchObject({ body: "landed" });
+	});
 	it("counts every serialized field in UTF-8 bytes", () => {
 		const input: MailboxInput = {
 			kind: "notice",

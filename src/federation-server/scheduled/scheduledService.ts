@@ -123,9 +123,14 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const input = parsed.data;
 		if (!isComposite(input.target.sessionId)) return envelope(sender, "refused", { reason: "spawn point" });
 		if (input.target.domainId !== domainId) return envelope(sender, "refused", { reason: "domain" });
+		const store = deps.registry.for(domainId);
+		const existing = store.list("scheduled").find((record) => record.clear.opId === input.opId);
+		if (existing) {
+			const record = ScheduledRecordSchema.parse({ ...existing.clear, version: existing.version });
+			return envelope(sender, "accepted", { state: record.state, version: record.version });
+		}
 		for (const file of input.files)
 			if (!deps.referenceHeld.has(domainId, file)) return envelope(sender, "refused", { reason: "file" });
-		const store = deps.registry.for(domainId);
 		const id = recordId(input.target);
 		const current = store.get("scheduled", id);
 		if (current?.clear.state === "firing") return envelope(sender, "conflict", { version: current.version });

@@ -36,6 +36,7 @@ import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewa
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
 import { type InboxService, type PeerRowGate, sessionTargetOf } from "./inbox/inboxService.js";
+import { routerMigrationEpoch } from "./migration/leaseService.js";
 import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { verifyRegistrationClaim } from "./registrationVerification.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
@@ -96,6 +97,8 @@ export class GatewayBridge implements ToolProvider {
 	private peerRowGate: PeerRowGate | null = null;
 	/** Whether a gateway is migration-fenced. */
 	private migrationFenced: ((domainId: string, gatewayId: string) => boolean) | null = null;
+	private migrationReady: ((domainId: string) => boolean) | null = null;
+	private migrationLease: ((domainId: string, gatewayId: string) => void) | null = null;
 	private readonly registeredListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private readonly droppedListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private transport: GatewayTransport | null = null;
@@ -422,6 +425,13 @@ export class GatewayBridge implements ToolProvider {
 				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
 				return { ok: false, error: "stale_incarnation" };
 			}
+			if (
+				routerMigrationEpoch() > 0 &&
+				name === "board_op" &&
+				this.migrationReady &&
+				!this.migrationReady(reg.domainId)
+			)
+				return { outcome: "refused", reason: "migrating" };
 			// Strip caller-supplied identity fields.
 			const { domainId: _domainId, gatewayId: _gatewayId, ...payload } = params;
 			return frameHandler(
@@ -534,6 +544,7 @@ export class GatewayBridge implements ToolProvider {
 			}
 		}
 		this.domainMap(domainId).set(gatewayId, connId);
+		this.migrationLease?.(domainId, gatewayId);
 		// Only admitted identities receive inbox incarnations.
 		const admitted = !!parsed.data.signPub;
 		const incarnation = !admitted ? null : this.inbox ? this.inbox.registerGateway(domainId, gatewayId) : 1;
@@ -550,6 +561,7 @@ export class GatewayBridge implements ToolProvider {
 			...(incarnation !== null ? { incarnation } : {}),
 		};
 		if (domain) reply.domain = domain;
+		if (this.migrationFenced?.(domainId, gatewayId)) reply.migrationFenced = true;
 		if (meta) {
 			reply.domainStatus = meta.status;
 			if (meta.displayName != null) reply.displayName = meta.displayName;
@@ -619,6 +631,14 @@ export class GatewayBridge implements ToolProvider {
 
 	public setMigrationFence(fenced: (domainId: string, gatewayId: string) => boolean): void {
 		this.migrationFenced = fenced;
+	}
+
+	public setMigrationReady(ready: (domainId: string) => boolean): void {
+		this.migrationReady = ready;
+	}
+
+	public setMigrationLease(put: (domainId: string, gatewayId: string) => void): void {
+		this.migrationLease = put;
 	}
 
 	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {

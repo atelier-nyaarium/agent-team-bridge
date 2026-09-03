@@ -965,11 +965,12 @@ export async function startGateway(): Promise<void> {
 		onTeamConnect: (team) => {
 			if (team === "host") pushPresenceWatch(true);
 			const handed = channelDeliveries.drain(team);
+			if (handed === "migrating") return;
 			if (handed > 0) console.log(`[delivery] handed ${handed} held message(s) to ${team}`);
 		},
 		onDeliveryAck: (team, deliveryId) => {
 			void inboxPump?.onChannelDeliveryAck(team, deliveryId);
-			if (channelDeliveries.acknowledge(deliveryId)) {
+			if (channelDeliveries.acknowledge(deliveryId) === true) {
 				console.log(`[delivery] ${team} confirmed ${deliveryId.slice(0, 8)}`);
 			}
 		},

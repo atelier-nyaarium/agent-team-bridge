@@ -193,25 +193,25 @@ export function createConsoleDispatcher({
 					void sendPromise
 						.then(async (res) => {
 							if (res.ok) {
+								const appended = devices.appendIfLive(
+									conversationId,
+									{
+										kind: "sent",
+										session_id: expectedSession,
+										opId,
+										body: op.body,
+										files: op.files,
+									},
+									`sent:${conversationId}:${opId}`,
+								);
+								if (appended === MIGRATING) {
+									evictOpCacheIfStillOwned(conversationId, opId, op.kind, generation);
+									return;
+								}
 								durableOpStore?.markComplete(conversationId, durableOpKey(op.kind, opId), {
 									session_id: expectedSession,
 									status: "sent",
 								});
-								try {
-									devices.appendIfLive(
-										conversationId,
-										{
-											kind: "sent",
-											session_id: expectedSession,
-											opId,
-											body: op.body,
-											files: op.files,
-										},
-										`sent:${conversationId}:${opId}`,
-									);
-								} catch {
-									// Best-effort mirror.
-								}
 								return;
 							}
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
@@ -232,16 +232,13 @@ export function createConsoleDispatcher({
 				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
 				const sendResult = { session_id: json.session_id ?? "", status: json.status ?? "running" };
+				const appended = devices.appendIfLive(
+					conversationId,
+					{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+					`sent:${conversationId}:${opId}`,
+				);
+				if (appended === MIGRATING) throw new Error(MIGRATING);
 				durableOpStore?.markComplete(conversationId, durableOpKey(op.kind, opId), sendResult);
-				try {
-					devices.appendIfLive(
-						conversationId,
-						{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
-						`sent:${conversationId}:${opId}`,
-					);
-				} catch {
-					// Durable completion already recorded.
-				}
 				return sendResult;
 			}
 
@@ -297,6 +294,7 @@ export function createConsoleDispatcher({
 
 				const box = mailboxStore.ensure(ownerId);
 				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
+				if ("outcome" in snap) throw new Error(snap.outcome);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
 
 				const participants = buildPollParticipants({
@@ -319,6 +317,7 @@ export function createConsoleDispatcher({
 					for (const p of participants) if (p.wait) waits.push(p.wait(hold));
 					await Promise.race(waits);
 					snap = box.drain(cursor, op.epoch, conversationId);
+					if ("outcome" in snap) throw new Error(snap.outcome);
 				}
 				if (snap.entries.length > 0 || snap.dropped > 0) {
 					console.log(

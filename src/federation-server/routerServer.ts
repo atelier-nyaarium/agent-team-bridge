@@ -33,6 +33,7 @@ import { WS_MAX_PAYLOAD_BYTES } from "./gatewayTransport.js";
 import { InboxService } from "./inbox/inboxService.js";
 import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
+import { createLeaseService, routerMigrationEpoch } from "./migration/leaseService.js";
 import { decideServe } from "./migration/serveGate.js";
 import { DomainQuota } from "./owner/domainQuota.js";
 import { OwnerQuarantined } from "./owner/ownerStateStore.js";
@@ -78,6 +79,7 @@ export class RouterServer {
 	private readonly ownerOps: OwnerOpIntake;
 	private readonly consoleSockets: ConsoleSockets;
 	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
+	private readonly leases: ReturnType<typeof createLeaseService>;
 
 	public constructor(private readonly params: RouterServerParams) {
 		this.tls = params.tls ?? loadRouterTls(params.dataDir);
@@ -95,6 +97,10 @@ export class RouterServer {
 			ownerOf: (domainId) => params.store.loadDomain(domainId)?.ownerSignPub ?? null,
 			quotaFor: () => new DomainQuota({ dir: params.dataDir, limitBytes: limit }),
 		});
+		this.leases = createLeaseService({
+			registry: this.ownerRegistry,
+			migrationEpoch: () => routerMigrationEpoch(),
+		});
 		this.inbox = new InboxService(this.ownerRegistry, {
 			signPub: params.store.persistedIdentity.sign.pub,
 			signPriv: params.store.persistedIdentity.sign.priv,
@@ -108,6 +114,7 @@ export class RouterServer {
 			inbox: this.inbox,
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			push: (domainId, address, rows) => this.bridge.pushInboxRows(domainId, address, rows),
+			leases: this.leases,
 		});
 		this.bridge = new GatewayBridge({
 			port: params.port,
@@ -183,6 +190,7 @@ export class RouterServer {
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
 			linkEdgeId: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.linkEdgeId(srcDomainId, dstDomainId) ?? null,
+			leases: this.leases,
 		});
 		this.console = new ConsoleSurface({
 			port: params.port,

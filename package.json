@@ -10,10 +10,12 @@
 		"build": "bun run scripts/build.ts",
 		"gateway:cut": "bun run scripts/gateway-cut.ts",
 		"gateway:export": "bun run scripts/gateway-export.ts",
+		"gateway:fence": "bun run scripts/gateway-fence.ts",
 		"lint": "bun scripts/lint.ts",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
 		"router:import": "bun run scripts/router-import.ts",
+		"router:lease": "bun run scripts/router-lease.ts",
 		"check:pinning": "bun run scripts/check-pinning-runtime.ts",
 		"postinstall": "bun scripts/link-lexicon.mjs || node scripts/link-lexicon.mjs"
 	},

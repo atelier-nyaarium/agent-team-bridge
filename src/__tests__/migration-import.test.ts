@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { applyImport } from "../federation-server/migration/applyImport.js";
 import { decideImport, type ImportMarker, markerKey } from "../federation-server/migration/importDecision.js";
 import {
 	IMPORTED,
@@ -26,8 +27,11 @@ import {
 	finishImport,
 	parseSums,
 } from "../federation-server/migration/serveGate.js";
+import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerLock, OwnerLockHeld } from "../federation-server/owner/ownerLock.js";
+import { OwnerStateStore } from "../federation-server/owner/ownerStateStore.js";
 import type { MailboxEntry } from "../shared/console-protocol.js";
+import { generateIdentity } from "../shared/crypto.js";
 import type { MigrationExport } from "../shared/schemasMigration.js";
 
 const marker = (over: Partial<ImportMarker> = {}): ImportMarker => ({
@@ -40,6 +44,13 @@ const marker = (over: Partial<ImportMarker> = {}): ImportMarker => ({
 
 const row = (seq: number, dedupeKey?: string): MailboxEntry =>
 	({ seq, at: 0, kind: "message", session_id: "conv.a.b.c.d", ...(dedupeKey ? { dedupeKey } : {}) }) as MailboxEntry;
+
+const envelope = (text: string) => ({
+	v: 1 as const,
+	epoch: 1,
+	nonce: Buffer.alloc(12).toString("base64"),
+	ciphertext: Buffer.from(text.padEnd(16, ".")).toString("base64"),
+});
 
 const snapshot = (over: Partial<MigrationExport> = {}): MigrationExport =>
 	({
@@ -252,6 +263,59 @@ describe("migration import", () => {
 			expect(`live Router owner lock held by pid ${process.pid}`).toContain(String(process.pid));
 		} finally {
 			lock.stop();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("strips an attachment missing from the blob manifest and records refusal", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-dangling-"));
+		const ownerIdentity = generateIdentity();
+		const routerIdentity = generateIdentity();
+		const entryId = "00000000000000000000000000000001";
+		const store = OwnerStateStore.open({
+			dataDir: dir,
+			key: { domainId: "alpha", ownerSignPub: ownerIdentity.sign.pub },
+			quota: new DomainQuota({ dir, limitBytes: 1_000_000, reserveBytes: 0 }),
+		});
+		try {
+			const value = snapshot({
+				owners: [
+					{
+						ownerId: "owner",
+						domainId: "alpha",
+						ownerSignPub: ownerIdentity.sign.pub,
+						board: [
+							{
+								entry: {
+									id: entryId,
+									state: "open",
+									rank: "m",
+									attachments: [
+										{ blobId: "missing", blobGateway: "gateway", size: 3, mime: "text/plain" },
+									],
+								},
+								sealed: { title: envelope("title") },
+							},
+						],
+						refusals: [],
+						mailboxes: [],
+						readAnchors: {},
+					},
+				],
+				blobs: [],
+			}) as MigrationExport;
+			applyImport(
+				store,
+				value,
+				ownerIdentity.sign.pub,
+				dedupeRows,
+				routerIdentity.sign.priv,
+				routerIdentity.sign.pub,
+			);
+			expect(store.get("board.entry", entryId)?.clear?.attachments).toBeUndefined();
+			expect(store.list("migration").map((record) => record.clear.reason)).toContain("blob_missing");
+		} finally {
+			store.close();
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { MailboxProvenance } from "../shared/device-mailbox.js";
 import type { ConsolePushEntry, FederatedOp } from "../shared/federation-protocol.js";
-import { fenced } from "../shared/migration-fence.js";
+import { fenced, MIGRATING } from "../shared/migration-fence.js";
 import { type NoticeTierWire, pickTiers } from "../shared/notice.js";
 import { type Address, storeKey } from "../shared/session-id.js";
 import type { ChannelFile } from "../shared/types.js";
@@ -28,7 +28,8 @@ export interface DeliverToOwnerOptions {
 	label?: string;
 }
 
-export type DeliverToOwner = (opts: DeliverToOwnerOptions) => boolean;
+export type DeliverToOwnerResult = boolean | typeof MIGRATING;
+export type DeliverToOwner = (opts: DeliverToOwnerOptions) => DeliverToOwnerResult;
 
 export interface ConsolePushOpsDeps {
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -66,10 +67,10 @@ export function createConsolePushOps({
 		origin,
 		resolveMailbox,
 		label = "deliver",
-	}: DeliverToOwnerOptions): boolean {
+	}: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {
 			console.warn(`[${label}] refused: migrating`);
-			return false;
+			return MIGRATING;
 		}
 		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
 			console.warn(`[${label}] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
@@ -90,7 +91,8 @@ export function createConsolePushOps({
 		}
 		if (!mailbox) return false;
 		try {
-			mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
+			const appended = mailbox.append({ ...entry, dedupeKey }, dedupeKey, provenance);
+			if ("outcome" in appended) return MIGRATING;
 		} catch (err) {
 			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
@@ -132,16 +134,15 @@ export function createConsolePushOps({
 	}
 
 	/** Lands relayed entries without fan-out. */
-	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
-		return {
-			delivered: deliverToOwner({
-				entry,
-				dedupeKey,
-				provenance: "message",
-				origin: "relay",
-				label: "console_push",
-			}),
-		};
+	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean; error?: typeof MIGRATING } {
+		const delivered = deliverToOwner({
+			entry,
+			dedupeKey,
+			provenance: "message",
+			origin: "relay",
+			label: "console_push",
+		});
+		return delivered === MIGRATING ? { delivered: false, error: MIGRATING } : { delivered };
 	}
 
 	/** Fans out local entries only. */
@@ -204,7 +205,9 @@ export function createConsolePushOps({
 			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		if (!deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "notify" })) {
+		const delivered = deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "notify" });
+		if (delivered === MIGRATING) return jsonResponse({ error: MIGRATING }, 503);
+		if (!delivered) {
 			return jsonResponse({ error: "failed to store notice" }, 500);
 		}
 		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
@@ -241,7 +244,15 @@ export function createConsolePushOps({
 			actionType,
 			...(payload ? { payload } : {}),
 		};
-		if (!deliverToOwner({ entry, dedupeKey, provenance: "message", origin: "local", label: "plugin_action" })) {
+		const delivered = deliverToOwner({
+			entry,
+			dedupeKey,
+			provenance: "message",
+			origin: "local",
+			label: "plugin_action",
+		});
+		if (delivered === MIGRATING) return jsonResponse({ error: MIGRATING }, 503);
+		if (!delivered) {
 			return jsonResponse({ error: "failed to store plugin action" }, 500);
 		}
 		console.log(`[plugin_action] ${pluginId}:${actionType} from ${from} delivered to owner ${owner}`);

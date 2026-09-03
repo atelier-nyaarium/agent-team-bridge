@@ -3,6 +3,7 @@ import { capFifo } from "../../shared/cap-fifo.js";
 import { type ConsoleReplyBody, MAX_OPS_PER_CONVERSATION, type MailboxInput } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
+import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import type { CapabilityStore } from "./capabilityStore.js";
@@ -75,10 +76,15 @@ export function createConsoleDevices({
 	 * resurrect a torn-down install. This owns WHETHER the device may deliver;
 	 * the funnel owns the append and the convergence relay. Gated on device
 	 * liveness, so a rename (same conversation) still delivers. */
-	function appendIfLive(conversationId: string, entry: MailboxInput, dedupeKey?: string): void {
+	function appendIfLive(
+		conversationId: string,
+		entry: MailboxInput,
+		dedupeKey?: string,
+	): undefined | typeof MIGRATING {
+		if (fenced()) return MIGRATING;
 		const ownerId = deviceOwner.get(conversationId);
 		if (!ownerId || !bindings.has(conversationId)) return;
-		deliver({
+		const delivered = deliver({
 			entry: entry as ConsolePushEntry,
 			// The funnel never mints a key, so the no-key callers (the late send-failure reply)
 			// get their per-delivery identity here.
@@ -88,6 +94,7 @@ export function createConsoleDevices({
 			resolveMailbox: () => mailboxStore.get(ownerId),
 			label: "console-device",
 		});
+		return delivered ? undefined : fenced() ? MIGRATING : undefined;
 	}
 
 	function assertValidIdentity(device: string, conversationId: string): void {
@@ -181,7 +188,7 @@ export function createConsoleDevices({
 					// inbox the index no longer tracks.
 					resolveMailbox: () => (bindings.has(conversationId) ? mailboxStore.ensure(ownerId) : undefined),
 					label: "console-peer",
-				}),
+				}) === true,
 			device,
 			conversationId,
 			conversationId,

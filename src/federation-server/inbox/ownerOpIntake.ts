@@ -12,6 +12,7 @@ import {
 	parseInboxAddress,
 	verifyOwnerOp,
 } from "../../shared/schemasInbox.js";
+import { type LeaseService, routerMigrationEpoch } from "../migration/leaseService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { InboxService } from "./inboxService.js";
 
@@ -22,6 +23,7 @@ export interface OwnerOpIntakeParams {
 	) => { ownerSignPub: string; admissions: SignedAdmission[]; revocations: SignedRevocation[] } | null;
 	push: (domainId: string, address: string, rows: InboxRow[]) => boolean;
 	now?: () => number;
+	leases?: Pick<LeaseService, "ready">;
 }
 
 /** Verified, admitted, fresh operation. */
@@ -29,6 +31,17 @@ export type OwnerOpHandler = (op: OwnerOp, value: Record<string, unknown>) => un
 type DurableNonceStore = Pick<InboxService, "ownerOpNonce" | "acceptOwnerOpNonce">;
 
 const BUILT_IN_KINDS = new Set(["deliver", "consumer_register", "inbox_read", "inbox_advance", "op_result"]);
+export const OWNER_STATE_MUTATION_KINDS = new Set([
+	"board_write",
+	"schedule_send",
+	"schedule_cancel",
+	"cross_domain_share",
+	"cross_domain_unshare",
+	"cross_domain_unlink",
+	"report_read",
+	"capabilities_report",
+	"deliver",
+]);
 
 /** Handler error for a `refused` result. */
 export class OwnerOpRefused extends Error {
@@ -82,6 +95,10 @@ export class OwnerOpIntake {
 		this.nonces.set(nonceKey, { at: op.at });
 		try {
 			const result = await this.dispatch(op, refused);
+			if (result && typeof result === "object" && (result as Record<string, unknown>).reason === "migrating") {
+				this.nonces.delete(nonceKey);
+				return result;
+			}
 			if (
 				op.op.kind !== "deliver" &&
 				nonceStore.acceptOwnerOpNonce &&
@@ -105,6 +122,9 @@ export class OwnerOpIntake {
 
 	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown | Promise<unknown> {
 		const value = op.op;
+		if (routerMigrationEpoch() > 0 && OWNER_STATE_MUTATION_KINDS.has(String(value.kind))) {
+			if (!this.params.leases?.ready(op.domainId)) return refused("migrating");
+		}
 		const handler = this.handlers.get(String(value.kind));
 		if (handler) return handler(op, value);
 		switch (value.kind) {

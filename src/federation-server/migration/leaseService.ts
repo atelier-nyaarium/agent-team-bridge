@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
 	authorityReady,
 	fenceOnReconnect,
@@ -6,10 +8,23 @@ import {
 } from "../../shared/migration-lease.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 
-/** Zero disables migration. */
+/** Zero disables migration. NaN is malformed. */
 export function routerMigrationEpoch(): number {
-	const raw = Number.parseInt(process.env.ROUTER_MIGRATION_EPOCH ?? "", 10);
-	return Number.isFinite(raw) && raw > 0 ? raw : 0;
+	const file = path.join(process.env.DATA_DIR || "/app/data", "migration-epoch");
+	if (fs.existsSync(file)) {
+		try {
+			const raw = fs.readFileSync(file, "utf8").trim();
+			if (!/^[1-9][0-9]*$/.test(raw)) return Number.NaN;
+			const epoch = Number(raw);
+			return Number.isSafeInteger(epoch) ? epoch : Number.NaN;
+		} catch {
+			return Number.NaN;
+		}
+	}
+	const raw = process.env.ROUTER_MIGRATION_EPOCH ?? "";
+	if (!/^[1-9][0-9]*$/.test(raw)) return 0;
+	const epoch = Number(raw);
+	return Number.isSafeInteger(epoch) ? epoch : 0;
 }
 
 export interface LeaseDeps {
@@ -56,12 +71,17 @@ export function createLeaseService(deps: LeaseDeps) {
 		},
 
 		ready(domainId: string): boolean {
-			return authorityReady(list(domainId), deps.migrationEpoch());
+			const epoch = deps.migrationEpoch();
+			return Number.isFinite(epoch) && authorityReady(list(domainId), epoch);
 		},
 
 		fenced(domainId: string, gatewayId: string): boolean {
-			if (deps.migrationEpoch() === 0) return false;
-			return fenceOnReconnect(read(domainId, gatewayId), deps.migrationEpoch());
+			const epoch = deps.migrationEpoch();
+			if (Number.isNaN(epoch)) return true;
+			if (epoch === 0) return false;
+			return fenceOnReconnect(read(domainId, gatewayId), epoch);
 		},
 	};
 }
+
+export type LeaseService = ReturnType<typeof createLeaseService>;

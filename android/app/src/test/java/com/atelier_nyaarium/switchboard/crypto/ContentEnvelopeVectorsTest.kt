@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.Base64
+import com.atelier_nyaarium.switchboard.board.scheduledBodyAadKind
 
 class ContentEnvelopeVectorsTest {
 	private val json = Json { ignoreUnknownKeys = true }
@@ -48,6 +49,9 @@ class ContentEnvelopeVectorsTest {
 				epoch,
 				value["kind"]!!.jsonPrimitive.content,
 			)
+			if (value["plaintextUtf8"]!!.jsonPrimitive.content == "fixture scheduled inbox.body") {
+				assertEquals("inbox.body\nconversation\nscheduled-op", scheduledBodyAadKind("conversation", "scheduled-op"))
+			}
 			val envelope = ContentEnvelope(
 				v = 1L,
 				epoch = epoch.toLong(),

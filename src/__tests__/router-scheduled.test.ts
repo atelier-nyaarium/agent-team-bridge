@@ -238,6 +238,27 @@ describe("scheduled service", () => {
 		registry.close();
 	});
 
+	it("answers an existing schedule by opId without replacing it", () => {
+		const { service, registry, rows, held, released } = make();
+		const value = {
+			kind: "schedule_send" as const,
+			target,
+			fireAt: 200,
+			opId: "op-1",
+			files: ["blob-1"],
+			body,
+		};
+		service.schedule("domain-a", { conversationId: "conversation", device: "phone", opId: "op-1" }, value);
+		expect(
+			service.schedule("domain-a", { conversationId: "conversation-2", device: "phone-b", opId: "op-1" }, value),
+		).toMatchObject({ outcome: "accepted", state: "armed", version: 1 });
+		expect(service.list("domain-a")).toHaveLength(1);
+		expect(rows).toHaveLength(1);
+		expect(held).toHaveLength(1);
+		expect(released).toEqual([]);
+		registry.close();
+	});
+
 	it("keeps a file carried across an edit held", () => {
 		const { service, registry, released } = make();
 		service.schedule(
@@ -358,6 +379,25 @@ describe("scheduled service", () => {
 		expect(service.list("domain-a")[0]?.state).toBe("fired");
 		expect(rows).toHaveLength(2);
 		expect(rows[1]).toMatchObject({ body: { opId: "op-1", outcome: "sent", seq: 7, body } });
+		registry.close();
+	});
+
+	it("answers a fired schedule by its existing opId", async () => {
+		const { service, registry, rows } = make();
+		const value = {
+			kind: "schedule_send" as const,
+			target,
+			fireAt: 200,
+			opId: "op-1",
+			files: [],
+			body,
+		};
+		service.schedule("domain-a", { conversationId: "conversation", device: "phone", opId: "op-1" }, value);
+		await service.fire("domain-a", target);
+		expect(
+			service.schedule("domain-a", { conversationId: "conversation-2", device: "phone-b", opId: "op-1" }, value),
+		).toMatchObject({ outcome: "accepted", state: "fired", version: 3 });
+		expect(rows).toHaveLength(2);
 		registry.close();
 	});
 

@@ -531,6 +531,7 @@ data class ConsoleWelcomeFrame(
 	val cursorEpoch: Long,
 	val floor: Long,
 	val versions: JsonObject,
+	val migrationEpoch: Long? = null,
 )
 
 @Serializable

@@ -13,6 +13,7 @@ internal class ConsoleSocketDriver(
 	private val onUnreachable: () -> Unit = {},
 	private val visible: () -> Boolean = { true },
 	private val reconnect: (Long) -> Unit = {},
+	private val onWelcome: (Long, com.atelier_nyaarium.switchboard.proto.ConsoleWelcomeFrame) -> Unit = { _, _ -> },
 ) {
 	private val lock = Any()
 
@@ -53,6 +54,14 @@ internal class ConsoleSocketDriver(
 		retire(open.second)
 	}
 
+	internal fun commitTranslation(gen: Long, cursor: Long, epoch: Long): Boolean {
+		if (!coordinator.commitTranslation(gen, cursor, epoch)) return false
+		val open = synchronized(lock) { client?.takeIf { it.first == gen }?.second } ?: return true
+		open.setCursorEpoch(epoch)
+		open.ack(cursor)
+		return true
+	}
+
 	private fun forget(gen: Long) {
 		synchronized(lock) { if (client?.first == gen) client = null }
 	}
@@ -64,16 +73,18 @@ internal class ConsoleSocketDriver(
 	private inner class Listener(private val gen: Long) : ConsoleSocketListener {
 		@Volatile private var welcomed = false
 
-		// Stale generations cannot consume, apply, or acknowledge.
 		override fun onFrame(frame: ConsoleSocketFrame) {
+			// Stale generations cannot consume, apply, or acknowledge.
 			coordinator.onActivity(visible())
 			when (frame) {
 				is ConsoleSocketFrame.Welcome -> {
 					val v = frame.value
-					val adopted = coordinator.onWelcome(gen, v.cursor, v.cursorEpoch, v.floor)
+					val consumer = socketOf()?.mode != "planes"
+					val adopted = coordinator.onWelcome(gen, v.cursor, v.cursorEpoch, v.floor, if (consumer) v.migrationEpoch else 0L)
 					if (adopted !is ConsoleAdoption.Adopted) return
 						welcomed = true
 						closeStreak = 0
+					onWelcome(gen, v)
 					if (adopted.dropped > 0) onGap(adopted.dropped)
 				}
 					is ConsoleSocketFrame.InboxRows -> {
@@ -85,7 +96,10 @@ internal class ConsoleSocketDriver(
 						if (coordinator.owns(gen) && socketOf()?.mode == "planes") return
 					if (!coordinator.mayConsume(gen)) return
 					onRows(v.rows, v.cursor)
-					if (coordinator.acked(gen, v.cursor)) socketOf()?.ack(v.cursor)
+					if (coordinator.acked(gen, v.cursor)) {
+						socketOf()?.setCursorEpoch(coordinator.cursorEpoch())
+						socketOf()?.ack(v.cursor)
+					}
 				}
 				is ConsoleSocketFrame.Plane -> {
 					if (!coordinator.owns(gen)) return

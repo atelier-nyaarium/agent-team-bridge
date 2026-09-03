@@ -1,6 +1,15 @@
 import crypto from "node:crypto";
-import { decodeB64, seal, sign, unseal, verify } from "./crypto.js";
-import type { ContentEnvelope, ContentKind, KeyEnvelope, KeyReceipt, KeyRequest } from "./schemasContentKey.js";
+import { decodeB64, seal, unseal } from "./crypto.js";
+import type { ContentEnvelope, ContentKind, KeyEnvelope } from "./schemasContentKey.js";
+
+export {
+	keyReceiptSigningBytes,
+	keyRequestSigningBytes,
+	signKeyReceipt,
+	signKeyRequest,
+	verifyKeyReceipt,
+	verifyKeyRequest,
+} from "./key-delivery.js";
 
 const CONTENT_SALT = Buffer.from("switchboard-content-salt-v1", "utf8");
 const CONTENT_INFO_PREFIX = "switchboard-content-v1\n";
@@ -110,34 +119,4 @@ export function unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: string):
 	const key = body.subarray(prefix.length);
 	if (key.length !== 32) throw new Error("content key must be 32 bytes");
 	return { epoch: env.epoch, key: Buffer.from(key) };
-}
-
-export function keyRequestSigningBytes(r: KeyRequest): Buffer {
-	return Buffer.from(
-		["KEYREQUEST_V1", r.domainId, r.requesterSignPub, r.epochs.join(","), String(r.at), r.nonce].join("\n"),
-		"utf8",
-	);
-}
-
-export function keyReceiptSigningBytes(r: KeyReceipt): Buffer {
-	return Buffer.from(
-		["KEYRECEIPT_V1", r.domainId, r.recipientSignPub, String(r.epoch), String(r.at), r.nonce].join("\n"),
-		"utf8",
-	);
-}
-
-export function signKeyRequest(request: KeyRequest, signPrivB64: string): KeyRequest {
-	return { ...request, signature: sign(keyRequestSigningBytes(request), signPrivB64) };
-}
-
-export function verifyKeyRequest(request: KeyRequest): boolean {
-	return verify(keyRequestSigningBytes(request), request.signature, request.requesterSignPub);
-}
-
-export function signKeyReceipt(receipt: KeyReceipt, signPrivB64: string): KeyReceipt {
-	return { ...receipt, signature: sign(keyReceiptSigningBytes(receipt), signPrivB64) };
-}
-
-export function verifyKeyReceipt(receipt: KeyReceipt): boolean {
-	return verify(keyReceiptSigningBytes(receipt), receipt.signature, receipt.recipientSignPub);
 }

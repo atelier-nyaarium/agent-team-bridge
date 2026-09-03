@@ -59,6 +59,16 @@ internal class MutationJournal(
 	@Synchronized
 	fun pending(): List<MutationEntry> = entries.values.filter { it.state == MutationState.PENDING }
 
+	@Synchronized
+	fun entries(kind: String): List<MutationEntry> = entries.values.filter { it.kind == kind }
+
+	@Synchronized
+	fun remove(opId: String) {
+		if (entries.remove(opId) == null) return
+		replayed.remove(opId)
+		compact()
+	}
+
 	/** Replay PENDING and SENT entries before live sends. */
 	@Synchronized
 	fun claimForReplay(): List<MutationEntry> {
@@ -71,15 +81,15 @@ internal class MutationJournal(
 	@Synchronized
 	fun compact() {
 		val keep = entries.values.filterNot {
-			it.state == MutationState.ACKED || it.state == MutationState.REFUSED || it.state == MutationState.CONFLICT
+			it.state == MutationState.ACKED || it.state == MutationState.CONFLICT
 		}
 		val temp = File(filesDir, "$fileName.tmp")
 		try {
 			filesDir.mkdirs()
 			FileOutputStream(temp).use { output ->
 				keep.forEach { output.write(line(it).toByteArray(Charsets.UTF_8)) }
-				// Fsync before replacement.
-				output.fd.sync()
+					// Fsync before replacement.
+					output.fd.sync()
 			}
 				replaceJournal(temp)
 				entries.clear()
@@ -126,6 +136,7 @@ internal class MutationJournal(
 			try {
 				FileOutputStream(temp, false).use { output ->
 					if (readable.isNotEmpty()) output.write((readable.joinToString("\n") + "\n").toByteArray(Charsets.UTF_8))
+					// Fsync before acknowledging the commit.
 					output.fd.sync()
 				}
 				replaceJournal(temp)
@@ -148,8 +159,7 @@ internal class MutationJournal(
 			filesDir.mkdirs()
 			FileOutputStream(file, true).use { output ->
 				output.write(line(entry).toByteArray(Charsets.UTF_8))
-				// Fsync before acknowledging the commit.
-				output.fd.sync()
+					output.fd.sync()
 			}
 		} catch (error: Throwable) {
 			throw MutationCommitException(error)

@@ -25,6 +25,9 @@ export interface ExportSources {
 	pending(ownerId: string): unknown[];
 	readAnchors(ownerId: string): Record<string, unknown>;
 	shares(): unknown[];
+	ownerInfo?(ownerId: string): { domainId: string; ownerSignPub: string } | null;
+	blobIds?(): string[];
+	blobBytes?(blobId: string): Buffer | null;
 	now(): number;
 }
 
@@ -148,6 +151,7 @@ export function buildExport(sources: ExportSources, epoch: number): MigrationExp
 		}
 		return {
 			ownerId,
+			...(sources.ownerInfo ? (sources.ownerInfo(ownerId) ?? {}) : {}),
 			board,
 			refusals,
 			mailboxes: mailboxSources.map((box) => {
@@ -179,7 +183,17 @@ export function buildExport(sources: ExportSources, epoch: number): MigrationExp
 		gatewayId: sources.gatewayId,
 		takenAt: sources.now(),
 		owners,
-		shares: sources.shares(),
+		shares: sources.shares().map((share) => ({
+			...(share as Record<string, unknown>),
+			generation: Number((share as Record<string, unknown>).generation ?? 0),
+		})) as MigrationExport["shares"],
+		...(sources.blobIds
+			? {
+					blobs: sources
+						.blobIds()
+						.map((blobId) => ({ blobId, size: 0, ciphertextDigest: "", referencedBy: [] })),
+				}
+			: {}),
 	};
 }
 

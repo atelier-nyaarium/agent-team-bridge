@@ -1150,14 +1150,29 @@ After the Router is live and the key backfill has confirmed every member, before
 - Import: board envelopes and attachment bytes; mailbox rows, cursors, and epochs with an explicit
   old-to-new mapping; pending deliveries; read anchors; share state with its TTLs. Verify counts,
   hashes, parent and rank invariants, attachment manifests.
-- Phone self-migration on first hub connect: scheduled sends and read anchors enter the journal
-  from the local records and upload, idempotent by opId, the Router answering the existing state
-  for one it already holds; the local alarm is cancelled and the record tombstoned only after the
-  Router accepts. Drafts and goals stay where they are.
+- Phone self-migration on the first accepted hub welcome that carries a migration epoch, once per
+  epoch by a journal marker: the cursor translation is journaled before it commits, then
+  scheduled sends upload under their own opId with the body sealed under the scheduled binding,
+  the Router answering `accepted` with the existing state for one it already holds; the local
+  alarm is cancelled and the record tombstoned only after the Router accepts. Read anchors upload
+  idempotently without a journal entry, since normal operation re-reports them. Drafts and goals
+  stay where they are.
 - Each gateway holds a migration lease: active, offline, retired, or excluded. Router authority
-  for owner state turns on when every active gateway reports complete; an offline gateway is
-  fenced and reconciles its epoch on reconnect before it may write.
+  for owner state turns on when every active gateway's export has been imported; the import
+  stamps that gateway's lease complete. An offline gateway is fenced on reconnect until its own
+  export is imported; retired and excluded gateways stay fenced.
 - No deletion until every record has a verified disposition.
+
+### Bug Classes
+
+**Mechanism: the migration fence at gateway write boundaries.** Defect class: a writer the fence
+does not cover, found by audit rather than by the residue test. Round one fenced the stores'
+mutators; round two found pending-delivery acknowledge, fail, sweep, and the mailbox drain and
+cursor advance; round three found the mailbox append itself and two callers that swallowed the
+typed refusal. The residue derivation reads each store's persist calls, so a mutator that persists
+through a sibling or a caller that drops a typed answer stays invisible. Candidate for
+`architecture-fan-out`: derive fenced writers from the persisted fields, and type every
+`migrating` answer so a caller cannot drop it without a compile error.
 
 ## Phase 9 - Cutover and removal
 
@@ -1168,6 +1183,12 @@ This gates marketplace auto-update from installing a plugin ahead of its gateway
 - No rollback. Fix forward; Phase 0's snapshots are the only safety net. Once the gate has passed
   everywhere, delete the old Router console surface and every old gateway path in one commit. Any
   shim that let the two coexist carries a remove-by comment.
+- Phone cutover: the console socket opens as a consumer (the `mode` default leaves `planes`),
+  which registers the owner-inbox consumer and runs the Phase 8 cursor translation on the first
+  welcome behind the migration epoch; the background poll drains that same consumer through
+  `inbox_read` under the coordinator's one consumer identity, and the gateway mailbox poll goes.
+  Until then the socket is planes-only and self-migration runs from any accepted welcome that
+  carries a migration epoch.
 - Vault questionaire resumes on the new substrate.
 
 # Specs
@@ -1605,10 +1626,12 @@ answers `migrating` (retryable), guarded at the writer rather than its callers: 
 `BoardStore.mutate`, `DurableOpStore.markInFlight`, `ReadAnchors.report`,
 `CrossDomainShareState.share` and `unshare`, and `gatewayRelay.handleOp` inbound.
 `capabilityStore` is not fenced: capabilities are not migrated, phones re-report on first hub
-connect. One guard function, called at each. In-flight console ops settle or are failed typed
-after 60 seconds; the persist timer, the trash sweep, and the share sweep stop; every store
-`saveChecked`. The residue test enumerates writers, not routes, so a new caller cannot bypass
-the fence.
+connect. One guard function, called at each, including the mailbox drain and pending-delivery
+acknowledge, fail, and sweep. In-flight console ops are dropped after 60 seconds, since the store
+keeps a marker and not the request; the persist timer, the trash sweep, and the share sweep write
+nothing under the fence; the shutdown persist is checked. `gateway:fence` raises and lowers the
+file. The residue test derives the writers from each store's persist calls, so a new writer
+cannot bypass the fence.
 
 Cut: tar of `DATA_DIR` plus `SHA256SUMS` at epoch E, taken with the fence up.
 

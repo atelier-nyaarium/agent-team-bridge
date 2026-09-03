@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import { fenced, MIGRATING } from "../shared/migration-fence.js";
 import type { PendingDelivery, PendingDeliveryStore } from "../shared/pending-delivery-store.js";
 import { getAllActiveWs, type TeamRegistry, type WsData } from "./wsTypes.js";
 
@@ -7,7 +8,7 @@ import { getAllActiveWs, type TeamRegistry, type WsData } from "./wsTypes.js";
 
 /** What became of a message handed to [ChannelDeliveryCoordinator.accept]. All three are answers the
  * sender can act on; none of them loses the message silently. */
-export type AcceptOutcome = "delivered" | "queued" | "refused";
+export type AcceptOutcome = "delivered" | "queued" | "refused" | "migrating";
 
 export interface ChannelDeliveryDeps {
 	store: PendingDeliveryStore;
@@ -36,23 +37,28 @@ export class ChannelDeliveryCoordinator {
 	/** Deliver now if the session can take it, hold it if not. */
 	accept(delivery: PendingDelivery): AcceptOutcome {
 		const outcome = this.deps.store.enqueue(delivery);
+		if (outcome === "migrating") return "migrating";
 		if (outcome === "refused") return "refused";
 		// A duplicate is already held; offering it again is what a retry of a lost reply wants.
-		return this.offer(delivery) ? "delivered" : "queued";
+		const offered = this.offer(delivery);
+		return offered === MIGRATING ? MIGRATING : offered ? "delivered" : "queued";
 	}
 
 	/** Hand everything waiting for a team to it, oldest first. Returns how many were offered. */
-	drain(team: string): number {
+	drain(team: string): number | "migrating" {
+		if (fenced()) return MIGRATING;
 		let offered = 0;
 		// A copy: offering can retire rows for a legacy peer, which mutates the queue underneath.
 		for (const delivery of [...this.deps.store.listForTeam(team)]) {
-			if (this.offer(delivery)) offered++;
+			const result = this.offer(delivery);
+			if (result === MIGRATING) return MIGRATING;
+			if (result) offered++;
 		}
 		return offered;
 	}
 
 	/** The receiver confirmed it emitted this one. */
-	acknowledge(deliveryId: string): boolean {
+	acknowledge(deliveryId: string): boolean | "migrating" {
 		return this.deps.store.acknowledge(deliveryId);
 	}
 
@@ -61,7 +67,7 @@ export class ChannelDeliveryCoordinator {
 	 *
 	 * False when nothing took it, which leaves the row queued for the next drain.
 	 */
-	private offer(delivery: PendingDelivery): boolean {
+	private offer(delivery: PendingDelivery): boolean | typeof MIGRATING {
 		const subs = this.deps.registry.get(delivery.team);
 		const sockets = subs ? getAllActiveWs(subs) : [];
 		if (sockets.length === 0) return false;
@@ -76,7 +82,10 @@ export class ChannelDeliveryCoordinator {
 
 		// Nobody here can acknowledge, so holding the row would re-offer it on every reconnect and
 		// duplicate the message. Retiring now gives an old plugin precisely today's behaviour.
-		if (!sockets.some(canAcknowledge)) this.deps.store.acknowledge(delivery.deliveryId);
+		if (!sockets.some(canAcknowledge)) {
+			const acknowledged = this.deps.store.acknowledge(delivery.deliveryId);
+			if (acknowledged === "migrating") return MIGRATING;
+		}
 		return true;
 	}
 }

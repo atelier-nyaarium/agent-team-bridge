@@ -123,6 +123,10 @@ internal class ConsoleSocketClient(
 		socket?.send(wireJson.encodeToString(ConsoleAckFrame.serializer(), ConsoleAckFrame(incarnation = at, cursor = cursor, cursorEpoch = epoch)))
 	}
 
+	fun setCursorEpoch(epoch: Long) {
+		cursorEpoch = epoch
+	}
+
 	fun ping() {
 		val at = incarnation ?: error("console socket is not welcomed")
 		socket?.send(wireJson.encodeToString(ConsolePingFrame.serializer(), ConsolePingFrame(incarnation = at)))

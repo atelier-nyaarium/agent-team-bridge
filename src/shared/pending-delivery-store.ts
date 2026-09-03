@@ -71,7 +71,8 @@ export class PendingDeliveryStore {
 		return this.byTeam.get(team) ?? [];
 	}
 
-	acknowledge(deliveryId: string): boolean {
+	acknowledge(deliveryId: string): boolean | typeof MIGRATING {
+		if (fenced()) return MIGRATING;
 		if (!this.ids.delete(deliveryId)) return false;
 		for (const [team, queue] of this.byTeam) {
 			const at = queue.findIndex((d) => d.deliveryId === deliveryId);
@@ -84,7 +85,8 @@ export class PendingDeliveryStore {
 		return true;
 	}
 
-	failTeam(team: string): PendingDelivery[] {
+	failTeam(team: string): PendingDelivery[] | typeof MIGRATING {
+		if (fenced()) return MIGRATING;
 		const queue = this.byTeam.get(team) ?? [];
 		if (queue.length === 0) return [];
 		this.byTeam.delete(team);
@@ -93,7 +95,8 @@ export class PendingDeliveryStore {
 		return queue;
 	}
 
-	sweep(): PendingDelivery[] {
+	sweep(): PendingDelivery[] | typeof MIGRATING {
+		if (fenced()) return MIGRATING;
 		const cutoff = this.now() - this.ttlMs;
 		const expired: PendingDelivery[] = [];
 		for (const [team, queue] of [...this.byTeam]) {

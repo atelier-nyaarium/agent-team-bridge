@@ -39,6 +39,7 @@ export interface OwnerServicesDeps {
 	linkEdgeId: (srcDomainId: string, dstDomainId: string) => string | null;
 	/** Owner rows wait for the next read. */
 	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget">;
+	leases?: ReturnType<typeof createLeaseService>;
 }
 
 const MAX_TIMER_MS = 2_147_483_647;
@@ -129,8 +130,13 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	};
 	inbox.setPeerGate(peerGate);
 	bridge.setPeerRowGate(peerGate);
-	const leases = createLeaseService({ registry, migrationEpoch: () => routerMigrationEpoch() });
+	const leases = deps.leases ?? createLeaseService({ registry, migrationEpoch: () => routerMigrationEpoch() });
 	bridge.setMigrationFence((domainId, gatewayId) => leases.fenced(domainId, gatewayId));
+	bridge.setMigrationReady((domainId) => leases.ready(domainId));
+	bridge.setMigrationLease((domainId, gatewayId) => {
+		const epoch = routerMigrationEpoch();
+		if (epoch > 0 && leases.read(domainId, gatewayId)?.epoch !== epoch) leases.put(domainId, gatewayId, "active");
+	});
 	inbox.onRowRetired((domainId, addressText, row) => {
 		const address = parseInboxAddress(addressText);
 		if (address?.kind !== "session") return;

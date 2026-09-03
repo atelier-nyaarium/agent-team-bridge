@@ -1,6 +1,6 @@
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS, resolveAdmitted } from "../shared/admission.js";
 import { sha256Hex } from "../shared/canonical-json.js";
-import { verifyKeyReceipt, verifyKeyRequest } from "../shared/content-envelope.js";
+import { verifyKeyReceipt, verifyKeyRequest } from "../shared/key-delivery.js";
 import {
 	type KeyGrant,
 	KeyGrantOpSchema,

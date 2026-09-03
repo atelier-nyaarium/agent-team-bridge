@@ -3,6 +3,8 @@ import { CrossDomainShareTargetSchema } from "./schemas.js";
 
 export type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
 
+export const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Local session offer keyed by session and audience. The console seal authenticates it. */
 const ShareRecordSchema = z.object({
 	sessionTarget: z.string().min(1),

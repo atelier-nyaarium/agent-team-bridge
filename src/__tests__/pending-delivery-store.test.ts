@@ -68,7 +68,7 @@ describe("PendingDeliveryStore", () => {
 		const s = new PendingDeliveryStore();
 		s.enqueue(delivery("d1"));
 		s.enqueue(delivery("d2"));
-		expect(s.failTeam("proj.alpha").map((d) => d.deliveryId)).toEqual(["d1", "d2"]);
+		expect((s.failTeam("proj.alpha") as PendingDelivery[]).map((d) => d.deliveryId)).toEqual(["d1", "d2"]);
 		expect(s.size).toBe(0);
 		// And the ids are free again, so the same message could legitimately be re-accepted later.
 		expect(s.enqueue(delivery("d1"))).toBe("enqueued");
@@ -80,7 +80,7 @@ describe("PendingDeliveryStore", () => {
 		s.enqueue(delivery("old", "proj.alpha", 1_000));
 		now = 2_000;
 		s.enqueue(delivery("fresh", "proj.alpha", 2_000));
-		expect(s.sweep().map((d) => d.deliveryId)).toEqual(["old"]);
+		expect((s.sweep() as PendingDelivery[]).map((d) => d.deliveryId)).toEqual(["old"]);
 		expect(s.listForTeam("proj.alpha").map((d) => d.deliveryId)).toEqual(["fresh"]);
 	});
 

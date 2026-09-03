@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type ConsoleSocket, createConsoleSockets } from "../federation-server/console/consoleSockets.js";
+import {
+	type ConsoleSocket,
+	type ConsoleSocketsDeps,
+	createConsoleSockets,
+} from "../federation-server/console/consoleSockets.js";
 import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
@@ -30,7 +34,7 @@ function socket(): FakeSocket {
 	};
 }
 
-function setup() {
+function setup(overrides: Partial<ConsoleSocketsDeps> = {}) {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "console-sockets-"));
 	roots.push(dataDir);
 	let now = Date.now();
@@ -79,6 +83,7 @@ function setup() {
 		planeVersions: () => ({ board: 4 }),
 		now: () => now,
 		admittedConsoleSigners: () => admitted.map((item) => item.admission.signPub),
+		...overrides,
 	});
 	return {
 		consoleIdentity,
@@ -366,6 +371,32 @@ describe("console sockets", () => {
 			),
 		).toEqual([next]);
 		expect(client.frames.at(-1)).toMatchObject({ type: "inbox_rows", rows: [next] });
+		fixture.registry.close();
+	});
+
+	it("drains with the acknowledged cursor epoch", async () => {
+		const readEpochs: number[] = [];
+		const advanceCalls: Array<{ cursor: number; cursorEpoch: number }> = [];
+		const fixture = setup({
+			registerConsumer: () => ({ cursor: 0, cursorEpoch: 4 }),
+			readOwner: (...args) => {
+				readEpochs.push(args[4] as number);
+				return [];
+			},
+			advanceCursor: (_domainId, _signerSignPub, cursor, cursorEpoch) => {
+				advanceCalls.push({ cursor, cursorEpoch });
+				return { outcome: "ok" };
+			},
+		});
+		const client = socket();
+		fixture.hub.open(client);
+		await fixture.hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture) }));
+		const incarnation = (client.frames[0] as { incarnation: number }).incarnation;
+
+		await fixture.hub.message(client, JSON.stringify({ type: "ack", incarnation, cursor: 7, cursorEpoch: 9 }));
+
+		expect(advanceCalls).toEqual([{ cursor: 7, cursorEpoch: 9 }]);
+		expect(readEpochs).toEqual([4, 9]);
 		fixture.registry.close();
 	});
 
