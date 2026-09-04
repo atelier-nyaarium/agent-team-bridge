@@ -151,6 +151,122 @@ authorization rule or a cryptographic one?
   it; the phone enters it through a value op to that gateway; other consoles see the catalogue
   only. A lost gateway loses its secrets. No console sync for values.
 
+A: A. Domain-wide, sealed shared, envelope allowlist enforced by the gateway.
+
+> "A it is"
+
+Recommendation reason: B defends only against a gateway that already holds the Domain key for the
+board and every message body, at the cost of a second key system. C gives up console sync and
+backup for the values, which the substrate made free.
+
+### Assumption A2 - One record kind, a note is an entry without a value
+
+`vault_entry` on the Router's owner state, CAS on revision like the board. Clear envelope: id,
+revision, tombstone. Sealed: public title and description, private title and description, value,
+the gateway allowlist. At least one title required. Public fields are the only ones ever served
+to an agent; a note is an entry with no value, so an agent can find it and never read it. The
+Router sees the envelope only.
+
+### Assumption A3 - Decisions and windows are gateway-local
+
+An approval names a session, and sessions belong to one gateway. The gateway records the decision
+and holds any window under `DATA_DIR`, durable across restarts, never on the Router. A second
+gateway asks again.
+
+## Question 2 - What is the unit of approval, and what does a window cover?
+
+Q: An operation arrives as the agent's argv plus a secret handle plus a session (`vault_run`), or
+as the caller's cmdline plus the program (askpass). The brief names it. What does one grant cover?
+
+- A) Exact operation. The identical argv or cmdline, same secret, same session. Every variation
+  re-prompts. A window only saves re-typing the same command.
+- B) Program plus target. The shape is the program basename plus its first non-flag argument:
+  `ssh deploy@prod`, `sudo apt`, `docker login registry`. A grant covers any argv sharing that
+  shape with the same secret and session. `curl` never matches an `ssh` grant. The gateway
+  derives the shape and the brief shows it.
+- C) Secret plus session. The parent spec read literally: unlock the secret for the session for a
+  window. Arbitrary use inside the window. The threat model 2 hole.
+
+A: Three grant tiers, one per button. Once is A-shaped: this exact operation, this call. 30
+minutes is B-shaped: program plus target, same secret, same session. Whole session is C-shaped:
+the secret unlocked for the session, labeled YOLO in the brief and on the session, ending with the
+session or at the settings cap, whichever comes first.
+
+> "once, 30 minutes, or whole session for those Yolo moments."
+
+Recommendation reason (B, for the timed tier): a loop of `ssh` and `scp` to one host stops
+nagging without handing the token to anything else.
+
+## Question 3 - May an agent write to the vault?
+
+Q: A tool call is transcript as much as a tool result, so an agent can never pass a value in.
+May it still create entries another way?
+
+- A) Phone-only writes. Agents search public fields and use values. Every create, edit, and
+  delete happens on the phone. The Router refuses gateway writes on the vault kind.
+- B) Create by capture. `vault_run` gains a capture mode: the child's stdout becomes the value of
+  a NEW entry, scrubbed from the tool result, the agent names the public title. Edits and deletes
+  stay phone-only. The owner gets a notice per created entry. The Router allows gateway creates
+  and refuses gateway updates and deletes on the clear envelope.
+- C) Nothing. Agents use values only; the vault is not even searchable by agents, and every
+  `vault_run` names an entry the owner handed the session in chat.
+
+A: B. Create by capture. A captured entry opens on the phone as editable, so the owner can clean
+the stdout crust off by hand. Capture trims one trailing newline and nothing else.
+
+> "B sounds good. and of course should show on phone as a editable so you can manually clean the
+> STDOUT crust off."
+
+Recommendation reason: "generate and store" is the case, an agent minting a database password
+that must reach the compose file without ever entering the transcript.
+
+### Assumption A4 - Requests come from this Domain only
+
+A request names a session on a gateway in the entry's allowlist, or the askpass helper on such a
+gateway's host. A cross-Domain friend session never sees the vault, never searches it, and never
+requests from it.
+
+## Question 4 - May the phone supply a value that is not stored?
+
+Q: The bonus feature: an agent runs `sudo` and the owner types the password. Under the design the
+request reaches the phone through the askpass helper. Must the password be a stored entry first,
+or may the owner type a one-shot value into the request?
+
+- A) Both request kinds. "Approve use of entry X for operation Y", and "supply a value for
+  operation Y" where the owner types it on the phone, with a Save as entry toggle. The typed
+  value travels sealed to the gateway like an approval and reaches the process the same way.
+- B) Stored entries only. The sudo password is a vault entry or the request is refused. One
+  request kind, one code path.
+- C) Typed values only on the askpass path. `vault_run` always names an entry; the helper may
+  take a typed value.
+
+A: A. Both request kinds, with a Save as entry toggle on the typed one.
+
+> "A"
+
+Recommendation reason: it is the bonus feature as written, and the Save toggle is how entries get
+made from the phone without opening the vault screen first.
+
+### Assumption A5 - Agents address entries by id after a public search
+
+`vault_search` answers ids with public title and description only. `vault_run` names an entry by
+id. No tool answers a private field or a value.
+
+### Assumption A6 - The askpass helper holds its own token
+
+Minted by the gateway at helper install, stored 0600 under the owner's home, revocable from the
+phone. Never `HOST_WS_TOKEN`.
+
+## Question 5 - Which approvals need biometrics?
+
+Q: The app has a biometric lock (`Biometric.promptUnlock`, the Security settings toggle) and gates
+device revocation with it. Which vault actions prompt?
+
+- A) YOLO and reveal. The whole-session grant prompts, and revealing or editing a stored value on
+  the vault screen prompts. Once and 30 minutes are a tap; a typed value is typing already.
+- B) Every approval prompts.
+- C) Nothing beyond the app's existing lock.
+
 (pending)
 
 # Plan
