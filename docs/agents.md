@@ -35,6 +35,12 @@ leaves it held.
 tracker-parsed frames, misattributes or interrupts live work. Reconciliation treats an unconfirmed
 turn as `recovering`.
 
+**A silent turn is interrupted, then its child retired.** 120 s without a frame from its thread and
+the daemon sends `turn/interrupt`; a second silent window releases the whole target, which ends every
+other agent's turn on that child. Both steps are logged on the daemon pane, as are a frame arriving
+more than 60 s after the last one and any interrupted terminal, so an interruption nobody asked for
+is attributable there.
+
 **Bookkeeping names the record, never only the id.** `mutate` checks identity before its request and
 never after it; an awaited reply can resume after that record was replaced. Retire, load, and poison
 refuse or drop by record identity. Retirements move the record to the back, and eviction leaves
