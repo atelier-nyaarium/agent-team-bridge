@@ -2,6 +2,9 @@ package com.atelier_nyaarium.switchboard
 
 import kotlinx.coroutines.flow.update
 
+internal fun sandboxHomeGateway(firstTeam: String?, current: String): String =
+	firstTeam?.split(".")?.getOrNull(1) ?: current
+
 internal interface SandboxSeeder {
 	fun seedSandbox(
 		teams: List<Team>,
@@ -26,7 +29,7 @@ internal class ChatRepositorySandboxSeeder(private val repo: ChatRepository) : S
 		admittedGateways: List<String>,
 	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
-		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { repo.homeGatewayId = it }
+		repo.homeGatewayId = sandboxHomeGateway(teams.firstOrNull()?.name, repo.homeGatewayId)
 		if (repo.store.load() == null) repo.store.save(SANDBOX_PROVISIONING)
 		this.dirs = dirs
 		repo._state.update { s ->

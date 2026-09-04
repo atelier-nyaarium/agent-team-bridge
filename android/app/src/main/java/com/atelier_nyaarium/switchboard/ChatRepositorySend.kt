@@ -239,16 +239,15 @@ internal fun ChatRepository.admitPicked(uris: List<Uri>, bucket: String): Pair<L
 	val dir = File(Attachments.root(filesDir), bucket)
 	var running = 0L
 	for ((i, uri) in uris.withIndex()) {
-		when (val a = OutgoingFiles.admit(contentResolver, uri, File(dir, "staged-$i"))) {
+		when (val a = attachmentHost.admit(uri, File(dir, "staged-$i"))) {
 			is Admission.Refused -> {
-				staged.forEach { it.source.delete() }
+				attachmentHost.cleanup(staged)
 				return emptyList<OutgoingFile>() to a
 			}
 			is Admission.Granted -> {
 				running += a.file.size
 				if (running > ChatRepository.MAX_OUTGOING_BYTES) {
-					staged.forEach { it.source.delete() }
-					a.file.source.delete()
+					attachmentHost.cleanup(staged + a.file)
 					return emptyList<OutgoingFile>() to
 						Admission.Refused(a.file.name, Admission.Reason.OVER_TRANSPORT, running, ChatRepository.MAX_OUTGOING_BYTES)
 				}

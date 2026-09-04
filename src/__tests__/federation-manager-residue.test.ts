@@ -17,7 +17,7 @@ const ANDROID_SRC = path.join(
 	"switchboard",
 );
 
-/** Allowed callers. */
+/** Allowed callers. The repository's own extracted hosts count as the repository. */
 const ALLOWED = [
 	"ChatRepository.kt",
 	"DeviceApprovalOps.kt",
@@ -26,6 +26,7 @@ const ALLOWED = [
 	"GatewayEnrollment.kt",
 	"OwnerFacts.kt",
 	"OwnerOps.kt",
+	"RepositoryProvisioningHost.kt",
 	"TrustOps.kt",
 ];
 

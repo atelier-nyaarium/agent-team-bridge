@@ -6,6 +6,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+internal fun selectHomeGateway(current: String, admitted: List<String>): String =
+	current.takeIf { it in admitted } ?: admitted.firstOrNull().orEmpty()
+
 internal interface RepositoryProvisioningHost {
 	var client: ConsoleClient?
 	fun client(): ConsoleClient
@@ -40,7 +43,7 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 
 	override fun refreshAdmittedGateways() {
 		val ids = repo.sessions.keyringGateways()
-		val nextHome = repo.homeGatewayId.takeIf { it in ids } ?: ids.firstOrNull().orEmpty()
+		val nextHome = selectHomeGateway(repo.homeGatewayId, ids)
 		if (nextHome != repo.homeGatewayId) {
 			repo.homeGatewayId = nextHome
 			repo.store.saveGatewayId(nextHome)
@@ -48,7 +51,7 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 		if (ids != repo._state.value.admittedGateways || nextHome != repo._state.value.homeGatewayId)
 			repo._state.update { it.copy(admittedGateways = ids, homeGatewayId = nextHome) }
 		// Remove revoked Gateway columns.
-		repo.board.retainGateways(ids)
+		repo.boardOps.boardRetainGateways(ids)
 	}
 
 	override fun localDomain(): String = repo.confirmedDomainId() ?: ""

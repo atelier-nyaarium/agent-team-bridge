@@ -86,6 +86,8 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	fun boardDismissRefusal(refusal: BoardRefusal) = repo.board.dismissRefusal(refusal)
 
+	fun boardRetainGateways(admitted: Collection<String>) = repo.board.retainGateways(admitted)
+
 	val boardRefusals get() = repo.board.refusals
 
 	val boardRevision get() = repo.board.revision
@@ -149,15 +151,12 @@ internal class BoardOps(private val repo: ChatRepository) {
 		}
 		// Limit count, not size.
 		if (keep.size + staged.size > Protocol.BOARD_ATTACHMENTS_MAX) {
-			staged.forEach { it.source.delete() }
+			repo.attachmentHost.cleanup(staged)
 			repo._state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
 			return
 		}
-		val client = repo.client ?: run {
-			staged.forEach { it.source.delete() }
-			repo._state.update { it.copy(error = "Connect before adding attachments") }
-			return
-		}
+		if (repo.attachmentHost.rejectIfUnconnected(staged)) return
+		val client = repo.client ?: return
 		val sources = mutableMapOf<String, String>()
 		val added = staged.mapNotNull { picked ->
 			// Land under the blob name.

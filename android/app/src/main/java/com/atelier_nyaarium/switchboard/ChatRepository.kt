@@ -125,6 +125,7 @@ class ChatRepository(
 		}.getOrNull()
 
 	internal val provisioningHost: RepositoryProvisioningHost = ChatRepositoryProvisioningHost(this)
+	internal val attachmentHost: AttachmentHost = ChatRepositoryAttachmentHost(this)
 	internal var client: ConsoleClient?
 		get() = provisioningHost.client
 		set(value) { provisioningHost.client = value }
@@ -500,6 +501,7 @@ class ChatRepository(
 	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
 	internal val presence = PresenceOps(presenceHost)
 	internal val sessions = SessionOps(this)
+	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	@Volatile internal var sttsClient: SttsClient? = null

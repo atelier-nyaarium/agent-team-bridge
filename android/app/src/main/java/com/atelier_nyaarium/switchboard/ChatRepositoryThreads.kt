@@ -6,7 +6,6 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 internal fun Target.isCloseTabTarget(): Boolean = this is Address
@@ -126,70 +125,5 @@ fun ChatRepository.setLabel(team: String, name: String) {
 	persistence.persistLabels(labels)
 }
 
-/** Rename a session: set it locally for immediate feedback, then push it to the gateway so the
- * label persists server-side, and reconcile the local label to whatever the gateway actually
- * applied (it sanitizes and per-spawn dedups, so "foo" may land as "foo-2"). A blank name clears
- * the local label only, unconditionally - like closeTab's own local-only mutation, clearing never
- * needs the network or an ownership check. On an unreachable/older gateway the optimistic local
- * label stays - the gateway is presumed to apply it eventually. The optimistic non-blank write is
- * withheld for a target that does not resolve to THIS Gateway's own Domain (closeTab permits
- * qualified remote closes; wakeSession routes to the target Gateway).
- * A federated peer's session can coincidentally share this Gateway's id, so this matches the
- * gateway's own rename_session guard, which checks both) -
- * a federated peer's session can otherwise pass the board's own, more permissive Rename-menu gates
- * and flash a label that was never actually applied anywhere; the round trip is still attempted
- * regardless (a second, reactive line of defense - the server's own rejection is the backstop even
- * if this check has a gap). An outright rejection (a successful round trip that still reports
- * renamed:false) reverts the optimistic write, but ONLY if the label still holds exactly what this
- * call wrote - a fresher server value landing via withFreshTeams, or a newer overlapping rename,
- * must never be clobbered by a stale rejection arriving late, and the transient message mirrors that
- * same guard (no revert happened -> nothing to report). A foreign target is always refused server-side
- * as a thrown error (not a clean renamed:false reply - there is no local record to even consider
- * renaming), so it is treated the same as an explicit rejection instead of the quiet
- * presumed-eventually-applied handling a genuinely unreachable LOCAL gateway gets - otherwise that
- * case is a silent no-op indistinguishable from success. */
-suspend fun ChatRepository.rename(team: String, name: String) {
-	val trimmed = name.trim()
-	if (trimmed.isEmpty()) {
-		setLabel(team, "")
-		return
-	}
-	val t = runCatching { parseTarget(team, localDomain(), _state.value.homeGatewayId) }.getOrNull()
-	val isLocal = t is Address && t.isLocalTo(localDomain(), setOf(_state.value.homeGatewayId))
-	val previous = _state.value.labels[team]
-	if (isLocal) setLabel(team, trimmed)
-	val reply = withContext(Dispatchers.IO) {
-		client().renameSession(team, trimmed)
-	}
-	val applied = reply.takeIf { it.renamed }?.sessionLabel
-	if (applied != null && applied != trimmed) {
-		// A confirmed, authoritative server value always wins over "nothing was protecting the
-		// label to begin with" (isLocal false - no optimistic write was ever made to clobber).
-		// When there WAS an optimistic write, only overwrite it while it still holds exactly what
-		// this call itself set - never stomp a fresher value a concurrent self-heal or a later
-		// rename already landed in the meantime.
-		val next = _state.updateAndGet { s ->
-			if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
-		}
-		persistence.persistLabels(next.labels)
-	} else if (reply.renamed == false) {
-		var reverted = true
-		if (isLocal) {
-			val before = _state.value.labels[team]
-			val next = _state.updateAndGet { s ->
-				if (s.labels[team] == trimmed) {
-					s.copy(labels = if (previous != null) s.labels + (team to previous) else s.labels - team)
-				} else {
-					s
-				}
-			}
-			persistence.persistLabels(next.labels)
-			reverted = next.labels[team] != before
-		}
-		if (reverted) {
-			val message = "Could not rename to \"$trimmed\""
-			_state.update { it.copy(transientMessages = it.transientMessages + message) }
-		}
-	}
-	presence.refreshAfterAction()
-}
+/** The rules live on [RenameOps.rename]. */
+suspend fun ChatRepository.rename(team: String, name: String) = renameOps.rename(team, name)
