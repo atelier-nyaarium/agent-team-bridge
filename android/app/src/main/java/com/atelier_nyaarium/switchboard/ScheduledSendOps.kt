@@ -153,14 +153,12 @@ internal class ScheduledSendOps(private val repo: ChatRepository) {
 		if (repo._state.value.scheduledSends[team]?.opId != rec.opId) return null
 		val alreadyFired = repo._state.value.threads[team]?.any { it.opId == rec.opId } == true
 		if (!alreadyFired) {
-			val echoId = repo.append(
-				team,
-				Message(true, rec.text, System.currentTimeMillis(), files = rec.fileRefs, status = "pending", opId = rec.opId),
-			)
+			val plan = composeScheduledSend(rec, System.currentTimeMillis())
+			val echoId = repo.append(team, plan.echo)
 				// The live row now owns these attachments.
 				clearScheduledSendRecord(team)
-			val (picked, _) = repo.rebuildFiles(rec.fileRefs)
-			repo.deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
+			val (picked, _) = repo.rebuildFiles(plan.fileRefs)
+			repo.deliver(team, echoId, plan.text, picked, plan.opId, false, plan.targetDomainId)
 			if (repo._state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
 						// Journal failures beyond the alarm retry.
 						val journaled = journalPendingSend(team, rec)

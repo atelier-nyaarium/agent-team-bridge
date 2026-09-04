@@ -1,0 +1,27 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleClient.inboxRead",
+	"case": "inbox_read",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "inbox_read",
+			"fromSeq": 1,
+			"cursorEpoch": 0,
+			"limit": 100
+		},
+		"opId": "inbox_read-op",
+		"nonce": "dHCRdZfUkxTDowkxjO9C2PAH"
+	},
+	"expect": {
+		"outcome": "cursor_stale"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"inbox_read-op\",\"at\":1757000000000,\"nonce\":\"dHCRdZfUkxTDowkxjO9C2PAH\",\"op\":{\"kind\":\"inbox_read\",\"fromSeq\":1,\"cursorEpoch\":0,\"limit\":100},\"signature\":\"R57lO10M7eYThf/dNuANIuOljjFlI8qdZZ8eRWPHTCS76nGclJxzRjI4QraOyL8MzCuT1YkAc/9zCDYOJqdqDw==\"}}"
+	}
+}

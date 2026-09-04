@@ -1446,6 +1446,68 @@ data class ReadAnchorsResult(
 )
 
 @Serializable
+data class WireFrame(
+	val name: String,
+	val params: JsonObject,
+)
+
+@Serializable
+data class WireRequest(
+	val method: String,
+	val path: String,
+	val headers: JsonObject,
+	val body: String,
+)
+
+@Serializable
+data class WirePhoneDecode(
+	val decodeAs: String,
+	val open: JsonElement? = null,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("producer")
+sealed class WireFixture {
+	@Serializable
+	@SerialName("ts")
+	data class Ts(
+		val composer: String,
+		val case: String,
+		val clock: Long,
+		val inputs: JsonObject,
+		val expect: JsonObject,
+		val frame: WireFrame,
+		val phone: WirePhoneDecode? = null,
+	) : WireFixture()
+
+	@Serializable
+	@SerialName("kotlin")
+	data class Kotlin(
+		val composer: String,
+		val case: String,
+		val clock: Long,
+		val inputs: JsonObject,
+		val expect: JsonObject,
+		val request: WireRequest,
+	) : WireFixture()
+}
+
+@Serializable
+data class WireFixtureEntry(
+	val file: String,
+	val composer: String,
+	val case: String,
+	val peer: String,
+)
+
+@Serializable
+data class WireManifest(
+	val _comment: String,
+	val fixtures: List<WireFixtureEntry>,
+)
+
+@Serializable
 data class RefFileMeta(
 	val refPath: String,
 	val segments: List<RefSegmentMeta>? = null,

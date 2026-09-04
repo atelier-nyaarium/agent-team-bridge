@@ -4,14 +4,14 @@
 	"case": "apiReachable",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {
+		"ok": true,
+		"protocolVersion": 2
+	},
 	"request": {
 		"method": "GET",
 		"path": "/health",
 		"headers": {},
 		"body": ""
-	},
-	"expect": {
-		"ok": true,
-		"protocolVersion": 2
 	}
 }

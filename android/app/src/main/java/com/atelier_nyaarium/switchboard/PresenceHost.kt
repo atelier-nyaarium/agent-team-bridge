@@ -10,7 +10,7 @@ internal interface PresenceHost {
 
 	suspend fun <T> withDrainMutex(block: suspend () -> T): T
 	suspend fun resetPlaneCursors()
-	suspend fun reportRead(team: String, epoch: Long, seq: Long)
+	suspend fun reportRead(team: String, anchor: ReadAnchor)
 	suspend fun fetchPresencePlanes(): com.atelier_nyaarium.switchboard.proto.PlanesReadResult?
 	fun fetchConnectedGateways(): List<String>?
 
@@ -31,10 +31,10 @@ internal class ChatRepositoryPresenceHost(private val repo: ChatRepository) : Pr
 		set(value) { repo.store.displayName = value }
 	override val forgottenUntil get() = repo.forgottenUntil
 
-	override suspend fun <T> withDrainMutex(block: suspend () -> T): T = repo.drain.withDrainMutex(block)
+	override suspend fun <T> withDrainMutex(block: suspend () -> T): T = repo.drainGate.withDrainMutex(block)
 	override suspend fun resetPlaneCursors() = repo.drain.resetPlaneCursors()
-	override suspend fun reportRead(team: String, epoch: Long, seq: Long) {
-		repo.client().reportRead(team, epoch, seq)
+	override suspend fun reportRead(team: String, anchor: ReadAnchor) {
+		repo.client().reportRead(team, anchor)
 	}
 	override suspend fun fetchPresencePlanes() = repo.client().planesRead(kotlinx.serialization.json.buildJsonObject {})
 	override fun fetchConnectedGateways(): List<String>? = repo.client().fetchConnectedGateways()

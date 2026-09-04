@@ -4,6 +4,9 @@
 	"case": "reach",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {
+		"domainId": "fixture-domain"
+	},
 	"request": {
 		"method": "POST",
 		"path": "/console",
@@ -11,8 +14,5 @@
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
 		"body": "{\"reach\":{\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\"}}"
-	},
-	"expect": {
-		"domainId": "fixture-domain"
 	}
 }

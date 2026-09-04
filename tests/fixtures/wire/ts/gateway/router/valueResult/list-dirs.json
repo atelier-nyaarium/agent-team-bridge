@@ -10,6 +10,10 @@
 			"path": "/home/fixture"
 		}
 	},
+	"expect": {
+		"settled": false,
+		"reason": "no_waiter"
+	},
 	"frame": {
 		"name": "value_result",
 		"params": {
@@ -30,9 +34,5 @@
 			"as": "ConsoleListDirsResult",
 			"aadKind": "op.result\nlist-dirs-op"
 		}
-	},
-	"expect": {
-		"settled": false,
-		"reason": "no_waiter"
 	}
 }

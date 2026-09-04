@@ -10,6 +10,9 @@
 		"gatewayId": "laptop",
 		"domainId": "fixture-domain"
 	},
+	"expect": {
+		"ok": true
+	},
 	"frame": {
 		"name": "gateway_register",
 		"params": {
@@ -23,8 +26,5 @@
 			"proofAt": 1757000000000,
 			"proofNonce": "C9cRk1+lbA1n7Ow1xjTsnnET"
 		}
-	},
-	"expect": {
-		"ok": true
 	}
 }

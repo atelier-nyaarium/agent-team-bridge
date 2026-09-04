@@ -33,11 +33,13 @@ class OwnerOpFieldRulesTest {
 
 		val identity = Crypto.generateIdentity()
 		val ownerOps = OwnerOps(
-			repo = null,
 			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
 			consoleIdentity = { identity },
 			provisioningConversationId = { fields.getJSONObject("conversationId").getString("valid") },
 			provisioningDevice = { fields.getJSONObject("device").getString("valid") },
+			now = { 1L },
+			newNonce = { randomNonceB64() },
+			newOpId = { "field-rules-op" },
 		)
 		repeat(300) {
 			val ownerOp = ownerOps.sign(buildJsonObject { put("kind", "representative") })
@@ -57,11 +59,13 @@ class OwnerOpFieldRulesTest {
 		val fields = fixture().getJSONObject("fields")
 		val identity = Crypto.generateIdentity()
 		val ownerOp = OwnerOps(
-			repo = null,
 			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
 			consoleIdentity = { identity },
 			provisioningConversationId = { fields.getJSONObject("conversationId").getString("valid") },
 			provisioningDevice = { fields.getJSONObject("device").getString("violation") },
+			now = { 1L },
+			newNonce = { randomNonceB64() },
+			newOpId = { "device-violation-op" },
 		).sign(buildJsonObject { put("kind", "representative") }) ?: error("OwnerOps.sign returned null")
 		assertFalse(matches(fields.getJSONObject("device"), ownerOp.device))
 	}
@@ -71,11 +75,13 @@ class OwnerOpFieldRulesTest {
 		val fields = fixture().getJSONObject("fields")
 		val identity = Crypto.generateIdentity()
 		val ownerOp = OwnerOps(
-			repo = null,
 			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
 			consoleIdentity = { identity },
 			provisioningConversationId = { fields.getJSONObject("conversationId").getString("violation") },
 			provisioningDevice = { fields.getJSONObject("device").getString("valid") },
+			now = { 1L },
+			newNonce = { randomNonceB64() },
+			newOpId = { "conversation-violation-op" },
 		).sign(buildJsonObject { put("kind", "representative") }) ?: error("OwnerOps.sign returned null")
 		assertFalse(matches(fields.getJSONObject("conversationId"), ownerOp.conversationId))
 	}

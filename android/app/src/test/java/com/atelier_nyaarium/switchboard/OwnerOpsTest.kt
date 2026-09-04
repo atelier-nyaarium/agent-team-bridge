@@ -27,7 +27,6 @@ class OwnerOpsTest {
 		val inputs = json.getValue("inputs").jsonObject
 		val op = inputs.getValue("op").jsonObject
 		val ownerOps = OwnerOps(
-			repo = null,
 			confirmedDomainId = { identityRoot.getValue("domain").jsonObject.getValue("id").jsonPrimitive.content },
 			consoleIdentity = { identity },
 			provisioningConversationId = { identityRoot.getValue("console").jsonObject.getValue("conversationId").jsonPrimitive.content },

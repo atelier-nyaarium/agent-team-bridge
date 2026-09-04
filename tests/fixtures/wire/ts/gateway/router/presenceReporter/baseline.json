@@ -4,6 +4,9 @@
 	"case": "baseline",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {
+		"ok": true
+	},
 	"frame": {
 		"name": "presence_baseline",
 		"params": {
@@ -24,8 +27,5 @@
 				"hostSpawns": []
 			}
 		}
-	},
-	"expect": {
-		"ok": true
 	}
 }

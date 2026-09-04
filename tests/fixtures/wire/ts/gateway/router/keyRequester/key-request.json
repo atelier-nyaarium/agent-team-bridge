@@ -8,6 +8,9 @@
 			"nonce": "yT7bODrdKDPmpLfVspFkjx2R"
 		}
 	},
+	"expect": {
+		"outcome": "accepted"
+	},
 	"frame": {
 		"name": "key_request",
 		"params": {
@@ -21,8 +24,5 @@
 				"signature": "l/u2FIf2j7d7pb2O0m4Yh/fysM5b/YejqSF1M1jx8nogxQ1cs8hWguqROYQAB6Pw3Xxdaq7B7eWkRXH4ptPTCQ=="
 			}
 		}
-	},
-	"expect": {
-		"outcome": "accepted"
 	}
 }

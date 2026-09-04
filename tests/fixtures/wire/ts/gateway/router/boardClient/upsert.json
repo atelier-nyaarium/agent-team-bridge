@@ -13,6 +13,9 @@
 		"title": "Wire the phone",
 		"body": "Sealed body"
 	},
+	"expect": {
+		"outcome": "applied"
+	},
 	"frame": {
 		"name": "board_op",
 		"params": {
@@ -49,8 +52,5 @@
 			"title": "board.title\nt-fixture",
 			"body": "board.body\nt-fixture"
 		}
-	},
-	"expect": {
-		"outcome": "applied"
 	}
 }

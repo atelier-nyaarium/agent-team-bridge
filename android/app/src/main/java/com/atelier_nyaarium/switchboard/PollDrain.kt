@@ -13,14 +13,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.coroutineContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -131,7 +127,7 @@ private fun advanceFloor(answer: kotlinx.serialization.json.JsonElement?, fallba
 	(answer as? JsonObject)?.get("floor")?.jsonPrimitive?.content?.toLongOrNull() ?: fallback
 
 /** Four plane cursors and drain-gate subscribers. */
-internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision {
+internal class PollDrain(private val host: DrainHost) : ClearsOnReprovision {
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// Scope for loop-bound work.
@@ -147,19 +143,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	@Volatile private var knownPlaneVersions: Map<String, Long> = emptyMap()
 
-	private val drainMutex = Mutex()
-
-	/** Marks the coroutine holding the drain mutex. */
-	private object DrainHolder : CoroutineContext.Element {
-		override val key: CoroutineContext.Key<*> get() = Key
-
-		object Key : CoroutineContext.Key<DrainHolder>
-	}
-
-	/** One drain at a time, whichever transport carried the payload; the holder may re-enter. */
-	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T =
-		if (coroutineContext[DrainHolder.Key] != null) block()
-		else drainMutex.withLock { withContext(DrainHolder) { block() } }
+	internal suspend fun <T> withDrainMutex(block: suspend () -> T): T = host.drainGate.withDrainMutex(block)
 
 	/** Synchronous, pre-commit delivery. */
 	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
@@ -211,29 +195,48 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 
 	internal fun mayApplyPlane(name: String, version: Long): Boolean = version > (knownPlaneVersions[name] ?: 0L)
 
+	/** Welcome carries versions only. */
+	internal suspend fun applyWelcomePlanes(welcome: JsonObject) {
+		withDrainMutex {
+			val newer = welcome.any { (name, value) -> mayApplyPlane(name, value.jsonPrimitive.content.toLongOrNull() ?: 0L) }
+			if (!newer) return@withDrainMutex
+			host.readPlanes(knownPlanesJson())?.forEach { plane ->
+				if (!mayApplyPlane(plane.name, plane.version)) return@forEach
+				if (host.applyPlane(plane.name, plane.payload)) notePlane(plane.name, plane.version)
+			}
+		}
+	}
+
+	internal suspend fun applyPlane(name: String, version: Long, payload: JsonElement?) {
+		withDrainMutex {
+			if (mayApplyPlane(name, version) && host.applyPlane(name, payload)) notePlane(name, version)
+		}
+	}
+
 	internal suspend fun processEntries(entries: List<MailboxEntry>, cursor: Long, epoch: Long, dropped: Long) {
-		val advanced = repo.mailboxSync.advance(SyncPollResult(entries.map { Drained(it) }, cursor, epoch, dropped))
-		repo._state.update { it.copy(gap = advanced.gap) }
-		if (advanced.fresh.isNotEmpty()) repo.pushback.onCommsActivity(System.currentTimeMillis(), repo.isVisible)
+		val advanced = host.advanceMailbox(SyncPollResult(entries.map { Drained(it) }, cursor, epoch, dropped))
+		host.setGap(advanced.gap)
+		if (advanced.fresh.isNotEmpty()) host.markCommsActivity(System.currentTimeMillis())
 		val burst = mutableMapOf<String, MutableList<Message>>()
-		val deviceAddr = repo.thisDeviceAddress()
+		val deviceAddr = host.thisDeviceAddress()
 		for (drained in advanced.fresh) {
 			val entry = drained.entry
 			val team = if (entry.kind == "notice") {
-				(parseStoreKey(entry.session_id) as? SessionKey.Notice)?.sender?.canonical ?: entry.from?.let(repo::fromCanonical)
+				(parseStoreKey(entry.session_id) as? SessionKey.Notice)?.sender?.canonical ?: entry.from?.let(host::fromCanonical)
 			} else {
 				when (val key = parseStoreKey(entry.session_id)) {
 					is SessionKey.Conv -> if (deviceAddr != null && key.address == deviceAddr) {
-						entry.from?.let(repo::fromCanonical) ?: key.address.canonical
+						entry.from?.let(host::fromCanonical) ?: key.address.canonical
 					} else key.address.canonical
-					else -> entry.from?.let(repo::fromCanonical)
+					else -> entry.from?.let(host::fromCanonical)
 				}
 			}
 			if (team == null) continue
-			val files = Attachments.decode(entry.files)
+			val files = host.decodeAttachments(entry.files)
 			val body = entry.body.orEmpty()
 			if (entry.kind == "sent") {
-				repo.reconcileSent(team, Message(true, body, entry.at, files = files, opId = entry.opId, epoch = epoch, seq = entry.seq))
+				val echo = Message(true, body, entry.at, files = files, opId = entry.opId, epoch = epoch, seq = entry.seq)
+				host.reconcileSent(team, echo)
 				continue
 			}
 			if (entry.kind == "plugin_action") {
@@ -246,14 +249,14 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 				continue
 			}
 			if (body.isEmpty() && files.isEmpty() && entry.status == null) continue
-			val attribution = resolveMessageAttribution(entry.kind, entry.from, entry.to, team, repo::fromCanonical)
+			val attribution = resolveMessageAttribution(entry.kind, entry.from, entry.to, team, host::fromCanonical)
 			val message = Message(
 				false, body, entry.at, files = files, status = entry.status,
 				title = entry.title.tierOrNull(), summary = entry.summary.tierOrNull(), fullSpoken = entry.fullSpoken.tierOrNull(),
 				epoch = epoch, seq = entry.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
-				arrivedVisible = repo.isVisible && !resumeBacklogPending,
+				arrivedVisible = host.isVisible && !resumeBacklogPending,
 			)
-			if (repo.appendInbound(team, message) {
+			if (host.appendInbound(team, message) {
 				inboundSubscribers.forEach { subscriber ->
 					runCatching { subscriber.onMessage(team, message) }
 						.onFailure { DebugLog.log("Drain", "inbound subscriber failed seq=${entry.seq}") }
@@ -265,39 +268,33 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		for ((team, messages) in burst) {
 			val lastAgent = messages.lastOrNull { !it.fromMe }
 			val scope = pollScope
-			val autoTier = repo.playback.autoPlayTier(repo.sttsAutoPlay)
-			val followed = team in repo._state.value.openTabs
-			val eligible = scope != null && lastAgent != null && repo.sttsReady() && followed &&
-				(repo.sttsAutoGen || autoTier != null)
+			val autoTier = host.autoPlayTier()
+			val followed = team in host.state.value.openTabs
+			val eligible = scope != null && lastAgent != null && host.isSttsReady() && followed &&
+				(host.autoGenerate || autoTier != null)
 			val queueable = if (!eligible) emptyList() else messages.filter { !it.fromMe }
 				.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
 			if (eligible && queueable.isNotEmpty()) {
 				val warm = queueable.first()
 				burstJobs += scope!!.launch(Dispatchers.IO) {
-					if (repo.sttsAutoGen) repo.playback.preloadMessage(team, warm.at)
-					repo.onInbound?.invoke(team, messages)
-					if (autoTier != null) queueable.forEach { repo.playback.enqueueForPlay(team, it.at, autoTier, announceRun = true) }
+					if (host.autoGenerate) host.preloadMessage(team, warm.at)
+					host.onInbound(team, messages)
+					if (autoTier != null) queueable.forEach { host.enqueueForPlay(team, it.at, autoTier) }
 				}
 			} else {
-				repo.onInbound?.invoke(team, messages)
+				host.onInbound(team, messages)
 			}
 		}
-		repo.mailboxSync.commit(advanced.next)
+		host.commitMailbox(advanced.next)
 		withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
-		repo.attachments.fetchPendingAttachments()
+		host.fetchPendingAttachments()
 	}
 
 	private suspend fun drainOwnerInbox() {
 		withDrainMutex {
-			val outcome = drainTick(
-				repo.client(),
-				repo.transportCoordinator,
-				knownPlaneVersions,
-				onRows = { repo.dispatchInboxRows(it) },
-				onPlane = { name, _, payload -> repo.applyPlane(name, payload) },
-			)
+			val outcome = host.poll(knownPlaneVersions)
 			knownPlaneVersions = outcome.known
-			if (outcome.cursorStale) repo._state.update { it.copy(gap = true) }
+			if (outcome.cursorStale) host.setGap(true)
 		}
 	}
 
@@ -306,17 +303,17 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
 				// Restore cached roster first.
-				runCatching { repo.presence.restoreLastProjection() }
+				runCatching { host.restorePresence() }
 			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					if (repo.isVisible) {
+					if (host.isVisible) {
 						withTimeoutOrNull(ChatRepository.POLL_INTERVAL_MS) { kick.receive() }
 						continue@pollLoop
 					}
-					if (!repo.isVisible && repo.transportCoordinator.link() == ConsoleLink.POLL) {
+					if (!host.isVisible && host.link() == ConsoleLink.POLL) {
 						drainOwnerInbox()
 						withTimeoutOrNull(ChatRepository.BACKGROUND_TICK_MS) { kick.receive() }
 						continue@pollLoop
@@ -334,7 +331,7 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 						DebugLog.log("Poll", "error streak=${pollFails + 1} [$kind]: ${e.message?.take(120)}")
 						failed = true
 						pollFails++
-						repo._state.update { s ->
+						host.state.update { s ->
 							when (kind) {
 								ConnKind.ENROLLING -> {
 									val (override, since) = enrollFold(s.enrollingSince)
@@ -348,10 +345,9 @@ internal class PollDrain(private val repo: ChatRepository) : ClearsOnReprovision
 					}
 					DebugLog.flushToIngest()
 				}
-				val watchedWorking = repo._state.value.let { s -> s.openTabs.any { tab -> s.working(tab) } }
-				val plan = repo.transportCoordinator.plan(
-					repo.isVisible,
-					repo.transportCoordinator.link() == ConsoleLink.SOCKET,
+				val plan = host.plan(
+					host.isVisible,
+					host.link() == ConsoleLink.SOCKET,
 					failed,
 				)
 				when (val wait = plan.wait) {

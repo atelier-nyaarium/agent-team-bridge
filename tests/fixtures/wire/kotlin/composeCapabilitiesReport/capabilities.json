@@ -1,0 +1,36 @@
+{
+	"producer": "kotlin",
+	"composer": "composeCapabilitiesReport",
+	"case": "capabilities",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "capabilities_report",
+			"capabilities": [
+				{
+					"id": "designer"
+				}
+			]
+		},
+		"opId": "capabilities-op",
+		"nonce": "qqW8lKiugRcmdUQ3HX3n+IfX"
+	},
+	"expect": {
+		"known": true,
+		"capabilities": [
+			{
+				"id": "designer"
+			}
+		],
+		"clientVersions": [],
+		"outcome": "accepted"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"capabilities-op\",\"at\":1757000000000,\"nonce\":\"qqW8lKiugRcmdUQ3HX3n+IfX\",\"op\":{\"kind\":\"capabilities_report\",\"capabilities\":[{\"id\":\"designer\"}]},\"signature\":\"3swvb3oCFEZKADyFNqF0qoO2z/nqjHYQA0mu4YucwJjDSbDuEThn5UbXRUwRKlj82/9uhStHvEfNDxYFZfe4DA==\"}}"
+	}
+}

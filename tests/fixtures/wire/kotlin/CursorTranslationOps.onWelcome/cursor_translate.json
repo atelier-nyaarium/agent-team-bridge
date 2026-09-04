@@ -11,7 +11,12 @@
 			"seq": 11
 		},
 		"opId": "cursor_translate-op",
-		"nonce": "UGPib7Eyx5Naw/LueNnnq354"
+		"nonce": "Wz2yYNc84OkCmDsG0ckoko/2"
+	},
+	"expect": {
+		"translation": {
+			"kind": "unmapped"
+		}
 	},
 	"request": {
 		"method": "POST",
@@ -19,11 +24,6 @@
 		"headers": {
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
-		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"cursor_translate-op\",\"at\":1757000000000,\"nonce\":\"UGPib7Eyx5Naw/LueNnnq354\",\"op\":{\"kind\":\"cursor_translate\",\"address\":\"owner:domain/owner\",\"epoch\":4,\"seq\":11},\"signature\":\"wWYnuEcM6RR3ybrZDBLLOu62R/MWuAvKCH+ClwYG/X/SmWD+pKFYcdM5o7s02nGk0yAlPpzddvMhAsspTsPICg==\"}}"
-	},
-	"expect": {
-		"translation": {
-			"kind": "unmapped"
-		}
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"cursor_translate-op\",\"at\":1757000000000,\"nonce\":\"Wz2yYNc84OkCmDsG0ckoko/2\",\"op\":{\"kind\":\"cursor_translate\",\"address\":\"owner:domain/owner\",\"epoch\":4,\"seq\":11},\"signature\":\"vYWCk2AiB5+NukifRvYIOvQb5UgHjIT/vmISGQYIaFWyGox+1ELI5O2rQkqatmpS+xKiznYk8hziDD87pQGxBA==\"}}"
 	}
 }

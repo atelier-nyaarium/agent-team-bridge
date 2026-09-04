@@ -6,6 +6,9 @@
 	"inputs": {
 		"sessionId": "fixture-app.fixture"
 	},
+	"expect": {
+		"ok": true
+	},
 	"frame": {
 		"name": "session_upsert",
 		"params": {
@@ -15,8 +18,5 @@
 			"recordExists": true,
 			"incarnation": 1
 		}
-	},
-	"expect": {
-		"ok": true
 	}
 }

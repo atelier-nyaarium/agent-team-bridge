@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
 import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
 import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
+import com.atelier_nyaarium.switchboard.crypto.randomNonceB64
 import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -20,6 +21,7 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.time.ZoneId
+import java.util.UUID
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -137,7 +139,15 @@ class ChatRepository(
 	internal lateinit var selfMigration: SelfMigration
 
 	/** Signs this console's operations. */
-	val ownerOps = OwnerOps(this)
+	val ownerOps = OwnerOps(
+		confirmedDomainId = { confirmedDomainId() },
+		consoleIdentity = { federation.consoleIdentity() },
+		provisioningConversationId = { client().transport.prov.conversationId },
+		provisioningDevice = { client().transport.prov.device },
+		now = { System.currentTimeMillis() },
+		newNonce = { randomNonceB64() },
+		newOpId = { UUID.randomUUID().toString() },
+	)
 
 	internal val keyDelivery = KeyDeliveryOps(
 		domainId = { ownerOps.domainId() },
@@ -171,11 +181,7 @@ class ChatRepository(
 			}
 		},
 		onPlane = { name, version, payload ->
-			repoScope.launch(Dispatchers.IO) {
-				drain.withDrainMutex {
-					if (drain.mayApplyPlane(name, version) && applyPlane(name, payload)) drain.notePlane(name, version)
-				}
-			}
+			repoScope.launch(Dispatchers.IO) { drain.applyPlane(name, version, payload) }
 		},
 		onGapDetailed = { floor, dropped ->
 			gapFloor = floor
@@ -191,15 +197,7 @@ class ChatRepository(
 		} },
 				onWelcome = { gen, welcome ->
 					// The welcome carries versions only; fetch the payloads.
-					repoScope.launch(Dispatchers.IO) {
-						drain.withDrainMutex {
-							client().planesRead(drain.knownPlanesJson())?.planes?.forEach { plane ->
-								if (drain.mayApplyPlane(plane.name, plane.version) && applyPlane(plane.name, plane.payload)) {
-									drain.notePlane(plane.name, plane.version)
-								}
-							}
-						}
-					}
+					repoScope.launch(Dispatchers.IO) { drain.applyWelcomePlanes(welcome.versions) }
 					val epoch = welcome.migrationEpoch ?: 0L
 				if (epoch != 0L) repoScope.launch {
 					if (transportCoordinator.awaitingTranslation()) {
@@ -477,10 +475,7 @@ class ChatRepository(
 			sign = { op, opId -> ownerOps.sign(op, opId) },
 			send = { client().postOwnerOp(it) },
 				reportRead = { team, anchor ->
-				val op = com.atelier_nyaarium.switchboard.proto.ReportRead(
-					team = team, epoch = anchor.epoch, seq = anchor.seq, at = System.currentTimeMillis(),
-				)
-				val signed = ownerOps.sign(wireJson.encodeToJsonElement(com.atelier_nyaarium.switchboard.proto.ReportRead.serializer(), op).jsonObject)
+				val signed = ownerOps.sign(composeReportRead(team, anchor, System.currentTimeMillis()))
 					if (signed == null) null else client().postOwnerOp(signed)
 				},
 				reportError = { message -> _state.update { it.copy(error = message) } },
@@ -498,9 +493,11 @@ class ChatRepository(
 			},
 		)
 	}
+	internal val drainGate = DrainGate()
+	internal val drainHost: DrainHost = ChatRepositoryDrainHost(this)
 	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
 	internal val presence = PresenceOps(presenceHost)
-	internal val sessions = SessionOps(this)
+	internal val sessions = SessionOps(ChatRepositorySessionHost(this))
 	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
@@ -535,7 +532,7 @@ class ChatRepository(
 		set(value) { focusHost.currentFocus = value }
 
 	/** Poll loop and mailbox drain. */
-	internal val drain = PollDrain(this)
+	internal val drain = PollDrain(drainHost)
 
 	// The held roster, before the first poll or welcome. Without it a restart shows nothing until the
 	// Router's presence version moves, and an unchanged version is skipped as stale.

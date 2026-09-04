@@ -1,27 +1,26 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** A session's life beyond its transcript: the terminal view, spawn/wake/relaunch, and the forget
  * that ends one. Owns the spawn idempotency map, which is why it is a held delegate rather than
  * extensions the way the voice settings and the drafts are. */
-internal class SessionOps(private val repo: ChatRepository) {
+internal class SessionOps(private val host: SessionHost) {
 	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
 	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
 	 * when the pane never loaded. */
 	suspend fun peekTerminal(team: String, sinceHash: String?): Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult> =
 		withContext(Dispatchers.IO) {
-			runCatchingCancellable { repo.client().peek(team, sinceHash) }
+			runCatchingCancellable { host.peekTerminal(team, sinceHash) }
 		}
 				.onFailure { DebugLog.log("Peek", "team=$team failed: ${it.message?.take(160)}") }
 			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
@@ -30,7 +29,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * footer markers are the truth). */
 	fun noteScreen(team: String, ansi: String) {
 		if (ansi.isEmpty()) return
-		repo._state.update {
+		host.state.update {
 			it.copy(
 				sessionWorking = it.sessionWorking + (team to AgentScreen.isWorking(ansi)),
 				sessionNeedsLogin = it.sessionNeedsLogin + (team to AgentScreen.isLoggedOut(ansi)),
@@ -69,58 +68,53 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * including the rule that a bare target means the home Gateway; a target it cannot place is not
 	 * remembered at all, since a suggestion is never worth guessing at. */
 	private fun rememberProject(target: String) {
-		val (gateway, project) = spawnTargetKey(target, repo.homeGatewayId) ?: return
-		repo.store.lastProjectByGateway = repo.store.lastProjectByGateway + (gateway to project)
-		repo._state.update { it.copy(lastProjectByGateway = repo.store.lastProjectByGateway) }
+		host.rememberProject(target)
 	}
 
 	suspend fun spawnSession(target: String, label: String, workdir: String? = null) = coroutineScope {
 		val key = target to label
-		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
-		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
-		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
-		// or bypasses the dialog entirely.
-		if (key in repo._state.value.pendingSpawns) return@coroutineScope
-		// Remembered here rather than in the dialog, because this is where a spawn is actually issued
-		// and the target already names both halves. Recorded on ATTEMPT, not on success: the owner
-		// meant this machine and this project either way, and a create that fails is the one they are
-		// most likely to repeat.
+		// Atomic claim.
+		val before = host.state.getAndUpdate { s ->
+			if (key in s.pendingSpawns) s else s.copy(pendingSpawns = s.pendingSpawns + key)
+		}
+		if (key in before.pendingSpawns) return@coroutineScope
+		// Remembered on attempt, not on success.
 		rememberProject(target)
 		val now = System.currentTimeMillis()
-		recentSpawnOpIds.entries.removeAll { now - it.value.second >= ChatRepository.SPAWN_RETRY_WINDOW_MS }
+		recentSpawnOpIds.entries.removeAll { now - it.value.second >= host.spawnRetryWindowMs }
 		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
 		recentSpawnOpIds[key] = opId to now
-		repo._state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
 		try {
 			runCatchingCancellable {
-				withContext(Dispatchers.IO) { repo.client().createSession(target, displayLabel = label, workdir = workdir, opId = opId) }
+				withContext(Dispatchers.IO) { host.createSession(target, displayLabel = label, workdir = workdir, opId = opId) }
 			}
 				.onSuccess { result ->
 					recentSpawnOpIds.remove(key)
-					repo._state.update {
+					host.state.update {
 						it.copy(
 							transientMessages = if (result.labelSanitized == true) {
 								it.transientMessages + "\"$label\" has unsupported characters; the session was created using its id as the name instead"
 							} else it.transientMessages,
 						)
 					}
-					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
+					host.refreshAfterAction()
 				}
 				.onFailure { e ->
-					repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Failed to create \"$label\"")) }
+					val reason = e.message ?: "Failed to create \"$label\""
+					host.state.update { it.copy(transientMessages = it.transientMessages + reason) }
 				}
 		} finally {
 			// The removal point: cleared once createSession itself settles (success or failure), or on
 			// cancellation, so a retry within the window can reuse this opId (see recentSpawnOpIds)
 			// rather than racing a still-claimed key.
-			repo._state.update { it.copy(pendingSpawns = it.pendingSpawns - key) }
+			host.state.update { it.copy(pendingSpawns = it.pendingSpawns - key) }
 		}
 	}
 
 	/** Take and clear the one-shot transient message, so a recomposition never re-shows it. */
 	fun consumeTransientMessage(): String? {
 		var msg: String? = null
-		repo._state.update { state ->
+		host.state.update { state ->
 			msg = state.transientMessages.firstOrNull()
 			state.copy(transientMessages = if (msg == null) state.transientMessages else state.transientMessages.drop(1))
 		}
@@ -129,7 +123,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
-		withContext(Dispatchers.IO) { repo.client().tmuxSend(team, text, key, submit) }
+		withContext(Dispatchers.IO) { host.tmuxSend(team, text, key, submit) }
 
 	/**
 	 * Clear a usage-limit dialog and pick the work back up: answer it with choice 1 (wait for the
@@ -159,9 +153,9 @@ internal class SessionOps(private val repo: ChatRepository) {
 	suspend fun listDirs(path: String, hostTarget: String, spawn: String): DirListing = withContext(Dispatchers.IO) {
 		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
 		// picker inspectable with no gateway behind it.
-		repo.sandboxDirs?.let { return@withContext DirListing(it[path].orEmpty()) }
+		host.sandboxDirs?.let { return@withContext DirListing(it[path].orEmpty()) }
 		runCatchingCancellable {
-			val listed = repo.client().listDirs(path, hostTarget, spawn)
+			val listed = host.listDirs(path, hostTarget, spawn)
 			DirListing(listed.entries, path = listed.path)
 		}
 			.getOrElse { DirListing(emptyList(), error = dirListError(it)) }
@@ -171,12 +165,12 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * sessions in the roster is still named, and a linked friend's never is. */
 	// internal (not private): ChatRepository.refreshAdmittedGateways publishes this into ChatState, so
 	// the sessions board draws a machine it can seal to even before that machine has any sessions.
-	fun keyringGateways(): List<String> = Keyring.parse(repo.store.loadDomain())?.admittedGatewayIds() ?: emptyList()
+	fun keyringGateways(): List<String> = host.keyringGateways()
 
-	val terminalRefreshMs: Long get() = repo.store.terminalRefreshMs
+	val terminalRefreshMs: Long get() = host.terminalRefreshMs
 
 	fun setTerminalRefreshMs(ms: Long) {
-		repo.store.terminalRefreshMs = ms
+		host.terminalRefreshMs = ms
 	}
 
 	// This device's own outstanding requests, keyed by team. The freshest fact this device holds
@@ -223,17 +217,17 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * its record and brings its container/tmux back up, so an existing record resumes rather than a
 	 * duplicate being minted. Best-effort; a failure surfaces as a transient message. */
 	fun wakeSession(team: String) {
-		val target = wakeTargetOf(team, repo.localDomain(), repo._state.value.homeGatewayId) ?: return
+		val target = wakeTargetOf(team, host.localDomain, host.state.value.homeGatewayId) ?: return
 		val opId = UUID.randomUUID().toString()
 		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
 		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
 		// the next poll.
-		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
-		repo.drain.scope?.launch(Dispatchers.IO) {
-			runCatchingCancellable { repo.client().wake(target, opId) }
+		host.launchInBackground { host.reapplyCachedTeams() }
+		host.launchInBackground {
+			runCatchingCancellable { host.wake(target, opId) }
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
+					host.refreshAfterAction()
 				}
 				.onFailure { e ->
 					DebugLog.log("Wake", "wake $team failed: ${e.javaClass.simpleName}: ${e.message?.take(160)}")
@@ -241,8 +235,8 @@ internal class SessionOps(private val repo: ChatRepository) {
 					// must stop saying "waking" the moment we know nothing is coming, and the reason
 					// is already on its way to the user as a transient message.
 					settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
-					repo.presence.reapplyCachedTeams()
-					repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "wake failed")) }
+					host.reapplyCachedTeams()
+					host.state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "wake failed")) }
 				}
 		}
 	}
@@ -255,29 +249,30 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * failure so the terminal surfaces it inline (tmuxSend's contract). */
 	suspend fun relaunchSession(team: String) {
 		withContext(Dispatchers.IO) {
-			val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
+			val t = runCatching { parseTarget(team, host.localDomain, host.state.value.homeGatewayId) }.getOrNull()
 			if (t !is Address) error("not an addressable session")
 			// Its own receipt, its own opId. A relaunch CLOSES the session first, so the roster
 			// correctly drops to asleep mid-sequence; without a receipt covering the whole chain the
 			// terminal would stop peeking exactly while the replacement is coming up.
 			val opId = UUID.randomUUID().toString()
 			noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
-			repo.presence.reapplyCachedTeams()
+			host.reapplyCachedTeams()
 			try {
-				repo.client().closeSession(team)
+				host.closeSession(team)
 				// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
-				repo.client().createSession(
+				host.createSession(
 					target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical,
 					sessionName = t.session,
+					opId = UUID.randomUUID().toString(),
 				)
 			} catch (e: Throwable) {
 				e.rethrowIfCancellation()
 				settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
-				repo.presence.reapplyCachedTeams()
+				host.reapplyCachedTeams()
 				throw e
 			}
 			settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-			repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
+			host.refreshAfterAction()
 		}
 	}
 
@@ -293,18 +288,18 @@ internal class SessionOps(private val repo: ChatRepository) {
 	fun forget(team: String, boardDisposition: String? = null, onForgotten: (() -> Unit)? = null) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
-		val key = repo.canonicalTarget(team)
-		repo.forgottenUntil[key] = System.currentTimeMillis() + ChatRepository.FORGET_TOMBSTONE_MS
+		val key = host.canonicalTarget(team)
+		host.forgottenUntil[key] = System.currentTimeMillis() + host.forgetTombstoneMs
 		var dropped: List<Message> = emptyList()
-		val priorDraft = repo._state.value.drafts[key]
-		val next = repo._state.updateAndGet { s ->
+		val priorDraft = host.state.value.drafts[key]
+		val next = host.state.updateAndGet { s ->
 			val afterForget = threadsAfterForget(s.threads, key)
 			dropped = afterForget.dropped
 			val newThreads = afterForget.threads
 			val newAnchors = (s.readAnchors - key).mapValues { (t, anchor) ->
 				reanchorAfterForget(newThreads[t].orEmpty(), anchor) ?: anchor
 			}
-			repo.presence.lastReportedReadAnchors = repo.presence.lastReportedReadAnchors - key
+			host.forgetReadAnchor(key)
 			s.copy(
 				teams = s.teams.filterNot { it.name == key },
 				threads = newThreads,
@@ -318,44 +313,41 @@ internal class SessionOps(private val repo: ChatRepository) {
 				drafts = s.drafts - key,
 			)
 		}
-		repo.persistence.persistThreadsAndReadAnchors(next.threads, next.readAnchors)
-		repo.persistence.persistLabels(next.labels)
-		repo.persistence.persistDrafts(next.drafts)
+		host.persistThreads(next.threads, next.readAnchors)
+		host.persistLabels(next.labels)
+		host.persistDrafts(next.drafts)
 		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
-		repo.scheduled.cancelScheduledSend(key)
+		host.cancelScheduled(key)
 		// Same, for a goal waiting on a pane about to be killed.
-		repo.goals.cancelGoal(key)
+		host.cancelGoal(key)
 		// Queue first, cache second. Dropping under the advance mutex stops the player only once the
 		// queue no longer points at it, so the stop's own terminal cannot advance into an entry whose
 		// audio `purge` is about to delete.
-		repo.repoScope.launch {
-			repo.playback.dropQueuedFor(key)
-			repo.stts.purge(key)
-		}
+		host.dropPlayback(key)
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
 		// the files are local no matter where the session lives, unlike the gateway RPC.
-		repo.attachments.scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
-		priorDraft?.let { repo.attachments.scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
+		host.scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
+		priorDraft?.let { host.scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
 		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
 		// Best-effort, the gateway no-ops an absent session.
-		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
+		val t = runCatching { parseTarget(team, host.localDomain, host.state.value.homeGatewayId) }.getOrNull()
 		val reachable = keyringGateways().toSet()
-		if (t is Address && t.isLocalTo(repo.localDomain(), reachable)) {
-			repo.drain.scope?.launch(Dispatchers.IO) {
-				runCatchingCancellable { repo.client().forget(team, boardDisposition) }
+		if (t is Address && t.isLocalTo(host.localDomain, reachable)) {
+			host.launchInBackground {
+				runCatchingCancellable { host.forget(team, boardDisposition) }
 					// The record drop already bumps the presence plane server-side, which wakes this
 					// device's own currently-held poll for free (same as closeTab/wakeSession/
 					// spawnSession, none of which nudge the poll loop either) - no client-side action
 					// needed on success.
 					.onSuccess { applied ->
-						repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
+						host.refreshAfterAction()
 						// A Gateway that predates the field strips the request's copy and answers
 						// without one, so it RELEASED work the owner asked to cancel. Say so; the
 						// session is gone either way and there is nothing left to retry against.
 						if (boardDisposition != null && applied != boardDisposition) {
-							repo._state.update {
+							host.state.update {
 								it.copy(transientMessages = it.transientMessages + "Gateway needs an update; that session's tasks went back to the backlog.")
 							}
 						}
@@ -363,7 +355,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 					}
 					.onFailure { e ->
 						DebugLog.log("Forget", "team=$team failed: ${e.message?.take(160)}")
-						repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) }
+					host.state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) }
 					}
 			}
 		} else {

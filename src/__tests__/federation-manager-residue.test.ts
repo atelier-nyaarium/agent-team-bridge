@@ -25,7 +25,6 @@ const ALLOWED = [
 	"EnrollCeremonyOps.kt",
 	"GatewayEnrollment.kt",
 	"OwnerFacts.kt",
-	"OwnerOps.kt",
 	"RepositoryProvisioningHost.kt",
 	"TrustOps.kt",
 ];

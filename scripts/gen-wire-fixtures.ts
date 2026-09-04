@@ -13,6 +13,7 @@ import { composeValueResult } from "../src/gateway/router/valueResult.js";
 import { rankBetween } from "../src/shared/board-rank.js";
 import type { ConsolePushEntry } from "../src/shared/federation-protocol.js";
 import type { PresenceRow } from "../src/shared/presence-identity.js";
+import { type WireFixture, WireFixtureSchema, WireManifestSchema } from "../src/shared/schemasWireFixture.js";
 import { Address, parseSessionName } from "../src/shared/session-id.js";
 import { SessionStore } from "../src/shared/session-store.js";
 import { contentKeyOf, loadIdentitySet } from "../src/testing/identitySet.js";
@@ -27,7 +28,7 @@ ContentKeyStore.writeFile(
 	new Map([[set.content.epoch, contentKeyOf(set)]]),
 );
 
-const cases: Array<Record<string, unknown>> = [];
+const cases: WireFixture[] = [];
 const context = (composer: string, name: string) => {
 	let n = 0;
 	const inputs: Record<string, unknown> = { draws: {} };
@@ -48,7 +49,7 @@ const write = (
 	expect: Record<string, unknown>,
 	phone?: Record<string, unknown>,
 ) => {
-	const value = {
+	const value = WireFixtureSchema.parse({
 		producer: "ts",
 		composer,
 		case: name,
@@ -57,11 +58,11 @@ const write = (
 		frame,
 		...(phone ? { phone } : {}),
 		expect,
-	};
+	});
 	const dir = path.join(root, composer);
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, `${name}.json`), `${JSON.stringify(value, null, "\t")}\n`);
-	cases.push({ file: `${composer}/${name}.json`, composer, case: name, peer: phone ? "phone" : "router" });
+	cases.push(value);
 };
 
 const keyFrames: Record<string, unknown>[] = [];
@@ -239,7 +240,8 @@ for (const [index, frame] of ownerFrames.entries()) {
 		frame,
 		{ outcome: "accepted" },
 		{
-			decodeAs: "InboxRow",
+			// Router stamps seq, acceptedAt, size.
+			decodeAs: "RowEnvelope",
 			open: {
 				as: "MailboxEntry",
 				aadKind: `inbox.body\n${params.row.envelope.opKey.conversationId}\n${params.row.envelope.opKey.opId}`,
@@ -354,10 +356,16 @@ await Promise.resolve();
 write("gateway/router/sessionRegistryReporter", "forget", { sessionId }, sessionFrame(1), { ok: true });
 sessionReporter.detach();
 
-fs.writeFileSync(
-	path.join(root, "_manifest.json"),
-	`${JSON.stringify({ _comment: "Generated TS wire fixtures.", fixtures: cases }, null, "\t")}\n`,
-);
+const manifest = WireManifestSchema.parse({
+	_comment: "Generated TS wire fixtures.",
+	fixtures: cases.map((fixture) => ({
+		file: `${fixture.composer}/${fixture.case}.json`,
+		composer: fixture.composer,
+		case: fixture.case,
+		peer: fixture.producer === "ts" && fixture.phone ? "phone" : "router",
+	})),
+});
+fs.writeFileSync(path.join(root, "_manifest.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
 const formatted = Bun.spawnSync(["bunx", "biome", "format", "--write", root]);
 fs.rmSync(temp, { recursive: true, force: true });
 if (formatted.exitCode !== 0) throw new Error("fixture formatting failed");

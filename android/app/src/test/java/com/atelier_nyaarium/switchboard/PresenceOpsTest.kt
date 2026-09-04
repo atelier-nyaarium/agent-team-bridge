@@ -25,7 +25,7 @@ class PresenceOpsTest {
 
 		override suspend fun <T> withDrainMutex(block: suspend () -> T): T = block()
 		override suspend fun resetPlaneCursors() = Unit
-		override suspend fun reportRead(team: String, epoch: Long, seq: Long) = Unit
+		override suspend fun reportRead(team: String, anchor: ReadAnchor) = Unit
 		override suspend fun fetchPresencePlanes() = null
 		override fun fetchConnectedGateways(): List<String>? = null
 		override fun loadRouterState(kind: String) = slot
@@ -40,9 +40,15 @@ class PresenceOpsTest {
 		override fun clearReceipt(team: String) = Unit
 	}
 
-	private fun info(name: String, status: String = Presence.ONLINE) = TeamInfo(
+	private fun info(
+		name: String,
+		gatewayId: String = "local",
+		domainId: String? = null,
+		status: String = Presence.ONLINE,
+	) = TeamInfo(
 		team = name,
-		gatewayId = "local",
+		gatewayId = gatewayId,
+		domainId = domainId,
 		status = status,
 		kind = "loose",
 		queue_depth = 0,
@@ -51,17 +57,21 @@ class PresenceOpsTest {
 	private fun projection(
 		version: Long,
 		name: String = "host.session",
+		rows: List<TeamInfo> = listOf(info(name)),
+		roster: List<RosterEntry> = listOf(RosterEntry("local", true, 1, 1)),
 		spawnPoints: List<GatewaySpawnPoints> = emptyList(),
 	) = OwnerPresenceProjection(
 		plane = PresencePlane(epoch = 1, version = version),
-		rows = listOf(info(name)),
+		rows = rows,
 		linked = emptyList(),
-		roster = listOf(RosterEntry("local", true, 1, 1)),
+		roster = roster,
 		coverage = DiscoverCoverage(rosterKnown = true, asked = 1, answered = 1),
 		spawnPoints = spawnPoints,
 	)
 
-	private val windowsOnMikan = listOf(GatewaySpawnPoints(gatewayId = "mikan", hostSpawns = listOf("windows"), domainId = "d"))
+	private val windowsOnMikan = listOf(
+		GatewaySpawnPoints(gatewayId = "mikan", hostSpawns = listOf("windows"), domainId = "d"),
+	)
 
 	@Test
 	fun projectedSpawnPointsReachThePickerAndLeaveWhenAGatewayStopsAdvertising() = runBlocking {
@@ -69,47 +79,45 @@ class PresenceOpsTest {
 		val ops = PresenceOps(host)
 		ops.applyOwnerProjection(projection(1, spawnPoints = windowsOnMikan))
 		assertEquals(windowsOnMikan, host.state.value.gatewaySpawnPoints)
-		assertEquals(listOf("windows", "host"), hostSpawnChoices(host.state.value.gatewaySpawnPoints, GatewayGroupKey("d", "mikan"), "d"))
+		assertEquals(
+			listOf("windows", "host"),
+			hostSpawnChoices(host.state.value.gatewaySpawnPoints, GatewayGroupKey("d", "mikan"), "d"),
+		)
 
 		ops.applyOwnerProjection(projection(2))
 		assertEquals(emptyList<GatewaySpawnPoints>(), host.state.value.gatewaySpawnPoints)
-	}
 
-	@Test
-	fun restoreLastProjectionLandsTheSpawnPointsToo() = runBlocking {
-		val host = FakeHost()
+		val restoredHost = FakeHost()
 		val stored = projection(1, spawnPoints = windowsOnMikan)
-		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), stored))
-		PresenceOps(host).restoreLastProjection()
-		assertEquals(windowsOnMikan, host.state.value.gatewaySpawnPoints)
-	}
-
-
-	@Test
-	fun restoreLastProjectionAppliesStoredSlotWithoutSelfBlocking() = runBlocking {
-		val host = FakeHost()
-		val stored = projection(1)
-		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), stored))
-		PresenceOps(host).restoreLastProjection()
-		assertEquals(1, host.state.value.teams.size)
+		restoredHost.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), stored))
+		PresenceOps(restoredHost).restoreLastProjection()
+		assertEquals(windowsOnMikan, restoredHost.state.value.gatewaySpawnPoints)
 	}
 
 	@Test
-	fun restoreLastProjectionYieldsToARosterAlreadyLanded() = runBlocking {
+	fun restoreLastProjectionLandsBeforePollingAndPollWinsAfterward() = runBlocking {
 		val host = FakeHost()
 		val ops = PresenceOps(host)
-		ops.applyOwnerProjection(projection(2, "host.new"))
-		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), projection(1, "host.old")))
+		val held = projection(1, "host.held", spawnPoints = windowsOnMikan)
+		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), held))
 		ops.restoreLastProjection()
-		assertEquals("local.local.host.new", host.state.value.teams.single().name)
+		assertEquals(listOf("local.local.host.held"), host.state.value.teams.map { it.name })
+		assertEquals(windowsOnMikan, host.state.value.gatewaySpawnPoints)
+
+		ops.applyOwnerProjection(projection(2, "host.live"))
+		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), held))
+		ops.restoreLastProjection()
+
+		assertEquals(listOf("local.local.host.live"), host.state.value.teams.map { it.name })
 	}
 
 	@Test
 	fun newerOwnerProjectionAppliesAndPersistsTheSlot() = runBlocking {
 		val host = FakeHost()
-		PresenceOps(host).applyOwnerProjection(projection(2))
+		val ops = PresenceOps(host)
+		ops.applyOwnerProjection(projection(2))
 		assertEquals(2L, host.slot?.version)
-		assertEquals(1, host.state.value.teams.size)
+		assertEquals(listOf("local.local.host.session"), host.state.value.teams.map { it.name })
 	}
 
 	@Test

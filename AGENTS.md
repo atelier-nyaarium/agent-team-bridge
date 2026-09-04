@@ -31,6 +31,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers
 - `android/.../ChatPersistence.kt` - JSON codec between repository state and AppStateStore
 - `android/.../PollDrain.kt` - owner-inbox tick, four plane cursors, and drain-gate subscribers
+- `android/.../DrainGate.kt` / `DrainHost.kt` / `SessionHost.kt` / `PresenceHost.kt` - the re-entrant drain gate and one host interface per ops class, each with its repository adapter beside it
+- `android/.../ReportReadCompose.kt` / `ScheduledSendCompose.kt` / `CapabilitiesCompose.kt` - pure phone composers
 - `android/.../PlaybackOps.kt` / `PlaybackReadModels.kt` - playback serialization and lock-free read models
 - `android/.../BoardOps.kt` - repository board operations
 - `android/.../AttachmentOps.kt` - attachment fetch-and-sweep state
@@ -95,6 +97,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/agent-binary.ts` - uncached backend CLI presence check
 - `src/shared/capabilities.ts` - capability ids, guidance, daemon declarations, and bundle folding
 - `src/shared/schemas.ts` / `schemas*.ts` - sole Zod wire truth; `.meta({id})` names generated Kotlin classes
+- `src/shared/schemasWireFixture.ts` - shared wire fixture schema for both runtimes
 - `src/shared/sealed-blob.ts` - per-chunk blob AEAD, twinned by `crypto/SealedBlob.kt` over a shared fixture corpus
 - `src/shared/content-envelope.ts` - content key derivation, content envelope, key envelope, join signing bytes
   - **Board text binds its entry id into the AAD kind:** `boardTextAadKind` is the sole builder. A

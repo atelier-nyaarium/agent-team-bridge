@@ -13,6 +13,7 @@ import com.atelier_nyaarium.switchboard.proto.RowOrigin
 import com.atelier_nyaarium.switchboard.proto.GatewayValueOp
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
+import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalJson
 import com.atelier_nyaarium.switchboard.crypto.opPayloadAadKind
 import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
@@ -44,6 +45,7 @@ class ConsoleClient internal constructor(
 	private val contentKeyring: () -> com.atelier_nyaarium.switchboard.crypto.ContentKeyring = { ContentKeyring(store = store) },
 	private val postOwnerOpSender: (suspend (OwnerOp) -> JsonElement?)? = null,
 	private val rowSigner: ((RowEnvelope) -> String?)? = null,
+	private val sealNonce: (() -> ByteArray)? = null,
 ) {
 	internal val transport = ConsoleRouterTransport(prov, store, homeGatewayId)
 
@@ -59,16 +61,10 @@ class ConsoleClient internal constructor(
 		val epoch = contentKeyring().epochs().maxOrNull() ?: return null
 		val key = contentKey(epoch) ?: return null
 		val signer = ownerSignPub() ?: return null
-		return epoch to com.atelier_nyaarium.switchboard.crypto.Crypto.sealContent(
-			plaintext,
-			key,
-			com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
-				domain,
-				signer,
-				epoch,
-				kind,
-			),
-		)
+		val aad = Crypto.ContentAad(domain, signer, epoch, kind)
+		val sealed = sealNonce?.invoke()?.let { nonce -> Crypto.sealContent(plaintext, key, aad, nonce) }
+			?: Crypto.sealContent(plaintext, key, aad)
+		return epoch to sealed
 	}
 
 	private fun signRow(envelope: RowEnvelope): String? {

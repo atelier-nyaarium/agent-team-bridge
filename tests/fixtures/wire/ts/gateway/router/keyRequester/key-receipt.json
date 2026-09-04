@@ -8,6 +8,9 @@
 			"nonce": "sgk91m49SzTO4xXbW9knlOaX"
 		}
 	},
+	"expect": {
+		"outcome": "accepted"
+	},
 	"frame": {
 		"name": "key_receipt",
 		"params": {
@@ -21,8 +24,5 @@
 				"signature": "7HOhEonDTPJoEJmdeQW46XHN+nh8DngcQa2mWeV4baBO26fO4cgMYOx8O24C9zmxwuwMeeB1YKxvuSTEiKhtDA=="
 			}
 		}
-	},
-	"expect": {
-		"outcome": "accepted"
 	}
 }

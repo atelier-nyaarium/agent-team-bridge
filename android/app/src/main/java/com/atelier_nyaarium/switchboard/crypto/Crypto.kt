@@ -107,13 +107,19 @@ object Crypto {
 		return out
 	}
 
-	fun seal(plaintext: ByteArray, recipientBoxPubB64: String, senderSignPrivB64: String): SealedEnvelope {
-		val ephPriv = X25519PrivateKeyParameters(rnd)
+	fun seal(
+		plaintext: ByteArray,
+		recipientBoxPubB64: String,
+		senderSignPrivB64: String,
+		entropy: ((Int) -> ByteArray)? = null,
+	): SealedEnvelope {
+		val draw = entropy ?: { size -> ByteArray(size).also { rnd.nextBytes(it) } }
+		val ephPriv = X25519PrivateKeyParameters(draw(32), 0)
 		val ephPub = ephPriv.generatePublicKey().encoded
 		val shared = ByteArray(32)
 		X25519Agreement().apply { init(ephPriv) }.calculateAgreement(X25519PublicKeyParameters(unb64(recipientBoxPubB64), 0), shared, 0)
 		val key = deriveKey(shared, ephPub)
-		val nonce = ByteArray(Protocol.Wire.CONTENT_NONCE_BYTES).also { rnd.nextBytes(it) }
+		val nonce = draw(Protocol.Wire.CONTENT_NONCE_BYTES)
 		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
 		cipher.init(true, AEADParameters(KeyParameter(key), 128, nonce))
 		val out = ByteArray(cipher.getOutputSize(plaintext.size))
@@ -195,11 +201,12 @@ object Crypto {
 		recipientBoxPubB64: String,
 		senderSignPubB64: String,
 		senderSignPrivB64: String,
+		entropy: ((Int) -> ByteArray)? = null,
 	): KeyEnvelope {
 		require(key.size == 32) { "content key must be 32 bytes" }
 		require(epoch >= 1) { "content epoch must be an integer from 1" }
 		val body = keyEnvelopePreimage(epoch, key)
-		val sealed = seal(body, recipientBoxPubB64, senderSignPrivB64)
+		val sealed = seal(body, recipientBoxPubB64, senderSignPrivB64, entropy)
 		return KeyEnvelope(
 			epoch.toLong(),
 			senderSignPubB64,

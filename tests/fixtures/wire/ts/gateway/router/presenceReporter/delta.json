@@ -4,6 +4,9 @@
 	"case": "delta",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {
+		"ok": true
+	},
 	"frame": {
 		"name": "presence_delta",
 		"params": {
@@ -20,8 +23,5 @@
 			],
 			"tombstones": ["beta"]
 		}
-	},
-	"expect": {
-		"ok": true
 	}
 }

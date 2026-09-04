@@ -4,6 +4,13 @@
 	"case": "connectedGateways",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {
+		"gateways": [
+			{
+				"gatewayId": "laptop"
+			}
+		]
+	},
 	"request": {
 		"method": "POST",
 		"path": "/console",
@@ -11,12 +18,5 @@
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
 		"body": "{\"gateways\":{}}"
-	},
-	"expect": {
-		"gateways": [
-			{
-				"gatewayId": "laptop"
-			}
-		]
 	}
 }

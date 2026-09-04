@@ -145,6 +145,14 @@ import {
 	ReportReadSchema,
 } from "../src/shared/schemasTier1.js";
 import {
+	WireFixtureEntrySchema,
+	WireFixtureSchema,
+	WireFrameSchema,
+	WireManifestSchema,
+	WirePhoneDecodeSchema,
+	WireRequestSchema,
+} from "../src/shared/schemasWireFixture.js";
+import {
 	ADDRESS_SEP,
 	CONV_TAG,
 	DEFAULT_SESSION,
@@ -164,10 +172,9 @@ import {
 	WIRE_NONCE_BYTES,
 } from "../src/shared/wire-vocabulary.js";
 
-const OUT_PATH = join(
-	import.meta.dir,
-	"../android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/Protocol.kt",
-);
+const OUT_PATH =
+	process.env.KOTLIN_PROTOCOL_OUT ??
+	join(import.meta.dir, "../android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/Protocol.kt");
 
 // Roots to emit, in output order. Every schema here must carry .meta({ id }).
 const ROOTS: z.ZodType[] = [
@@ -281,6 +288,12 @@ const ROOTS: z.ZodType[] = [
 	CapabilitySnapshotWireSchema,
 	ReportReadSchema,
 	ReadAnchorsResultSchema,
+	WireFrameSchema,
+	WireRequestSchema,
+	WirePhoneDecodeSchema,
+	WireFixtureSchema,
+	WireFixtureEntrySchema,
+	WireManifestSchema,
 ];
 
 // Listed unions are encoded; others stay open for decoding.
@@ -293,6 +306,7 @@ const SEALED_ROOTS = new Set([
 	"CrossDomainShareTarget",
 	"BoardOp",
 	"BoardActor",
+	"WireFixture",
 ]);
 
 type Json = Record<string, unknown>;

@@ -311,7 +311,7 @@ class ConsoleClientOwnerOpsTest {
 
 	@Test
 	fun reportReadEmitsTheReportReadOwnerOp() = runBlocking {
-		val result = client.reportRead("team", 7, 9, opId = "read-op")
+		val result = client.reportRead("team", ReadAnchor(7, 9, 0L), opId = "read-op")
 		val ownerOp = sent.single()
 		val report = wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.ReportRead.serializer(), ownerOp.op)
 

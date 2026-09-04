@@ -1,14 +1,9 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import org.json.JSONObject
 
 // This device's Domain link.
@@ -26,10 +21,7 @@ suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) 
 /** Report once to the Router. */
 private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 	val plugins = enabledPlugins?.invoke() ?: return
-	val op = buildJsonObject {
-		put("kind", JsonPrimitive("capabilities_report"))
-		put("capabilities", wireJson.encodeToJsonElement(ListSerializer(EnabledPlugin.serializer()), plugins))
-	}
+	val op = composeCapabilitiesReport(plugins)
 	val signed = ownerOps.sign(op) ?: error("cannot sign capabilities report")
 	runCatchingCancellable { client().postOwnerOp(signed) }
 		.onFailure { DebugLog.log("Plugins", "capability report failed, retrying next toggle: ${it.message?.take(80)}") }

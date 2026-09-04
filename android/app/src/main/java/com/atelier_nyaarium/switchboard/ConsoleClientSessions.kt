@@ -13,7 +13,6 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.jsonObject
 
 ////////////////////////////////
 //  Per-session ops
@@ -122,22 +121,12 @@ suspend fun ConsoleClient.renameSession(
 ): ConsoleRenameSessionResult =
 	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId), Protocol.Wire.ConsoleOpKind.RENAME_SESSION)
 
-/** Report this device's read position for a team, for the cross-device read-anchor sync plane
- * (monotonic per owner - see readAnchors.ts). No targetGateway override: this is owned by the
- * console's own mailbox, so it defaults to the home Gateway.
- * Idempotent per opId (a retry re-applies the same merge, which is a no-op if it already landed). */
+/** Idempotent per opId. */
 suspend fun ConsoleClient.reportRead(
 	team: String,
-	epoch: Long,
-	seq: Long,
+	anchor: ReadAnchor,
 	opId: String = UUID.randomUUID().toString(),
 ): ConsoleReportReadResult =
 	wireJson.decodeFromJsonElement(
-		postSigned(
-			wireJson.encodeToJsonElement(
-				com.atelier_nyaarium.switchboard.proto.ReportRead.serializer(),
-				com.atelier_nyaarium.switchboard.proto.ReportRead(team = team, epoch = epoch, seq = seq, at = System.currentTimeMillis()),
-			).jsonObject,
-			opId,
-		) ?: error("report_read timed out"),
+		postSigned(composeReportRead(team, anchor, System.currentTimeMillis()), opId) ?: error("report_read timed out"),
 	)

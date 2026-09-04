@@ -60,6 +60,7 @@ class KeyDeliveryOps(
 	private val newNonce: () -> String = { com.atelier_nyaarium.switchboard.crypto.randomNonceB64() },
 	private val missingTimer: MissingEpochTimer = CoroutineMissingEpochTimer(),
 	private val reportError: (String) -> Unit = {},
+	private val wrapEntropy: ((Int) -> ByteArray)? = null,
 ) {
 	private data class GrantKey(val subject: String, val epoch: Int)
 	private data class GrantClaim(val at: Long, val token: Long)
@@ -101,7 +102,8 @@ class KeyDeliveryOps(
 		val epochs = request.epochs.filter { it >= 1 && it <= Int.MAX_VALUE.toLong() }.map { it.toInt() }
 		var granted = 0
 		var skipped = 0
-		for (envelope in ring.wrapFor(epochs, recipient.boxPub, identity.sign.pub, identity.sign.priv)) {
+		val envelopes = ring.wrapFor(epochs, recipient.boxPub, identity.sign.pub, identity.sign.priv, entropy = wrapEntropy)
+		for (envelope in envelopes) {
 			val grantKey = GrantKey(recipient.signPub, envelope.epoch.toInt())
 			val claimToken = claimGrant(grantKey) ?: run {
 				skipped++
@@ -174,7 +176,9 @@ class KeyDeliveryOps(
 		val epochs = contentKeyring().epochs()
 		val members = keyring().liveAdmissions().filter { it.signPub != identity.sign.pub }
 		for (member in members) {
-			for (envelope in contentKeyring().wrapFor(epochs, member.boxPub, identity.sign.pub, identity.sign.priv)) {
+			val envelopes =
+				contentKeyring().wrapFor(epochs, member.boxPub, identity.sign.pub, identity.sign.priv, entropy = wrapEntropy)
+			for (envelope in envelopes) {
 				send(grantOp(KeyGrant(1, member.signPub, envelope, now())))
 			}
 		}

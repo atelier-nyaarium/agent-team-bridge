@@ -4,6 +4,7 @@
 	"case": "socketUpgrade",
 	"clock": 1757000000000,
 	"inputs": {},
+	"expect": {},
 	"request": {
 		"method": "GET",
 		"path": "/console",
@@ -11,6 +12,5 @@
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
 		"body": ""
-	},
-	"expect": {}
+	}
 }

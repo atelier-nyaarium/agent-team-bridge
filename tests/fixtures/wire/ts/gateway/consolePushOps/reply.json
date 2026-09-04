@@ -26,6 +26,9 @@
 		"opId": "owner-reply",
 		"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c"
 	},
+	"expect": {
+		"outcome": "accepted"
+	},
 	"frame": {
 		"name": "inbox_append",
 		"params": {
@@ -61,13 +64,10 @@
 		}
 	},
 	"phone": {
-		"decodeAs": "InboxRow",
+		"decodeAs": "RowEnvelope",
 		"open": {
 			"as": "MailboxEntry",
 			"aadKind": "inbox.body\nd6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c\nowner-reply"
 		}
-	},
-	"expect": {
-		"outcome": "accepted"
 	}
 }

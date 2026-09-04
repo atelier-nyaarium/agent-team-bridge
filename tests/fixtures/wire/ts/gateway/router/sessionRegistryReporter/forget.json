@@ -6,14 +6,14 @@
 	"inputs": {
 		"sessionId": "fixture-app.fixture"
 	},
+	"expect": {
+		"ok": true
+	},
 	"frame": {
 		"name": "session_forget",
 		"params": {
 			"sessionId": "fixture-app.fixture",
 			"incarnation": 1
 		}
-	},
-	"expect": {
-		"ok": true
 	}
 }

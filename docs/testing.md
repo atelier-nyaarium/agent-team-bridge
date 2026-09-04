@@ -9,8 +9,8 @@ and two Bun smoke gates.
 |---|---|
 | `bun run lint` | Biome and `tsc` |
 | `bun run test` | Vitest under Node, including the harness scenarios and both fixture replays |
-| `bun run check:fixtures` | Regenerating the TS wire fixtures changes no byte |
-| `./scripts/kotlin-gate.sh` | Kotlin import guard, a fresh Kotlin fixture regeneration diffs clean, the unit tests |
+| `bun run check:fixtures` | Regenerating the TS wire fixtures changes no byte. Every committed fixture and manifest entry on both sides parses under the schema |
+| `./scripts/kotlin-gate.sh` | Kotlin import guard, `Protocol.kt` regenerated unchanged, Kotlin fixtures regenerated unchanged, the unit tests |
 | `bun run check:pinning` | The shipping runtime pins the Router certificate |
 | `bun run check:boot` | The real entry points boot under Bun and answer one console op |
 
@@ -44,16 +44,23 @@ nonces, and commits what they produced; the other runtime consumes it with its r
   gateway frames (owner rows, presence, session registry, key requests, board writes, value
   results, registration). `src/__tests__/wire-fixtures-ts.test.ts` feeds every frame through the
   live pinned link; `WireFixturesDecodeTest.kt` opens every phone-bound answer.
-- `WireFixtureGenerator.kt` writes `tests/fixtures/wire/kotlin/<composer>/<case>.json`: signed
-  owner ops from the real phone composers and the transport request family. Regenerate with
-  `./gradlew :app:generateWireFixtures` from `android/`; an ordinary unit-test run asserts the
-  committed files. `src/__tests__/wire-fixtures-kotlin.test.ts` replays every request through
-  `RouterServer.handle` at the fixture clock, replays the socket upgrade against the real
-  listener, and reproduces every signed op through the phone driver.
+- `WireFixtureGenerator.kt` writes `tests/fixtures/wire/kotlin/<composer>/<case>.json`: the signed
+  owner ops of the real phone composers (hello, key request and receipt, cursor translation, board
+  write, the board read, the four inbox ops, a scheduled send's delivery, a value op, the key
+  grant answering a gateway's request, the read report, the capabilities report) and the transport
+  request family. Regenerate with `./gradlew :app:generateWireFixtures` from `android/`. An
+  ordinary unit-test run asserts the committed files, and `kotlin-gate.sh` diffs a fresh
+  regeneration against them. `src/__tests__/wire-fixtures-kotlin.test.ts` replays every request
+  through `RouterServer.handle` at the fixture clock in manifest order, so the board read follows
+  the board write. It also replays the socket upgrade against the real listener, reproduces every
+  signed op through the phone driver, and opens the key grant with the gateway's box key.
 
-Fixture shape: `producer`, `composer`, `case`, `clock`, `inputs`, then `frame` (TS) or
-`request` (Kotlin), an optional `phone` decode block, and `expect`, the real peer's answer as a
-subset. The n-th random draw of a case is the first N bytes of
+Fixture shape is `src/shared/schemasWireFixture.ts`, generated into Kotlin as `WireFixture`:
+`producer`, `composer`, `case`, `clock`, `inputs`, `expect` (the real peer's answer as a subset),
+then `frame` (TS) with an optional `phone` block naming the decode target (`RowEnvelope`,
+`ContentEnvelope`, `BoardOp`) or `request` (Kotlin). Each generator builds the value through the
+schema and derives the manifest from it. `check:fixtures` validates every committed file and
+manifest entry on both sides. The n-th random draw of a case is the first N bytes of
 `sha256("<producer>:<composer>:<case>:<n>")`, recorded in `inputs`.
 
 ## Wire vocabulary

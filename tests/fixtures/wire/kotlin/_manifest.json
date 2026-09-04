@@ -32,26 +32,62 @@
 			"peer": "router.handle"
 		},
 		{
-			"file": "PollDrain.consumerRegister/consumer_register.json",
-			"composer": "PollDrain.consumerRegister",
+			"file": "BoardRouterWriter.read/board_read.json",
+			"composer": "BoardRouterWriter.read",
+			"case": "board_read",
+			"peer": "router.handle"
+		},
+		{
+			"file": "ConsoleClient.send/deliver.json",
+			"composer": "ConsoleClient.send",
+			"case": "deliver",
+			"peer": "router.handle"
+		},
+		{
+			"file": "ConsoleClient.sendValueOp/gateway_value.json",
+			"composer": "ConsoleClient.sendValueOp",
+			"case": "gateway_value",
+			"peer": "router.handle"
+		},
+		{
+			"file": "KeyDeliveryOps.onKeyRequest/key_grant.json",
+			"composer": "KeyDeliveryOps.onKeyRequest",
+			"case": "key_grant",
+			"peer": "router.handle"
+		},
+		{
+			"file": "composeReportRead/report_read.json",
+			"composer": "composeReportRead",
+			"case": "report_read",
+			"peer": "router.handle"
+		},
+		{
+			"file": "composeCapabilitiesReport/capabilities.json",
+			"composer": "composeCapabilitiesReport",
+			"case": "capabilities",
+			"peer": "router.handle"
+		},
+		{
+			"file": "ConsoleClient.consumerRegister/consumer_register.json",
+			"composer": "ConsoleClient.consumerRegister",
 			"case": "consumer_register",
 			"peer": "router.handle"
 		},
 		{
-			"file": "PollDrain.inboxRead/inbox_read.json",
-			"composer": "PollDrain.inboxRead",
+			"file": "ConsoleClient.inboxRead/inbox_read.json",
+			"composer": "ConsoleClient.inboxRead",
 			"case": "inbox_read",
 			"peer": "router.handle"
 		},
 		{
-			"file": "PollDrain.inboxAdvance/inbox_advance.json",
-			"composer": "PollDrain.inboxAdvance",
+			"file": "ConsoleClient.inboxAdvance/inbox_advance.json",
+			"composer": "ConsoleClient.inboxAdvance",
 			"case": "inbox_advance",
 			"peer": "router.handle"
 		},
 		{
-			"file": "PollDrain.planesRead/planes_read.json",
-			"composer": "PollDrain.planesRead",
+			"file": "ConsoleClient.planesRead/planes_read.json",
+			"composer": "ConsoleClient.planesRead",
 			"case": "planes_read",
 			"peer": "router.handle"
 		},

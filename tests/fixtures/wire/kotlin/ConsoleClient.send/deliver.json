@@ -1,0 +1,61 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleClient.send",
+	"case": "deliver",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "deliver",
+			"address": "session:fixture-domain/laptop/fixture-app.abc123",
+			"row": {
+				"envelope": {
+					"origin": {
+						"kind": "console",
+						"domainId": "fixture-domain",
+						"device": "fixture-phone"
+					},
+					"opKey": {
+						"conversationId": "fixture-console",
+						"opId": "deliver-op"
+					},
+					"epoch": 1,
+					"kind": "console_op",
+					"contentRefs": []
+				},
+				"producerSig": "aExVf+0TQzYW4LHdlcg7Y/SgFr9Bz9cCFOQXfOXp5Fg1O+WKh3PlL0Af7RJP9TgvOccMMzCwL0hYs3qLAnoyAw==",
+				"body": {
+					"v": 1,
+					"epoch": 1,
+					"nonce": "TaQvqL9tEFRof4nx",
+					"ciphertext": "v04A7hWul3VU/aC+w7XXVCADSwDn/sHYz2TVbwMqH9Fv8U9D7HZ18w+zi7TfIhnlVWo7yr6G6YhT4kF6dcj7EOLsuoLdfbmKrK1QPAvAtwrEn5o3hvXEEtWqkx4a328/y57EI/xFuBdT"
+				},
+				"seq": 0,
+				"acceptedAt": 0,
+				"size": 0
+			}
+		},
+		"opId": "deliver-op",
+		"nonce": "97GnfiPEhSuCNUE9WroIoB4v",
+		"sealNonce": "TaQvqL9tEFRof4nx",
+		"record": {
+			"text": "fixture delivery",
+			"fileRefs": [],
+			"fireAtMillis": 1757000000000,
+			"opId": "deliver-op",
+			"targetDomainId": null,
+			"createdAt": 1757000000000
+		},
+		"team": "fixture-domain.laptop.fixture-app.abc123"
+	},
+	"expect": {
+		"outcome": "accepted"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"deliver-op\",\"at\":1757000000000,\"nonce\":\"97GnfiPEhSuCNUE9WroIoB4v\",\"op\":{\"kind\":\"deliver\",\"address\":\"session:fixture-domain/laptop/fixture-app.abc123\",\"row\":{\"envelope\":{\"origin\":{\"kind\":\"console\",\"domainId\":\"fixture-domain\",\"device\":\"fixture-phone\"},\"opKey\":{\"conversationId\":\"fixture-console\",\"opId\":\"deliver-op\"},\"epoch\":1,\"kind\":\"console_op\",\"contentRefs\":[]},\"producerSig\":\"aExVf+0TQzYW4LHdlcg7Y/SgFr9Bz9cCFOQXfOXp5Fg1O+WKh3PlL0Af7RJP9TgvOccMMzCwL0hYs3qLAnoyAw==\",\"body\":{\"v\":1,\"epoch\":1,\"nonce\":\"TaQvqL9tEFRof4nx\",\"ciphertext\":\"v04A7hWul3VU/aC+w7XXVCADSwDn/sHYz2TVbwMqH9Fv8U9D7HZ18w+zi7TfIhnlVWo7yr6G6YhT4kF6dcj7EOLsuoLdfbmKrK1QPAvAtwrEn5o3hvXEEtWqkx4a328/y57EI/xFuBdT\"},\"seq\":0,\"acceptedAt\":0,\"size\":0}},\"signature\":\"IDBTnROzTWWUTCs3lVZfTgyXQ4Pk8rznRQJlk3H/3qXia4juUUKv0wxyMMucUKCEvaJA1b+CS1Ig79+r0pVLAw==\"}}"
+	}
+}

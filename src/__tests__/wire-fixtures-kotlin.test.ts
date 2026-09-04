@@ -2,25 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { unwrapContentKey } from "../shared/content-envelope.js";
+import type { KeyEnvelope } from "../shared/schemasContentKey.js";
 import { type OwnerOp, OwnerOpSchema } from "../shared/schemasInbox.js";
+import { type WireFixture, WireFixtureSchema, WireManifestSchema } from "../shared/schemasWireFixture.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
-import { loadIdentitySet } from "../testing/identitySet.js";
+import { contentKeyOf, loadIdentitySet } from "../testing/identitySet.js";
 import { createPhoneDriver } from "../testing/phoneDriver.js";
 
-interface KotlinFixture {
-	composer: string;
-	case: string;
-	clock: number;
-	inputs: { op?: Record<string, unknown>; opId?: string; nonce?: string };
-	request: { method: string; path: string; headers: Record<string, string>; body: string };
-	expect: Record<string, unknown>;
-}
-
 const root = path.resolve(import.meta.dirname, "../../tests/fixtures/wire/kotlin");
-const manifest = JSON.parse(fs.readFileSync(path.join(root, "_manifest.json"), "utf8")) as {
-	fixtures: Array<{ file: string; peer: string }>;
+const manifest = WireManifestSchema.parse(JSON.parse(fs.readFileSync(path.join(root, "_manifest.json"), "utf8")));
+const load = (file: string): Extract<WireFixture, { producer: "kotlin" }> => {
+	const fixture = WireFixtureSchema.parse(JSON.parse(fs.readFileSync(path.join(root, file), "utf8")));
+	if (fixture.producer !== "kotlin") throw new Error(`fixture ${file} is not Kotlin-produced`);
+	return fixture;
 };
-const load = (file: string): KotlinFixture => JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
 const set = loadIdentitySet();
 
 describe("Kotlin wire fixtures replayed through the Router", () => {
@@ -83,8 +79,18 @@ describe("the TS phone driver reproduces every Kotlin-signed owner op", () => {
 				randomBytes: () => Buffer.from(fixture.inputs.nonce as string, "base64"),
 				newOpId: () => fixture.inputs.opId as string,
 			});
-			const ours = driver.ownerOp(fixture.inputs.op as Record<string, unknown>, fixture.inputs.opId);
+			const ours = driver.ownerOp(fixture.inputs.op as Record<string, unknown>, fixture.inputs.opId as string);
 			expect(OwnerOpSchema.parse(ours)).toEqual(OwnerOpSchema.parse(posted.ownerOp));
 		});
 	}
+});
+
+describe("the gateway opens the Kotlin key grant", () => {
+	it("KeyDeliveryOps.onKeyRequest/key_grant.json", () => {
+		const fixture = load("KeyDeliveryOps.onKeyRequest/key_grant.json");
+		const { grant } = fixture.inputs.op as { grant: { envelope: KeyEnvelope } };
+		const opened = unwrapContentKey(grant.envelope, set.gateway.identity.box.priv);
+		expect(opened.epoch).toBe(set.content.epoch);
+		expect(opened.key.equals(contentKeyOf(set))).toBe(true);
+	});
 });

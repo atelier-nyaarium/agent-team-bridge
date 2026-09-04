@@ -2,14 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MailboxEntrySchema } from "../shared/schemasConsoleOp.js";
+import { type WireFixture, WireFixtureSchema, WireManifestSchema } from "../shared/schemasWireFixture.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
 import { loadIdentitySet } from "../testing/identitySet.js";
 
 describe("TS wire fixtures", () => {
 	const root = path.resolve(import.meta.dirname, "../../tests/fixtures/wire/ts");
-	const manifest = JSON.parse(fs.readFileSync(path.join(root, "_manifest.json"), "utf8")) as {
-		fixtures: Array<{ file: string; peer: string }>;
-	};
+	const manifest = WireManifestSchema.parse(JSON.parse(fs.readFileSync(path.join(root, "_manifest.json"), "utf8")));
 	const set = loadIdentitySet();
 	let h: FederationHarness;
 
@@ -20,12 +19,11 @@ describe("TS wire fixtures", () => {
 		if (h) await h.close();
 	});
 
-	interface Fixture {
-		frame: { name: string; params: Record<string, unknown> };
-		expect: Record<string, unknown>;
-		phone?: { open: unknown };
-	}
-	const load = (file: string): Fixture => JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
+	const load = (file: string): Extract<WireFixture, { producer: "ts" }> => {
+		const fixture = WireFixtureSchema.parse(JSON.parse(fs.readFileSync(path.join(root, file), "utf8")));
+		if (fixture.producer !== "ts") throw new Error(`fixture ${file} is not TS-produced`);
+		return fixture;
+	};
 	const isRegister = (file: string) => load(file).frame.name === "gateway_register";
 
 	// Registration mints a new incarnation.

@@ -3,21 +3,18 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.ownerOpSigningBytes
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
-import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 
 /** Signed operations identify this console. */
 // Mutations use signed HTTP operations.
 class OwnerOps(
-	private val repo: ChatRepository?,
-	private val confirmedDomainId: () -> String? = { requireNotNull(repo).confirmedDomainId() },
-	private val consoleIdentity: () -> Crypto.Identity = { requireNotNull(repo).federation.consoleIdentity() },
-	private val provisioningConversationId: () -> String = { requireNotNull(repo).client().transport.prov.conversationId },
-	private val provisioningDevice: () -> String = { requireNotNull(repo).client().transport.prov.device },
-	// Shim, remove by 2026-10-01: callers pass their own clock and ids.
-	private val now: () -> Long = { System.currentTimeMillis() },
-	private val newNonce: () -> String = { com.atelier_nyaarium.switchboard.crypto.randomNonceB64() },
-	private val newOpId: () -> String = { UUID.randomUUID().toString() },
+	private val confirmedDomainId: () -> String?,
+	private val consoleIdentity: () -> Crypto.Identity,
+	private val provisioningConversationId: () -> String,
+	private val provisioningDevice: () -> String,
+	private val now: () -> Long,
+	private val newNonce: () -> String,
+	private val newOpId: () -> String,
 ) {
 
 	/** No domain means no signing. */

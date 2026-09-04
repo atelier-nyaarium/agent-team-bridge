@@ -1,0 +1,34 @@
+{
+	"producer": "kotlin",
+	"composer": "BoardRouterWriter.read",
+	"case": "board_read",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "board_read"
+		},
+		"opId": "board_read-op",
+		"nonce": "1sqRsImHP8nJCcqpbLgO21FR"
+	},
+	"expect": {
+		"revision": 1,
+		"entries": [
+			{
+				"clear": {
+					"id": "fixture-entry",
+					"state": "open",
+					"rank": "m",
+					"version": 1
+				}
+			}
+		]
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"board_read-op\",\"at\":1757000000000,\"nonce\":\"1sqRsImHP8nJCcqpbLgO21FR\",\"op\":{\"kind\":\"board_read\"},\"signature\":\"Nxv22QJu8MqXLkU7IaPWMJpQ/4iAM1cXe7JpSeIwkR8ERY/v48BWRjss2QPCowlm1rxgPVtt01mrtR+rvdG8BA==\"}}"
+	}
+}

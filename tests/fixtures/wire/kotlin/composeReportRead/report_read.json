@@ -1,0 +1,29 @@
+{
+	"producer": "kotlin",
+	"composer": "composeReportRead",
+	"case": "report_read",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "report_read",
+			"team": "fixture-domain.laptop.fixture-app.abc123",
+			"epoch": 1,
+			"seq": 1,
+			"at": 1757000000000
+		},
+		"opId": "report_read-op",
+		"nonce": "sA3JK5U3M8gzWO1ts98QG/wG"
+	},
+	"expect": {
+		"outcome": "accepted",
+		"advanced": true
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"report_read-op\",\"at\":1757000000000,\"nonce\":\"sA3JK5U3M8gzWO1ts98QG/wG\",\"op\":{\"kind\":\"report_read\",\"team\":\"fixture-domain.laptop.fixture-app.abc123\",\"epoch\":1,\"seq\":1,\"at\":1757000000000},\"signature\":\"maTxXUKuWEdIDVbPA2s+p6It05CBoQYV3Bv+rZJOTKxGDnwI+vQFM3/2qDvgTI5Z4HhQPiAkwngsztpC21POAQ==\"}}"
+	}
+}

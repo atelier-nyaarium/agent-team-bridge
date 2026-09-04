@@ -7,6 +7,10 @@
 		"opId": "refusal-op",
 		"reason": "denied"
 	},
+	"expect": {
+		"settled": false,
+		"reason": "no_waiter"
+	},
 	"frame": {
 		"name": "value_result",
 		"params": {
@@ -18,9 +22,5 @@
 			},
 			"incarnation": 1
 		}
-	},
-	"expect": {
-		"settled": false,
-		"reason": "no_waiter"
 	}
 }
