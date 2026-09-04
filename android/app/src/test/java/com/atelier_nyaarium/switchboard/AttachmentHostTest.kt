@@ -2,7 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AttachmentHostTest {
@@ -11,7 +11,7 @@ class AttachmentHostTest {
 		val host = FakeAttachmentHost()
 		val file = OutgoingFile.of("pick.txt", "text/plain", 1, File("/tmp/pick.txt"))
 
-		assertTrue(host.rejectIfUnconnected(listOf(file)))
+		assertNull(host.clientOrReject(listOf(file)))
 		assertEquals(listOf(file), host.cleaned)
 		assertEquals("Connect before adding attachments", host.message)
 	}

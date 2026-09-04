@@ -11,12 +11,12 @@ internal interface AttachmentHost {
 	fun report(message: String)
 }
 
-/** Without a client the staged files are removed and the reason shown. */
-internal fun AttachmentHost.rejectIfUnconnected(files: List<OutgoingFile>): Boolean {
-	if (client != null) return false
+/** One read of the client; without one the staged files are removed and the reason shown. */
+internal fun AttachmentHost.clientOrReject(files: List<OutgoingFile>): ConsoleClient? {
+	client?.let { return it }
 	cleanup(files)
 	report("Connect before adding attachments")
-	return true
+	return null
 }
 
 internal class ChatRepositoryAttachmentHost(private val repo: ChatRepository) : AttachmentHost {

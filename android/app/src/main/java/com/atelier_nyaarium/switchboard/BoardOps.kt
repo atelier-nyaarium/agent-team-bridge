@@ -155,8 +155,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 			repo._state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
 			return
 		}
-		if (repo.attachmentHost.rejectIfUnconnected(staged)) return
-		val client = repo.client ?: return
+		val client = repo.attachmentHost.clientOrReject(staged) ?: return
 		val sources = mutableMapOf<String, String>()
 		val added = staged.mapNotNull { picked ->
 			// Land under the blob name.
