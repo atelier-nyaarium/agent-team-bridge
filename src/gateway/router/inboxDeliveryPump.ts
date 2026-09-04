@@ -210,11 +210,15 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			`gateway/${parsed.gatewayId}/${parsed.sessionId}`,
 			`${parsed.domainId}/${parsed.gatewayId}/${parsed.sessionId}`,
 		]);
-		if (parsed.domainId !== deps.domainId || parsed.gatewayId !== deps.gatewayId || !targetMatches.has(target))
+		if (parsed.domainId !== deps.domainId || parsed.gatewayId !== deps.gatewayId || !targetMatches.has(target)) {
+			console.log(
+				`[console-op] ${op.data.kind} target=${target} -> target_mismatch (${parsed.domainId}/${parsed.gatewayId}/${parsed.sessionId})`,
+			);
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
 				outcome: "failed",
 				reason: "target_mismatch",
 			});
+		}
 		try {
 			const result = await deps.consoleDispatch(
 				op.data,
@@ -223,12 +227,12 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 				row.envelope.opKey.opId,
 				ownerSignPub,
 			);
+			console.log(`[console-op] ${op.data.kind} target=${target} -> ok`);
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: true, result });
 		} catch (error) {
-			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+			const message = error instanceof Error ? error.message : String(error);
+			console.log(`[console-op] ${op.data.kind} target=${target} -> error: ${message}`);
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: false, error: message });
 		}
 	}
 

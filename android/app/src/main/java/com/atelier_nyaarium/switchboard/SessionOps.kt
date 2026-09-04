@@ -23,6 +23,10 @@ internal class SessionOps(private val repo: ChatRepository) {
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable { repo.client().peek(team, sinceHash) }
 		}
+			// #region debug: peek outcome
+			.onSuccess { DebugLog.log("Peek", "team=$team kind=${it.kind} unchanged=${it.unchanged} hash=${it.hash.take(8)} ansi=${it.ansi?.length}") }
+			.onFailure { DebugLog.log("Peek", "team=$team failed: ${it.message?.take(160)}") }
+			// #endregion
 			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
 
 	/** Update a session's working + needs-login flags from a captured pane (the spinner and auth

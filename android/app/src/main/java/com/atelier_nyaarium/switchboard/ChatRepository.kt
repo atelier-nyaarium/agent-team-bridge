@@ -317,7 +317,10 @@ class ChatRepository(
 					}.onFailure { DebugLog.log("Inbox", "op_result open failed opId=${row.envelope.opKey.opId}") }.getOrNull()
 					val completed = transportCoordinator.completeOpResult(row.envelope.opKey.opId, result)
 					// #region debug: op result
-					DebugLog.log("Inbox", "op_result opId=${row.envelope.opKey.opId} opened=${result != null} waiter=$completed")
+					val verdict = (result as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+						"ok=${obj["ok"]} outcome=${obj["outcome"]} error=${obj["error"]?.toString()?.take(120)} reason=${obj["reason"]}"
+					}
+					DebugLog.log("Inbox", "op_result opId=${row.envelope.opKey.opId} opened=${result != null} waiter=$completed ${verdict ?: ""}")
 					// #endregion
 					continue
 				}
