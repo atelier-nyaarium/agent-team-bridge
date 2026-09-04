@@ -1,0 +1,88 @@
+{
+	"v": 1,
+	"recipientBox": {
+		"pub": "wFRjVjR56S8b6mR2m9jqT7epPHKAT8Dt3RfRQCnelXc=",
+		"priv": "txQXVT4jgPfIhuZvvnsv2zlEjzKvicqRcx3+0RA8jJ4="
+	},
+	"admittedSigner": {
+		"pub": "sMWYWcsAWqSu7SkcbzkhwhlTx279ZAbXNnZTVy3kVOw=",
+		"priv": "Ost7gQBLZ/F2CqiRjK7gbECjTXrbSZkGFW2lJ4ivJWw="
+	},
+	"unadmittedSigner": {
+		"pub": "gSzshDqOnGscpcOcbjHn2SU19T53Oh1OXnQhqwlolzc=",
+		"priv": "JmXL/jpX49GR64s36S/exLf8X6EyBG+4qytrRMwpQW0="
+	},
+	"held": {
+		"1": "ERERERERERERERERERERERERERERERERERERERERERE="
+	},
+	"envelopes": {
+		"epoch1Same": {
+			"epoch": 1,
+			"signerSignPub": "sMWYWcsAWqSu7SkcbzkhwhlTx279ZAbXNnZTVy3kVOw=",
+			"sealed": {
+				"ephemeralPub": "E9FVST+Dt0Y4C4UzVA8tSy3eURbhUU5KtyIPi8Ah5AA=",
+				"nonce": "0z7pl8/fQ8VvBvgH",
+				"ciphertext": "gSdGwE4yj+s5JdXuVstQ29lSQj7bHNBWR8iAX1Vnj+Lr+DlUAWDZiV4ZZkd1L3VhxcDdyLoHd/ANwy4fk4yEN7A=",
+				"signature": "evedLRGAiF+HrUrtZHq/pKPZi8zqxh7XxHGrDiEs4aKRWDGxb/s79/00RPhkhh6whV8+Zru7ETQMrlx0qDwrCA=="
+			}
+		},
+		"epoch1Different": {
+			"epoch": 1,
+			"signerSignPub": "sMWYWcsAWqSu7SkcbzkhwhlTx279ZAbXNnZTVy3kVOw=",
+			"sealed": {
+				"ephemeralPub": "vH3+W+KIno8aNcfI+C27Gr0V1R2xciCGKsyJBz6UxVU=",
+				"nonce": "BIZdCOf59VZmplOx",
+				"ciphertext": "8aT3htUJTUp/I2qMBF1qsm7T+li4tYvE+F6ZWzYDaUhLt8D8XoE4E+t2PkWT68aRYeTNYeSizvUnBYEg/6YHNVU=",
+				"signature": "UkmMLEELWrp7/6GfPngc+8Wgmvk4eERmq/bPZLWyfLpJ4NaypZx1RHMa2b6BnaWXvmLkvnM9uDJuMX8Nv5QvBQ=="
+			}
+		},
+		"epoch2": {
+			"epoch": 2,
+			"signerSignPub": "sMWYWcsAWqSu7SkcbzkhwhlTx279ZAbXNnZTVy3kVOw=",
+			"sealed": {
+				"ephemeralPub": "bRw2DgMDNBiqRomvTNzQojtZlkcIIUA1pI/Aa7i+Vws=",
+				"nonce": "y6RoTrP+xoIuVIYY",
+				"ciphertext": "ze8w15SREjFqKfPUKVqVrBm2+nJ0qp90F9UY480r2Y+jJWNuAPD6ePQXIOJJc+TtblWp0qLHsavEWMiV3lsCGkc=",
+				"signature": "6nbZ5HSGPl3xsPOTL4OaEecyAEXgC2n9KjxDrrU/fRHFsAAd6C/KcJEaUJRzeeofxy2kLGbAzOBFM3R7pFWOCQ=="
+			}
+		},
+		"epoch2Unadmitted": {
+			"epoch": 2,
+			"signerSignPub": "gSzshDqOnGscpcOcbjHn2SU19T53Oh1OXnQhqwlolzc=",
+			"sealed": {
+				"ephemeralPub": "yUM44Bhez3zvA0Ux7XzN54FzMK55mQSACthLDq1OLF4=",
+				"nonce": "DT7HZbhPsmOFlhtX",
+				"ciphertext": "4AGiNi0d72tKgUIhvzQdWyJyspl3j0mMEy/yfbibpJGhSwWt9ASWivZmNZG4/cFQyuXl9JWZaSmxH8V47qAbIo4=",
+				"signature": "FVGK4+nUTzUMNIhMaVI+hnz10QXExzVxlKqiHGW+RLV150Gu09ADStcmMtevZy3pUYHfiB77anvKHE5qPCp+BQ=="
+			}
+		}
+	},
+	"cases": [
+		{
+			"name": "held equal passes",
+			"envelopes": ["epoch1Same"],
+			"decision": "unchanged",
+			"expectedEpochs": [1]
+		},
+		{
+			"name": "held different refuses the batch",
+			"envelopes": ["epoch2", "epoch1Different"],
+			"decision": "refused",
+			"reason": "different_key",
+			"expectedEpochs": [1]
+		},
+		{
+			"name": "new epoch installs",
+			"envelopes": ["epoch2"],
+			"decision": "installed",
+			"expectedEpochs": [1, 2]
+		},
+		{
+			"name": "unadmitted signer refuses",
+			"envelopes": ["epoch2Unadmitted"],
+			"decision": "refused",
+			"reason": "untrusted_signer",
+			"expectedEpochs": [1]
+		}
+	]
+}
