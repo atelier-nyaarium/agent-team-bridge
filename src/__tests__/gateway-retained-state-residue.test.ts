@@ -23,12 +23,6 @@ const RETAINED: Record<string, string[]> = {
 
 /** State leaving the gateway, with current consumers. */
 const LEAVING: Record<string, string[]> = {
-	"gateway/boardStore.ts": [
-		"gateway/index.ts",
-		"gateway/console/consoleHandler.ts",
-		"gateway/console/consoleTypes.ts",
-		"gateway/console/pollPlanes.ts",
-	],
 	"gateway/console/capabilityStore.ts": [
 		"gateway/index.ts",
 		"gateway/console/consoleDevices.ts",
@@ -37,7 +31,6 @@ const LEAVING: Record<string, string[]> = {
 	"shared/plane-registry.ts": [
 		"gateway/index.ts",
 		"gateway/boardAwareness.ts",
-		"gateway/boardStore.ts",
 		"gateway/presence.ts",
 		"gateway/readAnchors.ts",
 		"gateway/console/consoleTypes.ts",
@@ -137,10 +130,8 @@ describe("gateway retained state", () => {
 		expect(UNMAPPED_LEAVING).toEqual(["awareness generation"]);
 	});
 
-	it("keeps the agent task-board path off the gateway's own board store", () => {
-		const importers = importersOf("gateway/boardStore.ts", files);
-		// The console path remains active.
-		expect(importers).toContain("gateway/console/consoleHandler.ts");
-		expect(importers).not.toContain("gateway/routes.ts");
+	it("does not retain the legacy gateway board store", () => {
+		expect(fs.existsSync(path.join(ROOT, "gateway/boardStore.ts"))).toBe(false);
+		expect(importersOf("gateway/boardStore.ts", files)).toEqual([]);
 	});
 });

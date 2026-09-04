@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { BoardAttachmentStore } from "../../shared/board-attachment-store.js";
+import type { BoardDisposition } from "../../shared/board-authority.js";
 import type { ConsoleOp, ConsoleOpResult, CrossDomainShareTarget } from "../../shared/console-protocol.js";
 import {
 	ALLOWED_KEYS,
@@ -18,7 +18,6 @@ import { sanitizeLabel } from "../../shared/session-sanitize.js";
 import type { SessionRecord } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { answerBlobOp } from "../blobOps.js";
-import { type BoardDisposition, type BoardResult, type BoardStore, OWNER_ACTOR, refusalError } from "../boardStore.js";
 import { readAnchorsPlaneName } from "../readAnchors.js";
 import { createConsoleTargets } from "./consoleTargets.js";
 import {
@@ -47,7 +46,6 @@ export function createConsoleDispatcher({
 	domain,
 	planeRegistry,
 	readAnchors,
-	boardStore,
 	blobStore,
 	boardAttachments,
 	fetchBlobFromGateway,
@@ -84,24 +82,6 @@ export function createConsoleDispatcher({
 		if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
 			throw new Error(`terminal view unavailable for a user-launched session; end it from your terminal`);
 		}
-	}
-
-	function requireBoard(): BoardStore {
-		if (!boardStore) throw new Error("task board is not available on this Gateway");
-		return boardStore;
-	}
-
-	function requireBoardAttachments(): BoardAttachmentStore {
-		if (!boardAttachments) throw new Error("task board attachments are not available on this Gateway");
-		return boardAttachments;
-	}
-
-	function boardWrite(result: BoardResult): { applied: true } {
-		// Retryable fence.
-		if (!result.applied && "migrating" in result) throw new Error(MIGRATING);
-		// Permanent refusal retires queued action.
-		if (!result.applied) throw refusalError(result.refused);
-		return { applied: true };
 	}
 
 	async function dispatch(
@@ -238,80 +218,6 @@ export function createConsoleDispatcher({
 				return { advanced };
 			}
 
-			case "board_upsert": {
-				return boardWrite(
-					requireBoard().upsert(
-						ownerId,
-						op.entries.map((e) =>
-							e.sessionId === undefined ? e : { ...e, sessionId: targets.boardSessionKey(e.sessionId) },
-						),
-						OWNER_ACTOR,
-					),
-				);
-			}
-			case "board_set_state": {
-				return boardWrite(requireBoard().setState(ownerId, op.id, op.state, OWNER_ACTOR));
-			}
-			case "board_set_title": {
-				return boardWrite(requireBoard().setTitle(ownerId, op.id, op.title, OWNER_ACTOR));
-			}
-			case "board_set_body": {
-				return boardWrite(requireBoard().setBody(ownerId, op.id, op.body, OWNER_ACTOR));
-			}
-			case "board_set_attachments": {
-				const attachments = requireBoardAttachments();
-				if (!requireBoard().entry(ownerId, op.id)) throw refusalError("entry_missing");
-				const supplied = op.supplied;
-				const resolved: Array<{ a: (typeof op.attachments)[number]; cached?: string }> = [];
-				const dropped: string[] = [];
-				for (const a of op.attachments) {
-					if (attachments.has(ownerId, op.id, a.blobId)) {
-						resolved.push({ a });
-						continue;
-					}
-					const cached = blobStore?.path(a.blobId);
-					if (cached) {
-						resolved.push({ a, cached });
-						continue;
-					}
-					if (!supplied || supplied.includes(a.blobId)) {
-						throw new Error(`attachment ${a.blobId} has not finished uploading`);
-					}
-					dropped.push(a.filename);
-				}
-				for (const r of resolved) {
-					if (r.cached) attachments.adopt(ownerId, op.id, r.a.blobId, r.cached);
-				}
-				if (dropped.length > 0) {
-					console.warn(
-						`[task-board] ${op.id}: dropped ${dropped.length} attachment(s) with no bytes anywhere`,
-					);
-				}
-				const result = requireBoard().setAttachments(
-					ownerId,
-					op.id,
-					resolved.map((r) => r.a),
-					OWNER_ACTOR,
-				);
-				boardWrite(result);
-				return { applied: true, ...(dropped.length > 0 ? { dropped } : {}) };
-			}
-			case "board_set_parent": {
-				return boardWrite(requireBoard().setParent(ownerId, op.id, op.parent, op.rank, OWNER_ACTOR));
-			}
-			case "board_set_trashed": {
-				return boardWrite(requireBoard().setTrashed(ownerId, op.id, op.trashed));
-			}
-			case "board_set_session": {
-				const sessionId = op.sessionId === undefined ? undefined : targets.boardSessionKey(op.sessionId);
-				if (sessionId !== undefined && sessionStore && !sessionStore.getByTeam(sessionId)) {
-					throw refusalError("session_missing");
-				}
-				return boardWrite(requireBoard().setSession(ownerId, op.id, sessionId));
-			}
-			case "board_remove": {
-				return boardWrite(requireBoard().remove(ownerId, op.ids));
-			}
 			case "peek": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = targets.tmuxTarget(op.target);

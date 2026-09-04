@@ -9,7 +9,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/wake.ts` - container/session wake decisions
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
 - `src/gateway/presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence, read anchors, host RPC correlation
-- `src/gateway/boardStore.ts` - durable owner task board
+- `src/gateway/router/boardClient.ts` - Router-held task board client
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer

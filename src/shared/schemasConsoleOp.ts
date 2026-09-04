@@ -2,14 +2,6 @@ import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlob.js";
-import {
-	BOARD_ATTACHMENTS_MAX,
-	BOARD_BATCH_MAX,
-	BOARD_BODY_MAX,
-	BOARD_RANK_MAX,
-	BoardAttachmentSchema,
-	BoardEntrySchema,
-} from "./schemasBoard.js";
 
 export { SealedEnvelopeSchema } from "./crypto.js";
 
@@ -49,51 +41,6 @@ export const ConsoleOpSchema = z
 			team: z.string().min(1).max(128),
 			epoch: z.number().int().nonnegative().max(0x7fffffff),
 			seq: z.number().int().nonnegative(),
-		}),
-		z.object({
-			kind: z.literal("board_upsert"),
-			entries: z.array(BoardEntrySchema).min(1).max(BOARD_BATCH_MAX),
-		}),
-		z.object({
-			kind: z.literal("board_set_state"),
-			id: z.string().min(1).max(64),
-			state: z.enum(["open", "in_progress", "paused", "done", "cancelled"]),
-		}),
-		z.object({
-			kind: z.literal("board_set_title"),
-			id: z.string().min(1).max(64),
-			title: z.string().min(1).max(500),
-		}),
-		z.object({
-			kind: z.literal("board_set_body"),
-			id: z.string().min(1).max(64),
-			body: z.string().max(BOARD_BODY_MAX).optional(),
-		}),
-		z.object({
-			kind: z.literal("board_set_attachments"),
-			id: z.string().min(1).max(64),
-			attachments: z.array(BoardAttachmentSchema).max(BOARD_ATTACHMENTS_MAX),
-			supplied: z.array(z.string().min(1).max(128)).max(BOARD_ATTACHMENTS_MAX).optional(),
-		}),
-		z.object({
-			kind: z.literal("board_set_parent"),
-			id: z.string().min(1).max(64),
-			parent: z.string().min(1).max(64).optional(),
-			rank: z.string().min(1).max(BOARD_RANK_MAX),
-		}),
-		z.object({
-			kind: z.literal("board_set_trashed"),
-			id: z.string().min(1).max(64),
-			trashed: z.boolean(),
-		}),
-		z.object({
-			kind: z.literal("board_set_session"),
-			id: z.string().min(1).max(64),
-			sessionId: z.string().min(1).max(128).optional(),
-		}),
-		z.object({
-			kind: z.literal("board_remove"),
-			ids: z.array(z.string().min(1).max(64)).min(1).max(BOARD_BATCH_MAX),
 		}),
 		z.object({
 			kind: z.literal("peek"),

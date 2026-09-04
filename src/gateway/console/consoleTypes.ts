@@ -1,6 +1,7 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
 import type { BlobStore } from "../../shared/blob-store.js";
 import type { BoardAttachmentStore } from "../../shared/board-attachment-store.js";
+import type { BoardDisposition } from "../../shared/board-authority.js";
 import type {
 	ConsoleOp,
 	CrossDomainConfirmResult,
@@ -19,7 +20,6 @@ import type { PlaneRegistry } from "../../shared/plane-registry.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
-import type { BoardDisposition, BoardStore } from "../boardStore.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
@@ -131,10 +131,6 @@ export interface ConsoleHandlerDeps {
 	 * another owner's). Absent when not wired (report_read then errors; the poll piggyback is
 	 * simply skipped, matching every other plane's own opt-in shape). */
 	readAnchors?: ReadAnchors;
-	/** The owner's task board (boardStore.ts): the board ops write through here, and the poll case
-	 * piggybacks this OWNER's own plane the way readAnchors does. Absent when not wired (board ops
-	 * then error; the poll piggyback is simply skipped). */
-	boardStore?: BoardStore;
 	/** The landed side of a linked friend's `presence_push` (crossDomainPresence.ts): the poll case
 	 * eagerly ensures a plane for every currently-linked Domain (via `linkedDomainIds` below) before
 	 * racing `waitForBump` - a plane that does not exist yet cannot wake an in-flight held poll on
@@ -151,7 +147,7 @@ export interface ConsoleHandlerDeps {
 	 * blob cases refuse rather than inventing a location to write to. */
 	blobStore?: BlobStore;
 	/** Task board attachment bytes, which outlive the cache. Read by the blob ops so the gallery can
-	 * still open a picture after the cached copy is swept, and written by board_set_attachments. */
+	 * still open a picture after the cached copy is swept. */
 	boardAttachments?: BoardAttachmentStore;
 	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
 	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */

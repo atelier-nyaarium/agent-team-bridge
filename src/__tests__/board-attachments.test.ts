@@ -1,232 +1,139 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { readBlobRange } from "../gateway/blobOps.js";
-import { type BoardAttachmentSink, BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
-import { BlobStore } from "../shared/blob-store.js";
+import { BlobStore, blobIdFor } from "../shared/blob-store.js";
 import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
-import { BOARD_TRASH_TTL_MS } from "../shared/board-structure.js";
-import type { BoardAttachment, BoardEntry } from "../shared/console-protocol.js";
-import { DurableStore } from "../shared/durable-store.js";
-import { PlaneRegistry } from "../shared/plane-registry.js";
 
-const OWNER = "a".repeat(64);
-const ENTRY = "b".repeat(32);
-
-function entry(id: string, over: Partial<BoardEntry> = {}): BoardEntry {
-	return { id, title: `t-${id}`, state: "open", rank: "m", ...over };
-}
-
-function attachment(bytes: string, over: Partial<BoardAttachment> = {}): BoardAttachment {
-	return {
-		blobId: blobIdOf(bytes),
-		blobGateway: "gw-1",
-		filename: `${bytes}.png`,
-		mime: "image/png",
-		size: bytes.length,
-		...over,
-	};
-}
-
-function blobIdOf(bytes: string): string {
-	return `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
-}
-
-let dir: string;
-let store: BoardStore;
-let attachments: BoardAttachmentStore;
-
-beforeEach(() => {
-	dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-attach-"));
-	attachments = new BoardAttachmentStore(path.join(dir, "board-attachments"));
-	const sink: BoardAttachmentSink = {
-		released: (ownerId, entryId, blobIds) => {
-			for (const blobId of blobIds) attachments.remove(ownerId, entryId, blobId);
-		},
-		releasedAll: (ownerId, entryId) => attachments.removeEntry(ownerId, entryId),
-	};
-	store = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined, undefined, sink);
-	store.upsert(OWNER, [entry(ENTRY)], OWNER_ACTOR);
-});
+const owner = "a".repeat(64);
+const entry = "b".repeat(32);
+const roots: string[] = [];
+const make = () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-attachments-"));
+	roots.push(root);
+	return { store: new BoardAttachmentStore(path.join(root, "attachments")), root };
+};
+const source = (root: string, name: string, bytes: string) => {
+	const file = path.join(root, name);
+	fs.writeFileSync(file, bytes);
+	return file;
+};
+const blob = (name: string) => `sha256-${name.padStart(64, "0")}`;
 
 afterEach(() => {
-	fs.rmSync(dir, { recursive: true, force: true });
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function hold(bytes: string, entryId = ENTRY): BoardAttachment {
-	const a = attachment(bytes);
-	const source = path.join(dir, `src-${bytes}`);
-	fs.writeFileSync(source, bytes);
-	attachments.adopt(OWNER, entryId, a.blobId, source);
-	return a;
-}
-
-const setAttachments = (list: readonly BoardAttachment[], id = ENTRY) =>
-	store.setAttachments(OWNER, id, list, OWNER_ACTOR);
-
-describe("setting an entry's attachments", () => {
-	it("adding then removing one leaves the survivor's bytes and reclaims only what left", () => {
-		const one = hold("one");
-		const two = hold("two");
-		setAttachments([one, two]);
-		expect(store.entry(OWNER, ENTRY)?.attachments).toHaveLength(2);
-
-		setAttachments([one]);
-		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.filename)).toEqual(["one.png"]);
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
-		expect(attachments.has(OWNER, ENTRY, two.blobId)).toBe(false);
+describe("board attachment store", () => {
+	it("adopts bytes", () => {
+		const { store, root } = make();
+		const id = blob("1");
+		store.adopt(owner, entry, id, source(root, "one", "one"));
+		expect(store.has(owner, entry, id)).toBe(true);
 	});
-
-	it("a same-count swap still reclaims the picture that left, because the diff is by membership", () => {
-		const one = hold("one");
-		const two = hold("two");
-		setAttachments([one]);
-		setAttachments([two]);
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(false);
-		expect(attachments.has(OWNER, ENTRY, two.blobId)).toBe(true);
+	it("returns the stored path", () => {
+		const { store, root } = make();
+		const id = blob("2");
+		store.adopt(owner, entry, id, source(root, "two", "two"));
+		expect(store.path(owner, entry, id)).not.toBeNull();
 	});
-
-	it("an empty list clears the field and releases everything the entry held", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		setAttachments([]);
-		expect(store.entry(OWNER, ENTRY)?.attachments).toBeUndefined();
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(false);
+	it("returns null for a missing path", () => expect(make().store.path(owner, entry, blob("3"))).toBeNull());
+	it("does not overwrite an existing copy", () => {
+		const { store, root } = make();
+		const id = blob("4");
+		store.adopt(owner, entry, id, source(root, "a", "first"));
+		store.adopt(owner, entry, id, source(root, "b", "second"));
+		expect(store.readAny(id, 0, 20)?.bytes.toString()).toBe("first");
 	});
-
-	it("re-sending the same list in a different order neither commits nor reclaims", () => {
-		const one = hold("one");
-		const two = hold("two");
-		setAttachments([one, two]);
-		expect(setAttachments([two, one])).toEqual({ applied: true });
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
-		expect(attachments.has(OWNER, ENTRY, two.blobId)).toBe(true);
+	it("reads a range", () => {
+		const { store, root } = make();
+		const id = blob("5");
+		store.adopt(owner, entry, id, source(root, "five", "abcdef"));
+		expect(store.readAny(id, 2, 2)).toEqual({ bytes: Buffer.from("cd"), eof: false });
 	});
-
-	it("stores sorted by blobId, so a rebuild in another order hashes identically", () => {
-		const one = hold("one");
-		const two = hold("two");
-		setAttachments([one, two]);
-		const first = store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId);
-		setAttachments([two, one]);
-		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId)).toEqual(first);
-		expect(first).toEqual([...(first ?? [])].sort());
+	it("reports eof for the final range", () => {
+		const { store, root } = make();
+		const id = blob("6");
+		store.adopt(owner, entry, id, source(root, "six", "abcdef"));
+		expect(store.readAny(id, 4, 8)?.eof).toBe(true);
 	});
-
-	it("a refused write reclaims nothing", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		expect(store.setAttachments(OWNER, "no-such-entry", [], OWNER_ACTOR)).toEqual({
-			applied: false,
-			refused: "entry_missing",
-		});
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
+	it("reads an empty range at eof", () => {
+		const { store, root } = make();
+		const id = blob("7");
+		store.adopt(owner, entry, id, source(root, "seven", "abc"));
+		expect(store.readAny(id, 3, 1)).toEqual({ bytes: Buffer.alloc(0), eof: true });
 	});
-});
-
-describe("upsert and attachments", () => {
-	it("ignores an incoming list, so a move cannot land members nothing ingested", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		const forged = attachment("never-uploaded");
-		store.upsert(OWNER, [{ ...entry(ENTRY), attachments: [forged] }], OWNER_ACTOR);
-		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId)).toEqual([one.blobId]);
+	it("finds bytes across entries", () => {
+		const { store, root } = make();
+		const id = blob("8");
+		store.adopt(owner, entry, id, source(root, "eight", "eight"));
+		expect(store.hasAny(id)).toBe(true);
 	});
-
-	it("drops an incoming list on an entry it has NEVER held, which is the move's destination", () => {
-		// Unknown entries cannot adopt attachment metadata.
-		const fresh = "d".repeat(32);
-		store.upsert(OWNER, [{ ...entry(fresh), attachments: [attachment("never-uploaded")] }], OWNER_ACTOR);
-		expect(store.entry(OWNER, fresh)?.attachments).toBeUndefined();
+	it("rejects invalid blob ids", () => expect(() => make().store.has(owner, entry, "bad")).toThrow(/blob id/));
+	it("rejects invalid owner ids", () => expect(() => make().store.has("bad", entry, blob("9"))).toThrow(/owner id/));
+	it("rejects invalid entry ids", () =>
+		expect(() => make().store.has(owner, "bad", blob("a"))).toThrow(/board entry id/));
+	it("rejects invalid ids before joining paths", () =>
+		expect(() => make().store.remove(owner, "../x", blob("b"))).toThrow(/board entry id/));
+	it("removes one blob", () => {
+		const { store, root } = make();
+		const id = blob("c");
+		store.adopt(owner, entry, id, source(root, "c", "c"));
+		store.remove(owner, entry, id);
+		expect(store.has(owner, entry, id)).toBe(false);
 	});
-
-	it("preserves the stored list when an older console upserts an entry with no attachments field", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		store.upsert(OWNER, [entry(ENTRY, { title: "renamed" })], OWNER_ACTOR);
-		const stored = store.entry(OWNER, ENTRY);
-		expect(stored?.title).toBe("renamed");
-		expect(stored?.attachments?.map((a) => a.blobId)).toEqual([one.blobId]);
+	it("removing a missing blob is harmless", () =>
+		expect(() => make().store.remove(owner, entry, blob("d"))).not.toThrow());
+	it("removes an entry directory", () => {
+		const { store, root } = make();
+		const id = blob("e");
+		store.adopt(owner, entry, id, source(root, "e", "e"));
+		store.removeEntry(owner, entry);
+		expect(store.has(owner, entry, id)).toBe(false);
 	});
-
-	it("treats a re-send differing ONLY in attachments as no change at all", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		const resent = { ...entry(ENTRY), attachments: [attachment("never-uploaded")] };
-		// An unchanged write cannot adopt forged attachments.
-		expect(store.upsert(OWNER, [resent], OWNER_ACTOR)).toEqual({ applied: true });
-		expect(store.entry(OWNER, ENTRY)?.attachments?.map((a) => a.blobId)).toEqual([one.blobId]);
+	it("removes all blobs for one entry only", () => {
+		const { store, root } = make();
+		const first = blob("f");
+		const second = blob("10");
+		store.adopt(owner, entry, first, source(root, "f", "f"));
+		store.adopt(owner, "c".repeat(32), second, source(root, "ten", "ten"));
+		store.removeEntry(owner, entry);
+		expect(store.hasAny(first)).toBe(false);
+		expect(store.hasAny(second)).toBe(true);
 	});
-});
-
-describe("the trash sweep", () => {
-	it("takes an entry's whole directory when the retention window is up", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		store.setTrashed(OWNER, ENTRY, true);
-		store.sweepTrash(Date.now() + BOARD_TRASH_TTL_MS + 1);
-		expect(store.entry(OWNER, ENTRY)).toBeUndefined();
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(false);
-	});
-
-	it("leaves a trashed entry's bytes alone until the window is up, so a restore still opens", () => {
-		const one = hold("one");
-		setAttachments([one]);
-		store.setTrashed(OWNER, ENTRY, true);
-		store.sweepTrash(Date.now());
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
-	});
-});
-
-describe("the delete half of a move", () => {
-	it("leaves the origin's bytes alone, because the op carries no evidence they landed elsewhere", () => {
-		// The receiver owns cleanup after attachment delivery.
-		const one = hold("one");
-		setAttachments([one]);
-		expect(store.remove(OWNER, [ENTRY])).toEqual({ applied: true });
-		expect(attachments.has(OWNER, ENTRY, one.blobId)).toBe(true);
-	});
-});
-
-describe("the durable store's path segments", () => {
-	it("refuses an entry id that is not the shape every real one has", () => {
-		expect(() => attachments.has(OWNER, "../../federation", blobIdOf("x"))).toThrow(/board entry id/);
-	});
-
-	it("refuses an owner id that did not come off the deriver", () => {
-		expect(() => attachments.has("../evil", ENTRY, blobIdOf("x"))).toThrow(/owner id/);
-	});
-
-	it("refuses a blob id that is not a sha256 name", () => {
-		expect(() => attachments.has(OWNER, ENTRY, "../../../etc/passwd")).toThrow(/blob id/);
-	});
-
-	it("keys by entry, so the same bytes on two entries survive one being cleared", () => {
+	it("keeps identical bytes independent by entry", () => {
+		const { store, root } = make();
+		const id = blob("11");
 		const other = "c".repeat(32);
-		store.upsert(OWNER, [entry(other)], OWNER_ACTOR);
-		const here = hold("shared");
-		hold("shared", other);
-		setAttachments([here]);
-		setAttachments([attachment("shared")], other);
-
-		setAttachments([], other);
-		expect(attachments.has(OWNER, ENTRY, here.blobId)).toBe(true);
+		store.adopt(owner, entry, id, source(root, "eleven", "same"));
+		store.adopt(owner, other, id, source(root, "eleven-b", "same"));
+		store.remove(owner, entry, id);
+		expect(store.has(owner, other, id)).toBe(true);
 	});
-});
-
-describe("serving bytes after the cache has swept", () => {
-	it("reads through to the durable store, which is what a peer Gateway's door depends on", () => {
-		const blobs = new BlobStore(path.join(dir, "blobs"));
-		const one = hold("one");
-		const served = readBlobRange(blobs, attachments, one.blobId, 0, 1024);
-		expect(served.bytes.toString()).toBe("one");
-		expect(served.eof).toBe(true);
+	it("reports absent bytes as null", () => expect(make().store.readAny(blob("12"), 0, 1)).toBeNull());
+	it("does not leave an adopting temp file as a hit", () => {
+		const { store, root } = make();
+		const id = blob("13");
+		const dir = path.join(root, "attachments", owner, entry);
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, `${id}.adopting`), "partial");
+		expect(store.has(owner, entry, id)).toBe(false);
 	});
 
-	it("still fails loudly when neither the cache nor any entry holds the bytes", () => {
-		const blobs = new BlobStore(path.join(dir, "blobs"));
-		expect(() => readBlobRange(blobs, attachments, blobIdOf("absent"), 0, 1024)).toThrow(/not complete/);
+	it("reads through from the cache to the durable attachment store", () => {
+		const { store, root } = make();
+		const bytes = Buffer.from("durable");
+		const id = blobIdFor(bytes);
+		store.adopt(owner, entry, id, source(root, "durable", bytes.toString()));
+		const cache = new BlobStore(path.join(root, "blobs"));
+		expect(readBlobRange(cache, store, id, 0, 1024)).toEqual({ bytes, eof: true });
+	});
+
+	it("fails loudly when neither store holds the blob", () => {
+		const { store, root } = make();
+		const cache = new BlobStore(path.join(root, "blobs"));
+		const id = blobIdFor(Buffer.from("absent"));
+		expect(() => readBlobRange(cache, store, id, 0, 1024)).toThrow(/not complete/);
 	});
 });

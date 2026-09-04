@@ -1,19 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAwarenessBank } from "../gateway/awarenessBank.js";
 import { boardAwarenessSubscriber } from "../gateway/boardAwareness.js";
-import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import type { AwarenessObservation } from "../shared/awareness-types.js";
-import { BOARD_TRASH_TTL_MS } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
-import { DurableStore } from "../shared/durable-store.js";
-import { PlaneRegistry } from "../shared/plane-registry.js";
 
-const owner = "owner";
 const session = "proj.main";
-type Observation = AwarenessObservation<BoardEntry>;
 const entry = (id: string, over: Partial<BoardEntry> = {}): BoardEntry => ({
 	id,
 	title: `t-${id}`,
@@ -21,242 +12,134 @@ const entry = (id: string, over: Partial<BoardEntry> = {}): BoardEntry => ({
 	rank: "m",
 	...over,
 });
+const change = (id: string, pre?: BoardEntry, post?: BoardEntry): AwarenessObservation<BoardEntry> => ({
+	identity: id,
+	sessionKey: session,
+	pre,
+	post,
+});
 
 describe("board awareness subscriber", () => {
-	let dir: string;
-	let store: BoardStore;
-	let observations: Observation[];
-
-	function createObserver() {
-		return (items: readonly Observation[]) => observations.push(...items);
-	}
-
-	function body() {
-		return boardAwarenessSubscriber.render(session, observations);
-	}
-
-	function acts() {
-		return observations.map(({ pre, post }) => boardAwarenessSubscriber.act(session, pre, post));
-	}
-
-	beforeEach(() => {
-		dir = fs.mkdtempSync(path.join(os.tmpdir(), "awareness-"));
-		observations = [];
-		store = new BoardStore(new DurableStore(dir, "task-board"), new PlaneRegistry(), undefined, createObserver());
-		store.upsert(owner, [entry("a")], OWNER_ACTOR);
-		store.claim(owner, "a", session);
-		observations = [];
-	});
-
-	afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
-
-	it("announces an owner edit by id alone, since a re-read resolves it", () => {
-		store.setTitle(owner, "a", "renamed", OWNER_ACTOR);
-		expect(body()).toBe("The owner edited a.");
-		expect(acts()).toEqual(["no_act"]);
-	});
-
-	it("keeps both sides of a reassignment", () => {
-		store.setSession(owner, "a", "other");
-		expect(new Set(observations.map((item) => item.sessionKey))).toEqual(new Set([session, "other"]));
-		observations = [];
-		store.setSession(owner, "a", session);
-		expect(new Set(observations.map((item) => item.sessionKey))).toEqual(new Set([session, "other"]));
-	});
-
-	it("classifies backlog as no_act and gone states as act_now", () => {
-		const before = entry("a", { sessionId: session });
-		const backlog = entry("a");
-		const trashed = entry("a", { trashedAt: 1 });
-		expect(boardAwarenessSubscriber.act(session, before, backlog)).toBe("no_act");
-		expect(boardAwarenessSubscriber.act(session, before, trashed)).toBe("act_now");
-		expect(boardAwarenessSubscriber.act(session, before, undefined)).toBe("act_now");
-	});
-
-	it("coalesces edits into the net transition", () => {
-		const before = entry("a", { sessionId: session });
-		const edited = entry("a", { sessionId: session, title: "edited" });
-		const trashed = entry("a", { sessionId: session, title: "edited", trashedAt: 1 });
-		expect(boardAwarenessSubscriber.render(session, [{ identity: "a", pre: edited, post: trashed }])).toContain(
-			"trashed",
-		);
-		expect(boardAwarenessSubscriber.render(session, [{ identity: "a", pre: before, post: before }])).toBe("");
-	});
-
-	it("flattens titles and bounds named facts", () => {
-		const changes = Array.from({ length: 21 }, (_, i) => ({
-			identity: `a${i}`,
-			pre: entry(`a${i}`, { sessionId: session }),
-			post: entry(`a${i}`, { sessionId: session, trashedAt: 1, title: `title ${i}\nnext` }),
-		}));
-		const body = boardAwarenessSubscriber.render(session, changes);
-		expect(body.split("\n")).toHaveLength(21);
-		expect(body).not.toContain('"title 20');
-		expect(body).toContain("And 1 more.");
-	});
-
-	it("does not announce a holder's own write", () => {
-		observations = [];
-		store.setState(owner, "a", "in_progress", { kind: "session", sessionId: session });
-		expect(observations).toEqual([]);
-	});
-
-	it("renders a backlog release as no_act", () => {
-		store.setSession(owner, "a", undefined);
-		expect(body()).toContain("t-a");
-		expect(body()).toContain("backlog");
-		expect(acts()).toEqual(["no_act"]);
-	});
-
-	it("distinguishes trashed, removed, and reassigned as act_now", () => {
-		store.setTrashed(owner, "a", true);
-		expect(body()).toContain("trashed");
-		expect(acts()).toEqual(["act_now"]);
-		observations = [];
-		store.setTrashed(owner, "a", false);
-		store.setSession(owner, "a", "other");
-		expect(body()).toContain("reassigned");
-		expect(acts()).toContain("act_now");
-		observations = [];
-		store.setSession(owner, "a", session);
-		observations = [];
-		store.remove(owner, ["a"]);
-		expect(body()).toContain("removed");
-		expect(acts()).toEqual(["act_now"]);
-	});
-
-	it("observes every member touched by a subtree write", () => {
-		store.upsert(owner, [entry("a1", { parent: "a" })], OWNER_ACTOR);
-		store.claim(owner, "a", session);
-		observations = [];
-		store.setSession(owner, "a", undefined);
-		expect(observations.map(({ identity }) => identity).sort()).toEqual(["a", "a1"]);
-	});
-
-	it("does not observe refused or unchanged writes", () => {
-		store.setTitle(owner, "a", "t-a", OWNER_ACTOR);
-		expect(observations).toEqual([]);
-		expect(store.claim(owner, "a", "other")).toEqual({ applied: false, refused: "held" });
-		expect(observations).toEqual([]);
-	});
-
-	it("does not observe unheld entries", () => {
-		store.upsert(owner, [entry("loose")], OWNER_ACTOR);
-		observations = [];
-		store.setTitle(owner, "loose", "renamed", OWNER_ACTOR);
-		expect(observations).toEqual([]);
-	});
-
-	it("does not observe session end or trash sweep", () => {
-		store.sessionEnded(session, "release");
-		expect(observations).toEqual([]);
-		store.setSession(owner, "a", session);
-		observations = [];
-		store.setTrashed(owner, "a", true, 1_000);
-		observations = [];
-		store.sweepTrash(1_000 + BOARD_TRASH_TTL_MS + 1);
-		expect(observations).toEqual([]);
-	});
-
-	it("renders an untrash as arrived", () => {
-		store.setTrashed(owner, "a", true);
-		observations = [];
-		store.setTrashed(owner, "a", false);
-		expect(body()).toBe('"t-a" is yours.');
-		expect(acts()).toEqual(["no_act"]);
-	});
-
-	it("renders newly assigned work as arrived", () => {
-		store.upsert(owner, [entry("fresh")], OWNER_ACTOR);
-		observations = [];
-		store.setSession(owner, "fresh", session);
-		expect(body()).toBe('"t-fresh" is yours.');
-		expect(acts()).toEqual(["no_act"]);
-	});
-
-	it("renders each side of a reassignment with its own kind", () => {
-		store.setSession(owner, "a", "other");
-		expect(observations.find((item) => item.sessionKey === session)).toBeDefined();
+	it("announces edits by id alone", () => {
 		expect(
-			boardAwarenessSubscriber.render(
+			boardAwarenessSubscriber.render(session, [
+				change("a", entry("a", { sessionId: session }), entry("a", { sessionId: session, title: "renamed" })),
+			]),
+		).toBe("The owner edited a.");
+	});
+
+	it("renders arrivals, backlog, and disappearances", () => {
+		expect(
+			boardAwarenessSubscriber.render(session, [change("a", entry("a"), entry("a", { sessionId: session }))]),
+		).toBe('"t-a" is yours.');
+		expect(
+			boardAwarenessSubscriber.render(session, [change("a", entry("a", { sessionId: session }), entry("a"))]),
+		).toContain("backlog");
+		expect(boardAwarenessSubscriber.act(session, entry("a", { sessionId: session }), undefined)).toBe("act_now");
+	});
+
+	it("classifies trash and reassignment as act-now", () => {
+		expect(
+			boardAwarenessSubscriber.act(session, entry("a", { sessionId: session }), entry("a", { trashedAt: 1 })),
+		).toBe("act_now");
+		expect(
+			boardAwarenessSubscriber.act(
 				session,
-				observations.filter((item) => item.sessionKey === session),
+				entry("a", { sessionId: session }),
+				entry("a", { sessionId: "other" }),
 			),
-		).toContain("reassigned");
-		expect(boardAwarenessSubscriber.act(session, observations[0].pre, observations[0].post)).toBe("act_now");
+		).toBe("act_now");
+	});
+
+	it("classifies edits, backlog, untrash, and arrival as no-act", () => {
+		const held = entry("a", { sessionId: session });
+		expect(boardAwarenessSubscriber.act(session, held, entry("a", { sessionId: session, title: "edited" }))).toBe(
+			"no_act",
+		);
+		expect(boardAwarenessSubscriber.act(session, held, entry("a"))).toBe("no_act");
+		expect(boardAwarenessSubscriber.act(session, entry("a", { trashedAt: 1 }), held)).toBe("no_act");
+		expect(boardAwarenessSubscriber.act(session, entry("a"), held)).toBe("no_act");
+	});
+
+	it("renders reassignment and removal as distinct act-now facts", () => {
 		expect(
-			boardAwarenessSubscriber.render(
-				"other",
-				observations.filter((item) => item.sessionKey === "other"),
+			boardAwarenessSubscriber.render(session, [
+				change("a", entry("a", { sessionId: session }), entry("a", { sessionId: "other" })),
+			]),
+		).toBe('"t-a" was reassigned.');
+		expect(
+			boardAwarenessSubscriber.render(session, [change("a", entry("a", { sessionId: session }), undefined)]),
+		).toBe('"t-a" was removed.');
+	});
+
+	it("ignores unchanged and unheld entries", () => {
+		const same = entry("a", { sessionId: session });
+		expect(boardAwarenessSubscriber.render(session, [change("a", same, same)])).toBe("");
+		expect(
+			boardAwarenessSubscriber.render(session, [change("a", entry("a"), entry("a", { title: "renamed" }))]),
+		).toBe("");
+		expect(boardAwarenessSubscriber.act(session, entry("a"), entry("a", { title: "renamed" }))).toBe("no_act");
+	});
+
+	it("coalesces changed ids and bounds output", () => {
+		const changes = Array.from({ length: 21 }, (_, i) =>
+			change(
+				`a${i}`,
+				entry(`a${i}`, { sessionId: session }),
+				entry(`a${i}`, { sessionId: session, title: `title ${i}` }),
 			),
-		).toContain("is yours");
+		);
+		const body = boardAwarenessSubscriber.render(session, changes);
+		expect(body).toContain("21 entries you hold");
+		expect(body).toContain("and 1 more");
 	});
 
-	it("coalesces edit and trash to the net trashed fact", () => {
+	it("coalesces edit and trash to one trashed notification", () => {
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
-		store.setTitle(owner, "a", "edited", OWNER_ACTOR);
-		observe(observations);
-		observations = [];
-		store.setTrashed(owner, "a", true);
-		observe(observations);
-		const riding = bank.takeFor(session);
-		expect(riding?.body).toContain("trashed");
-		expect(riding?.body).not.toContain("edited");
+		observe([change("a", entry("a", { sessionId: session }), entry("a", { sessionId: session, title: "edited" }))]);
+		observe([change("a", entry("a", { sessionId: session, title: "edited" }), entry("a", { trashedAt: 1 }))]);
+		expect(bank.takeFor(session)?.body).toBe('"t-a" was trashed.');
 	});
 
-	it("coalesces edit, trash, and untrash to nothing", () => {
+	it("coalesces edit, trash, edit, and untrash to no notification", () => {
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
-		store.setTitle(owner, "a", "edited", OWNER_ACTOR);
-		observe(observations);
-		observations = [];
-		store.setTrashed(owner, "a", true);
-		observe(observations);
-		observations = [];
-		store.setTitle(owner, "a", "t-a", OWNER_ACTOR);
-		observe(observations);
-		observations = [];
-		store.setTrashed(owner, "a", false);
-		observe(observations);
+		observe([change("a", entry("a", { sessionId: session }), entry("a", { sessionId: session, title: "edited" }))]);
+		observe([change("a", entry("a", { sessionId: session, title: "edited" }), entry("a", { trashedAt: 1 }))]);
+		observe([change("a", entry("a", { trashedAt: 1 }), entry("a", { trashedAt: 1, title: "restored" }))]);
+		observe([change("a", entry("a", { trashedAt: 1, title: "restored" }), entry("a", { sessionId: session }))]);
 		expect(bank.takeFor(session)).toBeNull();
 	});
 
-	it("coalesces a move and edits to one changed line", () => {
+	it("coalesces a move and several edits to one changed line", () => {
 		const bank = createAwarenessBank({ liveness: () => "live", now: () => 0, deliver: () => true });
 		const observe = bank.register(boardAwarenessSubscriber);
-		store.upsert(owner, [entry("p")], OWNER_ACTOR);
-		observations = [];
-		expect(store.setParent(owner, "a", "p", "m", OWNER_ACTOR)).toEqual({ applied: true });
-		expect(observations).toHaveLength(1);
-		observe(observations);
-		observations = [];
+		observe([change("a", entry("a", { sessionId: session }), entry("a", { sessionId: session, parent: "p" }))]);
 		for (const title of ["one", "two", "three"]) {
-			store.setTitle(owner, "a", title, OWNER_ACTOR);
-			observe(observations);
-			observations = [];
+			observe([
+				change(
+					"a",
+					entry("a", { sessionId: session, parent: "p" }),
+					entry("a", { sessionId: session, parent: "p", title }),
+				),
+			]);
 		}
 		expect(bank.takeFor(session)?.body).toBe("The owner edited a.");
 	});
 
-	it("flattens a multi-line title so a named fact stays one line", () => {
-		// Each fact occupies one rendered line.
-		store.setTitle(owner, "a", "line one\nline two", OWNER_ACTOR);
-		observations = [];
-		store.setSession(owner, "a", undefined);
-		expect(body().split("\n")).toHaveLength(1);
-		expect(body()).toContain("line one line two");
-	});
-
-	it("collapses more than 20 changed ids through the store", () => {
-		// Changed-id output is bounded.
-		const entries = Array.from({ length: 25 }, (_, i) => entry(`x${i}`));
-		store.upsert(owner, entries, OWNER_ACTOR);
-		observations = [];
-		for (const item of entries) store.claim(owner, item.id, session);
-		observations = [];
-		for (const item of entries) store.setTitle(owner, item.id, `changed-${item.id}`, OWNER_ACTOR);
-		expect(body()).toContain("25 entries you hold");
-		expect(body()).toContain("and 5 more");
+	it("bounds named changes and flattens titles", () => {
+		const changes = Array.from({ length: 21 }, (_, i) =>
+			change(
+				`a${i}`,
+				entry(`a${i}`, { sessionId: session, title: `title ${i}\nnext` }),
+				entry(`a${i}`, { title: `title ${i}\nnext`, trashedAt: 1 }),
+			),
+		);
+		const body = boardAwarenessSubscriber.render(session, changes);
+		expect(body.split("\n")).toHaveLength(21);
+		expect(body).not.toContain('"title 20 next"');
+		expect(body).toContain("And 1 more.");
+		expect(body).toContain('"title 0 next"');
 	});
 });

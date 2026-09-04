@@ -28,7 +28,6 @@ import type { ResponsePayload } from "../shared/types.js";
 import { type AwarenessBank, createAwarenessBank } from "./awarenessBank.js";
 import { answerBlobOp, BlobTooLarge, readBlobRange } from "./blobOps.js";
 import { boardAwarenessSubscriber } from "./boardAwareness.js";
-import { type BoardDisposition, BoardStore } from "./boardStore.js";
 import {
 	armingOf,
 	type BootState,
@@ -299,27 +298,6 @@ export async function startGateway(): Promise<void> {
 
 	let awareness: AwarenessBank | null = null;
 	let boardObserve: ((observations: readonly AwarenessObservation<BoardEntry>[]) => void) | undefined;
-	const boardStore = openDurable(
-		DATA_DIR,
-		"task-board",
-		(d) =>
-			new BoardStore(d, planeRegistry, restoredPlanes, (observations) => boardObserve?.(observations), {
-				released: (ownerId, entryId, blobIds) => {
-					for (const blobId of blobIds) boardAttachments.remove(ownerId, entryId, blobId);
-				},
-				releasedAll: (ownerId, entryId) => boardAttachments.removeEntry(ownerId, entryId),
-			}),
-	);
-	const boardSessionEnded = (team: string, disposition: BoardDisposition): number => {
-		try {
-			const count = boardStore.sessionEnded(team, disposition);
-			awareness?.dropFor(team);
-			return count;
-		} catch (err) {
-			console.error(`[task-board] session-ended hook failed for ${team}:`, err);
-			return 0;
-		}
-	};
 	const sessionResumeSnapshot = (cleanShutdown: boolean) => ({
 		sessions: sessionStore.snapshot(),
 		planes: planeRegistry.persistedState(cleanShutdown),
@@ -358,10 +336,8 @@ export async function startGateway(): Promise<void> {
 					});
 					if (sweptTeams.length === 0) return;
 					presence.markDirty();
-					for (const team of sweptTeams) boardSessionEnded(team, "release");
 				},
 			},
-			{ name: "board-trash-sweep", run: () => boardStore.sweepTrash() },
 			{ name: "op-idempotency-sweep", run: () => durableOpStore.sweep() },
 			{ name: "board-idempotency-sweep", run: () => boardReplays.sweep() },
 			{ name: "console-capabilities-sweep", run: () => capabilityStore.sweep() },
@@ -1087,9 +1063,8 @@ export async function startGateway(): Promise<void> {
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
 			isTrustedCatalogProject,
-			dropSessionResume: (team, disposition) => {
+			dropSessionResume: (team) => {
 				presence.forget(team);
-				boardSessionEnded(team, disposition);
 			},
 			sessionStore: presence,
 			capabilityStore,
@@ -1102,7 +1077,6 @@ export async function startGateway(): Promise<void> {
 			presence,
 			intentTracker,
 			readAnchors,
-			boardStore,
 			crossDomainPresenceConsumer,
 			linkedDomainIds: () => [...new Set(federation.crossDomainPeers.all().map((p) => p.friendDomainId))],
 			relayToHost,

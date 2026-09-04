@@ -69,8 +69,7 @@ export const BoardEntrySchema = z
 		session: BoardSessionSchema.optional(),
 		// Server-stamped when trashed; absent means live. The 30-day trash sweep runs off it.
 		trashedAt: z.number().int().nonnegative().optional(),
-		// Written ONLY by board_set_attachments; every other writer preserves what is stored. See
-		// BoardStore.setAttachments for why that is what keeps the bytes durable.
+		// Set only by the attachment operation; other writes preserve the stored list.
 		attachments: z.array(BoardAttachmentSchema).max(BOARD_ATTACHMENTS_MAX).optional(),
 	})
 	.meta({ id: "BoardEntry" });

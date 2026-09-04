@@ -111,7 +111,6 @@ describe("migration fence residue", () => {
 		const floor = [
 			{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },
 			{ file: "src/shared/pending-delivery-store.ts", symbol: "enqueue" },
-			{ file: "src/gateway/boardStore.ts", symbol: "mutate" },
 			{ file: "src/gateway/readAnchors.ts", symbol: "report" },
 			{ file: "src/gateway/federation/gatewayRelay.ts", symbol: "handleOp" },
 		];

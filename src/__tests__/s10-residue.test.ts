@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { BoardStore, OWNER_ACTOR } from "../gateway/boardStore.js";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { createConsolePushOps } from "../gateway/consolePushOps.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
@@ -51,7 +50,6 @@ describe("S10 process fence", () => {
 		const dir = tempDir();
 		process.env.DATA_DIR = dir;
 		const owner = "owner";
-		const board = openDurable(dir, "task-board", (store) => new BoardStore(store, new PlaneRegistry(), undefined));
 		const pending = openDurable(dir, "pending-deliveries", (store) => new PendingDeliveryStore(store));
 		const ops = new DurableOpStore(new DurableStore(dir, "console-ops"));
 		const anchors = new ReadAnchors(new PlaneRegistry(), undefined);
@@ -74,7 +72,6 @@ describe("S10 process fence", () => {
 			localGatewayId: "gateway",
 			localDomainId: "domain",
 		});
-		const entry = { id: "00000000000000000000000000000001", title: "title", state: "open", rank: "m" } as never;
 		const target = { kind: "domain", domainId: "other" } as never;
 		const file = path.join(dir, "migration-epoch");
 		fs.writeFileSync(file, "8\n");
@@ -83,7 +80,6 @@ describe("S10 process fence", () => {
 
 		expect(pending.enqueue(delivery("fenced-pending"))).toBe("migrating");
 		expect(ops.markInFlight("conversation", "fenced-op")).toBeNull();
-		expect(board.upsert(owner, [entry], OWNER_ACTOR)).toEqual({ applied: false, migrating: true });
 		expect(anchors.report(owner, "team", { epoch: 1, seq: 1, at: 1 })).toBe(false);
 		expect(shares.unshare("session", target)).toBe(false);
 		expect(
@@ -101,7 +97,6 @@ describe("S10 process fence", () => {
 		invalidate();
 		expect(pending.enqueue(delivery("live-pending"))).toBe("enqueued");
 		expect(ops.markInFlight("conversation", "live-op")).toEqual(expect.any(Number));
-		expect(board.upsert(owner, [entry], OWNER_ACTOR)).toEqual({ applied: true });
 		expect(anchors.report(owner, "team", { epoch: 1, seq: 1, at: 1 })).toBe(true);
 		shares.share("session", target);
 		expect(shares.all()).toHaveLength(1);
