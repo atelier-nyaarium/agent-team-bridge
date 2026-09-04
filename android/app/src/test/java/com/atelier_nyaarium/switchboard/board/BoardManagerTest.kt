@@ -7,6 +7,7 @@ import com.atelier_nyaarium.switchboard.proto.BoardEntryClear
 import com.atelier_nyaarium.switchboard.proto.BoardEntrySealed
 import com.atelier_nyaarium.switchboard.proto.BoardSession
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
+import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,28 +31,43 @@ class BoardManagerTest {
 	private fun entry(id: String, sessionId: String? = null, state: String = "open", trashedAt: Long? = null) =
 		BoardEntry(id = id, title = "t-$id", state = state, rank = "m", sessionId = sessionId, trashedAt = trashedAt)
 
+	private class RecordingSealing(
+		keyring: ContentKeyring,
+		domainId: String,
+		ownerSignPub: String,
+	) : BoardSealing(keyring, domainId, ownerSignPub) {
+		var openCount = 0
+		val openThreads = mutableListOf<String>()
+
+		override fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
+			openCount++
+			openThreads += Thread.currentThread().name
+			return super.open(env, kind, entryId)
+		}
+	}
+
+	private fun stored(entry: BoardEntry, sealing: BoardSealing) = BoardStoredEntry(
+		clear = BoardEntryClear(
+			id = entry.id,
+			state = entry.state,
+			parent = entry.parent,
+			rank = entry.rank,
+			session = entry.sessionId?.let { BoardSession("domain", "gw-route", it) },
+			trashedAt = entry.trashedAt,
+			version = 1L,
+		),
+		sealed = BoardEntrySealed(sealing.seal(entry.title, BOARD_KIND_TITLE, entry.id)!!),
+	)
+
+	private fun sealing(identity: Crypto.Identity, keyring: ContentKeyring): RecordingSealing =
+		RecordingSealing(keyring, "domain", identity.sign.pub)
+
 	private fun seedRouter(board: BoardManager, entries: List<BoardEntry>) {
 		val keyring = ContentKeyring(store = null)
 		keyring.deriveOwned(Crypto.generateIdentity(), "domain", 1)
 		val sealing = BoardSealing(keyring, "domain", "owner")
 		board.sealing = { sealing }
-		board.applyRouterBoard(
-			1L,
-			entries.map { e ->
-				BoardStoredEntry(
-					clear = BoardEntryClear(
-						id = e.id,
-						state = e.state,
-						parent = e.parent,
-						rank = e.rank,
-						session = e.sessionId?.let { BoardSession("domain", "gw-route", it) },
-						trashedAt = e.trashedAt,
-						version = 1L,
-					),
-					sealed = BoardEntrySealed(title = sealing.seal(e.title, BOARD_KIND_TITLE, e.id)!!),
-				)
-			},
-		)
+		board.applyRouterBoard(1L, entries.map { stored(it, sealing) })
 	}
 
 	@Test
@@ -110,5 +126,62 @@ class BoardManagerTest {
 		assertEquals(7L, board.snapshot().routerRevision)
 		assertEquals(listOf("old-entry"), board.snapshot().stored.map { it.clear.id })
 		assertFalse(Json.encodeToString(BoardBlob.serializer(), board.snapshot()).contains("\"gateways\""))
+	}
+
+	@Test
+	fun backgroundApplyMemoizesRenderingForSynchronousReaders() {
+		val identity = Crypto.generateIdentity()
+		val keyring = ContentKeyring(store = null).also { it.deriveOwned(identity, "domain", 1) }
+		val sealing = sealing(identity, keyring)
+		val board = BoardManager(storeStub()).also { it.sealing = { sealing } }
+		val entries = listOf(stored(entry("one", "team"), sealing), stored(entry("two", "team"), sealing))
+		val before = sealing.openCount
+		Thread { board.applyRouterBoard(1L, entries) }.apply { start(); join() }
+		val afterApply = sealing.openCount
+
+		repeat(3) {
+			assertEquals(listOf("t-one", "t-two"), board.routerEntries().map { it.title })
+			assertEquals("t-one", board.liveLine("team")?.title)
+			assertEquals(2, board.undoneCount("team"))
+		}
+
+		assertTrue(afterApply > before)
+		assertEquals(afterApply, sealing.openCount)
+		assertTrue(sealing.openThreads.none { it == Thread.currentThread().name })
+	}
+
+	@Test
+	fun newlyAvailableEpochRebuildsTheMemo() {
+		val identity = Crypto.generateIdentity()
+		val epochTwoKeyring = ContentKeyring(store = null).also { it.deriveOwned(identity, "domain", 2) }
+		val epochTwoSealing = sealing(identity, epochTwoKeyring)
+		val keyring = ContentKeyring(store = null).also { it.deriveOwned(identity, "domain", 1) }
+		val sealing = sealing(identity, keyring)
+		val board = BoardManager(storeStub()).also { it.sealing = { sealing } }
+		board.applyRouterBoard(1L, listOf(stored(entry("one"), epochTwoSealing)))
+
+		assertEquals(BOARD_TEXT_UNAVAILABLE, board.routerEntries().single().title)
+		val count = sealing.openCount
+		keyring.deriveOwned(identity, "domain", 2)
+
+		assertEquals("t-one", board.routerEntries().single().title)
+		assertTrue(sealing.openCount > count)
+	}
+
+	@Test
+	fun liveRenderingPersistsItsCachedTitles() {
+		val identity = Crypto.generateIdentity()
+		val keyring = ContentKeyring(store = null).also { it.deriveOwned(identity, "domain", 1) }
+		val sourceSealing = sealing(identity, keyring)
+		val store = FakeStore()
+		val board = BoardManager(store).also { it.sealing = { sourceSealing } }
+		board.applyRouterBoard(1L, listOf(stored(entry("one"), sourceSealing)))
+
+		val restored = BoardManager(store)
+		val emptySealing = sealing(identity, ContentKeyring())
+		restored.sealing = { emptySealing }
+
+		assertEquals(listOf("t-one"), restored.routerEntries().map { it.title })
+		assertEquals(1, emptySealing.openCount)
 	}
 }

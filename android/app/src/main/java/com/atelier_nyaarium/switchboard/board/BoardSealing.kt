@@ -11,19 +11,22 @@ const val BOARD_KIND_TITLE = BOARD_TITLE_KIND
 const val BOARD_KIND_BODY = BOARD_BODY_KIND
 
 /** Uses the domain root key for AAD. */
-class BoardSealing(
+open class BoardSealing(
 	private val keyring: ContentKeyring,
 	private val domainId: String,
 	private val ownerSignPub: String,
 	private val onMissingEpoch: (Int) -> Unit = {},
 ) {
+	val epochs: List<Int>
+		get() = keyring.epochs()
+
 	fun seal(text: String, kind: String, entryId: String): ContentEnvelope? {
 		val epoch = keyring.epochs().maxOrNull() ?: return null
 		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		return Crypto.sealContent(text.toByteArray(Charsets.UTF_8), key, aad(epoch, kind, entryId))
 	}
 
-	fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
+	open fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
 		val epoch = env.epoch.toInt()
 		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		return runCatching {

@@ -31,10 +31,16 @@ data class BoardLiveLine(
 /** Pending edits overlay snapshots until accepted or refused. */
 class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	private val json = Json { ignoreUnknownKeys = true }
+	private data class RenderMemo(
+		val stored: List<BoardStoredEntry>,
+		val epochs: List<Int>,
+		val rendered: BoardRendered,
+	)
 
 	/** Unreadable storage cannot authorize deletion. Declared before [blob] for [load]. */
 	@Volatile private var loadedCleanly = true
 	@Volatile private var blob: BoardBlob = load()
+	@Volatile private var memo: RenderMemo? = null
 
 	/** Guard every blob read-modify-write. */
 	private val stateLock = Any()
@@ -65,6 +71,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	override suspend fun clearInMemory() {
 		synchronized(stateLock) {
 			blob = BoardBlob()
+			memo = null
 			loadedCleanly = true
 			refusals.clear()
 			revision.longValue++
@@ -109,10 +116,27 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	fun snapshot(): BoardBlob = synchronized(stateLock) { blob }
 
+	/** One decrypt per stored list and key set, outside the lock; the writers fill the memo first. */
 	private fun routerEntries(current: BoardBlob): List<BoardEntry> {
 		val open = sealing?.invoke() ?: return applyPending(emptyList(), current.pending)
-		return applyPending(renderBoard(current.stored, open, current.text).entries, current.pending)
+		val hit = memo?.takeIf { it.stored === current.stored && it.epochs == open.epochs }
+		val next = hit ?: render(open, current.stored, current.text).also { fresh ->
+			synchronized(stateLock) {
+				if (blob.stored === current.stored) {
+					persist(blob.copy(text = fresh.rendered.cache))
+					memo = fresh
+				}
+			}
+		}
+		return applyPending(next.rendered.entries, current.pending)
 	}
+
+	private fun render(open: BoardSealing, stored: List<BoardStoredEntry>, cache: Map<String, BoardCachedText>) =
+		RenderMemo(stored, open.epochs, renderBoard(stored, open, cache))
+
+	/** Null without a sealing. Rendered before any lock. */
+	private fun renderIncoming(entries: List<BoardStoredEntry>): RenderMemo? =
+		sealing?.invoke()?.let { render(it, entries, snapshot().text) }
 
 	fun routerEntries(): List<BoardEntry> = routerEntries(snapshot())
 
@@ -125,13 +149,21 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	/** Settle and retire atomically. */
 	fun settleWrite(opId: String, revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()) {
+		val next = renderIncoming(entries)
 		synchronized(stateLock) {
-			val landed = if (revision >= blob.routerRevision) {
-				blob.copy(routerRevision = revision, stored = entries, lastRouterSyncAt = at)
+			val lands = revision >= blob.routerRevision
+			val landed = if (lands) {
+				blob.copy(
+					routerRevision = revision,
+					stored = entries,
+					text = next?.rendered?.cache ?: blob.text,
+					lastRouterSyncAt = at,
+				)
 			} else {
 				blob
 			}
 			persist(landed.copy(pending = landed.pending.filterNot { it.opId == opId }))
+			if (lands) memo = next
 		}
 	}
 
@@ -147,19 +179,20 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	/** Ignore older revisions. */
 	fun applyRouterBoard(revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()): Boolean {
+		val next = renderIncoming(entries)
 		synchronized(stateLock) {
 			if (revision < blob.routerRevision) return false
-			persist(blob.copy(routerRevision = revision, stored = entries, lastRouterSyncAt = at))
+			persist(
+				blob.copy(
+					routerRevision = revision,
+					stored = entries,
+					text = next?.rendered?.cache ?: blob.text,
+					lastRouterSyncAt = at,
+				),
+			)
+			memo = next
 			return true
 		}
-	}
-
-	/** Cache rendered text across epoch rotation. */
-	fun renderRouterBoard(sealing: BoardSealing): BoardRendered {
-		val current = snapshot()
-		val rendered = renderBoard(current.stored, sealing, current.text)
-		if (rendered.cache != current.text) mutate { it.copy(text = rendered.cache) }
-		return rendered
 	}
 
 	/** Retry threshold for row markers. */
