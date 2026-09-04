@@ -3,7 +3,12 @@ import { opPayloadAadKind, opResultAadKind, scheduledBodyAadKind } from "../../s
 import { SealedEnvelopeSchema } from "../../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../../shared/federation-protocol.js";
 import { BoardObservationRowSchema, type BoardStoredEntry } from "../../shared/schemasBoardState.js";
-import { ConsoleOpSchema, DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
+import {
+	ConsoleOpSchema,
+	DELIVERY_OP_KINDS,
+	TOLERATED_DELIVERY_OP_KINDS,
+	VALUE_OP_KINDS,
+} from "../../shared/schemasConsoleOp.js";
 import { ContentEnvelopeSchema, KeyGrantSchema } from "../../shared/schemasContentKey.js";
 import {
 	formatInboxAddress,
@@ -192,7 +197,11 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: false, error: "malformed_body" });
 		}
 		const op = ConsoleOpSchema.safeParse(body);
-		if (!op.success || !DELIVERY_OP_KINDS.has(op.data.kind) || VALUE_OP_KINDS.has(op.data.kind))
+		if (
+			!op.success ||
+			((!DELIVERY_OP_KINDS.has(op.data.kind) || VALUE_OP_KINDS.has(op.data.kind)) &&
+				!TOLERATED_DELIVERY_OP_KINDS.has(op.data.kind))
+		)
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
 				ok: false,
 				error: "delivery op kind is not allowed",

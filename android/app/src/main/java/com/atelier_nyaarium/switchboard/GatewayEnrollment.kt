@@ -48,7 +48,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		// Pull the gateway-bridge transport from the Router by proving this owner roots a network.
 		// The provisioning blob supplies the Router endpoint the console itself uses, and domainId is
 		// the rooted Domain the Gateway adopts.
-		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()
+		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull()
 			?: return@withContext EnrollDelivery(true, "Added, but this device is not provisioned - re-import your setup blob.", null)
 		val result = try {
 			repo.client().requestGatewayTransport(repo.federation.signTransportRequest(System.currentTimeMillis()))

@@ -193,7 +193,6 @@ export const ConsoleOpSchema = z
 export const DELIVERY_OP_KINDS = new Set([
 	"send",
 	"respond",
-	"peek",
 	"tmux_send",
 	"rename_session",
 	"close_session",
@@ -201,7 +200,11 @@ export const DELIVERY_OP_KINDS = new Set([
 	"wake",
 ]);
 
+// Remove-by: when every console sends peek as a value op.
+export const TOLERATED_DELIVERY_OP_KINDS = new Set(["peek"]);
+
 export const VALUE_OP_KINDS = new Set([
+	"peek",
 	"list_dirs",
 	"create_session",
 	"blob_stat",

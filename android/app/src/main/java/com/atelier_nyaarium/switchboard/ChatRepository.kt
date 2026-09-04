@@ -593,7 +593,7 @@ class ChatRepository(
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
 		return ConsoleClient(
-			Provisioning.parse(blob),
+			Provisioning.parse(blob, store),
 			store,
 			coordinator = transportCoordinator,
 			signOwnerOp = { op, opId -> ownerOps.sign(op, opId) },

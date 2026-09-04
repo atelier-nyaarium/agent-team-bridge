@@ -32,11 +32,11 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 	/** The Router's public device-approval reach for the authorize-console QR, or null when this network
 	 * has no public ingress (the Add-a-device entry is then shown disabled). */
 	fun deviceApprovalReach(): String? =
-		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
+		runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
 	/** The Router cert fingerprint to pin the reach against, empty when this device holds none. */
 	private fun routerCertFp(): String =
-		runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.routerCertFp ?: ""
+		runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull()?.routerCertFp ?: ""
 
 	/** HELD device: arm a one-time approval window and build the authorize-console QR. The QR carries
 	 * PUBLIC material only (owner keys + Domain + the reach/token/nonce), never an SA token. Fails when
@@ -111,7 +111,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 
 	/** Transport for an approved device. */
 	private fun buildConsoleTransport(recipientBoxPub: String): ConsoleTransport {
-		val prov = Provisioning.parse(repo.store.load() ?: error("not provisioned"))
+		val prov = Provisioning.parse(repo.store.load() ?: error("not provisioned"), repo.store)
 		val console = repo.federation.consoleIdentity()
 		val domainId = repo.confirmedDomainId() ?: error("Your Domain isn't confirmed yet - open a session first.")
 		repo.federation.ensureContentEpochs(domainId)
@@ -231,7 +231,7 @@ internal class DeviceApprovalOps(private val repo: ChatRepository) {
 			"installed approved-device transport; consoleAdmitted+firstRooted set, " +
 				"keyring=${if (transport.domain != null) "adopted" else "absent"} gateway=${transport.gatewayId ?: "none"}",
 		)
-		val parsed = Provisioning.parse(blob)
+		val parsed = Provisioning.parse(blob, repo.store)
 		repo._state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
 	}
 

@@ -234,12 +234,12 @@ describe("inbox delivery pump", () => {
 			producerSignPriv: identity.sign.priv,
 			consoleDispatch: async () => {
 				dispatched++;
-				return { hash: "h1", kind: "tmux", ansi: "" };
+				return { closed: true };
 			},
 			contentKeyStore: {
 				open: () => ({
 					kind: "ok",
-					plaintext: Buffer.from('{"kind":"peek","target":"domain.gateway.session"}'),
+					plaintext: Buffer.from('{"kind":"close_session","target":"domain.gateway.session"}'),
 				}),
 				seal: (plaintext: Buffer) => {
 					sealedResults.push(JSON.parse(plaintext.toString("utf8")));
@@ -253,7 +253,68 @@ describe("inbox delivery pump", () => {
 			deliveryEpoch: 1,
 		});
 		expect(dispatched).toBe(1);
-		expect(sealedResults).toEqual([{ ok: true, result: { hash: "h1", kind: "tmux", ansi: "" } }]);
+		expect(sealedResults).toEqual([{ ok: true, result: { closed: true } }]);
+	});
+
+	it("dispatches a delivery-shaped peek and refuses unrelated value ops", async () => {
+		const delivery = setup();
+		const identity = generateIdentity();
+		let dispatched = 0;
+		const pump = delivery.pump({
+			gatewayId: "gateway",
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return { ansi: "SCREEN" };
+			},
+			contentKeyStore: {
+				open: () => ({
+					kind: "ok",
+					plaintext: Buffer.from('{"kind":"peek","target":"session"}'),
+				}),
+				seal: () => ({ kind: "ok", envelope: row().body }),
+			} as never,
+			routerClient: {
+				callInboxTool: async (action: string, params: Record<string, unknown>) => {
+					delivery.calls.push({ action, params });
+					return { result: { outcome: action === "inbox_append" ? "accepted" : "delivered" } };
+				},
+			},
+		});
+		await pump.onFrame({
+			address,
+			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			deliveryEpoch: 1,
+		});
+		expect(dispatched).toBe(1);
+
+		const refused = setup();
+		const refusalBodies: unknown[] = [];
+		const refusedPump = refused.pump({
+			gatewayId: "gateway",
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return {};
+			},
+			contentKeyStore: {
+				open: () => ({
+					kind: "ok",
+					plaintext: Buffer.from('{"kind":"list_dirs","path":"/tmp"}'),
+				}),
+				seal: (plaintext: Buffer) => {
+					refusalBodies.push(JSON.parse(plaintext.toString("utf8")));
+					return { kind: "ok", envelope: row().body };
+				},
+			} as never,
+		});
+		await refusedPump.onFrame({
+			address,
+			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			deliveryEpoch: 1,
+		});
+		expect(refusalBodies).toEqual([{ ok: false, error: "delivery op kind is not allowed" }]);
+		expect(dispatched).toBe(1);
 	});
 
 	it("requests a missing console-op epoch and retries after the key grant", async () => {

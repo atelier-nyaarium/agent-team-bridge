@@ -80,8 +80,7 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	@Test
-	fun peekTmuxRenameCloseForgetWakeAllRideDeliver() = runBlocking {
-		client.peek("domain.gateway.spawn.session")
+	fun tmuxRenameCloseForgetWakeAllRideDeliver() = runBlocking {
 		client.tmuxSend("domain.gateway.spawn.session", text = "x", opId = "tmux-op")
 		client.renameSession("domain.gateway.spawn.session", "new", opId = "rename-op")
 		client.closeSession("domain.gateway.spawn.session", opId = "close-op")
@@ -90,16 +89,25 @@ class ConsoleClientOwnerOpsTest {
 		val ownerOps = sent.toList()
 		val opened = ownerOps.map { openConsoleOp(it) }
 
-		assertEquals(listOf("deliver", "deliver", "deliver", "deliver", "deliver", "deliver"), ownerOps.map { it.op["kind"]?.jsonPrimitive?.content })
-		assertEquals(listOf("peek", "tmux_send", "rename_session", "close_session", "forget", "wake"), opened.map(::kindOf))
-		assertEquals("domain.gateway.spawn.session", (opened[0] as ConsoleOp.Peek).target)
-		assertEquals("x", (opened[1] as ConsoleOp.TmuxSend).text)
-		assertEquals("new", (opened[2] as ConsoleOp.RenameSession).sessionLabel)
-		assertEquals("domain.gateway.spawn.session", (opened[3] as ConsoleOp.CloseSession).target)
-		assertEquals("keep", (opened[4] as ConsoleOp.Forget).boardDisposition)
-		assertEquals("domain.gateway.spawn.session", (opened[5] as ConsoleOp.Wake).target)
+		assertEquals(listOf("deliver", "deliver", "deliver", "deliver", "deliver"), ownerOps.map { it.op["kind"]?.jsonPrimitive?.content })
+		assertEquals(listOf("tmux_send", "rename_session", "close_session", "forget", "wake"), opened.map(::kindOf))
+		assertEquals("x", (opened[0] as ConsoleOp.TmuxSend).text)
+		assertEquals("new", (opened[1] as ConsoleOp.RenameSession).sessionLabel)
+		assertEquals("domain.gateway.spawn.session", (opened[2] as ConsoleOp.CloseSession).target)
+		assertEquals("keep", (opened[3] as ConsoleOp.Forget).boardDisposition)
+		assertEquals("domain.gateway.spawn.session", (opened[4] as ConsoleOp.Wake).target)
 		assertEquals("session:domain/gateway/spawn.session", ownerOps[0].op["address"]?.jsonPrimitive?.content)
-		assertEquals("session:domain/gateway/spawn.session", ownerOps[5].op["address"]?.jsonPrimitive?.content)
+		assertEquals("session:domain/gateway/spawn.session", ownerOps[4].op["address"]?.jsonPrimitive?.content)
+	}
+
+	// A read with no side effect costs no durable row.
+	@Test
+	fun peekRidesTheValuePath() = runBlocking {
+		// The fake transport answers nothing to decode; the path taken is the assertion.
+		runCatching { client.peek("domain.gateway.spawn.session") }
+
+		assertEquals("gateway_value", sent.single().op["kind"]?.jsonPrimitive?.content)
+		assertEquals("gateway", sent.single().op["gatewayId"]?.jsonPrimitive?.content)
 	}
 
 	@Test

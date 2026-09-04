@@ -22,7 +22,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	 * to abort connect after surfacing a terminal reject (an expired / already-claimed invite, which
 	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
 	suspend fun firstRootIfPending(): Boolean {
-		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return true
+		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull() ?: return true
 		return when (val decision = FriendOnboarding.decide(prov, repo.store.firstRooted)) {
 			is FirstRootDecision.NotPending -> true
 			is FirstRootDecision.Root -> {

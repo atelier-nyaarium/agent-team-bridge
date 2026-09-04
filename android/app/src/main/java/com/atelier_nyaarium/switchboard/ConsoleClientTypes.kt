@@ -24,7 +24,7 @@ import kotlinx.serialization.json.Json
  * which the app token authenticates to.
  *
  * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime behavior a
- * schema cannot express: device defaulting to Build.MODEL, conversationId minting a UUID, and
+ * schema cannot express: device defaulting to Build.MODEL, conversationId persistence, and
  * trailing-slash URL normalization.
  */
 data class Provisioning(
@@ -47,14 +47,29 @@ data class Provisioning(
 	val deviceApprovalReach: String? = null,
 ) {
 	companion object {
-		fun parse(blob: String): Provisioning {
+		fun parse(blob: String, store: AppStateStore): Provisioning {
 			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
+			val stored = store.load()?.let {
+				runCatching { wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(it) }.getOrNull()
+			}
+			// Transport may change freely; the credential and the Domain are what identify this console.
+			val remembered = if (stored != null && stored.appToken == p.appToken && stored.pendingTenant == p.pendingTenant) {
+				store.loadConversationId()
+			} else {
+				null
+			}
+			val conversationId = p.conversationId ?: remembered ?: UUID.randomUUID().toString()
+			store.saveConversationId(conversationId)
+			val device = (p.device ?: (android.os.Build.MODEL ?: "android"))
+				.replace(Regex("[/\\r\\n]"), "-")
+				.take(64)
+				.ifEmpty { "android" }
 			return Provisioning(
 				routerUrl = p.routerUrl?.trimEnd('/') ?: "",
 				routerCertFp = p.routerCertFp ?: "",
 				appToken = p.appToken ?: "",
-				device = p.device ?: (android.os.Build.MODEL ?: "android"),
-				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
+				device = device,
+				conversationId = conversationId,
 				pendingTenant = p.pendingTenant,
 				enrollHandshake = p.enrollHandshake,
 				deviceApprovalReach = p.deviceApprovalReach?.trimEnd('/'),

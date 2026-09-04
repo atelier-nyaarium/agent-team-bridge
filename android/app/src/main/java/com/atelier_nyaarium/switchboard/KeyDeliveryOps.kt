@@ -61,7 +61,12 @@ class KeyDeliveryOps(
 	private val missingTimer: MissingEpochTimer = CoroutineMissingEpochTimer(),
 	private val reportError: (String) -> Unit = {},
 ) {
+	private data class GrantKey(val subject: String, val epoch: Int)
+	private data class GrantClaim(val at: Long, val token: Long)
+
 	private val missing = linkedMapOf<Int, Long>()
+	private val recentGrants = linkedMapOf<GrantKey, GrantClaim>()
+	private var nextGrantToken = 0L
 	private var missingFlushScheduled = false
 	private var missingRetryScheduled = false
 	private var missingLastSentAt = 0L
@@ -95,11 +100,45 @@ class KeyDeliveryOps(
 		val ring = contentKeyring()
 		val epochs = request.epochs.filter { it >= 1 && it <= Int.MAX_VALUE.toLong() }.map { it.toInt() }
 		var granted = 0
+		var skipped = 0
 		for (envelope in ring.wrapFor(epochs, recipient.boxPub, identity.sign.pub, identity.sign.priv)) {
-			send(grantOp(KeyGrant(1, recipient.signPub, envelope, now())))
-			granted++
+			val grantKey = GrantKey(recipient.signPub, envelope.epoch.toInt())
+			val claimToken = claimGrant(grantKey) ?: run {
+				skipped++
+				continue
+			}
+			try {
+				if (send(grantOp(KeyGrant(1, recipient.signPub, envelope, now()))) != null) granted++ else releaseGrant(grantKey, claimToken)
+			} catch (e: Exception) {
+				try {
+					e.rethrowIfCancellation()
+				} finally {
+					releaseGrant(grantKey, claimToken)
+				}
+			}
 		}
-		DebugLog.log("KeyDelivery", "granted $granted of ${epochs.size} to ${request.requesterSignPub.take(8)}")
+		DebugLog.log("KeyDelivery", "granted $granted of ${epochs.size} to ${request.requesterSignPub.take(8)} skipped $skipped")
+	}
+
+	/** Null means already claimed; UNRECORDED_GRANT means grant it but the map was full. */
+	private fun claimGrant(key: GrantKey): Long? {
+		val current = now()
+		synchronized(recentGrants) {
+			recentGrants.entries.removeIf { current - it.value.at >= KEY_GRANT_WINDOW_MS }
+			if (recentGrants.containsKey(key)) return null
+			// Evicting a live claim would re-grant the pair it belonged to, so a full map forgoes the claim.
+			if (recentGrants.size >= MAX_RECENT_GRANTS) return UNRECORDED_GRANT
+			nextGrantToken++
+			recentGrants[key] = GrantClaim(current, nextGrantToken)
+			return nextGrantToken
+		}
+	}
+
+	private fun releaseGrant(key: GrantKey, token: Long) {
+		if (token == UNRECORDED_GRANT) return
+		synchronized(recentGrants) {
+			if (recentGrants[key]?.token == token) recentGrants.remove(key)
+		}
 	}
 
 	suspend fun onKeyGrant(grant: KeyGrant) {
@@ -226,5 +265,10 @@ class KeyDeliveryOps(
 	private companion object {
 		const val MISSING_RETRY_MS = 10 * 60 * 1000L
 		const val MISSING_WINDOW_MS = 24 * 60 * 60 * 1000L
+		const val KEY_GRANT_WINDOW_MS = MISSING_RETRY_MS
+		const val MAX_RECENT_GRANTS = 4096
+
+		/** Token for a grant sent without a claim, which nothing may release. */
+		const val UNRECORDED_GRANT = -1L
 	}
 }

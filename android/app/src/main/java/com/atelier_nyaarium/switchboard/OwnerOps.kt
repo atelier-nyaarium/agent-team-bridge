@@ -8,24 +8,31 @@ import kotlinx.serialization.json.JsonObject
 
 /** Signed operations identify this console. */
 // Mutations use signed HTTP operations.
-class OwnerOps(private val repo: ChatRepository) {
+class OwnerOps(
+	private val repo: ChatRepository?,
+	private val confirmedDomainId: () -> String? = { requireNotNull(repo).confirmedDomainId() },
+	private val consoleIdentity: () -> Crypto.Identity = { requireNotNull(repo).federation.consoleIdentity() },
+	private val provisioningConversationId: () -> String = { requireNotNull(repo).client().transport.prov.conversationId },
+	private val provisioningDevice: () -> String = { requireNotNull(repo).client().transport.prov.device },
+) {
 
 	/** No domain means no signing. */
-	fun domainId(): String? = repo.confirmedDomainId()?.takeIf { it.isNotEmpty() }
+	fun domainId(): String? = confirmedDomainId()?.takeIf { it.isNotEmpty() }
 
 	/** Sign the complete canonical operation. */
 	fun sign(op: JsonObject, opId: String = UUID.randomUUID().toString()): OwnerOp? {
 		val domain = domainId() ?: return null
-		val identity = repo.federation.consoleIdentity()
-		val prov = repo.client().transport.prov
+		val identity = consoleIdentity()
+		val conversation = provisioningConversationId()
+		val device = provisioningDevice()
 		val at = System.currentTimeMillis()
 		val nonce = com.atelier_nyaarium.switchboard.crypto.randomNonceB64()
 		val signature = Crypto.sign(
 			ownerOpSigningBytes(
 				domainId = domain,
 				signerSignPub = identity.sign.pub,
-				conversationId = prov.conversationId,
-				device = prov.device,
+				conversationId = conversation,
+				device = device,
 				opId = opId,
 				at = at,
 				nonce = nonce,
@@ -37,8 +44,8 @@ class OwnerOps(private val repo: ChatRepository) {
 			v = 1L,
 			domainId = domain,
 			signerSignPub = identity.sign.pub,
-			conversationId = prov.conversationId,
-			device = prov.device,
+			conversationId = conversation,
+			device = device,
 			opId = opId,
 			at = at,
 			nonce = nonce,

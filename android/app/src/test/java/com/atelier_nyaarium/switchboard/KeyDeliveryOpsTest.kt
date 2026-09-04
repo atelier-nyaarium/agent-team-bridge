@@ -12,6 +12,10 @@ import com.atelier_nyaarium.switchboard.proto.KeyRequest
 import com.atelier_nyaarium.switchboard.proto.KeyRequestOp
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import com.atelier_nyaarium.switchboard.proto.Revocation
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -38,14 +42,19 @@ class KeyDeliveryOpsTest {
 
 	private fun ownerOp(op: JsonObject) = OwnerOp(1, domain, console.sign.pub, "conversation", "device", "op", 1, "nonce", op, "signature")
 
-	private fun request(signatureOwner: Crypto.Identity = member, signature: String? = null) = KeyRequest(
+	private fun request(
+		subject: Crypto.Identity = member,
+		epochs: List<Long> = listOf(1, 2, 3),
+		signatureOwner: Crypto.Identity = subject,
+		signature: String? = null,
+	) = KeyRequest(
 		1,
 		domain,
-		member.sign.pub,
-		listOf(1, 2, 3),
+		subject.sign.pub,
+		epochs,
 		10,
 		"request-nonce",
-		signature ?: Crypto.sign(Crypto.keyRequestSigningBytes(domain, member.sign.pub, listOf(1, 2, 3), 10, "request-nonce"), signatureOwner.sign.priv),
+		signature ?: Crypto.sign(Crypto.keyRequestSigningBytes(domain, subject.sign.pub, epochs, 10, "request-nonce"), signatureOwner.sign.priv),
 	)
 
 	@Test
@@ -58,13 +67,202 @@ class KeyDeliveryOpsTest {
 			{ ring },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 		)
 
 		ops.onKeyRequest(request())
 
 		assertEquals(listOf("key_grant", "key_grant"), sent.map { it["kind"].toString().trim('"') })
 		assertEquals(listOf(1L, 2L), sent.map { wireJson.decodeFromJsonElement(KeyGrant.serializer(), it["grant"]!!).envelope.epoch })
+	}
+
+	@Test
+	fun burstOfIdenticalRequestsSendsOneGrantPerEpoch() = runBlocking {
+		val timer = FakeMissingTimer()
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op -> sent += op.op; buildJsonObject {} },
+			now = { timer.now },
+		)
+
+		repeat(13) { ops.onKeyRequest(request(epochs = listOf(1))) }
+
+		assertEquals(1, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
+	}
+
+	@Test
+	fun failedGrantPostDoesNotSuppressLaterRequest() = runBlocking {
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
+		val sent = mutableListOf<JsonObject>()
+		var attempts = 0
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op ->
+				attempts++
+				if (attempts == 1) error("transient")
+				sent += op.op
+				buildJsonObject {}
+			},
+		)
+
+		ops.onKeyRequest(request(epochs = listOf(1)))
+		ops.onKeyRequest(request(epochs = listOf(1)))
+
+		assertEquals(2, attempts)
+		assertEquals(1, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
+	}
+
+	@Test
+	fun burstAtBoundAddsOnlyOneDuplicateGrant() = runBlocking {
+		val members = (0 until 65).map { Crypto.generateIdentity() }
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 64) }
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(*members.map { admission(it, "console", 1) }.toTypedArray()) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op -> sent += op.op; buildJsonObject {} },
+		)
+		val epochs = (1L..64L).toList()
+
+		members.take(64).forEach { subject -> ops.onKeyRequest(request(subject = subject, epochs = epochs)) }
+		// The map is full of live claims, so this one is granted without displacing any of them.
+		ops.onKeyRequest(request(subject = members.last(), epochs = listOf(1)))
+		ops.onKeyRequest(request(subject = members.first(), epochs = epochs))
+
+		val grants = sent.filter { it["kind"]?.toString()?.trim('"') == "key_grant" }.map {
+			wireJson.decodeFromJsonElement(KeyGrant.serializer(), it["grant"]!!)
+		}
+		assertEquals(4097, grants.size)
+		assertEquals(1, grants.count { it.recipientSignPub == members.first().sign.pub && it.envelope.epoch == 1L })
+	}
+
+	@Test
+	fun differentEpochAndSubjectAreGranted() = runBlocking {
+		val timer = FakeMissingTimer()
+		val other = Crypto.generateIdentity()
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 2) }
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1), admission(other, "gateway", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op -> sent += op.op; buildJsonObject {} },
+			now = { timer.now },
+		)
+
+		ops.onKeyRequest(request(epochs = listOf(1)))
+		ops.onKeyRequest(request(epochs = listOf(2)))
+		ops.onKeyRequest(request(subject = other, epochs = listOf(1)))
+
+		assertEquals(3, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
+	}
+
+	@Test
+	fun samePairIsGrantedAfterWindow() = runBlocking {
+		val timer = FakeMissingTimer()
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op -> sent += op.op; buildJsonObject {} },
+			now = { timer.now },
+		)
+
+		ops.onKeyRequest(request(epochs = listOf(1)))
+		timer.now += 10 * 60 * 1000L
+		ops.onKeyRequest(request(epochs = listOf(1)))
+
+		assertEquals(2, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
+	}
+
+	@Test
+	fun stalledGrantFailureDoesNotReleaseReplacementClaim() = runBlocking {
+		val timer = FakeMissingTimer()
+		val entered = CompletableDeferred<Unit>()
+		val release = CompletableDeferred<Unit>()
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
+		var attempts = 0
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op ->
+				attempts++
+				if (attempts == 1) {
+					entered.complete(Unit)
+					release.await()
+					error("stalled")
+				}
+				sent += op.op
+				buildJsonObject {}
+			},
+			now = { timer.now },
+		)
+
+		val first = launch { ops.onKeyRequest(request(epochs = listOf(1))) }
+		entered.await()
+		timer.now += 10 * 60 * 1000L
+		ops.onKeyRequest(request(epochs = listOf(1)))
+		release.complete(Unit)
+		first.join()
+		ops.onKeyRequest(request(epochs = listOf(1)))
+
+		assertEquals(2, attempts)
+		assertEquals(1, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
+	}
+
+	@Test
+	fun cancelledGrantSendReleasesClaim() = runBlocking {
+		val entered = CompletableDeferred<Unit>()
+		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
+		var attempts = 0
+		val sent = mutableListOf<JsonObject>()
+		val ops = KeyDeliveryOps(
+			{ domain },
+			{ keyring(admission(member, "console", 1)) },
+			{ ring },
+			{ console },
+			{ op -> ownerOp(op) },
+			{ op ->
+				attempts++
+				if (attempts == 1) {
+					entered.complete(Unit)
+					awaitCancellation()
+				}
+				sent += op.op
+				buildJsonObject {}
+			},
+		)
+
+		val first = launch { ops.onKeyRequest(request(epochs = listOf(1))) }
+		entered.await()
+		first.cancelAndJoin()
+		ops.onKeyRequest(request(epochs = listOf(1)))
+
+		assertEquals(2, attempts)
+		assertEquals(1, sent.count { it["kind"]?.toString()?.trim('"') == "key_grant" })
 	}
 
 	@Test
@@ -77,7 +275,7 @@ class KeyDeliveryOpsTest {
 			{ ring },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 		)
 		ops.onKeyRequest(request(signature = "bad"))
 		ops.onKeyRequest(request(signatureOwner = console))
@@ -93,7 +291,7 @@ class KeyDeliveryOpsTest {
 			{ ContentKeyring() },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 		)
 		ops.onKeyRequest(request())
 		ops.onKeyGrant(KeyGrant(1, member.sign.pub, Crypto.wrapContentKey(ByteArray(32), 1, console.box.pub, member.sign.pub, member.sign.priv), 1))
@@ -110,7 +308,7 @@ class KeyDeliveryOpsTest {
 			{ ContentKeyring(console.box.priv) },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 			install = { _, _ -> KeyDeliveryInstall(true, true) },
 		)
 
@@ -130,7 +328,7 @@ class KeyDeliveryOpsTest {
 			{ ContentKeyring(console.box.priv) },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 			install = { _, _ -> KeyDeliveryInstall(true, false) },
 		)
 
@@ -176,7 +374,7 @@ class KeyDeliveryOpsTest {
 			{ ring },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 		)
 
 		ops.onKeyRequest(request())
@@ -194,7 +392,7 @@ class KeyDeliveryOpsTest {
 			{ ring },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 		)
 		val epochs = listOf(0L, 1L, Int.MAX_VALUE.toLong() + 1)
 		val at = 10L
@@ -218,7 +416,7 @@ class KeyDeliveryOpsTest {
 			{ ring },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 			now = { timer.now },
 			missingTimer = timer,
 			reportError = { errors += it },
@@ -246,7 +444,7 @@ class KeyDeliveryOpsTest {
 			{ ContentKeyring() },
 			{ console },
 			{ op -> ownerOp(op) },
-			{ op -> sent += op.op; null },
+			{ op -> sent += op.op; buildJsonObject {} },
 			now = { timer.now },
 			missingTimer = timer,
 			install = { _, _ -> KeyDeliveryInstall(true, true) },

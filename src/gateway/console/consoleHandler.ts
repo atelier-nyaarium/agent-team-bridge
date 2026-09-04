@@ -12,7 +12,7 @@ import {
 } from "../../shared/host-op.js";
 import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import { DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
+import { DELIVERY_OP_KINDS, TOLERATED_DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
 import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { sanitizeLabel } from "../../shared/session-sanitize.js";
 import type { SessionRecord } from "../../shared/session-store.js";
@@ -666,7 +666,8 @@ export function createConsoleDispatcher({
 		opId: string,
 		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
-		if (!DELIVERY_OP_KINDS.has(op.kind)) throw new Error("delivery op kind is not allowed");
+		if (!DELIVERY_OP_KINDS.has(op.kind) && !TOLERATED_DELIVERY_OP_KINDS.has(op.kind))
+			throw new Error("delivery op kind is not allowed");
 		ownerByConversation.set(conversationId, ownerKeyId(ownerSignPub));
 		return dispatch(op, device, conversationId, ownerKeyId(ownerSignPub), opId, ownerSignPub);
 	}

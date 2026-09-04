@@ -271,6 +271,11 @@ class AppStateStore internal constructor(
 
 	override fun loadGatewayId(): String = prefs.getString(KEY_GATEWAY_ID, "") ?: ""
 
+	/** Console conversation id. */
+	fun saveConversationId(id: String) = prefs.edit().putString(KEY_CONVERSATION_ID, id).apply()
+
+	fun loadConversationId(): String? = prefs.getString(KEY_CONVERSATION_ID, null)
+
 	/** Domain id the Router reported for this console. */
 	fun saveDomainId(id: String) = prefs.edit().putString(KEY_DOMAIN_ID, id).apply()
 
@@ -440,6 +445,7 @@ class AppStateStore internal constructor(
 		const val KEY_SCHEDULED_SENDS = "scheduled_sends"
 		const val KEY_GOALS = "goals"
 		const val KEY_GATEWAY_ID = "gateway_id"
+		const val KEY_CONVERSATION_ID = "conversation_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
 		const val KEY_CONTENT_KEYS = "federation_content_keys"
@@ -501,6 +507,7 @@ class AppStateStore internal constructor(
 			KEY_PENDING_ENROLLS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
+			KEY_CONVERSATION_ID,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
 			KEY_LAST_PROJECT,
 		)

@@ -38,7 +38,7 @@ private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO) {
 	// Reject malformed blobs before persisting.
 	val prov = try {
-		Provisioning.parse(blob)
+		Provisioning.parse(blob, store)
 	} catch (e: Exception) {
 		_state.update { it.copy(error = "Invalid provisioning blob: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
@@ -111,7 +111,7 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 		put("routerCertFp", fp)
 	}.toString()
 	try {
-		Provisioning.parse(edited)
+		Provisioning.parse(edited, store)
 	} catch (e: Exception) {
 		_state.update { it.copy(error = "Invalid endpoint: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
@@ -124,7 +124,7 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 
 suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	// Attach debug ingest before enrollment.
-	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) { client().transport.proxyBase } } }
+	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it, store)) { client().transport.proxyBase } } }
 	DebugLog.log("Connect", "start gateway=${homeGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 	try {
 		// Distinguish cluster failures early.
@@ -255,7 +255,7 @@ suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers
 }
 
 internal fun ChatRepository.currentDeviceName(): String =
-	store.load()?.let { runCatching { Provisioning.parse(it).device }.getOrNull() } ?: ""
+	store.load()?.let { runCatching { Provisioning.parse(it, store).device }.getOrNull() } ?: ""
 
 suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
 	// Join the poll loop before wiping state.

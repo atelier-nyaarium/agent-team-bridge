@@ -47,7 +47,7 @@ suspend fun ConsoleClient.reloadPlugins(gatewayId: String, opId: String = UUID.r
 /** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
  * Gateway returns unchanged=true (no ansi) for an idle pane. */
 suspend fun ConsoleClient.peek(target: String, sinceHash: String? = null): ConsolePeekResult =
-	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.Peek(target = target, sinceHash = sinceHash)), "peek")
+	valueResult(sendValueOp(transport.targetGatewayOf(target), ConsoleOp.Peek(target = target, sinceHash = sinceHash)), "peek")
 
 /** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
  * true) controls the trailing Enter: false types into the composer without submitting. Idempotent

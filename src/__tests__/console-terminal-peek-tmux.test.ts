@@ -13,6 +13,22 @@ describe("console terminal operations through dispatch", () => {
 		]);
 	});
 
+	it("routes peek through the value handler", async () => {
+		const h = makeConsoleSeam();
+		const op = { kind: "peek" as const, target: "recipe-app" };
+
+		await expect(h.handler.handleDelivery(op, "pixel", "conv-pixel", "peek-op", "owner-pub")).resolves.toEqual({
+			ansi: "SCREEN",
+			hash: "h1",
+			kind: "tmux",
+		});
+		await expect(h.handler.handleValue(op, "pixel", "conv-pixel", "peek-op", "owner-pub")).resolves.toEqual({
+			ansi: "SCREEN",
+			hash: "h1",
+			kind: "tmux",
+		});
+	});
+
 	it("returns unchanged when the pane hash matches", async () => {
 		const h = makeConsoleSeam();
 		expect(await h.dispatch({ kind: "peek", target: "recipe-app", sinceHash: "h1" })).toEqual({

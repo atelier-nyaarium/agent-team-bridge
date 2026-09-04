@@ -28,7 +28,7 @@ internal class EnrollCeremonyOps(private val repo: ChatRepository) {
 	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
 	  */
 	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
-		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return null
+		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull() ?: return null
 		val hs = prov.enrollHandshake ?: return null
 		val myDomainId = prov.pendingTenant?.domainId ?: return null
 		val myParty = EnrollParty(repo.federation.ownerSignPub(), repo.federation.ownerBoxPub(), myDomainId)

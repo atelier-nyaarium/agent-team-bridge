@@ -1,0 +1,45 @@
+{
+	"v": 1,
+	"note": "Every OwnerOp string field the console mints, and the rule the Router judges it by. The TypeScript test proves these rules are what OwnerOpSchema enforces; the Kotlin test proves the console's minted values satisfy them. A field the console mints in a shape the schema refuses fails here rather than on a device.",
+	"fields": {
+		"domainId": {
+			"pattern": "^[^/\\r\\n]+$",
+			"maxLength": 64,
+			"valid": "a95dd4e979aa3be5",
+			"violation": "domain/with/slash"
+		},
+		"signerSignPub": {
+			"pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$",
+			"valid": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+			"violation": "not base64!"
+		},
+		"conversationId": {
+			"pattern": "^[a-z0-9][a-z0-9-]*$",
+			"maxLength": 128,
+			"valid": "0bf293da-1bb9-4427-b059-72258c2566c2",
+			"violation": "Has-Capitals"
+		},
+		"device": {
+			"pattern": "^[^/\\r\\n]+$",
+			"maxLength": 64,
+			"valid": "Pixel 10 Pro XL",
+			"violation": "device/with/slash"
+		},
+		"opId": {
+			"pattern": "^[^/\\r\\n]+$",
+			"maxLength": 128,
+			"valid": "36c746a9-6686-4e38-87ba-20d5069a3c37",
+			"violation": "op/with/slash"
+		},
+		"nonce": {
+			"pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$",
+			"valid": "b3Atbm9uY2U=",
+			"violation": "36c746a9-6686-4e38-87ba-20d5069a3c37"
+		},
+		"signature": {
+			"pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$",
+			"valid": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+			"violation": "not base64!"
+		}
+	}
+}
