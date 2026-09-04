@@ -19,6 +19,7 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 | `ENROLL_LAN_HOST` | Host advertised on the enrollment payload's LAN leg, default `0.0.0.0` |
 | `MAX_BLOB_STORE_BYTES` | Blob sweep ceiling, default sixteen times the single-blob maximum. Tuning override |
 | `WAKE_TIMEOUT_MS` | How long a wake may take before it is given up on, default 600000. Tuning override |
+| `ALLOW_FIXTURE_IDENTITY` | `1` lets the gateway start on the committed test identity (`src/shared/fixture-identity.ts`). Only `check:boot` sets it |
 
 ## Federation Router (Docker, its own compose project)
 
@@ -33,6 +34,7 @@ hand-edited, so there is no `.env.example`. The compose files and the tuning ove
 | `ROUTER_DOMAIN_QUOTA_BYTES` | Owner state and inbox bytes per data dir, default 2 GiB. A 64 MB reserve is kept free |
 | `ROUTER_BLOB_CACHE_BYTES` | Blob cache bytes per Domain, default 1 GiB. The LRU sweep skips live transfers |
 | `ROUTER_MIGRATION_EPOCH` | Fallback migration epoch when the Router has no `migration-epoch` file. A positive integer raises the Router migration window |
+| `ALLOW_FIXTURE_IDENTITY` | `1` lets the Router start on the committed test identity. Only `check:boot` sets it |
 
 Router state under its `DATA_DIR`: `owner/<domainId>/<fingerprint>/` (manifest, snapshots, journals),
 `blobs/` (cache and reference-held entries), `inbox-claims/` on the gateway side.

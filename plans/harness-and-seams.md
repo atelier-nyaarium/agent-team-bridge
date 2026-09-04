@@ -509,11 +509,11 @@ here before the next lap starts.
 > "We can skip refinement. it's too vague to really concretely lock down. Just do a reassess of
 > future phases, each phase you complete."
 
-## Phase 1 - Federation harness
+## Phase 1 - Federation harness ✅
 
 The wire is tested by the code that composes it.
 
-### Slices, as shipped (`1e0c7857`)
+### Slices, as shipped (`1e0c7857`, `77e27c48`) ✅
 
 1. **Compose seam.** `composeGateway(deps)` holds the whole graph and returns `{ router,
    wsHandlers, close }` plus the stores and clients the harness reads (`GatewayGraph`).
@@ -602,44 +602,60 @@ The wire is tested by the code that composes it.
 
 ### Slices
 
-In the Q5 order. `DrainGate` owning the re-entrant mutex, the fake invokes `block()`; a
-welcome-plane method on `DrainHost`; `PollDrain(host: DrainHost)` with `ChatRepositoryDrainHost`;
-`SessionOps(host: SessionHost)` with `ChatRepositorySessionHost`, cleanup behind behavior
-methods, never the six heavy ops classes; `buildOwnerOpRequest(base, appToken, ownerOp): Request`
-with `postOwnerOp` keeping failover and execution; pure `composeReportRead(team, anchor, at,
-sign)`; `composeScheduledSend` split out of `fireOne` with the repository as the adapter; nonce
-injection through `Crypto.seal` for `ContentKeyring.wrapFor` and `wrapAllFor`. Then tests for the
-five defects: `d198b437` re-entry through `DrainGate`, `89da4b82` welcome fetch through
-`DrainHost`, and the three `PresenceOps` ones reasserted as behavior. The two repository-bound
-composers and the sealers join the Kotlin fixture corpus; the Gradle generator covers all
-thirteen.
+Reassessed after Phase 1. In the Q5 order. `DrainGate` owning the re-entrant mutex, the fake
+invokes `block()`; a welcome-plane method on `DrainHost`; `PollDrain(host: DrainHost)` with
+`ChatRepositoryDrainHost`; `SessionOps(host: SessionHost)` with `ChatRepositorySessionHost`,
+cleanup behind behavior methods, never the six heavy ops classes; pure `composeReportRead(team,
+anchor, at, sign)` replacing the inline `ReportRead` encode in `ChatRepository`;
+`composeScheduledSend` split out of `fireOne` with the repository as the adapter; nonce injection
+through `Crypto.seal` for `ContentKeyring.wrapFor` and `wrapAllFor` on the `BoardSealing` pattern.
+Every phone composer takes named parameters or one host interface; `KeyDeliveryOps` loses its
+eight positional lambdas and `OwnerOps` its unused repository. Then tests for the five defects:
+`d198b437` re-entry through `DrainGate`, `89da4b82` welcome fetch through `DrainHost`, and the
+three `PresenceOps` ones reasserted as behavior.
+
+Corpus: `reportRead`, scheduled delivery, `key_grant` as a phone op, and the capabilities report
+join `WireFixtureGenerator.kt`, whose per-case fakes fold onto the new hosts. The fixture file
+becomes a Zod `WireFixture` with `.meta({id})`, so codegen gives Kotlin the twin; `check:fixtures`
+and every consumer validate files; the manifests become derived indexes.
+
+The request builders (`buildOwnerOpRequest`, `buildHealthRequest`, `buildConnectedGatewaysRequest`,
+`buildReachRequest`, `buildSocketRequest`) shipped in Phase 1.
 
 ### Bug classes
 
 - Phone state with no seam (class 4): every ops class constructible in a JVM test with a fake
   under forty lines.
-- The fixture contract reaches every Kotlin composer.
+- The fixture contract reaches every Kotlin composer, and its shape is a schema on both runtimes.
 
 ## Phase 4 - Cold-start identity state
 
 ### Slices
 
+Reassessed after Phase 1.
+
 1. **Phone.** `PhoneBootstrap` with a private constructor, `assemble(store, prov, reach):
    BootState`, `BootState = Ready | Missing(needs)`. `OwnerOps`, `ConsoleClient`, `PollDrain`,
-   `KeyDeliveryOps` take the value; the `OwnerOps` defaults shim goes. `ChatRepository` holds
-   `StateFlow<BootState>` and `suspend fun ready()`; onboarding is the one site that renders
-   `Missing`. `confirmedDomainId`'s 24 sites and the `SessionsScreen` duplicate collapse onto
-   the value.
+   `KeyDeliveryOps` take the value; the `OwnerOps` defaults shim (dated 2026-10-01) goes.
+   `ChatRepository` holds `StateFlow<BootState>` and `suspend fun ready()`; onboarding is the one
+   site that renders `Missing`. `confirmedDomainId`'s 24 sites and the `SessionsScreen` duplicate
+   collapse onto the value.
 2. **Gateway.** `resolveGatewayBootstrap(paths, env)` extending `decideBootPhase`, answering
    `active { boot } | arming { nonce } | standalone { missing }`. `buildFederationSlice(boot:
    GatewayBootstrap)` takes non-optional identity, admission, transport, keys, and the restored
-   stores instead of re-reading files; `GatewayBootstrap` is `composeGateway`'s first module.
+   stores instead of re-reading files; `GatewayBootstrap` is `composeGateway`'s first module and
+   carries the fixture-identity refusal. `routes.ts` loses its `dataDir` environment fallback.
 3. **Router.** `RouterDomainBootstrap` names what the constructor builds; no behavior change.
-4. **Residue.** Only the assemblers construct the values.
-5. **Scenarios.** Reach before roster; late reply across a gateway restart on a retained dir;
-   owner-id routing of a console thread reply; missing-epoch request and retry from an empty
-   keyring; bounded bootstrap install (three epochs, request the rest); Router restart with
-   incarnation fencing, baseline, and session re-registration.
+4. **Fixture world.** `IdentitySet` becomes `FixtureSet` and assembles the same `PhoneBootstrap`
+   and `GatewayBootstrap` values production assembles; the generators, the harness, and the phone
+   driver consume them instead of rebuilding key stores and signers (three `ContentKeyStore`
+   constructions in `gen-wire-fixtures.ts`; `OwnerOps`, `ContentKeyring`, `Keyring`,
+   `Provisioning` rebuilt in `WireFixtureGenerator.kt`).
+5. **Residue.** Only the assemblers construct the values.
+6. **Scenarios.** Reach before roster; owner-id routing of a console thread reply; bounded
+   bootstrap install (three epochs, request the rest); Router restart with incarnation fencing,
+   baseline, and session re-registration. The restart-with-pending-reply and empty-keyring
+   scenarios shipped in Phase 1.
 
 ### Bug classes
 
@@ -651,19 +667,33 @@ thirteen.
 
 ### Slices
 
-1. **Kill.** The suites behind the twelve fake helpers (about 480 cases) and the helpers, except
-   `federation-router` (the harness reuses `startRouter`) and `createMockWs` (the harness's fake
-   sessions). The by-kind categories: 167 prose assertions, 76 call-order keys, 49 stubbed
-   answers. The seven rotting residue files (`federation-manager`, `gateway-retained-state`,
-   `inbox-service`, `install-layer`, `module`, `resolve-bun`, `setup-verify`).
+Reassessed after Phase 1.
+
+1. **Kill.** The suites behind the twelve fake helpers (about 480 cases) and the helpers; the
+   harness composes `RouterServer` directly and brings its own `createFakeSocket`, so
+   `federation-router` and `createMockWs` go too once no survivor uses them. The by-kind
+   categories: 167 prose assertions, 76 call-order keys, 49 stubbed answers. The seven rotting
+   residue files (`federation-manager`, `gateway-retained-state`, `inbox-service`,
+   `install-layer`, `module`, `resolve-bun`, `setup-verify`) and the structure-pinning probes
+   Phase 1 had to patch (`data-dir-inventory`, `host-spawn-wiring`, `s10-residue`, the file scan
+   in `session-authority`).
 2. **Merge.** One module, one file: `routes` (five files), `session-store` (five),
    `websocket` (three), `codex-agent` (four), `owner state` (four).
-3. **Rewrite.** Survivors assert a sequence of actions and the state or output it produces.
-   String tests stay only where the string is the behavior: `agent-screen`, `pane-trim`,
-   `limit-notice`, canonical bytes, signing vectors. The decision rules the killed suites carried
-   (send addressing, wake bounds, refusal mapping, the presence protocol invariants) are
-   re-expressed as scenarios or pure-rule tests before their suite is deleted.
-4. **Kotlin.** The same pass: 45 prose asserts; the reflection tests reviewed;
+3. **Rewrite.** Survivors assert a sequence of actions and the state or output it produces, on
+   the harness and the fixture feeders as the bench. String tests stay only where the string is
+   the behavior: `agent-screen`, `pane-trim`, `limit-notice`, canonical bytes, signing vectors.
+   The decision rules the killed suites carried (send addressing, wake bounds, refusal mapping,
+   the presence protocol invariants) are re-expressed as scenarios or pure-rule tests before
+   their suite is deleted. `fakeHost` and `fakeSession` validate the frames they send and receive
+   against the shared schemas.
+4. **Catalog.** The residue fences derive from the schemas instead of curated lists: annotate the
+   Zod discriminators, outcomes, and reasons, generate one catalog into `Protocol.Wire`, and
+   point `wire-vocabulary-residue`, `aad-kinds-residue`, and `preimage-tag-twins` at it.
+   `outcome: "complete"` joins `OpOutcomeSchema` or gets its own family; `presence_read`,
+   `schedule_send`, `capabilities_read`, `cursor_translate` join the owner-op kinds; the raw
+   comparisons of `cursor_stale`, `stale_incarnation`, `no_waiter`, `accepted`, `applied` on both
+   runtimes read the constants.
+5. **Kotlin.** The same pass: 45 prose asserts; the reflection tests reviewed;
    `ClearsOnReprovisionTest` stays as a roster pin.
 
 ### Bug classes
@@ -675,6 +705,8 @@ thirteen.
 
 ### Slices
 
+Reassessed after Phase 1.
+
 1. `routes.ts` into modules by the field matrix (`routesStatus`, `routesCapabilities`,
    `routesPresence`, `routesSend`, `routesRespond`, `routesBoard`, `routesHumanNotify` over
    `createConsolePushOps`, `routesBlob`, `routesFederationPresence`) behind a compatibility
@@ -684,14 +716,28 @@ thirteen.
    blobStore, sessionAuthority, agentRoutes}`, with the blob and enrollment routes beside it.
 3. `composeGateway`'s residue into the thirteen modules in compose order (bootstrap, stores,
    sessions, persistence, host, agents, awareness, federation, websockets, routes, router
-   handlers, HTTP router, listener); the four late-bound cycles stay closures.
-4. The 42-site clock sweep and timer injection, module by module as each moves.
-5. `startGateway` under 100 lines; no file over 600.
+   handlers, HTTP router, listener); the four late-bound cycles stay closures. `GatewayGraph`
+   shrinks to `router`, `wsHandlers`, `close`, and an explicit fault port (link down, keyring
+   state) that replaces the harness's `federation().routerClient.stop()` and
+   `contentKeyStore.epochs()` reads. `RouterHandlers` splits frame dispatch from the
+   presence-push lifecycle.
+4. **Ambient context.** One injected record (clock, entropy, ids, timers) through
+   `composeGateway` and `RouterServerParams` replaces the per-module `now?`, `randomBytes?`,
+   `newId?` defaults (25 `Date.now` sites; the timers in `routes`, `wake`, the relays,
+   `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`). A residue test
+   fences direct `Date.now`, `randomBytes`, `randomUUID`, `Math.random`, `setTimeout`, and
+   `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1.
+5. **Router.** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
+   definitions carry kind, value schema, handler, and mutation class; built-ins register through
+   the same path as the services; `OwnerOp.op` stops being `z.record`; the per-kind answer shapes
+   become schemas the phone driver, the fixtures, and Kotlin read.
+6. `startGateway` under 100 lines; no file over 600.
 
 ### Bug classes
 
 - Structural: a root nobody can read or test, and the same fragility in `routes.ts`.
-- The clock seam finishes.
+- The clock seam finishes, as one context with a fence.
+- An owner-op kind with no schema, handler, or classification has no place to be added.
 
 ## Deploy
 
@@ -703,3 +749,37 @@ into the app; no wire field changes. Gateway first as usual.
 - A bootstrap wire op collapsing reach, roster, and the first key request.
 - Fault injection under the real stores through a `SecretIO` and `DurableStore` fault seam;
   Phase 1's remaining blind spot.
+
+## Painpoints
+
+- **Structure-pinning tests.** `data-dir-inventory`, `host-spawn-wiring`,
+  `gateway-retained-state-residue`, `s10-residue`, and the `session-authority` allowlist pin
+  file names and source text. Moving `startGateway` into `composeGateway` broke five of them
+  without changing behavior. Phase 2's kill list.
+- **Two HTTP paths in the Router.** `RouterServer.resolve` (Node `IncomingMessage`) and
+  `RouterServer.handle` (Fetch `Request`) each build the dispatched request; the GET-with-body
+  refusal lived in only one of them. One body reader should feed both.
+- **`composeGateway.ts` as one closure.** Threading `now` to `createShareAttestor` or a stop to
+  the presence pusher means reading 1400 lines to find the construction site, and the federation
+  slice rebuilds its handlers on activation. The harness reaches into `GatewayGraph` because no
+  smaller seam exists. Phase 5.
+- **Positional lambdas on Kotlin composers.** `KeyDeliveryOps` takes eight positional
+  constructor lambdas; the generator passes `{ error("unused") }` by position and guesses the
+  order. `OwnerOps(repo = null, ...)` wants a repository it never uses. Phase 3's hosts should be
+  named parameters or one host interface each.
+- **Bun and Node disagree at the socket.** Bun refuses an IP literal as SNI and ignores `ws`
+  `createConnection` unless the real package is resolved; the same dial had to be proved twice
+  (`check:pinning`, `check:boot`). `pinnedDial` is the one place that knows; nothing else should
+  open a TLS socket.
+- **Gradle cannot generate.** AGP owns the unit-test tasks, so the Kotlin fixture generator is a
+  JUnit class behind a system property and a task-name check in `build.gradle.kts`; the worker's
+  cwd is `android/app`, so every path is a property. Tolerable, not elegant.
+- **The frame a composer emits is not the frame on the wire.** `callInboxTool` stamps the
+  incarnation invisibly; the first fixture replay failed on `stale_incarnation` for a frame that
+  looked complete. The stamping belongs in the composer or in one named transport step.
+- **Router answers have no schema per op kind.** `board_read` answers a bare `BoardReadResult`,
+  `gateway_value` an `OpResultEnvelope`, `consumer_register` `{cursor, cursorEpoch}`,
+  `hello` `{outcome: "complete", hello}`; `OwnerOp.op` is `z.record`. Every consumer (the phone
+  driver, the fixture expects, Kotlin) learns the shapes by running the Router. The typed
+  owner-op registry in Phase 5 is the fix.
+- **Clock defaults in three spellings.** Recorded under Phase 1's bug classes; Phase 5.

@@ -6,6 +6,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
 - `src/gateway/` - Docker-side HTTP and WS router
+- `src/gateway/composeGateway.ts` - the whole gateway graph behind `GatewayDeps`, with `close()`; `index.ts` is the Bun process adapter
+- `src/gateway/router/registerAuth.ts` / `valueResult.ts` - the `gateway_register` frame and the `value_result` settlement, pure
 - `src/gateway/wake.ts` - container/session wake decisions
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
 - `src/gateway/presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence, read anchors, host RPC correlation
@@ -68,7 +70,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/mcp/codex/codexTools.ts` - five Codex tools and per-invocation replay ids
 - `src/mcp/capabilities.ts` / `capabilitiesTool.ts` - capability gating and guidance
 - `src/federation-server/` - live self-hosted federation Router
-- `src/federation-server/routerServer.ts` - guarded `route()` seam and sole `serve()` adapter; residue-tested
+- `src/federation-server/routerServer.ts` - public `handle(Request)` over `preflight` and `dispatch`; sole `serve()` adapter; residue-tested
 - `src/federation-server/fileSecretStore.ts` - durable federation state and bounded atomic CAS
 - `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
 - `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
@@ -106,6 +108,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/host-spawn.ts` - sole host-shell spawn-segment and command owner
 - `src/shared/crypto.ts` / `admission.ts` / `router-protocol.ts` / `federation-lifecycle.ts` - federation trust wire vocabulary
 - `src/shared/notice.ts` - shared notice tiers
+- `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, dispatched owner-op kinds, signing tags, nonce lengths; generated into `Protocol.Wire`; residue-fenced on both runtimes
+- `src/shared/fixture-identity.ts` - the committed test signing keys; shipping entry points refuse them without `ALLOW_FIXTURE_IDENTITY=1`
 - `src/shared/atomic-write.ts` - sole write-then-rename and temp-suffix owner; residue-tested
 - `src/shared/durable-store.ts` - atomic snapshots and per-file quarantine boundaries
 - `src/shared/session-store.ts` - authoritative gateway sessions keyed by `spawn.id`
@@ -128,6 +132,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../ConsoleSocketClient.kt` - `ConsoleSocketMode`
 - **Migration window reader:** `readRouterMigrationWindow`. A present null epoch means an unreadable file
 - `tests/fixtures/` - shared golden wire and signing fixtures; manifests drive both runtimes
+- `tests/fixtures/identity/set.json` - the one fixed identity set every harness and fixture generator reads; `scripts/gen-identity-set.ts` mints it
+- `tests/fixtures/wire/ts/` / `wire/kotlin/` - minted wire fixtures, each runtime's real composers under the set; `scripts/gen-wire-fixtures.ts` and `WireFixtureGenerator.kt` write them, `check:fixtures` and `kotlin-gate.sh` diff them
+- `src/testing/` - the federation harness: real Router and gateway graph in-process, fake host and session sockets, the TS phone driver, the console socket; `docs/testing.md`
+- `scripts/check-boot-runtime.ts` - the real entry points under Bun, one console op through a fake host
 - `skills/crosstalk/SKILL.md` - agent-facing tool reference
 
 ## Architecture
@@ -154,6 +162,7 @@ How each subsystem works lives in `docs/`:
 | `docs/agents.md` | Codex and Copilot delegation, local agent mode |
 | `docs/task-board.md` | Board, attachments, awareness |
 | `docs/references.md` | `ref://` grammar and matchers |
+| `docs/testing.md` | The federation harness, the minted wire fixtures, the identity set, the gates |
 | `docs/environment.md` | Every environment variable |
 
 ## Development
@@ -269,7 +278,7 @@ which is the whole of it. No category strip, no bidi rule, no Unicode whitespace
 Vitest runs under Node. The gateway, Router, and daemon run under Bun. `ws` and WebSocket behavior
 therefore differ. `bun run check:pinning` is the shipping-runtime gate. `bun run check:boot` is the
 shipping-composition gate: it boots the real Router and gateway under Bun and runs one console op
-through a fake host.
+through a fake host. The in-process harness and the fixture corpora are in `docs/testing.md`.
 
 ### Debugging the console on-device
 
