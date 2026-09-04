@@ -230,18 +230,13 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// the next poll.
 		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
 		repo.drain.scope?.launch(Dispatchers.IO) {
-			// #region Hypothesis A: wake target address
-			DebugLog.log("Wake", "wake $team -> op target $target")
-			// #endregion
 			runCatchingCancellable { repo.client().wake(target, opId) }
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
 					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 				}
 				.onFailure { e ->
-					// #region Hypothesis A: wake target address
 					DebugLog.log("Wake", "wake $team failed: ${e.javaClass.simpleName}: ${e.message?.take(160)}")
-					// #endregion
 					// FAILED retires the receipt rather than letting it run out its TTL: the surface
 					// must stop saying "waking" the moment we know nothing is coming, and the reason
 					// is already on its way to the user as a transient message.
