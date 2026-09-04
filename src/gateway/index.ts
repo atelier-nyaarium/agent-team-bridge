@@ -43,6 +43,7 @@ import { CodexRoute } from "./codexRoute.js";
 import { CopilotAgentService } from "./copilotAgentService.js";
 import { CopilotRelay } from "./copilotRelay.js";
 import { CopilotRoute } from "./copilotRoute.js";
+import { reportUnrecognizedDataEntries } from "./dataDirInventory.js";
 
 const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -1360,6 +1361,8 @@ export async function startGateway(): Promise<void> {
 
 		return new Response("Not Found", { status: 404 });
 	}
+
+	reportUnrecognizedDataEntries(DATA_DIR);
 
 	Bun.serve<WsData>({
 		port: PORT,
