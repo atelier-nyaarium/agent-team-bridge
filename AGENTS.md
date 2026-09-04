@@ -170,11 +170,18 @@ How each subsystem works lives in `docs/`:
 - `bun scripts/import-stts-voices.ts` - regenerate the committed TTS catalog.
 - `bun scripts/sync-leaf.ts <path>` or `--all` - synchronize a leaf.
 
-### Pull before every follow-up edit after a push
+### Push straight to `main`
 
-`gitPushNewBranch` can reset local `main` to `origin/main` while the PR merges. Run `gitFetch` and
-`gitPull` after every push. A non-empty `git log main..origin/main` is a hard stop. Scripted edits
-must assert their match before writing.
+Commit and push to `main`. Do not open a branch or a PR for ordinary work, and do not leave one
+open: an unmerged PR is work the owner will forget.
+
+Nothing gates a push but the local gates, so run them first. CI has no checks on this repo.
+
+Run `gitFetch` and `gitPull` before every follow-up edit after a push. A non-empty
+`git log main..origin/main` is a hard stop. Scripted edits must assert their match before writing.
+
+`gitPushNewBranch` resets local `main` to `origin/main`, taking the commit with it, so the work then
+lives only on the branch until the PR merges.
 
 ### Verify locally before pushing, especially Android
 
