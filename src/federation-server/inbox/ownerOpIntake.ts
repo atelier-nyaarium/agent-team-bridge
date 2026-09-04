@@ -25,6 +25,8 @@ export interface OwnerOpIntakeParams {
 	push: (domainId: string, address: string, rows: InboxRow[]) => boolean;
 	now?: () => number;
 	leases?: Pick<LeaseService, "ready">;
+	/** Answers kept for re-posts; the oldest goes when full. */
+	maxCachedAnswers?: number;
 }
 
 /** Verified, admitted, fresh operation. */
@@ -44,6 +46,14 @@ export const OWNER_STATE_MUTATION_KINDS = new Set([
 	"deliver",
 ]);
 
+const isMigrating = (result: unknown): boolean =>
+	!!result && typeof result === "object" && (result as { reason?: unknown }).reason === "migrating";
+
+/** An answer the console can keep; anything else it is expected to re-post. */
+const isSettled = (result: unknown): boolean =>
+	!isMigrating(result) &&
+	!(!!result && typeof result === "object" && (result as { outcome?: unknown }).outcome === "durability_uncertain");
+
 /** Handler error for a `refused` result. */
 export class OwnerOpRefused extends Error {
 	constructor(readonly reason: string) {
@@ -56,10 +66,12 @@ export class OwnerOpIntake {
 	private readonly nonces = new Map<string, { at: number; answer: Promise<unknown> }>();
 	private readonly handlers = new Map<string, OwnerOpHandler>();
 	private readonly now: () => number;
+	private readonly maxCachedAnswers: number;
 	private gatewayProtocol: ((domainId: string, gatewayId: string) => number | null) | undefined;
 
 	constructor(private readonly params: OwnerOpIntakeParams) {
 		this.now = params.now ?? Date.now;
+		this.maxCachedAnswers = params.maxCachedAnswers ?? 5000;
 	}
 
 	/** Register one non-built-in handler per operation kind. */
@@ -92,40 +104,54 @@ export class OwnerOpIntake {
 		if (Math.abs(this.now() - op.at) > REGISTER_MAX_SKEW_MS) return refused("stale");
 		for (const [nonce, entry] of this.nonces)
 			if (this.now() - entry.at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
-		const nonceKey = `${op.signerSignPub}/${op.nonce}`;
+		const nonceKey = `${op.domainId}/${op.signerSignPub}/${op.nonce}`;
 		// One signed op gets one answer. The console re-posts the same op on reach failover, so a
 		// second copy, in flight or settled, reads the first answer instead of running or being refused.
 		const replay = this.nonces.get(nonceKey);
 		if (replay) return replay.answer;
 		const nonceStore = this.params.inbox as InboxService & Partial<DurableNonceStore>;
 		if (nonceStore.ownerOpNonce?.(op.domainId, op.signerSignPub, op.nonce)) return refused("replay");
-		const answer = this.settle(op, nonceKey, nonceStore, refused);
+		// Only a settled answer stays cached. An outcome the console should retry is forgotten once it
+		// lands, so the re-post runs the op again instead of reading the failure back.
+		const answer = this.settle(op, nonceStore, refused).then(
+			(result) => {
+				if (!isSettled(result)) this.nonces.delete(nonceKey);
+				return result;
+			},
+			(error) => {
+				this.nonces.delete(nonceKey);
+				throw error;
+			},
+		);
 		this.nonces.set(nonceKey, { at: op.at, answer });
+		if (this.nonces.size > this.maxCachedAnswers) {
+			const oldest = this.nonces.keys().next().value;
+			if (oldest !== undefined) this.nonces.delete(oldest);
+		}
 		return answer;
 	}
 
 	private async settle(
 		op: OwnerOp,
-		nonceKey: string,
 		nonceStore: Partial<DurableNonceStore>,
 		refused: (reason: string) => OpResultEnvelope,
 	): Promise<unknown> {
+		const uncertain = () => ({
+			opKey: { conversationId: op.conversationId, opId: op.opId },
+			outcome: "durability_uncertain" as const,
+		});
 		try {
 			const result = await this.dispatch(op, refused);
-			if (result && typeof result === "object" && (result as Record<string, unknown>).reason === "migrating") {
-				this.nonces.delete(nonceKey);
-				return result;
-			}
+			if (isMigrating(result)) return result;
 			if (
 				op.op.kind !== "deliver" &&
 				nonceStore.acceptOwnerOpNonce &&
 				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
 			)
-				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
+				return uncertain();
 			return result;
 		} catch (error) {
-			if (error instanceof OwnerQuarantined)
-				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
+			if (error instanceof OwnerQuarantined) return uncertain();
 			// Parse failures and refused errors are operation results, not Router faults.
 			if (error instanceof ZodError) return refused("malformed");
 			if (error instanceof OwnerOpRefused) return refused(error.reason);

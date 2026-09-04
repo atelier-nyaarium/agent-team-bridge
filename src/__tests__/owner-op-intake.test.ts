@@ -108,6 +108,71 @@ describe("OwnerOpIntake", () => {
 		expect(runs).toBe(1);
 	});
 
+	it("runs a re-posted op again after the first attempt failed to settle", async () => {
+		const fixture = setup();
+		let attempts = 0;
+		fixture.intake.register("flaky", () => {
+			attempts++;
+			if (attempts === 1) throw new Error("transient");
+			return { answered: attempts };
+		});
+
+		await expect(fixture.intake.handle(op(fixture, "flaky", "same"))).rejects.toThrow("transient");
+		expect(await fixture.intake.handle(op(fixture, "flaky", "same"))).toEqual({ answered: 2 });
+	});
+
+	it("scopes a cached answer to its Domain and drops the oldest past the cap", async () => {
+		const fixture = setup();
+		const intake = new OwnerOpIntake({
+			inbox: { registerConsumer: () => ({ cursor: 0, cursorEpoch: 1 }) } as never,
+			getDomain: () => ({
+				ownerSignPub: fixture.owner.sign.pub,
+				admissions: [
+					signAdmission(
+						{
+							kind: "console",
+							signPub: fixture.consoleIdentity.sign.pub,
+							boxPub: fixture.consoleIdentity.box.pub,
+							issuedAt: 1,
+							nonce: "admit",
+						},
+						fixture.owner.sign.priv,
+						fixture.owner.sign.pub,
+					),
+				],
+				revocations: [],
+			}),
+			push: () => true,
+			now: () => 1_000_000,
+			maxCachedAnswers: 2,
+		});
+		let runs = 0;
+		intake.register("count", () => ({ run: ++runs }));
+		const signed = (nonce: string, domainId = "domain") =>
+			signOwnerOp(
+				{
+					v: 1 as const,
+					domainId,
+					signerSignPub: fixture.consoleIdentity.sign.pub,
+					conversationId: "c",
+					device: "phone",
+					opId: `o-${nonce}`,
+					at: 1_000_000,
+					nonce: Buffer.from(nonce).toString("base64"),
+					op: { kind: "count" },
+				},
+				fixture.consoleIdentity.sign.priv,
+			);
+
+		expect(await intake.handle(signed("a"))).toEqual({ run: 1 });
+		// The same signer and nonce in another Domain is its own op, not a replay.
+		expect(await intake.handle(signed("a", "other"))).toEqual({ run: 2 });
+		expect(await intake.handle(signed("b"))).toEqual({ run: 3 });
+		// Three answers exceed the cap of two: the first is gone, so its re-post runs again.
+		expect(await intake.handle(signed("a"))).toEqual({ run: 4 });
+		expect(await intake.handle(signed("b"))).toEqual({ run: 3 });
+	});
+
 	it("refuses unauthorized, stale, mismatched, and unsupported operations, and answers a replay with its first result", async () => {
 		const fixture = setup();
 		expect(
