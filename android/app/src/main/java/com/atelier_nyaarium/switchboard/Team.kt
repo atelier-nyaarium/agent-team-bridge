@@ -127,6 +127,20 @@ internal fun mergePresence(prior: List<Team>, fresh: List<Team>, keepPrior: (Tea
 	return fresh + prior.filter { it.name !in freshNames && keepPrior(it) }
 }
 
+/**
+ * Whether a row the last fold held survives a projection that no longer carries it.
+ *
+ * The roster names every Gateway the projection speaks for, and the Router KEEPS a disconnected
+ * Gateway's rows, marking them unreachable rather than dropping them. So an absent row on a named
+ * Gateway is a session that is gone, and holding it draws a session no forget can ever remove.
+ * Only a Gateway the projection does not name, which is a linked friend Domain, keeps its last rows.
+ */
+internal fun keepPriorRow(row: Team, homeGatewayId: String, planeDomain: String?, coveredGateways: Set<String>): Boolean {
+	val gateway = row.gatewayId.ifEmpty { homeGatewayId }
+	val foreignDomain = row.domainId != null && planeDomain != null && row.domainId != planeDomain
+	return foreignDomain || (gateway != homeGatewayId && gateway !in coveredGateways)
+}
+
 internal fun teamInfoToTeam(it: TeamInfo, homeGatewayId: String): Team {
 	val gatewayId = it.gatewayId.ifEmpty { homeGatewayId }
 	// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the

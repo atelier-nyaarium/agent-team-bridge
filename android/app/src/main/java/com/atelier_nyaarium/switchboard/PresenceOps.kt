@@ -142,7 +142,10 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 
 	private suspend fun landProjection(projection: OwnerPresenceProjection, bypassFreshness: Boolean = false) {
 		if (!bypassFreshness && System.currentTimeMillis() < lastProjectionAt) return
-		applyPlanePresenceLocked(projection.rows.map { teamInfoToTeam(it, host.homeGatewayId) })
+		applyPlanePresenceLocked(
+			projection.rows.map { teamInfoToTeam(it, host.homeGatewayId) },
+			projection.roster.mapTo(HashSet()) { it.gatewayId },
+		)
 		applyCrossDomainPresence(projection.linked)
 		// The picker offers what the Router last projected; a Gateway that stops advertising drops off.
 		if (projection.spawnPoints != host.state.value.gatewaySpawnPoints) {
@@ -150,21 +153,13 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 		}
 	}
 
-	suspend fun applyPlanePresence(planeRows: List<Team>, issuedAt: Long = System.currentTimeMillis()) = host.withDrainMutex {
-		projectionMutex.withLock {
-			if (issuedAt < lastProjectionAt) return@withLock
-			applyPlanePresenceLocked(planeRows)
-		}
-	}
-
-	private suspend fun applyPlanePresenceLocked(planeRows: List<Team>) {
+	private suspend fun applyPlanePresenceLocked(planeRows: List<Team>, coveredGateways: Set<String>) {
 		val local = host.homeGatewayId
 		// Only pushed rows become LIVE.
 		val fresh = planeRows.map { it.withAuthority(Authority.LIVE) }
 		val planeDomain = fresh.firstOrNull()?.domainId
 		val merged = mergePresence(lastRawTeams ?: emptyList(), fresh) { row ->
-			val gw = row.gatewayId.ifEmpty { local }
-			gw != local || (row.domainId != null && planeDomain != null && row.domainId != planeDomain)
+			keepPriorRow(row, local, planeDomain, coveredGateways)
 		}
 		applyPresenceLocked(merged)
 	}

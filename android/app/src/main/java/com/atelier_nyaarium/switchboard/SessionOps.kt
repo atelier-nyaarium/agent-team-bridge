@@ -358,9 +358,14 @@ internal class SessionOps(private val repo: ChatRepository) {
 						}
 						withContext(Dispatchers.Main) { onForgotten?.invoke() }
 					}
-					.onFailure { e -> repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) } }
+					.onFailure { e ->
+						DebugLog.log("Forget", "team=$team failed: ${e.message?.take(160)}")
+						repo._state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) }
+					}
 			}
 		} else {
+			// A silent path otherwise: the pane and the record outlive the row the owner just dropped.
+			DebugLog.log("Forget", "team=$team dropped locally; no Gateway to send it to")
 			// Nothing to send it to, so the local drop IS the whole forget.
 			onForgotten?.invoke()
 		}
