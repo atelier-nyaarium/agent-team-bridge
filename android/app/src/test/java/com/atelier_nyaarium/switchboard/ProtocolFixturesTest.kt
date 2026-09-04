@@ -9,6 +9,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
 import com.atelier_nyaarium.switchboard.proto.InboxRow
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.PlanesReadResult
 import com.atelier_nyaarium.switchboard.proto.PlanesReadValue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -33,6 +34,7 @@ class ProtocolFixturesTest {
 			"OwnerOp" -> wireJson.decodeFromString<OwnerOp>(body)
 			"InboxRow" -> wireJson.decodeFromString<InboxRow>(body)
 			"PlanesReadValue" -> wireJson.decodeFromString<PlanesReadValue>(body)
+			"PlanesReadResult" -> wireJson.decodeFromString<PlanesReadResult>(body)
 			"ConsoleSendResult" -> wireJson.decodeFromString<ConsoleSendResult>(body)
 			"ConsoleCreateSessionResult" -> wireJson.decodeFromString<ConsoleCreateSessionResult>(body)
 			"ConsoleCloseSessionResult" -> wireJson.decodeFromString<ConsoleCloseSessionResult>(body)

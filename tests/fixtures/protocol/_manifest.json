@@ -11,6 +11,7 @@
 		{ "file": "inbox-row.json", "schema": "InboxRow", "expect": "pass" },
 		{ "file": "tolerance-extra-field.json", "schema": "InboxRow", "expect": "pass" },
 		{ "file": "planes-read-value.json", "schema": "PlanesReadValue", "expect": "pass" },
+		{ "file": "planes-read-result.json", "schema": "PlanesReadResult", "expect": "pass" },
 		{ "file": "send-result.json", "schema": "ConsoleSendResult", "expect": "pass" },
 		{ "file": "create-session-result-pending.json", "schema": "ConsoleCreateSessionResult", "expect": "pass" },
 		{ "file": "close-session-result.json", "schema": "ConsoleCloseSessionResult", "expect": "pass" },

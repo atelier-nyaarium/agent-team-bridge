@@ -12,6 +12,7 @@ import {
 	ConsoleSendResultSchema,
 	InboxRowSchema,
 	OwnerOpSchema,
+	PlanesReadResultSchema,
 	PlanesReadValueSchema,
 } from "../shared/schemas.js";
 
@@ -22,6 +23,7 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	OwnerOp: OwnerOpSchema,
 	InboxRow: InboxRowSchema,
 	PlanesReadValue: PlanesReadValueSchema,
+	PlanesReadResult: PlanesReadResultSchema,
 	ConsoleSendResult: ConsoleSendResultSchema,
 	ConsoleCreateSessionResult: ConsoleCreateSessionResultSchema,
 	ConsoleCloseSessionResult: ConsoleCloseSessionResultSchema,

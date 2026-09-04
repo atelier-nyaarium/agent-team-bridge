@@ -220,10 +220,7 @@ internal class SessionOps(private val repo: ChatRepository) {
 	 * its record and brings its container/tmux back up, so an existing record resumes rather than a
 	 * duplicate being minted. Best-effort; a failure surfaces as a transient message. */
 	fun wakeSession(team: String) {
-		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
-		if (t !is Address) return
-		// The QUALIFIED session address, so the op routes to the session's own Gateway.
-		val target = t.canonical
+		val target = wakeTargetOf(team, repo.localDomain(), repo._state.value.homeGatewayId) ?: return
 		val opId = UUID.randomUUID().toString()
 		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
 		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
@@ -369,3 +366,8 @@ internal class SessionOps(private val repo: ChatRepository) {
 		}
 	}
 }
+
+/** The QUALIFIED session address a Wake is sent to, so the op routes to the session's own Gateway.
+ * Null for anything that is not a session: a spawn point has no pane to wake. */
+internal fun wakeTargetOf(team: String, localDomain: String, homeGatewayId: String): String? =
+	(runCatching { parseTarget(team, localDomain, homeGatewayId) }.getOrNull() as? Address)?.canonical
