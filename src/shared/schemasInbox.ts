@@ -188,7 +188,7 @@ export const PlanesReadValueSchema = z
 	.meta({ id: "PlanesReadValue" });
 
 export const PlaneReadSchema = z
-	.object({ name: z.string(), version: z.number().int().nonnegative(), payload: z.unknown() })
+	.object({ name: z.string(), version: z.number().int().nonnegative(), payload: z.unknown().optional() })
 	.meta({ id: "PlaneRead" });
 
 export const PlanesReadResultSchema = z

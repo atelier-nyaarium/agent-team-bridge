@@ -1046,7 +1046,7 @@ data class GatewayValueOp(
 data class PlaneRead(
 	val name: String,
 	val version: Long,
-	val payload: JsonElement,
+	val payload: JsonElement? = null,
 )
 
 @Serializable
