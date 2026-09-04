@@ -59,7 +59,7 @@ Fan Out ► Join Style
 
 ## Recovery
 
-Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns a bounded summary; pass \`agentId\` to inspect one agent's full history.
+Codex agents belong to the whole Claude Code session. A terminal result means finished. \`agent_dead\` means the agent cannot run. \`agent_unreachable\` means its App Server may still be running, so do not duplicate the work. If a Workflow caller dies, \`codexListAgents\` returns a bounded summary; pass \`agentId\` to inspect one agent's full history.
 `.trim();
 
 export const COPILOT_AGENT_INSTRUCTIONS = `

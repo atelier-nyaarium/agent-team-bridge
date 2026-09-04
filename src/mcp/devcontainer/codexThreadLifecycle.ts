@@ -203,6 +203,19 @@ export class ThreadLifecycle {
 	}
 
 	/**
+	 * Load the thread and take whatever it holds: a running turn becomes ours, a settled one leaves it
+	 * idle. Nothing is published and nothing is deleted; the caller settles what it learns.
+	 */
+	adopt(threadId: string): Promise<ThreadInspection> {
+		this.track(threadId);
+		return this.run(threadId, async (record) => {
+			this.refuseEnded(threadId, record);
+			await this.load(threadId, record);
+			return this.take(threadId, record);
+		});
+	}
+
+	/**
 	 * Read the thread and take whatever it holds: a running turn becomes ours, a settled one is
 	 * settled, and two reads proving nothing delete it. An unknown read leaves it as it is.
 	 */
@@ -210,20 +223,9 @@ export class ThreadLifecycle {
 		this.track(threadId);
 		return this.run(threadId, async (record) => {
 			this.refuseEnded(threadId, record);
-			const first = await this.inspect(threadId, record);
-			if (first.known === "running") {
-				this.cancelRetry(record);
-				record.epoch += 1;
-				record.state = { phase: "active", turnId: first.turnId, epoch: record.epoch };
-				return first;
-			}
-			if (first.known === "settled") {
-				// The read is authoritative: no turn is running, whatever this client believed.
-				if (record.state.phase === "active") record.state = { phase: "idle" };
-				await this.accept(threadId, record, first.turnId, first.outcome);
-				return first;
-			}
-			if (first.known === "unknown") return first;
+			const first = await this.take(threadId, record);
+			if (first.known === "settled") await this.accept(threadId, record, first.turnId, first.outcome);
+			if (first.known !== "empty") return first;
 			await this.pause(DISPOSE_QUIET_MS);
 			const second = await this.inspect(threadId, record);
 			if (second.known !== "empty") return second;
@@ -405,6 +407,19 @@ export class ThreadLifecycle {
 		if (record.retry === undefined) return;
 		clearTimeout(record.retry);
 		record.retry = undefined;
+	}
+
+	/** One read: a running turn becomes ours; a settled read is authoritative that no turn runs. */
+	private async take(threadId: string, record: ThreadRecord): Promise<ThreadInspection> {
+		const first = await this.inspect(threadId, record);
+		if (first.known === "running") {
+			this.cancelRetry(record);
+			record.epoch += 1;
+			record.state = { phase: "active", turnId: first.turnId, epoch: record.epoch };
+		} else if (first.known === "settled" && record.state.phase === "active") {
+			record.state = { phase: "idle" };
+		}
+		return first;
 	}
 
 	private async inspect(threadId: string, record: ThreadRecord): Promise<ThreadInspection> {

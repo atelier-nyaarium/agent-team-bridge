@@ -54,7 +54,6 @@ function unavailable(
 
 const TARGET_UNAVAILABLE = { code: "daemon_unavailable" as const, retryable: true };
 const AGENT_NOT_FOUND = { code: "not_found" as const, retryable: false };
-const DELIVERY_UNCONFIRMED = { code: "app_server_unavailable" as const, retryable: true };
 
 function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexStoredTurn | undefined {
 	return turnId ? agent.turns.find((turn) => turn.id === turnId) : undefined;
@@ -77,12 +76,17 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 	// hold. Checked FIRST and for every branch: reporting a settled turn's answer while the record is
 	// in recovery hands the caller a previous prompt's response as though it answered this one.
 	if (agent.agentState === "unavailable" || agent.agentState === "recovering") {
+		const dead = agent.agentState === "unavailable";
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: agent.agentState,
 			observation: "unavailable",
 			activities: [],
-			error: { ...DELIVERY_UNCONFIRMED, message: "codex agent state could not be confirmed" },
+			error: {
+				code: dead ? "agent_dead" : "agent_unreachable",
+				retryable: !dead,
+				message: dead ? "codex agent is dead" : "codex agent is alive but unreachable",
+			},
 		});
 	}
 	const turn = turnOf(agent, waitedTurnId);

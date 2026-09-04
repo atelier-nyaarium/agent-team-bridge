@@ -33,6 +33,8 @@ export const CodexErrorCodeSchema = z.enum([
 	"feature_disabled",
 	"daemon_unavailable",
 	"app_server_unavailable",
+	"agent_dead",
+	"agent_unreachable",
 	"interrupt_in_progress",
 	"protocol_incompatible",
 	"protocol_error",
@@ -159,6 +161,8 @@ export const CodexAgentResultSchema = z
 			const infrastructureError =
 				value.error?.code === "daemon_unavailable" ||
 				value.error?.code === "app_server_unavailable" ||
+				value.error?.code === "agent_dead" ||
+				value.error?.code === "agent_unreachable" ||
 				value.error?.code === "protocol_incompatible" ||
 				value.error?.code === "protocol_error";
 			if (

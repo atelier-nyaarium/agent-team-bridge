@@ -261,4 +261,22 @@ describe("Codex tool contracts", () => {
 			}).success,
 		).toBe(false);
 	});
+
+	it("distinguishes a dead agent from one whose live server is unreachable", () => {
+		const base = { agentId: AGENT_ID, observation: "unavailable", activities: [] };
+		expect(
+			CodexAgentResultSchema.safeParse({
+				...base,
+				agentState: "unavailable",
+				error: { code: "agent_dead", message: "codex agent is dead", retryable: false },
+			}).success,
+		).toBe(true);
+		expect(
+			CodexAgentResultSchema.safeParse({
+				...base,
+				agentState: "recovering",
+				error: { code: "agent_unreachable", message: "codex agent is alive but unreachable", retryable: true },
+			}).success,
+		).toBe(true);
+	});
 });

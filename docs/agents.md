@@ -50,6 +50,13 @@ preserving reply-before-notification wire order.
 **A refused request is not an unavailable agent.** Request failures use the request-error envelope
 and HTTP 400; genuine agent failure uses the unavailable result envelope.
 
+**Result availability is explicit.** A terminal result means finished. `agent_dead` means the agent
+cannot run. `agent_unreachable` means its App Server may still be running, so do not duplicate work.
+
+**Reconnect adopts persisted threads.** The daemon reopens the execution target, resumes the stored
+thread, and adopts its running or settled turn before accepting a follow-up. Reconciliation emits its
+receipt before an adopted terminal, preserving the fence. It reads and never deletes a thread.
+
 **The model is a start parameter, not configuration.** It is checked against `model/list` at use time
 and is never silently substituted.
 

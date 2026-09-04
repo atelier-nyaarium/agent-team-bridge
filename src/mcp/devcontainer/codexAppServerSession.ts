@@ -1,7 +1,7 @@
 import type { CodexServiceTier } from "../../shared/codex-agent.js";
 import { CodexAppServerClient, createJsonlTransport, type LifecycleHooks } from "./codexAppServer.js";
 import type { CodexChild } from "./codexTargets.js";
-import type { ThreadPhase } from "./codexThreadLifecycle.js";
+import type { ThreadInspection, ThreadPhase } from "./codexThreadLifecycle.js";
 import type { TerminalOutcome } from "./codexTurnOutcome.js";
 
 ////////////////////////////////
@@ -12,6 +12,8 @@ export interface AppServerSession {
 	onEvent(listener: (message: { method: string; params?: unknown }) => void): void;
 	startThread(settings: { cwd: string; model?: string; serviceTier?: CodexServiceTier }): Promise<string>;
 	resumeThread(threadId: string): Promise<void>;
+	/** Loads the thread and owns a running turn; publishes and deletes nothing. */
+	adoptThread(threadId: string): Promise<ThreadInspection>;
 	readThread(threadId: string): Promise<unknown>;
 	/**
 	 * Start a turn, registering for it in `onStarted`.

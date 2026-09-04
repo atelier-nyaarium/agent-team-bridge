@@ -1676,6 +1676,52 @@ describe("the thread lifecycle", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("adopts a thread for reconciliation: loaded, a running turn owned, nothing published or deleted", async () => {
+		vi.useFakeTimers();
+		try {
+			const terminals: unknown[] = [];
+			const { f, client } = await openLifecycle({ onTerminal: (...args) => terminals.push(args) });
+
+			const empty = client.adoptThread("thread-inherited");
+			await answer(f, "thread/resume", {});
+			await answer(f, "thread/read", readOf("thread-inherited", []));
+			expect(await empty).toEqual({ known: "empty" });
+			await vi.advanceTimersByTimeAsync(DISPOSE_QUIET_MS * 2);
+			expect(methods(f)).not.toContain("thread/delete");
+			expect(client.stateOf("thread-inherited")).toMatchObject({ phase: "idle" });
+
+			const settled = client.adoptThread("thread-inherited");
+			await answer(
+				f,
+				"thread/read",
+				readOf("thread-inherited", [
+					{
+						id: "turn-s",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "done", phase: "final_answer" }],
+					},
+				]),
+				1,
+			);
+			expect(await settled).toMatchObject({ known: "settled", turnId: "turn-s" });
+			expect(terminals).toEqual([]);
+			expect(methods(f)).not.toContain("thread/archive");
+
+			const running = client.adoptThread("thread-inherited");
+			await answer(
+				f,
+				"thread/read",
+				readOf("thread-inherited", [{ id: "turn-r", status: "inProgress", items: [] }]),
+				2,
+			);
+			expect(await running).toEqual({ known: "running", turnId: "turn-r" });
+			expect(client.stateOf("thread-inherited")).toMatchObject({ phase: "active", turnId: "turn-r" });
+			expect(methods(f).filter((m) => m === "thread/resume")).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 describe("choosing a reasoning effort", () => {

@@ -390,12 +390,17 @@ export class CodexDaemonService {
 		let observed: ReadOutcome = { known: "unknown" };
 		if (command.turnId) {
 			try {
-				await session.client.resumeThread(command.threadId);
-				observed = outcomeFromRead(
-					await session.client.readThread(command.threadId),
-					command.threadId,
-					command.turnId,
-				);
+				const adopted = await session.client.adoptThread(command.threadId);
+				if (adopted.known === "running" || adopted.known === "settled") {
+					if (adopted.turnId !== command.turnId) {
+						// The thread moved on to another turn; this one is asked about by name.
+						observed = await this.readOutcome(session, command.threadId, command.turnId);
+					} else if (adopted.known === "running") {
+						observed = { known: "running" };
+					} else {
+						observed = { known: "settled", outcome: adopted.outcome };
+					}
+				}
 			} catch {
 				observed = { known: "unknown" };
 			}

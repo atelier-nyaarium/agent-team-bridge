@@ -3,7 +3,12 @@ import type { LifecycleHooks } from "../mcp/devcontainer/codexAppServer.js";
 import type { AppServerSession } from "../mcp/devcontainer/codexDaemonService.js";
 import { CodexDaemonService, resolveAgentTarget } from "../mcp/devcontainer/codexDaemonService.js";
 import type { CodexChild, TargetAvailability, TargetSupervisor } from "../mcp/devcontainer/codexTargets.js";
-import type { PoisonReason, ThreadPhase } from "../mcp/devcontainer/codexThreadLifecycle.js";
+import {
+	inspectRead,
+	type PoisonReason,
+	type ThreadInspection,
+	type ThreadPhase,
+} from "../mcp/devcontainer/codexThreadLifecycle.js";
 import type { TerminalOutcome } from "../mcp/devcontainer/codexTurnOutcome.js";
 import type { CodexResolvedTarget } from "../shared/codex-agent.js";
 
@@ -90,6 +95,18 @@ class FakeSession implements AppServerSession {
 		this.calls.push("readThread");
 		if (this.readGate) await this.readGate;
 		return this.threadReadResult;
+	}
+	/** What `ThreadLifecycle.adopt` does: load, then own a running turn; a settled one is the daemon's to settle. */
+	async adoptThread(threadId: string): Promise<ThreadInspection> {
+		this.calls.push("adoptThread");
+		await this.resumeThread();
+		if (this.readGate) await this.readGate;
+		const adopted = inspectRead(this.threadReadResult, threadId);
+		if (adopted.known === "running") {
+			this.active.set(threadId, adopted.turnId);
+			this.phases.set(threadId, { phase: "active", turnId: adopted.turnId, epoch: 1 });
+		}
+		return adopted;
 	}
 	/** The owner hands the id back before publishing anything for it, so the double must too. */
 	async startTurn(threadId: string, _text: string, onStarted: (turnId: string) => void) {
@@ -1543,7 +1560,48 @@ describe("Codex daemon commands", () => {
 		});
 		await settle();
 
+		// Adopted, so the owner holds the turn as its own and its terminal parks the thread.
+		expect(context.session.calls).toContain("adoptThread");
+		expect(context.session.stateOf("thread-1")).toMatchObject({ phase: "active", turnId: "turn-1" });
 		expect(context.sent).toMatchObject([{ kind: "reconciled", turnId: "turn-1", turnState: "inProgress" }]);
+	});
+
+	it("asks about a turn by name when the thread has moved on to another", async () => {
+		const context = setup();
+		context.service.handleCommand(startCommand());
+		await settle();
+		context.sent.length = 0;
+		context.session.threadReadResult = {
+			thread: {
+				id: "thread-1",
+				turns: [
+					{
+						id: "turn-1",
+						status: "completed",
+						items: [{ type: "agentMessage", id: "item-1", text: "earlier", phase: "final_answer" }],
+					},
+					{ id: "turn-2", status: "inProgress", items: [] },
+				],
+			},
+		};
+
+		context.service.handleCommand({
+			type: "codex_command",
+			kind: "reconcile",
+			requestId: REQUEST_ID,
+			ownerKey: OWNER_KEY,
+			agentId: AGENT_ID,
+			target: RESOLVED_TARGET,
+			threadId: "thread-1",
+			turnId: "turn-1",
+		});
+		await settle();
+
+		expect(context.session.calls).toContain("readThread");
+		expect(context.sent).toMatchObject([
+			{ type: "codex_receipt", kind: "reconciled", turnId: "turn-1", turnState: "completed" },
+			{ type: "codex_event", kind: "terminal", state: "completed", finalResponse: "earlier" },
+		]);
 	});
 
 	it("reports a turn that started despite a failed startTurn rather than refusing it", async () => {

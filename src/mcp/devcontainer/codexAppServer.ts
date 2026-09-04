@@ -414,6 +414,11 @@ export class CodexAppServerClient {
 		return this.lifecycle.adoptOrDispose(threadId);
 	}
 
+	/** For a thread being reconciled: loaded, and whatever turn it holds is the caller's to settle. */
+	adoptThread(threadId: string): Promise<ThreadInspection> {
+		return this.lifecycle.adopt(threadId);
+	}
+
 	stateOf(threadId: string): ThreadPhase | undefined {
 		return this.lifecycle.stateOf(threadId);
 	}
