@@ -15,11 +15,13 @@ import {
 	PlanesReadResultSchema,
 	PlanesReadValueSchema,
 } from "../shared/schemas.js";
+import { MailboxEntrySchema } from "../shared/schemasConsoleOp.js";
 
 const FIXTURES = path.join(__dirname, "../../tests/fixtures/protocol");
 
 const SCHEMAS: Record<string, z.ZodType> = {
 	ConsoleOp: ConsoleOpSchema,
+	MailboxEntry: MailboxEntrySchema,
 	OwnerOp: OwnerOpSchema,
 	InboxRow: InboxRowSchema,
 	PlanesReadValue: PlanesReadValueSchema,

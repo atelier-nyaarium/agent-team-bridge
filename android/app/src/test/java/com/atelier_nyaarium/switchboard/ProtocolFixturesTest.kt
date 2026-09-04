@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
 import com.atelier_nyaarium.switchboard.proto.InboxRow
+import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import com.atelier_nyaarium.switchboard.proto.PlanesReadResult
 import com.atelier_nyaarium.switchboard.proto.PlanesReadValue
@@ -33,6 +34,7 @@ class ProtocolFixturesTest {
 			"ConsoleOp" -> wireJson.decodeFromString<ConsoleOp>(body)
 			"OwnerOp" -> wireJson.decodeFromString<OwnerOp>(body)
 			"InboxRow" -> wireJson.decodeFromString<InboxRow>(body)
+			"MailboxEntry" -> wireJson.decodeFromString<MailboxEntry>(body)
 			"PlanesReadValue" -> wireJson.decodeFromString<PlanesReadValue>(body)
 			"PlanesReadResult" -> wireJson.decodeFromString<PlanesReadResult>(body)
 			"ConsoleSendResult" -> wireJson.decodeFromString<ConsoleSendResult>(body)

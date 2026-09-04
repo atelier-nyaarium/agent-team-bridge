@@ -11,13 +11,18 @@ import { Address } from "../shared/session-id.js";
 const identity = generateIdentity();
 
 describe("owner row body", () => {
-	it("is a MailboxEntry the phone can decode; the bare entry is not", () => {
-		const reply = ownerRowBody({ kind: "reply", session_id: "s", body: "b", status: "ok" }, 5);
-		const notice = ownerRowBody({ kind: "notice", session_id: "n", title: "t", body: "b" }, 6);
-		expect(MailboxEntrySchema.safeParse(reply).success).toBe(true);
-		expect(MailboxEntrySchema.safeParse(notice).success).toBe(true);
-		expect(reply).toMatchObject({ seq: 0, at: 5, kind: "reply", body: "b" });
-		expect(MailboxEntrySchema.safeParse({ kind: "reply", session_id: "s", body: "b" }).success).toBe(false);
+	it("seals the body the owner-row-reply fixture pins, which both runtimes decode as a MailboxEntry", () => {
+		const pinned = JSON.parse(
+			fs.readFileSync(path.join(__dirname, "../../tests/fixtures/protocol/owner-row-reply.json"), "utf8"),
+		);
+		expect(
+			ownerRowBody({ kind: "reply", session_id: "host.82d560", body: "done", status: "ok" }, 1757000000000),
+		).toEqual(pinned);
+		expect(MailboxEntrySchema.safeParse(pinned).success).toBe(true);
+		// The bare entry is what the phone was handed before, and what it could not decode.
+		expect(MailboxEntrySchema.safeParse({ kind: "reply", session_id: "host.82d560", body: "done" }).success).toBe(
+			false,
+		);
 	});
 });
 

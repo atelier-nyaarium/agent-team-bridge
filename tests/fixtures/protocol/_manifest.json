@@ -18,6 +18,9 @@
 		{ "file": "forget-result-release.json", "schema": "ConsoleForgetResult", "expect": "pass" },
 		{ "file": "list-dirs-result.json", "schema": "ConsoleListDirsResult", "expect": "pass" },
 		{ "file": "peek-result-container-logs.json", "schema": "ConsolePeekResult", "expect": "pass" },
-		{ "file": "peek-result-legacy.json", "schema": "ConsolePeekResult", "expect": "pass" }
+		{ "file": "peek-result-legacy.json", "schema": "ConsolePeekResult", "expect": "pass" },
+		{ "file": "owner-row-reply.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "owner-row-notice.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "invalid-owner-row-bare-entry.json", "schema": "MailboxEntry", "expect": "fail" }
 	]
 }
