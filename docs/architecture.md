@@ -16,6 +16,13 @@ Entry points, addressing, sessions, and the state planes the console reads.
 | 20002 | MCP connector WS |
 | 20003 | Enrollment TLS, one-time nonce |
 
+**Bootstrap values:** `GatewayBootstrap.resolve(paths, env, io)` decides the gateway's boot
+(`active`, `arming`, or `standalone`) and carries the identity, Domain id, transport, allowlist,
+content keys, and cached reach the federation slice reads; `composeGateway` re-resolves after a
+bootstrap install. `RouterDomainBootstrap.assemble` names what the Router's constructor builds. The
+phone's `PhoneIdentity` publishes `PhoneBootstrap` (`docs/console.md`). `bootstrap-residue` pins
+that only the assemblers construct the values.
+
 ## Channel conversations
 
 Every connection is channel mode. Each MCP process mints one stable `conversation_id` at startup and
@@ -108,7 +115,8 @@ The phone reaches the Router through signed OwnerOps. `deliver` carries a `conso
 
 `ConsoleSocketMode.INBOX` selects the inbox socket. `PollDrain.drainTick` reads the owner inbox and
 planes, then advances the inbox once when rows drain. `homeGatewayId` selects the home Gateway from
-the admitted gateways.
+the admitted gateways. A Domain-less phone reaches the Router through the token-only transport,
+whose reach answer names the Domain; the signed client exists only for a Ready boot.
 
 ## Versioned state planes
 

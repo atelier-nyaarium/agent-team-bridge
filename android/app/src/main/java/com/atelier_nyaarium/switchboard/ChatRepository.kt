@@ -26,7 +26,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
@@ -57,9 +56,9 @@ class ChatRepository(
 	internal val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) : ClearsOnReprovision {
 	internal val federation = FederationManager(store)
+	internal val identity = PhoneIdentity(store, federation)
 	internal val ambient = PhoneAmbient.system()
-	private val _bootState = MutableStateFlow<BootState>(BootState.Missing(setOf(Need.PROVISIONING)))
-	internal val bootState: StateFlow<BootState> = _bootState
+	internal val bootState: StateFlow<BootState> get() = identity.bootState
 	private var ownerOpsBoot: PhoneBootstrap? = null
 	private var ownerOpsValue: OwnerOps? = null
 	private var keyDeliveryBoot: PhoneBootstrap? = null
@@ -147,17 +146,9 @@ class ChatRepository(
 	internal lateinit var cursorTranslation: CursorTranslationOps
 	internal lateinit var selfMigration: SelfMigration
 
-	fun refreshBoot() {
-		_bootState.value = PhoneBootstrap.assemble(store, federation, confirmedDomainId())
-		val domainId = readyOrNull()?.domainId
-		if (_state.value.domainId != domainId) _state.update { it.copy(domainId = domainId) }
-	}
+	internal fun readyOrNull(): PhoneBootstrap? = identity.readyOrNull()
 
-	internal fun readyOrNull(): PhoneBootstrap? = (_bootState.value as? BootState.Ready)?.boot
-
-	internal suspend fun ready(): PhoneBootstrap {
-		return bootState.first { it is BootState.Ready }.let { (it as BootState.Ready).boot }
-	}
+	internal suspend fun ready(): PhoneBootstrap = identity.ready()
 
 	@Synchronized
 	internal fun ownerOpsOrNull(): OwnerOps? {
@@ -180,7 +171,7 @@ class ChatRepository(
 				KeyDeliveryCollaborators(
 					signOwnerOp = { op -> ownerOpsOrNull()?.sign(op) },
 					sendOwnerOp = { client().postOwnerOp(it) },
-					install = KeyDeliveryOps.installInto(boot.contentKeyring),
+					install = { envelope, trust -> identity.installContentKey(boot, envelope, trust) },
 					reportError = { message -> _state.update { it.copy(error = message) } },
 				),
 			)
@@ -196,7 +187,6 @@ class ChatRepository(
 
 	init {
 		board.sealing = { boardSealing() }
-		refreshBoot()
 	}
 
 	/** Foreground Router push channel. */
@@ -463,6 +453,15 @@ class ChatRepository(
 		repoScope.launch { block() }
 	}
 
+	init {
+		repoScope.launch {
+			identity.bootState.collect { boot ->
+				val domainId = (boot as? BootState.Ready)?.boot?.domainId
+				if (_state.value.domainId != domainId) _state.update { it.copy(domainId = domainId) }
+			}
+		}
+	}
+
 	// Domain trust anchor.
 
 	/** Apply the keyring snapshot. */
@@ -543,7 +542,6 @@ class ChatRepository(
 		ownerOpsValue = null
 		keyDeliveryBoot = null
 		keyDeliveryValue = null
-		_bootState.value = BootState.Missing(setOf(Need.PROVISIONING))
 		homeGatewayId = ""
 		mailboxSync.clearInMemory()
 		forgottenUntil.clear()

@@ -47,12 +47,6 @@ internal fun localSessions(sessions: List<Team>, adminDomainId: String): List<Te
 internal fun dedupedFriendSessions(sessions: List<CrossDomainPresenceSession>): List<CrossDomainPresenceSession> =
 	sessions.distinctBy { it.gatewayId to it.team }
 
-/** A domainId-less local entry never masks a later real one. */
-internal fun adminDomainId(sessions: List<Team>, homeGatewayId: String): String =
-	sessions
-		.firstOrNull { (it.gatewayId.ifEmpty { homeGatewayId }) == homeGatewayId && !it.domainId.isNullOrEmpty() }
-		?.domainId.orEmpty()
-
 /** The session-board grouping key: the full (Domain, Gateway) pair. A gateway id is
  * unique only within a Domain, so two linked friend Domains running an identically-named
  * gateway must group separately rather than merge. */

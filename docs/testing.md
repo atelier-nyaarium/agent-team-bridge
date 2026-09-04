@@ -24,11 +24,13 @@ refuse them unless `ALLOW_FIXTURE_IDENTITY=1`, which only the harness and the bo
 Re-minting the set invalidates every derived fixture.
 
 Each runtime builds one `FixtureWorld` from the identity set. It asserts that the content key is
-derived from the Domain owner and that both admissions verify. The world supplies the Router and
-Gateway bootstrap state, one content key store, and phone facts. `FixtureDraws` gives each case one
-counter. Draws are the first N bytes of `sha256("<producer>:<composer>:<case>:<n>")`, recorded in
-`inputs.draws` by index. Kotlin sealed blocks declare every envelope path, its AAD kind, and the
-plaintext or JSON subset the other runtime must open.
+derived from the Domain owner and that both admissions verify, and assembles the values its
+participants have: TS the gateway boot and content key store, Kotlin the phone boot and client.
+`FixtureDraws` gives each case one counter. Draws are the first N bytes of
+`sha256("<producer>:<composer>:<case>:<n>")`, recorded in `inputs.draws` by index. `WireSealed`
+blocks on both producers (`phone.sealed` on TS fixtures, `sealed` on Kotlin ones) declare every
+envelope path, its AAD kind, and the plaintext, JSON subset, or decode class the other runtime
+checks; each reader scans its frame for undeclared envelopes.
 
 ## The harness
 
@@ -41,9 +43,11 @@ the harness `now`. `restartGateway` recomposes over the retained directories.
 
 Scenarios live in `src/__tests__/federation-harness.test.ts`. Each asserts what the phone or the
 session observes, never a fake's bookkeeping.
-The harness also supports `restartRouter`, and the phone driver exposes `reach()` for the token-gated
-reach and gateway roster. Scenarios cover reach before roster, owner-id reply routing, bounded bootstrap
-installation with missing-epoch requests, and Router restart incarnation fencing with presence recovery.
+`startRouterOnly` composes the Router without a gateway, so a scenario can add an arming or active
+gateway itself; `restartRouter` replaces the Router on its port; the phone driver's `reach()` is the
+token-gated reach and gateway roster. `federation-harness-boot.test.ts` covers reach before roster,
+a bounded bootstrap install that requests the missing epoch, and a Router restart that leaves one
+registration in the reach roster and one presence row after re-registration.
 
 ## Minted wire fixtures
 
@@ -69,7 +73,8 @@ nonces, and commits what they produced; the other runtime consumes it with its r
 Fixture shape is `src/shared/schemasWireFixture.ts`, generated into Kotlin as `WireFixture`:
 `producer`, `composer`, `case`, `clock`, `inputs`, `expect` (the real peer's answer as a subset),
 then `frame` (TS) with an optional `phone` block naming the decode target (`RowEnvelope`,
-`ContentEnvelope`, `BoardOp`) or `request` (Kotlin). Each generator builds the value through the
+`ContentEnvelope`, `BoardOp`) and its `sealed` values, or `request` (Kotlin) with its `sealed`
+values. Each generator builds the value through the
 schema and derives the manifest from it. `check:fixtures` validates every committed file and
 manifest entry on both sides. The n-th random draw of a case is the first N bytes of
 `sha256("<producer>:<composer>:<case>:<n>")`, recorded in `inputs`.

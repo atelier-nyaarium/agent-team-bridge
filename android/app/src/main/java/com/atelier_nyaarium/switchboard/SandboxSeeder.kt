@@ -30,7 +30,7 @@ internal class ChatRepositorySandboxSeeder(private val repo: ChatRepository) : S
 	) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
 		repo.homeGatewayId = sandboxHomeGateway(teams.firstOrNull()?.name, repo.homeGatewayId)
-		if (repo.store.load() == null) repo.store.save(SANDBOX_PROVISIONING)
+		if (repo.store.load() == null) repo.identity.saveBlob(SANDBOX_PROVISIONING)
 		this.dirs = dirs
 		repo._state.update { s ->
 			s.copy(

@@ -18,12 +18,15 @@ class PhoneBootstrap private constructor(
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub)
 
 	companion object {
-		fun assemble(store: AppStateStore, federation: FederationManager, domainId: String?): BootState {
+		/** An invite's pending tenant is the Domain until reach or roster confirm one. */
+		fun assemble(store: AppStateStore, federation: FederationManager): BootState {
 			val blob = store.load() ?: return BootState.Missing(setOf(Need.PROVISIONING))
-			val domain = domainId?.takeIf { it.isNotBlank() } ?: return BootState.Missing(setOf(Need.DOMAIN_ID))
+			val provisioning = Provisioning.parse(blob, store)
+			val domain = store.loadDomainId().ifEmpty { provisioning.pendingTenant?.domainId.orEmpty() }
+			if (domain.isBlank()) return BootState.Missing(setOf(Need.DOMAIN_ID))
 			return BootState.Ready(
 				PhoneBootstrap(
-					provisioning = Provisioning.parse(blob, store),
+					provisioning = provisioning,
 					consoleIdentity = federation.consoleIdentity(),
 					ownerSignPub = federation.ownerSignPub(),
 					domainId = domain,

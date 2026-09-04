@@ -16,7 +16,14 @@ internal interface DeviceApprovalOpsCollaborators {
 	fun approvalNonces(): MutableMap<String, String>
 	fun homeGatewayId(): String
 	fun setHomeGatewayId(value: String)
-	fun installApprovedDevice(blob: String, domainJson: String?, domainVersion: String?, gatewayId: String?, contentKeys: Map<Int, ByteArray>): Boolean
+	fun installApprovedDevice(
+		blob: String,
+		domainJson: String?,
+		domainVersion: String?,
+		gatewayId: String?,
+		contentKeys: Map<Int, ByteArray>,
+		domainId: String?,
+	): Boolean
 	fun invalidateClients()
 	suspend fun submitOwnerAdmission(signed: SignedAdmission): Boolean
 	fun refreshAdmittedGateways()
@@ -134,9 +141,7 @@ internal class DeviceApprovalOps(
 		val prov = boot.provisioning
 		val console = boot.consoleIdentity
 		val domainId = boot.domainId
-		identity.federation.ensureContentEpochs(domainId)
-		// The boot's keyring predates the ensure.
-		val contentKeyring = identity.federation.contentKeyring()
+		identity.ensureContentEpochs(boot)
 		return ConsoleTransport(
 			routerUrl = prov.routerUrl,
 			routerCertFp = prov.routerCertFp,
@@ -145,7 +150,7 @@ internal class DeviceApprovalOps(
 				gatewayId = collaborators.homeGatewayId().takeIf { it.isNotEmpty() } ?: store.loadGatewayId().takeIf { it.isNotEmpty() },
 				domainVersion = store.loadDomainVersion().ifEmpty { null },
 			domain = boot.keyring().snapshot,
-			contentKeys = contentKeyring.wrapAllFor(
+			contentKeys = boot.contentKeyring.wrapAllFor(
 				recipientBoxPub,
 				console.sign.pub,
 				console.sign.priv,
@@ -239,8 +244,7 @@ internal class DeviceApprovalOps(
 			wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.DomainSnapshot.serializer(), it)
 		}
 		val gatewayId = transport.gatewayId?.takeIf { it.isNotEmpty() }
-		transport.domainId?.takeIf { it.isNotEmpty() }?.let(store::saveDomainId)
-		check(collaborators.installApprovedDevice(blob, domainJson, transport.domainVersion, gatewayId, contentKeys)) {
+		check(collaborators.installApprovedDevice(blob, domainJson, transport.domainVersion, gatewayId, contentKeys, transport.domainId)) {
 			"approved-device install could not be committed"
 		}
 		gatewayId?.let { collaborators.setHomeGatewayId(it) }

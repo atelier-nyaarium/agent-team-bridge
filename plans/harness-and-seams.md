@@ -645,69 +645,71 @@ constructors anyway.
 - The fixture contract reaches every signed-op composer and request builder on the phone, its
   shape is one schema on both runtimes, and every sealed fixture is opened by its real peer.
 
-## Phase 4 - Cold-start identity state
+## Phase 4 - Cold-start identity state ✅
 
-### Slices
+### Slices, as shipped (`72b8098d` and the identity door commit) ✅
 
-Reassessed after Phase 3.
+**Phone:** `PhoneBootstrap` (private constructor; `assemble(store, federation)` answers
+`Ready(boot)` or `Missing(needs)`). Ready carries the provisioning, the console identity, the
+Domain owner's sign pub, the Domain id, and the content keyring, and reads the admission keyring
+live through `keyring()`. The Domain id is the stored one, else an invite's pending tenant, so an
+invited device is Ready to first-root. `PhoneAmbient` carries `now`, `newNonce`, `newNonceBytes`,
+`newOpId`, `wrapEntropy`, and the missing-epoch timer. `OwnerOps(boot, ambient)`;
+`KeyDeliveryOps(boot, ambient, KeyDeliveryCollaborators)`; `ConsoleClient(boot, ambient, store,
+coordinator, ConsoleClientCollaborators)` with no storage fallback keyring; `BoardSealing(boot,
+ambient, onMissingEpoch)`; `CursorTranslationOps` with no defaults. `PhoneIdentity` is the one
+door for identity facts (`provision`, `saveBlob`, `learnDomainId`, `installApproved`,
+`importOwnerBackup`, `applyDomainSync`, `mergeAdmission`, `mergeRevocation`,
+`ensureContentEpochs`, `installContentKeys`, `clear`): each write is serialized and re-assembles
+the boot. `ChatRepository` exposes the door's `bootState`, `readyOrNull`, and `ready`, caches
+`OwnerOps` and `KeyDeliveryOps` per boot, and syncs `ChatState.domainId` from the flow.
+`confirmedDomainId` is gone: the token-only reach (`ConsoleRouterTransport.apiReachable`) and the
+signed roster feed `learnDomainId`. Onboarding renders `Missing`; `SessionsScreen` reads
+`ChatState.domainId`.
 
-1. **Phone.** `PhoneBootstrap` with a private constructor, `assemble(store, prov, reach):
-   BootState`, `BootState = Ready | Missing(needs)`; `Ready` carries the console identity, the
-   Domain id, the provisioning (conversation id, device), the keyring and content keyring, the
-   Domain owner's sign pub, and the home Gateway id. `PhoneAmbient` carries `now`, `newNonce`,
-   `newNonceBytes`, `newOpId`, `wrapEntropy`, and the missing-epoch timer. `OwnerOps(bootstrap,
-   ambient)`, `KeyDeliveryOps(bootstrap, ambient, collaborators)` with an explicit
-   `KeyDeliveryCollaborators` record (sign, send, install, report), and the same fold on
-   `ConsoleClient` (no storage fallback keyring, no optional identity), `BoardSealing`, and
-   `CursorTranslationOps`. Construction sites: `OwnerOps` 6, `KeyDeliveryOps` 21, `ConsoleClient`
-   5, `BoardSealing` 8, `CursorTranslationOps` 3. `ChatRepository` holds `StateFlow<BootState>`
-   and `suspend fun ready()`; onboarding is the one site that renders `Missing`.
-   `confirmedDomainId`'s 24 sites and the `SessionsScreen` duplicate collapse onto the value.
-1b. **Role ports.** The nine repository-bound ops classes take composable role ports (state,
-   persistence, client, presence, playback), not nine more wide hosts, so one role fake serves
-   every test; the stateful coordinators stay classes and their decisions become pure functions.
-   Order: `EnrollCeremonyOps` (its pure `SasExchange` exists), `DeviceApprovalOps`,
-   `DomainAdminOps`, `GoalOps`, `ScheduledSendOps`, `AttachmentOps`, `BoardOps`, `TrustOps`,
-   `PlaybackOps`. `DrainHost`, `SessionHost`, and `PresenceHost` are re-expressed as compositions
-   of the same ports once they exist.
-2. **Gateway.** `resolveGatewayBootstrap(paths, env)` extending `decideBootPhase`, answering
-   `active { boot } | arming { nonce } | standalone { missing }`. `buildFederationSlice(boot:
-   GatewayBootstrap)` takes non-optional identity, admission, transport, keys, and the restored
-   stores instead of re-reading files; `GatewayBootstrap` is `composeGateway`'s first module and
-   carries the fixture-identity refusal. `routes.ts` loses its `dataDir` environment fallback.
-3. **Router.** `RouterDomainBootstrap` names what the constructor builds; no behavior change.
-4. **Fixture world.** `IdentitySet` becomes `FixtureSet` and assembles the same `PhoneBootstrap`
-   and `GatewayBootstrap` values production assembles, on both runtimes (`FixtureWorld.from(set,
-   draws)` in TS and Kotlin), asserting that the content key derives from the Domain owner and
-   that both admissions are present; the generators, the harness, and the phone driver consume
-   them instead of rebuilding key stores and signers (three `ContentKeyStore` constructions in
-   `gen-wire-fixtures.ts`; `OwnerOps`, `ContentKeyring`, `Keyring`, `Provisioning`, and
-   `ConsoleClient` rebuilt per case in `WireFixtureGenerator.kt`). Draws come from one per-case
-   counter object, `FixtureDraws.forCase(producer, composer, case).next(size)`, on both sides;
-   hooks are adapters over it, never captured bytes, so two calls cannot return the same bytes.
-   Kotlin fixtures gain the same declarative `open` block TS fixtures carry, and the TS openings
-   of Kotlin-sealed content read it instead of hand-coded AAD kinds.
-5. **Residue.** Only the assemblers construct the values.
-6. **Scenarios.** Reach before roster; owner-id routing of a console thread reply; bounded
-   bootstrap install (three epochs, request the rest); Router restart with incarnation fencing,
-   baseline, and session re-registration. The restart-with-pending-reply and empty-keyring
-   scenarios shipped in Phase 1.
+**Role ports:** four shared ports (`ClientPort`, `IdentityPort`, `PresencePort`, `PlaybackPort`)
+plus one per-class collaborator record for the repository calls only that class makes; nine
+adapters in `RepositoryCollaborators.kt`; shared fakes `TestIdentityPort`, `FailingClientPort`,
+`IdlePresencePort`. State and persistence stay `MutableStateFlow<ChatState>` and
+`ChatPersistence`. Behavior tests for all nine classes. `DrainHost`, `SessionHost`, and
+`PresenceHost` stay flow seams. Pure decisions were extracted only where cheap
+(`verifyDeviceJoin`, `scheduledSendJournalDecision`, `shedDeadAttachmentFailures`).
+
+**Gateway:** `GatewayBootstrap.resolve(paths, env, io)` (private constructor) answers `active {
+boot } | arming { nonce } | standalone { missing }`; the boot carries identity, Domain id,
+transport, allowlist, content keys, and the cached reach, and `buildFederationSlice(boot)` reads
+them. `composeGateway` builds the data dir, the identity loader, and the content key store first,
+since arming and standalone need them, and re-resolves after a bootstrap install. `routes.ts`
+requires `dataDir`. The registration hook requests every missing epoch below the oldest held.
+
+**Router:** `RouterDomainBootstrap.assemble` names what the constructor builds.
+
+**Fixture world:** `FixtureWorld.from(set)` on both runtimes verifies the content key derivation
+and both admissions, and assembles the values its participants have (TS the gateway boot, Kotlin
+the phone boot and client). `FixtureDraws.forCase(...)` is the one per-case counter. `WireSealed`
+blocks declare every sealed value on both producers (`phone.sealed` on TS fixtures, `sealed` on
+Kotlin ones), and each reader scans its frame for undeclared envelopes. `IdentitySet` keeps its
+name; the file is `identity/set.json`.
+
+**Residue:** `bootstrap-residue` (only the assemblers construct the values),
+`phone-identity-residue` (only the door writes identity facts or assembles the boot).
+
+**Scenarios:** reach before roster; bounded bootstrap install requesting the missing epoch;
+Router restart with one registration in the reach roster and one presence row after
+re-registration. Phase 1's live send-and-reply pins owner-id routing: the reply lands in the owner
+mailbox with no console socket open.
 
 ### Bug classes
 
-- Identity bootstrap (class 3) as a shape: signing with no Domain id, routing with no gateway
-  identity, consuming a mailbox with no keyring have no constructor to call.
-- Constructor lambda bundles: identity facts are one value, ambient draws one record,
-  collaborators one named record; a test cannot hand a composer inconsistent identity facts.
-- Two fixture worlds: a case cannot hold a key or an admission production would not hold.
-- Phone state with no seam (class 4), completed for the nine remaining ops classes.
-- The five behaviors pinned in the harness.
-- **Patched four times in lap 3, so a design bug:** identity facts written without re-assembling
-  the boot. `refreshBoot()` is a call every writer must remember: the connect reach, `provision`,
-  `clearAll`, and the approved-device install each missed it once. The mechanism is the eager
-  `StateFlow<BootState>` beside stores that still accept writes from anywhere. For
-  `architecture-fan-out`: route every identity-fact write (provisioning blob, Domain id, owner
-  identity, keyring) through one door that re-assembles, or derive the boot from the stores.
+- Identity bootstrap (class 3) as a shape: held. Signing, routing, and mailbox consumption take a
+  Ready boot.
+- Identity facts written without re-assembling the boot: nine patches in one lap showed the
+  mechanism (an eager flow beside stores open to any writer). The door and its residue fence make
+  the class inexpressible.
+- Constructor lambda bundles, and two fixture worlds: held.
+- Phone state with no seam (class 4): held for the nine ops classes.
+- Not held: stale-incarnation fencing is pinned through the roster, not by replaying an old
+  frame; a second device's boot binds the local owner key, which predates this phase.
 
 ## Phase 2 - Kill and rewrite
 

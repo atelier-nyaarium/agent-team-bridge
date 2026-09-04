@@ -65,11 +65,9 @@ enum class NoGatewayState {
 //  Functions & Helpers
 
 object FriendOnboarding {
-	 /**
-	 * session has not yet reported a confirmed Domain id (null) cannot sign a rename over a real
-	  */
-	fun renameAwaitsDiscovery(firstRooted: Boolean, confirmedDomainId: String?): Boolean =
-		firstRooted && confirmedDomainId == null
+	/** A rooted device with no Domain id yet cannot sign a rename. */
+	fun renameAwaitsDiscovery(firstRooted: Boolean, domainId: String?): Boolean =
+		firstRooted && domainId == null
 
 	/** Decide whether a provisioning blob asks the app to first-root a pending Domain. The blob's
 	 * `pendingTenant` is the only discriminator (a register reply never reports pending), so present

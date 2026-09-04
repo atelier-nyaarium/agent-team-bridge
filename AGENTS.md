@@ -7,6 +7,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
 - `src/gateway/` - Docker-side HTTP and WS router
 - `src/gateway/composeGateway.ts` - the whole gateway graph behind `GatewayDeps`, with `close()`; `index.ts` is the Bun process adapter
+- `src/gateway/boot.ts` - `GatewayBootstrap.resolve`, the boot phase decision, and the federation slice types
 - `src/gateway/router/registerAuth.ts` / `valueResult.ts` - the `gateway_register` frame and the `value_result` settlement, pure
 - `src/gateway/wake.ts` - container/session wake decisions
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
@@ -28,6 +29,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/consolePushOps.ts` - phone-bound rows, `deliverToOwner`, and durable `OwnerRowOutbox`
 - S8 retained endpoints: `/capabilities`, `/discover`, `/task-board`
 - `android/.../ChatRepository.kt` - console process singleton, OwnerOp client, and home Gateway state
+- `android/.../PhoneIdentity.kt` / `PhoneBootstrap.kt` / `PhoneAmbient.kt` - the one door for identity facts, the boot value it publishes, and the ambient record (clock, entropy, ids, timer)
+- `android/.../RepositoryPorts.kt` / `RepositoryCollaborators.kt` - role ports for the ops classes and their repository adapters
 - `android/.../Message.kt` / `MessageFile.kt` / `MessageText.kt` / `Draft.kt` / `ThreadOps.kt` / `ReadAnchor.kt` / `ChatState.kt` / `ConnError.kt` / `FederationTypes.kt` / `ScheduledSend.kt` - repository value types and pure helpers
 - `android/.../ChatPersistence.kt` - JSON codec between repository state and AppStateStore
 - `android/.../PollDrain.kt` - owner-inbox tick, four plane cursors, and drain-gate subscribers
@@ -73,6 +76,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/mcp/capabilities.ts` / `capabilitiesTool.ts` - capability gating and guidance
 - `src/federation-server/` - live self-hosted federation Router
 - `src/federation-server/routerServer.ts` - public `handle(Request)` over `preflight` and `dispatch`; sole `serve()` adapter; residue-tested
+- `src/federation-server/routerDomainBootstrap.ts` - what the Router constructor builds, assembled once
 - `src/federation-server/fileSecretStore.ts` - durable federation state and bounded atomic CAS
 - `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
 - `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
@@ -360,8 +364,6 @@ Purge Gateway removes only gateway state and gateway-owned `.env` keys. Purge Fe
 **Purge Gateway does not revoke the Gateway:** Only the phone holds the signing key. Use Revoke in the app.
 
 **`.env` is shared by the gateway and Router:** Purges must preserve the file.
-
-**The phone drops a revoked Gateway's board column:** `BoardManager.retainGateways` makes unreferenced attachment buckets collectible.
 
 **The phone's half of Purge Federation is Forget this Domain:** Revoke and Delete is app-only because it purges the Domain server-side.
 

@@ -25,7 +25,8 @@ internal interface ConsoleSocketTransport {
 internal class ConsoleRouterTransport(
 	internal val prov: Provisioning,
 	internal val store: AppStateStore,
-	private val homeGatewayId: (() -> String?)? = null,
+	private val homeGatewayId: (() -> String?)?,
+	private val saveProvisioning: (String) -> Unit,
 ) : ConsoleSocketTransport {
 	internal val client = ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp)
 
@@ -103,31 +104,29 @@ internal class ConsoleRouterTransport(
 		val wanted = "https://$publicHost:$port"
 		if (currentUrl == wanted) return
 		DebugLog.log("Router", "bootstrap self-corrected to $publicHost")
-		store.save(json.put("routerUrl", wanted).toString())
+		saveProvisioning(json.put("routerUrl", wanted).toString())
 	}
 
-	/** Leaf-pinned Router preflight; learns the Domain id. */
-	suspend fun apiReachable(): String {
+	/** Leaf-pinned Router preflight; answers the reach, which may name the Domain. */
+	suspend fun apiReachable(): RouterReach? {
 		// Only the preflight may fail over.
-		val code = withReachFailover { base ->
+		withReachFailover { base ->
 			val req = buildHealthRequest(base)
 			clientFor(base).newCall(req).execute().use { resp ->
 				val text = resp.body?.string().orEmpty()
 				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
-				resp.code
 			}
 		}
-		reached(runCatching { fetchReach() }.getOrNull())
-		return "reachable (HTTP $code)"
+		val reach = runCatching { fetchReach() }.getOrNull()
+		reached(reach)
+		return reach
 	}
 
 	private fun fetchReach(): RouterReach? {
 		val req = buildReachRequest(proxyBase)
 		client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
-			val reach = RouterReach.decode(resp.body?.string())
-			reach.domainId?.takeIf { it.isNotEmpty() }?.let(store::saveDomainId)
-			return reach
+			return RouterReach.decode(resp.body?.string())
 		}
 	}
 

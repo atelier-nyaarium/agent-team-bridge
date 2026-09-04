@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
-import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapBundle
@@ -22,35 +21,6 @@ class FederationManagerContentTest {
 		Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
 	@Test
-	fun installContentKeysCommitsThroughTheFederationManager() {
-		val store = testStore()
-		val owner = Crypto.generateIdentity()
-		store.saveOwnerIdentity(owner)
-		val manager = FederationManager(store)
-		val console = manager.consoleIdentity()
-		val admission = AdmissionCrypto.signAdmission(
-			Admission("console", console.sign.pub, console.box.pub, null, 1, "console"),
-			owner.sign.priv,
-			owner.sign.pub,
-		)
-		val envelope = Crypto.wrapContentKey(
-			ByteArray(32) { 5 },
-			3,
-			console.box.pub,
-			console.sign.pub,
-			console.sign.priv,
-		)
-
-		val result = manager.installContentKeys(
-			listOf(envelope),
-			Keyring(DomainSnapshot(owner.sign.pub, listOf(admission), emptyList())),
-		)
-
-		assertTrue(result is ContentKeyring.Merge.Installed)
-		assertArrayEquals(ByteArray(32) { 5 }, (store.loadContentKeys() as ContentKeysLoad.Loaded).keys.getValue(3))
-	}
-
-	@Test
 	fun sealBundleCarriesGatewayAndConsoleAdmissionsAndContentKey() {
 		val store = testStore()
 		val owner = Crypto.generateIdentity()
@@ -65,6 +35,7 @@ class FederationManagerContentTest {
 			gatewayAdmission,
 			gateway.box.pub,
 			"domain",
+			ContentKeyring(store = store),
 		)
 		val plain = Crypto.unseal(frame.sealed.asCrypto(), gateway.box.priv,manager.consoleIdentity().sign.pub)
 		val bundle = json.decodeFromString(GatewayBootstrapBundle.serializer(), plain.toString(Charsets.UTF_8))
@@ -114,6 +85,7 @@ class FederationManagerContentTest {
 			gatewayAdmission,
 			gateway.box.pub,
 			"domain",
+			ContentKeyring(store = store),
 		)
 		val plain = Crypto.unseal(frame.sealed.asCrypto(), gateway.box.priv, console.sign.pub)
 		val bundle = json.decodeFromString(GatewayBootstrapBundle.serializer(), plain.toString(Charsets.UTF_8))
@@ -142,7 +114,7 @@ class FederationManagerContentTest {
 		)
 
 		assertThrows(IllegalStateException::class.java) {
-			FederationManager(store).sealBundle("nonce", GatewayTransport(bearer = "token"), gatewayAdmission, gateway.box.pub, "domain")
+			FederationManager(store).sealBundle("nonce", GatewayTransport(bearer = "token"), gatewayAdmission, gateway.box.pub, "domain", ContentKeyring(store = store))
 		}
 	}
 
@@ -157,7 +129,7 @@ class FederationManagerContentTest {
 			"v1",
 		)
 
-		FederationManager(store).ensureContentEpochs("domain")
+		FederationManager(store).ensureContentEpochs("domain", ContentKeyring(store = store))
 
 		assertTrue(store.loadContentKeys() is ContentKeysLoad.Absent)
 	}
@@ -172,7 +144,7 @@ class FederationManagerContentTest {
 			"v1",
 		)
 
-		FederationManager(store).ensureContentEpochs("domain")
+		FederationManager(store).ensureContentEpochs("domain", ContentKeyring(store = store))
 
 		assertArrayEquals(
 			Crypto.deriveContentKey(owner.sign.priv, "domain", 1),

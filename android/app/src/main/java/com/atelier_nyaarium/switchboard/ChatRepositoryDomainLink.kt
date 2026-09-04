@@ -35,24 +35,14 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 		_state.update { it.copy(error = "Invalid provisioning blob: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
 	}
-	store.save(blob)
+	identity.provision(blob)
 	homeGatewayId = ""
-	store.saveGatewayId("")
-	// The next reach confirms the Domain.
-	store.saveDomainId("")
-	// Re-import requires fresh admission.
-	store.consoleAdmitted = false
-	// Re-evaluate pending invites.
-	store.firstRooted = false
-	// Re-offer the trust ceremony.
-	store.enrollCeremonyDone = false
 	client = null
 	sttsClient = null
 	// Mirror the reset in UI state.
 	_state.update {
 		it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false, homeGatewayId = "", teams = emptyList())
 	}
-	refreshBoot()
 }
 
 /** Normalize a SHA-256 leaf fingerprint. */
@@ -111,10 +101,9 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 		_state.update { it.copy(error = "Invalid endpoint: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
 	}
-	store.save(edited)
+	identity.saveBlob(edited)
 	client = null
 	sttsClient = null
-	refreshBoot()
 	_state.update { it.copy(error = null) }
 }
 
@@ -122,9 +111,11 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	// Attach debug ingest before enrollment.
 	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it, store)) { client().transport.proxyBase } } }
 	DebugLog.log("Connect", "start gateway=${homeGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
+	// Facts learned here belong to this blob.
+	val blob = identity.blob() ?: return@withContext
 	try {
 		// The token-only reach can learn the Domain id.
-		runCatchingCancellable { transport().apiReachable() }.onFailure { e ->
+		val reach = runCatchingCancellable { transport().apiReachable() }.getOrElse { e ->
 			val (cause, kind) = classifyConnError(e)
 			_state.update {
 				if (kind == ConnKind.TERMINAL) {
@@ -136,7 +127,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			return@withContext
 		}
 		DebugLog.log("Connect", "apiReachable ok")
-		refreshBoot()
+		reach?.domainId?.let { identity.learnDomainId(it, blob) }
 		// Root pending invites before admission.
 		if (!ownerFacts.firstRootIfPending()) return@withContext
 		// Reflect first-root state in the UI.
@@ -176,12 +167,10 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				admittedGateways = sessions.keyringGateways(),
 			)
 		}
-		refreshBoot()
-		val domain = readyOrNull()?.domainId
-		domain?.let { store.saveDomainId(it) }
-		ownerFacts.ensureContentEpochs(domain)
-		// The boot's keyring is a snapshot.
-		refreshBoot()
+		rosterDomainId()?.let { identity.learnDomainId(it, blob) }
+		val boot = readyOrNull()
+		val domain = boot?.domainId
+		boot?.let(identity::ensureContentEpochs)
 		presence.refreshDisplayNameFromTeams()
 		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }} domain=${domain ?: "none"}")
 	} catch (e: Exception) {
@@ -189,7 +178,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 		e.rethrowIfCancellation()
 		val (cause, kind) = classifyConnError(e)
 		// Retry stale admission state.
-		if (kind == ConnKind.ENROLLING) store.consoleAdmitted = false
+		if (kind == ConnKind.ENROLLING) identity.setConsoleAdmitted(false, blob)
 		_state.update { s ->
 			when (kind) {
 				// Allow post-enrollment sync lag.
@@ -215,12 +204,10 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 /** This owner's display name. */
 fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { readyOrNull()?.domainId.orEmpty() }
 
-/** Confirmed local Domain id. */
-internal fun ChatRepository.confirmedDomainId(): String? {
+/** The home gateway's Domain, as the signed roster reports it. */
+private fun ChatRepository.rosterDomainId(): String? {
 	val gw = homeGatewayId
-	val fromRoster = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
-	// The roster arrives over signed reads, so the Router's reach answer seeds the id.
-	return fromRoster ?: store.loadDomainId().takeIf { it.isNotEmpty() }
+	return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 }
 
 /** True when the local session owns the admin Domain. */
@@ -244,7 +231,7 @@ suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers
 			_state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Invalid provisioning blob")) }
 			return@withContext
 		}
-	store.save(updated)
+	identity.saveBlob(updated)
 	client = null
 	_state.update { it.copy(deviceName = name) }
 	connect()
@@ -257,7 +244,7 @@ suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
 	// Join the poll loop before wiping state.
 	drain.stopAndJoin()
 	// Preserve voice settings.
-	store.clearProvisioning()
+	identity.clear()
 	// Wipe durable state first.
 	for (cache in clearedOnReprovision) cache.clearInMemory()
 	stts.purgeAll()

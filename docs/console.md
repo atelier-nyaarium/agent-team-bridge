@@ -31,12 +31,24 @@ that must keep working for one more console build goes into `TOLERATED_DELIVERY_
   `report_read`, `capabilities_report`, and a scheduled send come from the pure composers
   `composeReportRead`, `composeCapabilitiesReport`, and `composeScheduledSend`.
 
-**Repository seams:** `PollDrain`, `SessionOps`, `PresenceOps`, and `RenameOps` take one host
-interface each (`DrainHost`, `SessionHost`, `PresenceHost`, `RenameHost`) with the repository
-adapter beside it, so a JVM test constructs them over a fake. `DrainGate` is the repository's one
-re-entrant drain mutex, shared by the drain and presence hosts. Sealing takes an entropy hook
-(`Crypto.seal`, `ContentKeyring.wrapFor`, `KeyDeliveryOps.wrapEntropy`, `ConsoleClient.sealNonce`,
-`BoardSealing.newNonce`); a null hook draws from `SecureRandom`.
+**Identity:** `PhoneIdentity` is the one door for identity facts (the provisioning blob, the
+Domain id, the owner identity, the Domain snapshot, the content keys, the admission latches). Each
+write is serialized and re-assembles `PhoneBootstrap`, published as `bootState`; `Ready` carries
+the provisioning, the console identity, the owner sign pub, the Domain id, and the content keyring.
+The Domain id is the stored one, else an invite's pending tenant. A fact a connect learns names the
+blob it was learned for, and a later blob refuses it. The boot's `ContentKeyring` is the key
+authority of its generation; a replaced boot refuses a late install. `phone-identity-residue`
+fences the store setters and the FederationManager's writes to the door. `PhoneAmbient` carries the
+clock, nonces, op ids, wrap entropy, and the missing-epoch timer.
+
+**Repository seams:** `OwnerOps`, `KeyDeliveryOps`, `ConsoleClient`, `BoardSealing`, and
+`CursorTranslationOps` take the boot and the ambient. `PollDrain`, `SessionOps`, `PresenceOps`, and
+`RenameOps` take one host interface each (`DrainHost`, `SessionHost`, `PresenceHost`, `RenameHost`).
+The nine other ops classes take the role ports (`ClientPort`, `IdentityPort`, `PresencePort`,
+`PlaybackPort`) plus a per-class collaborator record, adapted in `RepositoryCollaborators.kt`, so a
+JVM test constructs them over shared fakes. `DrainGate` is the repository's one re-entrant drain
+mutex. Sealing takes an entropy hook (`Crypto.seal`, `ContentKeyring.wrapFor`,
+`KeyDeliveryOps.wrapEntropy`, `PhoneAmbient.newNonceBytes`); a null hook draws from `SecureRandom`.
 
 `homeGatewayId` selects the phone's home Gateway from the admitted gateways. Phone-bound rows are
 appended by the Gateway through `deliverToOwner`. `src/gateway/consolePushOps.ts` owns the durable

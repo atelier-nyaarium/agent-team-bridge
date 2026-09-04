@@ -31,7 +31,7 @@ internal fun testBootstrap(
 	domain?.let {
 		store.saveDomain(wireJson.encodeToString(DomainSnapshot.serializer(), it), "test")
 	}
-	return (PhoneBootstrap.assemble(store, FederationManager(store), domainId) as BootState.Ready).boot
+	return (PhoneBootstrap.assemble(store, FederationManager(store)) as BootState.Ready).boot
 }
 
 internal fun testAmbient(

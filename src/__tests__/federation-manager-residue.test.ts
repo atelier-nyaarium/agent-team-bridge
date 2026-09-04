@@ -20,13 +20,13 @@ const ANDROID_SRC = path.join(
 /** Allowed callers. The repository's own hosts, ports, and adapters count as the repository. */
 const ALLOWED = [
 	"PhoneBootstrap.kt",
+	"PhoneIdentity.kt",
 	"ChatRepository.kt",
 	"DeviceApprovalOps.kt",
 	"GatewayEnrollment.kt",
 	"OwnerFacts.kt",
 	"RepositoryCollaborators.kt",
 	"RepositoryPorts.kt",
-	"RepositoryProvisioningHost.kt",
 	"TrustOps.kt",
 ];
 

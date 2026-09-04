@@ -5,6 +5,7 @@ internal class TestIdentityPort(private val store: AppStateStore, private val bo
 	override fun readyOrNull(): PhoneBootstrap? = boot
 	override suspend fun ready(): PhoneBootstrap = boot ?: error("unused")
 	override fun ownerOpsOrNull(): OwnerOps? = null
+	override fun ensureContentEpochs(boot: PhoneBootstrap) = Unit
 	override val federation get() = federationValue
 }
 

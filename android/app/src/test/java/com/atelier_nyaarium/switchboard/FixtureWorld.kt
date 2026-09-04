@@ -45,7 +45,7 @@ internal class FixtureWorld private constructor(
 		store.saveDomainId(domainId)
 		store.saveDomain(wireJson.encodeToString(DomainSnapshot.serializer(), domain), "1")
 		check(store.saveContentKeys(mapOf(1 to contentKey)))
-		return (PhoneBootstrap.assemble(store, FederationManager(store), domainId) as BootState.Ready).boot
+		return (PhoneBootstrap.assemble(store, FederationManager(store)) as BootState.Ready).boot
 	}
 
 	fun ambient(draws: FixtureDraws): PhoneAmbient = PhoneAmbient(
@@ -80,6 +80,7 @@ internal class FixtureWorld private constructor(
 			collaborators = ConsoleClientCollaborators(
 				signOwnerOp = { op, opId -> signer.sign(op, opId).also { onSign?.invoke(it) } },
 				homeGatewayId = { gatewayId },
+				saveProvisioning = store::save,
 				postOwnerOpSender = sender,
 			),
 		)

@@ -32,9 +32,8 @@ internal class ChatRepositoryDeviceApprovalCollaborators(private val repo: ChatR
 		domainVersion: String?,
 		gatewayId: String?,
 		contentKeys: Map<Int, ByteArray>,
-	) = repo.store.installApprovedDevice(blob, domainJson, domainVersion, gatewayId, contentKeys).also { installed ->
-		if (installed) repo.refreshBoot()
-	}
+		domainId: String?,
+	) = repo.identity.installApproved(blob, domainJson, domainVersion, gatewayId, contentKeys, domainId)
 	override fun invalidateClients() {
 		repo.client = null
 		repo.sttsClient = null
@@ -43,7 +42,7 @@ internal class ChatRepositoryDeviceApprovalCollaborators(private val repo: ChatR
 		repo.ownerFacts.submitOwnerFact(
 		 signed,
 		 { repo.client().enroll(com.atelier_nyaarium.switchboard.proto.EnrollOp.SubmitAdmission(it)) },
-		 repo.federation::mergeAdmission,
+		 repo.identity::mergeAdmission,
 		"Approve failed",
 	)
 	override fun refreshAdmittedGateways() = repo.refreshAdmittedGateways()

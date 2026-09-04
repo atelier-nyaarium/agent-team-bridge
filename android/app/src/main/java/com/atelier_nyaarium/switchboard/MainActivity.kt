@@ -404,7 +404,7 @@ fun App(
 						// Local composite sessions permit terminal ops.
 					eligible = isComposite(localFieldOf(openTeam!!)) &&
 						run {
-							val admin = adminDomainId(state.sessions(), state.homeGatewayId)
+							val admin = state.domainId.orEmpty()
 							val dom = session?.domainId
 							dom.isNullOrEmpty() || admin.isEmpty() || dom == admin
 						},

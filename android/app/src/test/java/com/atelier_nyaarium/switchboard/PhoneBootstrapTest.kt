@@ -12,19 +12,21 @@ class PhoneBootstrapTest {
 	@Test
 	fun missingProvisioningIsReported() {
 		val store = testStore()
-		val state = PhoneBootstrap.assemble(store, FederationManager(store), "domain")
 
-		assertEquals(BootState.Missing(setOf(Need.PROVISIONING)), state)
+		assertEquals(BootState.Missing(setOf(Need.PROVISIONING)), PhoneBootstrap.assemble(store, FederationManager(store)))
 	}
 
 	@Test
 	fun missingDomainIdIsReported() {
 		val store = testStore()
 		testBootstrap(store = store, domainId = "domain")
-		val nullState = PhoneBootstrap.assemble(store, FederationManager(store), null)
-		val blankState = PhoneBootstrap.assemble(store, FederationManager(store), " ")
 
-		assertEquals(BootState.Missing(setOf(Need.DOMAIN_ID)), nullState)
+		store.saveDomainId("")
+		val emptyState = PhoneBootstrap.assemble(store, FederationManager(store))
+		store.saveDomainId(" ")
+		val blankState = PhoneBootstrap.assemble(store, FederationManager(store))
+
+		assertEquals(BootState.Missing(setOf(Need.DOMAIN_ID)), emptyState)
 		assertEquals(BootState.Missing(setOf(Need.DOMAIN_ID)), blankState)
 	}
 

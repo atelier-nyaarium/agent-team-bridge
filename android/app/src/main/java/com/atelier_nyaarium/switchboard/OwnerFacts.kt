@@ -12,9 +12,6 @@ import kotlinx.coroutines.withContext
  * its backup, and every admission / revocation / cross-Domain-link fact submitted through the
  * merge-iff-accepted path, plus the membership that path leaves in the keyring. */
 internal class OwnerFacts(private val repo: ChatRepository) {
-	/** Ensure epoch 1 for the Domain root holder. */
-	fun ensureContentEpochs(domainId: String?) = repo.federation.ensureContentEpochs(domainId)
-
 	/** First-root a pending friend Domain if the imported blob carries one (and it is not yet
 	 * rooted). Builds a FirstRoot over this device's silent owner key + the invite nonce, self-signs
 	 * it (FederationManager), and POSTs it to the Router's console-bridge firstRoot intake. Returns true to
@@ -22,7 +19,8 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	 * to abort connect after surfacing a terminal reject (an expired / already-claimed invite, which
 	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
 	suspend fun firstRootIfPending(): Boolean {
-		val prov = runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store) } }.getOrNull() ?: return true
+		val blob = repo.identity.blob() ?: return true
+		val prov = runCatching { Provisioning.parse(blob, repo.store) }.getOrNull() ?: return true
 		return when (val decision = FriendOnboarding.decide(prov, repo.store.firstRooted)) {
 			is FirstRootDecision.NotPending -> true
 			is FirstRootDecision.Root -> {
@@ -36,9 +34,8 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 					return false
 				}
 				if (result.ok) {
-					repo.store.firstRooted = true
-					repo.federation.ensureContentEpochs(decision.domainId)
-					repo.refreshBoot()
+					repo.identity.markFirstRooted(blob)
+					repo.readyOrNull()?.let(repo.identity::ensureContentEpochs)
 					DebugLog.log("FirstRoot", "rooted ok domain=${decision.domainId}")
 					true
 				} else {
@@ -79,9 +76,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	/** Restore the owner root key from a backup blob. The result lets the UI distinguish a
 	 * wrong passphrase from a different-owner rejection. */
 	suspend fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult =
-		withContext(Dispatchers.IO) {
-			repo.federation.importOwnerBackup(blob, passphrase).also { if (it == OwnerRestoreResult.OK) repo.refreshBoot() }
-		}
+		withContext(Dispatchers.IO) { repo.identity.importOwnerBackup(blob, passphrase) }
 
 	/** Submit an owner-signed fact to the Router and fold it into the local keyring ONLY if the
 	 * Router accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
@@ -121,6 +116,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
 	 * The gateway may still be syncing the admission - the ENROLLING grace covers that. */
 	suspend fun submitConsoleAdmission() {
+		val blob = repo.identity.blob() ?: return
 		if (repo.store.consoleAdmitted) {
 			// Distinguishes "the app believes it is already admitted and never POSTs" (which would
 			// explain zero enroll ops reaching the Router) from "it POSTs and the submit fails".
@@ -131,8 +127,8 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 		DebugLog.log("Enroll", "submitting console admission to the Router (owner ${Crypto.fingerprint(signed.ownerSignPub)})")
 		// submitOwnerFact surfaces the real cause (e.g. the Router rooted at a different owner key)
 		// so it does not hide behind the generic "finishing enrollment" the register hits next.
-		if (submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Console admission rejected")) {
-			repo.store.consoleAdmitted = true
+		if (submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.identity::mergeAdmission, "Console admission rejected")) {
+			repo.identity.setConsoleAdmitted(true, blob)
 		} else {
 			DebugLog.log("Federation", "console admission submit failed")
 			// Throw so connect() surfaces this SPECIFIC cause and stops; otherwise register() runs
@@ -148,7 +144,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	suspend fun admitGateway(gatewayId: String, signPub: String, boxPub: String): SignedAdmission? =
 		withContext(Dispatchers.IO) {
 			val signed = repo.federation.admitGateway(gatewayId, signPub, boxPub, System.currentTimeMillis())
-			if (!submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.federation::mergeAdmission, "Admit failed")) {
+			if (!submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitAdmission(it)) }, repo.identity::mergeAdmission, "Admit failed")) {
 				return@withContext null
 			}
 			if (repo.store.loadGatewayId().isEmpty()) {
@@ -164,7 +160,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 		val signed = repo.federation.revoke(signPub, System.currentTimeMillis())
 		// The local merge folds the revocation into the keyring on success, so the member
 		// drops off the board now instead of waiting for the Router to rebroadcast it.
-		submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitRevocation(it)) }, repo.federation::mergeRevocation, "Revoke failed")
+		submitOwnerFact(signed, { repo.client().enroll(EnrollOp.SubmitRevocation(it)) }, repo.identity::mergeRevocation, "Revoke failed")
 	}
 
 	/** Owner-sign a cross-Domain link edge (this Domain -> a linked friend Domain) and submit

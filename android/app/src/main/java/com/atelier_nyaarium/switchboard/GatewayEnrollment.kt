@@ -80,7 +80,8 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 			routerCertFp = result.routerCertFp,
 			bearer = result.bearer,
 		)
-		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
+		val contentKeys = repo.readyOrNull()?.contentKeyring ?: error("Domain not yet confirmed by a local session")
+		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId, contentKeys)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		val pasteFrame = repo.federation.sealBundle(
 			nonce,
@@ -88,6 +89,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 			signed,
 			scanned.boxPub,
 			prov.pendingTenant?.domainId,
+			contentKeys,
 			maxContentEpochs = 3,
 		)
 		val pasteFrameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), pasteFrame)

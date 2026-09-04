@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.Crypto
-import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 import com.atelier_nyaarium.switchboard.proto.KeyGrant
@@ -43,15 +42,6 @@ internal class KeyDeliveryOps(
 		private const val KEY_GRANT_WINDOW_MS = MISSING_RETRY_MS
 		private const val MAX_RECENT_GRANTS = 4096
 		private const val UNRECORDED_GRANT = -1L
-
-		fun installInto(ring: ContentKeyring): (KeyEnvelope, Keyring) -> KeyDeliveryInstall = { envelope, trust ->
-			when (val merge = ring.classify(listOf(envelope), trust)) {
-				is ContentKeyring.Merge.Refused -> KeyDeliveryInstall(false, false, merge.reason)
-				ContentKeyring.Merge.Unchanged -> KeyDeliveryInstall(true, true)
-				is ContentKeyring.Merge.Installed ->
-					if (ring.commit(merge)) KeyDeliveryInstall(true, true) else KeyDeliveryInstall(false, false, "content key commit failed")
-			}
-		}
 	}
 
 	private data class GrantKey(val subject: String, val epoch: Int)

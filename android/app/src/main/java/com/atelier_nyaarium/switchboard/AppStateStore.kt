@@ -67,6 +67,16 @@ class AppStateStore internal constructor(
 
 	fun load(): String? = prefs.getString(KEY_BLOB, null)
 
+	/** A new blob, with nothing remembered from the old one. */
+	fun replaceProvisioning(blob: String): Boolean = prefs.edit().apply {
+		putString(KEY_BLOB, blob)
+		putString(KEY_GATEWAY_ID, "")
+		putString(KEY_DOMAIN_ID, "")
+		putBoolean(KEY_CONSOLE_ADMITTED, false)
+		putBoolean(KEY_FIRST_ROOTED, false)
+		putBoolean(KEY_ENROLL_CEREMONY_DONE, false)
+	}.commit()
+
 	fun installApprovedDevice(
 		blob: String,
 		domainJson: String?,

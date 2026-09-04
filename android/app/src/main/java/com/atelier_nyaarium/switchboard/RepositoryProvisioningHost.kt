@@ -34,7 +34,7 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 	override fun transport(): ConsoleRouterTransport {
 		cachedTransport?.let { return it }
 		val blob = repo.store.load() ?: error("not provisioned")
-		return ConsoleRouterTransport(Provisioning.parse(blob, repo.store), repo.store) { repo.homeGatewayId }.also {
+		return ConsoleRouterTransport(Provisioning.parse(blob, repo.store), repo.store, { repo.homeGatewayId }, repo.identity::saveBlob).also {
 			cachedTransport = it
 		}
 	}
@@ -50,6 +50,7 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 			collaborators = ConsoleClientCollaborators(
 				signOwnerOp = { op, opId -> repo.ownerOpsOrNull()?.sign(op, opId) },
 				homeGatewayId = { repo.homeGatewayId },
+				saveProvisioning = repo.identity::saveBlob,
 			),
 		).also {
 			clientBoot = boot
@@ -58,8 +59,7 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 	}
 
 	override fun applyDomainSync(snapshot: DomainSnapshot, version: String) {
-		repo.federation.applyDomainSync(snapshot, version)
-		repo.refreshBoot()
+		repo.identity.applyDomainSync(snapshot, version)
 		client = null
 		refreshAdmittedGateways()
 	}

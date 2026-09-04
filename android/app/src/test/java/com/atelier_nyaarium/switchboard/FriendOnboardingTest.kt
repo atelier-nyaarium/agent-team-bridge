@@ -153,18 +153,18 @@ class FriendOnboardingTest {
 	fun renameWaitsWhileDomainUnconfirmed() {
 		// A device that first-rooted its own Domain but has no confirmed local session yet (null) cannot
 		// sign a rename over a real Domain, so Save is gated.
-		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = null))
+		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, domainId = null))
 	}
 
 	@Test
 	fun renameProceedsOnceTheDomainIsConfirmed() {
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = "guest-9f3a"))
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, domainId = "guest-9f3a"))
 	}
 
 	@Test
 	fun notFirstRootedRenameIsNeverGated() {
 		// A device that never first-rooted is not gated even before a Domain is confirmed.
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, confirmedDomainId = null))
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, domainId = null))
 	}
 
 	// -- The hosted-tenant state machine (awaiting -> offline -> online) --

@@ -33,7 +33,6 @@ import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapBundle
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
-import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.json.Json
@@ -80,11 +79,10 @@ class FederationManager(private val store: AppStateStore) {
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub
 
-	fun ensureContentEpochs(domainId: String?) {
-		if (domainId == null) return
+	fun ensureContentEpochs(domainId: String, ring: ContentKeyring) {
 		if (!holdsDomainOwnerKey()) return
 		val owner = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity ?: return
-		ContentKeyring(store = store).ensureOwnerEpochs(owner, domainId)
+		ring.ensureOwnerEpochs(owner, domainId)
 	}
 
 	fun ownerSas(): String = Crypto.fingerprint(ownerIdentity().sign.pub)
@@ -246,16 +244,6 @@ class FederationManager(private val store: AppStateStore) {
 
 	fun contentKeyring(): ContentKeyring = ContentKeyring(consoleIdentity().box.priv, store)
 
-	@Synchronized
-	fun installContentKeys(envelopes: List<KeyEnvelope>, trust: Keyring): ContentKeyring.Merge {
-		val keyring = ContentKeyring(consoleIdentity().box.priv, store)
-		return when (val merge = keyring.classify(envelopes, trust)) {
-			is ContentKeyring.Merge.Installed ->
-				if (keyring.commit(merge)) merge else ContentKeyring.Merge.Refused("content key commit failed")
-			else -> merge
-		}
-	}
-
 	/** Seal Gateway bootstrap keys. */
 	fun sealBundle(
 		nonce: String,
@@ -263,6 +251,7 @@ class FederationManager(private val store: AppStateStore) {
 		admission: SignedAdmission,
 		recipientBoxPub: String,
 		domainId: String?,
+		contentKeys: ContentKeyring,
 		maxContentEpochs: Int? = null,
 	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
@@ -271,7 +260,7 @@ class FederationManager(private val store: AppStateStore) {
 		val consoleAdmission = keyring.signedConsoleAdmission(console.sign.pub)
 			?: if (holdsDomainOwnerKey()) consoleAdmission(System.currentTimeMillis()) else error("this console is not admitted")
 		// Include the signer admission for roster-free trust.
-		ensureContentEpochs(domainId)
+		domainId?.let { ensureContentEpochs(it, contentKeys) }
 		val bundle = GatewayBootstrapBundle(
 			nonce = nonce,
 			transport = transport,
@@ -283,7 +272,7 @@ class FederationManager(private val store: AppStateStore) {
 				displayName = ring.displayName,
 			),
 			domainId = domainId,
-			contentKeys = ContentKeyring(store = store).wrapAllFor(
+			contentKeys = contentKeys.wrapAllFor(
 				recipientBoxPub,
 				console.sign.pub,
 				console.sign.priv,
