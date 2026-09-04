@@ -127,14 +127,15 @@ export function createPresenceService(deps: {
 				foldWriteResult(store.del("presence.row", record.id, record.version));
 		}
 		const rowsResult = upsertRows(reg, parsed.rows);
-		if (rowsResult) return { outcome: rowsResult.outcome };
+		if (rowsResult) return { ok: false, outcome: rowsResult.outcome };
 		const gatewayResult = write(reg.domainId, gatewayRecordId(reg.gatewayId), {
 			incarnation: parsed.incarnation,
 			seq: 0,
 			spawnPoints: { ...parsed.spawnPoints, gatewayId: reg.gatewayId, domainId: reg.domainId },
 			lastRegisteredAt: now(),
 		});
-		return { outcome: gatewayResult.outcome };
+		// The gateway's presence protocol reads `ok`; an answer without it is retried as a baseline forever.
+		return { ok: gatewayResult.applied, outcome: gatewayResult.outcome };
 	};
 
 	const applyDelta = (reg: GatewayRegistration, params: Delta) => {
@@ -155,9 +156,9 @@ export function createPresenceService(deps: {
 			if (current) foldWriteResult(store.del("presence.row", current.id, current.version));
 		}
 		const rowsResult = upsertRows(reg, parsed.upserts);
-		if (rowsResult) return { outcome: rowsResult.outcome };
+		if (rowsResult) return { ok: false, outcome: rowsResult.outcome };
 		const gatewayResult = write(reg.domainId, gatewayRecordId(reg.gatewayId), { ...record.clear, seq: parsed.seq });
-		return { outcome: gatewayResult.outcome };
+		return { ok: gatewayResult.applied, outcome: gatewayResult.outcome };
 	};
 
 	const markUnreachable = (domainId: string, gatewayId?: string): void => {

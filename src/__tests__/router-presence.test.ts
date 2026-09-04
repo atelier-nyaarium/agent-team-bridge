@@ -384,15 +384,20 @@ describe("router presence slice", () => {
 			connectedGateways: () => ["gw"],
 		});
 
-		frames.get("presence_baseline")!(reg, {
-			incarnation: 1,
-			seq: 0,
-			rows: [row("proj.main")],
-			spawnPoints: { gatewayId: "gw", hostSpawns: [] },
-		});
+		expect(
+			frames.get("presence_baseline")!(reg, {
+				incarnation: 1,
+				seq: 0,
+				rows: [row("proj.main")],
+				spawnPoints: { gatewayId: "gw", hostSpawns: [] },
+			}),
+		).toMatchObject({ ok: true });
 
 		expect(pokes).toEqual([0]);
-		frames.get("presence_delta")!(reg, { incarnation: 1, seq: 1, upserts: [row("proj.main")], tombstones: [] });
+		// The gateway's protocol streams only after an `ok`; without it every frame is a retried baseline.
+		expect(
+			frames.get("presence_delta")!(reg, { incarnation: 1, seq: 1, upserts: [row("proj.main")], tombstones: [] }),
+		).toMatchObject({ ok: true });
 		expect(pokes).toEqual([0]);
 		frames.get("presence_delta")!(reg, {
 			incarnation: 1,
