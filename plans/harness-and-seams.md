@@ -647,7 +647,7 @@ constructors anyway.
 
 ## Phase 4 - Cold-start identity state ✅
 
-### Slices, as shipped (`72b8098d` and the identity door commit) ✅
+### Slices, as shipped (`72b8098d`, `18318587`) ✅
 
 **Phone:** `PhoneBootstrap` (private constructor; `assemble(store, federation)` answers
 `Ready(boot)` or `Missing(needs)`). Ready carries the provisioning, the console identity, the
@@ -715,19 +715,24 @@ mailbox with no console socket open.
 
 ### Slices
 
-Reassessed after Phase 1.
+Reassessed after Phase 4.
 
-1. **Kill.** The suites behind the twelve fake helpers (about 480 cases) and the helpers; the
+1. **Kill:** The suites behind the twelve fake helpers (about 480 cases) and the helpers; the
    harness composes `RouterServer` directly and brings its own `createFakeSocket`, so
    `federation-router` and `createMockWs` go too once no survivor uses them. The by-kind
    categories: 167 prose assertions, 76 call-order keys, 49 stubbed answers. The seven rotting
    residue files (`federation-manager`, `gateway-retained-state`, `inbox-service`,
    `install-layer`, `module`, `resolve-bun`, `setup-verify`) and the structure-pinning probes
    Phase 1 had to patch (`data-dir-inventory`, `host-spawn-wiring`, `s10-residue`, the file scan
-   in `session-authority`).
-2. **Merge.** One module, one file: `routes` (five files), `session-store` (five),
+   in `session-authority`). Of the Kotlin-scanning probes, `board-door-residue`,
+   `federation-manager-residue`, and `reprovision-wipe-residue` go where a behavior test or the
+   identity door covers the rule; `bootstrap-residue` and `phone-identity-residue` stay, since
+   their invariants have no runtime expression. The gateway-board era's empty bodies go with
+   their forwarders and tests: `BoardManager.applySnapshot`, `retainGateways`,
+   `truncatedGateways`, `strugglingEntries`, and the four `BoardOps` methods over them.
+2. **Merge:** One module, one file: `routes` (five files), `session-store` (five),
    `websocket` (three), `codex-agent` (four), `owner state` (four).
-3. **Rewrite.** Survivors assert a sequence of actions and the state or output it produces, on
+3. **Rewrite:** Survivors assert a sequence of actions and the state or output it produces, on
    the harness and the fixture feeders as the bench. String tests stay only where the string is
    the behavior: `agent-screen`, `pane-trim`, `limit-notice`, canonical bytes, signing vectors.
    The decision rules the killed suites carried (send addressing, wake bounds, refusal mapping,
@@ -735,16 +740,19 @@ Reassessed after Phase 1.
    their suite is deleted, the way `PresenceMergeTest` keeps `keepPriorRow` and `mergePresence`
    beside the behavior test. `fakeHost` and `fakeSession` validate the frames they send and
    receive against the shared schemas. No consumer walks a producer's JSON by hand: the
-   `WireFixturesDecodeTest` no-op is the instance.
-4. **Catalog.** The residue fences derive from the schemas instead of curated lists: annotate the
+   `WireFixturesDecodeTest` no-op is the instance. On the phone, `PhoneIdentityTest` is the bench
+   for lifecycle rules; `connect()` still lives in `ChatRepository` and has no JVM seat until
+   Phase 5 splits it.
+4. **Catalog:** The residue fences derive from the schemas instead of curated lists: annotate the
    Zod discriminators, outcomes, and reasons, generate one catalog into `Protocol.Wire`, and
    point `wire-vocabulary-residue`, `aad-kinds-residue`, and `preimage-tag-twins` at it.
    `outcome: "complete"` joins `OpOutcomeSchema` or gets its own family; `presence_read`,
    `schedule_send`, `capabilities_read`, `cursor_translate` join the owner-op kinds; the raw
    comparisons of `cursor_stale`, `stale_incarnation`, `no_waiter`, `accepted`, `applied` on both
    runtimes read the constants.
-5. **Kotlin.** The same pass: 45 prose asserts; the reflection tests reviewed;
-   `ClearsOnReprovisionTest` stays as a roster pin.
+5. **Kotlin:** The same pass: 45 prose asserts; the reflection tests reviewed;
+   `ClearsOnReprovisionTest` stays as a roster pin. Test doubles that throw at construction
+   (`error("unused") as X`) become getters.
 
 ### Bug classes
 
@@ -755,7 +763,7 @@ Reassessed after Phase 1.
 
 ### Slices
 
-Reassessed after Phase 1.
+Reassessed after Phase 4.
 
 1. `routes.ts` into modules by the field matrix (`routesStatus`, `routesCapabilities`,
    `routesPresence`, `routesSend`, `routesRespond`, `routesBoard`, `routesHumanNotify` over
@@ -770,20 +778,30 @@ Reassessed after Phase 1.
    shrinks to `router`, `wsHandlers`, `close`, and an explicit fault port (link down, keyring
    state) that replaces the harness's `federation().routerClient.stop()` and
    `contentKeyStore.epochs()` reads. `RouterHandlers` splits frame dispatch from the
-   presence-push lifecycle.
-4. **Ambient context.** One injected record (clock, entropy, ids, timers) through
+   presence-push lifecycle. The gateway takes the phone door's shape: one active federation
+   context published atomically on a bootstrap install replaces the outer `gatewayBoot` and
+   `localDomainId` captures and the `routerCertFp` the routes read, which go stale after an
+   install today.
+4. **Ambient context:** One injected record (clock, entropy, ids, timers) through
    `composeGateway` and `RouterServerParams` replaces the per-module `now?`, `randomBytes?`,
    `newId?` defaults (25 `Date.now` sites; the timers in `routes`, `wake`, the relays,
    `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`). A residue test
    fences direct `Date.now`, `randomBytes`, `randomUUID`, `Math.random`, `setTimeout`, and
    `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1. The
-   phone's fold is `PhoneAmbient` in Phase 4; the two share the vocabulary (clock, entropy, ids,
-   timers), not a type.
-5. **Router.** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
+   phone's fold shipped as `PhoneAmbient` in Phase 4; the two share the vocabulary (clock,
+   entropy, ids, timers), not a type.
+5. **Router:** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
    definitions carry kind, value schema, handler, and mutation class; built-ins register through
    the same path as the services; `OwnerOp.op` stops being `z.record`; the per-kind answer shapes
    become schemas the phone driver, the fixtures, and Kotlin read.
-6. `startGateway` under 100 lines; no file over 600.
+6. **Names:** The two `Provisioning` types (the generated `proto.Provisioning`, eleven optional
+   fields and positional hazards, and the parsed one in `ConsoleClientTypes.kt`) become a wire
+   type and a credential blob; `Provisioning.parse` stops saving the conversation id, the last
+   identity write outside the door. `ChatRepository.client` (a var) beside `client()` gets one
+   name. `DrainHost`, `SessionHost`, and `PresenceHost` fold onto the role ports where their
+   members overlap. `connect()` leaves `ChatRepository` for a JVM-testable coordinator over the
+   door and the transport.
+7. `startGateway` under 100 lines; no file over 600.
 
 ### Bug classes
 
@@ -863,3 +881,19 @@ into the app; no wire field changes. Gateway first as usual.
   driver, the fixture expects, Kotlin) learns the shapes by running the Router. The typed
   owner-op registry in Phase 5 is the fix.
 - **Clock defaults in three spellings.** Recorded under Phase 1's bug classes; Phase 5.
+- **An eager boot beside open stores.** `StateFlow<BootState>` refreshed by hand cost nine
+  `refreshBoot()` patches in one lap (reach, roster, provision, clear, install, endpoint, first
+  root, owner restore, key ensure) before `PhoneIdentity` became the one writer. A published value
+  needs one door, or the stores it reads need a version.
+- **Test doubles that throw at construction.** `error("unused") as X` compiles and fails when the
+  fake is built; two agents wrote it in one lap. A getter is the stub shape.
+- **Positional construction of an all-optional generated type.** `proto.Provisioning` has eleven
+  optional fields; positional args put the token in the certificate slot and every Kotlin
+  fixture carried device "android" and a random conversation id until the corpus diff showed it.
+- **The Kotlin gate diffs the corpus before running the tests.** A drift costs a regeneration
+  round before the unit-test failures behind it appear.
+- **Structure probes read as tests to every auditor.** Every audit slice flags the regex fences as
+  non-behavior tests, and each lap pays the triage. A fence guards an invariant with no runtime
+  expression; name it so, keep the set small, or derive it from the schemas (Phase 2).
+- **The fixture world built the client's transport over a store that never held the identity.**
+  The reach fixture lost its signer; one store per case, or the world hands out both from one.

@@ -77,6 +77,7 @@ export type BootState =
 
 export type BootPhaseDecision = "activate" | "arm" | "standalone";
 
+/** The active gateway's identity facts; `resolve` is the one assembler. */
 export class GatewayBootstrap {
 	private constructor(
 		readonly identity: Identity,

@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 
+/** The Ready identity value; `PhoneIdentity` assembles it. */
 class PhoneBootstrap private constructor(
 	val provisioning: Provisioning,
 	val consoleIdentity: Crypto.Identity,
