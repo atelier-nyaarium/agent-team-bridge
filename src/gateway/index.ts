@@ -335,6 +335,7 @@ export async function startGateway(): Promise<void> {
 						isLive: (team) => resolveLiveIncarnation(registry, sessionStore, team) !== undefined,
 					});
 					if (sweptTeams.length === 0) return;
+					for (const team of sweptTeams) void fed()?.boardClient.sessionEnded(team, "release");
 					presence.markDirty();
 				},
 			},
@@ -1063,7 +1064,8 @@ export async function startGateway(): Promise<void> {
 			localGatewayId,
 			localDomainId: localDomainId ?? "",
 			isTrustedCatalogProject,
-			dropSessionResume: (team) => {
+			dropSessionResume: (team, disposition) => {
+				void fed()?.boardClient.sessionEnded(team, disposition);
 				presence.forget(team);
 			},
 			sessionStore: presence,

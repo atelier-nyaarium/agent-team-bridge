@@ -115,6 +115,102 @@ afterEach(() => {
 });
 
 describe("router board service", () => {
+	it("releases a session's finished work and returns unfinished entries to the backlog", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("done1", { session: { domainId: "a", gatewayId: "g", sessionId: "s" }, state: "done" }),
+					entry("open1", {
+						session: { domainId: "a", gatewayId: "g", sessionId: "s" },
+						state: "in_progress",
+					}),
+				],
+			},
+			{ kind: "owner" },
+		);
+		const result = service.sessionEnded("a", "a/g/s", "release", 5000);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries.find((e) => e.clear.id === "done1")?.clear.trashedAt).toBe(5000);
+		expect(service.read("a").entries.find((e) => e.clear.id === "done1")?.clear.session).toBeUndefined();
+		expect(service.read("a").entries.find((e) => e.clear.id === "open1")?.clear.trashedAt).toBeUndefined();
+		expect(service.read("a").entries.find((e) => e.clear.id === "open1")?.clear.session).toBeUndefined();
+		registry.close();
+	});
+
+	it("cancels and trashes unfinished session work in one write", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("open1", { session: { domainId: "a", gatewayId: "g", sessionId: "s" }, state: "open" }),
+					entry("busy", { session: { domainId: "a", gatewayId: "g", sessionId: "s" }, state: "in_progress" }),
+					entry("done1", { session: { domainId: "a", gatewayId: "g", sessionId: "s" }, state: "done" }),
+				],
+			},
+			{ kind: "owner" },
+		);
+		service.sessionEnded("a", "a/g/s", "cancel", 5000);
+		for (const id of ["open1", "busy"]) {
+			const saved = service.read("a").entries.find((e) => e.clear.id === id)?.clear;
+			expect(saved).toMatchObject({ state: "cancelled", trashedAt: 5000 });
+			expect(saved?.session).toBeUndefined();
+		}
+		registry.close();
+	});
+
+	it("leaves an already trashed entry's state unchanged and clears its holder", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("binned", {
+						session: { domainId: "a", gatewayId: "g", sessionId: "s" },
+						state: "in_progress",
+					}),
+				],
+			},
+			{ kind: "owner" },
+		);
+		service.write("a", { expectedRevision: 1, ops: [{ kind: "trash", id: "binned" }] }, { kind: "owner" });
+		service.sessionEnded("a", "a/g/s", "cancel", 5000);
+		const saved = service.read("a").entries.find((e) => e.clear.id === "binned")?.clear;
+		expect(saved).toMatchObject({ state: "in_progress" });
+		expect(saved?.session).toBeUndefined();
+		registry.close();
+	});
+
+	it("disposes every entry held by the session and preserves other holders", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [
+					entry("seen", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } }),
+					entry("unpolled", { session: { domainId: "a", gatewayId: "g", sessionId: "s" } }),
+					entry("other", { session: { domainId: "a", gatewayId: "other", sessionId: "s" } }),
+				],
+			},
+			{ kind: "owner" },
+		);
+		service.sessionEnded("a", "a/g/s", "cancel", 5000);
+		for (const id of ["seen", "unpolled"])
+			expect(service.read("a").entries.find((e) => e.clear.id === id)?.clear.session).toBeUndefined();
+		expect(service.read("a").entries.find((e) => e.clear.id === "other")?.clear.session).toEqual({
+			domainId: "a",
+			gatewayId: "other",
+			sessionId: "s",
+		});
+		registry.close();
+	});
+
 	it("persists owner writes and rejects stale revisions", () => {
 		const { service, registry } = make();
 		const first = service.write("a", { expectedRevision: 0, ops: [entry("one")] }, { kind: "owner" });
@@ -869,6 +965,61 @@ describe("router board service", () => {
 			},
 		);
 		expect((result as { outcome: string }).outcome).toBe("refused");
+		registry.close();
+	});
+
+	it("only lets the calling gateway end its own session", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g2", sessionId: "s" } })],
+			},
+			{ kind: "owner" },
+		);
+		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
+		service.register({
+			ownerOp: () => undefined,
+			gatewayFrame: (name, registered) => {
+				if (name === "board_session_end") handler = registered as typeof handler;
+			},
+			onGatewayRegistered: () => undefined,
+			onGatewayDropped: () => undefined,
+			onSessionForgotten: () => undefined,
+			pushFrameTo: () => false,
+			gatewayIncarnation: () => null,
+			connectedGateways: () => [],
+		});
+		const result = handler?.(
+			{ domainId: "a", gatewayId: "g1", signPub: "pub", incarnation: 1 },
+			{
+				sessionId: "s",
+				disposition: "cancel",
+			},
+		);
+		expect(result).toMatchObject({ outcome: "refused", refusal: "session_missing" });
+		expect(service.read("a").entries[0]?.clear.session?.gatewayId).toBe("g2");
+		registry.close();
+	});
+
+	it("retries a session disposition after a concurrent board write without partial state", () => {
+		const { service, registry } = make();
+		service.write(
+			"a",
+			{
+				expectedRevision: 0,
+				ops: [entry("one", { session: { domainId: "a", gatewayId: "g", sessionId: "s" }, state: "open" })],
+			},
+			{ kind: "owner" },
+		);
+		const store = registry.for("a");
+		const batch = vi.spyOn(store, "batch");
+		batch.mockImplementationOnce(() => ({ kind: "conflict" }) as never);
+		const result = service.sessionEnded("a", "a/g/s", "cancel", 5000);
+		expect(result.outcome).toBe("applied");
+		expect(service.read("a").entries[0]?.clear).toMatchObject({ state: "cancelled", trashedAt: 5000 });
+		expect(service.read("a").entries[0]?.clear.session).toBeUndefined();
 		registry.close();
 	});
 

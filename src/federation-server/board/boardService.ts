@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { BlobReference } from "../../shared/blob-reference.js";
 import { type BoardActor, mayTake, mayWrite } from "../../shared/board-authority.js";
 import { applyCascade } from "../../shared/board-cascade.js";
@@ -8,6 +9,7 @@ import {
 	MAX_ENTRIES_PER_OWNER,
 	orphanedParents,
 	promoteOrphans,
+	prunableSubtrees,
 } from "../../shared/board-structure.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
 import type { BoardEntry } from "../../shared/console-protocol.js";
@@ -48,6 +50,10 @@ type BoardReplay = {
 	refusal?: string;
 };
 const BOARD_OP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const BoardSessionEndParamsSchema = z.object({
+	sessionId: z.string().min(1),
+	disposition: z.enum(["release", "cancel"]),
+});
 /** Caller-minted ids require a count cap. */
 const MAX_BOARD_OPS_PER_OWNER = 5000;
 const key = (s: { domainId: string; gatewayId: string; sessionId: string }) =>
@@ -116,7 +122,7 @@ export function createBoardService(deps: Deps) {
 	};
 	const attachmentsHeld = (domainId: string, attachments: { blobId: string }[]): boolean =>
 		attachments.every((x) => deps.referenceHeld.has(domainId, x.blobId));
-	const write = (domainId: string, input: BoardWrite, writer: BoardActorState, opId?: string) => {
+	const write = (domainId: string, input: BoardWrite, writer: BoardActorState, opId?: string, at = now()) => {
 		const store = deps.registry.for(domainId);
 		const before = load(domainId);
 		const answerBefore = () => [...before.entries.values()].map(stored);
@@ -282,7 +288,7 @@ export function createBoardService(deps: Deps) {
 				} else if (op.kind === "set_attachments") {
 					if (!attachmentsHeld(domainId, op.attachments)) return rememberRefusal("attachment_missing");
 					replaceAttachments(e, op.attachments as unknown as NonNullable<BoardEntry["attachments"]>);
-				} else if (op.kind === "trash") e.trashedAt = now();
+				} else if (op.kind === "trash") e.trashedAt = at;
 				else delete e.trashedAt;
 				touched.add(op.id);
 			}
@@ -364,6 +370,50 @@ export function createBoardService(deps: Deps) {
 			cascaded: cascaded.map(({ id, from, to, reason }) => ({ id, from, to, reason })),
 		};
 	};
+	const sessionEnded = (domainId: string, sessionKey: string, disposition: "release" | "cancel", at = now()) => {
+		for (let attempt = 0; attempt < 4; attempt++) {
+			const before = load(domainId);
+			const ending = [...before.entries.values()].filter((e) => e.sessionId === sessionKey);
+			if (ending.length === 0)
+				return {
+					outcome: "refused" as const,
+					revision: before.revision,
+					entries: [],
+					cascaded: [],
+					refusal: "session_missing",
+				};
+			const next = new Map([...before.entries].map(([id, e]) => [id, structuredClone(e)]));
+			if (disposition === "cancel")
+				for (const e of ending)
+					if (e.trashedAt === undefined && e.state !== "done" && e.state !== "cancelled")
+						next.get(e.id)!.state = "cancelled";
+			const finished = prunableSubtrees(
+				next,
+				(e) => e.sessionId === sessionKey && (e.state === "done" || e.state === "cancelled"),
+			);
+			const ops: BoardWrite["ops"] = [];
+			for (const e of ending)
+				if (next.get(e.id)!.state !== e.state)
+					ops.push({ kind: "set_state", id: e.id, state: next.get(e.id)!.state });
+			for (const id of finished) ops.push({ kind: "trash", id });
+			for (const e of ending) ops.push({ kind: "set_session", id: e.id });
+			const result = write(
+				domainId,
+				{ expectedRevision: before.revision, ops },
+				{ kind: "owner" },
+				undefined,
+				at,
+			);
+			if (result.outcome !== "conflict") return result;
+		}
+		const current = load(domainId);
+		return {
+			outcome: "conflict" as const,
+			revision: current.revision,
+			entries: [...current.entries.values()].map(stored),
+			cascaded: [],
+		};
+	};
 	const sweepTrash = (domainId: string, at = now()) => {
 		const store = deps.registry.for(domainId);
 		const b = load(domainId);
@@ -418,6 +468,14 @@ export function createBoardService(deps: Deps) {
 				p.opId,
 			);
 		});
+		hooks.gatewayFrame("board_session_end", (reg: GatewayRegistration, params) => {
+			const p = BoardSessionEndParamsSchema.parse(params);
+			return sessionEnded(
+				reg.domainId,
+				key({ domainId: reg.domainId, gatewayId: reg.gatewayId, sessionId: p.sessionId }),
+				p.disposition,
+			);
+		});
 		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => {
 			try {
 				return read(reg.domainId);
@@ -427,5 +485,5 @@ export function createBoardService(deps: Deps) {
 			}
 		});
 	};
-	return { read, write, sweepTrash, register };
+	return { read, write, sessionEnded, sweepTrash, register };
 }

@@ -305,7 +305,27 @@ export function createBoardClient(deps: BoardClientDeps) {
 		return { kind: "unavailable", error: "board is busy" };
 	}
 
-	return { read, mutate, openEntry };
+	async function sessionEnded(sessionKey: string, disposition: "release" | "cancel"): Promise<BoardWriteAnswer> {
+		const answer = await deps.call("board_session_end", { sessionId: sessionKey, disposition });
+		if (answer.error) return { kind: "unavailable", error: answer.error };
+		const parsed = BoardWriteResultSchema.safeParse(answer.result);
+		if (!parsed.success) return { kind: "unavailable", error: "malformed board_session_end answer" };
+		if (parsed.data.outcome === "refused") return { kind: "refused", refused: asRefusal(parsed.data.refusal) };
+		if (parsed.data.outcome === "conflict") return { kind: "unavailable", error: "board is busy" };
+		const folded = fold(parsed.data.entries);
+		const titles = new Map(folded.entries.map((e) => [e.id, e.title]));
+		return {
+			kind: "applied",
+			revision: parsed.data.revision,
+			entries: folded.entries,
+			cascaded: parsed.data.cascaded.map((c) => ({
+				...(c as CascadeChange),
+				title: titles.get(c.id) ?? UNOPENED,
+			})),
+		};
+	}
+
+	return { read, mutate, openEntry, sessionEnded };
 }
 
 const clearAttachment = ({ blobId, size, mime, blobGateway }: BoardAttachment) => ({
