@@ -12,6 +12,7 @@ import {
 	parseInboxAddress,
 	signRowEnvelope,
 } from "../shared/schemasInbox.js";
+import { OWNER_OP_KINDS } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { createBoardService } from "./board/boardService.js";
 import type { ConsoleSockets } from "./console/consoleSockets.js";
@@ -103,16 +104,16 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			inbox.markWaking(domainId, row.envelope.opKey);
 	};
 
-	deps.intake.register("hello", (op) => ({
+	deps.intake.register(OWNER_OP_KINDS.hello, (op) => ({
 		opKey: { conversationId: op.conversationId, opId: op.opId },
 		outcome: "complete" as const,
 		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
 	}));
 
-	deps.intake.register("blob_fetch", (op, value) =>
+	deps.intake.register(OWNER_OP_KINDS.blobFetch, (op, value) =>
 		bridge.fetchBlobForOwner(op.domainId, OwnerBlobFetchParamsSchema.parse(value)),
 	);
-	deps.intake.register("gateway_value", (op, value) => {
+	deps.intake.register(OWNER_OP_KINDS.gatewayValue, (op, value) => {
 		const parsed = GatewayValueOpSchema.parse(value);
 		return bridge
 			.forwardGatewayValue(op.domainId, {
@@ -133,7 +134,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 				return { opKey, outcome: "accepted" as const, result };
 			});
 	});
-	deps.intake.register("planes_read", (op, value) => {
+	deps.intake.register(OWNER_OP_KINDS.planesRead, (op, value) => {
 		const parsed = PlanesReadValueSchema.parse(value);
 		return {
 			opKey: { conversationId: op.conversationId, opId: op.opId },

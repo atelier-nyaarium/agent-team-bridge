@@ -49,14 +49,12 @@ function makePush(
 		envelope: { v: 1 as const, epoch: 1, nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==" },
 	}),
 ) {
-	process.env.DATA_DIR = dataDir;
 	return createConsolePushOps({
+		dataDir,
 		ownerId: () => "owner",
 		routerClient: {
 			isConnected: () => router.connected,
 			isRegistered: () => router.connected,
-			acceptedOpLedgerProtocol: () => null,
-			callTool: async () => ({ callId: "call", result: { gateways: [] } }),
 			callInboxTool: async (_action, params) => {
 				router.beforeCall?.();
 				router.calls.push(params);
@@ -64,8 +62,6 @@ function makePush(
 					router.results.shift() ?? { callId: "call", result: { opKey: params.opKey, outcome: "accepted" } }
 				);
 			},
-			incarnation: () => 1,
-			stop: () => undefined,
 		},
 		localGatewayId: "gateway",
 		localDomainId: "domain",

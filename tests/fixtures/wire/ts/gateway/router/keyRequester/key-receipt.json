@@ -1,0 +1,28 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/keyRequester",
+	"case": "key-receipt",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"nonce": "sgk91m49SzTO4xXbW9knlOaX"
+		}
+	},
+	"frame": {
+		"name": "key_receipt",
+		"params": {
+			"receipt": {
+				"v": 1,
+				"domainId": "fixture-domain",
+				"recipientSignPub": "MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=",
+				"epoch": 1,
+				"at": 1757000000000,
+				"nonce": "sgk91m49SzTO4xXbW9knlOaX",
+				"signature": "7HOhEonDTPJoEJmdeQW46XHN+nh8DngcQa2mWeV4baBO26fO4cgMYOx8O24C9zmxwuwMeeB1YKxvuSTEiKhtDA=="
+			}
+		}
+	},
+	"expect": {
+		"outcome": "accepted"
+	}
+}

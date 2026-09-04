@@ -1,0 +1,17 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleClient.apiReachableRequest",
+	"case": "apiReachable",
+	"clock": 1757000000000,
+	"inputs": {},
+	"request": {
+		"method": "GET",
+		"path": "/health",
+		"headers": {},
+		"body": ""
+	},
+	"expect": {
+		"ok": true,
+		"protocolVersion": 2
+	}
+}

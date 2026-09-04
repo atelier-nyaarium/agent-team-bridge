@@ -9,6 +9,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsolePongFrame
 import com.atelier_nyaarium.switchboard.proto.ConsoleRefusedFrame
 import com.atelier_nyaarium.switchboard.proto.ConsoleWelcomeFrame
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -76,7 +77,7 @@ internal class ConsoleSocketClient(
 		socketMode: ConsoleSocketMode = ConsoleSocketMode.PLANES,
 	) : this(
 		transport,
-		{ ownerOps.sign(JsonObject(mapOf("kind" to JsonPrimitive("hello")))) },
+		{ ownerOps.sign(JsonObject(mapOf("kind" to JsonPrimitive(Protocol.Wire.OWNER_OP_HELLO)))) },
 		listener,
 		::newWebSocket,
 		defaultConsoleSocketScheduler,
@@ -96,10 +97,7 @@ internal class ConsoleSocketClient(
 		val uri = java.net.URI(base)
 		check(uri.scheme.equals("https", ignoreCase = true)) { "console socket requires an https base" }
 		val ownerOp = signHello() ?: error("cannot sign console hello")
-		val request = Request.Builder()
-			.url("${base.trimEnd('/')}/console")
-			.header("X-Console-Bridge-Token", "Bearer ${transport.appToken}")
-			.build()
+		val request = socketRequest(base, transport.appToken)
 		socket = openSocket(transport.clientFor(base), request, object : WebSocketListener() {
 				override fun onOpen(webSocket: WebSocket, response: Response) {
 					lastPongAt = now()
@@ -161,7 +159,7 @@ internal class ConsoleSocketClient(
 	private fun handle(text: String) {
 		val json = runCatching { wireJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
 		when (runCatching { json["type"]?.jsonPrimitive?.content }.getOrNull()) {
-			"welcome" -> {
+			Protocol.Wire.SocketFrame.WELCOME -> {
 				val frame = wireJson.decodeFromJsonElement(ConsoleWelcomeFrame.serializer(), json)
 				if (incarnation == null) {
 					incarnation = frame.incarnation
@@ -169,13 +167,13 @@ internal class ConsoleSocketClient(
 					listener.onFrame(ConsoleSocketFrame.Welcome(frame))
 				}
 			}
-			"inbox_rows" -> decodeIfCurrent(json, ConsoleInboxRowsFrame.serializer()) { ConsoleSocketFrame.InboxRows(it) }
-			"plane" -> decodeIfCurrent(json, ConsolePlaneFrame.serializer()) { ConsoleSocketFrame.Plane(it) }
-			"pong" -> {
+			Protocol.Wire.SocketFrame.INBOX_ROWS -> decodeIfCurrent(json, ConsoleInboxRowsFrame.serializer()) { ConsoleSocketFrame.InboxRows(it) }
+			Protocol.Wire.SocketFrame.PLANE -> decodeIfCurrent(json, ConsolePlaneFrame.serializer()) { ConsoleSocketFrame.Plane(it) }
+			Protocol.Wire.SocketFrame.PONG -> {
 				lastPongAt = now()
 				decodeIfCurrent(json, ConsolePongFrame.serializer()) { ConsoleSocketFrame.Pong(it) }
 			}
-			"refused" -> {
+			Protocol.Wire.SocketFrame.REFUSED -> {
 				val frame = wireJson.decodeFromJsonElement(ConsoleRefusedFrame.serializer(), json)
 				listener.onFrame(ConsoleSocketFrame.Refused(frame))
 				close()
@@ -206,3 +204,9 @@ internal class ConsoleSocketClient(
 			client.newWebSocket(request, listener)
 	}
 }
+
+internal fun socketRequest(base: String, appToken: String): Request =
+	Request.Builder()
+		.url(base.trimEnd('/') + Protocol.Wire.ROUTER_PATH_CONSOLE)
+		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + appToken)
+		.build()

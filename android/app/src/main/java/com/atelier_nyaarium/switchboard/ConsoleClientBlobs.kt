@@ -14,7 +14,7 @@ import java.util.Base64
 /** How much of a blob the gateway already holds. `have` is the contiguous prefix, so it is also
  * the offset to resume from - no separate progress bookkeeping to get out of step. */
 suspend fun ConsoleClient.blobStat(blobId: String, targetGateway: String? = null): ConsoleBlobStatResult =
-	valueResult(sendValueOp(targetGateway ?: defaultGatewayId(), ConsoleOp.BlobStat(blobId = blobId)), "blob_stat")
+	valueResult(sendValueOp(targetGateway ?: defaultGatewayId(), ConsoleOp.BlobStat(blobId = blobId)), Protocol.Wire.ConsoleOpKind.BLOB_STAT)
 
 /** Send one bounded chunk. Re-sending an offset already held is a no-op at the store, because
  * the blob is named by its own digest, so a retry needs no idempotency key of its own.
@@ -35,7 +35,7 @@ suspend fun ConsoleClient.blobPut(
 			chunk = Base64.getEncoder().encodeToString(chunk),
 			final = final,
 		)),
-		"blob_put",
+		Protocol.Wire.ConsoleOpKind.BLOB_PUT,
 	)
 
 /** Read one bounded range back. */
@@ -46,7 +46,7 @@ suspend fun ConsoleClient.blobGet(blobId: String, offset: Long, length: Int, fro
 			defaultGatewayId(),
 			ConsoleOp.BlobGet(blobId = blobId, offset = offset, length = length.toLong(), fromGateway = fromGateway),
 		),
-		"blob_get",
+		Protocol.Wire.ConsoleOpKind.BLOB_GET,
 	)
 
 /**

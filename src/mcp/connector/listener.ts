@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { Server, ServerWebSocket } from "bun";
 import { isInsideContainer } from "../../shared/env.js";
+import { BEARER_PREFIX } from "../../shared/wire-vocabulary.js";
 import { getLoadedToolNames, getToolSchema } from "./projectTools.js";
 import { addClient, type ClientData, getAllClients, getClient, getClientByInstance, removeClient } from "./sessions.js";
 
@@ -243,7 +244,7 @@ function createServer({ hostname, port, mode, cert, key }: CreateServerParams): 
 
 			if (mode === "https" && authToken) {
 				const authHeader = req.headers.get("Authorization") ?? "";
-				const expected = `Bearer ${authToken}`;
+				const expected = BEARER_PREFIX + authToken;
 				const a = Buffer.from(authHeader);
 				const b = Buffer.from(expected);
 				if (a.length !== b.length || !timingSafeEqual(a, b)) {

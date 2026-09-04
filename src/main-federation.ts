@@ -3,6 +3,7 @@ import { FileSecretStore } from "./federation-server/fileSecretStore.js";
 import { decideServe } from "./federation-server/migration/serveGate.js";
 import { RouterServer } from "./federation-server/routerServer.js";
 import { loadRouterTls } from "./federation-server/routerTls.js";
+import { refuseFixtureIdentity } from "./shared/fixture-identity.js";
 import { installRejectionGuard } from "./shared/process-guards.js";
 
 installRejectionGuard("federation-router");
@@ -37,6 +38,7 @@ if (serve.kind === "refuse") {
 
 const store = new FileSecretStore(dataDir);
 const identity = await store.init();
+refuseFixtureIdentity(identity.sign.pub, "Router");
 const tls = loadRouterTls(dataDir);
 const server = new RouterServer({
 	port,
@@ -51,7 +53,7 @@ if (publicHost) console.log(`[federation-router] public host ${publicHost}:${pub
 if (lanAddresses.length) console.log(`[federation-router] lan addresses ${lanAddresses.join(", ")}`);
 await server.start();
 console.log(`[federation-router] identity ${identity.sign.pub}`);
-console.log(`[federation-router] ready on port ${port}`);
+console.log(`[federation-router] ready on port ${server.listeningPort ?? port}`);
 
 function shutdown(): void {
 	server.stop().then(

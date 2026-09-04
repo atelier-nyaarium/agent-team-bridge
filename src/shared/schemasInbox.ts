@@ -4,6 +4,7 @@ import { canonicalJson, sha256Hex } from "./canonical-json.js";
 import { b64Field, SealedEnvelopeSchema, sign, verify } from "./crypto.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { ContentEnvelopeSchema } from "./schemasContentKey.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 const idField = (max: number) =>
 	z
@@ -106,7 +107,7 @@ export type RowKind = z.infer<typeof RowKindSchema>;
 export type RowEnvelope = z.infer<typeof RowEnvelopeSchema>;
 
 export function rowEnvelopeSigningBytes(envelope: RowEnvelope): Buffer {
-	return Buffer.from(`INBOXROW_V1\n${canonicalJson(envelope)}`, "utf8");
+	return Buffer.from(`${SIGNING_TAGS.inboxRow}\n${canonicalJson(envelope)}`, "utf8");
 }
 
 export function signRowEnvelope(envelope: RowEnvelope, signPriv: string): string {
@@ -210,7 +211,7 @@ export type GatewayValueOp = z.infer<typeof GatewayValueOpSchema>;
 export function ownerOpSigningBytes(op: OwnerOpFields): Buffer {
 	return Buffer.from(
 		[
-			"OWNEROP_V1",
+			SIGNING_TAGS.ownerOp,
 			op.domainId,
 			op.signerSignPub,
 			op.conversationId,

@@ -162,6 +162,8 @@ How each subsystem works lives in `docs/`:
 
 - `bun run lint` - Biome and `tsc`.
 - `bun run test [path]` - Vitest.
+- `bun run gen:fixtures` - regenerate the TS wire fixtures.
+- `bun run check:fixtures` - regenerate the TS wire fixtures and diff.
 - `bun run build patch|minor|major` - release build and commit.
 - `bun run build --build-only` - bundle without versioning.
 - `bun scripts/codegen-kotlin.ts` - regenerate Kotlin protocol types.
@@ -191,6 +193,8 @@ CI does not compile Kotlin before merge. Run:
 ```
 
 Resolves the repo root and sources the SDK env itself, so it runs from any directory.
+
+Regenerate Kotlin wire fixtures with `./gradlew :app:generateWireFixtures` from `android/`.
 
 `testDebugUnitTest` is un-minified. Both debug and release are R8-minified, so verify reflective
 Android and JavaScript bridge entry points with `assembleRelease` or on-device. The
@@ -263,7 +267,9 @@ which is the whole of it. No category strip, no bidi rule, no Unicode whitespace
 ### Testing
 
 Vitest runs under Node. The gateway, Router, and daemon run under Bun. `ws` and WebSocket behavior
-therefore differ. `bun run check:pinning` is the shipping-runtime gate.
+therefore differ. `bun run check:pinning` is the shipping-runtime gate. `bun run check:boot` is the
+shipping-composition gate: it boots the real Router and gateway under Bun and runs one console op
+through a fake host.
 
 ### Debugging the console on-device
 

@@ -7,6 +7,7 @@ export interface PresenceReporterDeps {
 	spawnPoints: () => GatewaySpawnPoints;
 	send: (action: string, params: Record<string, unknown>) => Promise<PresenceAnswer>;
 	incarnation: () => number | null;
+	now?: () => number;
 	debounceMs?: number;
 	retryMs?: number;
 }
@@ -14,6 +15,7 @@ export interface PresenceReporterDeps {
 const retryMsOf = (deps: PresenceReporterDeps): number => deps.retryMs ?? 30_000;
 
 export function createPresenceReporter(deps: PresenceReporterDeps) {
+	const now = deps.now ?? Date.now;
 	let sync: Sync = { at: "needsBaseline" };
 	let dirty = false;
 	let deadline: number | null = null;
@@ -33,7 +35,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 		if (timer) clearTimeout(timer);
 		timer = null;
 		if (deadline === null) return;
-		const delay = Math.max(0, deadline - Date.now());
+		const delay = Math.max(0, deadline - now());
 		timer = setTimeout(() => {
 			timer = null;
 			void pump();
@@ -55,7 +57,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 					wakeWaiters();
 					return;
 				}
-				if (deadline !== null && Date.now() < deadline) {
+				if (deadline !== null && now() < deadline) {
 					arm();
 					return;
 				}
@@ -98,7 +100,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 						sync = verdict.sync;
 						dirty = true;
 						if (frame.at === "baseline") wakeWaiters();
-						setDeadline(Date.now() + retryMsOf(deps));
+						setDeadline(now() + retryMsOf(deps));
 						return;
 					case "rebaseline":
 						sync = { at: "needsBaseline" };
@@ -125,7 +127,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 		// Never move an ARMED deadline later. A retry floor must not be lowered and a debounce window
 		// must not be pushed out by the next mutation, and both meanings agree on that. Extending it
 		// would make churn faster than the window starve presence entirely.
-		if (deadline === null) setDeadline(Date.now() + (deps.debounceMs ?? 250));
+		if (deadline === null) setDeadline(now() + (deps.debounceMs ?? 250));
 		void pump();
 	};
 
@@ -135,5 +137,12 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 		void pump();
 	};
 
-	return { baseline, markDirty, resync };
+	const stop = (): void => {
+		if (timer) clearTimeout(timer);
+		timer = null;
+		deadline = null;
+		wakeWaiters();
+	};
+
+	return { baseline, markDirty, resync, stop };
 }

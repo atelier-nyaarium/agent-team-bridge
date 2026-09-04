@@ -33,8 +33,12 @@ export type DeliverToOwnerResult = boolean | typeof MIGRATING;
 export type DeliverToOwner = (opts: DeliverToOwnerOptions) => DeliverToOwnerResult;
 
 export interface ConsolePushOpsDeps {
+	dataDir: string;
 	ownerId?: (() => string | null) | null;
-	routerClient?: import("./router/routerClient.js").RouterClient | null;
+	routerClient?: Pick<
+		import("./router/routerClient.js").RouterClient,
+		"isConnected" | "isRegistered" | "callInboxTool"
+	> | null;
 	localGatewayId: string;
 	localDomainId?: string;
 	producerSignPriv?: string;
@@ -43,6 +47,8 @@ export interface ConsolePushOpsDeps {
 	localAddress: (name: string) => Address;
 	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
+	now?: () => number;
+	newId?: () => string;
 }
 
 type OwnerRowOutboxItem = {
@@ -62,6 +68,7 @@ export function ownerRowBody(entry: ConsolePushEntry, at: number): Record<string
 }
 
 export function createConsolePushOps({
+	dataDir,
 	ownerId,
 	routerClient,
 	localGatewayId,
@@ -72,8 +79,10 @@ export function createConsolePushOps({
 	localAddress,
 	cacheBlobs,
 	refuseImpersonation,
+	now = Date.now,
+	newId = crypto.randomUUID,
 }: ConsolePushOpsDeps) {
-	const outboxStore = new DurableStore(process.env.DATA_DIR || "/app/data", "owner-row-outbox");
+	const outboxStore = new DurableStore(dataDir, "owner-row-outbox");
 	const opKeyOf = (item: OwnerRowOutboxItem) => JSON.stringify([sha256Hex(item.entry.session_id ?? ""), item.opId]);
 	const OutboxItemsSchema = z.array(
 		z.object({
@@ -117,7 +126,7 @@ export function createConsolePushOps({
 		const ownerSign = ownerSignPub?.();
 		if (!domainId || !ownerSign || !producerSignPriv || !contentKeyStore) return null;
 		const conversationId = sha256Hex(entry.session_id ?? "");
-		const body = ownerRowBody(entry, item.at ?? Date.now());
+		const body = ownerRowBody(entry, item.at ?? now());
 		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(body), "utf8"), {
 			domainId,
 			ownerSignPub: ownerSign,
@@ -197,7 +206,9 @@ export function createConsolePushOps({
 		});
 	}
 
-	setInterval(() => void drainOutbox(), 1000).unref?.();
+	const drainTimer = setInterval(() => void drainOutbox(), 1000);
+	drainTimer.unref?.();
+	const stop = (): void => clearInterval(drainTimer);
 
 	function deliverToOwner({ entry, dedupeKey, label = "deliver" }: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {
@@ -221,7 +232,7 @@ export function createConsolePushOps({
 	}
 
 	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string): boolean {
-		const item: OwnerRowOutboxItem = { entry, opId, label, at: Date.now() };
+		const item: OwnerRowOutboxItem = { entry, opId, label, at: now() };
 		if (!queueOutbox(item)) return false;
 		void drainOutbox();
 		return true;
@@ -238,7 +249,7 @@ export function createConsolePushOps({
 			status?: string;
 		},
 		// Stable across relay hops.
-		dedupeKey: string = crypto.randomUUID(),
+		dedupeKey: string = newId(),
 	): void {
 		const owner = ownerId?.();
 		if (!owner) return;
@@ -280,7 +291,7 @@ export function createConsolePushOps({
 		if (!owner) {
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
 		}
-		const dedupeKey = crypto.randomUUID();
+		const dedupeKey = newId();
 		// Notices require qualified sender addresses.
 		const sender = localAddress(from);
 		const entry: ConsolePushEntry = {
@@ -319,7 +330,7 @@ export function createConsolePushOps({
 		} catch {
 			return jsonResponse({ error: `invalid "from" session name: ${from}` }, 400);
 		}
-		const dedupeKey = crypto.randomUUID();
+		const dedupeKey = newId();
 		const entry: ConsolePushEntry = {
 			kind: "plugin_action",
 			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
@@ -340,5 +351,5 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	return { mirrorPeer, humanNotify, pluginAction, deliverToOwner, drainOutbox };
+	return { mirrorPeer, humanNotify, pluginAction, deliverToOwner, drainOutbox, stop };
 }

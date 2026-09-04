@@ -1,0 +1,77 @@
+{
+	"_comment": "Generated TS wire fixtures.",
+	"fixtures": [
+		{
+			"file": "gateway/router/keyRequester/key-request.json",
+			"composer": "gateway/router/keyRequester",
+			"case": "key-request",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/keyRequester/key-receipt.json",
+			"composer": "gateway/router/keyRequester",
+			"case": "key-receipt",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/registerAuth/gateway-register.json",
+			"composer": "gateway/router/registerAuth",
+			"case": "gateway-register",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/valueResult/list-dirs.json",
+			"composer": "gateway/router/valueResult",
+			"case": "list-dirs",
+			"peer": "phone"
+		},
+		{
+			"file": "gateway/router/valueResult/refusal.json",
+			"composer": "gateway/router/valueResult",
+			"case": "refusal",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/consolePushOps/message.json",
+			"composer": "gateway/consolePushOps",
+			"case": "message",
+			"peer": "phone"
+		},
+		{
+			"file": "gateway/consolePushOps/reply.json",
+			"composer": "gateway/consolePushOps",
+			"case": "reply",
+			"peer": "phone"
+		},
+		{
+			"file": "gateway/router/presenceReporter/baseline.json",
+			"composer": "gateway/router/presenceReporter",
+			"case": "baseline",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/presenceReporter/delta.json",
+			"composer": "gateway/router/presenceReporter",
+			"case": "delta",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/sessionRegistryReporter/upsert.json",
+			"composer": "gateway/router/sessionRegistryReporter",
+			"case": "upsert",
+			"peer": "router"
+		},
+		{
+			"file": "gateway/router/boardClient/upsert.json",
+			"composer": "gateway/router/boardClient",
+			"case": "upsert",
+			"peer": "phone"
+		},
+		{
+			"file": "gateway/router/sessionRegistryReporter/forget.json",
+			"composer": "gateway/router/sessionRegistryReporter",
+			"case": "forget",
+			"peer": "router"
+		}
+	]
+}

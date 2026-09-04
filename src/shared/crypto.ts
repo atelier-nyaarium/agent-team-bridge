@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import { CONTENT_NONCE_BYTES } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Federation crypto (node:crypto only - no third-party dependency)
@@ -108,7 +109,7 @@ export function seal(plaintext: Buffer, recipientBoxPubB64: string, senderSignPr
 	const recipientPub = rawPubToKey(Buffer.from(recipientBoxPubB64, "base64"), "x25519");
 	const shared = crypto.diffieHellman({ privateKey: ephemeral.privateKey, publicKey: recipientPub });
 	const key = deriveKey(shared, ephemeralPubRaw);
-	const nonce = crypto.randomBytes(12);
+	const nonce = crypto.randomBytes(CONTENT_NONCE_BYTES);
 	const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
 	const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 	const sealed = Buffer.concat([ct, cipher.getAuthTag()]);

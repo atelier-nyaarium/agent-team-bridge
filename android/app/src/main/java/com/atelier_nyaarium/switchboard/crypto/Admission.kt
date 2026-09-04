@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
+import com.atelier_nyaarium.switchboard.proto.Protocol
 
 /**
  * Owner-signed admission / revocation, the byte-exact Kotlin counterpart of
@@ -14,12 +15,12 @@ import com.atelier_nyaarium.switchboard.proto.SignedRevocation
  */
 object AdmissionCrypto {
 	fun admissionSigningBytes(a: Admission): ByteArray =
-		listOf("ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.gatewayId ?: "", a.issuedAt.toString(), a.nonce)
+		listOf(Protocol.Wire.SIGNING_TAG_ADMISSION, a.kind, a.signPub, a.boxPub, a.gatewayId ?: "", a.issuedAt.toString(), a.nonce)
 			.joinToString("\n")
 			.toByteArray(Charsets.UTF_8)
 
 	fun revocationSigningBytes(r: Revocation): ByteArray =
-		listOf("REVOCATION_V1", r.signPub, r.issuedAt.toString(), r.nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+		listOf(Protocol.Wire.SIGNING_TAG_REVOCATION, r.signPub, r.issuedAt.toString(), r.nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signAdmission(admission: Admission, ownerSignPriv: String, ownerSignPub: String): SignedAdmission =
 		SignedAdmission(

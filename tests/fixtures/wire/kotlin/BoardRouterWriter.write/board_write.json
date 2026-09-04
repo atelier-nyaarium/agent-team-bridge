@@ -1,0 +1,41 @@
+{
+	"producer": "kotlin",
+	"composer": "BoardRouterWriter.write",
+	"case": "board_write",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "board_write",
+			"write": {
+				"ops": [
+					{
+						"kind": "upsert",
+						"id": "fixture-entry",
+						"state": "open",
+						"rank": "m",
+						"title": {
+							"v": 1,
+							"epoch": 1,
+							"nonce": "/NAXIK6VhfjZYdrn",
+							"ciphertext": "dlUvPlr41Nbjn+17bOUJRT71lKBq37WssPyyKVk="
+						}
+					}
+				],
+				"expectedRevision": 0
+			}
+		},
+		"opId": "board_write-op",
+		"nonce": "RZLkGVKtwWAV/DNEujDB3/Dr"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"board_write-op\",\"at\":1757000000000,\"nonce\":\"RZLkGVKtwWAV/DNEujDB3/Dr\",\"op\":{\"kind\":\"board_write\",\"write\":{\"ops\":[{\"kind\":\"upsert\",\"id\":\"fixture-entry\",\"state\":\"open\",\"rank\":\"m\",\"title\":{\"v\":1,\"epoch\":1,\"nonce\":\"/NAXIK6VhfjZYdrn\",\"ciphertext\":\"dlUvPlr41Nbjn+17bOUJRT71lKBq37WssPyyKVk=\"}}],\"expectedRevision\":0}},\"signature\":\"7YNWeS8HpxPeVgk+67aqo4KAXVyBwZ5jpEgdMlim4kqgBl8+EuyJHlTwuE5o22BY97HBrVJKoKNHt1ex85hMDA==\"}}"
+	},
+	"expect": {
+		"outcome": "applied"
+	}
+}

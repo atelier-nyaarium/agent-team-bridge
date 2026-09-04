@@ -58,6 +58,7 @@ export interface GatewayBridgeParams {
 	inbox?: InboxService;
 	blobCache?: RouterBlobCache;
 	referenceHeld?: ReferenceHeldStore;
+	now?: () => number;
 }
 
 /** Authenticated frame identity, not payload identity. */
@@ -153,6 +154,7 @@ export class GatewayBridge implements ToolProvider {
 	private readonly adminDomainIdGetter: () => string | null;
 	private readonly reachGetter: GatewayBridgeParams["reach"];
 	private readonly seenRegisterNonces = new Map<string, number>();
+	private readonly now: () => number;
 
 	public constructor({
 		port,
@@ -165,7 +167,9 @@ export class GatewayBridge implements ToolProvider {
 		inbox,
 		blobCache,
 		referenceHeld,
+		now,
 	}: GatewayBridgeParams) {
+		this.now = now ?? Date.now;
 		this.port = port;
 		this.authToken = authToken;
 		this.getDomain = getDomain;
@@ -567,10 +571,11 @@ export class GatewayBridge implements ToolProvider {
 		if (domain) {
 			const presented = !!(parsed.data.signPub || parsed.data.admission || parsed.data.proof);
 			if (presented) {
-				const denied = verifyRegistrationClaim(parsed.data, {
-					ownerSignPub: domain.ownerSignPub,
-					revocations: domain.revocations,
-				});
+				const denied = verifyRegistrationClaim(
+					parsed.data,
+					{ ownerSignPub: domain.ownerSignPub, revocations: domain.revocations },
+					this.now(),
+				);
 				if (denied) {
 					console.warn(`[BridgeServer] rejected registration for "${domainId}/${gatewayId}": ${denied}`);
 					return { ok: false, error: `registration_denied: ${denied}` };
@@ -808,10 +813,12 @@ export class GatewayBridge implements ToolProvider {
 	private handleValueResult(connId: ConnectionId, params: Record<string, unknown>): unknown {
 		const parsed = ValueResultParamsSchema.safeParse(params);
 		const reg = this.connGateways.get(connId);
-		if (!parsed.success || !reg || reg.incarnation !== parsed.data.incarnation) return { settled: false };
+		if (!parsed.success) return { settled: false, reason: "malformed" };
+		if (!reg || reg.incarnation !== parsed.data.incarnation) return { settled: false, reason: "stale_incarnation" };
 		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
 		const pending = this.pendingValues.get(key);
-		if (!pending || pending.every((waiter) => waiter.connId !== connId)) return { settled: false };
+		if (!pending || pending.every((waiter) => waiter.connId !== connId))
+			return { settled: false, reason: "no_waiter" };
 		for (const waiter of pending) clearTimeout(waiter.timer);
 		this.pendingValues.delete(key);
 		for (const waiter of pending) waiter.resolve(parsed.data.result);
@@ -961,7 +968,7 @@ export class GatewayBridge implements ToolProvider {
 
 	private rememberRegisterNonce(nonce: string | undefined): boolean {
 		if (!nonce) return false;
-		const now = Date.now();
+		const now = this.now();
 		for (const [key, expiry] of this.seenRegisterNonces) if (expiry <= now) this.seenRegisterNonces.delete(key);
 		if (this.seenRegisterNonces.has(nonce)) return false;
 		this.seenRegisterNonces.set(nonce, now + REGISTER_MAX_SKEW_MS);
@@ -1185,7 +1192,7 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	private allowHandshakeAttempt(srcDomain: string, dstGateway: string): boolean {
-		const now = Date.now();
+		const now = this.now();
 		const key = `${srcDomain}|${dstGateway}`;
 		const cutoff = now - HANDSHAKE_RATE_WINDOW_MS;
 		for (const [k, timestamps] of this.handshakeAttempts) {

@@ -17,7 +17,11 @@ export interface FederationTrust {
 ////////////////////////////////
 //  Functions & Helpers
 
-export function verifyRegistrationClaim(params: GatewayRegisterParams, trust: FederationTrust): string | null {
+export function verifyRegistrationClaim(
+	params: GatewayRegisterParams,
+	trust: FederationTrust,
+	nowMs: number = Date.now(),
+): string | null {
 	const { gatewayId, signPub, boxPub, admission, proof, proofAt, proofNonce } = params;
 	if (!signPub || !boxPub || !admission || !proof || proofAt === undefined || !proofNonce) {
 		return "admitted-identity proof required";
@@ -32,6 +36,6 @@ export function verifyRegistrationClaim(params: GatewayRegisterParams, trust: Fe
 	}
 	return verifyRegistration(
 		{ gatewayId, signPub, boxPub, admission: signed, proof, proofAt, nonce: proofNonce },
-		{ ownerSignPub: trust.ownerSignPub, revocations: trust.revocations, nowMs: Date.now() },
+		{ ownerSignPub: trust.ownerSignPub, revocations: trust.revocations, nowMs },
 	);
 }

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import kotlinx.serialization.json.JsonElement
@@ -112,23 +113,19 @@ internal class ConsoleRouterTransport(
 		logBody: Boolean,
 		fail: (String) -> R,
 	): R = withReachFailover { base ->
-		ConsoleHttp.postRouterDirect(clientFor(base), "$base/console", prov.appToken, tag, describe, body, logBody, fail)
+		ConsoleHttp.postRouterDirect(clientFor(base), base + Protocol.Wire.ROUTER_PATH_CONSOLE, prov.appToken, tag, describe, body, logBody, fail)
 	}
 
 	internal suspend fun postOwnerOp(ownerOp: OwnerOp): JsonElement =
 		withReachFailover { base ->
-			val body = buildJsonObject {
-				put("ownerOp", wireJson.encodeToJsonElement(OwnerOp.serializer(), ownerOp))
-			}.toString().toRequestBody(ConsoleHttp.JSON)
-			val req = Request.Builder()
-				.url("$base/console")
-				.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-				.post(body)
-				.build()
+			val req = buildOwnerOpRequest(base, ownerOp)
 			val resp = ConsoleHttp.executeCancellable(clientFor(base), req)
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${resp.text.take(500)}")
 			wireJson.parseToJsonElement(resp.text)
 		}
+
+	internal fun buildOwnerOpRequest(base: String, ownerOp: OwnerOp): Request =
+		buildOwnerOpRequest(base, ownerOp, prov.appToken)
 
 	internal inline fun <reified T> resultOf(body: OwnerOpAnswer, op: String): T {
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")
@@ -145,3 +142,12 @@ internal class ConsoleRouterTransport(
 	internal fun targetGatewayOf(target: String): String =
 		gatewayOfTarget(target, homeGatewayId?.invoke()?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId())
 }
+
+internal fun buildOwnerOpRequest(base: String, ownerOp: OwnerOp, appToken: String): Request =
+	Request.Builder()
+		.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
+		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + appToken)
+		.post(buildJsonObject {
+			put("ownerOp", wireJson.encodeToJsonElement(OwnerOp.serializer(), ownerOp))
+		}.toString().toRequestBody(ConsoleHttp.JSON))
+		.build()

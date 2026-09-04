@@ -1,0 +1,19 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/sessionRegistryReporter",
+	"case": "forget",
+	"clock": 1757000000000,
+	"inputs": {
+		"sessionId": "fixture-app.fixture"
+	},
+	"frame": {
+		"name": "session_forget",
+		"params": {
+			"sessionId": "fixture-app.fixture",
+			"incarnation": 1
+		}
+	},
+	"expect": {
+		"ok": true
+	}
+}

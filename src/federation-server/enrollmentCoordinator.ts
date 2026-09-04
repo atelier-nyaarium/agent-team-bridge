@@ -16,6 +16,7 @@ import {
 	verifyXDomainLinkEdge,
 	verifyXDomainLinkRevocation,
 } from "../shared/federation-lifecycle.js";
+import { WIRE_NONCE_BYTES } from "../shared/wire-vocabulary.js";
 import type { EnrollmentState, EnrollmentStore } from "./federationSecret.js";
 import type { TenantAdmin } from "./tenantAdmin.js";
 
@@ -71,7 +72,7 @@ export class EnrollmentCoordinator {
 	}
 
 	public mintEnrollOwner(domainId: string, routerAddr: string, nowMs: number): EnrollOwnerPayload {
-		const nonce = randomBytes(18).toString("base64url");
+		const nonce = randomBytes(WIRE_NONCE_BYTES).toString("base64url");
 		this.nonces.set(nonce, nowMs + this.nonceTtlMs);
 		return {
 			type: "enroll-owner",

@@ -5,6 +5,7 @@ import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.ScheduleSendValue
 import com.atelier_nyaarium.switchboard.proto.ScheduledTarget
 import kotlinx.serialization.json.JsonElement
@@ -123,7 +124,7 @@ internal class SelfMigration(
 				journal.transition(opId, MutationState.ACKED)
 				UploadOutcome.ACCEPTED
 			}
-			"refused", "conflict" -> {
+			Protocol.Wire.SocketFrame.REFUSED, "conflict" -> {
 				journal.transition(opId, MutationState.REFUSED)
 				reportError("Scheduled send $opId was refused")
 				UploadOutcome.REFUSED

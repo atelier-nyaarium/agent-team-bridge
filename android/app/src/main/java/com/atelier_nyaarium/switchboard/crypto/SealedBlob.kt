@@ -6,7 +6,7 @@ import java.util.Base64
 import kotlin.math.ceil
 import kotlin.math.floor
 
-const val BLOB_NONCE_BYTES = 12
+const val BLOB_NONCE_BYTES = Protocol.Wire.CONTENT_NONCE_BYTES
 const val BLOB_TAG_BYTES = 16
 const val BLOB_FRAME_OVERHEAD_BYTES = BLOB_NONCE_BYTES + BLOB_TAG_BYTES
 const val BLOB_CIPHERTEXT_CHUNK_BYTES = Protocol.BLOB_CHUNK_BYTES + BLOB_FRAME_OVERHEAD_BYTES

@@ -49,6 +49,8 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		}
 	}
 
+	let restore: (() => void) | null = null;
+
 	function attach(): void {
 		const store = deps.sessionStore as unknown as {
 			create: (id: string, opts: Parameters<SessionStore["mint"]>[0]) => SessionRecord;
@@ -56,19 +58,24 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 			sweep: SessionStore["sweep"];
 		};
 		const create = store.create;
+		const forgetRecord = store.forget;
+		const sweep = store.sweep;
+		restore = () => {
+			store.create = create;
+			store.forget = forgetRecord;
+			store.sweep = sweep;
+		};
 		store.create = (id, opts) => {
 			const record = create.call(deps.sessionStore, id, opts);
 			report(record);
 			return record;
 		};
-		const forgetRecord = store.forget;
 		store.forget = (team) => {
 			const record = deps.sessionStore.getByTeam(team);
 			const removed = forgetRecord.call(deps.sessionStore, team);
 			if (removed && record) forget(record);
 			return removed;
 		};
-		const sweep = store.sweep;
 		store.sweep = (ttlMs, cap) => {
 			const records = new Map(
 				deps.sessionStore.list().map((record) => [deps.sessionStore.teamOf(record), record]),
@@ -80,6 +87,11 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 			}
 			return removed;
 		};
+	}
+
+	function detach(): void {
+		restore?.();
+		restore = null;
 	}
 
 	function reconcile(): void {
@@ -101,5 +113,5 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		for (const sessionId of current) known.add(sessionId);
 	}
 
-	return { attach, report, reconcile };
+	return { attach, detach, report, reconcile };
 }

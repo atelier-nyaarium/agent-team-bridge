@@ -24,12 +24,12 @@ const RETAINED: Record<string, string[]> = {
 /** State leaving the gateway, with current consumers. */
 const LEAVING: Record<string, string[]> = {
 	"gateway/console/capabilityStore.ts": [
-		"gateway/index.ts",
+		"gateway/composeGateway.ts",
 		"gateway/console/consoleDevices.ts",
 		"gateway/console/consoleTypes.ts",
 	],
 	"shared/plane-registry.ts": [
-		"gateway/index.ts",
+		"gateway/composeGateway.ts",
 		"gateway/boardAwareness.ts",
 		"gateway/presence.ts",
 		"gateway/readAnchors.ts",
@@ -39,13 +39,17 @@ const LEAVING: Record<string, string[]> = {
 		"shared/presence-identity.ts",
 	],
 	"gateway/readAnchors.ts": [
-		"gateway/index.ts",
+		"gateway/composeGateway.ts",
 		"gateway/console/consoleHandler.ts",
 		"gateway/console/consoleTypes.ts",
 		"gateway/console/pollPlanes.ts",
 	],
-	"gateway/federation/crossDomainShareState.ts": ["gateway/index.ts", "gateway/boot.ts"],
-	"gateway/console/durableOpStore.ts": ["gateway/index.ts", "gateway/routes.ts", "gateway/console/consoleTypes.ts"],
+	"gateway/federation/crossDomainShareState.ts": ["gateway/composeGateway.ts", "gateway/boot.ts"],
+	"gateway/console/durableOpStore.ts": [
+		"gateway/composeGateway.ts",
+		"gateway/routes.ts",
+		"gateway/console/consoleTypes.ts",
+	],
 };
 
 const UNMAPPED_LEAVING = ["awareness generation"];

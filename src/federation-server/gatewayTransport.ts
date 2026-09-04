@@ -1,10 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
 import type WebSocket from "ws";
+import { BEARER_PREFIX } from "../shared/wire-vocabulary.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;
 	const left = Buffer.from(provided);
-	const right = Buffer.from(`Bearer ${expected}`);
+	const right = Buffer.from(BEARER_PREFIX + expected);
 	return left.length === right.length && timingSafeEqual(left, right);
 }
 

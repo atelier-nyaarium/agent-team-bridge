@@ -1,10 +1,6 @@
 import type WebSocket from "ws";
 import { createReconnector } from "../../shared/reconnect.js";
-import {
-	FEDERATION_PROTOCOL_VERSION,
-	RouterInboundFrameSchema,
-	type ToolCallFrame,
-} from "../../shared/router-protocol.js";
+import { RouterInboundFrameSchema, type ToolCallFrame } from "../../shared/router-protocol.js";
 import {
 	DEFAULT_ROUTER_PORT,
 	isPrivateHost,
@@ -15,6 +11,7 @@ import {
 } from "../../shared/router-reach.js";
 import { GatewayRegisterAnswerSchema } from "../../shared/schemasRegister.js";
 import { pinnedDial, pinRefusal, realWebSocket } from "./pinnedSocket.js";
+import { registerFrame } from "./registerAuth.js";
 
 // Shared relay-frame ceiling. The peer transport and tests use the same value.
 export const ROUTER_WS_MAX_PAYLOAD_BYTES = 67_108_864;
@@ -314,12 +311,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 	// Register on open and while the Domain remains pending.
 	function registerGateway(): void {
 		if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
-		void callTool("gateway_register", {
-			gatewayId: config.gatewayId,
-			domainId: config.domainId,
-			protocolVersion: FEDERATION_PROTOCOL_VERSION,
-			...(config.buildRegisterAuth?.() ?? {}),
-		})
+		void callTool("gateway_register", registerFrame(config, config.buildRegisterAuth?.() ?? null))
 			.then((res) => {
 				const r = res.result as
 					| {

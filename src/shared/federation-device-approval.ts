@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { b64Field, displayField, SealedEnvelopeSchema } from "./crypto.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Device self-enroll approval (the "Add a device" rendezvous)
@@ -71,5 +72,5 @@ export function deviceJoinSigningBytes(
 	newSignPub: string,
 	newBoxPub: string,
 ): Buffer {
-	return Buffer.from(["DEVICE_JOIN_V1", approvalId, nonce, newSignPub, newBoxPub].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.deviceJoin, approvalId, nonce, newSignPub, newBoxPub].join("\n"), "utf8");
 }

@@ -13,6 +13,7 @@ import {
 	parseInboxAddress,
 	verifyOwnerOp,
 } from "../../shared/schemasInbox.js";
+import { OWNER_OP_KINDS } from "../../shared/wire-vocabulary.js";
 import { type LeaseService, readRouterMigrationWindow } from "../migration/leaseService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { InboxService } from "./inboxService.js";
@@ -33,7 +34,13 @@ export interface OwnerOpIntakeParams {
 export type OwnerOpHandler = (op: OwnerOp, value: Record<string, unknown>) => unknown | Promise<unknown>;
 type DurableNonceStore = Pick<InboxService, "ownerOpNonce" | "acceptOwnerOpNonce">;
 
-const BUILT_IN_KINDS = new Set(["deliver", "consumer_register", "inbox_read", "inbox_advance", "op_result"]);
+const BUILT_IN_KINDS = new Set<string>([
+	OWNER_OP_KINDS.deliver,
+	OWNER_OP_KINDS.consumerRegister,
+	OWNER_OP_KINDS.inboxRead,
+	OWNER_OP_KINDS.inboxAdvance,
+	OWNER_OP_KINDS.opResult,
+]);
 export const OWNER_STATE_MUTATION_KINDS = new Set([
 	"board_write",
 	"schedule_send",
@@ -144,7 +151,7 @@ export class OwnerOpIntake {
 			const result = await this.dispatch(op, refused);
 			if (isMigrating(result)) return result;
 			if (
-				op.op.kind !== "deliver" &&
+				op.op.kind !== OWNER_OP_KINDS.deliver &&
 				nonceStore.acceptOwnerOpNonce &&
 				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
 			)
@@ -167,15 +174,15 @@ export class OwnerOpIntake {
 		const handler = this.handlers.get(String(value.kind));
 		if (handler) return handler(op, value);
 		switch (value.kind) {
-			case "deliver":
+			case OWNER_OP_KINDS.deliver:
 				return this.deliver(op, value, refused);
-			case "consumer_register":
+			case OWNER_OP_KINDS.consumerRegister:
 				return this.params.inbox.registerConsumer(
 					op.domainId,
 					op.signerSignPub,
 					Number(value.incarnation ?? 0),
 				);
-			case "inbox_read":
+			case OWNER_OP_KINDS.inboxRead:
 				return this.params.inbox.readOwner(
 					op.domainId,
 					op.signerSignPub,
@@ -183,14 +190,14 @@ export class OwnerOpIntake {
 					Math.min(Number(value.limit ?? 100), 500),
 					value.cursorEpoch === undefined ? undefined : Number(value.cursorEpoch),
 				);
-			case "inbox_advance":
+			case OWNER_OP_KINDS.inboxAdvance:
 				return this.params.inbox.advanceCursor(
 					op.domainId,
 					op.signerSignPub,
 					Number(value.cursor),
 					Number(value.cursorEpoch),
 				);
-			case "op_result":
+			case OWNER_OP_KINDS.opResult:
 				return this.params.inbox.opResult(op.domainId, {
 					conversationId: String(value.conversationId),
 					opId: String(value.opId),

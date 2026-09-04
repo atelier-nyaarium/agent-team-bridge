@@ -11,6 +11,7 @@
 			"!**/lexicon",
 			"!**/plans",
 			"!**/tests/fixtures/ref-project",
+			"!**/tests/fixtures/wire/kotlin",
 			"!**/*.md",
 			"!**/*.mdc",
 			"!**/*.yml",

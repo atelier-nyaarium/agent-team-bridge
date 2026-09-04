@@ -1,0 +1,56 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/boardClient",
+	"case": "upsert",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"contentNonce0": "gHjZSxZqDTfQnF0y",
+			"contentNonce1": "C+yko4RWqDtxgpqV"
+		},
+		"id": "t-fixture",
+		"opId": "board-op",
+		"title": "Wire the phone",
+		"body": "Sealed body"
+	},
+	"frame": {
+		"name": "board_op",
+		"params": {
+			"sessionId": "fixture-app.fixture",
+			"opId": "board-op",
+			"write": {
+				"ops": [
+					{
+						"kind": "upsert",
+						"id": "t-fixture",
+						"rank": "V",
+						"title": {
+							"v": 1,
+							"epoch": 1,
+							"nonce": "gHjZSxZqDTfQnF0y",
+							"ciphertext": "Oj3azGSEthA1t7kzv3QEPiJjaWyUqf4B4i1HpBWo"
+						},
+						"state": "open",
+						"body": {
+							"v": 1,
+							"epoch": 1,
+							"nonce": "C+yko4RWqDtxgpqV",
+							"ciphertext": "4OF0efXd0OeA83LoShwH1R7r/k/VRnmBtrcx"
+						}
+					}
+				],
+				"expectedRevision": 0
+			}
+		}
+	},
+	"phone": {
+		"decodeAs": "BoardOp",
+		"open": {
+			"title": "board.title\nt-fixture",
+			"body": "board.body\nt-fixture"
+		}
+	},
+	"expect": {
+		"outcome": "applied"
+	}
+}

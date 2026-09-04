@@ -1,18 +1,19 @@
 import { sign, verify } from "./crypto.js";
 import type { KeyReceipt, KeyRequest } from "./schemasContentKey.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 export type { KeyReceipt, KeyRequest } from "./schemasContentKey.js";
 
 export function keyRequestSigningBytes(r: KeyRequest): Buffer {
 	return Buffer.from(
-		["KEYREQUEST_V1", r.domainId, r.requesterSignPub, r.epochs.join(","), String(r.at), r.nonce].join("\n"),
+		[SIGNING_TAGS.keyRequest, r.domainId, r.requesterSignPub, r.epochs.join(","), String(r.at), r.nonce].join("\n"),
 		"utf8",
 	);
 }
 
 export function keyReceiptSigningBytes(r: KeyReceipt): Buffer {
 	return Buffer.from(
-		["KEYRECEIPT_V1", r.domainId, r.recipientSignPub, String(r.epoch), String(r.at), r.nonce].join("\n"),
+		[SIGNING_TAGS.keyReceipt, r.domainId, r.recipientSignPub, String(r.epoch), String(r.at), r.nonce].join("\n"),
 		"utf8",
 	);
 }

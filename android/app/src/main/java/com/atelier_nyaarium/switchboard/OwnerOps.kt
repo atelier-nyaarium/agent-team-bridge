@@ -14,19 +14,23 @@ class OwnerOps(
 	private val consoleIdentity: () -> Crypto.Identity = { requireNotNull(repo).federation.consoleIdentity() },
 	private val provisioningConversationId: () -> String = { requireNotNull(repo).client().transport.prov.conversationId },
 	private val provisioningDevice: () -> String = { requireNotNull(repo).client().transport.prov.device },
+	// Shim, remove by 2026-10-01: callers pass their own clock and ids.
+	private val now: () -> Long = { System.currentTimeMillis() },
+	private val newNonce: () -> String = { com.atelier_nyaarium.switchboard.crypto.randomNonceB64() },
+	private val newOpId: () -> String = { UUID.randomUUID().toString() },
 ) {
 
 	/** No domain means no signing. */
 	fun domainId(): String? = confirmedDomainId()?.takeIf { it.isNotEmpty() }
 
 	/** Sign the complete canonical operation. */
-	fun sign(op: JsonObject, opId: String = UUID.randomUUID().toString()): OwnerOp? {
+	fun sign(op: JsonObject, opId: String = newOpId()): OwnerOp? {
 		val domain = domainId() ?: return null
 		val identity = consoleIdentity()
 		val conversation = provisioningConversationId()
 		val device = provisioningDevice()
-		val at = System.currentTimeMillis()
-		val nonce = com.atelier_nyaarium.switchboard.crypto.randomNonceB64()
+		val at = now()
+		val nonce = newNonce()
 		val signature = Crypto.sign(
 			ownerOpSigningBytes(
 				domainId = domain,

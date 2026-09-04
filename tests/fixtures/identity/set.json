@@ -1,0 +1,88 @@
+{
+	"issuedAt": 1757000000000,
+	"router": {
+		"identity": {
+			"sign": {
+				"pub": "BM40ZeyXZfBY5jOpqeLEyLRc03tNPKGCfP2Z8nQJCKk=",
+				"priv": "YcLWCT7/XdjM++XbYgQpsqYc9N++MgKiu4LEhUjzBwU="
+			},
+			"box": {
+				"pub": "KaoopDv8jI+MfSwjqm9VVOwNedOEloD6fjimA1CeUzc=",
+				"priv": "bw0iRSQgL86+c8yuyd7LoMwNj9K9Jur4OlVc2VkiRrs="
+			}
+		}
+	},
+	"domain": {
+		"id": "fixture-domain",
+		"owner": {
+			"sign": {
+				"pub": "s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=",
+				"priv": "qMTcSGH7Mpks/4siGA3KzsirfWhBwTn4LjG/4is7n3E="
+			},
+			"box": {
+				"pub": "lxNwVI/uFWHgVEQNQx5OZvoEUaG70yMLW6B7GqUpSFQ=",
+				"priv": "D8vgNms9Yl7jvfM4GJRDVyxL1R80RfV+5P/JPTOkbJ8="
+			}
+		},
+		"isAdminDomain": true
+	},
+	"gateway": {
+		"id": "laptop",
+		"identity": {
+			"sign": {
+				"pub": "MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=",
+				"priv": "Nxzceq5eUwbanc1G90hr/usndX+xpGAa7uSH9i0A9Ek="
+			},
+			"box": {
+				"pub": "GfSHcs+oJgYnhkKtJSg6YkoZeVnmB71RIqLOQPx03wk=",
+				"priv": "BxuAkYxtyNFPf743fv3zkG4hQjoW8swJ8V1GMkPRcKA="
+			}
+		},
+		"admission": {
+			"admission": {
+				"kind": "gateway",
+				"signPub": "MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=",
+				"boxPub": "GfSHcs+oJgYnhkKtJSg6YkoZeVnmB71RIqLOQPx03wk=",
+				"gatewayId": "laptop",
+				"issuedAt": 1757000000000,
+				"nonce": "fixture-gateway-admission"
+			},
+			"ownerSignPub": "s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=",
+			"signature": "vJ7NYDTb1giPcPW50X3SbFulgqLxS6j1SqfvRMvxs0/2R6erQ9r/TI0ApmF/E0YX9fdirnrzx+8hvRFkba4YAg=="
+		}
+	},
+	"console": {
+		"device": "fixture-phone",
+		"conversationId": "fixture-console",
+		"identity": {
+			"sign": {
+				"pub": "bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=",
+				"priv": "ab1MF2fWGeaBGouNl5uGQHjns0jz22V2M2KWBIL8hBg="
+			},
+			"box": {
+				"pub": "ZJXvYkTXFel8PJo6I5yPwLwG11MlMMM8KBnT8aL7kDs=",
+				"priv": "5zmSL9WgQj3qEbBoGoVGKoEx8QRA2Wg+RYLOwz8yuKM="
+			}
+		},
+		"admission": {
+			"admission": {
+				"kind": "console",
+				"signPub": "bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=",
+				"boxPub": "ZJXvYkTXFel8PJo6I5yPwLwG11MlMMM8KBnT8aL7kDs=",
+				"issuedAt": 1757000000000,
+				"nonce": "fixture-console-admission"
+			},
+			"ownerSignPub": "s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=",
+			"signature": "0P3/Vw7Kb8WxMk/HOq5uzjUMN7bjTfcNbfQZ40uvo0V1cwfYDqtaFtzSZwcIdVZxHMngVNtp7DGT8Euoiwq+DA=="
+		}
+	},
+	"tokens": {
+		"console": "fixture-console-token",
+		"federation": "fixture-federation-token",
+		"host": "fixture-host-token"
+	},
+	"content": {
+		"epoch": 1,
+		"key": "nNQ1Z8kzlYykKoVFv/qyLS6nyoA8j0L26PvWjlxzYZs="
+	}
+}

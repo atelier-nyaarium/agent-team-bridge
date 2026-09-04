@@ -1,0 +1,30 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/registerAuth",
+	"case": "gateway-register",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"nonce": "C9cRk1+lbA1n7Ow1xjTsnnET"
+		},
+		"gatewayId": "laptop",
+		"domainId": "fixture-domain"
+	},
+	"frame": {
+		"name": "gateway_register",
+		"params": {
+			"gatewayId": "laptop",
+			"domainId": "fixture-domain",
+			"protocolVersion": 2,
+			"signPub": "MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=",
+			"boxPub": "GfSHcs+oJgYnhkKtJSg6YkoZeVnmB71RIqLOQPx03wk=",
+			"admission": "{\"admission\":{\"kind\":\"gateway\",\"signPub\":\"MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=\",\"boxPub\":\"GfSHcs+oJgYnhkKtJSg6YkoZeVnmB71RIqLOQPx03wk=\",\"gatewayId\":\"laptop\",\"issuedAt\":1757000000000,\"nonce\":\"fixture-gateway-admission\"},\"ownerSignPub\":\"s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=\",\"signature\":\"vJ7NYDTb1giPcPW50X3SbFulgqLxS6j1SqfvRMvxs0/2R6erQ9r/TI0ApmF/E0YX9fdirnrzx+8hvRFkba4YAg==\"}",
+			"proof": "YUT5n8WCGiTfDAIwtlyNwHshRQC9MZLZ+h7giKwCgHYCTYnwsWTGXqJP0zfKqR/Qtn7sywpCY1wXTW9iJoH0Dg==",
+			"proofAt": 1757000000000,
+			"proofNonce": "C9cRk1+lbA1n7Ow1xjTsnnET"
+		}
+	},
+	"expect": {
+		"ok": true
+	}
+}

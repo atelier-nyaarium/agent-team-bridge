@@ -1,0 +1,22 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/sessionRegistryReporter",
+	"case": "upsert",
+	"clock": 1757000000000,
+	"inputs": {
+		"sessionId": "fixture-app.fixture"
+	},
+	"frame": {
+		"name": "session_upsert",
+		"params": {
+			"sessionId": "fixture-app.fixture",
+			"kind": "session",
+			"label": "Fixture",
+			"recordExists": true,
+			"incarnation": 1
+		}
+	},
+	"expect": {
+		"ok": true
+	}
+}

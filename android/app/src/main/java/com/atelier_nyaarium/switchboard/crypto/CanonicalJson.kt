@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard.crypto
 
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.security.MessageDigest
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -32,7 +33,7 @@ fun ownerOpSigningBytes(
 	nonce: String,
 	opJson: JsonObject,
 ): ByteArray = listOf(
-	"OWNEROP_V1",
+	Protocol.Wire.SIGNING_TAG_OWNER_OP,
 	domainId,
 	signerSignPub,
 	conversationId,

@@ -1,0 +1,18 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleRouterTransport.buildOwnerOpRequest",
+	"case": "postOwnerOp",
+	"clock": 1757000000000,
+	"inputs": {},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"hello-op\",\"at\":1757000000000,\"nonce\":\"nHqlCBoIKpqbm0E8zU+ZPM4o\",\"op\":{\"kind\":\"hello\"},\"signature\":\"SGv9gjcQdr1TcC2cH8QfdqXQozpTtsjg+pZlbuLgQd4G8rQtuhFfwHs3cYMYit7B22DcR1CQcC26G6OhmtGDCg==\"}}"
+	},
+	"expect": {
+		"outcome": "complete"
+	}
+}

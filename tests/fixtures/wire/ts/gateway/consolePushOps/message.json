@@ -1,0 +1,64 @@
+{
+	"producer": "ts",
+	"composer": "gateway/consolePushOps",
+	"case": "message",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"contentNonce0": "tY6ObOTbCVRYL4u6",
+			"contentNonce1": "xs9ehC3AjZCI1/Zf"
+		},
+		"entry": {
+			"kind": "message",
+			"session_id": "fixture-session",
+			"from": "agent",
+			"body": "Wire message"
+		},
+		"opId": "owner-message",
+		"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c"
+	},
+	"frame": {
+		"name": "inbox_append",
+		"params": {
+			"address": "owner:fixture-domain/s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=",
+			"row": {
+				"envelope": {
+					"origin": {
+						"kind": "gateway",
+						"domainId": "fixture-domain",
+						"gatewayId": "laptop"
+					},
+					"opKey": {
+						"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c",
+						"opId": "owner-message"
+					},
+					"epoch": 1,
+					"kind": "message",
+					"contentRefs": []
+				},
+				"producerSig": "YWfbUKKpBzPTMRHhMMS6gMg4zGSAFkhJ7RQ4wX5lVRotYRvLa1tF22BuPzBUKK5gm1ZG4e/W00+yiCpQClP7CA==",
+				"body": {
+					"v": 1,
+					"epoch": 1,
+					"nonce": "tY6ObOTbCVRYL4u6",
+					"ciphertext": "BzZ/eKBgLB0fUisd6WRwH7+XmsZqC/aXaOGwaK+6NdQGYjwTN92y4Qj0+OpeH8+vNCxh1jlh5Tk7c8hGh+taycqM3Gk37XSryP6TmrzAiqhneqYZ0r9K0m2ixVLQRPNTbSQFI/RrmqlHX+Rb3hFBOYI2H8sf7X12HdFJrKTeH282"
+				}
+			},
+			"opKey": {
+				"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c",
+				"opId": "owner-message",
+				"hash": "9783b7edf3d03145bbe958418401893dfeca69d9940df9ac2451b6e4cc81dabc"
+			}
+		}
+	},
+	"phone": {
+		"decodeAs": "InboxRow",
+		"open": {
+			"as": "MailboxEntry",
+			"aadKind": "inbox.body\nd6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c\nowner-message"
+		}
+	},
+	"expect": {
+		"outcome": "accepted"
+	}
+}

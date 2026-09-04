@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { b64Field, displayField, fingerprint, sign, slugField, verify } from "./crypto.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Friend cross-Domain onboarding (pending tenant + first-root + display name)
@@ -187,7 +188,7 @@ export type SignedDeleteDomain = z.infer<typeof SignedDeleteDomainSchema>;
 export function provisionTenantSigningBytes(p: ProvisionTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
-			"PROVISION_TENANT_V1",
+			SIGNING_TAGS.provisionTenant,
 			fingerprint(adminSignPubB64),
 			p.domainId,
 			p.displayName,
@@ -225,7 +226,7 @@ export function verifyProvisionTenant(s: SignedProvisionTenant, expectedAdminSig
 /** REMOVE_TENANT_V1 signing bytes (admin-signed). */
 export function removeTenantSigningBytes(r: RemoveTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
-		["REMOVE_TENANT_V1", fingerprint(adminSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
+		[SIGNING_TAGS.removeTenant, fingerprint(adminSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
 		"utf8",
 	);
 }
@@ -253,7 +254,7 @@ export function verifyRemoveTenant(s: SignedRemoveTenant, expectedAdminSignPubB6
  * key being rooted, carried INSIDE the artifact, and `nonce` is the one-time QR token). */
 export function firstRootSigningBytes(f: FirstRoot): Buffer {
 	return Buffer.from(
-		["FIRST_ROOT_V1", f.domainId, f.ownerSignPub, f.ownerBoxPub, f.nonce, String(f.issuedAt)].join("\n"),
+		[SIGNING_TAGS.firstRoot, f.domainId, f.ownerSignPub, f.ownerBoxPub, f.nonce, String(f.issuedAt)].join("\n"),
 		"utf8",
 	);
 }
@@ -275,7 +276,7 @@ export function verifyFirstRoot(s: SignedFirstRoot): boolean {
 export function setDisplayNameSigningBytes(r: SetDisplayName, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
-			"SET_DISPLAY_NAME_V1",
+			SIGNING_TAGS.setDisplayName,
 			fingerprint(ownerSignPubB64),
 			r.domainId,
 			r.displayName,
@@ -309,7 +310,7 @@ export function verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignP
  * purge the whole Domain; the fingerprint binds the request to that owner. */
 export function deleteDomainSigningBytes(d: DeleteDomain, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
-		["DELETE_DOMAIN_V1", fingerprint(ownerSignPubB64), d.domainId, String(d.issuedAt), d.nonce].join("\n"),
+		[SIGNING_TAGS.deleteDomain, fingerprint(ownerSignPubB64), d.domainId, String(d.issuedAt), d.nonce].join("\n"),
 		"utf8",
 	);
 }

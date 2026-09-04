@@ -95,6 +95,8 @@ type PendingPush = { sessions: PresenceForDomain; token: number };
 
 export interface CoalescedPusher {
 	push: (domainId: string, sessions: PresenceForDomain) => void;
+	/** Drops every pending payload and retry. */
+	stop: () => void;
 	/** Drop any in-flight/pending payload for `domainId` without waiting for it to settle. This
 	 * bumps that Domain's generation token (by removing its `pending` entry outright), so an
 	 * ALREADY-in-flight attempt's eventual settle can tell it is stale - even if a fresh `push()`
@@ -116,6 +118,7 @@ export function createCoalescedPresencePusher(
 	sendOnce: (domainId: string, sessions: PresenceForDomain) => Promise<{ ok: boolean; error?: string }>,
 ): CoalescedPusher {
 	const pending = new Map<string, PendingPush>();
+	const retries = new Set<ReturnType<typeof setTimeout>>();
 	let nextToken = 0;
 
 	// `token` identifies which `pending` GENERATION this specific attempt() call belongs to - not
@@ -155,11 +158,23 @@ export function createCoalescedPresencePusher(
 					pending.delete(domainId);
 					return;
 				}
-				setTimeout(() => attempt(domainId, attemptNum + 1, token), Math.min(2000 * 2 ** attemptNum, 30_000));
+				const retry = setTimeout(
+					() => {
+						retries.delete(retry);
+						attempt(domainId, attemptNum + 1, token);
+					},
+					Math.min(2000 * 2 ** attemptNum, 30_000),
+				);
+				retries.add(retry);
 			});
 	}
 
 	return {
+		stop: () => {
+			for (const retry of retries) clearTimeout(retry);
+			retries.clear();
+			pending.clear();
+		},
 		push: (domainId, sessions) => {
 			const existing = pending.get(domainId);
 			if (existing) {

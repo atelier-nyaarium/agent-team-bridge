@@ -63,7 +63,7 @@ object SasCrypto {
 	 */
 	fun crossDomainCommitmentPreimage(party: CrossDomainParty, salt: String): ByteArray =
 		listOf(
-			"SAS_COMMIT_V1",
+			Protocol.Wire.SIGNING_TAG_SAS_COMMIT,
 			party.ownerSignPub,
 			party.gatewaySignPub,
 			party.gatewayBoxPub,
@@ -109,7 +109,7 @@ object SasCrypto {
 			b.domainId,
 			b.gatewayId,
 		).sorted()
-		return (listOf("SAS_V1") + fields + listOf(pin)).joinToString("\n").toByteArray(Charsets.UTF_8)
+		return (listOf(Protocol.Wire.SIGNING_TAG_SAS) + fields + listOf(pin)).joinToString("\n").toByteArray(Charsets.UTF_8)
 	}
 
 	/** The displayed safety code for the cross-Domain preimage (see reduceToSas). */
@@ -128,7 +128,7 @@ object SasCrypto {
 
 	fun enrollCommitmentPreimage(party: EnrollParty, role: String, salt: String): ByteArray =
 		listOf(
-			"ENROLL_COMMIT_V1",
+			Protocol.Wire.SIGNING_TAG_ENROLL_COMMIT,
 			role,
 			party.ownerSignPub,
 			party.ownerBoxPub,
@@ -144,7 +144,7 @@ object SasCrypto {
 
 	fun enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin: String): ByteArray =
 		listOf(
-			"ENROLL_SAS_V1",
+			Protocol.Wire.SIGNING_TAG_ENROLL_SAS,
 			"ADMIN",
 			admin.ownerSignPub,
 			admin.ownerBoxPub,

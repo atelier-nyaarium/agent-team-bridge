@@ -1,0 +1,31 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/presenceReporter",
+	"case": "baseline",
+	"clock": 1757000000000,
+	"inputs": {},
+	"frame": {
+		"name": "presence_baseline",
+		"params": {
+			"seq": 0,
+			"rows": [
+				{
+					"team": "alpha",
+					"gatewayId": "laptop",
+					"domainId": "fixture-domain",
+					"status": "available",
+					"kind": "console",
+					"queue_depth": 0
+				}
+			],
+			"spawnPoints": {
+				"gatewayId": "laptop",
+				"domainId": "fixture-domain",
+				"hostSpawns": []
+			}
+		}
+	},
+	"expect": {
+		"ok": true
+	}
+}

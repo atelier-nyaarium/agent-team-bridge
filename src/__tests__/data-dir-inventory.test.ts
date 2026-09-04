@@ -14,7 +14,8 @@ const GATEWAY_SRC = path.join(import.meta.dirname, "../gateway");
 /** Every durable name the gateway opens directly under DATA_DIR, read from source. */
 function openedDurableNames(): Set<string> {
 	const names = new Set<string>();
-	const opener = /(?:new DurableStore|openDurable)\(\s*(?:DATA_DIR|process\.env\.DATA_DIR[^,]*),\s*"([^"]+)"/g;
+	const opener =
+		/(?:new DurableStore|openDurable)\(\s*(?:DATA_DIR|dataDir|process\.env\.DATA_DIR[^,]*),\s*"([^"]+)"/g;
 	for (const file of walk(GATEWAY_SRC)) {
 		const source = fs.readFileSync(file, "utf8");
 		for (const match of source.matchAll(opener)) names.add(`${match[1]}.json`);

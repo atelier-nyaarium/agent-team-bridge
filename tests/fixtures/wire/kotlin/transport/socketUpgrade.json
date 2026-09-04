@@ -1,0 +1,16 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleSocketClient.socketRequest",
+	"case": "socketUpgrade",
+	"clock": 1757000000000,
+	"inputs": {},
+	"request": {
+		"method": "GET",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": ""
+	},
+	"expect": {}
+}

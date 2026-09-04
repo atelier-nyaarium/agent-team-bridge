@@ -35,7 +35,12 @@ import {
 	TrustPendingResultSchema,
 } from "../src/shared/federation-lifecycle.js";
 import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
-import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../src/shared/router-protocol.js";
+import {
+	BLOB_CHUNK_BYTES,
+	FEDERATION_PROTOCOL_FLOOR,
+	FEDERATION_PROTOCOL_VERSION,
+	MAX_BLOB_BYTES,
+} from "../src/shared/router-protocol.js";
 import {
 	BOARD_ATTACHMENTS_MAX,
 	BOARD_AUTO_DOWNLOAD_MAX_BYTES,
@@ -149,6 +154,15 @@ import {
 	SLUG_RE,
 } from "../src/shared/session-id.js";
 import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
+import {
+	BEARER_PREFIX,
+	CONSOLE_TOKEN_HEADER,
+	CONTENT_NONCE_BYTES,
+	OWNER_OP_KINDS,
+	ROUTER_PATHS,
+	SIGNING_TAGS,
+	WIRE_NONCE_BYTES,
+} from "../src/shared/wire-vocabulary.js";
 
 const OUT_PATH = join(
 	import.meta.dir,
@@ -471,6 +485,58 @@ for (const schema of ROOTS) {
 
 const order = [...new Set([...rootIds, ...defs.keys()])];
 
+function literalValues(schema: z.ZodType, field: string): string[] {
+	const definition = (schema as unknown as { _def: { options?: unknown[]; shape?: Record<string, ZodInternal> } })
+		._def;
+	const options = definition.options ?? [];
+	return options.flatMap((option) => {
+		const shape = (option as { _def?: { shape?: Record<string, ZodInternal> } })._def?.shape;
+		const values = shape?.[field]?._def.values;
+		return values?.filter((value): value is string => typeof value === "string") ?? [];
+	});
+}
+
+function objectLiteralValue(schema: z.ZodType, field: string): string[] {
+	const shape = (schema as unknown as { _def: { shape: Record<string, ZodInternal> } })._def.shape;
+	return shape[field]._def.values?.filter((value): value is string => typeof value === "string") ?? [];
+}
+
+type ZodInternal = { _def: { values?: unknown[] } };
+
+function kotlinConstName(name: string): string {
+	return name.replace(/[a-z][A-Z]/g, (match) => `${match[0]}_${match[1]}`).toUpperCase();
+}
+
+const wireConstants: ReadonlyArray<readonly [string, string | number]> = [
+	...Object.entries(ROUTER_PATHS).map(([name, value]) => [`ROUTER_PATH_${name}`, value] as const),
+	["CONSOLE_TOKEN_HEADER", CONSOLE_TOKEN_HEADER],
+	["BEARER_PREFIX", BEARER_PREFIX],
+	...Object.entries(OWNER_OP_KINDS).map(([name, value]) => [`OWNER_OP_${name}`, value] as const),
+	...Object.entries(SIGNING_TAGS).map(([name, value]) => [`SIGNING_TAG_${name}`, value] as const),
+	["CONTENT_NONCE_BYTES", CONTENT_NONCE_BYTES],
+	["WIRE_NONCE_BYTES", WIRE_NONCE_BYTES],
+];
+const wireConstantBlock = wireConstants
+	.map(
+		([name, value]) =>
+			`${INDENT}${INDENT}const val ${kotlinConstName(name)}: ${typeof value === "number" ? "Int" : "String"} = ${typeof value === "number" ? value : kotlinString(value)}`,
+	)
+	.join("\n");
+const consoleOpKinds = literalValues(ConsoleOpSchema, "kind");
+const socketFrameTypes = literalValues(ConsoleSocketOutboundSchema, "type");
+const keyOpKinds = [KeyRequestOpSchema, KeyGrantOpSchema, KeyReceiptOpSchema, KeyReceiptsReadOpSchema].flatMap(
+	(schema) => objectLiteralValue(schema, "kind"),
+);
+const schemaConstantBlock = (name: string, values: string[]) =>
+	[
+		`${INDENT}${INDENT}object ${name} {`,
+		...values.map(
+			(value) =>
+				`${INDENT}${INDENT}${INDENT}const val ${kotlinConstName(value)}: String = ${kotlinString(value)}`,
+		),
+		`${INDENT}${INDENT}}`,
+	].join("\n");
+
 const blocks: string[] = [];
 for (const name of order) {
 	const node = defs.get(name);
@@ -510,6 +576,18 @@ import kotlinx.serialization.json.JsonObject
 
 object Protocol {
 ${INDENT}const val CONSOLE_PROTOCOL_VERSION: Int = ${CONSOLE_PROTOCOL_VERSION}
+${INDENT}const val FEDERATION_PROTOCOL_FLOOR: Int = ${FEDERATION_PROTOCOL_FLOOR}
+${INDENT}const val FEDERATION_PROTOCOL_VERSION: Int = ${FEDERATION_PROTOCOL_VERSION}
+
+${INDENT}object Wire {
+${wireConstantBlock}
+
+${schemaConstantBlock("ConsoleOpKind", consoleOpKinds)}
+
+${schemaConstantBlock("SocketFrame", socketFrameTypes)}
+
+${schemaConstantBlock("KeyOpKind", keyOpKinds)}
+${INDENT}}
 
 ${INDENT}/** Address and store separator. */
 ${INDENT}const val ADDRESS_SEP: String = ${kotlinString(ADDRESS_SEP)}

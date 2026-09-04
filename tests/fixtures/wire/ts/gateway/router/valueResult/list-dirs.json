@@ -1,0 +1,38 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/valueResult",
+	"case": "list-dirs",
+	"clock": 1757000000000,
+	"inputs": {
+		"opId": "list-dirs-op",
+		"result": {
+			"entries": ["projects"],
+			"path": "/home/fixture"
+		}
+	},
+	"frame": {
+		"name": "value_result",
+		"params": {
+			"opId": "list-dirs-op",
+			"conversationId": "fixture-console",
+			"result": {
+				"v": 1,
+				"epoch": 1,
+				"nonce": "crb2JAapWQoaWkDr",
+				"ciphertext": "rmscYaeuhOaE0SqpjV3LSseMEcF4skXrkis+9nSJYkm5n7kPwY6Zf1euZ2QjeVGOlJfzDqMmrairt9ithD3P"
+			},
+			"incarnation": 1
+		}
+	},
+	"phone": {
+		"decodeAs": "ContentEnvelope",
+		"open": {
+			"as": "ConsoleListDirsResult",
+			"aadKind": "op.result\nlist-dirs-op"
+		}
+	},
+	"expect": {
+		"settled": false,
+		"reason": "no_waiter"
+	}
+}

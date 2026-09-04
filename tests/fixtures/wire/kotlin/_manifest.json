@@ -1,0 +1,89 @@
+{
+	"_comment": "Kotlin phone wire fixtures.",
+	"fixtures": [
+		{
+			"file": "OwnerOps.sign/hello.json",
+			"composer": "OwnerOps.sign",
+			"case": "hello",
+			"peer": "router.handle"
+		},
+		{
+			"file": "KeyDeliveryOps.requestMissing/key_request.json",
+			"composer": "KeyDeliveryOps.requestMissing",
+			"case": "key_request",
+			"peer": "router.handle"
+		},
+		{
+			"file": "KeyDeliveryOps.onKeyGrant/key_receipt.json",
+			"composer": "KeyDeliveryOps.onKeyGrant",
+			"case": "key_receipt",
+			"peer": "router.handle"
+		},
+		{
+			"file": "CursorTranslationOps.onWelcome/cursor_translate.json",
+			"composer": "CursorTranslationOps.onWelcome",
+			"case": "cursor_translate",
+			"peer": "router.handle"
+		},
+		{
+			"file": "BoardRouterWriter.write/board_write.json",
+			"composer": "BoardRouterWriter.write",
+			"case": "board_write",
+			"peer": "router.handle"
+		},
+		{
+			"file": "PollDrain.consumerRegister/consumer_register.json",
+			"composer": "PollDrain.consumerRegister",
+			"case": "consumer_register",
+			"peer": "router.handle"
+		},
+		{
+			"file": "PollDrain.inboxRead/inbox_read.json",
+			"composer": "PollDrain.inboxRead",
+			"case": "inbox_read",
+			"peer": "router.handle"
+		},
+		{
+			"file": "PollDrain.inboxAdvance/inbox_advance.json",
+			"composer": "PollDrain.inboxAdvance",
+			"case": "inbox_advance",
+			"peer": "router.handle"
+		},
+		{
+			"file": "PollDrain.planesRead/planes_read.json",
+			"composer": "PollDrain.planesRead",
+			"case": "planes_read",
+			"peer": "router.handle"
+		},
+		{
+			"file": "transport/postOwnerOp.json",
+			"composer": "ConsoleRouterTransport.buildOwnerOpRequest",
+			"case": "postOwnerOp",
+			"peer": "router.handle"
+		},
+		{
+			"file": "transport/apiReachable.json",
+			"composer": "ConsoleClient.apiReachableRequest",
+			"case": "apiReachable",
+			"peer": "router.handle"
+		},
+		{
+			"file": "transport/connectedGateways.json",
+			"composer": "ConsoleClient.connectedGatewaysRequest",
+			"case": "connectedGateways",
+			"peer": "router.handle"
+		},
+		{
+			"file": "transport/reach.json",
+			"composer": "ConsoleClient.reachRequest",
+			"case": "reach",
+			"peer": "router.handle"
+		},
+		{
+			"file": "transport/socketUpgrade.json",
+			"composer": "ConsoleSocketClient.socketRequest",
+			"case": "socketUpgrade",
+			"peer": "router.upgrade"
+		}
+	]
+}

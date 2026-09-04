@@ -1,0 +1,28 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/keyRequester",
+	"case": "key-request",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"nonce": "yT7bODrdKDPmpLfVspFkjx2R"
+		}
+	},
+	"frame": {
+		"name": "key_request",
+		"params": {
+			"request": {
+				"v": 1,
+				"domainId": "fixture-domain",
+				"requesterSignPub": "MXCo4mPj6sJdP9TnM34sP3ZPawSzPEIj5kJtJCkZ02Q=",
+				"epochs": [1],
+				"at": 1757000000000,
+				"nonce": "yT7bODrdKDPmpLfVspFkjx2R",
+				"signature": "l/u2FIf2j7d7pb2O0m4Yh/fysM5b/YejqSF1M1jx8nogxQ1cs8hWguqROYQAB6Pw3Xxdaq7B7eWkRXH4ptPTCQ=="
+			}
+		}
+	},
+	"expect": {
+		"outcome": "accepted"
+	}
+}

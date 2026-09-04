@@ -78,6 +78,10 @@ import {
 export { MAX_RESPONSE_FILE_BYTES, POST_WAKE_SETTLE_MS };
 
 export interface RoutesDeps {
+	/** Bare test callers omit it. */
+	dataDir?: string;
+	now?: () => number;
+	newId?: () => string;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
@@ -198,6 +202,9 @@ export function createRoutesCarryOver(): RoutesCarryOver {
 // Functions & Helpers.
 
 export function createRoutes({
+	dataDir = process.env.DATA_DIR || "/app/data",
+	now,
+	newId,
 	registry,
 	conversationRegistry,
 	store,
@@ -460,7 +467,8 @@ export function createRoutes({
 	}
 
 	// Constructed per createRoutes call, never hoisted: a rebuild (federation activating mid-session).
-	const { mirrorPeer, humanNotify, pluginAction, deliverToOwner } = createConsolePushOps({
+	const consolePush = createConsolePushOps({
+		dataDir,
 		ownerId,
 		routerClient,
 		localDomainId: localDomainId ?? undefined,
@@ -469,6 +477,8 @@ export function createRoutes({
 		contentKeyStore,
 		localGatewayId,
 		localAddress,
+		now,
+		newId,
 		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's.
 		cacheBlobs: blobUploader
 			? (blobIds) => {
@@ -481,6 +491,7 @@ export function createRoutes({
 			: null,
 		refuseImpersonation,
 	});
+	const { mirrorPeer, humanNotify, pluginAction, deliverToOwner } = consolePush;
 	const { fetchBlobFromGateway } = createBlobFetcher({
 		blobStore,
 		crossDomainPeers,
@@ -1634,5 +1645,6 @@ export function createRoutes({
 		pushPresenceToDomain,
 		pullPresenceFromDomain,
 		invalidatePresenceSnapshotCache,
+		stop: consolePush.stop,
 	};
 }

@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.InboxRow
 import com.atelier_nyaarium.switchboard.proto.OpKey
@@ -77,7 +78,7 @@ class ConsoleClient internal constructor(
 			else -> return null
 		}
 		return com.atelier_nyaarium.switchboard.crypto.Crypto.sign(
-			"INBOXROW_V1\n${canonicalJson(wireJson.encodeToJsonElement(RowEnvelope.serializer(), envelope))}".toByteArray(),
+			"${Protocol.Wire.SIGNING_TAG_INBOX_ROW}\n${canonicalJson(wireJson.encodeToJsonElement(RowEnvelope.serializer(), envelope))}".toByteArray(),
 			identity.sign.priv,
 		)
 	}
@@ -92,29 +93,29 @@ class ConsoleClient internal constructor(
 		return postOwnerOp(signed)
 	}
 
-	internal suspend fun consumerRegister(incarnation: Long): JsonElement? = postSigned(buildJsonObject {
-		put("kind", "consumer_register")
+	internal suspend fun consumerRegister(incarnation: Long, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+		put("kind", Protocol.Wire.OWNER_OP_CONSUMER_REGISTER)
 		put("incarnation", incarnation)
-	})
+	}, opId)
 
-	internal suspend fun inboxRead(fromSeq: Long, cursorEpoch: Long, limit: Int = 100): JsonElement? = postSigned(buildJsonObject {
-		put("kind", "inbox_read")
+	internal suspend fun inboxRead(fromSeq: Long, cursorEpoch: Long, limit: Int = 100, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+		put("kind", Protocol.Wire.OWNER_OP_INBOX_READ)
 		put("fromSeq", fromSeq)
 		put("cursorEpoch", cursorEpoch)
 		put("limit", limit)
-	})
+	}, opId)
 
-	internal suspend fun inboxAdvance(cursor: Long, cursorEpoch: Long): JsonElement? = postSigned(buildJsonObject {
-		put("kind", "inbox_advance")
+	internal suspend fun inboxAdvance(cursor: Long, cursorEpoch: Long, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+		put("kind", Protocol.Wire.OWNER_OP_INBOX_ADVANCE)
 		put("cursor", cursor)
 		put("cursorEpoch", cursorEpoch)
-	})
+	}, opId)
 
-	internal suspend fun planesRead(known: JsonObject): com.atelier_nyaarium.switchboard.proto.PlanesReadResult? {
+	internal suspend fun planesRead(known: JsonObject, opId: String = UUID.randomUUID().toString()): com.atelier_nyaarium.switchboard.proto.PlanesReadResult? {
 		val answer = postSigned(buildJsonObject {
-			put("kind", "planes_read")
+			put("kind", Protocol.Wire.OWNER_OP_PLANES_READ)
 			put("known", known)
-		}) ?: return null
+		}, opId) ?: return null
 		val result = answer.jsonObject["result"] ?: return null
 		return runCatching {
 			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.PlanesReadResult.serializer(), result)
@@ -150,7 +151,7 @@ class ConsoleClient internal constructor(
         0L,
     )
 		val ownerOp = signOwnerOp?.invoke(buildJsonObject {
-			put("kind", "deliver")
+			put("kind", Protocol.Wire.OWNER_OP_DELIVER)
 			put("address", target)
 			put("row", wireJson.encodeToJsonElement(InboxRow.serializer(), row))
 		}, opId) ?: return null
@@ -222,7 +223,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		val value = GatewayValueOp(gatewayId = gatewayId, value = sealed.second)
 		val ownerOp = signOwnerOp?.invoke(
 			buildJsonObject {
-				put("kind", "gateway_value")
+				put("kind", Protocol.Wire.OWNER_OP_GATEWAY_VALUE)
 				put("gatewayId", gatewayId)
 				put("value", wireJson.encodeToJsonElement(ContentEnvelope.serializer(), value.value))
 			},
@@ -268,10 +269,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 	suspend fun apiReachable(): String {
 		// Only the preflight may fail over.
 		val code = transport.withReachFailover { base ->
-			val req = Request.Builder()
-				.url("$base/health")
-				.get()
-				.build()
+			val req = apiReachableRequest(base)
 			transport.clientFor(base).newCall(req).execute().use { resp ->
 				val text = resp.body?.string().orEmpty()
 				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
@@ -285,11 +283,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 
 	/** Connected Gateways, or unknown. */
 	fun fetchConnectedGateways(): List<String>? {
-		val req = Request.Builder()
-			.url("${transport.proxyBase}/console")
-			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
-			.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
-			.build()
+		val req = connectedGatewaysRequest(transport.proxyBase)
 		transport.client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
 			val body = resp.body?.string() ?: return null
@@ -302,21 +296,36 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 
 	/** Advertised Router addresses, and this console's Domain when the signer is known. */
 	private fun fetchReach(): RouterReach? {
-		val signer = (transport.store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
-		val body = buildJsonObject {
-			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })
-		}.toString()
-		val req = Request.Builder()
-			.url("${transport.proxyBase}/console")
-			.header("X-Console-Bridge-Token", "Bearer ${transport.prov.appToken}")
-			.post(body.toRequestBody(ConsoleHttp.JSON))
-			.build()
+		val req = reachRequest(transport.proxyBase)
 		transport.client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
 			val reach = RouterReach.decode(resp.body?.string())
 			reach.domainId?.takeIf { it.isNotEmpty() }?.let { transport.store.saveDomainId(it) }
 			return reach
 		}
+	}
+
+	internal fun apiReachableRequest(base: String): Request = Request.Builder()
+		.url(base + Protocol.Wire.ROUTER_PATH_HEALTH)
+		.get()
+		.build()
+
+	internal fun connectedGatewaysRequest(base: String): Request = Request.Builder()
+		.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
+		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
+		.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
+		.build()
+
+	internal fun reachRequest(base: String): Request {
+		val signer = (transport.store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
+		val body = buildJsonObject {
+			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })
+		}.toString()
+		return Request.Builder()
+			.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
+			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
+			.post(body.toRequestBody(ConsoleHttp.JSON))
+			.build()
 	}
 
 	/** Send a message. */

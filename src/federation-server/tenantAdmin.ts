@@ -14,6 +14,7 @@ import {
 	verifyRemoveTenant,
 	verifySetDisplayName,
 } from "../shared/federation-lifecycle.js";
+import { WIRE_NONCE_BYTES } from "../shared/wire-vocabulary.js";
 import { sanitizeDomainId } from "./enrollmentCoordinator.js";
 import type { EnrollmentState, PendingTenantRecord, SeenAdminNonce } from "./federationSecret.js";
 import type { FileSecretStore } from "./fileSecretStore.js";
@@ -51,7 +52,7 @@ export class TenantAdmin {
 		if (domainId === this.store.adminDomainId()) {
 			return { ok: false, error: "cannot provision the admin's Domain" };
 		}
-		const inviteNonce = randomBytes(18).toString("base64");
+		const inviteNonce = randomBytes(WIRE_NONCE_BYTES).toString("base64");
 		const pending: PendingTenantRecord = {
 			displayName,
 			nonce: inviteNonce,

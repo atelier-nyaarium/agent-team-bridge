@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { b64Field, displayField, sign, verify } from "./crypto.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Proof-of-possession query surfaces (roster / trust-pending / transport)
@@ -146,7 +147,7 @@ export const ROSTER_MAX_SKEW_MS = 120_000;
 export const TRANSPORT_MAX_SKEW_MS = 120_000;
 
 export function rosterRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
-	return Buffer.from(["ROSTER_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.roster, signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
 }
 
 /** Sign a fresh roster request with the console's raw Ed25519 private key. */
@@ -172,7 +173,7 @@ export const TRUST_PENDING_MAX_SKEW_MS = 120_000;
  * timestamp + nonce. A distinct version tag from ROSTER_V1 so a roster proof can never be replayed as
  * a trust-pending query and vice versa. */
 export function trustPendingSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
-	return Buffer.from(["TRUST_PENDING_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.trustPending, signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
 }
 
 /** Sign a fresh trust-pending query with the querying owner's raw Ed25519 private key. */
@@ -199,7 +200,7 @@ export const TRANSPORT_REQUEST_MAX_SKEW_MS = 120_000;
  * fresh timestamp + nonce. A distinct version tag from ROSTER_V1 / TRUST_PENDING_V1 so neither proof
  * can be replayed as a transport request and vice versa. */
 export function transportRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
-	return Buffer.from(["TRANSPORT_REQUEST_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.transportRequest, signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
 }
 
 /** Sign a fresh transport request with the requesting owner's raw Ed25519 private key (private key

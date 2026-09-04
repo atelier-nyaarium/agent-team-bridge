@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.board
 import com.atelier_nyaarium.switchboard.proto.BoardReadResult
 import com.atelier_nyaarium.switchboard.proto.BoardWrite
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.wireJson
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -54,8 +55,8 @@ class BoardRouterWriter(
 					board.settleWrite(opId, result.revision, result.entries)
 					return BoardWriteOutcome.Applied
 				}
-				"refused" -> {
-					val reason = result.refusal ?: "refused"
+				Protocol.Wire.SocketFrame.REFUSED -> {
+					val reason = result.refusal ?: Protocol.Wire.SocketFrame.REFUSED
 					board.settleWrite(opId, result.revision, result.entries)
 					board.noticeRefusal(intents.singleOrNull()?.id, reason)
 					return BoardWriteOutcome.Refused(reason)
@@ -89,13 +90,13 @@ class BoardRouterWriter(
 
 	/** Router revision seeds the next CAS. */
 	suspend fun read(opId: String, decodeRead: (JsonElement) -> BoardReadResult): Boolean {
-		val result = runCatching { decodeRead(signAndPost(buildJsonObject { put("kind", JsonPrimitive("board_read")) }, opId)) }
+		val result = runCatching { decodeRead(signAndPost(buildJsonObject { put("kind", JsonPrimitive(Protocol.Wire.OWNER_OP_BOARD_READ)) }, opId)) }
 			.getOrNull() ?: return false
 		return board.applyRouterBoard(result.revision, result.entries)
 	}
 
 	private fun body(write: BoardWrite): JsonObject = buildJsonObject {
-		put("kind", JsonPrimitive("board_write"))
+		put("kind", JsonPrimitive(Protocol.Wire.OWNER_OP_BOARD_WRITE))
 		put("write", wireJson.encodeToJsonElement(BoardWrite.serializer(), write))
 	}
 }

@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard.crypto
 
 import java.security.MessageDigest
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.Serializable
@@ -74,7 +75,7 @@ object Crypto {
 		}
 
 	fun deviceJoinSigningBytes(approvalId: String, nonce: String, newSignPub: String, newBoxPub: String): ByteArray =
-		listOf("DEVICE_JOIN_V1", approvalId, nonce, newSignPub, newBoxPub).joinToString("\n").toByteArray(Charsets.UTF_8)
+		listOf(Protocol.Wire.SIGNING_TAG_DEVICE_JOIN, approvalId, nonce, newSignPub, newBoxPub).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun keyRequestSigningBytes(
 		domainId: String,
@@ -83,7 +84,7 @@ object Crypto {
 		at: Long,
 		nonce: String,
 	): ByteArray =
-		listOf("KEYREQUEST_V1", domainId, requesterSignPub, epochs.joinToString(","), at.toString(), nonce)
+		listOf(Protocol.Wire.SIGNING_TAG_KEY_REQUEST, domainId, requesterSignPub, epochs.joinToString(","), at.toString(), nonce)
 			.joinToString("\n")
 			.toByteArray(Charsets.UTF_8)
 
@@ -94,7 +95,7 @@ object Crypto {
 		at: Long,
 		nonce: String,
 	): ByteArray =
-		listOf("KEYRECEIPT_V1", domainId, recipientSignPub, epoch.toString(), at.toString(), nonce)
+		listOf(Protocol.Wire.SIGNING_TAG_KEY_RECEIPT, domainId, recipientSignPub, epoch.toString(), at.toString(), nonce)
 			.joinToString("\n")
 			.toByteArray(Charsets.UTF_8)
 
@@ -112,7 +113,7 @@ object Crypto {
 		val shared = ByteArray(32)
 		X25519Agreement().apply { init(ephPriv) }.calculateAgreement(X25519PublicKeyParameters(unb64(recipientBoxPubB64), 0), shared, 0)
 		val key = deriveKey(shared, ephPub)
-		val nonce = ByteArray(12).also { rnd.nextBytes(it) }
+		val nonce = ByteArray(Protocol.Wire.CONTENT_NONCE_BYTES).also { rnd.nextBytes(it) }
 		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
 		cipher.init(true, AEADParameters(KeyParameter(key), 128, nonce))
 		val out = ByteArray(cipher.getOutputSize(plaintext.size))
@@ -160,10 +161,10 @@ object Crypto {
 		plaintext: ByteArray,
 		key: ByteArray,
 		aad: ContentAad,
-		nonce: ByteArray = ByteArray(12).also { rnd.nextBytes(it) },
+		nonce: ByteArray = ByteArray(Protocol.Wire.CONTENT_NONCE_BYTES).also { rnd.nextBytes(it) },
 	): ContentEnvelope {
 		require(key.size == 32) { "content key must be 32 bytes" }
-		require(nonce.size == 12) { "content nonce must be 12 bytes" }
+		require(nonce.size == Protocol.Wire.CONTENT_NONCE_BYTES) { "content nonce must be 12 bytes" }
 		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
 		cipher.init(true, AEADParameters(KeyParameter(key), 128, nonce, aad.bytes()))
 		val out = ByteArray(cipher.getOutputSize(plaintext.size))
@@ -177,7 +178,7 @@ object Crypto {
 		if (env.epoch != aad.epoch.toLong()) throw IllegalArgumentException("content envelope epoch does not match AAD")
 		require(key.size == 32) { "content key must be 32 bytes" }
 		val nonce = unb64(env.nonce)
-		require(nonce.size == 12) { "content nonce must be 12 bytes" }
+		require(nonce.size == Protocol.Wire.CONTENT_NONCE_BYTES) { "content nonce must be 12 bytes" }
 		val sealed = unb64(env.ciphertext)
 		if (sealed.size < 16) throw IllegalArgumentException("content ciphertext is too short")
 		val cipher = GCMBlockCipher.newInstance(AESEngine.newInstance())
@@ -209,7 +210,7 @@ object Crypto {
 	fun keyEnvelopePreimage(epoch: Int, key: ByteArray): ByteArray {
 		require(epoch >= 1) { "content epoch must be an integer from 1" }
 		require(key.size == 32) { "content key must be 32 bytes" }
-		return "KEYENVELOPE_V1\n$epoch\n".toByteArray(Charsets.UTF_8) + key
+		return "${Protocol.Wire.SIGNING_TAG_KEY_ENVELOPE}\n$epoch\n".toByteArray(Charsets.UTF_8) + key
 	}
 
 	fun unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: String): Pair<Int, ByteArray> {

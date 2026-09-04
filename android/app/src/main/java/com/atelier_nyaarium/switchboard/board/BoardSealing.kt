@@ -15,6 +15,8 @@ open class BoardSealing(
 	private val keyring: ContentKeyring,
 	private val domainId: String,
 	private val ownerSignPub: String,
+	// Null draws at random.
+	private val newNonce: (() -> ByteArray)? = null,
 	private val onMissingEpoch: (Int) -> Unit = {},
 ) {
 	val epochs: List<Int>
@@ -23,7 +25,9 @@ open class BoardSealing(
 	fun seal(text: String, kind: String, entryId: String): ContentEnvelope? {
 		val epoch = keyring.epochs().maxOrNull() ?: return null
 		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
-		return Crypto.sealContent(text.toByteArray(Charsets.UTF_8), key, aad(epoch, kind, entryId))
+		val bytes = text.toByteArray(Charsets.UTF_8)
+		val nonce = newNonce?.invoke() ?: return Crypto.sealContent(bytes, key, aad(epoch, kind, entryId))
+		return Crypto.sealContent(bytes, key, aad(epoch, kind, entryId), nonce)
 	}
 
 	open fun open(env: ContentEnvelope, kind: String, entryId: String): String? {

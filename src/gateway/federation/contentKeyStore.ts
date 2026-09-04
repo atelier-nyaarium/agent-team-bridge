@@ -1,9 +1,10 @@
+import { randomBytes as nodeRandomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { resolveAdmittedConsole, type SignedAdmission, type SignedRevocation } from "../../shared/admission.js";
 import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
-import { type ContentAad, openContent, sealContent, unwrapContentKey } from "../../shared/content-envelope.js";
+import { type ContentAad, openContent, sealContentWithNonce, unwrapContentKey } from "../../shared/content-envelope.js";
 import { b64Field } from "../../shared/crypto.js";
 import {
 	type ContentEnvelope,
@@ -11,6 +12,7 @@ import {
 	type KeyEnvelope,
 	KeyEnvelopeSchema,
 } from "../../shared/schemasContentKey.js";
+import { CONTENT_NONCE_BYTES } from "../../shared/wire-vocabulary.js";
 
 export const CONTENT_KEYS_FILE = "content-keys.json";
 
@@ -42,7 +44,11 @@ export class ContentKeyStore {
 	private readonly recipientBoxPriv: string | (() => string);
 	private readonly keys: Map<number, Buffer>;
 
-	constructor(dir: string, recipientBoxPriv: string | (() => string) = "") {
+	constructor(
+		dir: string,
+		recipientBoxPriv: string | (() => string) = "",
+		private readonly randomBytes: (size: number) => Buffer = nodeRandomBytes,
+	) {
 		this.file = path.join(dir, CONTENT_KEYS_FILE);
 		this.recipientBoxPriv = recipientBoxPriv;
 		this.keys = this.read();
@@ -171,7 +177,10 @@ export class ContentKeyStore {
 		const epoch = explicitEpoch ?? this.epochs().at(-1);
 		const key = epoch === undefined ? null : this.keyFor(epoch);
 		if (epoch === undefined || !key) return { kind: "no_key" };
-		return { kind: "ok", envelope: sealContent(plaintext, key, { ...aad, epoch }) };
+		return {
+			kind: "ok",
+			envelope: sealContentWithNonce(plaintext, key, { ...aad, epoch }, this.randomBytes(CONTENT_NONCE_BYTES)),
+		};
 	}
 
 	open(

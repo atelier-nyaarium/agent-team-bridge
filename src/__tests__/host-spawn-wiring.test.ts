@@ -1,6 +1,6 @@
 // The gateway must actually HAND its host-spawn state to the two halves that use it.
 //
-// This exists because it did not. `hostSpawnPoints` was created in index.ts and passed to neither
+// This exists because it did not. `hostSpawnPoints` was created in composeGateway.ts and passed to neither
 // `createWebSocketHandlers` nor `createRoutes`, and because both deps are optional, TypeScript
 // accepted it: the catalog frame had no state to write, discovery had none to read, and the whole
 // feature was silently dead in production while every unit test passed. A test that builds the two
@@ -13,12 +13,12 @@ import { describe, expect, it } from "vitest";
 ////////////////////////////////
 //  Functions & Helpers
 
-const INDEX = fs.readFileSync(path.join(import.meta.dirname, "..", "gateway", "index.ts"), "utf8");
+const INDEX = fs.readFileSync(path.join(import.meta.dirname, "..", "gateway", "composeGateway.ts"), "utf8");
 
-/** The argument list of one `createX({ ... })` call in index.ts. */
+/** The argument list of one `createX({ ... })` call in composeGateway.ts. */
 function depsOf(factory: string): string {
 	const start = INDEX.indexOf(`${factory}({`);
-	expect(start, `${factory} is not called in index.ts`).toBeGreaterThan(-1);
+	expect(start, `${factory} is not called in composeGateway.ts`).toBeGreaterThan(-1);
 	let depth = 0;
 	for (let i = INDEX.indexOf("{", start); i < INDEX.length; i++) {
 		if (INDEX[i] === "{") depth++;

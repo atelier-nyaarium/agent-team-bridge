@@ -45,7 +45,7 @@ export function createShareAttestor(deps: ShareAttestorDeps) {
 			void deps.send("share_job_live", {
 				sessionTarget,
 				jobIds,
-				observedAt: Date.now(),
+				observedAt: now(),
 			});
 		}
 		previousLive = currentLive;

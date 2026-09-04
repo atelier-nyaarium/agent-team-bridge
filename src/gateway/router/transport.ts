@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_ROUTER_PORT, type RouterReach } from "../../shared/router-reach.js";
+import { BEARER_PREFIX } from "../../shared/wire-vocabulary.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -55,7 +56,7 @@ export function routerWsConnection(t: RouterTransport): {
 } {
 	return {
 		url: t.routerUrl,
-		headers: { Authorization: `Bearer ${t.bearer}` },
+		headers: { Authorization: BEARER_PREFIX + t.bearer },
 		tls: { certFp: t.routerCertFp },
 	};
 }
@@ -63,11 +64,11 @@ export function routerWsConnection(t: RouterTransport): {
 /** The bootstrap address Gateway Setup wrote, as a base URL, or null when it asked for none. The
  * operator names a door that works from where THIS machine stands; the phone's sealed bundle names
  * the Router's public host, which is not always reachable from the Router's own LAN. */
-export function routerBootstrapOverride(): string | null {
-	const host = (process.env.FEDERATION_ROUTER_HOST ?? "").trim();
+export function routerBootstrapOverride(hostValue: string | undefined, portValue: string | undefined): string | null {
+	const host = (hostValue ?? "").trim();
 	if (!host) return null;
 	if (host.includes("://")) return host.replace(/\/+$/, "");
-	const port = Number((process.env.FEDERATION_ROUTER_PORT ?? "").trim()) || DEFAULT_ROUTER_PORT;
+	const port = Number((portValue ?? "").trim()) || DEFAULT_ROUTER_PORT;
 	return `https://${host}:${port}`;
 }
 

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { signKeyReceipt, signKeyRequest } from "../../shared/content-envelope.js";
 import type { KeyReceipt, KeyRequest } from "../../shared/schemasContentKey.js";
+import { WIRE_NONCE_BYTES } from "../../shared/wire-vocabulary.js";
 
 const RETRY_MS = 10 * 60 * 1000;
 const LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -14,12 +15,14 @@ export interface KeyRequesterDeps {
 	send: (action: string, params: Record<string, unknown>) => Promise<unknown>;
 	onError: (message: string) => void;
 	now?: () => number;
+	randomBytes?: (size: number) => Buffer;
 	setTimeout?: (handler: () => void, timeout: number) => ReturnType<typeof setTimeout> | number;
 	clearTimeout?: (timer: ReturnType<typeof setTimeout> | number) => void;
 }
 
 export function createKeyRequester(deps: KeyRequesterDeps) {
 	const now = deps.now ?? Date.now;
+	const random = deps.randomBytes ?? randomBytes;
 	const setTimer = deps.setTimeout ?? setTimeout;
 	const clearTimer = deps.clearTimeout ?? clearTimeout;
 	const pending = new Map<number, number>();
@@ -76,7 +79,7 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 					requesterSignPub: deps.gatewaySignPub,
 					epochs: batch,
 					at,
-					nonce: randomBytes(18).toString("base64"),
+					nonce: random(WIRE_NONCE_BYTES).toString("base64"),
 					signature: "",
 				},
 				deps.gatewaySignPriv,
@@ -113,6 +116,13 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 		}
 	}
 
+	function stop(): void {
+		if (timer === null) return;
+		clearTimer(timer);
+		timer = null;
+		timerDelay = null;
+	}
+
 	async function sendReceipt(epoch: number): Promise<void> {
 		const receipt: KeyReceipt = signKeyReceipt(
 			{
@@ -121,7 +131,7 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 				recipientSignPub: deps.gatewaySignPub,
 				epoch,
 				at: now(),
-				nonce: randomBytes(18).toString("base64"),
+				nonce: random(WIRE_NONCE_BYTES).toString("base64"),
 				signature: "",
 			},
 			deps.gatewaySignPriv,
@@ -141,5 +151,5 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 		}
 	}
 
-	return { request, installed, sendReceipt, resendReceipts };
+	return { request, installed, sendReceipt, resendReceipts, stop };
 }

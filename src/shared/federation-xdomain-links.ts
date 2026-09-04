@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Schemas
@@ -84,7 +85,7 @@ export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevoca
 export function xDomainLinkEdgeSigningBytes(edge: XDomainLinkEdge, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
-			"XDOMAIN_RELAY_GATE_V1",
+			SIGNING_TAGS.xdomainRelayGate,
 			ownerSignPubB64,
 			edge.srcDomainId,
 			edge.dstDomainId,
@@ -123,9 +124,14 @@ export function verifyXDomainLinkEdge(s: SignedXDomainLinkEdge, expectedOwnerSig
  * Do NOT sign raw JSON. */
 export function xDomainLinkRevocationSigningBytes(rev: XDomainLinkRevocation, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
-		["XDOMAIN_REVOKE_V1", ownerSignPubB64, rev.srcDomainId, rev.dstDomainId, String(rev.revokedAt), rev.nonce].join(
-			"\n",
-		),
+		[
+			SIGNING_TAGS.xdomainRevoke,
+			ownerSignPubB64,
+			rev.srcDomainId,
+			rev.dstDomainId,
+			String(rev.revokedAt),
+			rev.nonce,
+		].join("\n"),
 		"utf8",
 	);
 }

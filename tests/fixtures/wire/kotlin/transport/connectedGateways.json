@@ -1,0 +1,22 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleClient.connectedGatewaysRequest",
+	"case": "connectedGateways",
+	"clock": 1757000000000,
+	"inputs": {},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"gateways\":{}}"
+	},
+	"expect": {
+		"gateways": [
+			{
+				"gatewayId": "laptop"
+			}
+		]
+	}
+}

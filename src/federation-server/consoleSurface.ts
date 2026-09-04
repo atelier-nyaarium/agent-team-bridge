@@ -1,11 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { BEARER_PREFIX, CONSOLE_TOKEN_HEADER, ROUTER_PATHS } from "../shared/wire-vocabulary.js";
 
 function constantTimeBearerEquals(provided: string | null, expected: string): boolean {
 	if (!provided) return false;
 	const left = Buffer.from(provided);
-	const right = Buffer.from(`Bearer ${expected}`);
+	const right = Buffer.from(BEARER_PREFIX + expected);
 	return left.length === right.length && timingSafeEqual(left, right);
 }
 
@@ -70,7 +71,7 @@ export interface RouterGatewaysAnswer {
 	gateways: { gatewayId: string; signFp: string | null }[];
 }
 
-export const APP_TOKEN_HEADER = "x-console-bridge-token";
+export const APP_TOKEN_HEADER = CONSOLE_TOKEN_HEADER;
 
 export class ConsoleSurface {
 	private readonly authToken: string;
@@ -325,7 +326,7 @@ export class ConsoleSurface {
 			return new Response(`Unauthorized`, { status: 401 });
 		}
 
-		if (url.pathname === "/ingest") return this.handleIngest(req);
+		if (url.pathname === ROUTER_PATHS.ingest) return this.handleIngest(req);
 
 		let body: Record<string, unknown>;
 		try {

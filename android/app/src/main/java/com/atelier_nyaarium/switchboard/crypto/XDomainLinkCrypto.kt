@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.proto.XDomainLink
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
 import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
+import com.atelier_nyaarium.switchboard.proto.Protocol
 
 /**
  * Owner-signed cross-Domain link edge / revocation, the byte-exact Kotlin counterpart
@@ -22,7 +23,7 @@ import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
 object XDomainLinkCrypto {
 	fun edgeSigningBytes(edge: XDomainLinkEdge, ownerSignPub: String): ByteArray =
 		listOf(
-			"XDOMAIN_RELAY_GATE_V1",
+			Protocol.Wire.SIGNING_TAG_XDOMAIN_RELAY_GATE,
 			ownerSignPub,
 			edge.srcDomainId,
 			edge.dstDomainId,
@@ -32,7 +33,7 @@ object XDomainLinkCrypto {
 
 	fun revocationSigningBytes(rev: XDomainLinkRevocation, ownerSignPub: String): ByteArray =
 		listOf(
-			"XDOMAIN_REVOKE_V1",
+			Protocol.Wire.SIGNING_TAG_XDOMAIN_REVOKE,
 			ownerSignPub,
 			rev.srcDomainId,
 			rev.dstDomainId,
@@ -71,7 +72,7 @@ object XDomainLinkCrypto {
 	 */
 	fun linkSigningBytes(link: XDomainLink): ByteArray =
 		listOf(
-			"XDOMAIN_LINK_V1",
+			Protocol.Wire.SIGNING_TAG_XDOMAIN_LINK,
 			link.myOwnerSignPub,
 			link.peerOwnerSignPub,
 			link.peerDomainId,
@@ -102,7 +103,7 @@ object XDomainLinkCrypto {
 	 */
 	fun untrustSigningBytes(u: XDomainUntrust): ByteArray =
 		listOf(
-			"XDOMAIN_UNTRUST_V1",
+			Protocol.Wire.SIGNING_TAG_XDOMAIN_UNTRUST,
 			u.myOwnerSignPub,
 			u.peerOwnerSignPub,
 			u.revokedAt.toString(),

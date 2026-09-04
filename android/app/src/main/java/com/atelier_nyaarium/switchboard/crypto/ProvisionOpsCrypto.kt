@@ -10,6 +10,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
+import com.atelier_nyaarium.switchboard.proto.Protocol
 
 /**
  * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
@@ -25,7 +26,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 object ProvisionOpsCrypto {
 	fun provisionSigningBytes(p: ProvisionTenant, adminSignPub: String): ByteArray =
 		listOf(
-			"PROVISION_TENANT_V1",
+			Protocol.Wire.SIGNING_TAG_PROVISION_TENANT,
 			Crypto.fingerprint(adminSignPub),
 			p.domainId,
 			p.displayName,
@@ -46,7 +47,7 @@ object ProvisionOpsCrypto {
 
 	fun removeSigningBytes(r: RemoveTenant, adminSignPub: String): ByteArray =
 		listOf(
-			"REMOVE_TENANT_V1",
+			Protocol.Wire.SIGNING_TAG_REMOVE_TENANT,
 			Crypto.fingerprint(adminSignPub),
 			r.domainId,
 			r.issuedAt.toString(),
@@ -72,7 +73,7 @@ object ProvisionOpsCrypto {
 	 */
 	fun firstRootSigningBytes(f: FirstRoot): ByteArray =
 		listOf(
-			"FIRST_ROOT_V1",
+			Protocol.Wire.SIGNING_TAG_FIRST_ROOT,
 			f.domainId,
 			f.ownerSignPub,
 			f.ownerBoxPub,
@@ -88,7 +89,7 @@ object ProvisionOpsCrypto {
 
 	fun setDisplayNameSigningBytes(r: SetDisplayName, ownerSignPub: String): ByteArray =
 		listOf(
-			"SET_DISPLAY_NAME_V1",
+			Protocol.Wire.SIGNING_TAG_SET_DISPLAY_NAME,
 			Crypto.fingerprint(ownerSignPub),
 			r.domainId,
 			r.displayName,
@@ -115,7 +116,7 @@ object ProvisionOpsCrypto {
 	 */
 	fun deleteDomainSigningBytes(d: DeleteDomain, ownerSignPub: String): ByteArray =
 		listOf(
-			"DELETE_DOMAIN_V1",
+			Protocol.Wire.SIGNING_TAG_DELETE_DOMAIN,
 			Crypto.fingerprint(ownerSignPub),
 			d.domainId,
 			d.issuedAt.toString(),
@@ -141,7 +142,7 @@ object ProvisionOpsCrypto {
 	 * it reproduces byte-for-byte against rosterRequestSigningBytes in federation-lifecycle.ts.
 	 */
 	fun rosterRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
-		listOf("ROSTER_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+		listOf(Protocol.Wire.SIGNING_TAG_ROSTER, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signRosterRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(rosterRequestSigningBytes(signerSignPub, proofAt, nonce), signPriv)
@@ -153,7 +154,7 @@ object ProvisionOpsCrypto {
 	 * over. Reproduces byte-for-byte against trustPendingSigningBytes in federation-lifecycle.ts.
 	 */
 	fun trustPendingSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
-		listOf("TRUST_PENDING_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+		listOf(Protocol.Wire.SIGNING_TAG_TRUST_PENDING, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signTrustPendingRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(trustPendingSigningBytes(signerSignPub, proofAt, nonce), signPriv)
@@ -166,7 +167,7 @@ object ProvisionOpsCrypto {
 	 * transportRequestSigningBytes in federation-lifecycle.ts.
 	 */
 	fun transportRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
-		listOf("TRANSPORT_REQUEST_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+		listOf(Protocol.Wire.SIGNING_TAG_TRANSPORT_REQUEST, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signTransportRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(transportRequestSigningBytes(signerSignPub, proofAt, nonce), signPriv)

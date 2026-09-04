@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Domain admission + allowlist (the trust model)
@@ -94,13 +95,15 @@ export type DomainSnapshot = z.infer<typeof DomainSnapshotSchema>;
 
 export function admissionSigningBytes(a: Admission): Buffer {
 	return Buffer.from(
-		["ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.gatewayId ?? "", String(a.issuedAt), a.nonce].join("\n"),
+		[SIGNING_TAGS.admission, a.kind, a.signPub, a.boxPub, a.gatewayId ?? "", String(a.issuedAt), a.nonce].join(
+			"\n",
+		),
 		"utf8",
 	);
 }
 
 export function revocationSigningBytes(r: Revocation): Buffer {
-	return Buffer.from(["REVOCATION_V1", r.signPub, String(r.issuedAt), r.nonce].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.revocation, r.signPub, String(r.issuedAt), r.nonce].join("\n"), "utf8");
 }
 
 /** Owner-sign an admission (the owner device holds the signing key). */
@@ -208,7 +211,7 @@ export function resolveAdmittedConsole(
 export const REGISTER_MAX_SKEW_MS = 120_000;
 
 export function registerSigningBytes(gatewayId: string, proofAt: number, nonce: string): Buffer {
-	return Buffer.from(["REGISTER_V1", gatewayId, String(proofAt), nonce].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.register, gatewayId, String(proofAt), nonce].join("\n"), "utf8");
 }
 
 /** Sign a fresh registration proof with the Gateway's raw Ed25519 private key. */

@@ -22,6 +22,7 @@ import {
 	verifyTrustPendingRequest,
 } from "../shared/federation-proofs.js";
 import { FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
+import { BEARER_PREFIX, ROUTER_PATHS } from "../shared/wire-vocabulary.js";
 import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type ConsoleSockets, createConsoleSockets } from "./console/consoleSockets.js";
@@ -55,6 +56,16 @@ export interface RouterServerParams {
 	tls?: RouterTls;
 	/** Reach requires app token. */
 	reach?: RouterReachAnswer;
+	now?: () => number;
+}
+
+/** Body cap per path; zero means the body is never read. */
+function bodyCapFor(pathname: string): number {
+	if (pathname === ROUTER_PATHS.deviceApproval || pathname.startsWith(`${ROUTER_PATHS.deviceApproval}/`))
+		return 8 * 1024;
+	if (pathname === ROUTER_PATHS.ingest) return 512 * 1024;
+	if (pathname === ROUTER_PATHS.console) return 67_108_864;
+	return 0;
 }
 
 export class RouterServer {
@@ -82,22 +93,30 @@ export class RouterServer {
 	private readonly consoleSockets: ConsoleSockets;
 	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
 	private readonly leases: ReturnType<typeof createLeaseService>;
+	private readonly now: () => number;
 
 	public constructor(private readonly params: RouterServerParams) {
+		const now = params.now ?? Date.now;
+		this.now = now;
 		this.tls = params.tls ?? loadRouterTls(params.dataDir);
 		this.wsServer.on("error", () => {});
-		this.deviceApproval = new DeviceApprovalCoordinator();
-		this.enrollHandshake = new EnrollHandshakeCoordinator();
-		this.trustRendezvous = new TrustRendezvousCoordinator();
-		this.tenantAdmin = new TenantAdmin(params.store, () => {
-			const id = params.store.adminDomainId();
-			return id ? (params.store.loadDomain(id)?.ownerSignPub ?? null) : null;
-		});
+		this.deviceApproval = new DeviceApprovalCoordinator(undefined, undefined, undefined, now);
+		this.enrollHandshake = new EnrollHandshakeCoordinator(undefined, undefined, undefined, now);
+		this.trustRendezvous = new TrustRendezvousCoordinator(undefined, undefined, undefined, undefined, now);
+		this.tenantAdmin = new TenantAdmin(
+			params.store,
+			() => {
+				const id = params.store.adminDomainId();
+				return id ? (params.store.loadDomain(id)?.ownerSignPub ?? null) : null;
+			},
+			now,
+		);
 		const limit = Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024);
 		this.ownerRegistry = new OwnerStoreRegistry({
 			dataDir: params.dataDir,
 			ownerOf: (domainId) => params.store.loadDomain(domainId)?.ownerSignPub ?? null,
 			quotaFor: () => new DomainQuota({ dir: params.dataDir, limitBytes: limit }),
+			now,
 		});
 		this.leases = createLeaseService({
 			registry: this.ownerRegistry,
@@ -110,6 +129,7 @@ export class RouterServer {
 		this.blobCache = new RouterBlobCache({
 			dataDir: params.dataDir,
 			quotaBytesPerDomain: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
+			now,
 		});
 		this.referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir, quotaBytesPerDomain: limit });
 		this.ownerOps = new OwnerOpIntake({
@@ -117,11 +137,13 @@ export class RouterServer {
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			push: (domainId, address, rows) => this.bridge.pushInboxRows(domainId, address, rows),
 			leases: this.leases,
+			now,
 		});
 		this.bridge = new GatewayBridge({
 			port: params.port,
 			authToken: params.federationToken,
 			inbox: this.inbox,
+			now,
 			adminDomainId: () => params.store.adminDomainId(),
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			getDomainMeta: (domainId) => {
@@ -261,7 +283,11 @@ export class RouterServer {
 			}
 		}, 60_000);
 		this.sweepTimer.unref?.();
-		this.approval = new PublicApproval({ port: params.port, onApproval: (op) => this.deviceApproval.handle(op) });
+		this.approval = new PublicApproval({
+			port: params.port,
+			onApproval: (op) => this.deviceApproval.handle(op),
+			now,
+		});
 	}
 
 	public async start(): Promise<void> {
@@ -275,8 +301,8 @@ export class RouterServer {
 		});
 		this.server.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
-			const console = url.pathname === "/console";
-			if (!console && url.pathname !== "/" && url.pathname !== "/gateway") {
+			const console = url.pathname === ROUTER_PATHS.console;
+			if (!console && url.pathname !== ROUTER_PATHS.root && url.pathname !== ROUTER_PATHS.gateway) {
 				socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
 				socket.destroy();
 				return;
@@ -372,16 +398,56 @@ export class RouterServer {
 	private async route(request: IncomingMessage): Promise<Response> {
 		const answer = await this.resolve(request);
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
-		if (url.pathname !== "/health") {
+		if (url.pathname !== ROUTER_PATHS.health) {
 			const peer = request.socket.remoteAddress ?? "?";
 			console.log(`[federation-router] ${request.method} ${url.pathname} from ${peer} -> ${answer.status}`);
 		}
 		return answer;
 	}
 
+	/** The HTTP surface over a Fetch request: what `serve()` answers, minus the socket. */
+	public async handle(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		const early = this.preflight(request.method, url, (name) => request.headers.get(name));
+		if (early) return early;
+		const cap = bodyCapFor(url.pathname);
+		const bytes = cap === 0 ? Buffer.alloc(0) : Buffer.from(await request.arrayBuffer());
+		if (bytes.length > cap) return new Response("Payload Too Large", { status: 413 });
+		return this.dispatch(
+			url,
+			new Request(url, {
+				method: request.method,
+				headers: request.headers,
+				body: bytes.length ? new Uint8Array(bytes) : undefined,
+			}),
+		);
+	}
+
 	private async resolve(request: IncomingMessage): Promise<Response> {
 		const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
-		if (url.pathname === "/health" && request.method === "GET") {
+		const early = this.preflight(request.method ?? "GET", url, (name) => {
+			const value = request.headers[name.toLowerCase()];
+			return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+		});
+		if (early) return early;
+		const body = await readBody(request, bodyCapFor(url.pathname));
+		if (body.outcome === "too-large") return new Response("Payload Too Large", { status: 413 });
+		if (body.outcome === "aborted") return new Response(null, { status: 499 });
+		const headers = new Headers();
+		for (const [key, value] of Object.entries(request.headers)) {
+			if (typeof value === "string") headers.set(key, value);
+		}
+		const webRequest = new Request(url, {
+			method: request.method,
+			headers,
+			body: body.bytes.length ? new Uint8Array(body.bytes) : undefined,
+		});
+		return this.dispatch(url, webRequest);
+	}
+
+	/** Health and the token gate, answered before any body is read. */
+	private preflight(method: string, url: URL, header: (name: string) => string | null): Response | null {
+		if (url.pathname === ROUTER_PATHS.health && method === "GET") {
 			// Public health omits LAN reach.
 			return new Response(
 				JSON.stringify({
@@ -394,42 +460,27 @@ export class RouterServer {
 				}),
 			);
 		}
-		const maxBody =
-			url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")
-				? 8 * 1024
-				: url.pathname === "/ingest"
-					? 512 * 1024
-					: url.pathname === "/console"
-						? 67_108_864
-						: 0;
-		if (["/console", "/ingest"].includes(url.pathname) && request.method === "POST") {
-			const provided = request.headers["x-console-bridge-token"];
-			const token = Array.isArray(provided) ? provided[0] : provided;
-			const left = Buffer.from(token ?? "");
-			const right = Buffer.from(`Bearer ${this.params.consoleToken}`);
+		if (([ROUTER_PATHS.console, ROUTER_PATHS.ingest] as string[]).includes(url.pathname) && method === "POST") {
+			const left = Buffer.from(header(APP_TOKEN_HEADER) ?? "");
+			const right = Buffer.from(BEARER_PREFIX + this.params.consoleToken);
 			if (left.length !== right.length || !timingSafeEqual(left, right)) {
 				return new Response("Unauthorized", { status: 401 });
 			}
 		}
-		const body = await readBody(request, maxBody);
-		if (body.outcome === "too-large") return new Response("Payload Too Large", { status: 413 });
-		if (body.outcome === "aborted") return new Response(null, { status: 499 });
-		const headers = new Headers();
-		for (const [key, value] of Object.entries(request.headers)) {
-			if (typeof value === "string") headers.set(key, value);
-		}
-		const webRequest = new Request(url, {
-			method: request.method,
-			headers,
-			body: body.bytes.length ? new Uint8Array(body.bytes) : undefined,
-		});
-		if (url.pathname === "/device-approval" || url.pathname.startsWith("/device-approval/")) {
+		return null;
+	}
+
+	private dispatch(url: URL, webRequest: Request): Promise<Response> {
+		if (
+			url.pathname === ROUTER_PATHS.deviceApproval ||
+			url.pathname.startsWith(`${ROUTER_PATHS.deviceApproval}/`)
+		) {
 			return this.approval.handleRequest(webRequest);
 		}
-		if (["/console", "/ingest"].includes(url.pathname)) {
+		if (([ROUTER_PATHS.console, ROUTER_PATHS.ingest] as string[]).includes(url.pathname)) {
 			return this.console.handleRequest(webRequest);
 		}
-		return new Response("Not Found", { status: 404 });
+		return Promise.resolve(new Response("Not Found", { status: 404 }));
 	}
 
 	private async writeResponse(response: ServerResponse, result: Response): Promise<void> {
@@ -505,7 +556,7 @@ export class RouterServer {
 	private handleRoster(req: RosterRequest): RosterResult {
 		const opaque: RosterResult = { ok: false, error: "not a member of this network" };
 		if (!verifyRosterRequest(req)) return opaque;
-		const now = Date.now();
+		const now = this.now();
 		if (Math.abs(now - req.proofAt) > ROSTER_MAX_SKEW_MS) return opaque;
 		for (const [nonce, at] of this.rosterNonces) {
 			if (Math.abs(now - at) > ROSTER_MAX_SKEW_MS) this.rosterNonces.delete(nonce);
@@ -526,7 +577,7 @@ export class RouterServer {
 	private handleTransport(req: TransportRequest): TransportResult {
 		const opaque: TransportResult = { ok: false, error: "not a member of this network" };
 		if (!verifyTransportRequest(req)) return opaque;
-		const now = Date.now();
+		const now = this.now();
 		if (Math.abs(now - req.proofAt) > TRANSPORT_MAX_SKEW_MS) return opaque;
 		for (const [nonce, at] of this.transportNonces) {
 			if (Math.abs(now - at) > TRANSPORT_MAX_SKEW_MS) this.transportNonces.delete(nonce);
@@ -556,7 +607,7 @@ export class RouterServer {
 	private handleTrustPending(req: TrustPendingRequest): TrustPendingResult {
 		const opaque: TrustPendingResult = { ok: true, pending: [] };
 		if (!verifyTrustPendingRequest(req)) return opaque;
-		const now = Date.now();
+		const now = this.now();
 		if (Math.abs(now - req.proofAt) > TRUST_PENDING_MAX_SKEW_MS) return opaque;
 		for (const [nonce, at] of this.trustPendingNonces) {
 			if (Math.abs(now - at) > TRUST_PENDING_MAX_SKEW_MS) this.trustPendingNonces.delete(nonce);

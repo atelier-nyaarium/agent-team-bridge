@@ -55,6 +55,7 @@ describe("S10 process fence", () => {
 		const anchors = new ReadAnchors(new PlaneRegistry(), undefined);
 		const shares = new CrossDomainShareState(dir);
 		const push = createConsolePushOps({
+			dataDir: dir,
 			ownerId: () => owner,
 			localGatewayId: "gateway",
 			localAddress: (() => ({ canonical: "domain.gateway.team.session" })) as never,

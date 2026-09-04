@@ -21,6 +21,108 @@ import kotlinx.serialization.json.JsonObject
 
 object Protocol {
 	const val CONSOLE_PROTOCOL_VERSION: Int = 3
+	const val FEDERATION_PROTOCOL_FLOOR: Int = 1
+	const val FEDERATION_PROTOCOL_VERSION: Int = 2
+
+	object Wire {
+		const val ROUTER_PATH_CONSOLE: String = "/console"
+		const val ROUTER_PATH_HEALTH: String = "/health"
+		const val ROUTER_PATH_INGEST: String = "/ingest"
+		const val ROUTER_PATH_DEVICE_APPROVAL: String = "/device-approval"
+		const val ROUTER_PATH_GATEWAY: String = "/gateway"
+		const val ROUTER_PATH_ROOT: String = "/"
+		const val CONSOLE_TOKEN_HEADER: String = "x-console-bridge-token"
+		const val BEARER_PREFIX: String = "Bearer "
+		const val OWNER_OP_DELIVER: String = "deliver"
+		const val OWNER_OP_CONSUMER_REGISTER: String = "consumer_register"
+		const val OWNER_OP_INBOX_READ: String = "inbox_read"
+		const val OWNER_OP_INBOX_ADVANCE: String = "inbox_advance"
+		const val OWNER_OP_OP_RESULT: String = "op_result"
+		const val OWNER_OP_HELLO: String = "hello"
+		const val OWNER_OP_BLOB_FETCH: String = "blob_fetch"
+		const val OWNER_OP_GATEWAY_VALUE: String = "gateway_value"
+		const val OWNER_OP_PLANES_READ: String = "planes_read"
+		const val OWNER_OP_REPORT_READ: String = "report_read"
+		const val OWNER_OP_KEY_REQUEST: String = "key_request"
+		const val OWNER_OP_KEY_GRANT: String = "key_grant"
+		const val OWNER_OP_KEY_RECEIPT: String = "key_receipt"
+		const val OWNER_OP_KEY_RECEIPTS_READ: String = "key_receipts_read"
+		const val OWNER_OP_BOARD_READ: String = "board_read"
+		const val OWNER_OP_BOARD_WRITE: String = "board_write"
+		const val SIGNING_TAG_ADMISSION: String = "ADMISSION_V1"
+		const val SIGNING_TAG_REVOCATION: String = "REVOCATION_V1"
+		const val SIGNING_TAG_REGISTER: String = "REGISTER_V1"
+		const val SIGNING_TAG_DEVICE_JOIN: String = "DEVICE_JOIN_V1"
+		const val SIGNING_TAG_OWNER_OP: String = "OWNEROP_V1"
+		const val SIGNING_TAG_INBOX_ROW: String = "INBOXROW_V1"
+		const val SIGNING_TAG_KEY_ENVELOPE: String = "KEYENVELOPE_V1"
+		const val SIGNING_TAG_KEY_REQUEST: String = "KEYREQUEST_V1"
+		const val SIGNING_TAG_KEY_RECEIPT: String = "KEYRECEIPT_V1"
+		const val SIGNING_TAG_ROSTER: String = "ROSTER_V1"
+		const val SIGNING_TAG_TRUST_PENDING: String = "TRUST_PENDING_V1"
+		const val SIGNING_TAG_TRANSPORT_REQUEST: String = "TRANSPORT_REQUEST_V1"
+		const val SIGNING_TAG_PROVISION_TENANT: String = "PROVISION_TENANT_V1"
+		const val SIGNING_TAG_REMOVE_TENANT: String = "REMOVE_TENANT_V1"
+		const val SIGNING_TAG_FIRST_ROOT: String = "FIRST_ROOT_V1"
+		const val SIGNING_TAG_SET_DISPLAY_NAME: String = "SET_DISPLAY_NAME_V1"
+		const val SIGNING_TAG_DELETE_DOMAIN: String = "DELETE_DOMAIN_V1"
+		const val SIGNING_TAG_XDOMAIN_RELAY_GATE: String = "XDOMAIN_RELAY_GATE_V1"
+		const val SIGNING_TAG_XDOMAIN_REVOKE: String = "XDOMAIN_REVOKE_V1"
+		const val SIGNING_TAG_XDOMAIN_LINK: String = "XDOMAIN_LINK_V1"
+		const val SIGNING_TAG_XDOMAIN_UNTRUST: String = "XDOMAIN_UNTRUST_V1"
+		const val SIGNING_TAG_SAS_COMMIT: String = "SAS_COMMIT_V1"
+		const val SIGNING_TAG_SAS: String = "SAS_V1"
+		const val SIGNING_TAG_ENROLL_COMMIT: String = "ENROLL_COMMIT_V1"
+		const val SIGNING_TAG_ENROLL_SAS: String = "ENROLL_SAS_V1"
+		const val SIGNING_TAG_CODEX_AGENT: String = "CODEX_AGENT_V1"
+		const val SIGNING_TAG_COPILOT_AGENT: String = "COPILOT_AGENT_V1"
+		const val CONTENT_NONCE_BYTES: Int = 12
+		const val WIRE_NONCE_BYTES: Int = 18
+
+		object ConsoleOpKind {
+			const val SEND: String = "send"
+			const val RESPOND: String = "respond"
+			const val REPORT_READ: String = "report_read"
+			const val PEEK: String = "peek"
+			const val TMUX_SEND: String = "tmux_send"
+			const val CREATE_SESSION: String = "create_session"
+			const val RELOAD_PLUGINS: String = "reload_plugins"
+			const val FORGET: String = "forget"
+			const val CLOSE_SESSION: String = "close_session"
+			const val RENAME_SESSION: String = "rename_session"
+			const val WAKE: String = "wake"
+			const val LIST_DIRS: String = "list_dirs"
+			const val BLOB_STAT: String = "blob_stat"
+			const val BLOB_PUT: String = "blob_put"
+			const val BLOB_GET: String = "blob_get"
+			const val CROSS_DOMAIN_LISTEN: String = "cross_domain_listen"
+			const val CROSS_DOMAIN_REQUEST: String = "cross_domain_request"
+			const val CROSS_DOMAIN_CONFIRM: String = "cross_domain_confirm"
+			const val CROSS_DOMAIN_LISTEN_STATE: String = "cross_domain_listen_state"
+			const val CROSS_DOMAIN_CANCEL: String = "cross_domain_cancel"
+			const val CROSS_DOMAIN_SHARE: String = "cross_domain_share"
+			const val CROSS_DOMAIN_UNSHARE: String = "cross_domain_unshare"
+			const val CROSS_DOMAIN_LIST_SHARES: String = "cross_domain_list_shares"
+			const val CROSS_DOMAIN_LIST_PEERS: String = "cross_domain_list_peers"
+			const val CROSS_DOMAIN_UNLINK: String = "cross_domain_unlink"
+			const val CROSS_DOMAIN_UNTRUST: String = "cross_domain_untrust"
+		}
+
+		object SocketFrame {
+			const val WELCOME: String = "welcome"
+			const val INBOX_ROWS: String = "inbox_rows"
+			const val PLANE: String = "plane"
+			const val REFUSED: String = "refused"
+			const val PONG: String = "pong"
+		}
+
+		object KeyOpKind {
+			const val KEY_REQUEST: String = "key_request"
+			const val KEY_GRANT: String = "key_grant"
+			const val KEY_RECEIPT: String = "key_receipt"
+			const val KEY_RECEIPTS_READ: String = "key_receipts_read"
+		}
+	}
 
 	/** Address and store separator. */
 	const val ADDRESS_SEP: String = "."

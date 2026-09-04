@@ -120,6 +120,21 @@ android {
 
 }
 
+val generatingWireFixtures = gradle.startParameter.taskNames.any { it.endsWith("generateWireFixtures") }
+tasks.withType<Test>().configureEach {
+	systemProperty("wireFixturesDir", rootProject.projectDir.resolve("../tests/fixtures/wire/kotlin").absolutePath)
+	if (generatingWireFixtures) {
+		systemProperty(
+			"wireFixturesOut",
+			project.findProperty("wireFixturesOut")?.toString()
+				?: rootProject.projectDir.resolve("../tests/fixtures/wire/kotlin").absolutePath,
+		)
+		filter { includeTestsMatching("com.atelier_nyaarium.switchboard.WireFixtureGenerator") }
+		outputs.upToDateWhen { false }
+	}
+}
+tasks.register("generateWireFixtures") { dependsOn("testDebugUnitTest") }
+
 // Name the built APKs switchboard-<variant>.apk instead of the module-default
 // app-<variant>.apk, so the GitHub release assets, the sideload instructions, and the
 // in-app self-updater all share the product name.

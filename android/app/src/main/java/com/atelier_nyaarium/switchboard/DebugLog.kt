@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
@@ -129,7 +130,7 @@ object DebugLog {
 	 */
 	fun flushToIngest() {
 		if (BuildConfig.DEBUG) {
-			val url = ingestBase?.let { "${it().trimEnd('/')}/ingest" } ?: return
+			val url = ingestBase?.let { it().trimEnd('/') + Protocol.Wire.ROUTER_PATH_INGEST } ?: return
 			val appToken = ingestAppToken ?: return
 			val device = ingestDevice ?: return
 			val convId = ingestConversationId ?: return
@@ -148,7 +149,7 @@ object DebugLog {
 					okhttp3.Request.Builder()
 						.url(url)
 						.post(body.toRequestBody("application/json".toMediaType()))
-						.header("X-Console-Bridge-Token", "Bearer $appToken")
+						.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + appToken)
 						.build()
 				// Read the code to complete the round-trip; discard the body. Logged straight to logcat
 				// rather than through log(): a failing flush must not feed the ring it is draining.

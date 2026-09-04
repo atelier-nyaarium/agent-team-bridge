@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { decodeB64, seal, unseal } from "./crypto.js";
 import type { ContentEnvelope, ContentKind, KeyEnvelope } from "./schemasContentKey.js";
+import { CONTENT_NONCE_BYTES, SIGNING_TAGS } from "./wire-vocabulary.js";
 
 export {
 	keyReceiptSigningBytes,
@@ -107,7 +108,7 @@ export function contentAad({ domainId, ownerSignPub, epoch, kind }: ContentAad):
 }
 
 export function sealContent(plaintext: Buffer, key: Buffer, aad: ContentAad): ContentEnvelope {
-	return sealContentWithNonce(plaintext, key, aad, crypto.randomBytes(12));
+	return sealContentWithNonce(plaintext, key, aad, crypto.randomBytes(CONTENT_NONCE_BYTES));
 }
 
 export function sealContentWithNonce(plaintext: Buffer, key: Buffer, aad: ContentAad, nonce: Buffer): ContentEnvelope {
@@ -147,7 +148,7 @@ export function wrapContentKey(
 export function keyEnvelopePreimage(epoch: number, key: Buffer): Buffer {
 	assertContentEpoch(epoch);
 	if (key.length !== 32) throw new Error("content key must be 32 bytes");
-	return Buffer.concat([Buffer.from(`KEYENVELOPE_V1\n${epoch}\n`, "utf8"), key]);
+	return Buffer.concat([Buffer.from(`${SIGNING_TAGS.keyEnvelope}\n${epoch}\n`, "utf8"), key]);
 }
 
 export function unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: string): { epoch: number; key: Buffer } {

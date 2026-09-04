@@ -5,6 +5,7 @@ import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NOTICE_TITLE_MAX, NoticeTierWireFields } from "./notice.js";
 import { BLOB_CHUNK_BYTES } from "./router-protocol.js";
 import { isSlug } from "./session-id.js";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Federation inner protocol (gateway <-> gateway, via the Router)
@@ -256,7 +257,7 @@ export type SignedXDomainLink = z.infer<typeof SignedXDomainLinkSchema>;
 export function xDomainLinkSigningBytes(link: XDomainLink): Buffer {
 	return Buffer.from(
 		[
-			"XDOMAIN_LINK_V1",
+			SIGNING_TAGS.xdomainLink,
 			link.myOwnerSignPub,
 			link.peerOwnerSignPub,
 			link.peerDomainId,
@@ -330,7 +331,7 @@ export type SignedXDomainUntrust = z.infer<typeof SignedXDomainUntrustSchema>;
  * `xDomainLinkSigningBytes` (every field base64/decimal, no newline can sneak in). */
 export function xDomainUntrustSigningBytes(u: XDomainUntrust): Buffer {
 	return Buffer.from(
-		["XDOMAIN_UNTRUST_V1", u.myOwnerSignPub, u.peerOwnerSignPub, String(u.revokedAt), u.nonce].join("\n"),
+		[SIGNING_TAGS.xdomainUntrust, u.myOwnerSignPub, u.peerOwnerSignPub, String(u.revokedAt), u.nonce].join("\n"),
 		"utf8",
 	);
 }

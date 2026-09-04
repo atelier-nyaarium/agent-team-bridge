@@ -1,0 +1,27 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/presenceReporter",
+	"case": "delta",
+	"clock": 1757000000000,
+	"inputs": {},
+	"frame": {
+		"name": "presence_delta",
+		"params": {
+			"seq": 1,
+			"upserts": [
+				{
+					"team": "alpha",
+					"gatewayId": "laptop",
+					"domainId": "fixture-domain",
+					"status": "available",
+					"kind": "console",
+					"queue_depth": 0
+				}
+			],
+			"tombstones": ["beta"]
+		}
+	},
+	"expect": {
+		"ok": true
+	}
+}

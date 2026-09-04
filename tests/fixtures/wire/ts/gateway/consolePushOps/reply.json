@@ -1,0 +1,73 @@
+{
+	"producer": "ts",
+	"composer": "gateway/consolePushOps",
+	"case": "reply",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"contentNonce0": "tY6ObOTbCVRYL4u6",
+			"contentNonce1": "xs9ehC3AjZCI1/Zf"
+		},
+		"entry": {
+			"kind": "reply",
+			"session_id": "fixture-session",
+			"from": "agent",
+			"body": "Wire reply",
+			"files": [
+				{
+					"filename": "note.txt",
+					"mime": "text/plain",
+					"size": 4,
+					"descriptiveKey": "note",
+					"role": "attachment"
+				}
+			]
+		},
+		"opId": "owner-reply",
+		"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c"
+	},
+	"frame": {
+		"name": "inbox_append",
+		"params": {
+			"address": "owner:fixture-domain/s1H7W7bG7tz0kA+qDERSO9pCIZ3USsFnGLpqFZ13m28=",
+			"row": {
+				"envelope": {
+					"origin": {
+						"kind": "gateway",
+						"domainId": "fixture-domain",
+						"gatewayId": "laptop"
+					},
+					"opKey": {
+						"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c",
+						"opId": "owner-reply"
+					},
+					"epoch": 1,
+					"kind": "reply",
+					"contentRefs": []
+				},
+				"producerSig": "qpQUzTYQn3maPv533GurnRSxrD7Tc7siUvZC6WmxfjhEPlGi+7344HTu1HHhg80QZPhRjja9TfifAniVlHkPCA==",
+				"body": {
+					"v": 1,
+					"epoch": 1,
+					"nonce": "xs9ehC3AjZCI1/Zf",
+					"ciphertext": "r/Wixe1VqwifWit7lq79xYBxhC3TcYKrx9VT6KBktiwRaBn0Lyg7chcGpAcLXvtYpBhj2DfE704GJZ3umvyXSH1Og/E9Ffe3+4RacgEXdiiz2BqtYuzJ9JPndOuYKE76f43GggrhZvOQ+FL/2dyOMd8iVJ6Q005LL2oatiNq9cm/VeMlp+9gx2hhBZ/5fp2adW9ZLyOsP5+3HUPFR+RCACk/bvYebo9recARyniiiq4JRZxS2MR1fArX+yyDdJYeNfZDq39wwYsfcZqVljGqJ7WY0KbiWaiDgGFt5thxgIQHjl4JXiVOIg=="
+				}
+			},
+			"opKey": {
+				"conversationId": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c",
+				"opId": "owner-reply",
+				"hash": "853978d2476665ae828375639a1aa9d62d6248bdf52be98059e9d6b23342aaa6"
+			}
+		}
+	},
+	"phone": {
+		"decodeAs": "InboxRow",
+		"open": {
+			"as": "MailboxEntry",
+			"aadKind": "inbox.body\nd6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c\nowner-reply"
+		}
+	},
+	"expect": {
+		"outcome": "accepted"
+	}
+}

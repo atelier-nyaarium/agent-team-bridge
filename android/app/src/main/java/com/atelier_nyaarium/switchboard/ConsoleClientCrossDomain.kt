@@ -13,6 +13,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.util.UUID
 
 ////////////////////////////////
@@ -26,7 +27,7 @@ import java.util.UUID
 /** RECEIVER: open a listening window. Returns the short token to read to the friend plus
  * this Gateway's keys (for the SAS) and the window's expiry. */
 suspend fun ConsoleClient.crossDomainListen(): CrossDomainListenResult =
-	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListen), "cross_domain_listen")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListen), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LISTEN)
 
 /** REQUESTER: pair against the friend's listening token. The Gateway runs the full
  * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
@@ -46,7 +47,7 @@ suspend fun ConsoleClient.crossDomainRequest(
 				requesterDomainId = requesterDomainId,
 				requesterGatewayId = requesterGatewayId,
 		), opId),
-		"cross_domain_request",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_REQUEST,
 	)
 
 /** EITHER ROLE: confirm the SAS match. Each owner confirms INDEPENDENTLY, submitting only its
@@ -59,7 +60,7 @@ suspend fun ConsoleClient.crossDomainConfirm(
 ): CrossDomainConfirmResult =
 	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainConfirm(pin = pin, mySignedLink = mySignedLink), opId),
-		"cross_domain_confirm",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_CONFIRM,
 	)
 
 /** RECEIVER: poll the listening window's pairing state. Before a pairing arrives this reports
@@ -68,7 +69,7 @@ suspend fun ConsoleClient.crossDomainConfirm(
 suspend fun ConsoleClient.crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
 	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)),
-		"cross_domain_listen_state",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LISTEN_STATE,
 	)
 
 /** EITHER ROLE: cancel a listening window (receiver token) and/or a pending pairing (pin)
@@ -76,7 +77,7 @@ suspend fun ConsoleClient.crossDomainListenState(listeningToken: String): CrossD
 suspend fun ConsoleClient.crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
 	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)),
-		"cross_domain_cancel",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_CANCEL,
 	)
 
 /** Mark a local session shared to an audience (a linked friend Domain, or everyone trusted). */
@@ -87,7 +88,7 @@ suspend fun ConsoleClient.crossDomainShare(
 ): CrossDomainShareResult =
 	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
-		"cross_domain_share",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE,
 	)
 
 /** Withdraw a local session's share from an audience. */
@@ -98,19 +99,19 @@ suspend fun ConsoleClient.crossDomainUnshare(
 ): CrossDomainUnshareResult =
 	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
-		"cross_domain_unshare",
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE,
 	)
 
 /** This owner's current shares, so the UI can render the per-session checkmarks. */
 suspend fun ConsoleClient.crossDomainListShares(): CrossDomainListSharesResult =
-	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListShares), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LIST_SHARES)
 
  /**
  * peer is visible (and its detail reachable) before any of its sessions surface in the presence plane. A
  * fresh read each call (never cached). */
 suspend fun ConsoleClient.crossDomainListPeers(): CrossDomainListPeersResult =
-	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListPeers), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LIST_PEERS)
 
 /** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
 suspend fun ConsoleClient.crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
-	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
+	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNTRUST)

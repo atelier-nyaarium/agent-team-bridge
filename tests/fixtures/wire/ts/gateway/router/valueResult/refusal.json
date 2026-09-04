@@ -1,0 +1,26 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/valueResult",
+	"case": "refusal",
+	"clock": 1757000000000,
+	"inputs": {
+		"opId": "refusal-op",
+		"reason": "denied"
+	},
+	"frame": {
+		"name": "value_result",
+		"params": {
+			"opId": "refusal-op",
+			"conversationId": "fixture-console",
+			"result": {
+				"kind": "refusal",
+				"reason": "denied"
+			},
+			"incarnation": 1
+		}
+	},
+	"expect": {
+		"settled": false,
+		"reason": "no_waiter"
+	}
+}

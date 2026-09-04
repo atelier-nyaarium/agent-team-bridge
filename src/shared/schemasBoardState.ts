@@ -112,3 +112,5 @@ export type BoardStoredEntry = z.infer<typeof BoardStoredEntrySchema>;
 export type BoardActorState = z.infer<typeof BoardActorSchema>;
 export type BoardOp = z.infer<typeof BoardOpSchema>;
 export type BoardWrite = z.infer<typeof BoardWriteSchema>;
+export type BoardWriteResult = z.infer<typeof BoardWriteResultSchema>;
+export type BoardReadResult = z.infer<typeof BoardReadResultSchema>;

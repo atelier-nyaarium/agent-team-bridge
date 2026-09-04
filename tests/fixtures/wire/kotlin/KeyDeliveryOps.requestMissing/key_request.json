@@ -1,0 +1,35 @@
+{
+	"producer": "kotlin",
+	"composer": "KeyDeliveryOps.requestMissing",
+	"case": "key_request",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "key_request",
+			"request": {
+				"v": 1,
+				"domainId": "fixture-domain",
+				"requesterSignPub": "bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=",
+				"epochs": [
+					1
+				],
+				"at": 1757000000000,
+				"nonce": "hhJRn4gZwgsQhCXTATb3Nl8W",
+				"signature": "gN1wiGOebRur8eSM70LyrRwpCWDKETkC5Gt+z6219YccRDnznLWW0F5yWBaQHdvtitpVRVbTDrXK+brAbirSBg=="
+			}
+		},
+		"opId": "key_request-op",
+		"nonce": "Hqsy2A77cNQK6w7lNvZaHhr7"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"key_request-op\",\"at\":1757000000000,\"nonce\":\"Hqsy2A77cNQK6w7lNvZaHhr7\",\"op\":{\"kind\":\"key_request\",\"request\":{\"v\":1,\"domainId\":\"fixture-domain\",\"requesterSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"epochs\":[1],\"at\":1757000000000,\"nonce\":\"hhJRn4gZwgsQhCXTATb3Nl8W\",\"signature\":\"gN1wiGOebRur8eSM70LyrRwpCWDKETkC5Gt+z6219YccRDnznLWW0F5yWBaQHdvtitpVRVbTDrXK+brAbirSBg==\"}},\"signature\":\"JaVEtnbBCz4QKLtBw1QmjpZDHJJNBLR/BRk9uWJ/BkdW44MUA4KLyI+AFawa7KiRk+tnrqBmURS7qVVdudcCDg==\"}}"
+	},
+	"expect": {
+		"outcome": "accepted"
+	}
+}

@@ -1,0 +1,18 @@
+{
+	"producer": "kotlin",
+	"composer": "ConsoleClient.reachRequest",
+	"case": "reach",
+	"clock": 1757000000000,
+	"inputs": {},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"reach\":{\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\"}}"
+	},
+	"expect": {
+		"domainId": "fixture-domain"
+	}
+}

@@ -1,0 +1,25 @@
+{
+	"producer": "kotlin",
+	"composer": "PollDrain.consumerRegister",
+	"case": "consumer_register",
+	"clock": 1757000000000,
+	"inputs": {
+		"op": {
+			"kind": "consumer_register",
+			"incarnation": 1
+		},
+		"opId": "consumer_register-op",
+		"nonce": "oR7JRUKhGLXjUqhOgqtfFQvY"
+	},
+	"request": {
+		"method": "POST",
+		"path": "/console",
+		"headers": {
+			"x-console-bridge-token": "Bearer fixture-console-token"
+		},
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"consumer_register-op\",\"at\":1757000000000,\"nonce\":\"oR7JRUKhGLXjUqhOgqtfFQvY\",\"op\":{\"kind\":\"consumer_register\",\"incarnation\":1},\"signature\":\"02+2KsuUusEDqbkMt+gxwoId1ipRIH7nXJW7YgBTEcMRmCKc164mRfPHWfl3ToDTnkFrrptmkLkSsWIn+vwSDA==\"}}"
+	},
+	"expect": {
+		"cursor": 0
+	}
+}

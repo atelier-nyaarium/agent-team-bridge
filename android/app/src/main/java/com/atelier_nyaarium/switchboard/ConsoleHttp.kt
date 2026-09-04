@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.CertificateException
@@ -143,7 +144,7 @@ internal object ConsoleHttp {
 	): R {
 		val req = Request.Builder()
 			.url(url)
-			.header("X-Console-Bridge-Token", "Bearer $appToken")
+			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + appToken)
 			.post(body)
 			.build()
 		DebugLog.log(tag, "POST $url $describe")

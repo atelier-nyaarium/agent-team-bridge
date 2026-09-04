@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { SIGNING_TAGS } from "./wire-vocabulary.js";
 
 ////////////////////////////////
 //  Cross-Domain pairing SAS + commitment (commit-reveal SAS-AKE)
@@ -43,7 +44,7 @@ export interface CrossDomainParty {
 export function crossDomainCommitmentPreimage(party: CrossDomainParty, salt: string): Buffer {
 	return Buffer.from(
 		[
-			"SAS_COMMIT_V1",
+			SIGNING_TAGS.sasCommit,
 			party.ownerSignPub,
 			party.gatewaySignPub,
 			party.gatewayBoxPub,
@@ -103,7 +104,7 @@ export function crossDomainSasPreimage(a: CrossDomainParty, b: CrossDomainParty,
 		b.domainId,
 		b.gatewayId,
 	].sort();
-	return Buffer.from(["SAS_V1", ...fields, pin].join("\n"), "utf8");
+	return Buffer.from([SIGNING_TAGS.sas, ...fields, pin].join("\n"), "utf8");
 }
 
 /**
@@ -172,7 +173,7 @@ export type EnrollRole = "ADMIN" | "ENROLLEE";
  * on a mismatch. */
 export function enrollCommitmentPreimage(party: EnrollParty, role: EnrollRole, salt: string): Buffer {
 	return Buffer.from(
-		["ENROLL_COMMIT_V1", role, party.ownerSignPub, party.ownerBoxPub, party.domainId, salt].join("\n"),
+		[SIGNING_TAGS.enrollCommit, role, party.ownerSignPub, party.ownerBoxPub, party.domainId, salt].join("\n"),
 		"utf8",
 	);
 }
@@ -209,7 +210,7 @@ export function verifyEnrollCommitment(
 export function enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin: string): Buffer {
 	return Buffer.from(
 		[
-			"ENROLL_SAS_V1",
+			SIGNING_TAGS.enrollSas,
 			"ADMIN",
 			admin.ownerSignPub,
 			admin.ownerBoxPub,

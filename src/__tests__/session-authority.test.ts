@@ -249,13 +249,14 @@ describe("confirmed managed callers", () => {
 describe("no call site reaches around the authority", () => {
 	// session-store owns the stored field, sessionAuthority owns every rule derived from it,
 	// wsTypes declares WsData, websocket performs the single write that stamps a proven credential
-	// onto a socket, and the MCP bridge is the client end that SENDS the header rather than judging it.
+	// onto a socket; the MCP bridge and the fake session only SEND the header.
 	const ALLOWED = new Set([
 		"shared/session-store.ts",
 		"gateway/sessionAuthority.ts",
 		"gateway/wsTypes.ts",
 		"gateway/websocket.ts",
 		"mcp/bridge/helpers.ts",
+		"testing/fakeSession.ts",
 	]);
 
 	function sourceFiles(dir: string, acc: string[] = []): string[] {
