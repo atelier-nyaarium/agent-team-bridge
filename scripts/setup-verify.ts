@@ -32,9 +32,15 @@ export async function verify(): Promise<void> {
 	} else {
 		const host = (await envGet("FEDERATION_ROUTER_HOST"))?.trim();
 		const port = Number(await envGet("FEDERATION_ROUTER_PORT")) || ROUTER_PORT;
-		const persisted = (await envGet("FEDERATION_ROUTER_CERT_FP"))?.trim().toLowerCase();
+		// A Gateway-only host keeps the pin in the Gateway's transport, which its health reports.
+		const gatewayPin = jparse<{ routerCertFp?: string | null }>(
+			(await $`curl -s --max-time 5 ${GATEWAY_HEALTH}`.quiet().nothrow().text()).trim(),
+		)?.routerCertFp;
+		const persisted =
+			(await envGet("FEDERATION_ROUTER_CERT_FP"))?.trim().toLowerCase() || gatewayPin?.trim().toLowerCase();
 		if (!host) throw new Error("FEDERATION_ROUTER_HOST missing from .env");
-		if (!persisted) throw new Error("FEDERATION_ROUTER_CERT_FP missing from .env");
+		if (!persisted)
+			throw new Error("no Router pin: FEDERATION_ROUTER_CERT_FP is not in .env and the Gateway reported none");
 		const routerUrl = `https://${host}:${port}`;
 		router = await pinnedRouterHealth(routerUrl, persisted);
 		if (!router) throw new Error(`the Router at ${routerUrl} did not answer pinned /health`);
@@ -86,6 +92,7 @@ export async function verify(): Promise<void> {
 		incarnation?: number | null;
 		protocolVersion?: number;
 		opLedgerProtocol?: number;
+		routerCertFp?: string | null;
 		router_connected?: boolean;
 	}>(gwText.trim());
 	let registered: Array<{ gatewayId: string; incarnation?: number; protocolVersion?: number }> = [];

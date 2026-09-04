@@ -996,6 +996,7 @@ export async function startGateway(): Promise<void> {
 		const f = fed();
 		return createRoutes({
 			carryOver: routesCarryOver,
+			routerCertFp: routerTransport?.routerCertFp,
 			registry,
 			conversationRegistry,
 			store,

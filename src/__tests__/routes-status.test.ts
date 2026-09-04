@@ -170,6 +170,7 @@ describe("routes", () => {
 				incarnation: null,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
 				opLedgerProtocol: null,
+				routerCertFp: null,
 				teams: 1,
 				pending_jobs: 1,
 				router_connected: false,

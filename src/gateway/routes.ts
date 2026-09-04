@@ -93,6 +93,8 @@ export interface RoutesDeps {
 	config: GatewayConfig;
 	producerSignPriv?: string;
 	routerClient?: import("./router/routerClient.js").RouterClient | null;
+	/** The Router leaf fingerprint this Gateway pins; health reports it for the verify gate. */
+	routerCertFp?: string;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
@@ -208,6 +210,7 @@ export function createRoutes({
 	config,
 	producerSignPriv,
 	routerClient,
+	routerCertFp,
 	sealer,
 	blobStore,
 	blobUploader,
@@ -1331,6 +1334,7 @@ export function createRoutes({
 			incarnation: routerClient?.incarnation() ?? null,
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
 			opLedgerProtocol: routerClient?.acceptedOpLedgerProtocol() ?? null,
+			routerCertFp: routerCertFp ?? null,
 			teams: registry.size,
 			pending_jobs: store.size,
 			router_connected: routerClient?.isConnected() ?? false,

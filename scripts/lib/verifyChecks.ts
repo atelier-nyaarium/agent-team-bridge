@@ -20,6 +20,13 @@ export interface VerifyGatewayReport {
 	incarnation?: number | null;
 	protocolVersion?: number;
 	opLedgerProtocol?: number;
+	routerCertFp?: string | null;
+}
+
+/** The pin: `.env` on the Router host, the Gateway's own transport elsewhere. */
+export function persistedPin(context: Pick<VerifyCheckContext, "env" | "gateway">): string | null {
+	const pin = (context.env.FEDERATION_ROUTER_CERT_FP ?? context.gateway.routerCertFp ?? "").trim().toLowerCase();
+	return pin || null;
 }
 
 export interface VerifyRegisteredGateway {
@@ -94,9 +101,9 @@ export function createVerifyChecks(context: VerifyCheckContext): VerifyCheck[] {
 		{
 			name: "router-pin",
 			run: result(() => {
-				const persisted = context.env.FEDERATION_ROUTER_CERT_FP;
-				if (!persisted) throw new Error("FEDERATION_ROUTER_CERT_FP is missing");
-				if (router.certFingerprint !== persisted.toLowerCase())
+				const persisted = persistedPin(context);
+				if (!persisted) throw new Error("no Router pin in .env or in the Gateway's transport");
+				if (router.certFingerprint !== persisted)
 					throw new Error("Router /health fingerprint differs from .env");
 			}),
 		},
@@ -153,8 +160,8 @@ export function createVerifyChecks(context: VerifyCheckContext): VerifyCheck[] {
 			run: async () => {
 				try {
 					if (!context.routerUrl.startsWith("wss://")) throw new Error("refusing non-TLS Router URL");
-					const persisted = context.env.FEDERATION_ROUTER_CERT_FP?.trim().toLowerCase();
-					if (!persisted) throw new Error("FEDERATION_ROUTER_CERT_FP is missing");
+					const persisted = persistedPin(context);
+					if (!persisted) throw new Error("no Router pin in .env or in the Gateway's transport");
 					await context.dial(`${context.routerUrl}/console`, persisted);
 					return { ok: true, detail: "" };
 				} catch (error) {

@@ -77,7 +77,16 @@ describe("setup verify checks", () => {
 		const context = checks(currentGateway, currentCoverage, async () => {}, {});
 		const consoleCheck = context.find((check) => check.name === "console-ws");
 		const answers = await consoleCheck?.run();
-		expect(answers).toEqual({ ok: false, detail: "FEDERATION_ROUTER_CERT_FP is missing" });
+		expect(answers).toEqual({ ok: false, detail: "no Router pin in .env or in the Gateway's transport" });
+	});
+
+	it("takes the pin from the Gateway's own transport on a Gateway-only host", async () => {
+		const dial = vi.fn(async () => {});
+		const answers = await Promise.all(
+			checks({ ...currentGateway, routerCertFp: "FP" }, currentCoverage, dial, {}).map((check) => check.run()),
+		);
+		expect(dial).toHaveBeenCalledWith("wss://router:20001/console", "fp");
+		expect(answers.every((answer) => answer.ok)).toBe(true);
 	});
 
 	it("keeps a Gateway-only setup verify branch", async () => {
