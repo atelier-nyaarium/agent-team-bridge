@@ -59,7 +59,7 @@ Fan Out ► Join Style
 
 ## Recovery
 
-Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns every thread with its full history, so recover or re-run the collection.
+Codex agents belong to the whole Claude Code session. If a Workflow caller dies, \`codexListAgents\` returns a bounded summary; pass \`agentId\` to inspect one agent's full history.
 `.trim();
 
 export const COPILOT_AGENT_INSTRUCTIONS = `

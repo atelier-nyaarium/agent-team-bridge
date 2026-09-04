@@ -96,9 +96,28 @@ export const CodexListAgentSchema = z
 		for (const message of codexAgentHistoryIssues(value)) ctx.addIssue({ code: "custom", message });
 	});
 
+export const CodexListSummaryAgentSchema = z
+	.object({
+		agentId: CodexAgentIdSchema,
+		model: z.string().min(1).max(128).optional(),
+		cwd: z.string().min(1).max(4096),
+		agentState: CodexAgentStateSchema,
+		turnCount: z.number().int().nonnegative(),
+		lastActiveAt: z.number().int().nonnegative(),
+		latestPromptFirstLine: z.string().max(256).optional(),
+	})
+	.strict();
+
+export const CodexListDetailSchema = z.enum(["summary", "full"]);
+
 export const CodexListAgentsResultSchema = z
 	.object({
-		agents: z.array(CodexListAgentSchema),
+		detail: CodexListDetailSchema.default("full"),
+		agents: z
+			.array(z.union([CodexListSummaryAgentSchema, CodexListAgentSchema]))
+			.transform((agents) => agents as CodexListAgent[]),
+		omitted: z.number().int().nonnegative().default(0),
+		notice: z.string().optional(),
 		observation: z.literal("unavailable").optional(),
 		error: CodexListAvailabilityErrorSchema.optional(),
 	})
@@ -110,11 +129,20 @@ export const CodexListAgentsResultSchema = z
 		if ((value.observation === "unavailable") !== (value.error !== undefined)) {
 			ctx.addIssue({ code: "custom", message: "unavailable list observation requires an error" });
 		}
+		if (value.omitted > 0 !== (value.notice !== undefined)) {
+			ctx.addIssue({ code: "custom", message: "omitted agents require a notice" });
+		}
 	});
 
 export type CodexAgentCatalog = z.infer<typeof CodexAgentCatalogSchema>;
 export type CodexListAgent = z.infer<typeof CodexListAgentSchema>;
+export type CodexListSummaryAgent = z.infer<typeof CodexListSummaryAgentSchema>;
 export type CodexListAgentsResult = z.infer<typeof CodexListAgentsResultSchema>;
+
+export const CODEX_LIST_DEFAULT_LIMIT = 20;
+export const CODEX_LIST_MAX_LIMIT = 50;
+export const CODEX_LIST_FULL_DEFAULT_LIMIT = 5;
+export const CODEX_LIST_FULL_MAX_LIMIT = 5;
 
 function migrateCodexAgentRecoveryIntent(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;
@@ -237,9 +265,41 @@ export function projectCodexListAgent(agent: CodexPersistedAgent): CodexListAgen
 export function projectCodexListResult(
 	agents: readonly CodexPersistedAgent[],
 	error?: CodexListAvailabilityError,
+	options: { detail?: "summary" | "full"; limit?: number } = {},
 ): CodexListAgentsResult {
+	const detail = options.detail ?? "summary";
+	const defaultLimit = detail === "full" ? CODEX_LIST_FULL_DEFAULT_LIMIT : CODEX_LIST_DEFAULT_LIMIT;
+	const limit = Math.min(
+		options.limit ?? defaultLimit,
+		detail === "full" ? CODEX_LIST_FULL_MAX_LIMIT : CODEX_LIST_MAX_LIMIT,
+	);
+	const selected = agents.slice(-limit).reverse();
+	const omitted = Math.max(0, agents.length - selected.length);
 	return CodexListAgentsResultSchema.parse({
-		agents: agents.map(projectCodexListAgent),
+		detail,
+		agents:
+			detail === "full"
+				? selected.map(projectCodexListAgent)
+				: selected.map((agent) => {
+						const start = agent.exchanges.find((exchange) => exchange.kind === "start");
+						const cwd =
+							agent.resolvedTarget?.cwd ??
+							(agent.requestedTarget.kind === "host"
+								? agent.requestedTarget.workdirHint
+								: agent.requestedTarget.hostProjectPath);
+						const prompt = agent.exchanges.at(-1)?.prompt.split("\n", 1)[0]?.slice(0, 256);
+						return {
+							agentId: agent.agentId,
+							...(start?.model === undefined ? {} : { model: start.model }),
+							cwd,
+							agentState: agent.agentState,
+							turnCount: agent.turns.length,
+							lastActiveAt: agent.updatedAt,
+							...(prompt === undefined ? {} : { latestPromptFirstLine: prompt }),
+						};
+					}),
+		omitted,
+		...(omitted === 0 ? {} : { notice: `Older agents omitted: ${omitted}.` }),
 		observation: error ? "unavailable" : undefined,
 		error,
 	});

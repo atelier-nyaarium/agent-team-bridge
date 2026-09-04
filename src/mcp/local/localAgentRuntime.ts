@@ -162,6 +162,7 @@ interface LocalAgentRecord {
 export interface LocalListAgent {
 	agentId: string;
 	agentState: LocalAgentState;
+	model?: string;
 	activeTurnId?: string;
 	exchanges: Array<Omit<LocalExchangeRecord, never>>;
 	turns: Array<{
@@ -301,6 +302,7 @@ export class LocalAgentRuntime {
 		return [...this.agents.values()].map((agent) => ({
 			agentId: agent.agentId,
 			agentState: this.stateOf(agent),
+			...(agent.model === undefined ? {} : { model: agent.model }),
 			...(agent.activeTurnId ? { activeTurnId: agent.activeTurnId } : {}),
 			exchanges: agent.exchanges.map((exchange) => ({ ...exchange })),
 			turns: agent.turns.map((turn) => ({
