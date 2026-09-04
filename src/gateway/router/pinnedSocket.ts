@@ -74,14 +74,21 @@ export function moduleDir(moduleUrl: string): string {
 
 export function realWebSocket(): typeof WebSocket {
 	const require_ = createRequire(import.meta.url);
-	let dir = moduleDir(import.meta.url);
+	const start = moduleDir(import.meta.url);
+	let dir = start;
+	let lastError = "";
 	for (;;) {
 		const candidate = path.join(dir, "node_modules", "ws", "lib", "websocket.js");
 		try {
 			return require_(candidate) as typeof WebSocket;
-		} catch {}
+		} catch (error) {
+			lastError = error instanceof Error ? error.message : String(error);
+		}
 		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error("the ws package could not be resolved for TLS pinning");
+		if (parent === dir)
+			throw new Error(
+				`the ws package could not be resolved for TLS pinning (searched node_modules above ${start}; last error: ${lastError.split("\n")[0]}); run bun install --frozen-lockfile`,
+			);
 		dir = parent;
 	}
 }
