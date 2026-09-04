@@ -97,7 +97,7 @@ describe("presence authority: the status string has one owner", () => {
 		// The two decisions the terminal's gate is built from. Losing either silently restores the
 		// blank-terminal bug, since both would fall back to reading a bare status.
 		expect(owner).toMatch(/fun mayHavePane\(/);
-		expect(owner).toMatch(/val authoritative:/);
+		expect(owner).toMatch(/val gatewayReachable:/);
 	});
 
 	it("keeps the presence fields off Team, where a caller could read them unqualified", () => {

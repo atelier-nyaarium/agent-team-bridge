@@ -134,19 +134,20 @@ private constructor(
 	 * - Otherwise an "available" row means asleep and idling is right - which is what keeps a warm
 	 *   container from being docker-exec'd every cycle for a session that is genuinely down.
 	 *
-	 * A POLLED row is deliberately NOT trusted enough to skip peeking forever: the caller probes once
-	 * per mount when [authority] is not LIVE (see TerminalView), which settles a stale row for the
-	 * price of a single op instead of a blank screen during the next presence refresh.
+	 * NO row is trusted enough to skip peeking entirely, LIVE included: a row says whether an AGENT
+	 * registered and never whether the tmux PANE exists, and those differ for the whole time Claude is
+	 * closed with a shell still sitting in the pane. The caller probes once per mount (see
+	 * TerminalView), which settles the question for the price of a single op.
 	 */
 	fun mayHavePane(now: Long): Boolean = when (authority) {
 		Authority.UNREACHABLE, Authority.NONE -> false
 		Authority.LIVE, Authority.POLLED -> status != AVAILABLE || receipt?.live(now) == true
 	}
 
-	/** True only when a Gateway that speaks for this session said so THIS poll. A caller that would
-	 * act on "there is nothing there" has to consult this, or it is acting on a value that may be a
-	  */
-	val authoritative: Boolean get() = authority == Authority.LIVE
+	/** Whether one probe is worth attempting at all. An unreachable Gateway is a guaranteed round trip
+	 * to a machine already known to be out of reach, which is the bound that keeps a powered-off
+	 * machine from being peeked at the terminal's cadence. */
+	val gatewayReachable: Boolean get() = authority != Authority.UNREACHABLE && authority != Authority.NONE
 
 	fun withAuthority(a: Authority): Presence = rebuild(a = a)
 

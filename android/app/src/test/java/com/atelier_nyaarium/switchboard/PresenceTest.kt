@@ -24,11 +24,11 @@ class PresenceTest {
 	//  What a row is worth
 
 	@Test
-	fun onlyThePushedPlaneIsAuthoritative() {
-		assertTrue(row(Presence.AVAILABLE, Authority.LIVE).authoritative)
-		assertFalse(row(Presence.AVAILABLE, Authority.POLLED).authoritative)
-		assertFalse(row(Presence.AVAILABLE, Authority.UNREACHABLE).authoritative)
-		assertFalse(row(Presence.AVAILABLE, Authority.NONE).authoritative)
+	fun onlyAGatewayWithinReachIsWorthProbing() {
+		assertTrue(row(Presence.AVAILABLE, Authority.LIVE).gatewayReachable)
+		assertTrue(row(Presence.AVAILABLE, Authority.POLLED).gatewayReachable)
+		assertFalse(row(Presence.AVAILABLE, Authority.UNREACHABLE).gatewayReachable)
+		assertFalse(row(Presence.AVAILABLE, Authority.NONE).gatewayReachable)
 	}
 
 	@Test
