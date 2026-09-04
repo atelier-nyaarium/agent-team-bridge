@@ -449,7 +449,19 @@ export function createConsoleDispatcher({
 			}
 			case "wake": {
 				if (!tryWakeTeam) throw new Error("wake is unavailable");
-				const { name } = targets.requireLocalComposite(op.target, "wake");
+				const { name, spawn, session } = targets.requireLocalComposite(op.target, "wake");
+				// The owner's button re-creates a record the gateway lost, under the session's own id, as
+				// create_session does with a typed sessionName. A send never adopts a typed name; the
+				// console may. A launch that never comes up forgets the record again.
+				const adopted =
+					sessionStore && !sessionStore.getByTeam(name)
+						? sessionStore.adoptById(session, { spawn, sessionLabel: session, workdirHint: session })
+						: null;
+				const mayForget = () => {
+					if (!adopted || !sessionStore) return false;
+					const current = sessionStore.getByTeam(name);
+					return current === adopted && current.confirmedAt === undefined;
+				};
 				// Bounded like create_session: a slow launch answers pending and finishes on its own.
 				let boundTimer: ReturnType<typeof setTimeout> | undefined;
 				const bound = new Promise<null>((resolve) => {
@@ -459,10 +471,17 @@ export function createConsoleDispatcher({
 				const winner = await Promise.race([wake, bound]);
 				clearTimeout(boundTimer);
 				if (winner === null) {
-					void wake.catch(() => {});
+					void wake
+						.then((r) => {
+							if (!r.ok && mayForget()) sessionStore?.forget(name);
+						})
+						.catch(() => {
+							if (mayForget()) sessionStore?.forget(name);
+						});
 					return { ok: true, status: "pending" as const };
 				}
 				if (!winner.ok) {
+					if (mayForget()) sessionStore?.forget(name);
 					const reason =
 						winner.error ??
 						(winner.errorKind === "disconnected"

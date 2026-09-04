@@ -96,6 +96,7 @@ export interface ConsoleHandlerDeps {
 		SessionStore,
 		| "getByTeam"
 		| "teamOf"
+		| "adoptById"
 		| "adoptOrReattach"
 		| "mintOrReattach"
 		| "hostWorkdirHint"

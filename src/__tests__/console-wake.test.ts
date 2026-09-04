@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WakeResult } from "../gateway/wake.js";
+import { SessionStore } from "../shared/session-store.js";
 import { makeConsoleSeam } from "./helpers/consoleSeam.js";
 
 describe("console wake through dispatch", () => {
@@ -42,6 +43,33 @@ describe("console wake through dispatch", () => {
 		await expect(refused.dispatch({ kind: "wake", target: "recipe-app.scratch" })).rejects.toThrow(
 			"no such record",
 		);
+	});
+
+	it("adopts a recordless session under its own id before waking, and forgets it when the launch fails", async () => {
+		const store = new SessionStore();
+		const woken: string[] = [];
+		const failing = makeConsoleSeam({
+			sessionStore: store,
+			tryWakeTeam: async (team) => {
+				woken.push(team);
+				return { ok: false, errorKind: "timeout" };
+			},
+		});
+		await expect(failing.dispatch({ kind: "wake", target: "recipe-app.scratch" })).rejects.toThrow("come online");
+		expect(woken).toEqual(["recipe-app.scratch"]);
+		expect(store.getByTeam("recipe-app.scratch")).toBeUndefined();
+
+		const landing = makeConsoleSeam({ sessionStore: store, tryWakeTeam: async () => ({ ok: true }) });
+		expect(await landing.dispatch({ kind: "wake", target: "recipe-app.scratch" })).toEqual({ ok: true });
+		expect(store.getByTeam("recipe-app.scratch")?.id).toBe("scratch");
+	});
+
+	it("wakes an existing record as it is, label and all", async () => {
+		const store = new SessionStore();
+		store.adoptById("scratch", { spawn: "recipe-app", sessionLabel: "Keep Me" });
+		const h = makeConsoleSeam({ sessionStore: store, tryWakeTeam: async () => ({ ok: false, error: "nope" }) });
+		await expect(h.dispatch({ kind: "wake", target: "recipe-app.scratch" })).rejects.toThrow("nope");
+		expect(store.getByTeam("recipe-app.scratch")?.sessionLabel).toBe("Keep Me");
 	});
 
 	it("answers pending when the launch outlasts the bound, and lets it finish", async () => {
