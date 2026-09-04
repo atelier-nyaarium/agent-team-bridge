@@ -53,22 +53,19 @@ export class DurableOutbox<T> {
 		const key = this.options.keyOf(item);
 		const index = this.items.findIndex((existing) => this.options.keyOf(existing) === key);
 		if (index >= 0) {
-			this.items[index] = item;
-			this.persist();
+			this.commit(this.items.map((existing, at) => (at === index ? item : existing)));
 			return "replaced";
 		}
 		if (this.items.length >= (this.options.maxSize ?? Number.MAX_SAFE_INTEGER)) return "refused";
-		this.items.push(item);
-		this.persist();
+		this.commit([...this.items, item]);
 		return "enqueued";
 	}
 
 	retire(key: string): boolean | typeof MIGRATING {
 		if (fenced()) return MIGRATING;
-		const index = this.items.findIndex((item) => this.options.keyOf(item) === key);
-		if (index < 0) return false;
-		this.items.splice(index, 1);
-		this.persist();
+		const kept = this.items.filter((item) => this.options.keyOf(item) !== key);
+		if (kept.length === this.items.length) return false;
+		this.commit(kept);
 		return true;
 	}
 
@@ -76,9 +73,7 @@ export class DurableOutbox<T> {
 		if (fenced()) return MIGRATING;
 		const retired = this.items.filter(predicate);
 		if (retired.length === 0) return retired;
-		const kept = this.items.filter((item) => !predicate(item));
-		this.items.splice(0, this.items.length, ...kept);
-		this.persist();
+		this.commit(this.items.filter((item) => !predicate(item)));
 		return retired;
 	}
 
@@ -98,8 +93,9 @@ export class DurableOutbox<T> {
 		}
 	}
 
-	/** Persistence failure reaches the caller; a queue that cannot save must not claim it did. */
-	private persist(): void {
-		this.options.durable?.saveChecked(this.options.serialize?.(this.items) ?? this.items);
+	/** The file first: a queue that cannot save its next state keeps its current one, and the caller hears why. */
+	private commit(next: T[]): void {
+		this.options.durable?.saveChecked(this.options.serialize?.(next) ?? next);
+		this.items.splice(0, this.items.length, ...next);
 	}
 }

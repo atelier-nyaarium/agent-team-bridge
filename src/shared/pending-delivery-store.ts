@@ -1,5 +1,5 @@
 import { DurableOutbox } from "./durable-outbox.js";
-import { MIGRATING } from "./migration-fence.js";
+import { fenced, MIGRATING } from "./migration-fence.js";
 import type { ChannelFile, RidingAwareness } from "./types.js";
 
 /** Queued message with delivery state. */
@@ -71,6 +71,7 @@ export class PendingDeliveryStore {
 
 	/** Refuses when full. */
 	enqueue(delivery: PendingDelivery): EnqueueOutcome {
+		if (fenced()) return MIGRATING;
 		if (this.outbox.has(delivery.deliveryId)) return "duplicate";
 		if (this.listForTeam(delivery.team).length >= this.maxPerTeam) return "refused";
 		const result = this.outbox.enqueue(delivery);
@@ -90,6 +91,7 @@ export class PendingDeliveryStore {
 	}
 
 	sweep(): PendingDelivery[] | typeof MIGRATING {
+		if (fenced()) return MIGRATING;
 		const cutoff = this.now() - this.ttlMs;
 		return this.outbox.retireWhere((delivery) => delivery.enqueuedAt <= cutoff);
 	}
