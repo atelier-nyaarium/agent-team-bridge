@@ -893,7 +893,7 @@ describe("Codex watchdog and reaping", () => {
 			},
 		};
 
-		await context.sweep(200_000);
+		await context.sweep(700_000);
 
 		// The turn ended without an event this daemon ever saw, which is the silence being answered.
 		expect(terminalsOf(context.sent)).toMatchObject([{ finalResponse: "quietly done" }]);
@@ -908,11 +908,11 @@ describe("Codex watchdog and reaping", () => {
 		};
 		context.session.calls.length = 0;
 
-		await context.sweep(200_000);
+		await context.sweep(700_000);
 		expect(context.session.calls).toContain("interruptTurn");
 		expect(context.released).toEqual([]);
 
-		await context.sweep(200_000);
+		await context.sweep(700_000);
 
 		// Another identical inProgress is not progress, which is the whole point of asking twice.
 		expect(context.released).toEqual([TARGET_ID]);
@@ -927,7 +927,7 @@ describe("Codex watchdog and reaping", () => {
 		};
 		context.session.calls.length = 0;
 
-		context.advance(200_000);
+		context.advance(700_000);
 		// A turn that only ever runs commands emits no agent message, and is working the whole time.
 		context.session.listener({
 			method: "item/started",
@@ -947,7 +947,7 @@ describe("Codex watchdog and reaping", () => {
 		};
 		context.session.calls.length = 0;
 
-		context.advance(200_000);
+		context.advance(700_000);
 		context.session.listener({
 			method: "item/completed",
 			params: {
@@ -970,7 +970,7 @@ describe("Codex watchdog and reaping", () => {
 		};
 		context.session.calls.length = 0;
 
-		context.advance(200_000);
+		context.advance(700_000);
 		// The same turn id on a thread this turn does not belong to says nothing about this turn.
 		context.session.listener({
 			method: "item/started",
@@ -989,7 +989,7 @@ describe("Codex watchdog and reaping", () => {
 			thread: { id: "thread-1", turns: [{ id: "turn-1", status: "inProgress", items: [] }] },
 		};
 
-		await context.sweep(200_000);
+		await context.sweep(700_000);
 		expect(context.released).toEqual([]);
 
 		// A reconcile is the gateway asking, not the turn working, so it buys no second chance.
@@ -1004,7 +1004,7 @@ describe("Codex watchdog and reaping", () => {
 			turnId: "turn-1",
 		});
 		await settle();
-		await context.sweep(200_000);
+		await context.sweep(700_000);
 
 		expect(context.released).toEqual([TARGET_ID]);
 	});

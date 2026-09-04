@@ -44,6 +44,7 @@ import { CopilotAgentService } from "./copilotAgentService.js";
 import { CopilotRelay } from "./copilotRelay.js";
 import { CopilotRoute } from "./copilotRoute.js";
 import { reportUnrecognizedDataEntries } from "./dataDirInventory.js";
+import { dueSchemaSteps, type SchemaStep, schemaVersionOf } from "./schemaWipe.js";
 
 const SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -160,20 +161,29 @@ export async function startGateway(): Promise<void> {
 	let boot: BootState = { phase: "standalone" };
 	const fed = (): FederationSlice | null => federationOf(boot);
 
-	const SCHEMA_VERSION = "2";
+	const SCHEMA_STEPS: ReadonlyArray<SchemaStep> = [
+		{
+			version: 2,
+			files: [
+				path.join(DATA_DIR, "pending-jobs.json"),
+				path.join(DATA_DIR, "mailboxes.json"),
+				path.join(LOG_DIR, "pending-jobs.json"),
+				path.join(LOG_DIR, "mailboxes.json"),
+				path.join(federationDir, "cross-domain-share-state.json"),
+			],
+		},
+		// Orphaned by the Router cutover; nothing has opened either since.
+		{ version: 3, files: [path.join(DATA_DIR, "mailboxes.json"), path.join(DATA_DIR, "task-board.json")] },
+	];
+	const SCHEMA_VERSION = SCHEMA_STEPS[SCHEMA_STEPS.length - 1]!.version;
 	try {
 		const sentinelPath = path.join(DATA_DIR, "schema-version");
-		const current = fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, "utf8").trim() : "";
-		if (current !== SCHEMA_VERSION) {
-			const legacyDir = LOG_DIR;
-			for (const f of ["pending-jobs.json", "mailboxes.json"]) {
-				fs.rmSync(path.join(DATA_DIR, f), { force: true });
-				fs.rmSync(path.join(legacyDir, f), { force: true });
-			}
-			fs.rmSync(path.join(federationDir, "cross-domain-share-state.json"), { force: true });
-			fs.writeFileSync(sentinelPath, SCHEMA_VERSION);
-			console.log(`[schema-wipe] cleared old-grammar delivery state (schema ${SCHEMA_VERSION})`);
+		const current = schemaVersionOf(fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, "utf8") : null);
+		for (const step of dueSchemaSteps(current, SCHEMA_STEPS)) {
+			for (const file of step.files) fs.rmSync(file, { force: true });
+			console.log(`[schema-wipe] step ${step.version}: removed ${step.files.length} retired files`);
 		}
+		if (current !== SCHEMA_VERSION) fs.writeFileSync(sentinelPath, String(SCHEMA_VERSION));
 	} catch (err) {
 		console.error("[schema-wipe] failed:", err);
 	}

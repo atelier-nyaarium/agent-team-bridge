@@ -37,7 +37,8 @@ export type { CodexDaemonEvent, CodexDaemonReceipt };
 const HELD_TERMINAL_MS = 10_000;
 
 /** How long an active turn may go without progress before the watchdog asks App Server about it. */
-const NO_PROGRESS_MS = 120_000;
+// A reasoning stretch streams no frame; ten minutes tells that from a hang.
+const NO_PROGRESS_MS = 600_000;
 /** A frame this long after the last one is logged, since it is the silence the watchdog acts on. */
 const FRAME_GAP_LOG_MS = 60_000;
 

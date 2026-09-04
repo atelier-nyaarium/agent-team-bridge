@@ -147,8 +147,9 @@ export const DELIVERY_OP_KINDS = new Set([
 	"wake",
 ]);
 
-// Remove-by: when every console sends peek as a value op.
-export const TOLERATED_DELIVERY_OP_KINDS = new Set(["peek"]);
+// Delivery kinds a console older than a reclassification still sends. Empty since the peek shim
+// retired; the next reclassification names its kind here with a Remove-by line.
+export const TOLERATED_DELIVERY_OP_KINDS = new Set<string>();
 
 export const VALUE_OP_KINDS = new Set([
 	"peek",

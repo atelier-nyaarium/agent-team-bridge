@@ -13,15 +13,13 @@ describe("console terminal operations through dispatch", () => {
 		]);
 	});
 
-	it("routes peek through the value handler", async () => {
+	it("serves peek as a value op only; the delivery shape is refused now that the shim is retired", async () => {
 		const h = makeConsoleSeam();
 		const op = { kind: "peek" as const, target: "recipe-app" };
 
-		await expect(h.handler.handleDelivery(op, "pixel", "conv-pixel", "peek-op", "owner-pub")).resolves.toEqual({
-			ansi: "SCREEN",
-			hash: "h1",
-			kind: "tmux",
-		});
+		await expect(h.handler.handleDelivery(op, "pixel", "conv-pixel", "peek-op", "owner-pub")).rejects.toThrow(
+			"delivery op kind is not allowed",
+		);
 		await expect(h.handler.handleValue(op, "pixel", "conv-pixel", "peek-op", "owner-pub")).resolves.toEqual({
 			ansi: "SCREEN",
 			hash: "h1",

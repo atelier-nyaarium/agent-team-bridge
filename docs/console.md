@@ -4,7 +4,17 @@ The Android console reaches the Router through signed OwnerOps.
 
 ## OwnerOps
 
-`ConsoleClient` sends protocol version 2 operations with one `conversationId` and `opId`.
+`ConsoleClient` sends protocol version 3 operations with one `conversationId` and `opId`.
+
+**The version is a documented floor, not a negotiated one.** No console sends it and no gateway
+checks it. Adding a wire field stays optional and degrades field by field. Removing an accepted kind
+is not additive: it bumps `CONSOLE_PROTOCOL_VERSION`, this file records what went, and a console
+built before the bump gets the gateway's existing "not allowed" refusal until it updates. A kind
+that must keep working for one more console build goes into `TOLERATED_DELIVERY_OP_KINDS` with a
+`Remove-by` line instead.
+
+- 3: removed the nine `board_*` delivery kinds (the board lives on the Router) and `peek` as a
+  delivery op (it is a value op).
 
 - `deliver` carries a `console_op` row. Delivery kinds are `DELIVERY_OP_KINDS` in
   `src/shared/schemasConsoleOp.ts`. The answer is an `op_result` row sealed under

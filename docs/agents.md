@@ -35,9 +35,9 @@ leaves it held.
 tracker-parsed frames, misattributes or interrupts live work. Reconciliation treats an unconfirmed
 turn as `recovering`.
 
-**A silent turn is interrupted, then its child retired.** 120 s without a frame from its thread and
-the daemon sends `turn/interrupt`; a second silent window releases the whole target, which ends every
-other agent's turn on that child. Both steps are logged on the daemon pane, as are a frame arriving
+**A silent turn is interrupted, then its child retired.** Ten minutes without a frame from its thread
+and the daemon sends `turn/interrupt`; a second silent window releases the whole target, which ends
+every other agent's turn on that child, since the App Server has no per-thread kill. Both steps are logged on the daemon pane, as are a frame arriving
 more than 60 s after the last one and any interrupted terminal, so an interruption nobody asked for
 is attributable there.
 

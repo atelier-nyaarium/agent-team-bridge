@@ -39,10 +39,12 @@ import type {
 //  grammar lives in session-id.ts. The Kotlin side consumes generated types
 //  from codegen-kotlin.ts.
 
-// A diagnostic signal, not a hard compatibility gate: every wire addition here is additive and
-// optional, so an older client decoding a newer server's reply (or vice versa) already degrades
-// gracefully field-by-field without needing this to change client behavior.
-export const CONSOLE_PROTOCOL_VERSION = 2;
+// A documented floor, not a negotiated one: no console sends this number and no gateway checks it.
+// Additions stay optional and degrade field by field. REMOVING an accepted kind is not additive: it
+// bumps this number, docs/console.md records what went, and a console built before the bump gets
+// the existing "not allowed" refusal until it updates.
+//   3: the nine board_* delivery kinds (the board lives on the Router) and peek as a delivery op.
+export const CONSOLE_PROTOCOL_VERSION = 3;
 
 // Shared by consoleHandler.ts's in-memory opCache and durableOpStore.ts's durable record store -
 // a durable op can never outnumber the mutating ops that pass through the in-memory cache above
