@@ -25,7 +25,9 @@
 			}
 		},
 		"opId": "board_write-op",
-		"nonce": "bZKL+0dHPngAEmuhXQMUs+ay"
+		"nonce": "bZKL+0dHPngAEmuhXQMUs+ay",
+		"sealNonce": "4rYyreit8x3F93JI",
+		"title": "fixture-title"
 	},
 	"expect": {
 		"outcome": "applied"

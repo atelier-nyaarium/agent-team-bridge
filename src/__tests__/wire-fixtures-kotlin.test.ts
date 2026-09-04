@@ -2,8 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { unwrapContentKey } from "../shared/content-envelope.js";
-import type { KeyEnvelope } from "../shared/schemasContentKey.js";
+import {
+	BOARD_TITLE_KIND,
+	boardTextAadKind,
+	type ContentAad,
+	openContent,
+	opPayloadAadKind,
+	unwrapContentKey,
+} from "../shared/content-envelope.js";
+import type { ContentEnvelope, KeyEnvelope } from "../shared/schemasContentKey.js";
 import { type OwnerOp, OwnerOpSchema } from "../shared/schemasInbox.js";
 import { type WireFixture, WireFixtureSchema, WireManifestSchema } from "../shared/schemasWireFixture.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
@@ -85,12 +92,43 @@ describe("the TS phone driver reproduces every Kotlin-signed owner op", () => {
 	}
 });
 
-describe("the gateway opens the Kotlin key grant", () => {
+describe("the gateway opens what the phone sealed", () => {
+	const key = contentKeyOf(set);
+	const aad = (kind: ContentAad["kind"]): ContentAad => ({
+		domainId: set.domain.id,
+		ownerSignPub: set.domain.owner.sign.pub,
+		epoch: set.content.epoch,
+		kind,
+	});
+	const openJson = (env: ContentEnvelope) =>
+		JSON.parse(openContent(env, key, aad(opPayloadAadKind())).toString("utf8"));
+
 	it("KeyDeliveryOps.onKeyRequest/key_grant.json", () => {
 		const fixture = load("KeyDeliveryOps.onKeyRequest/key_grant.json");
 		const { grant } = fixture.inputs.op as { grant: { envelope: KeyEnvelope } };
 		const opened = unwrapContentKey(grant.envelope, set.gateway.identity.box.priv);
 		expect(opened.epoch).toBe(set.content.epoch);
-		expect(opened.key.equals(contentKeyOf(set))).toBe(true);
+		expect(opened.key.equals(key)).toBe(true);
+	});
+
+	it("ConsoleClient.send/deliver.json", () => {
+		const fixture = load("ConsoleClient.send/deliver.json");
+		const { row } = fixture.inputs.op as { row: { body: ContentEnvelope } };
+		const record = fixture.inputs.record as { text: string };
+		expect(openJson(row.body)).toMatchObject({ to: fixture.inputs.team, body: record.text });
+	});
+
+	it("ConsoleClient.sendValueOp/gateway_value.json", () => {
+		const fixture = load("ConsoleClient.sendValueOp/gateway_value.json");
+		const { value } = fixture.inputs.op as { value: ContentEnvelope };
+		expect(openJson(value)).toMatchObject({ target: fixture.inputs.target });
+	});
+
+	it("BoardRouterWriter.write/board_write.json", () => {
+		const fixture = load("BoardRouterWriter.write/board_write.json");
+		const { write } = fixture.inputs.op as { write: { ops: Array<{ id: string; title: ContentEnvelope }> } };
+		const [upsert] = write.ops;
+		const title = openContent(upsert.title, key, aad(boardTextAadKind(BOARD_TITLE_KIND, upsert.id)));
+		expect(title.toString("utf8")).toBe(fixture.inputs.title);
 	});
 });

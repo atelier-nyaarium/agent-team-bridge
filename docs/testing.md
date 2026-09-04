@@ -53,7 +53,8 @@ nonces, and commits what they produced; the other runtime consumes it with its r
   regeneration against them. `src/__tests__/wire-fixtures-kotlin.test.ts` replays every request
   through `RouterServer.handle` at the fixture clock in manifest order, so the board read follows
   the board write. It also replays the socket upgrade against the real listener, reproduces every
-  signed op through the phone driver, and opens the key grant with the gateway's box key.
+  signed op through the phone driver, and opens every phone-sealed envelope (the key grant with the
+  gateway's box key, the delivered row, the value payload, the board title) with the content key.
 
 Fixture shape is `src/shared/schemasWireFixture.ts`, generated into Kotlin as `WireFixture`:
 `producer`, `composer`, `case`, `clock`, `inputs`, `expect` (the real peer's answer as a subset),

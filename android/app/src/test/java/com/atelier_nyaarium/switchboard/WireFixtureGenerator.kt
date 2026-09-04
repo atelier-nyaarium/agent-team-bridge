@@ -145,7 +145,22 @@ class WireFixtureGenerator {
 				BoardSealing(ring, domain, ownerIdentity(root).sign.pub, newNonce = { drawBytes("BoardRouterWriter.write", "board_write", sealDraws++, 12) }),
 			)
 		}
-		return ownerCase(root, "BoardRouterWriter.write", "board_write", captured ?: error("board_write not captured"), "board_write-op", "{\"outcome\":\"applied\"}")
+		val op = captured ?: error("board_write not captured")
+		return ownerCase(
+			root,
+			"BoardRouterWriter.write",
+			"board_write",
+			op,
+			"board_write-op",
+			"{\"outcome\":\"applied\"}",
+			buildJsonObject {
+				put("op", op.op)
+				put("opId", "board_write-op")
+				put("nonce", op.nonce)
+				put("sealNonce", draw("BoardRouterWriter.write", "board_write", 1, 12))
+				put("title", "fixture-title")
+			},
+		)
 	}
 
 	private fun boardRead(root: JsonObject): Fixture {
