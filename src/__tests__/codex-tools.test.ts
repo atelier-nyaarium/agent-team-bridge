@@ -38,6 +38,15 @@ describe("what a tool actually sends", () => {
 		expect(codexRequestBody("list")).not.toHaveProperty("operationId");
 	});
 
+	it("passes list recovery filters without adding them to other requests", () => {
+		const agentId = "codex_0123456789abcdef0123456789abcdef";
+		const list = codexRequestBody("list", { agentId, detail: "full", limit: 1 });
+
+		expect(list).toMatchObject({ kind: "list", agentId, detail: "full", limit: 1 });
+		expect(CodexGatewayRequestSchema.safeParse(list).success).toBe(true);
+		expect(codexRequestBody("await", { agentId })).not.toHaveProperty("detail");
+	});
+
 	it("omits an absent field rather than sending it undefined", () => {
 		// A strict schema rejects a key that is present and undefined, so this is not cosmetic.
 		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");

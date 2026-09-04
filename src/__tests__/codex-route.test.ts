@@ -158,7 +158,27 @@ describe("Codex gateway route", () => {
 		const body = await (await context.route.handle(post(context.token), { kind: "list" })).json();
 
 		expect(body.agents).toHaveLength(1);
-		expect(body.agents[0].exchanges[0]).toMatchObject({ kind: "start", prompt: "Audit" });
+		expect(body.detail).toBe("summary");
+		expect(body.agents[0]).toMatchObject({ agentId: codexAgentIdForOperation(OPERATION_ID), turnCount: 0 });
+	});
+
+	it("filters one agent and returns its full history", async () => {
+		const context = setup();
+		const secondOperation = "223e4567-e89b-42d3-a456-426614174000";
+		await context.route.handle(post(context.token), { kind: "start", operationId: OPERATION_ID, prompt: "First" });
+		await context.route.handle(post(context.token), {
+			kind: "start",
+			operationId: secondOperation,
+			prompt: "Second",
+		});
+		const agentId = codexAgentIdForOperation(secondOperation);
+		const body = await (
+			await context.route.handle(post(context.token), { kind: "list", agentId, limit: 50 })
+		).json();
+
+		expect(body.detail).toBe("full");
+		expect(body.agents).toHaveLength(1);
+		expect(body.agents[0].exchanges[0]).toMatchObject({ prompt: "Second" });
 	});
 
 	/** Drive an agent to accepted-and-working, the state every stop and await has to survive. */

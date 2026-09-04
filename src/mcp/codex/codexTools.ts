@@ -94,7 +94,11 @@ Does not stop background processes started by Codex.
 const LIST_DESCRIPTION = `
 # List Codex Agents
 
-List this session's Codex agents with their prompt and response history.
+List Codex agents. Defaults to a bounded summary, newest first.
+
+- \`agentId\` returns one agent in full detail.
+- \`detail\` selects \`summary\` or bounded \`full\` output.
+- \`limit\` bounds the number of agents returned.
 
 Agents outlive their callers. Use this to resume work after a subagent or workflow ends.
 `.trim();
@@ -118,7 +122,15 @@ export function codexStartDefaults(args: { model?: string; serviceTier?: CodexSe
 /** Absent is OMITTED, since the gateway's schemas are strict. */
 export function codexRequestBody(
 	kind: "start" | "message" | "await" | "stop" | "list",
-	args: { agentId?: string; prompt?: string; model?: string; cwd?: string; serviceTier?: CodexServiceTier } = {},
+	args: {
+		agentId?: string;
+		prompt?: string;
+		model?: string;
+		cwd?: string;
+		serviceTier?: CodexServiceTier;
+		detail?: "summary" | "full";
+		limit?: number;
+	} = {},
 ): Record<string, unknown> {
 	const mutating = kind === "start" || kind === "message" || kind === "stop";
 	const chosen = kind === "start" ? codexStartDefaults(args) : { serviceTier: args.serviceTier };
@@ -126,6 +138,8 @@ export function codexRequestBody(
 		kind,
 		...(mutating ? { operationId: operationId() } : {}),
 		...(args.agentId === undefined ? {} : { agentId: args.agentId }),
+		...(kind === "list" && args.detail === undefined ? {} : kind === "list" ? { detail: args.detail } : {}),
+		...(kind === "list" && args.limit === undefined ? {} : kind === "list" ? { limit: args.limit } : {}),
 		...(args.prompt === undefined ? {} : { prompt: args.prompt }),
 		...(kind === "start" && chosen.model !== undefined ? { model: chosen.model } : {}),
 		...(kind === "start" && args.cwd !== undefined ? { cwd: args.cwd } : {}),
@@ -195,6 +209,7 @@ export function registerCodexTools(mcpServer: McpServer, dispatch: AgentDispatch
 		"codexListAgents",
 		// Strict, not a bare `{}`: a literal registers in strip mode and silently drops unknown fields.
 		{ title: `Codex List Agents`, description: LIST_DESCRIPTION, inputSchema: listSchema },
-		async () => post(dispatch, codexRequestBody("list")),
+		async (args: { agentId?: string; detail?: "summary" | "full"; limit?: number }) =>
+			post(dispatch, codexRequestBody("list", args)),
 	);
 }

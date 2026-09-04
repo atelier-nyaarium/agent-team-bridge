@@ -16,6 +16,53 @@ const ACCEPTANCE_FENCE = {
 };
 
 describe("Codex persisted and list contracts", () => {
+	it("returns a bounded newest-first summary with an omission notice", () => {
+		const agents = Array.from({ length: 21 }, (_, index) => {
+			const agent = requestedAgent(
+				`codex_${String(index).padStart(32, "0")}`,
+				`${String(index).padStart(8, "0")}-e89b-42d3-a456-426614174000`,
+			);
+			const prompt = index === 20 ? `${"P".repeat(300)}\nDetails` : `Prompt ${index}\nDetails`;
+			return CodexPersistedAgentSchema.parse({
+				...agent,
+				exchanges: [{ ...agent.exchanges[0]!, prompt }],
+				operations: [
+					{ ...agent.operations[0]!, fingerprint: codexOperationFingerprint("start", agent.agentId, prompt) },
+				],
+				updatedAt: 10 + index,
+			});
+		});
+		const result = projectCodexListResult(agents);
+
+		expect(result.detail).toBe("summary");
+		expect(result.agents).toHaveLength(20);
+		expect(result.agents[0]).toMatchObject({
+			agentId: agents.at(-1)!.agentId,
+			cwd: "/projects/recipe-app",
+			turnCount: 0,
+			lastActiveAt: 30,
+			latestPromptFirstLine: "P".repeat(256),
+		});
+		expect(result.omitted).toBe(1);
+		expect(result.notice).toContain("Older agents omitted: 1");
+		expect(result.agents[0]).toMatchObject({ latestPromptFirstLine: "P".repeat(256) });
+
+		const full = projectCodexListResult(agents, undefined, { detail: "full", limit: 50 });
+		expect(full.agents).toHaveLength(5);
+		expect(full.omitted).toBe(16);
+		expect(full.notice).toContain("Older agents omitted: 16");
+	});
+
+	it("returns one requested agent in bounded full detail", () => {
+		const first = requestedAgent();
+		const second = requestedAgent("codex_abcdef0123456789abcdef0123456789", "223e4567-e89b-42d3-a456-426614174000");
+		const result = projectCodexListResult([first, second], undefined, { detail: "full", limit: 50 });
+
+		expect(result.detail).toBe("full");
+		expect(result.agents).toHaveLength(2);
+		expect(result.agents[0]).toHaveProperty("exchanges");
+		expect(projectCodexListResult([first, second], undefined, { detail: "full", limit: 50 }).omitted).toBe(0);
+	});
 	it("projects validated persisted agents without recovery-only fields", () => {
 		const persisted = requestedAgent();
 		const projected = projectCodexListAgent(persisted);

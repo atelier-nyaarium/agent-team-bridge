@@ -287,7 +287,13 @@ export const CodexMessageAgentInputSchema = z
 
 export const CodexAwaitAgentInputSchema = z.object({ agentId: CodexAgentIdSchema }).strict();
 export const CodexStopAgentInputSchema = z.object({ agentId: CodexAgentIdSchema }).strict();
-export const CodexListAgentsInputSchema = z.object({}).strict();
+export const CodexListAgentsInputSchema = z
+	.object({
+		agentId: CodexAgentIdSchema.optional(),
+		detail: z.enum(["summary", "full"]).optional(),
+		limit: z.number().int().positive().max(50).optional(),
+	})
+	.strict();
 
 export const CodexGatewayRequestSchema = z.discriminatedUnion("kind", [
 	CodexStartAgentInputSchema.extend({ kind: z.literal("start"), operationId: OperationIdSchema }).strict(),

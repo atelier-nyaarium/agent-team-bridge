@@ -171,7 +171,7 @@ export class CodexRoute {
 				case "stop":
 					return json(await this.stop(req, owner, request));
 				case "list":
-					return json(this.list(owner));
+					return json(this.list(owner, request));
 				default:
 					return json({ error: "unsupported Codex request" }, 400);
 			}
@@ -322,11 +322,20 @@ export class CodexRoute {
 		return describeAgent(this.current(owner, agentId) ?? owned.agent, waitedTurnId);
 	}
 
-	private list(owner: SessionRecord): CodexListAgentsResult {
+	private list(
+		owner: SessionRecord,
+		request: Extract<ReturnType<typeof CodexGatewayRequestSchema.parse>, { kind: "list" }>,
+	): CodexListAgentsResult {
 		// The other trigger. A list is how a caller picks work back up after its own agent died, so it
 		// is exactly when a stale record most needs asking about.
 		this.deps.relay.reconcileStale(owner);
-		return projectCodexListResult(this.deps.service.listOwnedAgents(owner));
+		const agents = this.deps.service.listOwnedAgents(owner);
+		const selected =
+			request.agentId === undefined ? agents : agents.filter((agent) => agent.agentId === request.agentId);
+		return projectCodexListResult(selected, undefined, {
+			detail: request.agentId === undefined ? request.detail : "full",
+			limit: request.limit,
+		});
 	}
 
 	/**

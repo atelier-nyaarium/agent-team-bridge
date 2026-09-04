@@ -295,7 +295,7 @@ describe("Codex session isolation", () => {
 		expect(mine.agents).toHaveLength(1);
 		expect(theirs.agents).toHaveLength(1);
 		expect(mine.agents[0].agentId).not.toBe(theirs.agents[0].agentId);
-		expect(theirs.agents[0].exchanges[0].prompt).toBe("Not yours");
+		expect(theirs.agents[0].latestPromptFirstLine).toBe("Not yours");
 	});
 
 	it("refuses a daemon receipt whose owner key names no session", async () => {

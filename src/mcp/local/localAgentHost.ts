@@ -14,6 +14,10 @@ import {
 import { resolveWorkdir, workdirOrFallback } from "../../shared/agent-workdir.js";
 import {
 	CODEX_ACTIVITY_MAX_ITEMS,
+	CODEX_LIST_DEFAULT_LIMIT,
+	CODEX_LIST_FULL_DEFAULT_LIMIT,
+	CODEX_LIST_FULL_MAX_LIMIT,
+	CODEX_LIST_MAX_LIMIT,
 	CodexAgentResultSchema,
 	CodexGatewayRequestSchema,
 	CodexListAgentsResultSchema,
@@ -149,10 +153,34 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 	 * built per backend rather than handed over raw. Codex's public row IS the runtime's row, which is
 	 * why passing it straight through worked there and hid that Copilot's never matched.
 	 */
-	const listAgents = (): unknown =>
-		isCodex
-			? CodexListAgentsResultSchema.parse({ agents: runtime.list() })
-			: projectCopilotListResult(runtime.list().map(toCopilotListSource));
+	const listAgents = (request: { agentId?: string; detail?: "summary" | "full"; limit?: number }): unknown => {
+		if (!isCodex) return projectCopilotListResult(runtime.list().map(toCopilotListSource));
+		const all = runtime.list();
+		const selected = request.agentId === undefined ? all : all.filter((agent) => agent.agentId === request.agentId);
+		const detail = request.agentId === undefined ? (request.detail ?? "summary") : "full";
+		const defaultLimit = detail === "full" ? CODEX_LIST_FULL_DEFAULT_LIMIT : CODEX_LIST_DEFAULT_LIMIT;
+		const maxLimit = detail === "full" ? CODEX_LIST_FULL_MAX_LIMIT : CODEX_LIST_MAX_LIMIT;
+		const limit = Math.min(request.limit ?? defaultLimit, maxLimit);
+		const bounded = selected.slice(-limit).reverse();
+		const omitted = selected.length - bounded.length;
+		return CodexListAgentsResultSchema.parse({
+			detail,
+			agents:
+				detail === "full"
+					? bounded
+					: bounded.map((agent) => ({
+							agentId: agent.agentId,
+							...(agent.model === undefined ? {} : { model: agent.model }),
+							cwd: process.cwd(),
+							agentState: agent.agentState,
+							turnCount: agent.turns.length,
+							lastActiveAt: agent.updatedAt,
+							latestPromptFirstLine: agent.exchanges.at(-1)?.prompt.split("\n", 1)[0]?.slice(0, 256),
+						})),
+			omitted,
+			...(omitted === 0 ? {} : { notice: `Older agents omitted: ${omitted}.` }),
+		});
+	};
 
 	/** The result envelope cannot carry this: it only permits an error when the AGENT is unwell. */
 	const refuse = (message: string): unknown =>
@@ -165,7 +193,10 @@ export function createLocalAgentBackend(backend: AgentBackendDescriptor): LocalA
 			if (!parsed.success) return refuse(parsed.error.issues[0]?.message ?? `invalid request`);
 
 			const request = parsed.data;
-			if (request.kind === "list") return listAgents();
+			if (request.kind === "list")
+				return listAgents(
+					request as unknown as { agentId?: string; detail?: "summary" | "full"; limit?: number },
+				);
 			const answer = await runtime.handle({
 				kind: request.kind,
 				// Forwarded rather than dropped. It was validated by the schema above and then discarded
