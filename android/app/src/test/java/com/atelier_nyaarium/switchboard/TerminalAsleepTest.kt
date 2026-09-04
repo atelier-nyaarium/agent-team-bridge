@@ -7,9 +7,9 @@ import org.junit.Test
 /**
  * When the terminal stops peeking and reads as asleep.
  *
- * The defect this pins: an authoritative "available" row was taken as proof there was nothing to
- * show, so closing Claude to use the shell underneath and then reopening the thread landed on "This
- * session is asleep" over a pane that was still alive and typeable.
+ * The defect these pin: an "available" row was taken as proof there was nothing to show, so closing
+ * Claude to use the shell underneath and reopening the thread landed on "This session is asleep"
+ * over a pane that was still alive and typeable.
  */
 class TerminalAsleepTest {
 	private val now = 1_000L

@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -365,8 +366,8 @@ private fun isRootedFor(project: String, text: String): Boolean =
  *
  * Windows has no home this side can spell, so an empty field asks for the spawn point's OWN default
  * directory with a blank path, and the machine answers which directory that was. Elsewhere home is
- * `~/` and always was. A blank parent is the request, never a directory: nothing is ever listed
- * relative to it, because the answer replaces it with the absolute path it resolved.
+ * `~/`. A blank parent is the request, never a directory: nothing is ever listed relative to it,
+ * because the answer replaces it with the absolute path it resolved.
  */
 internal data class DirBrowse(val parent: String, val fragment: String, val listable: Boolean)
 
@@ -387,10 +388,10 @@ internal fun dirBrowse(text: String, isWindows: Boolean): DirBrowse {
  * prefix names the directory to list (fetched once per directory, cached for the dialog's life), and
  * the fragment after it filters that listing locally, so typing within a segment costs no round-trip
  * and only crossing a "/" boundary does. Blank shows "(default)" (the label-derived workdir); first
- * focus fills "~/" with the cursor after the slash and lists home immediately, and on Windows lists
- * the drives instead, since that machine has no home to imply. Every match renders
- * (no cutoff) in a drag-scrollable box, dot dirs sorted to the bottom and greyed but still selectable;
- * tapping a row completes it plus "/" and descends a level. */
+ * focus fills "~/" with the cursor after the slash and lists home immediately, except on Windows,
+ * which has no `~` to spell and instead asks the machine for its own default directory. Every match
+ * renders (no cutoff) in a drag-scrollable box, dot dirs sorted to the bottom and greyed but still
+ * selectable; tapping a row completes it plus "/" and descends a level. */
 @Composable
 fun DirectoryField(
 	value: TextFieldValue,
@@ -420,8 +421,9 @@ fun DirectoryField(
 	// IN for a blank field, so a cleared field still lists that directory and a tap still completes to
 	// an absolute path, without the text being written back.
 	var defaultDir by remember { mutableStateOf<String?>(null) }
-	// Offered once per dialog. Clearing the field is a decision, and refilling it undoes that decision.
-	var offeredDefault by remember { mutableStateOf(false) }
+	// Read at the moment of the write. The effect's keys do not change while a bare fragment is typed,
+	// so its captured value would still be the empty one that launched it.
+	val latestValue = rememberUpdatedState(value)
 	val text = value.text
 	// With no separator typed yet, home is the implied directory and the whole text is its filter.
 	// That covers a field cleared back to default (still focused, so the focus prefill cannot fire
@@ -441,15 +443,15 @@ fun DirectoryField(
 			return@LaunchedEffect
 		}
 		failures.remove(parent)
-		// A blank request asked for the machine's default directory, so the answer names it. Held as the
-		// stand-in directory, and offered to the field once: a slow answer must not overwrite what the
-		// owner typed meanwhile, and a cleared field must stay cleared.
+		// A blank request asked for the machine's default directory, so the answer names it. Holding it
+		// as the stand-in is what keeps a cleared field cleared: the parent stops being blank, so this
+		// branch cannot run a second time and offer the prefill again.
 		val resolved = listing.path
-		if (parent.isEmpty() && !resolved.isNullOrEmpty()) {
+		if (typedParent.isEmpty() && !resolved.isNullOrEmpty()) {
 			defaultDir = resolved
 			cache["$resolved/"] = listing.dirs
-			if (!offeredDefault && value.text.isEmpty()) {
-				offeredDefault = true
+			// Only into a field still empty now. A slow answer must not overwrite what was typed meanwhile.
+			if (latestValue.value.text.isEmpty()) {
 				val rooted = "$resolved/"
 				onValueChange(TextFieldValue(rooted, selection = TextRange(rooted.length)))
 			}

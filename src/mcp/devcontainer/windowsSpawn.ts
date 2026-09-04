@@ -130,21 +130,6 @@ function isPathShaped(hint: string): boolean {
 }
 
 /**
- * Immediate subdirectories of a WINDOWS directory, listed by Windows itself.
- *
- * Browsing `/mnt/c` from the Linux side was the cheap alternative and is wrong: the picker would
- * happily offer `/home/you/...`, which the launch then refuses, so it presents choices that cannot
- * work. It also cannot see a network drive, since only auto-mounted fixed drives appear under /mnt.
- * Listing through PowerShell costs one interpreter start (~0.36s) and removes both.
- *
- * `-Force` includes hidden and system directories, which is what a file picker should show on a
- * platform where plenty of real working directories are hidden. `-ErrorAction SilentlyContinue`
- * because an unreadable subdirectory is a normal condition, not a reason to fail the listing.
- *
- * Empty rather than throwing, matching listHostDirs: this feeds a type-ahead, which has no use for
- * the reason.
- */
-/**
  * The Windows home, spelled with forward slashes like every other path on this wire.
  *
  * A blank listing is the one request that cannot name its own directory: the picker asks for this
@@ -156,6 +141,23 @@ export function windowsHome(userProfile: string): string {
 	return userProfile.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
+/**
+ * Immediate subdirectories of a WINDOWS directory, listed by Windows itself.
+ *
+ * Browsing `/mnt/c` from the Linux side was the cheap alternative and is wrong: the picker would
+ * happily offer `/home/you/...`, which the launch then refuses, so it presents choices that cannot
+ * work. It also cannot see a network drive, since only auto-mounted fixed drives appear under /mnt.
+ * Listing through PowerShell costs one interpreter start (~0.36s) and removes both.
+ *
+ * `-Force` includes hidden and system directories, which is what a file picker should show on a
+ * platform where plenty of real working directories are hidden. `-ErrorAction SilentlyContinue`
+ * because an unreadable subdirectory is a normal condition, not a reason to fail the listing.
+ *
+ * A blank path asks for the machine's own home, which is the one directory this side cannot spell.
+ *
+ * Empty rather than throwing, matching listHostDirs: this feeds a type-ahead, which has no use for
+ * the reason.
+ */
 export function listWindowsDirs(rawPath: string, userProfile?: string): HostListDirsResult {
 	if (rawPath.length === 0) {
 		if (!userProfile) return { entries: [] };

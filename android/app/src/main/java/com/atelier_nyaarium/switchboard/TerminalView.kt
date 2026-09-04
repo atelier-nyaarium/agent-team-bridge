@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
  * A presence row says whether an AGENT registered. It never says whether the tmux PANE exists, and
  * those two differ for the whole time the owner has closed Claude to use the shell underneath. So an
  * "available" row is not evidence that there is nothing to show, however authoritative it is: the
- * terminal probes once per mount and lets the pane itself answer. That probe is the difference
+ * terminal probes while reachable and lets the pane itself answer. That probe is the difference
  * between coming back to a working terminal and coming back to "This session is asleep" over a shell
  * that is sitting right there.
  *
@@ -58,8 +58,8 @@ import kotlinx.coroutines.launch
  * known to be out of reach, which is the bound that keeps one Wake tap on a powered-off machine from
  * becoming an endless poll.
  *
- * The one probe is per mount, not per peek: a presence change while a peek is in flight cancels the
- * effect before its answer lands, and the next mount pays for one more.
+ * A reachable terminal without a pane keeps probing until a successful answer establishes that
+ * there is nothing to show.
  */
 internal fun terminalReadsAsleep(
 	presence: Presence?,
@@ -84,7 +84,7 @@ internal fun terminalReadsAsleep(
  *    TUI commands, nothing to receive them) swaps to a Wake up button firing onRelaunch;
  *  - a read-only container-logs snapshot while the session's tmux pane does not exist yet (a booting
  *    devcontainer), with no input since there is nothing to type into;
- *  - a centered Wake button ONLY when a probe found no pane, or the Gateway cannot be reached. A
+ *  - a centered Wake button ONLY when a successful probe found no pane, or the Gateway cannot be reached. A
  *    status drop back to "available" (Claude closed, tmux itself untouched) keeps showing that pane,
  *    with the Wake up button in the key row rather than over the terminal. See [terminalReadsAsleep].
  * onPeek carries the last hash so an idle frame round-trips only the hash, and returns a Result so a
@@ -133,8 +133,8 @@ fun TerminalView(
 	// the off-session screen reads "Waking..." and offers Retry rather than a first-time "Wake".
 	// Seeded from the repository's own outstanding receipt rather than from a status word: this
 	var wakeRequested by remember(team) { mutableStateOf(presence?.waking(System.currentTimeMillis()) == true) }
-	// Whether this mount's one probing peek has answered. A pane latches everSawTmuxFrame and the loop
-	// carries on; an absent one hands the question back to the idle gate.
+	// Whether this mount has received a successful probing answer. A pane latches everSawTmuxFrame;
+	// an absent one hands the question back to the idle gate.
 	var probed by remember(team) { mutableStateOf(false) }
 	// A long-press freezes the frame (this halts peeking) so its text can be selected and copied
 	// without the next frame wiping the selection; the Paused banner resumes.
@@ -185,15 +185,15 @@ fun TerminalView(
 						lastHash = r.hash
 						peekError = null
 						failCount = 0
+						// Marked once the answer is IN, not once the request goes out: a probe still in flight is
+						// not evidence of an empty pane, and stamping it early flashes the Wake screen over a
+						// terminal that is about to render.
+						probed = true
 					}
 					.onFailure {
 						peekError = it.message ?: "terminal unavailable"
 						failCount++
 					}
-				// Marked once the answer is IN, not once the request goes out: a probe still in flight is
-				// not evidence of an empty pane, and stamping it early flashes the Wake screen over a
-				// terminal that is about to render.
-				probed = true
 				// Back off while the session is not answering (asleep, stuck, or user-launched) so a
 				// long-open terminal does not docker-exec every cycle forever; a success resets to base.
 				delay(refreshMs * failCount.coerceIn(1, 8).toLong())
@@ -222,7 +222,7 @@ fun TerminalView(
 	// daemon's 2-peek hysteresis and the next poll.
 	val limit = remember(ansi) { if (ansi.isEmpty()) null else AgentScreen.limitNotice(ansi) }
 	// The same call the peek loop makes, so the screen and the polling cannot disagree about whether
-	// this session is asleep - two answers to one question is how the original defect got written.
+	// this session is asleep. Two answers to one question is what wrote the blank-terminal defect.
 	val asleepIdle =
 		terminalReadsAsleep(presence, wakeRequested, everSawTmuxFrame, probed, System.currentTimeMillis())
 	// The wake/error screen shows once there is no frame to display (a failed peek, or a wake in flight
