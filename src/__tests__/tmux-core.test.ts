@@ -573,6 +573,45 @@ describe("tmuxCore awaitReady", () => {
 		}
 	});
 
+	it("walks the cursor onto Yes and confirms an unnumbered trust dialog that rests on No, exit", async () => {
+		// A newer build on a fresh Windows machine, captured from the phone's terminal view.
+		stdoutData = [
+			" Accessing workspace:",
+			"",
+			" C:\\Users\\nyaarium",
+			"",
+			" Quick safety check: Is this a project you created",
+			" or one you trust? (Like your own code, a well-known",
+			" open source project, or work from your team). If",
+			" not, take a moment to review what's in this folder",
+			" first.",
+			"",
+			" Security guide",
+			"",
+			" > No, exit",
+			"   Yes, I trust this folder",
+			"",
+			" Enter to confirm · Esc to cancel",
+		].join("\n");
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 30 });
+		expect(res).toMatchObject({ alive: true, ready: false });
+		const keys = calls.filter((c) => c.includes("send-keys")).map((c) => c[c.length - 1]);
+		expect(keys.slice(0, 2)).toEqual(["Down", "Enter"]);
+		expect(calls.some((c) => c.includes("-l"))).toBe(false);
+	});
+
+	it("confirms an unnumbered non-trust prompt with Enter, and leaves a trust dialog with no cursor alone", async () => {
+		stdoutData = " Try the new fullscreen renderer?\n > Yes, try it\n   Not now";
+		await awaitReady(target, { pollMs: 5, timeoutMs: 30 });
+		const keys = calls.filter((c) => c.includes("send-keys")).map((c) => c[c.length - 1]);
+		expect(keys.slice(0, 1)).toEqual(["Enter"]);
+
+		calls.length = 0;
+		stdoutData = " Is this a project you created or one you trust?\n   No, exit\n   Yes, I trust this folder";
+		await awaitReady(target, { pollMs: 5, timeoutMs: 30 });
+		expect(calls.some((c) => c.includes("send-keys"))).toBe(false);
+	});
+
 	it('presses "1" when SGR escapes split the prompt phrase in a real -e capture', async () => {
 		// capture-pane -e wraps cells in SGR codes, so the phrase is not contiguous in the raw bytes;
 		// awaitReady must strip before matching, or the menu never gets cleared.

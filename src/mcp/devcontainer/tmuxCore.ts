@@ -36,9 +36,16 @@ const READY_POLL_MS = 1_000;
 // A dead launch never captures.
 const DEAD_LAUNCH_PROBES = 8;
 
-// Answered with "1".
+// Answered by choosing the first option: "1" while the menu is numbered, Enter once it is not.
 const STARTUP_PROMPT_RE =
 	/I am using this for local development|Is this a project you created|trust this folder|Try the new fullscreen renderer/;
+// Numbered options, the older shape, where a digit selects and confirms.
+const NUMBERED_MENU_RE = /^[ \t\u00a0]*[❯>][ \t\u00a0]*\d+\./mu;
+// The highlighted row of an unnumbered menu: an indented cursor glyph and the option text.
+const MENU_CURSOR_ROW_RE = /^[ \t\u00a0]+[❯>][ \t\u00a0]+\S/u;
+// The trust dialog's affirmative row. Newer builds rest the cursor on "No, exit", so Enter alone would
+// end the session; the cursor is walked onto this row first.
+const TRUST_YES_RE = /Yes, I trust this folder/u;
 
 // Answered with "2": full session, not summary. An unattended wake must not drop context.
 const RESUME_PROMPT_RE = /Resuming the full session will consume/;
@@ -318,6 +325,34 @@ function pressDigit(target: TmuxTarget, digit: string): Promise<void> {
 	});
 }
 
+/** A named key, for the menus a digit no longer answers. Daemon-pressed, so it skips the whitelist. */
+function pressKey(target: TmuxTarget, key: "Up" | "Down" | "Enter"): Promise<void> {
+	return serialized(targetKey(target), async () => {
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
+	});
+}
+
+/**
+ * Choose the first option of a numbered menu with its digit; on an unnumbered one, confirm the
+ * highlighted row with Enter, after walking the cursor onto the trust dialog's Yes row when that is
+ * the menu. A trust dialog whose cursor or Yes row cannot be found is left alone: Enter there could
+ * pick "No, exit", and an unanswered menu is still answerable from the terminal view.
+ */
+async function answerStartupPrompt(target: TmuxTarget, clean: string): Promise<void> {
+	if (NUMBERED_MENU_RE.test(clean)) return pressDigit(target, "1");
+	const lines = clean.split("\n");
+	const yes = lines.findIndex((line) => TRUST_YES_RE.test(line));
+	if (yes >= 0) {
+		const cursor = lines.findIndex((line) => MENU_CURSOR_ROW_RE.test(line));
+		if (cursor < 0) return;
+		// Options render contiguous; a blank row between them is layout, not a choice.
+		const [from, to] = cursor < yes ? [cursor, yes] : [yes, cursor];
+		const steps = lines.slice(from + 1, to + 1).filter((line) => line.trim() !== "").length;
+		for (let i = 0; i < steps; i += 1) await pressKey(target, cursor < yes ? "Down" : "Up");
+	}
+	await pressKey(target, "Enter");
+}
+
 /** Poll until the composer appears, pressing through the startup and resume menus. */
 export async function awaitReady(
 	target: TmuxTarget,
@@ -344,7 +379,7 @@ export async function awaitReady(
 		// A prompt outranks a stale composer sharing its frame.
 		if (STARTUP_PROMPT_RE.test(clean)) {
 			try {
-				await pressDigit(target, "1");
+				await answerStartupPrompt(target, clean);
 			} catch {
 				// Self-heals next poll.
 			}
