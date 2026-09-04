@@ -13,7 +13,10 @@
 			]
 		},
 		"opId": "capabilities-op",
-		"nonce": "qqW8lKiugRcmdUQ3HX3n+IfX"
+		"nonce": "qqW8lKiugRcmdUQ3HX3n+IfX",
+		"draws": {
+			"0": "qqW8lKiugRcmdUQ3HX3n+IfX"
+		}
 	},
 	"expect": {
 		"known": true,

@@ -136,7 +136,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `tests/fixtures/` - shared golden wire and signing fixtures; manifests drive both runtimes
 - `tests/fixtures/identity/set.json` - the one fixed identity set every harness and fixture generator reads; `scripts/gen-identity-set.ts` mints it
 - `tests/fixtures/wire/ts/` / `wire/kotlin/` - minted wire fixtures, each runtime's real composers under the set; `scripts/gen-wire-fixtures.ts` and `WireFixtureGenerator.kt` write them, `check:fixtures` and `kotlin-gate.sh` diff them
-- `src/testing/` - the federation harness: real Router and gateway graph in-process, fake host and session sockets, the TS phone driver, the console socket; `docs/testing.md`
+- `src/testing/` - the federation harness, `fixtureWorld.ts`, real Router and gateway graph in-process, fake host and session sockets, the TS phone driver, the console socket; `docs/testing.md`
 - `scripts/check-boot-runtime.ts` - the real entry points under Bun, one console op through a fake host
 - `skills/crosstalk/SKILL.md` - agent-facing tool reference
 

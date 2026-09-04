@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,16 +20,30 @@ internal fun shedDeadAttachmentFailures(
 }
 
 /** Fetches attachment bytes and sweeps residue. */
-internal class AttachmentOps(private val repo: ChatRepository) {
+internal interface AttachmentOpsCollaborators {
+	fun clientOrNull(): ConsoleClient?
+	suspend fun routerBlobRange(domainId: String, blobId: String, offset: Long, originGateway: String?): Pair<ByteArray, Boolean>?
+	fun attachmentBuckets(): Set<String>?
+}
+
+internal class AttachmentOps(
+	private val state: MutableStateFlow<ChatState>,
+	private val persistence: ChatPersistence,
+	private val client: ClientPort,
+	private val identity: IdentityPort,
+	private val filesDir: File,
+	private val scope: () -> CoroutineScope?,
+	private val collaborators: AttachmentOpsCollaborators,
+) {
 	/** Range answers declare whether bytes are sealed. */
 	private suspend fun fromRouterCache(blobId: String, originGateway: String?): java.io.File? {
-		val domain = repo.ownerOps.domainId() ?: return null
-		val client = repo.client()
-		var offset = client.blobs.stat(blobId).have
+		val domain = identity.readyOrNull()?.domainId ?: return null
+		val activeClient = client.client()
+		var offset = activeClient.blobs.stat(blobId).have
 		while (true) {
-			val answer = repo.routerBlobRange(domain, blobId, offset, originGateway) ?: return null
-			val written = client.blobs.write(blobId, offset, answer.first, answer.second)
-			if (answer.second) return if (written.complete) client.blobs.path(blobId) else null
+			val answer = collaborators.routerBlobRange(domain, blobId, offset, originGateway) ?: return null
+			val written = activeClient.blobs.write(blobId, offset, answer.first, answer.second)
+			if (answer.second) return if (written.complete) activeClient.blobs.path(blobId) else null
 			if (written.have <= offset) return null
 			offset = written.have
 		}
@@ -52,47 +68,47 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 
 	/** Cold-start orphan sweep. Run before polling. */
 	suspend fun sweepOrphanAttachments() = withContext(Dispatchers.IO) {
-		val referencedSrcs = repo._state.value.threads.values.asSequence()
+		val referencedSrcs = state.value.threads.values.asSequence()
 			.flatMap { it.asSequence() }
 			.flatMap { it.files.asSequence() }
 			.map { it.src }
-			.toList() + repo._state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
-			repo._state.value.drafts.values.flatMap { it.files }.map { it.src }
+			.toList() + state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
+			state.value.drafts.values.flatMap { it.files }.map { it.src }
 		// Video frames have separate buckets.
 		val frameBuckets = (
-			repo._state.value.threads.values.asSequence().flatMap { it.asSequence() }.flatMap { it.files.asSequence() } +
-				repo._state.value.drafts.values.asSequence().flatMap { it.files.asSequence() } +
+			state.value.threads.values.asSequence().flatMap { it.asSequence() }.flatMap { it.files.asSequence() } +
+				state.value.drafts.values.asSequence().flatMap { it.files.asSequence() } +
 				// Include banked-send videos.
-				repo._state.value.scheduledSends.values.asSequence().flatMap { it.fileRefs.asSequence() }
+				state.value.scheduledSends.values.asSequence().flatMap { it.fileRefs.asSequence() }
 			)
 			.filter { it.mime.startsWith("video/") }
 			.mapNotNull { VideoThumbs.keyFor(it) }
 			.map { VideoThumbs.bucketFor(it) }
 			.toSet()
 		// Unknown boards retain all board buckets.
-		val keep = repo.boardOps.attachmentBuckets()
-		if (keep != null) Attachments.sweepOrphanBuckets(repo.filesDir, referencedSrcs, frameBuckets + keep)
+		val keep = collaborators.attachmentBuckets()
+		if (keep != null) Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, frameBuckets + keep)
 		// Prune staged blobs before polling.
-		val freed = repo.client?.pruneStaleBlobs(ChatRepository.STALE_BLOB_MAX_AGE_MS) ?: 0L
+		val freed = collaborators.clientOrNull()?.pruneStaleBlobs(ChatRepository.STALE_BLOB_MAX_AGE_MS) ?: 0L
 		if (freed > 0) DebugLog.log("Attachments", "pruned $freed bytes of transfer residue")
 	}
 
 	/** Schedules background deletion. */
 	fun scheduleAttachmentDelete(srcs: List<String>) {
 		if (srcs.isEmpty()) return
-		repo.drain.scope?.launch(Dispatchers.IO) { Attachments.deleteFiles(repo.filesDir, srcs) }
+		scope()?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
 	}
 
 	/** Fetches pending attachments one at a time. */
 	fun fetchPendingAttachments() {
-		val client = repo.client ?: return
+		val activeClient = collaborators.clientOrNull() ?: return
 		// Release if dispatch cannot run.
-		val scope = repo.drain.scope ?: return
+		val activeScope = scope() ?: return
 		if (!fetchingAttachments.compareAndSet(false, true)) return
-		val job = scope.launch(Dispatchers.IO) {
+		val job = activeScope.launch(Dispatchers.IO) {
 			try {
 				// Snapshot pending work.
-				val pending = repo._state.value.threads.flatMap { (team, msgs) ->
+				val pending = state.value.threads.flatMap { (team, msgs) ->
 					msgs.flatMap { m ->
 						m.files.filter { it.blobId != null && it.src == null }.map { Triple(team, m, it) }
 					}
@@ -103,7 +119,7 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 					if (attachmentFetchFailures.getOrDefault(blobId, 0) >= ChatRepository.MAX_ATTACHMENT_FETCH_TRIES) continue
 						// Prefer the Router cache.
 					val source = runCatchingCancellable {
-						fromRouterCache(blobId, file.blobGateway) ?: client.downloadBlob(blobId, file.blobGateway)
+						fromRouterCache(blobId, file.blobGateway) ?: activeClient.downloadBlob(blobId, file.blobGateway)
 					}
 						.onFailure {
 							// Count failures per blob.
@@ -116,11 +132,11 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 					attachmentFetchFailures.remove(blobId)
 					_failedAttachmentFetches.update { s -> s - blobId }
 					val src =
-						Attachments.land(repo.filesDir, Attachments.bucketFor(message.epoch, message.seq), file.name, source)
+						Attachments.land(filesDir, Attachments.bucketFor(message.epoch, message.seq), file.name, source)
 							?: continue
 					landFetchedAttachment(team, message.id, file.name, src)
 					// Attachments bucket owns the landed bytes.
-					client.forgetBlob(blobId)
+					activeClient.forgetBlob(blobId)
 				}
 			} finally {
 				fetchingAttachments.set(false)
@@ -133,7 +149,7 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 	/** Restores a landed row file. */
 	private fun landFetchedAttachment(team: String, messageId: Long, name: String, src: String) {
 		var changed = false
-		val threads = repo._state.updateAndGet { s ->
+		val threads = state.updateAndGet { s ->
 			// Re-establish on every CAS attempt.
 			changed = false
 			val thread = s.threads[team] ?: return@updateAndGet s
@@ -153,6 +169,6 @@ internal class AttachmentOps(private val repo: ChatRepository) {
 			val next = thread.toMutableList().also { it[idx] = row.copy(files = files) }
 			s.copy(threads = s.threads + (team to next))
 		}.threads
-		if (changed) repo.persistence.persistThreads(threads)
+		if (changed) persistence.persistThreads(threads)
 	}
 }

@@ -75,6 +75,23 @@ fun LockScreen(onUnlock: () -> Unit) {
 	}
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DomainConnectingScreen(onSettings: () -> Unit) {
+	Scaffold(
+		topBar = {
+			TopAppBar(
+				title = { Text("Set up") },
+				actions = { IconButton(onClick = hapticClick(onSettings)) { Icon(Icons.Default.Settings, contentDescription = "Settings") } },
+			)
+		},
+	) { pad ->
+		Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+			Text("Connecting...", style = MaterialTheme.typography.titleLarge)
+		}
+	}
+}
+
 /**
  * The neutral fresh-open: one "Scan your setup code" screen.
  *

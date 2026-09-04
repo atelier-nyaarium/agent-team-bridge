@@ -23,8 +23,6 @@ import {
 } from "../shared/federation-proofs.js";
 import { FEDERATION_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { BEARER_PREFIX, ROUTER_PATHS } from "../shared/wire-vocabulary.js";
-import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
-import { RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type ConsoleSockets, createConsoleSockets } from "./console/consoleSockets.js";
 import { APP_TOKEN_HEADER, ConsoleSurface, type RouterReachAnswer } from "./consoleSurface.js";
 import { DeviceApprovalCoordinator } from "./deviceApprovalCoordinator.js";
@@ -33,17 +31,14 @@ import { dispatchEnrollOp, EnrollmentCoordinator, resolveEnrollRoute } from "./e
 import type { FileSecretStore } from "./fileSecretStore.js";
 import { GatewayBridge } from "./gatewayBridge.js";
 import { WS_MAX_PAYLOAD_BYTES } from "./gatewayTransport.js";
-import { InboxService } from "./inbox/inboxService.js";
 import { OwnerOpIntake } from "./inbox/ownerOpIntake.js";
-import { OwnerStoreRegistry } from "./inbox/ownerStoreRegistry.js";
-import { createLeaseService, readRouterMigrationWindow } from "./migration/leaseService.js";
 import { decideServe } from "./migration/serveGate.js";
-import { DomainQuota } from "./owner/domainQuota.js";
 import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { createOwnerServices } from "./ownerServices.js";
 import { PublicApproval } from "./publicApproval.js";
 import { buildRoster, type RosterDomain } from "./roster.js";
-import { loadRouterTls, type RouterTls } from "./routerTls.js";
+import { RouterDomainBootstrap } from "./routerDomainBootstrap.js";
+import type { RouterTls } from "./routerTls.js";
 import { TenantAdmin } from "./tenantAdmin.js";
 import { TrustRendezvousCoordinator } from "./trustRendezvousCoordinator.js";
 
@@ -83,22 +78,24 @@ export class RouterServer {
 	private readonly rosterNonces = new Map<string, number>();
 	private readonly transportNonces = new Map<string, number>();
 	private readonly trustPendingNonces = new Map<string, number>();
-	private readonly tls: RouterTls;
-	private readonly ownerRegistry: OwnerStoreRegistry;
-	private readonly inbox: InboxService;
-	private readonly blobCache: RouterBlobCache;
-	private readonly referenceHeld: ReferenceHeldStore;
+	private readonly domain: RouterDomainBootstrap;
 	private readonly sweepTimer: ReturnType<typeof setInterval>;
 	private readonly ownerOps: OwnerOpIntake;
 	private readonly consoleSockets: ConsoleSockets;
 	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
-	private readonly leases: ReturnType<typeof createLeaseService>;
 	private readonly now: () => number;
 
 	public constructor(private readonly params: RouterServerParams) {
 		const now = params.now ?? Date.now;
 		this.now = now;
-		this.tls = params.tls ?? loadRouterTls(params.dataDir);
+		this.domain = RouterDomainBootstrap.assemble({
+			dataDir: params.dataDir,
+			store: params.store,
+			now,
+			tls: params.tls,
+			quotaBytes: Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024),
+			blobCacheBytes: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
+		});
 		this.wsServer.on("error", () => {});
 		this.deviceApproval = new DeviceApprovalCoordinator(undefined, undefined, undefined, now);
 		this.enrollHandshake = new EnrollHandshakeCoordinator(undefined, undefined, undefined, now);
@@ -111,38 +108,17 @@ export class RouterServer {
 			},
 			now,
 		);
-		const limit = Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024);
-		this.ownerRegistry = new OwnerStoreRegistry({
-			dataDir: params.dataDir,
-			ownerOf: (domainId) => params.store.loadDomain(domainId)?.ownerSignPub ?? null,
-			quotaFor: () => new DomainQuota({ dir: params.dataDir, limitBytes: limit }),
-			now,
-		});
-		this.leases = createLeaseService({
-			registry: this.ownerRegistry,
-			migrationWindow: readRouterMigrationWindow,
-		});
-		this.inbox = new InboxService(this.ownerRegistry, {
-			signPub: params.store.persistedIdentity.sign.pub,
-			signPriv: params.store.persistedIdentity.sign.priv,
-		});
-		this.blobCache = new RouterBlobCache({
-			dataDir: params.dataDir,
-			quotaBytesPerDomain: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
-			now,
-		});
-		this.referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir, quotaBytesPerDomain: limit });
 		this.ownerOps = new OwnerOpIntake({
-			inbox: this.inbox,
+			inbox: this.domain.inbox,
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			push: (domainId, address, rows) => this.bridge.pushInboxRows(domainId, address, rows),
-			leases: this.leases,
+			leases: this.domain.leases,
 			now,
 		});
 		this.bridge = new GatewayBridge({
 			port: params.port,
 			authToken: params.federationToken,
-			inbox: this.inbox,
+			inbox: this.domain.inbox,
 			now,
 			adminDomainId: () => params.store.adminDomainId(),
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
@@ -159,10 +135,10 @@ export class RouterServer {
 		this.consoleSockets = createConsoleSockets({
 			handleOwnerOp: (raw) => this.ownerOps.handle(raw),
 			registerConsumer: (domainId, signerSignPub, incarnation) =>
-				this.inbox.registerConsumer(domainId, signerSignPub, incarnation),
+				this.domain.inbox.registerConsumer(domainId, signerSignPub, incarnation),
 			readOwner: (domainId, signerSignPub, fromSeq, limit, cursorEpoch) => {
 				try {
-					return this.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch);
+					return this.domain.inbox.readOwner(domainId, signerSignPub, fromSeq, limit, cursorEpoch);
 				} catch (error) {
 					if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
 					throw error;
@@ -170,16 +146,16 @@ export class RouterServer {
 			},
 			readOwnerKeyRows: (domainId, ownerSignPub, sinceMs) => {
 				try {
-					return this.inbox.readOwnerKeyRows(domainId, ownerSignPub, sinceMs);
+					return this.domain.inbox.readOwnerKeyRows(domainId, ownerSignPub, sinceMs);
 				} catch (error) {
 					if (error instanceof OwnerQuarantined) return { outcome: "durability_uncertain" as const };
 					throw error;
 				}
 			},
-			now: () => this.ownerRegistry.now(),
+			now: () => this.domain.ownerRegistry.now(),
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
-				this.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
-			ownerFloor: (domainId) => this.inbox.ownerFloor(domainId),
+				this.domain.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
+			ownerFloor: (domainId) => this.domain.inbox.ownerFloor(domainId),
 			planeVersions: (domainId, signerSignPub) =>
 				this.ownerServices?.planeVersions(domainId, signerSignPub) ?? {},
 			readPlane: (domainId, signerSignPub, name) => this.ownerServices?.readPlane(domainId, signerSignPub, name),
@@ -201,22 +177,22 @@ export class RouterServer {
 		});
 		this.bridge.setOwnerRowPush((domainId, row) => this.consoleSockets.pushOwnerRow(domainId, null, row));
 		this.ownerServices = createOwnerServices({
-			registry: this.ownerRegistry,
-			inbox: this.inbox,
+			registry: this.domain.ownerRegistry,
+			inbox: this.domain.inbox,
 			bridge: this.bridge,
 			intake: this.ownerOps,
-			referenceHeld: this.referenceHeld,
+			referenceHeld: this.domain.referenceHeld,
 			consoleSockets: this.consoleSockets,
 			routerIdentity: {
-				signPub: params.store.persistedIdentity.sign.pub,
-				signPriv: params.store.persistedIdentity.sign.priv,
+				signPub: this.domain.identity.sign.pub,
+				signPriv: this.domain.identity.sign.priv,
 			},
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			hasLinkEdge: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
 			linkEdgeId: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.linkEdgeId(srcDomainId, dstDomainId) ?? null,
-			leases: this.leases,
+			leases: this.domain.leases,
 		});
 		this.console = new ConsoleSurface({
 			port: params.port,
@@ -275,8 +251,8 @@ export class RouterServer {
 				process.exit(1);
 			}
 			try {
-				this.inbox.sweep();
-				this.blobCache.sweep();
+				this.domain.inbox.sweep();
+				this.domain.blobCache.sweep();
 				this.ownerServices.sweep();
 			} catch (error) {
 				console.warn(`[router] sweep failed: ${(error as Error).message}`);
@@ -296,9 +272,12 @@ export class RouterServer {
 		this.ownerServices.rearm();
 		const transport = this.bridge.transportAdapter;
 		if (!transport) throw new Error("gateway transport unavailable");
-		this.server = https.createServer({ cert: this.tls.certPem, key: this.tls.keyPem }, (request, response) => {
-			void this.serve(request, response);
-		});
+		this.server = https.createServer(
+			{ cert: this.domain.tls.certPem, key: this.domain.tls.keyPem },
+			(request, response) => {
+				void this.serve(request, response);
+			},
+		);
 		this.server.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
 			const console = url.pathname === ROUTER_PATHS.console;
@@ -350,7 +329,7 @@ export class RouterServer {
 				const address = this.server?.address();
 				const port = typeof address === "object" && address ? address.port : this.params.port;
 				console.log(`[federation-router] listening on ${port}`);
-				console.log(`[federation-router] TLS fingerprint ${this.tls.certFp}`);
+				console.log(`[federation-router] TLS fingerprint ${this.domain.tls.certFp}`);
 				resolve();
 			});
 		});
@@ -372,7 +351,7 @@ export class RouterServer {
 		const server = this.server;
 		this.server = null;
 		if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-		this.ownerRegistry.close();
+		this.domain.ownerRegistry.close();
 	}
 
 	public get gatewayBridge(): GatewayBridge {
@@ -454,9 +433,9 @@ export class RouterServer {
 					ok: true,
 					version: packageJson.version,
 					protocolVersion: FEDERATION_PROTOCOL_VERSION,
-					certFingerprint: this.tls.certFp,
+					certFingerprint: this.domain.tls.certFp,
 					gateways: this.bridge.registeredGatewayCount,
-					...this.ownerRegistry.health(),
+					...this.domain.ownerRegistry.health(),
 				}),
 			);
 		}
@@ -497,7 +476,7 @@ export class RouterServer {
 		let coordinator = this.coordinators.get(domainId);
 		if (!coordinator) {
 			coordinator = new EnrollmentCoordinator(
-				this.params.store.persistedIdentity,
+				this.domain.identity,
 				this.params.store.domainStore(domainId),
 				domainId,
 			);
@@ -522,7 +501,7 @@ export class RouterServer {
 		const result = await dispatchEnrollOp(coordinator, op, this.tenantAdmin);
 		if (!result.ok) return result;
 		if (op.kind === "submit_revocation") {
-			this.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
+			this.domain.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
 			this.consoleSockets.forget(domainId, op.revocation.revocation.signPub);
 		}
 		if (op.kind === "submit_admission" || op.kind === "submit_revocation") {
@@ -598,7 +577,7 @@ export class RouterServer {
 		return {
 			ok: true,
 			routerUrl: `https://${host}:${port}`,
-			routerCertFp: this.tls.certFp,
+			routerCertFp: this.domain.tls.certFp,
 			bearer: this.params.federationToken,
 		};
 	}

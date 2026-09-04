@@ -51,6 +51,8 @@ data class ChatState(
 	/** Connected Gateway id, learned from the register result. Empty before the first
 	 * federation-aware connect, where bare names resolve to the local Gateway. */
 	val homeGatewayId: String = "",
+	/** Confirmed by reach or roster. */
+	val domainId: String? = null,
 	/** Epoch ms while a post-enrollment allowlist sync is in progress: the device is admitted but the
 	 * home Gateway has not re-synced, so sealed ops transiently reject. Drives the calm SYNCING
 	 * header; cleared once an op succeeds or the grace lapses. */

@@ -1,16 +1,39 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.SttsProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+internal interface PlaybackPort {
+	val stts: SttsPlayer
+	fun sttsClient(): SttsClient?
+	fun currentProvider(): SttsProvider?
+	fun sttsVoiceFor(providerId: String): String
+	val sttsVolume: Int
+	val sttsChimeVolume: Int
+	val sttsAutoPlay: String
+	fun sttsReady(): Boolean
+}
+
+internal interface PlaybackOpsCollaborators {
+	fun openThread(team: String): String
+}
 
 /** The playback surface: the autoplay queue, the chime/sentinel marker sequence in front of it, and
  * every transport control a UI surface drives either one with. PlaybackOps is the single owner of the
  * whole playback serialization boundary - the queue, its advance mutex, and every piece of state that
  * boundary protects. What a surface only READS is answered by [PlaybackReadModels], which takes no
  * lock because it mutates nothing; the queries below forward to it. */
-internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovision {
+internal class PlaybackOps(
+	private val state: MutableStateFlow<ChatState>,
+	private val repoScope: CoroutineScope,
+	private val playback: PlaybackPort,
+	private val collaborators: PlaybackOpsCollaborators,
+) : ClearsOnReprovision {
 	/** What autoplay still has to speak. This class owns it and advances it; [SttsPlayer] stays a
 	 * one-shot engine that knows nothing about what comes next. */
 	private val queue = PlaybackQueue()
@@ -19,17 +42,17 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * read the head before mutating it; `scheduledSendFireMutex` guards the same shape for sends. */
 	private val advanceMutex = Mutex()
 
-	private val reads = PlaybackReadModels(repo, queue) { transportPaused }
+	private val reads = PlaybackReadModels(state, playback, queue) { transportPaused }
 
 	// The queue advances off terminals, so it subscribes for the process's lifetime rather than with a
 	// screen: a backgrounded burst has no UI listening and must still walk forward.
 	init {
-		repo.stts.addListener { event ->
+		playback.stts.addListener { event ->
 			if (event is Event.Ended) {
 				val entry = QueueEntry(event.team, event.at, event.tier)
 				// `gen` is carried, not dropped: it is the only field that says WHICH request ended,
 				// and a marker's entry key is shared by every run of the same session.
-				repo.repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen, event.reason) }
+				repoScope.launch { onPlaybackEnded(entry, event.outcome, event.gen, event.reason) }
 			}
 		}
 	}
@@ -40,7 +63,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * work. Cache and single-flight live in SttsPlayer. No-op when unconfigured or the message is gone.
 	 */
 	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
-		repo.stts.post { startPlayback(team, at, tier) }
+		playback.stts.post { startPlayback(team, at, tier) }
 	}
 
 	/** Null when the engine TOOK this message, which is the same as a terminal now being owed for it.
@@ -58,22 +81,22 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		// message, an unspeakable row), each named so the alert is never left with only a generic
 		// failure.
 	): String? {
-		val client = repo.sttsClient() ?: return "no voice key set"
-		val provider = repo.currentProvider() ?: return "no voice provider set"
-		val msg = repo._state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe }
+		val client = playback.sttsClient() ?: return "no voice key set"
+		val provider = playback.currentProvider() ?: return "no voice provider set"
+		val msg = state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe }
 			?: return "message is no longer here"
-		val text = ttsTextFramed(repo._state.value, msg, tier, attributed)
+		val text = ttsTextFramed(state.value, msg, tier, attributed)
 		if (text.isBlank()) return "nothing to read aloud"
-		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		val taken = repo.stts.play(client, provider, voice, team, at, tier, text, repo.sttsVolume, yielding, "${msg.epoch}-${msg.seq}")
+		val voice = playback.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		val taken = playback.stts.play(client, provider, voice, team, at, tier, text, playback.sttsVolume, yielding, "${msg.epoch}-${msg.seq}")
 		return if (taken) null else "already speaking"
 	}
 
 	fun playStatesFor(team: String): Map<Long, String> = reads.playStatesFor(team)
 
-	fun isMessagePlaying(team: String, at: Long): Boolean = repo.stts.isPlayingMessage(team, at)
+	fun isMessagePlaying(team: String, at: Long): Boolean = playback.stts.isPlayingMessage(team, at)
 
-	fun stopMessage(team: String, at: Long) = repo.stts.stopMessage(team, at)
+	fun stopMessage(team: String, at: Long) = playback.stts.stopMessage(team, at)
 
 	/** Advances on a terminal like the queue, not through a second mechanism. Held here, not on
 	 * [QueueEntry]: what an entry consists of is not the queue's business. */
@@ -117,7 +140,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			// Re-checked under the lock, not just at the drain. A burst job runs on its own coroutine
 			// and can land after a close or forget has already swept this team, putting an entry back
 			// into a queue the teardown believed it had emptied.
-			if (requireFollowed && team !in repo._state.value.openTabs) return
+			if (requireFollowed && team !in state.value.openTabs) return
 			// Asked BEFORE the enqueue: mid-run the queue is never idle, so the chime marks the run
 			// rather than every message in it.
 			val beginsRun = queue.isIdle()
@@ -133,8 +156,8 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 		pendingMarkers.clear()
 		markersFor = entry
 		if (chime) pendingMarkers.addLast(Marker.Chime)
-		val msg = repo._state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: return
-		pendingMarkers.addLast(Marker.Spoken(sentinelText(repo._state.value, msg, entry.team)))
+		val msg = state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: return
+		pendingMarkers.addLast(Marker.Spoken(sentinelText(state.value, msg, entry.team)))
 	}
 
 	private fun clearMarkers() {
@@ -149,7 +172,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	private fun nextMarkerStarted(): Boolean {
 		while (pendingMarkers.isNotEmpty()) {
 			val started = when (val marker = pendingMarkers.removeFirst()) {
-				is Marker.Chime -> chimeSource?.invoke()?.let { repo.stts.playChime(it, repo.sttsChimeVolume) }
+				is Marker.Chime -> chimeSource?.invoke()?.let { playback.stts.playChime(it, playback.sttsChimeVolume) }
 				is Marker.Spoken -> speakMarker(marker.text)
 			}
 			// A marker that will not play is skipped rather than allowed to stall the body behind it:
@@ -164,10 +187,10 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	}
 
 	private fun speakMarker(text: String): Long? {
-		val client = repo.sttsClient() ?: return null
-		val provider = repo.currentProvider() ?: return null
-		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		return repo.stts.playMarker(client, provider, voice, text, repo.sttsVolume)
+		val client = playback.sttsClient() ?: return null
+		val provider = playback.currentProvider() ?: return null
+		val voice = playback.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		return playback.stts.playMarker(client, provider, voice, text, playback.sttsVolume)
 	}
 
 	/** Set by the app layer: this class deliberately holds no Context, the same seam the alarm
@@ -218,8 +241,8 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 				// been torn down and a new one staged, and a stale callback that re-bound to whatever
 				// was current would drive the new entry's sequence and drop its body unspoken.
 				val owner = head
-				repo.stts.afterGap {
-					repo.repoScope.launch {
+				playback.stts.afterGap {
+					repoScope.launch {
 						advanceMutex.withLock {
 							if (markersFor != owner || queue.playing() != owner) return@withLock
 							if (nextMarkerStarted()) return@withLock
@@ -257,14 +280,14 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			// Tearing the thread down is not a pause. Swept across the whole TEAM rather than the entry
 			// handed back: a pause parks its message in pending, so the one entry that actually holds an
 			// offset is never the head, and the head is all a teardown is told about.
-			queue.dropTeam(team)?.let { repo.stts.abandon(it.team, it.at, it.tier, remember = false) }
-			repo.stts.forgetTeamPositions(team)
+			queue.dropTeam(team)?.let { playback.stts.abandon(it.team, it.at, it.tier, remember = false) }
+			playback.stts.forgetTeamPositions(team)
 			// A marker lives under its own reserved team, so dropping the message's team cannot reach
 			// one already handed to the engine. Abandoned by its own identity rather than by stopping
 			// whatever is audible: the marker may still be synthesizing and hold no sound yet, and
 			// what IS audible may belong to a team nobody asked to silence.
 			if (markersFor?.team == team) {
-				markerInFlight?.let { repo.stts.abandonGeneration(it) }
+				markerInFlight?.let { playback.stts.abandonGeneration(it) }
 				clearMarkers()
 			}
 			resumeIfSilent()
@@ -337,17 +360,17 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * play. Warming is idempotent per entry, so calling it on every change is free. Deliberately keeps
 	 * going while the run is PAUSED: a pause means the person is busy, not that the work should stop. */
 	private fun warmQueued() {
-		val client = repo.sttsClient() ?: return
-		val provider = repo.currentProvider() ?: return
-		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		val state = repo._state.value
+		val client = playback.sttsClient() ?: return
+		val provider = playback.currentProvider() ?: return
+		val voice = playback.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		val state = state.value
 		for (entry in queue.queued()) {
 			val tier = entry.tier ?: continue
 			val msg = state.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe } ?: continue
 			// The words the RUN will speak, not the attributed form a hand-play uses - the cache is keyed
 			// on the text, so warming the other one would fill the cache and still synthesize live.
 			val text = ttsTextFramed(state, msg, tier, attributed = false)
-			if (text.isNotBlank()) repo.stts.cache.warm(client, provider, voice, entry.team, entry.at, tier, text, "${msg.epoch}-${msg.seq}")
+			if (text.isNotBlank()) playback.stts.cache.warm(client, provider, voice, entry.team, entry.at, tier, text, "${msg.epoch}-${msg.seq}")
 		}
 	}
 
@@ -355,7 +378,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * question: the queue is headless the instant it stands down, and answering the wrong one is how it
 	 * ends up speaking over the playback it just yielded to. Callers hold [advanceMutex]. */
 	private fun resumeIfSilent() {
-		if (transportPaused || queue.playing() != null || repo.stts.isSounding()) return
+		if (transportPaused || queue.playing() != null || playback.stts.isSounding()) return
 		queue.startNext()?.let { speak(it) }
 	}
 
@@ -368,7 +391,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 			// - autoplay AND the in-thread button, which share this start path - would be refused.
 			if (queue.isIdle()) return@withLock
 			transportPaused = true
-			markerInFlight?.let { repo.stts.abandonGeneration(it) }
+			markerInFlight?.let { playback.stts.abandonGeneration(it) }
 			clearMarkers()
 			val head = queue.playing()
 			if (head != null) {
@@ -382,7 +405,7 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 				// files nothing rather than cutting the opening off the body.
 				queue.requeueFront(head)
 				parkedAnnounced = head
-				repo.stts.abandon(head.team, head.at, head.tier, remember = true)
+				playback.stts.abandon(head.team, head.at, head.tier, remember = true)
 				queue.advance(head, SttsPlayer.Outcome.PREEMPTED)
 			}
 		}
@@ -439,8 +462,8 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 				queue.drop(entry)
 				// Giving up on a message gives up on where it had got to, exactly as a skip does - which
 				// the abandon is told outright rather than left to work out from the outcome.
-				repo.stts.abandon(entry.team, entry.at, entry.tier, remember = false)
-				repo.stts.forgetPosition(entry.team, entry.at, entry.tier)
+				playback.stts.abandon(entry.team, entry.at, entry.tier, remember = false)
+				playback.stts.forgetPosition(entry.team, entry.at, entry.tier)
 				// A way to EMPTY the queue has to be a way to release a pause. Trashing the entry a pause
 				// parked otherwise leaves the flag set over an idle queue, refusing every later run on
 				// every team with no enabled control left to clear it.
@@ -454,10 +477,10 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	/** Retire a NAMED head and start whatever follows it. The shared body of skip and of trashing the
 	 * tile that is speaking, so the two cannot drift; both must already hold [advanceMutex]. */
 	private fun retireHead(head: QueueEntry) {
-		markerInFlight?.let { repo.stts.abandonGeneration(it) }
+		markerInFlight?.let { playback.stts.abandonGeneration(it) }
 		clearMarkers()
-		repo.stts.forgetPosition(head.team, head.at, head.tier)
-		repo.stts.abandon(head.team, head.at, head.tier, remember = false)
+		playback.stts.forgetPosition(head.team, head.at, head.tier)
+		playback.stts.abandon(head.team, head.at, head.tier, remember = false)
 		// STOPPED, not COMPLETED. The queue advances on both, but only COMPLETED means "heard" - and a
 		// skip that claimed it did cleared the message out of the failures list, telling the user they
 		// had heard the very thing they had just given up on.
@@ -492,12 +515,12 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	 * since - a marker, or the next message. */
 	fun seekPlayback(ms: Long) {
 		val snap = playbackPosition() ?: return
-		repo.stts.seekTo(snap.owner, ms)
+		playback.stts.seekTo(snap.owner, ms)
 	}
 
 	/** Open the thread a queue entry belongs to, returning the CANONICAL key its tab is filed under.
 	 * Revealing the message is the caller's half: only the view layer can scroll, and this class holds none. */
-	fun jumpTo(entry: QueueEntry): String = repo.openThread(entry.team)
+	fun jumpTo(entry: QueueEntry): String = collaborators.openThread(entry.team)
 
 	fun queueCounts(): Triple<Int, Boolean, Int> = reads.queueCounts()
 
@@ -519,14 +542,14 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	private fun speakBody(entry: QueueEntry) {
 		val tier = entry.tier
 		if (tier == null) {
-			repo.repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = "no tier to speak") }
+			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = "no tier to speak") }
 			return
 		}
 		// Yielding: by the time this reaches the player the user may have started something of their
 		// own, and autoplay stands down rather than talking over it.
-		repo.stts.post {
+		playback.stts.post {
 			startPlayback(entry.team, entry.at, tier, yielding = true, attributed = false)?.let { why ->
-				repo.repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = why) }
+				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR, reason = why) }
 			}
 		}
 	}
@@ -548,30 +571,30 @@ internal class PlaybackOps(private val repo: ChatRepository) : ClearsOnReprovisi
 	// internal (not private): the poll loop (PollDrain.start) preloads the first message of
 	// an eligible burst before the notification fires.
 	internal fun preloadMessage(team: String, at: Long) {
-		val client = repo.sttsClient() ?: return
-		val provider = repo.currentProvider() ?: return
-		val msg = repo._state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
-		val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		repo.stts.cache.preloadTiers(
+		val client = playback.sttsClient() ?: return
+		val provider = playback.currentProvider() ?: return
+		val msg = state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
+		val voice = playback.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		playback.stts.cache.preloadTiers(
 			client,
 			provider,
 			voice,
 			team,
 			at,
-			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.TITLE),
-			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.SUMMARY),
-			ttsTextFramed(repo._state.value, msg, SttsPlayer.Tier.FULL),
+			ttsTextFramed(state.value, msg, SttsPlayer.Tier.TITLE),
+			ttsTextFramed(state.value, msg, SttsPlayer.Tier.SUMMARY),
+			ttsTextFramed(state.value, msg, SttsPlayer.Tier.FULL),
 			rowKey = "${msg.epoch}-${msg.seq}",
 		)
 	}
 
 	/** Settings voice preview with the current provider/voice. */
 	fun playSttsSample() {
-		repo.stts.post {
-			val client = repo.sttsClient() ?: return@post
-			val provider = repo.currentProvider() ?: return@post
-			val voice = repo.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			repo.stts.playSample(client, provider, voice, "This is your switchboard voice.", repo.sttsVolume)
+		playback.stts.post {
+			val client = playback.sttsClient() ?: return@post
+			val provider = playback.currentProvider() ?: return@post
+			val voice = playback.sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+			playback.stts.playSample(client, provider, voice, "This is your switchboard voice.", playback.sttsVolume)
 		}
 	}
 }

@@ -151,6 +151,7 @@ import {
 	WireManifestSchema,
 	WirePhoneDecodeSchema,
 	WireRequestSchema,
+	WireSealedSchema,
 } from "../src/shared/schemasWireFixture.js";
 import {
 	ADDRESS_SEP,
@@ -291,6 +292,7 @@ const ROOTS: z.ZodType[] = [
 	WireFrameSchema,
 	WireRequestSchema,
 	WirePhoneDecodeSchema,
+	WireSealedSchema,
 	WireFixtureSchema,
 	WireFixtureEntrySchema,
 	WireManifestSchema,

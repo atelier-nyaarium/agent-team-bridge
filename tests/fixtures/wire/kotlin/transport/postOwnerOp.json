@@ -3,7 +3,9 @@
 	"composer": "ConsoleRouterTransport.buildOwnerOpRequest",
 	"case": "postOwnerOp",
 	"clock": 1757000000000,
-	"inputs": {},
+	"inputs": {
+		"draws": {}
+	},
 	"expect": {
 		"outcome": "complete"
 	},

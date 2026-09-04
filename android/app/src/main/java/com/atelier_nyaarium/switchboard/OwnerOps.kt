@@ -5,29 +5,19 @@ import com.atelier_nyaarium.switchboard.crypto.ownerOpSigningBytes
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
 import kotlinx.serialization.json.JsonObject
 
-/** Signed operations identify this console. */
-// Mutations use signed HTTP operations.
-class OwnerOps(
-	private val confirmedDomainId: () -> String?,
-	private val consoleIdentity: () -> Crypto.Identity,
-	private val provisioningConversationId: () -> String,
-	private val provisioningDevice: () -> String,
-	private val now: () -> Long,
-	private val newNonce: () -> String,
-	private val newOpId: () -> String,
+internal class OwnerOps(
+	private val boot: PhoneBootstrap,
+	private val ambient: PhoneAmbient,
 ) {
+	fun domainId(): String = boot.domainId
 
-	/** No domain means no signing. */
-	fun domainId(): String? = confirmedDomainId()?.takeIf { it.isNotEmpty() }
-
-	/** Sign the complete canonical operation. */
-	fun sign(op: JsonObject, opId: String = newOpId()): OwnerOp? {
-		val domain = domainId() ?: return null
-		val identity = consoleIdentity()
-		val conversation = provisioningConversationId()
-		val device = provisioningDevice()
-		val at = now()
-		val nonce = newNonce()
+	fun sign(op: JsonObject, opId: String = ambient.newOpId()): OwnerOp {
+		val domain = boot.domainId
+		val identity = boot.consoleIdentity
+		val conversation = boot.conversationId
+		val device = boot.device
+		val at = ambient.now()
+		val nonce = ambient.newNonce()
 		val signature = Crypto.sign(
 			ownerOpSigningBytes(
 				domainId = domain,

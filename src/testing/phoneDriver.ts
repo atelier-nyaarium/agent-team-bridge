@@ -2,6 +2,7 @@
 
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import type { z } from "zod";
+import type { RouterReachAnswer } from "../federation-server/consoleSurface.js";
 import { APP_TOKEN_HEADER } from "../federation-server/consoleSurface.js";
 import type { ConsoleOp } from "../shared/console-protocol.js";
 import {
@@ -27,7 +28,8 @@ import {
 	signOwnerOp,
 	signRowEnvelope,
 } from "../shared/schemasInbox.js";
-import { contentKeyOf, type IdentitySet } from "./identitySet.js";
+import { type FixtureDraws, FixtureWorld } from "./fixtureWorld.js";
+import type { IdentitySet } from "./identitySet.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -35,10 +37,12 @@ import { contentKeyOf, type IdentitySet } from "./identitySet.js";
 export type MailboxEntry = z.infer<typeof MailboxEntrySchema>;
 
 export interface PhoneDriverDeps {
-	set: IdentitySet;
+	world?: FixtureWorld;
+	set?: IdentitySet;
 	/** The Router's HTTP surface, socket-free. */
 	handle: (request: Request) => Promise<Response>;
 	now?: () => number;
+	draws?: FixtureDraws;
 	randomBytes?: (size: number) => Buffer;
 	newOpId?: () => string;
 }
@@ -46,6 +50,10 @@ export interface PhoneDriverDeps {
 export interface PostAnswer {
 	status: number;
 	body: unknown;
+}
+
+export interface ReachAnswer extends RouterReachAnswer {
+	gateways: Array<{ gatewayId: string; signFp: string | null }>;
 }
 
 export interface ValueAnswer {
@@ -57,6 +65,7 @@ export interface ValueAnswer {
 export interface PhoneDriver {
 	ownerOp(op: Record<string, unknown>, opId?: string): OwnerOp;
 	post(op: OwnerOp): Promise<PostAnswer>;
+	reach(): Promise<ReachAnswer>;
 	/** Signs and posts; answers the response body. */
 	send(op: Record<string, unknown>, opId?: string): Promise<unknown>;
 	value(consoleOp: ConsoleOp, opId?: string): Promise<ValueAnswer>;
@@ -83,11 +92,12 @@ export interface PhoneDriver {
 const ENTRY_KINDS = new Set(["message", "reply", "notice", "sent", "peer", "plugin_action"]);
 
 export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
-	const { set } = deps;
+	const world = deps.world ?? FixtureWorld.from(deps.set as IdentitySet);
+	const { set } = world;
 	const now = deps.now ?? Date.now;
-	const randomBytes = deps.randomBytes ?? nodeRandomBytes;
+	const randomBytes = deps.randomBytes ?? (deps.draws ? deps.draws.next.bind(deps.draws) : nodeRandomBytes);
 	const newOpId = deps.newOpId ?? (() => `op-${randomBytes(6).toString("hex")}`);
-	const key = contentKeyOf(set);
+	const key = world.contentKey;
 	const aad = (kind: ContentAad["kind"], epoch = set.content.epoch): ContentAad => ({
 		domainId: set.domain.id,
 		ownerSignPub: set.domain.owner.sign.pub,
@@ -124,6 +134,27 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 			body = JSON.parse(text);
 		} catch {}
 		return { status: response.status, body };
+	}
+
+	async function reach(): Promise<ReachAnswer> {
+		const headers = { [APP_TOKEN_HEADER]: `Bearer ${set.tokens.console}`, "content-type": "application/json" };
+		const reachResponse = await deps.handle(
+			new Request("https://router.test/console", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ reach: { signerSignPub: set.console.identity.sign.pub } }),
+			}),
+		);
+		if (!reachResponse.ok) throw new Error(`reach answered ${reachResponse.status}`);
+		const gatewaysResponse = await deps.handle(
+			new Request("https://router.test/console", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ gateways: {} }),
+			}),
+		);
+		if (!gatewaysResponse.ok) throw new Error(`gateways answered ${gatewaysResponse.status}`);
+		return { ...(await reachResponse.json()), ...(await gatewaysResponse.json()) } as ReachAnswer;
 	}
 
 	async function send(op: Record<string, unknown>, opId?: string): Promise<unknown> {
@@ -207,6 +238,7 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 	return {
 		ownerOp,
 		post,
+		reach,
 		send,
 		value,
 		deliver,

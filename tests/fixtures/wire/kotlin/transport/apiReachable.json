@@ -1,9 +1,11 @@
 {
 	"producer": "kotlin",
-	"composer": "ConsoleClient.buildHealthRequest",
+	"composer": "ConsoleRouterTransport.buildHealthRequest",
 	"case": "apiReachable",
 	"clock": 1757000000000,
-	"inputs": {},
+	"inputs": {
+		"draws": {}
+	},
 	"expect": {
 		"ok": true,
 		"protocolVersion": 2

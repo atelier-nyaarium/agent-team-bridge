@@ -103,6 +103,8 @@ fun App(
 	openQueueRequest: MutableState<Boolean>,
 ) {
 	val state by repo.state.collectAsState()
+	val bootState by repo.bootState.collectAsState()
+	val missingBoot = bootState as? BootState.Missing
 	val context = LocalContext.current
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
@@ -147,7 +149,9 @@ fun App(
 	val rendererPool = rememberBoundRendererPool(repo, pluginManager, viewerState, linkMenuState, linkMenuNoteState)
 
 	LaunchedEffect(injectedBlob) {
-		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
+		if (injectedBlob != null && Need.PROVISIONING in (missingBoot?.needs ?: emptySet())) {
+			repo.provision(injectedBlob)
+		}
 	}
 	// Offer pending ceremony once.
 	LaunchedEffect(state.provisioned, state.firstRooted) {
@@ -249,17 +253,20 @@ fun App(
 					settingsRoute = SettingsRoute.HUB
 				},
 			)
-		!state.provisioned ->
-			ProvisionScreen(
-				repo = repo,
-				state = state,
-				onProvision = { repo.command { provision(it) } },
-				onSettings = { showSettings = true },
-				onFederation = {
-					settingsRoute = SettingsRoute.FEDERATION
-					showSettings = true
-				},
-			)
+		missingBoot != null -> when {
+			Need.PROVISIONING in missingBoot.needs ->
+				ProvisionScreen(
+					repo = repo,
+					state = state,
+					onProvision = { repo.command { provision(it) } },
+					onSettings = { showSettings = true },
+					onFederation = {
+						settingsRoute = SettingsRoute.FEDERATION
+						showSettings = true
+					},
+				)
+			else -> DomainConnectingScreen(onSettings = { showSettings = true })
+		}
 		openTeam != null -> {
 			// Devcontainer names are fixed.
 			val session = state.sessions().firstOrNull { it.name == openTeam }

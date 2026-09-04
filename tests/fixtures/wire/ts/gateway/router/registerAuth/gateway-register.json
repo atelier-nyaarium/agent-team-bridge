@@ -5,7 +5,7 @@
 	"clock": 1757000000000,
 	"inputs": {
 		"draws": {
-			"nonce": "C9cRk1+lbA1n7Ow1xjTsnnET"
+			"0": "C9cRk1+lbA1n7Ow1xjTsnnET"
 		},
 		"gatewayId": "laptop",
 		"domainId": "fixture-domain"

@@ -106,6 +106,49 @@ internal class ConsoleRouterTransport(
 		store.save(json.put("routerUrl", wanted).toString())
 	}
 
+	/** Leaf-pinned Router preflight; learns the Domain id. */
+	suspend fun apiReachable(): String {
+		// Only the preflight may fail over.
+		val code = withReachFailover { base ->
+			val req = buildHealthRequest(base)
+			clientFor(base).newCall(req).execute().use { resp ->
+				val text = resp.body?.string().orEmpty()
+				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
+				resp.code
+			}
+		}
+		reached(runCatching { fetchReach() }.getOrNull())
+		return "reachable (HTTP $code)"
+	}
+
+	private fun fetchReach(): RouterReach? {
+		val req = buildReachRequest(proxyBase)
+		client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			val reach = RouterReach.decode(resp.body?.string())
+			reach.domainId?.takeIf { it.isNotEmpty() }?.let(store::saveDomainId)
+			return reach
+		}
+	}
+
+	internal fun buildHealthRequest(base: String): Request = Request.Builder()
+		.url(base + Protocol.Wire.ROUTER_PATH_HEALTH)
+		.get()
+		.build()
+
+	/** The signer is known before the Domain is. */
+	internal fun buildReachRequest(base: String): Request {
+		val signer = (store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
+		val body = buildJsonObject {
+			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })
+		}.toString()
+		return Request.Builder()
+			.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
+			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + prov.appToken)
+			.post(body.toRequestBody(ConsoleHttp.JSON))
+			.build()
+	}
+
 	internal suspend inline fun <reified R> postRouterDirect(
 		tag: String,
 		describe: String,

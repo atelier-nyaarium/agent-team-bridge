@@ -4,7 +4,6 @@ import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
 import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
 import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
-import com.atelier_nyaarium.switchboard.crypto.randomNonceB64
 import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -21,13 +20,13 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.time.ZoneId
-import java.util.UUID
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
@@ -57,6 +56,14 @@ class ChatRepository(
 	internal val contentResolver: ContentResolver,
 	internal val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) : ClearsOnReprovision {
+	internal val federation = FederationManager(store)
+	internal val ambient = PhoneAmbient.system()
+	private val _bootState = MutableStateFlow<BootState>(BootState.Missing(setOf(Need.PROVISIONING)))
+	internal val bootState: StateFlow<BootState> = _bootState
+	private var ownerOpsBoot: PhoneBootstrap? = null
+	private var ownerOpsValue: OwnerOps? = null
+	private var keyDeliveryBoot: PhoneBootstrap? = null
+	private var keyDeliveryValue: KeyDeliveryOps? = null
 	/** TTS playback engine. */
 	val stts = SttsPlayer(filesDir)
 
@@ -112,6 +119,8 @@ class ChatRepository(
 	/** Local Domain id for address parsing. */
 	internal fun localDomain(): String = provisioningHost.localDomain()
 
+	internal fun transport(): ConsoleRouterTransport = provisioningHost.transport()
+
 	/** Canonicalize a target address. */
 	internal fun canonicalTarget(team: String): String =
 		runCatching { parseTarget(team, localDomain(), homeGatewayId).canonical }.getOrDefault(team)
@@ -138,31 +147,56 @@ class ChatRepository(
 	internal lateinit var cursorTranslation: CursorTranslationOps
 	internal lateinit var selfMigration: SelfMigration
 
-	/** Signs this console's operations. */
-	val ownerOps = OwnerOps(
-		confirmedDomainId = { confirmedDomainId() },
-		consoleIdentity = { federation.consoleIdentity() },
-		provisioningConversationId = { client().transport.prov.conversationId },
-		provisioningDevice = { client().transport.prov.device },
-		now = { System.currentTimeMillis() },
-		newNonce = { randomNonceB64() },
-		newOpId = { UUID.randomUUID().toString() },
-	)
+	fun refreshBoot() {
+		_bootState.value = PhoneBootstrap.assemble(store, federation, confirmedDomainId())
+		val domainId = readyOrNull()?.domainId
+		if (_state.value.domainId != domainId) _state.update { it.copy(domainId = domainId) }
+	}
 
-	internal val keyDelivery = KeyDeliveryOps(
-		domainId = { ownerOps.domainId() },
-		keyring = { federation.keyring() },
-		contentKeyring = { federation.contentKeyring() },
-		consoleIdentity = { federation.consoleIdentity() },
-		signOwnerOp = { ownerOps.sign(it) },
-		sendOwnerOp = { client().postOwnerOp(it) },
-	)
+	internal fun readyOrNull(): PhoneBootstrap? = (_bootState.value as? BootState.Ready)?.boot
+
+	internal suspend fun ready(): PhoneBootstrap {
+		return bootState.first { it is BootState.Ready }.let { (it as BootState.Ready).boot }
+	}
+
+	@Synchronized
+	internal fun ownerOpsOrNull(): OwnerOps? {
+		val boot = readyOrNull() ?: return null
+		if (ownerOpsBoot !== boot) {
+			ownerOpsBoot = boot
+			ownerOpsValue = OwnerOps(boot, ambient)
+		}
+		return ownerOpsValue
+	}
+
+	@Synchronized
+	internal fun keyDeliveryOrNull(): KeyDeliveryOps? {
+		val boot = readyOrNull() ?: return null
+		if (keyDeliveryBoot !== boot) {
+			keyDeliveryBoot = boot
+			keyDeliveryValue = KeyDeliveryOps(
+				boot,
+				ambient,
+				KeyDeliveryCollaborators(
+					signOwnerOp = { op -> ownerOpsOrNull()?.sign(op) },
+					sendOwnerOp = { client().postOwnerOp(it) },
+					install = KeyDeliveryOps.installInto(boot.contentKeyring),
+					reportError = { message -> _state.update { it.copy(error = message) } },
+				),
+			)
+		}
+		return keyDeliveryValue
+	}
+
+	internal val ownerOps: OwnerOps get() = ownerOpsOrNull() ?: error("Domain not yet confirmed by a local session")
+	internal val keyDelivery: KeyDeliveryOps get() = keyDeliveryOrNull() ?: error("Domain not yet confirmed by a local session")
 
 	/** Board sealing context. */
-	fun boardSealing() = provisioningHost.boardSealing()
+	internal fun boardSealing() = provisioningHost.boardSealing()
 
 	init {
 		board.sealing = { boardSealing() }
+		refreshBoot()
 	}
 
 	/** Foreground Router push channel. */
@@ -430,7 +464,6 @@ class ChatRepository(
 	}
 
 	// Domain trust anchor.
-	internal val federation = FederationManager(store)
 
 	/** Apply the keyring snapshot. */
 	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) =
@@ -440,14 +473,6 @@ class ChatRepository(
 	internal fun refreshAdmittedGateways() = provisioningHost.refreshAdmittedGateways()
 	internal val ownerFacts = OwnerFacts(this)
 	internal val gatewayEnroll = GatewayEnrollment(this)
-	internal val ceremony = EnrollCeremonyOps(this)
-	internal val devices = DeviceApprovalOps(this)
-	internal val domainAdmin = DomainAdminOps(this)
-	internal val trust = TrustOps(this)
-	internal val playback = PlaybackOps(this)
-	internal val boardOps = BoardOps(this)
-	internal val attachments = AttachmentOps(this)
-	internal val scheduled = ScheduledSendOps(this)
 	init {
 		cursorTranslation = CursorTranslationOps(
 			coordinator = transportCoordinator,
@@ -458,6 +483,7 @@ class ChatRepository(
 			send = { client().postOwnerOp(it) },
 			reportError = { message -> _state.update { it.copy(error = message) } },
 			commit = { gen, cursor, epoch -> socket.commitTranslation(gen, cursor, epoch) },
+			ambient = ambient,
 			)
 		selfMigration = SelfMigration(
 			records = { _state.value.scheduledSends },
@@ -501,6 +527,7 @@ class ChatRepository(
 	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
+	internal val approvalNonces = mutableMapOf<String, String>()
 	@Volatile internal var sttsClient: SttsClient? = null
 
 	// Re-provision wipe.
@@ -512,11 +539,17 @@ class ChatRepository(
 	override suspend fun clearInMemory() {
 		client = null
 		sttsClient = null
+		ownerOpsBoot = null
+		ownerOpsValue = null
+		keyDeliveryBoot = null
+		keyDeliveryValue = null
+		_bootState.value = BootState.Missing(setOf(Need.PROVISIONING))
 		homeGatewayId = ""
 		mailboxSync.clearInMemory()
 		forgottenUntil.clear()
 		reconciled.clear()
 		enrollInvites.clear()
+		approvalNonces.clear()
 	}
 
 	internal val focusHost: RepositoryFocusHost = ChatRepositoryFocusHost(this)
@@ -541,7 +574,84 @@ class ChatRepository(
 	}
 
 	/** Armed session goals. */
-	internal val goals = GoalOps(this)
+	internal val ports = ChatRepositoryPorts(this)
+	private val ceremonyCollaborators = ChatRepositoryEnrollCeremonyCollaborators(this)
+	private val deviceApprovalCollaborators = ChatRepositoryDeviceApprovalCollaborators(this)
+	private val domainAdminCollaborators = ChatRepositoryDomainAdminCollaborators(this)
+	private val goalCollaborators = ChatRepositoryGoalCollaborators(this)
+	private val scheduledSendCollaborators = ChatRepositoryScheduledSendCollaborators(this)
+	private val attachmentCollaborators = ChatRepositoryAttachmentCollaborators(this)
+	private val boardCollaborators = ChatRepositoryBoardCollaborators(this)
+	private val trustCollaborators = ChatRepositoryTrustCollaborators(this)
+	private val playbackPort = ChatRepositoryPlaybackPort(this)
+	private val playbackCollaborators = ChatRepositoryPlaybackCollaborators(this)
+	internal val ceremony = EnrollCeremonyOps(
+		store = store,
+		identity = ports,
+		client = ports,
+		collaborators = ceremonyCollaborators,
+	)
+	internal val devices = DeviceApprovalOps(
+		state = _state,
+		store = store,
+		identity = ports,
+		client = ports,
+		collaborators = deviceApprovalCollaborators,
+	)
+	internal val domainAdmin = DomainAdminOps(
+		state = _state,
+		store = store,
+		identity = ports,
+		client = ports,
+		collaborators = domainAdminCollaborators,
+	)
+	internal val trust = TrustOps(
+		state = _state,
+		clientPort = ports,
+		identity = ports,
+		presence = ports,
+		homeGatewayId = { homeGatewayId },
+		collaborators = trustCollaborators,
+	)
+	internal val playback = PlaybackOps(
+		state = _state,
+		repoScope = repoScope,
+		playback = playbackPort,
+		collaborators = playbackCollaborators,
+	)
+	internal val boardOps = BoardOps(
+		state = _state,
+		repoScope = repoScope,
+		filesDir = filesDir,
+		homeGatewayId = { homeGatewayId },
+		collaborators = boardCollaborators,
+	)
+	internal val attachments = AttachmentOps(
+		state = _state,
+		persistence = persistence,
+		client = ports,
+		identity = ports,
+		filesDir = filesDir,
+		scope = { drain.scope },
+		collaborators = attachmentCollaborators,
+	)
+	internal val scheduled = ScheduledSendOps(
+		state = _state,
+		persistence = persistence,
+		filesDir = filesDir,
+		repoScope = repoScope,
+		mutationJournal = mutationJournal,
+		identity = ports,
+		pushback = pushback,
+		isVisible = { isVisible },
+		collaborators = scheduledSendCollaborators,
+	)
+	internal val goals = GoalOps(
+		state = _state,
+		persistence = persistence,
+		repoScope = repoScope,
+		sessions = goalCollaborators,
+	)
 
 	/** Inbound message callback. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null

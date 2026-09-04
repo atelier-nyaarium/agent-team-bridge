@@ -13,8 +13,24 @@ export const WireRequestSchema = z
 	})
 	.meta({ id: "WireRequest" });
 
+/** One sealed envelope the peer must open. */
+export const WireSealedSchema = z
+	.object({
+		/** Dotted path from the sealed root: `frame.params` (TS), `inputs.op` (Kotlin). */
+		path: z.string().min(1),
+		/** AAD kind, or `key` for a key envelope. */
+		aadKind: z.string().min(1),
+		/** Plaintext class name. */
+		decodeAs: z.string().min(1).optional(),
+		/** Input the plaintext must equal. */
+		plaintextOf: z.string().min(1).optional(),
+		/** Subset the opened JSON must match. */
+		expectJson: z.record(z.string(), z.unknown()).optional(),
+	})
+	.meta({ id: "WireSealed" });
+
 export const WirePhoneDecodeSchema = z
-	.object({ decodeAs: z.string().min(1), open: z.unknown().optional() })
+	.object({ decodeAs: z.string().min(1), sealed: z.array(WireSealedSchema) })
 	.meta({ id: "WirePhoneDecode" });
 
 const wireBase = {
@@ -37,6 +53,7 @@ export const WireFixtureKotlinSchema = z.object({
 	producer: z.literal("kotlin"),
 	...wireBase,
 	request: WireRequestSchema,
+	sealed: z.array(WireSealedSchema).optional(),
 });
 
 export const WireFixtureSchema = z
@@ -59,6 +76,7 @@ export const WireManifestSchema = z
 export type WireFrame = z.infer<typeof WireFrameSchema>;
 export type WireRequest = z.infer<typeof WireRequestSchema>;
 export type WirePhoneDecode = z.infer<typeof WirePhoneDecodeSchema>;
+export type WireSealed = z.infer<typeof WireSealedSchema>;
 export type WireFixture = z.infer<typeof WireFixtureSchema>;
 export type WireFixtureEntry = z.infer<typeof WireFixtureEntrySchema>;
 export type WireManifest = z.infer<typeof WireManifestSchema>;

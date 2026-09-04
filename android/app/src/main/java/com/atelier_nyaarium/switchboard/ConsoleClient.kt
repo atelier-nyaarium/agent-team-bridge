@@ -12,12 +12,10 @@ import com.atelier_nyaarium.switchboard.proto.RowEnvelope
 import com.atelier_nyaarium.switchboard.proto.RowOrigin
 import com.atelier_nyaarium.switchboard.proto.GatewayValueOp
 import com.atelier_nyaarium.switchboard.proto.parseTarget
-import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalJson
 import com.atelier_nyaarium.switchboard.crypto.opPayloadAadKind
 import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
-import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -33,54 +31,50 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Serializable
 internal data class OwnerOpAnswer(val ok: Boolean, val result: JsonElement? = null, val error: String? = null)
 
+internal class ConsoleClientCollaborators(
+	val signOwnerOp: (JsonObject, String) -> OwnerOp?,
+	val homeGatewayId: () -> String?,
+	val postOwnerOpSender: (suspend (OwnerOp) -> JsonElement?)? = null,
+	val rowSigner: ((RowEnvelope) -> String?)? = null,
+)
+
 /** Signed OwnerOp client for the Router console surface. */
 class ConsoleClient internal constructor(
-	prov: Provisioning,
+	private val boot: PhoneBootstrap,
+	internal val ambient: PhoneAmbient,
 	store: AppStateStore,
 	private val coordinator: ConsoleTransportCoordinator? = null,
-	private val signOwnerOp: ((kotlinx.serialization.json.JsonObject, String) -> OwnerOp?)? = null,
-	private val domainId: () -> String? = { null },
-	private val ownerSignPub: () -> String? = { null },
-	private val homeGatewayId: (() -> String?)? = null,
-	private val contentKeyring: () -> com.atelier_nyaarium.switchboard.crypto.ContentKeyring = { ContentKeyring(store = store) },
-	private val postOwnerOpSender: (suspend (OwnerOp) -> JsonElement?)? = null,
-	private val rowSigner: ((RowEnvelope) -> String?)? = null,
-	private val sealNonce: (() -> ByteArray)? = null,
+	private val collaborators: ConsoleClientCollaborators,
 ) {
-	internal val transport = ConsoleRouterTransport(prov, store, homeGatewayId)
+	internal val transport = ConsoleRouterTransport(boot.provisioning, store, collaborators.homeGatewayId)
 
 	/** Content-addressed blob staging. */
 	internal val blobs = BlobStore(BlobStore.root(store.filesDir))
 	internal suspend fun postOwnerOp(ownerOp: OwnerOp): JsonElement? =
-		if (postOwnerOpSender != null) postOwnerOpSender.invoke(ownerOp) else transport.postOwnerOp(ownerOp)
+		if (collaborators.postOwnerOpSender != null) collaborators.postOwnerOpSender.invoke(ownerOp) else transport.postOwnerOp(ownerOp)
 
-	private fun contentKey(epoch: Int): ByteArray? = contentKeyring().keyFor(epoch)
+	private fun contentKey(epoch: Int): ByteArray? = boot.contentKeyring.keyFor(epoch)
 
 	private fun sealOwnerPayload(plaintext: ByteArray, kind: String): Pair<Int, ContentEnvelope>? {
-		val domain = domainId() ?: return null
-		val epoch = contentKeyring().epochs().maxOrNull() ?: return null
+		val domain = boot.domainId
+		val epoch = boot.contentKeyring.epochs().maxOrNull() ?: return null
 		val key = contentKey(epoch) ?: return null
-		val signer = ownerSignPub() ?: return null
+		val signer = boot.ownerSignPub
 		val aad = Crypto.ContentAad(domain, signer, epoch, kind)
-		val sealed = sealNonce?.invoke()?.let { nonce -> Crypto.sealContent(plaintext, key, aad, nonce) }
-			?: Crypto.sealContent(plaintext, key, aad)
+		val sealed = Crypto.sealContent(plaintext, key, aad, ambient.newNonceBytes())
 		return epoch to sealed
 	}
 
 	private fun signRow(envelope: RowEnvelope): String? {
-		rowSigner?.invoke(envelope)?.let { return it }
-		val identity = when (val loaded = transport.store.loadIdentity()) {
-			is IdentityLoad.Loaded -> loaded.identity
-			else -> return null
-		}
-		return com.atelier_nyaarium.switchboard.crypto.Crypto.sign(
+		collaborators.rowSigner?.invoke(envelope)?.let { return it }
+		return Crypto.sign(
 			"${Protocol.Wire.SIGNING_TAG_INBOX_ROW}\n${canonicalJson(wireJson.encodeToJsonElement(RowEnvelope.serializer(), envelope))}".toByteArray(),
-			identity.sign.priv,
+			boot.consoleIdentity.sign.priv,
 		)
 	}
 
-	internal suspend fun postSigned(op: kotlinx.serialization.json.JsonObject, opId: String = UUID.randomUUID().toString()): JsonElement? {
-		val signed = signOwnerOp?.invoke(op, opId)
+	internal suspend fun postSigned(op: JsonObject, opId: String = ambient.newOpId()): JsonElement? {
+		val signed = collaborators.signOwnerOp(op, opId)
 		// Signing needs a confirmed Domain; without one every op dies here unremarked.
 		if (signed == null) {
 			DebugLog.log("OwnerOp", "${op["kind"]?.jsonPrimitive?.content} unsigned")
@@ -89,25 +83,25 @@ class ConsoleClient internal constructor(
 		return postOwnerOp(signed)
 	}
 
-	internal suspend fun consumerRegister(incarnation: Long, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+	internal suspend fun consumerRegister(incarnation: Long, opId: String = ambient.newOpId()): JsonElement? = postSigned(buildJsonObject {
 		put("kind", Protocol.Wire.OWNER_OP_CONSUMER_REGISTER)
 		put("incarnation", incarnation)
 	}, opId)
 
-	internal suspend fun inboxRead(fromSeq: Long, cursorEpoch: Long, limit: Int = 100, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+	internal suspend fun inboxRead(fromSeq: Long, cursorEpoch: Long, limit: Int = 100, opId: String = ambient.newOpId()): JsonElement? = postSigned(buildJsonObject {
 		put("kind", Protocol.Wire.OWNER_OP_INBOX_READ)
 		put("fromSeq", fromSeq)
 		put("cursorEpoch", cursorEpoch)
 		put("limit", limit)
 	}, opId)
 
-	internal suspend fun inboxAdvance(cursor: Long, cursorEpoch: Long, opId: String = UUID.randomUUID().toString()): JsonElement? = postSigned(buildJsonObject {
+	internal suspend fun inboxAdvance(cursor: Long, cursorEpoch: Long, opId: String = ambient.newOpId()): JsonElement? = postSigned(buildJsonObject {
 		put("kind", Protocol.Wire.OWNER_OP_INBOX_ADVANCE)
 		put("cursor", cursor)
 		put("cursorEpoch", cursorEpoch)
 	}, opId)
 
-	internal suspend fun planesRead(known: JsonObject, opId: String = UUID.randomUUID().toString()): com.atelier_nyaarium.switchboard.proto.PlanesReadResult? {
+	internal suspend fun planesRead(known: JsonObject, opId: String = ambient.newOpId()): com.atelier_nyaarium.switchboard.proto.PlanesReadResult? {
 		val answer = postSigned(buildJsonObject {
 			put("kind", Protocol.Wire.OWNER_OP_PLANES_READ)
 			put("known", known)
@@ -121,7 +115,7 @@ class ConsoleClient internal constructor(
 	internal suspend fun sendDeliveryOp(
 		target: String,
 		op: ConsoleOp,
-		opId: String = UUID.randomUUID().toString(),
+		opId: String = ambient.newOpId(),
 		timeoutMs: Long = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS,
 	): JsonElement? {
 		val conversationId = transport.prov.conversationId
@@ -130,7 +124,7 @@ class ConsoleClient internal constructor(
 			opPayloadAadKind(),
 		) ?: return null
 		val (epoch, body) = sealed
-		val domain = domainId() ?: return null
+		val domain = boot.domainId
 		val envelope = RowEnvelope(
 			origin = RowOrigin("console", domain, device = transport.prov.device),
 			opKey = OpKey(conversationId, opId),
@@ -146,7 +140,7 @@ class ConsoleClient internal constructor(
         0L,
         0L,
     )
-		val ownerOp = signOwnerOp?.invoke(buildJsonObject {
+		val ownerOp = collaborators.signOwnerOp(buildJsonObject {
 			put("kind", Protocol.Wire.OWNER_OP_DELIVER)
 			put("address", target)
 			put("row", wireJson.encodeToJsonElement(InboxRow.serializer(), row))
@@ -196,7 +190,7 @@ class ConsoleClient internal constructor(
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")
 	}
 
-	internal fun defaultGatewayId(): String = homeGatewayId?.invoke()?.takeIf { it.isNotEmpty() }
+	internal fun defaultGatewayId(): String = collaborators.homeGatewayId()?.takeIf { it.isNotEmpty() }
 		?: error("No home Gateway admitted yet")
 
 	internal fun sessionAddressOf(target: String): String {
@@ -210,14 +204,14 @@ class ConsoleClient internal constructor(
 		return transport.resultOf(wireJson.decodeFromJsonElement<OwnerOpAnswer>(answer), op)
 	}
 
-internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String = UUID.randomUUID().toString()): JsonElement? {
+internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String = ambient.newOpId()): JsonElement? {
 		if (gatewayId.isBlank()) return null
 		val sealed = sealOwnerPayload(
 			wireJson.encodeToString(ConsoleOp.serializer(), op).toByteArray(Charsets.UTF_8),
 			opPayloadAadKind(),
 		) ?: return null
 		val value = GatewayValueOp(gatewayId = gatewayId, value = sealed.second)
-		val ownerOp = signOwnerOp?.invoke(
+		val ownerOp = collaborators.signOwnerOp(
 			buildJsonObject {
 				put("kind", Protocol.Wire.OWNER_OP_GATEWAY_VALUE)
 				put("gatewayId", gatewayId)
@@ -242,7 +236,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 			val envelope = runCatching { wireJson.decodeFromJsonElement(ContentEnvelope.serializer(), answer) }
 				.onFailure { DebugLog.log("Console", "value result envelope failed opId=$opId") }
 				.getOrNull() ?: return null
-		val domain = domainId() ?: return null
+		val domain = boot.domainId
 		val key = contentKey(envelope.epoch.toInt()) ?: return null
 		return runCatching {
 			val plain = wireJson.parseToJsonElement(
@@ -251,7 +245,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 					key,
 					com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
 						domain,
-						ownerSignPub() ?: error("identity unavailable"),
+						boot.ownerSignPub,
 						envelope.epoch.toInt(),
 						valueResultAadKind(opId),
 					),
@@ -259,22 +253,6 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 			)
 			wireJson.encodeToJsonElement(OwnerOpAnswer.serializer(), OwnerOpAnswer(ok = true, result = plain))
 		}.onFailure { DebugLog.log("Console", "value result open failed opId=$opId") }.getOrNull()
-	}
-
-	/** Leaf-pinned Router preflight. */
-	suspend fun apiReachable(): String {
-		// Only the preflight may fail over.
-		val code = transport.withReachFailover { base ->
-			val req = buildHealthRequest(base)
-			transport.clientFor(base).newCall(req).execute().use { resp ->
-				val text = resp.body?.string().orEmpty()
-				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
-				resp.code
-			}
-		}
-		// Refresh advertised reachability best-effort.
-		transport.reached(runCatching { fetchReach() }.getOrNull())
-		return "reachable (HTTP $code)"
 	}
 
 	/** Connected Gateways, or unknown. */
@@ -290,46 +268,18 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		}
 	}
 
-	/** Advertised Router addresses, and this console's Domain when the signer is known. */
-	private fun fetchReach(): RouterReach? {
-		val req = buildReachRequest(transport.proxyBase)
-		transport.client.newCall(req).execute().use { resp ->
-			if (!resp.isSuccessful) return null
-			val reach = RouterReach.decode(resp.body?.string())
-			reach.domainId?.takeIf { it.isNotEmpty() }?.let { transport.store.saveDomainId(it) }
-			return reach
-		}
-	}
-
-	internal fun buildHealthRequest(base: String): Request = Request.Builder()
-		.url(base + Protocol.Wire.ROUTER_PATH_HEALTH)
-		.get()
-		.build()
-
 	internal fun buildConnectedGatewaysRequest(base: String): Request = Request.Builder()
 		.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
 		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
 		.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
 		.build()
 
-	internal fun buildReachRequest(base: String): Request {
-		val signer = (transport.store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
-		val body = buildJsonObject {
-			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })
-		}.toString()
-		return Request.Builder()
-			.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
-			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
-			.post(body.toRequestBody(ConsoleHttp.JSON))
-			.build()
-	}
-
 	/** Send a message. */
 	suspend fun send(
 		to: String,
 		body: String,
 		files: List<OutgoingFile> = emptyList(),
-		opId: String = UUID.randomUUID().toString(),
+		opId: String = ambient.newOpId(),
 		domainId: String? = null,
 	): SendResult {
 		// Blob holder Gateway.

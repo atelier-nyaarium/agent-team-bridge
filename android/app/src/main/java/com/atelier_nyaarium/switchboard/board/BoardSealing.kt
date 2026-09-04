@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard.board
 
-import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
+import com.atelier_nyaarium.switchboard.PhoneAmbient
+import com.atelier_nyaarium.switchboard.PhoneBootstrap
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.BOARD_BODY_KIND
 import com.atelier_nyaarium.switchboard.crypto.BOARD_TITLE_KIND
@@ -12,27 +13,23 @@ const val BOARD_KIND_BODY = BOARD_BODY_KIND
 
 /** Uses the domain root key for AAD. */
 open class BoardSealing(
-	private val keyring: ContentKeyring,
-	private val domainId: String,
-	private val ownerSignPub: String,
-	// Null draws at random.
-	private val newNonce: (() -> ByteArray)? = null,
-	private val onMissingEpoch: (Int) -> Unit = {},
+	private val boot: PhoneBootstrap,
+	private val ambient: PhoneAmbient,
+	private val onMissingEpoch: (Int) -> Unit,
 ) {
 	val epochs: List<Int>
-		get() = keyring.epochs()
+		get() = boot.contentKeyring.epochs()
 
 	fun seal(text: String, kind: String, entryId: String): ContentEnvelope? {
-		val epoch = keyring.epochs().maxOrNull() ?: return null
-		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
+		val epoch = boot.contentKeyring.epochs().maxOrNull() ?: return null
+		val key = boot.contentKeyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		val bytes = text.toByteArray(Charsets.UTF_8)
-		val nonce = newNonce?.invoke() ?: return Crypto.sealContent(bytes, key, aad(epoch, kind, entryId))
-		return Crypto.sealContent(bytes, key, aad(epoch, kind, entryId), nonce)
+		return Crypto.sealContent(bytes, key, aad(epoch, kind, entryId), ambient.newNonceBytes())
 	}
 
 	open fun open(env: ContentEnvelope, kind: String, entryId: String): String? {
 		val epoch = env.epoch.toInt()
-		val key = keyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
+		val key = boot.contentKeyring.keyFor(epoch) ?: return null.also { onMissingEpoch(epoch) }
 		return runCatching {
 			Crypto.openContent(env, key, aad(epoch, kind, entryId)).toString(Charsets.UTF_8)
 		}.getOrNull()
@@ -40,5 +37,5 @@ open class BoardSealing(
 
 	// Match boardTextAadKind byte for byte; revision stays unbound.
 	private fun aad(epoch: Int, kind: String, entryId: String) =
-		Crypto.ContentAad(domainId, ownerSignPub, epoch, boardTextAadKind(kind, entryId))
+		Crypto.ContentAad(boot.domainId, boot.ownerSignPub, epoch, boardTextAadKind(kind, entryId))
 }

@@ -38,6 +38,8 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 	store.save(blob)
 	homeGatewayId = ""
 	store.saveGatewayId("")
+	// The next reach confirms the Domain.
+	store.saveDomainId("")
 	// Re-import requires fresh admission.
 	store.consoleAdmitted = false
 	// Re-evaluate pending invites.
@@ -48,8 +50,9 @@ suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO)
 	sttsClient = null
 	// Mirror the reset in UI state.
 	_state.update {
-		it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false, homeGatewayId = "")
+		it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false, homeGatewayId = "", teams = emptyList())
 	}
+	refreshBoot()
 }
 
 /** Normalize a SHA-256 leaf fingerprint. */
@@ -111,6 +114,7 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 	store.save(edited)
 	client = null
 	sttsClient = null
+	refreshBoot()
 	_state.update { it.copy(error = null) }
 }
 
@@ -119,8 +123,8 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it, store)) { client().transport.proxyBase } } }
 	DebugLog.log("Connect", "start gateway=${homeGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 	try {
-		// Distinguish cluster failures early.
-		runCatchingCancellable { client().apiReachable() }.onFailure { e ->
+		// The token-only reach can learn the Domain id.
+		runCatchingCancellable { transport().apiReachable() }.onFailure { e ->
 			val (cause, kind) = classifyConnError(e)
 			_state.update {
 				if (kind == ConnKind.TERMINAL) {
@@ -132,6 +136,7 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 			return@withContext
 		}
 		DebugLog.log("Connect", "apiReachable ok")
+		refreshBoot()
 		// Root pending invites before admission.
 		if (!ownerFacts.firstRootIfPending()) return@withContext
 		// Reflect first-root state in the UI.
@@ -171,9 +176,12 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 				admittedGateways = sessions.keyringGateways(),
 			)
 		}
-		val domain = confirmedDomainId()
+		refreshBoot()
+		val domain = readyOrNull()?.domainId
 		domain?.let { store.saveDomainId(it) }
 		ownerFacts.ensureContentEpochs(domain)
+		// The boot's keyring is a snapshot.
+		refreshBoot()
 		presence.refreshDisplayNameFromTeams()
 		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }} domain=${domain ?: "none"}")
 	} catch (e: Exception) {
@@ -205,19 +213,15 @@ suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
 }
 
 /** This owner's display name. */
-fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { confirmedDomainId().orEmpty() }
+fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { readyOrNull()?.domainId.orEmpty() }
 
 /** Confirmed local Domain id. */
-fun ChatRepository.confirmedDomainId(): String? {
+internal fun ChatRepository.confirmedDomainId(): String? {
 	val gw = homeGatewayId
 	val fromRoster = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 	// The roster arrives over signed reads, so the Router's reach answer seeds the id.
 	return fromRoster ?: store.loadDomainId().takeIf { it.isNotEmpty() }
 }
-
-/** Confirmed local Domain id or error. */
-internal fun ChatRepository.confirmedDomainIdOrThrow(): String =
-	confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 
 /** True when the local session owns the admin Domain. */
 fun ChatRepository.isAdmin(): Boolean {
@@ -226,7 +230,7 @@ fun ChatRepository.isAdmin(): Boolean {
 }
 
 /** True for confirmed app-only users. */
-fun ChatRepository.canDeleteOwnDomain(): Boolean = !isAdmin() && confirmedDomainId() != null
+fun ChatRepository.canDeleteOwnDomain(): Boolean = !isAdmin() && readyOrNull()?.domainId != null
 
 // Display name.
 

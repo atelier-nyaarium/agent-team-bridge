@@ -1462,7 +1462,16 @@ data class WireRequest(
 @Serializable
 data class WirePhoneDecode(
 	val decodeAs: String,
-	val open: JsonElement? = null,
+	val sealed: List<WireSealed>,
+)
+
+@Serializable
+data class WireSealed(
+	val path: String,
+	val aadKind: String,
+	val decodeAs: String? = null,
+	val plaintextOf: String? = null,
+	val expectJson: JsonObject? = null,
 )
 
 @Serializable
@@ -1490,6 +1499,7 @@ sealed class WireFixture {
 		val inputs: JsonObject,
 		val expect: JsonObject,
 		val request: WireRequest,
+		val sealed: List<WireSealed>? = null,
 	) : WireFixture()
 }
 

@@ -2,6 +2,11 @@ package com.atelier_nyaarium.switchboard
 
 import android.net.Uri
 import com.atelier_nyaarium.switchboard.board.BoardLiveLine
+import com.atelier_nyaarium.switchboard.board.BoardManager
+import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
+import com.atelier_nyaarium.switchboard.board.BoardSealing
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.atelier_nyaarium.switchboard.board.BoardRefusal
 import com.atelier_nyaarium.switchboard.board.CardBranch
 import com.atelier_nyaarium.switchboard.board.BoardIntent
@@ -16,27 +21,45 @@ import java.util.UUID
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+internal interface BoardOpsCollaborators {
+	val board: BoardManager
+	val sessions: SessionOps
+	val attachmentHost: AttachmentHost
+	val boardRouter: BoardRouterWriter
+	fun boardSealing(): BoardSealing?
+	fun admitPicked(uris: List<Uri>, name: String): Pair<List<OutgoingFile>, Admission.Refused?>
+	fun localDomain(): String
+	val client: ConsoleClient?
+	fun command(block: () -> Unit)
+}
+
 /** Repository-side board operations. */
-internal class BoardOps(private val repo: ChatRepository) {
+internal class BoardOps(
+	private val state: MutableStateFlow<ChatState>,
+	private val repoScope: CoroutineScope,
+	private val filesDir: File,
+	private val homeGatewayId: () -> String,
+	private val collaborators: BoardOpsCollaborators,
+) {
 	/** Reads and drains the Router board. */
 	fun refreshBoard() {
-		repo.repoScope.launch { readRouterBoard() }
+		repoScope.launch { readRouterBoard() }
 	}
 
 	private suspend fun readRouterBoard() {
-		val sealing = repo.boardSealing() ?: return
+		val sealing = collaborators.boardSealing() ?: return
 		runCatchingCancellable {
-			repo.boardRouter.read(java.util.UUID.randomUUID().toString()) {
+			collaborators.boardRouter.read(java.util.UUID.randomUUID().toString()) {
 				wireJson.decodeFromJsonElement(BoardReadResult.serializer(), it)
 			}
-			repo.boardRouter.drain(sealing)
+			collaborators.boardRouter.drain(sealing)
 		}.onFailure { DebugLog.log("Board", "router read/drain failed: ${it.message?.take(80)}") }
 	}
 
 	/** Assignable live sessions with sealable keys. */
 	fun boardAssignTargets(): List<Team> {
-		val reachable = repo.sessions.keyringGateways().toSet()
-		return repo._state.value.teams.filter {
+		val reachable = collaborators.sessions.keyringGateways().toSet()
+		return state.value.teams.filter {
 			it.kind != "console" && it.kind != "devcontainer" && (it.gatewayId.isEmpty() || it.gatewayId in reachable)
 		}
 	}
@@ -44,72 +67,72 @@ internal class BoardOps(private val repo: ChatRepository) {
 	/** Forgets a session and its board disposition. */
 	fun forgetWithBoardDisposition(team: String, cancelThem: Boolean, onForgotten: () -> Unit) {
 		val asked = if (cancelThem) "cancel" else "release"
-		repo.sessions.forget(team, asked, onForgotten)
+		collaborators.sessions.forget(team, asked, onForgotten)
 	}
 
 	/** Resolves the board Gateway from the address. */
 	fun boardGatewayOf(team: String?): String {
 		val fromName = team?.let { runCatching { gatewayOf(it) }.getOrNull() }?.ifEmpty { null }
-		return fromName ?: repo.homeGatewayId
+		return fromName ?: homeGatewayId()
 	}
 
 	/** Resolves the board Gateway for a session key. */
 	fun boardGatewayOfKey(sessionKey: String): String? {
 		if (sessionKey.isEmpty()) return null
-		val gw = repo._state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
-		return gw?.ifEmpty { repo.homeGatewayId }
+		val gw = state.value.teams.firstOrNull { localFieldOrSelf(it.name) == sessionKey }?.gatewayId
+		return gw?.ifEmpty { homeGatewayId() }
 	}
 
-	fun boardEntriesFor(team: String?): List<BoardEntry> = repo.board.routerEntries()
+	fun boardEntriesFor(team: String?): List<BoardEntry> = collaborators.board.routerEntries()
 
-	fun boardLiveLineFor(team: String): BoardLiveLine? = repo.board.liveLine(team)
+	fun boardLiveLineFor(team: String): BoardLiveLine? = collaborators.board.liveLine(team)
 
-	fun boardUndoneCountFor(team: String): Int = repo.board.undoneCount(team)
+	fun boardUndoneCountFor(team: String): Int = collaborators.board.undoneCount(team)
 
 	fun boardCardBranchFor(team: String, currentId: String?): CardBranch =
-		repo.board.cardBranch(boardGatewayOf(team), team, currentId)
+		collaborators.board.cardBranch(boardGatewayOf(team), team, currentId)
 
-	fun boardSessionKeyOf(team: String): String = repo.board.sessionKeyOf(team)
+	fun boardSessionKeyOf(team: String): String = collaborators.board.sessionKeyOf(team)
 
-	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = repo.board.routerEntries()
+	fun boardEntriesOn(gatewayId: String): List<BoardEntry> = collaborators.board.routerEntries()
 
 	/** The whole Router board. */
-	fun boardEntries(): List<BoardEntry> = repo.board.routerEntries()
+	fun boardEntries(): List<BoardEntry> = collaborators.board.routerEntries()
 
-	fun boardSourceGatewayIds(): List<String> = repo.board.sourceGatewayIds(repo.homeGatewayId)
+	fun boardSourceGatewayIds(): List<String> = collaborators.board.sourceGatewayIds(homeGatewayId())
 
-	fun boardLastSyncedAt(gatewayId: String): Long = repo.board.lastSyncedAt(gatewayId)
+	fun boardLastSyncedAt(gatewayId: String): Long = collaborators.board.lastSyncedAt(gatewayId)
 
-	fun boardTruncatedGateways(): List<String> = repo.board.truncatedGateways()
+	fun boardTruncatedGateways(): List<String> = collaborators.board.truncatedGateways()
 
-	fun boardStrugglingEntries(): Set<String> = repo.board.strugglingEntries()
+	fun boardStrugglingEntries(): Set<String> = collaborators.board.strugglingEntries()
 
-	fun boardDismissRefusal(refusal: BoardRefusal) = repo.board.dismissRefusal(refusal)
+	fun boardDismissRefusal(refusal: BoardRefusal) = collaborators.board.dismissRefusal(refusal)
 
-	fun boardRetainGateways(admitted: Collection<String>) = repo.board.retainGateways(admitted)
+	fun boardRetainGateways(admitted: Collection<String>) = collaborators.board.retainGateways(admitted)
 
-	val boardRefusals get() = repo.board.refusals
+	val boardRefusals get() = collaborators.board.refusals
 
-	val boardRevision get() = repo.board.revision
+	val boardRevision get() = collaborators.board.revision
 
-	val knownBoardVersion get() = repo.board.knownVersion
+	val knownBoardVersion get() = collaborators.board.knownVersion
 
 	fun applyBoardSnapshot(
 		gatewayId: String,
 		entries: List<BoardEntry>,
 		version: Long?,
 		truncated: Boolean,
-	) = repo.board.applySnapshot(gatewayId, entries, version, truncated)
+	) = collaborators.board.applySnapshot(gatewayId, entries, version, truncated)
 
 	/** Queues an intent. */
 	private fun intend(vararg intents: BoardIntent) {
-		repo.board.enqueueWrite(intents.toList())
-		repo.repoScope.launch { readRouterBoard() }
+		collaborators.board.enqueueWrite(intents.toList())
+		repoScope.launch { readRouterBoard() }
 	}
 
 	/** Captures a root thought. */
 	fun boardCapture(title: String, body: String?) {
-		val last = repo.board.routerEntries()
+		val last = collaborators.board.routerEntries()
 			.filter { it.parent == null && it.trashedAt == null }
 			.maxOfOrNull { it.rank }
 		intend(
@@ -138,29 +161,29 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** Sets an entry's complete attachment list. */
 	fun boardSetAttachments(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) =
-		repo.command { boardSetAttachmentsNow(gatewayId, id, keep, add) }
+		collaborators.command { boardSetAttachmentsNow(gatewayId, id, keep, add) }
 
 	private fun boardSetAttachmentsNow(gatewayId: String, id: String, keep: List<BoardAttachment>, add: List<Uri>) {
 		val bucket = Attachments.boardBucket(id)
 		// Keep staged files outside the destination bucket.
 		val (staged, refused) =
-			if (add.isEmpty()) emptyList<OutgoingFile>() to null else repo.admitPicked(add, "pick-${UUID.randomUUID()}")
+			if (add.isEmpty()) emptyList<OutgoingFile>() to null else collaborators.admitPicked(add, "pick-${UUID.randomUUID()}")
 		if (refused != null) {
-			repo._state.update { it.copy(error = refused.message()) }
+			state.update { it.copy(error = refused.message()) }
 			return
 		}
 		// Limit count, not size.
 		if (keep.size + staged.size > Protocol.BOARD_ATTACHMENTS_MAX) {
-			repo.attachmentHost.cleanup(staged)
-			repo._state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
+			collaborators.attachmentHost.cleanup(staged)
+			state.update { it.copy(error = "An entry holds at most ${Protocol.BOARD_ATTACHMENTS_MAX} attachments") }
 			return
 		}
-		val client = repo.attachmentHost.clientOrReject(staged) ?: return
+		val client = collaborators.attachmentHost.clientOrReject(staged) ?: return
 		val sources = mutableMapOf<String, String>()
 		val added = staged.mapNotNull { picked ->
 			// Land under the blob name.
 			val blobId = client.blobIdOf(picked.source)
-			val target = Attachments.boardFile(repo.filesDir, id, blobId)
+			val target = Attachments.boardFile(filesDir, id, blobId)
 			target.parentFile?.mkdirs()
 			picked.source.copyTo(target, overwrite = true)
 			picked.source.delete()
@@ -175,12 +198,12 @@ internal class BoardOps(private val repo: ChatRepository) {
 		}
 		// Supply every locally available member.
 		for (a in keep) {
-			val local = Attachments.boardFile(repo.filesDir, id, a.blobId)
+			val local = Attachments.boardFile(filesDir, id, a.blobId)
 			if (local.isFile) sources[a.blobId] = local.absolutePath
 		}
 		// Remove only unreferenced landed files.
 		val stays = (keep + added).mapTo(mutableSetOf()) { it.blobId }
-		Attachments.boardBucketDir(repo.filesDir, id).listFiles()?.forEach {
+		Attachments.boardBucketDir(filesDir, id).listFiles()?.forEach {
 			if (it.name.startsWith("sha256-") && it.name !in stays) it.delete()
 		}
 
@@ -197,7 +220,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** Returns or starts fetching an attachment. */
 	fun boardAttachmentFile(entryId: String, a: BoardAttachment): File? {
-		val landed = Attachments.boardFile(repo.filesDir, entryId, a.blobId)
+		val landed = Attachments.boardFile(filesDir, entryId, a.blobId)
 		if (landed.isFile) return landed
 		// Auto-download small attachments only.
 		if (a.size <= Protocol.BOARD_AUTO_DOWNLOAD_MAX_BYTES) kickBoardDownload(entryId, a)
@@ -230,10 +253,10 @@ internal class BoardOps(private val repo: ChatRepository) {
 		if (!boardDownloadsInFlight.add(a.blobId)) return
 		// The queued action identifies the holder.
 		val holder = a.blobGateway
-		repo.repoScope.launch {
+		repoScope.launch {
 			try {
-				val target = Attachments.boardFile(repo.filesDir, entryId, a.blobId)
-				val c = repo.client()
+				val target = Attachments.boardFile(filesDir, entryId, a.blobId)
+				val c = collaborators.client ?: error("Domain not yet confirmed by a local session")
 				val staged = c.downloadBlob(a.blobId, holder)
 				target.parentFile?.mkdirs()
 				// Land atomically through a temporary file.
@@ -249,7 +272,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 				c.forgetBlob(a.blobId)
 				boardFetchFailures.remove(a.blobId)
 				boardFetchAbsent.keys.removeAll { it.second == a.blobId }
-				repo.board.revision.longValue++
+				collaborators.board.revision.longValue++
 			} catch (e: BlobAbsent) {
 				// Gateway-confirmed absence.
 				val key = entryId to a.blobId
@@ -260,7 +283,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 				if (proven >= ChatRepository.BOARD_FETCH_DEAD_AFTER) {
 					boardFetchAbsent.remove(key)
 				}
-				repo.board.revision.longValue++
+				collaborators.board.revision.longValue++
 			} catch (e: Exception) {
 				e.rethrowIfCancellation()
 				// Ordinary failures do not prove absence.
@@ -269,7 +292,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 				boardFetchFailures[a.blobId] = (boardFetchFailures[a.blobId] ?: 0) + 1
 				DebugLog.log("Board", "attachment fetch failed: ${e.message?.take(80)}")
 				// Refresh the tile state.
-				repo.board.revision.longValue++
+				collaborators.board.revision.longValue++
 			} finally {
 				boardDownloadsInFlight.remove(a.blobId)
 			}
@@ -278,16 +301,16 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** All board buckets on disk. */
 	internal fun existingBoardBuckets(): Set<String> =
-		Attachments.root(repo.filesDir).listFiles()
+		Attachments.root(filesDir).listFiles()
 			?.filter { it.isDirectory && it.name.startsWith("board-") }
 			?.mapTo(mutableSetOf()) { it.name }
 			?: emptySet()
 
 	/** Whether the board decoded. */
-	internal val boardIsKnown: Boolean get() = repo.board.boardIsKnown
+	internal val boardIsKnown: Boolean get() = collaborators.board.boardIsKnown
 
 	/** Live board attachment buckets. */
-	internal fun attachmentBuckets(): Set<String>? = repo.board.attachmentBuckets()
+	internal fun attachmentBuckets(): Set<String>? = collaborators.board.attachmentBuckets()
 
 	/** Restarts pending transfers. */
 	internal fun resumeBoardUploads() {
@@ -298,9 +321,9 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	private fun kickBoardUpload(source: String, gatewayId: String) {
 		if (!boardUploadsInFlight.add(source)) return
-		repo.repoScope.launch {
+		repoScope.launch {
 			try {
-				repo.client?.uploadBlob(File(source), gatewayId)
+				collaborators.client?.uploadBlob(File(source), gatewayId)
 			} catch (e: Exception) {
 				e.rethrowIfCancellation()
 				DebugLog.log("Board", "attachment upload failed: ${e.message?.take(80)}")
@@ -314,11 +337,11 @@ internal class BoardOps(private val repo: ChatRepository) {
 	fun boardAssign(fromGateway: String, id: String, team: String?) {
 		// Assignment changes fields on one board.
 		val session = team?.let { name ->
-			val row = repo._state.value.teams.firstOrNull { it.name == name }
+			val row = state.value.teams.firstOrNull { it.name == name }
 			BoardSession(
-				domainId = row?.domainId ?: repo.localDomain(),
+				domainId = row?.domainId ?: collaborators.localDomain(),
 				gatewayId = boardGatewayOf(name),
-				sessionId = repo.board.sessionKeyOf(name),
+				sessionId = collaborators.board.sessionKeyOf(name),
 			)
 		}
 		// Assign the subtree in one write.
@@ -327,7 +350,7 @@ internal class BoardOps(private val repo: ChatRepository) {
 
 	/** Visited guard prevents cycles. */
 	private fun subtreeOf(rootId: String): List<String> {
-		val children = repo.board.routerEntries().groupBy { it.parent }
+		val children = collaborators.board.routerEntries().groupBy { it.parent }
 		val out = mutableListOf<String>()
 		val seen = mutableSetOf<String>()
 		val stack = ArrayDeque(listOf(rootId))

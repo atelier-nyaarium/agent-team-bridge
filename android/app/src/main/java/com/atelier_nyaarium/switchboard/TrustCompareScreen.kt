@@ -115,7 +115,7 @@ fun TrustCompareScreen(
 								confirmed.set(true)
 								busy = true
 								scope.launch {
-									val domainId = repo.confirmedDomainId()
+									val domainId = repo.readyOrNull()?.domainId
 									if (domainId == null) {
 										// Same failure path as the .onFailure below (not a bare return@launch),
 										// so this can never strand the screen on the busy spinner with no

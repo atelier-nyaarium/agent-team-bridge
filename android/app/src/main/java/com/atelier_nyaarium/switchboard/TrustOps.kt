@@ -3,10 +3,23 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+
+internal interface TrustOpsCollaborators {
+	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String): Boolean
+	suspend fun revokeXdomainLink(srcDomainId: String, dstDomainId: String): Boolean
+}
 
 /** The cross-Domain trust surface: the roster, the link/share/unlink wizard's REQUESTER and
  * RECEIVER legs, the owner-keyed friend graph, and the FLOW-2 roster-initiated trust rendezvous. */
-internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision {
+internal class TrustOps(
+	private val state: MutableStateFlow<ChatState>,
+	private val clientPort: ClientPort,
+	private val identity: IdentityPort,
+	private val presence: PresencePort,
+	private val homeGatewayId: () -> String,
+	private val collaborators: TrustOpsCollaborators,
+) : ClearsOnReprovision {
 	// RECEIVER link state: the requester-minted pin learned from a listen-state poll, keyed by the
 	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
 	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
@@ -23,7 +36,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	suspend fun fetchRoster(): Result<List<com.atelier_nyaarium.switchboard.proto.RosterMember>> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
-				val result = repo.client().roster(repo.federation.signRosterRequest(System.currentTimeMillis()))
+				val result = clientPort.client().roster(identity.federation.signRosterRequest(System.currentTimeMillis()))
 				if (!result.ok) error(result.error ?: "roster unavailable")
 				result.members ?: emptyList()
 			}
@@ -40,16 +53,16 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	 * surface in presence. Presence still supplies the session count; a peer present
 	 * only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> {
-		val adminDomain = repo.confirmedDomainId() ?: return emptyList()
-		return CrossDomainLink.mergeLinkedDomains(repo._state.value.teams, repo._state.value.linkedPeerOwners, adminDomain)
+		val adminDomain = identity.readyOrNull()?.domainId ?: return emptyList()
+		return CrossDomainLink.mergeLinkedDomains(state.value.teams, state.value.linkedPeerOwners, adminDomain)
 	}
 
 	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never the
 	 * host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
-		val adminDomain = repo.confirmedDomainId() ?: return emptyList()
-		val gw = repo.homeGatewayId
-		val s = repo._state.value
+		val adminDomain = identity.readyOrNull()?.domainId ?: return emptyList()
+		val gw = homeGatewayId()
+		val s = state.value
 		return s.teams
 			.filter { (it.domainId.isNullOrEmpty() || it.domainId == adminDomain) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
 			.filter { it.kind == "devcontainer" || it.kind == "loose" }
@@ -60,7 +73,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	 * Gateway's keys + the expiry. */
 	suspend fun crossDomainListen(): Result<com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult> =
 		withContext(Dispatchers.IO) {
-			runCatchingCancellable { repo.client().crossDomainListen() }
+			runCatchingCancellable { clientPort.client().crossDomainListen() }
 		}
 
 	/** REQUESTER: mint a one-time rendezvous pin, pair against the friend's token, and run the
@@ -70,13 +83,14 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
 				val pin = newRendezvousPin()
-				val adminDomain = repo.confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
-				val result = repo.client().crossDomainRequest(
+				val boot = identity.readyOrNull() ?: error("Domain not yet confirmed by a local session")
+				val adminDomain = boot.domainId
+				val result = clientPort.client().crossDomainRequest(
 					listeningToken = listeningToken.trim(),
 					pin = pin,
-					requesterOwnerSignPub = repo.federation.ownerSignPub(),
+					requesterOwnerSignPub = boot.ownerSignPub,
 					requesterDomainId = adminDomain,
-					requesterGatewayId = repo.homeGatewayId,
+					requesterGatewayId = homeGatewayId(),
 				)
 				CrossDomainPairing(pin = pin, result = result)
 			}
@@ -89,7 +103,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	suspend fun crossDomainListenState(listeningToken: String): Result<CrossDomainReceiverPairing?> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
-				val state = repo.client().crossDomainListenState(listeningToken)
+				val state = clientPort.client().crossDomainListenState(listeningToken)
 				if (!state.pairingArrived) {
 					return@runCatchingCancellable null
 				}
@@ -163,7 +177,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		peerBoxPub: String,
 		linkNonce: String,
 	): Result<ConfirmOutcome> = runCatchingCancellable {
-		val mySignedLink = repo.federation.signMyLink(
+		val mySignedLink = identity.federation.signMyLink(
 			peerOwnerSignPub = peerOwnerSignPub,
 			peerDomainId = peerDomainId,
 			peerGatewayId = peerGatewayId,
@@ -173,12 +187,12 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 			nonce = linkNonce,
 		)
 		// Record the OWNER-keyed friend edge (the Users-surface trust) - the SAS confirmed this owner key.
-		repo.federation.addTrustedOwner(peerOwnerSignPub)
-		repo.client().crossDomainConfirm(pin, mySignedLink)
+		identity.federation.addTrustedOwner(peerOwnerSignPub)
+		clientPort.client().crossDomainConfirm(pin, mySignedLink)
 		// The local peer is now written. The relay-affinity edge is a separate Router submit that
 		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
 		// edge alone) rather than letting the wizard show a false "Linked".
-		if (repo.ownerFacts.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
+		if (collaborators.submitXdomainLink(identity.ready().domainId, peerDomainId)) {
 			ConfirmOutcome.Linked
 		} else {
 			ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -191,7 +205,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	 * failure or advance to Done. */
 	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			if (repo.ownerFacts.submitXdomainLink(repo.confirmedDomainIdOrThrow(), peerDomainId)) {
+			if (collaborators.submitXdomainLink(identity.ready().domainId, peerDomainId)) {
 				ConfirmOutcome.Linked
 			} else {
 				ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -201,21 +215,21 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 
 	/** A fresh owner-link nonce, pinned by the wizard for one pairing so a confirm retry reuses
 	 * the same signed link bytes. */
-	fun freshLinkNonce(): String = repo.federation.freshLinkNonce()
+	fun freshLinkNonce(): String = identity.federation.freshLinkNonce()
 
 	/** Cancel the pairing windows when the owner leaves the link screen (no passive surface). */
 	suspend fun crossDomainCancel(listeningToken: String?, pin: String?) = withContext(Dispatchers.IO) {
-		runCatchingCancellable { repo.client().crossDomainCancel(listeningToken, pin) }
+		runCatchingCancellable { clientPort.client().crossDomainCancel(listeningToken, pin) }
 	}
 
 	////////////////////////////////
 	//  Owner-keyed trust (the friend graph the Users surface reads)
 
 	/** True iff this owner has trusted the given owner key (the Users-surface Trusted badge). */
-	fun isOwnerTrusted(ownerSignPub: String): Boolean = repo.federation.isTrusted(ownerSignPub)
+	fun isOwnerTrusted(ownerSignPub: String): Boolean = identity.federation.isTrusted(ownerSignPub)
 
 	/** The set of trusted owner keys (the friend graph). */
-	fun trustedOwners(): Set<String> = repo.federation.trustedOwners()
+	fun trustedOwners(): Set<String> = identity.federation.trustedOwners()
 
 	/** Untrust a person by owner key: drop the local friend edge + sign an owner-keyed untrust
 	 * tombstone. The relay-affinity edge teardown (per the peer's Domains) is the gateway-side
@@ -223,22 +237,22 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	suspend fun untrustOwner(peerOwnerSignPub: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			// Drop the local friend edge first so the Users surface reflects the untrust immediately.
-			repo.federation.removeTrustedOwner(peerOwnerSignPub)
+			identity.federation.removeTrustedOwner(peerOwnerSignPub)
 			// Capture the person's Domains BEFORE the local cleanup forgets the peers (a person may run
 			// several), so we can revoke each Router-side relay edge. Owner-keyed via the peer set.
 			val peerDomains = runCatchingCancellable {
-				repo.client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
+				clientPort.client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
 			}.getOrDefault(emptySet())
 			// Tell the gateway to forget every peer + share for this owner across all their Domains
 			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
 			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
-			runCatchingCancellable { repo.client().crossDomainUntrust(peerOwnerSignPub) }
+			runCatchingCancellable { clientPort.client().crossDomainUntrust(peerOwnerSignPub) }
 			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so the
 			// Router drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
 			for (d in peerDomains) {
-				runCatchingCancellable { repo.ownerFacts.revokeXdomainLink(repo.confirmedDomainIdOrThrow(), d) }
+				runCatchingCancellable { collaborators.revokeXdomainLink(identity.ready().domainId, d) }
 			}
-			repo.presence.refreshAfterAction()
+			presence.refreshAfterAction()
 			Unit
 		}
 	}
@@ -253,14 +267,14 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		if (myOwner < peerOwner) EnrollCeremony.ADMIN else EnrollCeremony.ENROLLEE
 
 	/** Mint a fresh rendezvous id (the initiator's; also the SAS pin both sides bind). */
-	fun mintRendezvousId(): String = repo.federation.freshRendezvousId()
+	fun mintRendezvousId(): String = identity.federation.freshRendezvousId()
 
 	/** Poll "who armed trust toward me?" (the highlight). Returns the armed initiator rows (owner key
 	 * + rendezvousId) so the Users surface highlights them. Best-effort. */
 	suspend fun fetchPendingTrust(): Result<List<com.atelier_nyaarium.switchboard.proto.TrustPendingEntry>> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
-				val r = repo.client().trustPending(repo.federation.signTrustPendingRequest(System.currentTimeMillis()))
+				val r = clientPort.client().trustPending(identity.federation.signTrustPendingRequest(System.currentTimeMillis()))
 				if (!r.ok) error(r.error ?: "trust pending unavailable")
 				r.pending ?: emptyList()
 			}
@@ -275,13 +289,13 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	): Result<EnrollExchange> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
-				val myParty = repo.federation.trustParty(repo.confirmedDomainIdOrThrow())
+				val myParty = identity.federation.trustParty(identity.ready().domainId)
 				runSasExchange(
 					myParty = myParty,
 					myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub),
 					// The rendezvousId IS this flow's SAS pin, so no new SAS scheme.
 					pin = rendezvousId,
-					salt = repo.federation.freshEnrollSalt(),
+					salt = identity.federation.freshEnrollSalt(),
 					// No QR here, so the recovery is re-arming from the roster.
 					retryHint = "Try again.",
 					transport = object : SasTransport {
@@ -291,13 +305,13 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 							} else {
 								TrustHandshakeOp.Join(rendezvousId, myParty.ownerSignPub, commitment)
 							}
-							val r = repo.client().trustHandshake(op)
+							val r = clientPort.client().trustHandshake(op)
 							if (!r.ok) error(r.error ?: "trust commit rejected")
 							return r.peerCommitment
 						}
 
 						override suspend fun reveal(myReveal: com.atelier_nyaarium.switchboard.proto.EnrollReveal) =
-							repo.client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal)).let {
+							clientPort.client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal)).let {
 								if (!it.ok) error(it.error ?: "trust reveal rejected")
 								it.peerReveal
 							}
@@ -309,14 +323,14 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 
 	/** Cancel this leg of the trust rendezvous (a [No], timeout, or leaving). Best-effort. */
 	suspend fun trustCancel(rendezvousId: String) = withContext(Dispatchers.IO) {
-		runCatchingCancellable { repo.client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
+		runCatchingCancellable { clientPort.client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
 	}
 
 	/** This owner's current per-session SPECIFIC-Domain shares as (sessionTarget, domainId) pairs, so
 	 * the per-peer checkmark UI can render them (everyone-trusted shares are a separate mode). */
 	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			repo.client().crossDomainListShares().shares
+			clientPort.client().crossDomainListShares().shares
 				.mapNotNull { e ->
 					(e.target as? com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain)?.let {
 						e.sessionTarget to it.domainId
@@ -331,10 +345,10 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	 * to everyone-trusted. Joins the peer set (owner -> their Domains) with the share list. */
 	suspend fun sharedSessionCounts(): Result<Map<String, Int>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			val ownerDomains = repo.client().crossDomainListPeers().peers
+			val ownerDomains = clientPort.client().crossDomainListPeers().peers
 				.filter { it.ownerSignPub.isNotEmpty() }
 				.groupBy({ it.ownerSignPub }, { it.domainId })
-			val shares = repo.client().crossDomainListShares().shares
+			val shares = clientPort.client().crossDomainListShares().shares
 			val everyoneSessions = shares
 				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
 				.map { it.sessionTarget }
@@ -355,7 +369,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
 	suspend fun sessionsSharedToEveryone(): Result<Set<String>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			repo.client().crossDomainListShares().shares
+			clientPort.client().crossDomainListShares().shares
 				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
 				.map { it.sessionTarget }
 				.toSet()
@@ -367,7 +381,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
 				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain(domainId)
-				if (shared) repo.client().crossDomainShare(sessionTarget, target) else repo.client().crossDomainUnshare(sessionTarget, target)
+				if (shared) clientPort.client().crossDomainShare(sessionTarget, target) else clientPort.client().crossDomainUnshare(sessionTarget, target)
 				Unit
 			}
 		}
@@ -377,7 +391,7 @@ internal class TrustOps(private val repo: ChatRepository) : ClearsOnReprovision 
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
 				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted
-				if (shared) repo.client().crossDomainShare(sessionTarget, target) else repo.client().crossDomainUnshare(sessionTarget, target)
+				if (shared) clientPort.client().crossDomainShare(sessionTarget, target) else clientPort.client().crossDomainUnshare(sessionTarget, target)
 				Unit
 			}
 		}

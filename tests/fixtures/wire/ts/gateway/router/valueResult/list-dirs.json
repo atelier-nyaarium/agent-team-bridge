@@ -4,6 +4,9 @@
 	"case": "list-dirs",
 	"clock": 1757000000000,
 	"inputs": {
+		"draws": {
+			"0": "crb2JAapWQoaWkDr"
+		},
 		"opId": "list-dirs-op",
 		"result": {
 			"entries": ["projects"],
@@ -30,9 +33,16 @@
 	},
 	"phone": {
 		"decodeAs": "ContentEnvelope",
-		"open": {
-			"as": "ConsoleListDirsResult",
-			"aadKind": "op.result\nlist-dirs-op"
-		}
+		"sealed": [
+			{
+				"path": "result",
+				"aadKind": "op.result\nlist-dirs-op",
+				"decodeAs": "ConsoleListDirsResult",
+				"expectJson": {
+					"entries": ["projects"],
+					"path": "/home/fixture"
+				}
+			}
+		]
 	}
 }

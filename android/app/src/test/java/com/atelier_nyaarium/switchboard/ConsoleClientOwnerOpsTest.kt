@@ -35,7 +35,8 @@ import org.junit.Test
 
 class ConsoleClientOwnerOpsTest {
 	private val identity = Crypto.generateIdentity()
-	private val ring = ContentKeyring().also { it.deriveOwned(identity, "domain", 1) }
+	private val owner = Crypto.generateIdentity()
+	private val ring = ContentKeyring().also { it.deriveOwned(owner, "domain", 1) }
 	private val coordinator = newCoordinator()
 	private val sent = mutableListOf<OwnerOp>()
 	private var valueResultMode = ValueResultMode.Normal
@@ -327,18 +328,19 @@ class ConsoleClientOwnerOpsTest {
 		coordinator: ConsoleTransportCoordinator?,
 		sender: suspend (OwnerOp) -> JsonElement? = { op -> answer(op, coordinator) },
 	): ConsoleClient {
-		val store = plainStore().also { it.saveGatewayId("gateway") }
+		val store = testStore().also { it.saveGatewayId("gateway") }
+		val boot = testBootstrap(store, "domain", identity, owner, ring, device = "device", conversationId = "conversation")
 		return ConsoleClient(
-		Provisioning(appToken = "", device = "device", conversationId = "conversation"),
+		boot,
+		testAmbient(clock = 1L, nonce = "nonce", opId = "op", nonceBytes = ByteArray(12)),
 		store,
 		coordinator = coordinator,
-		signOwnerOp = { op, opId -> OwnerOp(1, "domain", "owner", "conversation", "device", opId, 1, "nonce", op, "sig") },
-		domainId = { "domain" },
-		ownerSignPub = { "owner" },
-		homeGatewayId = { "gateway" },
-		contentKeyring = { ring },
+		collaborators = ConsoleClientCollaborators(
+			signOwnerOp = { op, opId -> OwnerOp(1, "domain", "owner", "conversation", "device", opId, 1, "nonce", op, "sig") },
+			homeGatewayId = { "gateway" },
 		postOwnerOpSender = sender,
 		rowSigner = { "row-sig" },
+		),
 		)
 	}
 
@@ -357,9 +359,9 @@ class ConsoleClientOwnerOpsTest {
 				val sealed = Crypto.sealContent(
 					body.toString().toByteArray(),
 					requireNotNull(ring.keyFor(1)),
-					Crypto.ContentAad("domain", "owner", 1, opResultAadKind(op.conversationId, op.opId)),
+					Crypto.ContentAad("domain", owner.sign.pub,1, opResultAadKind(op.conversationId, op.opId)),
 				)
-				val opened = Crypto.openContent(sealed, requireNotNull(ring.keyFor(1)), Crypto.ContentAad("domain", "owner", 1, opResultAadKind(op.conversationId, op.opId)))
+				val opened = Crypto.openContent(sealed, requireNotNull(ring.keyFor(1)), Crypto.ContentAad("domain", owner.sign.pub,1, opResultAadKind(op.conversationId, op.opId)))
 				kotlinx.coroutines.yield()
 				coordinator?.completeOpResult(op.opId, wireJson.parseToJsonElement(opened.toString(Charsets.UTF_8)))
 				buildJsonObject {
@@ -411,7 +413,7 @@ class ConsoleClientOwnerOpsTest {
 		val envelope = Crypto.sealContent(
 			result.toString().toByteArray(),
 			requireNotNull(ring.keyFor(1)),
-			Crypto.ContentAad("domain", "owner", 1, valueResultAadKind(resultOpId)),
+			Crypto.ContentAad("domain", owner.sign.pub,1, valueResultAadKind(resultOpId)),
 		)
 		return buildJsonObject {
 			put("opKey", buildJsonObject { put("conversationId", ownerOp.conversationId); put("opId", ownerOp.opId) })
@@ -437,7 +439,7 @@ class ConsoleClientOwnerOpsTest {
 		val plain = Crypto.openContent(
 			envelope,
 			requireNotNull(ring.keyFor(envelope.epoch.toInt())),
-			Crypto.ContentAad("domain", "owner", envelope.epoch.toInt(), opPayloadAadKind()),
+			Crypto.ContentAad("domain", owner.sign.pub,envelope.epoch.toInt(), opPayloadAadKind()),
 		)
 		return wireJson.decodeFromString(ConsoleOp.serializer(), plain.toString(Charsets.UTF_8))
 	}

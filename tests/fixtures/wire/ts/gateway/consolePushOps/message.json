@@ -5,8 +5,8 @@
 	"clock": 1757000000000,
 	"inputs": {
 		"draws": {
-			"contentNonce0": "tY6ObOTbCVRYL4u6",
-			"contentNonce1": "xs9ehC3AjZCI1/Zf"
+			"0": "tY6ObOTbCVRYL4u6",
+			"1": "xs9ehC3AjZCI1/Zf"
 		},
 		"entry": {
 			"kind": "message",
@@ -56,9 +56,16 @@
 	},
 	"phone": {
 		"decodeAs": "RowEnvelope",
-		"open": {
-			"as": "MailboxEntry",
-			"aadKind": "inbox.body\nd6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c\nowner-message"
-		}
+		"sealed": [
+			{
+				"path": "row.body",
+				"aadKind": "inbox.body\nd6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c\nowner-message",
+				"decodeAs": "MailboxEntry",
+				"expectJson": {
+					"kind": "message",
+					"body": "Wire message"
+				}
+			}
+		]
 	}
 }

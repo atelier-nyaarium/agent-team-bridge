@@ -11,7 +11,10 @@
 			"seq": 11
 		},
 		"opId": "cursor_translate-op",
-		"nonce": "Wz2yYNc84OkCmDsG0ckoko/2"
+		"nonce": "Wz2yYNc84OkCmDsG0ckoko/2",
+		"draws": {
+			"0": "Wz2yYNc84OkCmDsG0ckoko/2"
+		}
 	},
 	"expect": {
 		"translation": {

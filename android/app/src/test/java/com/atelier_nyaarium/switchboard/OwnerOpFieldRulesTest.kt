@@ -32,18 +32,16 @@ class OwnerOpFieldRulesTest {
 		}
 
 		val identity = Crypto.generateIdentity()
-		val ownerOps = OwnerOps(
-			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
-			consoleIdentity = { identity },
-			provisioningConversationId = { fields.getJSONObject("conversationId").getString("valid") },
-			provisioningDevice = { fields.getJSONObject("device").getString("valid") },
-			now = { 1L },
-			newNonce = { randomNonceB64() },
-			newOpId = { "field-rules-op" },
+		val domain = fields.getJSONObject("domainId").getString("valid")
+		val boot = testBootstrap(
+			domainId = domain,
+			identity = identity,
+			device = fields.getJSONObject("device").getString("valid"),
+			conversationId = fields.getJSONObject("conversationId").getString("valid"),
 		)
+		val ownerOps = OwnerOps(boot, testAmbient(clock = 1L, nonce = randomNonceB64(), opId = "field-rules-op"))
 		repeat(300) {
 			val ownerOp = ownerOps.sign(buildJsonObject { put("kind", "representative") })
-				?: error("OwnerOps.sign returned null")
 			assertField(fields, "domainId", ownerOp.domainId)
 			assertField(fields, "signerSignPub", ownerOp.signerSignPub)
 			assertField(fields, "conversationId", ownerOp.conversationId)
@@ -55,34 +53,32 @@ class OwnerOpFieldRulesTest {
 	}
 
 	@Test
-	fun deviceSlashViolatesItsFixtureRule() {
+	fun aProvisionedDeviceWithASlashIsSanitizedBeforeItIsSigned() {
 		val fields = fixture().getJSONObject("fields")
 		val identity = Crypto.generateIdentity()
-		val ownerOp = OwnerOps(
-			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
-			consoleIdentity = { identity },
-			provisioningConversationId = { fields.getJSONObject("conversationId").getString("valid") },
-			provisioningDevice = { fields.getJSONObject("device").getString("violation") },
-			now = { 1L },
-			newNonce = { randomNonceB64() },
-			newOpId = { "device-violation-op" },
-		).sign(buildJsonObject { put("kind", "representative") }) ?: error("OwnerOps.sign returned null")
-		assertFalse(matches(fields.getJSONObject("device"), ownerOp.device))
+		val boot = testBootstrap(
+			domainId = fields.getJSONObject("domainId").getString("valid"),
+			identity = identity,
+			device = fields.getJSONObject("device").getString("violation"),
+			conversationId = fields.getJSONObject("conversationId").getString("valid"),
+		)
+		val ownerOp = OwnerOps(boot, testAmbient(clock = 1L, nonce = randomNonceB64(), opId = "device-violation-op"))
+			.sign(buildJsonObject { put("kind", "representative") })
+		assertTrue(matches(fields.getJSONObject("device"), ownerOp.device))
 	}
 
 	@Test
 	fun blobConversationIdViolationBreaksItsFixtureRule() {
 		val fields = fixture().getJSONObject("fields")
 		val identity = Crypto.generateIdentity()
-		val ownerOp = OwnerOps(
-			confirmedDomainId = { fields.getJSONObject("domainId").getString("valid") },
-			consoleIdentity = { identity },
-			provisioningConversationId = { fields.getJSONObject("conversationId").getString("violation") },
-			provisioningDevice = { fields.getJSONObject("device").getString("valid") },
-			now = { 1L },
-			newNonce = { randomNonceB64() },
-			newOpId = { "conversation-violation-op" },
-		).sign(buildJsonObject { put("kind", "representative") }) ?: error("OwnerOps.sign returned null")
+		val boot = testBootstrap(
+			domainId = fields.getJSONObject("domainId").getString("valid"),
+			identity = identity,
+			device = fields.getJSONObject("device").getString("valid"),
+			conversationId = fields.getJSONObject("conversationId").getString("violation"),
+		)
+		val ownerOp = OwnerOps(boot, testAmbient(clock = 1L, nonce = randomNonceB64(), opId = "conversation-violation-op"))
+			.sign(buildJsonObject { put("kind", "representative") })
 		assertFalse(matches(fields.getJSONObject("conversationId"), ownerOp.conversationId))
 	}
 }

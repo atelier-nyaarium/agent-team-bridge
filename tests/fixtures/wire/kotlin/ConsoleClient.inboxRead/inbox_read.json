@@ -11,7 +11,10 @@
 			"limit": 100
 		},
 		"opId": "inbox_read-op",
-		"nonce": "dHCRdZfUkxTDowkxjO9C2PAH"
+		"nonce": "dHCRdZfUkxTDowkxjO9C2PAH",
+		"draws": {
+			"0": "dHCRdZfUkxTDowkxjO9C2PAH"
+		}
 	},
 	"expect": {
 		"outcome": "cursor_stale"

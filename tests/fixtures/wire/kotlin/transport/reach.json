@@ -1,9 +1,11 @@
 {
 	"producer": "kotlin",
-	"composer": "ConsoleClient.buildReachRequest",
+	"composer": "ConsoleRouterTransport.buildReachRequest",
 	"case": "reach",
 	"clock": 1757000000000,
-	"inputs": {},
+	"inputs": {
+		"draws": {}
+	},
 	"expect": {
 		"domainId": "fixture-domain"
 	},

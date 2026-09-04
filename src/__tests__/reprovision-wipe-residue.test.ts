@@ -36,13 +36,28 @@ function kotlinSources(dir: string, acc: string[] = []): string[] {
 	return acc;
 }
 
+/** Supertypes, constructor parens skipped. */
+function supertypesOf(source: string, from: number): string {
+	let depth = 0;
+	let out = "";
+	for (let i = from; i < source.length; i += 1) {
+		const ch = source[i];
+		if (ch === "(") depth += 1;
+		else if (ch === ")") depth -= 1;
+		else if (depth === 0 && ch === "{") break;
+		else if (depth === 0) out += ch;
+	}
+	return out;
+}
+
 /** Every class declaring its own wipe, by name. */
 function wipingClasses(): Set<string> {
 	const out = new Set<string>();
 	for (const file of kotlinSources(ANDROID_SRC)) {
 		const source = fs.readFileSync(file, "utf8");
-		for (const m of source.matchAll(/^(?:\w+ )*class (\w+)[^\n]*: ClearsOnReprovision\b/gm)) {
-			if (m[1]) out.add(m[1]);
+		for (const m of source.matchAll(/^(?:@\w+(?:\([^)]*\))? )*(?:\w+ )*class (\w+)/gm)) {
+			const header = supertypesOf(source, (m.index ?? 0) + m[0].length);
+			if (m[1] && /:\s*ClearsOnReprovision\b/.test(header)) out.add(m[1]);
 		}
 	}
 	return out;

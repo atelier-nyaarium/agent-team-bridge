@@ -13,7 +13,6 @@ import { opPayloadAadKind } from "../shared/content-envelope.js";
 import type { Identity } from "../shared/crypto.js";
 import { resolveLocalDomainId } from "../shared/domain-id.js";
 import { createPersistRunner, DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
-import { refuseFixtureIdentity } from "../shared/fixture-identity.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import { fenced, MIGRATION_SETTLE_MS, useMigrationEpochFile } from "../shared/migration-fence.js";
@@ -34,9 +33,9 @@ import { boardAwarenessSubscriber } from "./boardAwareness.js";
 import {
 	armingOf,
 	type BootState,
-	decideBootPhase,
 	type FederationSlice,
 	federationOf,
+	GatewayBootstrap,
 	type RouterHandlers,
 } from "./boot.js";
 import { ChannelDeliveryCoordinator } from "./channelDelivery.js";
@@ -52,7 +51,6 @@ import { CopilotRelay } from "./copilotRelay.js";
 import { CopilotRoute } from "./copilotRoute.js";
 import { DaemonCapabilityStore } from "./daemonCapabilities.js";
 import { reportUnrecognizedDataEntries } from "./dataDirInventory.js";
-import { Allowlist } from "./federation/allowlist.js";
 import { activateStaged, openBootstrapBundle, recoverStaging, stageBootstrap } from "./federation/bootstrapInstall.js";
 import { ContentKeyStore } from "./federation/contentKeyStore.js";
 import {
@@ -89,13 +87,7 @@ import { buildRegisterAuth } from "./router/registerAuth.js";
 import { startRouterClient } from "./router/routerClient.js";
 import { createSessionRegistryReporter } from "./router/sessionRegistryReporter.js";
 import { createShareAttestor } from "./router/shareAttestor.js";
-import {
-	loadRouterReach,
-	loadRouterTransport,
-	type RouterTransport,
-	routerWsConnection,
-	saveRouterReach,
-} from "./router/transport.js";
+import { routerWsConnection, saveRouterReach } from "./router/transport.js";
 import { composeValueResult } from "./router/valueResult.js";
 import { createRoutes, createRoutesCarryOver } from "./routes.js";
 import { dueSchemaSteps, type SchemaStep, schemaVersionOf } from "./schemaWipe.js";
@@ -214,15 +206,16 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	let cachedIdentity: Identity | null = null;
 	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir));
 	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv, randomBytes);
-	// The allowlist carries the Domain id; the file and the env are fallbacks.
-	const allowlistDomainId = (): string | null => {
-		try {
-			return new Allowlist(federationDir).domainId;
-		} catch {
-			return null;
-		}
-	};
-	let localDomainId = resolveLocalDomainId(federationDir, allowlistDomainId());
+	const gatewayBoot = GatewayBootstrap.resolve(
+		{ federationDir },
+		{
+			enrollNonce: config.enrollNonce ?? null,
+			allowFixtureIdentity: deps.allowFixtureIdentity ?? false,
+			domainIdEnv: process.env.FEDERATION_DOMAIN_ID,
+		},
+		{ identity, contentKeys: contentKeyStore },
+	);
+	let localDomainId = gatewayBoot.kind === "active" ? gatewayBoot.boot.domainId : resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 
 	let boot: BootState = { phase: "standalone" };
@@ -567,17 +560,10 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			?.crossDomainPeers.all()
 			.some((p) => p.friendDomainId === domainId) ?? false;
 
-	const routerTransport = loadRouterTransport(federationDir);
-	const enrollNonce = config.enrollNonce;
-	const bootDecision = decideBootPhase({
-		hasTransport: routerTransport !== null,
-		hasDomainId: localDomainId !== null,
-		hasEnrollNonce: !!enrollNonce,
-	});
-
-	function buildFederationSlice(transport: RouterTransport, domainId: string): FederationSlice {
+	function buildFederationSlice(gatewayBootstrap: GatewayBootstrap): FederationSlice {
 		let slice: FederationSlice;
-		const allowlist = new Allowlist(federationDir);
+		const { domainId } = gatewayBootstrap;
+		const allowlist = gatewayBootstrap.allowlist;
 		const crossDomainPeers = new CrossDomainPeers(federationDir, () => {
 			planeRegistry.markDirty("linked-peers");
 			slice.handlers?.presenceSource.recomputeAll();
@@ -607,8 +593,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			},
 			now,
 		);
-		const federationIdentity = identity();
-		if (!deps.allowFixtureIdentity) refuseFixtureIdentity(federationIdentity.sign.pub, "gateway");
+		const federationIdentity = gatewayBootstrap.identity;
 		const replayDurable = new DurableStore(DATA_DIR, "replay-guard");
 		const replayGuard = new ReplayGuard();
 		restoreDurable("replay-guard", () => {
@@ -664,7 +649,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		if (!allowlist.selfAdmission(federationIdentity.sign.pub))
 			logAdmitGatewayQr(federationIdentity, localGatewayId);
 
-		const connection = routerWsConnection(transport);
+		const connection = routerWsConnection(gatewayBootstrap.transport);
 		const bootstrap = config.routerBootstrapUrl ?? connection.url;
 		console.log(`[router] direct transport -> ${bootstrap}`);
 
@@ -674,7 +659,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			tls: connection.tls,
 			gatewayId: localGatewayId,
 			domainId,
-			reach: loadRouterReach(federationDir),
+			reach: gatewayBootstrap.reach,
 			onReach: (learned) => saveRouterReach(federationDir, learned),
 			onGatewayRelay: (frame) => {
 				slice.handlers?.gatewayRelay(frame);
@@ -719,8 +704,12 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 				presenceReporter?.baseline();
 				shareAttestor?.attest();
 				void inboxPump?.resendReceipts();
-				// The first epoch always exists; newer ones arrive with the rows sealed under them.
-				if (contentKeyStore.epochs().length === 0) keyRequester?.request(1);
+				// Older rows are sealed under the epochs below the oldest held one.
+				const oldestHeld = Math.min(...contentKeyStore.epochs());
+				const wanted = Number.isFinite(oldestHeld) ? oldestHeld - 1 : 1;
+				for (let epoch = 1; epoch <= wanted; epoch += 1) {
+					if (contentKeyStore.keyFor(epoch) === null) keyRequester?.request(epoch);
+				}
 			},
 			onPresenceResync: () => presenceReporter?.resync(),
 			onUnlink: (frame) => {
@@ -786,14 +775,14 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			incarnation: () => routerClient.incarnation(),
 			domainId,
 			ownerSignPub: () => allowlist.ownerSignPub,
-			keys: contentKeyStore,
+			keys: gatewayBootstrap.contentKeys,
 		});
 		const boardClient = createBoardClient({
 			call: (action, params) => routerClient.callInboxTool(action, params),
 			domainId,
 			gatewayId: localGatewayId,
 			ownerSignPub: () => allowlist.ownerSignPub,
-			keys: contentKeyStore,
+			keys: gatewayBootstrap.contentKeys,
 		});
 		keyRequester = createKeyRequester({
 			domainId,
@@ -834,7 +823,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			gatewayId: localGatewayId,
 			gatewaySignPub: federationIdentity.sign.pub,
 			ownerSignPub: () => allowlist.ownerSignPub,
-			contentKeyStore,
+			contentKeyStore: gatewayBootstrap.contentKeys,
 			consoleDispatch: (op, device, conversationId, opId, ownerSignPub) =>
 				consoleDeliveryHandler
 					? consoleDeliveryHandler(op, device, conversationId, opId, ownerSignPub)
@@ -859,7 +848,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			coordinator,
 			sealer,
 			routerClient,
-			contentKeyStore,
+			contentKeyStore: gatewayBootstrap.contentKeys,
 			boardClient,
 			blobUploader,
 			replayPersist: () => replayDurable.save(replayGuard.snapshot()),
@@ -931,19 +920,18 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			enrollTlsServer?.stop();
 			enrollTlsServer = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
-			const installedTransport = loadRouterTransport(federationDir);
-			const installedDomainId = resolveLocalDomainId(federationDir, allowlistDomainId());
-			if (installedTransport && installedDomainId) {
+			const installedBoot = GatewayBootstrap.resolve(
+				{ federationDir },
+				{
+					enrollNonce: null,
+					allowFixtureIdentity: deps.allowFixtureIdentity ?? false,
+					domainIdEnv: process.env.FEDERATION_DOMAIN_ID,
+				},
+				{ identity, contentKeys: contentKeyStore },
+			);
+			if (installedBoot.kind === "active") {
 				try {
-					const oldestDeliveredEpoch = Math.min(
-						...(bundle.contentKeys ?? []).map((envelope) => envelope.epoch),
-					);
-					const missingBootstrapEpochs = Number.isFinite(oldestDeliveredEpoch)
-						? Array.from({ length: oldestDeliveredEpoch - 1 }, (_, index) => index + 1).filter(
-								(epoch) => contentKeyStore.keyFor(epoch) === null,
-							)
-						: [];
-					enterFederationActive(installedTransport, installedDomainId, missingBootstrapEpochs);
+					enterFederationActive(installedBoot.boot);
 					console.log(
 						`[enroll] installed credentials for Gateway "${localGatewayId}"; connecting to the Router.`,
 					);
@@ -974,7 +962,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			arming: { install, admitPayload: admitGatewayPayload(enrollIdentity, localGatewayId, delivery) },
 		};
 	}
-	if (bootDecision === "arm" && enrollNonce) enterArming(enrollNonce);
+	if (gatewayBoot.kind === "arming") enterArming(gatewayBoot.nonce);
 
 	function handleEnrollPost(body: Record<string, unknown>): Response {
 		const install = armingOf(boot)?.install;
@@ -1055,7 +1043,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		return createRoutes({
 			dataDir: DATA_DIR,
 			carryOver: routesCarryOver,
-			routerCertFp: routerTransport?.routerCertFp,
+			routerCertFp: gatewayBoot.kind === "active" ? gatewayBoot.boot.transport.routerCertFp : undefined,
 			registry,
 			conversationRegistry,
 			store,
@@ -1335,19 +1323,18 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		shareSweepTimer.unref?.();
 	}
 
-	function enterFederationActive(transport: RouterTransport, domainId: string, bootstrapEpochs: number[] = []): void {
+	function enterFederationActive(gatewayBootstrap: GatewayBootstrap): void {
 		if (boot.phase === "federationActive") return;
-		localDomainId = domainId;
-		const federation = buildFederationSlice(transport, domainId);
+		localDomainId = gatewayBootstrap.domainId;
+		const federation = buildFederationSlice(gatewayBootstrap);
 		boot = { phase: "federationActive", federation };
 		routes.stop();
 		routes = buildRoutes();
 		federation.handlers = buildRouterHandlers(federation);
 		startShareSweep(federation);
-		for (const epoch of bootstrapEpochs) keyRequester?.request(epoch);
 	}
-	if (bootDecision === "activate" && routerTransport && localDomainId) {
-		enterFederationActive(routerTransport, localDomainId);
+	if (gatewayBoot.kind === "active") {
+		enterFederationActive(gatewayBoot.boot);
 	}
 
 	async function router(req: Request): Promise<Response> {
@@ -1372,9 +1359,9 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		if (method === "GET" && url.pathname === "/admit-payload") {
 			// Admit payloads require the armed enrollment nonce.
 			const presented = Buffer.from(req.headers.get("x-enroll-nonce") ?? "");
-			const expected = Buffer.from(enrollNonce ?? "");
+			const expected = Buffer.from(config.enrollNonce ?? "");
 			const authed =
-				!!enrollNonce && presented.length === expected.length && timingSafeEqual(presented, expected);
+				!!config.enrollNonce && presented.length === expected.length && timingSafeEqual(presented, expected);
 			const admitPayload = armingOf(boot)?.admitPayload;
 			if (!admitPayload || !authed) {
 				return new Response(JSON.stringify({ ok: false, error: "not in enrollment mode" }), {

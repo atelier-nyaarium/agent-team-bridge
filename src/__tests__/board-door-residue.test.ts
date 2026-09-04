@@ -5,15 +5,15 @@ import { describe, expect, it } from "vitest";
 ////////////////////////////////
 //  Tests
 //
-//  BoardOps is the only door to BoardManager. A second reacher can hold BoardOps' resolver answer
-//  and ask BoardManager the question, observe one's revision while querying the other, or read an
-//  entry from one and hand it back to the other's ABSOLUTE setter - a lost update on a write that
-//  cannot be merged.
+//  BoardOps is the only door to BoardManager; the repository declares it and one adapter hands it
+//  over. A second reacher could write back an entry read through the other, a lost update.
 
 const ANDROID_SRC = path.join(__dirname, "..", "..", "android", "app", "src");
 const DOOR = "BoardOps.kt";
-// ChatRepository declares the BoardManager instance; the door reaches it through that name.
+const HANDOFF = "RepositoryCollaborators.kt";
 const DECLARER = "ChatRepository.kt";
+const REACHES = /\b(?:repo|collaborators)\.board\./;
+const HOLDS = /\brepo\.board\b/;
 
 function kotlinFiles(dir: string, acc: string[] = []): string[] {
 	for (const entry of fs.readdirSync(dir)) {
@@ -41,14 +41,21 @@ describe("board door residue", () => {
 		expect(files.length).toBeGreaterThan(50);
 		expect(files.some((f) => path.basename(f) === DOOR)).toBe(true);
 
-		const reachers = files.filter((f) => /\brepo\.board\./.test(code(f))).map((f) => path.basename(f));
+		const reachers = files.filter((f) => REACHES.test(code(f))).map((f) => path.basename(f));
 		expect(new Set(reachers)).toEqual(new Set([DOOR]));
+	});
+
+	it("only the collaborator adapter holds the instance for the door", () => {
+		const holders = kotlinFiles(ANDROID_SRC)
+			.filter((f) => HOLDS.test(code(f)))
+			.map((f) => path.basename(f));
+		expect(new Set(holders)).toEqual(new Set([HANDOFF]));
 	});
 
 	it("the door actually reaches it, so the rule cannot pass by everyone giving up", () => {
 		const door = kotlinFiles(ANDROID_SRC).find((f) => path.basename(f) === DOOR);
 		expect(door).toBeDefined();
-		expect(code(door as string)).toMatch(/\brepo\.board\./);
+		expect(code(door as string)).toMatch(REACHES);
 	});
 
 	it("ChatRepository still declares the instance the door reaches", () => {

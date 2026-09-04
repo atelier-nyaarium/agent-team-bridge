@@ -8,7 +8,8 @@ package com.atelier_nyaarium.switchboard
  * surface from disagreeing with the queue itself.
  */
 internal class PlaybackReadModels(
-	private val repo: ChatRepository,
+	private val state: kotlinx.coroutines.flow.MutableStateFlow<ChatState>,
+	private val playback: PlaybackPort,
 	private val queue: PlaybackQueue,
 	// Read through its owner's accessor rather than copied. That accessor is what normalizes a pause
 	// over an idle queue, and a copy here would make the bad state observable again.
@@ -21,7 +22,7 @@ internal class PlaybackReadModels(
 		for (entry in queue.queued()) {
 			if (entry.team != team) continue
 			states[entry.at] = when {
-				repo.stts.isPlayingMessage(entry.team, entry.at) -> "playing"
+				playback.stts.isPlayingMessage(entry.team, entry.at) -> "playing"
 				entry == queue.playing() -> "loading"
 				else -> "queued"
 			}
@@ -39,7 +40,7 @@ internal class PlaybackReadModels(
 	fun queueCounts(): Triple<Int, Boolean, Int> {
 		val queued = queue.queued()
 		val head = queue.playing()
-		val generating = head != null && !repo.stts.isPlayingMessage(head.team, head.at)
+		val generating = head != null && !playback.stts.isPlayingMessage(head.team, head.at)
 		return Triple(queued.size, generating, queue.remembered().size)
 	}
 
@@ -52,7 +53,7 @@ internal class PlaybackReadModels(
 		val current = playbackPosition()
 		// Only the HEAD can be mid-synthesis, and only until its audio starts. Everything behind it is
 		// waiting its turn, which is a different thing and must not draw as work in progress.
-		val generating = head != null && !repo.stts.isPlayingMessage(head.team, head.at)
+		val generating = head != null && !playback.stts.isPlayingMessage(head.team, head.at)
 		return queue.queued().distinct().map { entry ->
 			row(
 				entry,
@@ -60,7 +61,7 @@ internal class PlaybackReadModels(
 				// The live player for the one sounding, otherwise whatever warming measured - a queued
 				// entry knows its own length as soon as its audio exists, which is the point of warming it early.
 				durationMs = current?.takeIf { it.entry == entry }?.durationMs
-					?: repo.stts.cache.warmedDuration(entry.team, entry.at, entry.tier),
+					?: playback.stts.cache.warmedDuration(entry.team, entry.at, entry.tier),
 				generating = generating && entry == head,
 			)
 		}
@@ -97,10 +98,10 @@ internal class PlaybackReadModels(
 		gaveUp: Boolean = false,
 		reason: String? = null,
 	): QueueRow {
-		val msg = repo._state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
+		val msg = state.value.threads[entry.team]?.lastOrNull { it.at == entry.at && !it.fromMe }
 		return QueueRow(
 			entry = entry,
-			sessionLabel = repo._state.value.label(entry.team),
+			sessionLabel = state.value.label(entry.team),
 			title = msg?.let { SttsPlayer.ttsText(it, SttsPlayer.Tier.TITLE) }.orEmpty(),
 			durationMs = durationMs,
 			isCurrent = isCurrent,
@@ -114,7 +115,7 @@ internal class PlaybackReadModels(
 	 * bar is null through the chime and the sentinel too: neither marker gets a timeline, and a bar
 	 * running over one would invite a seek with nowhere useful to land. */
 	fun playbackPosition(): Position? =
-		repo.stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
+		playback.stts.positionSnapshot()?.takeIf { it.entry == queue.playing() }
 
 	/** Where the run would pick up while it is held. A pause has no player, so the live snapshot is
 	 * null and the sheet showed nothing at all - blanking the timeline at precisely the moment the
@@ -122,6 +123,6 @@ internal class PlaybackReadModels(
 	fun heldPosition(): Long? {
 		if (!paused()) return null
 		val parked = queue.queued().firstOrNull() ?: return null
-		return repo.stts.heldPosition(parked.team, parked.at, parked.tier)
+		return playback.stts.heldPosition(parked.team, parked.at, parked.tier)
 	}
 }

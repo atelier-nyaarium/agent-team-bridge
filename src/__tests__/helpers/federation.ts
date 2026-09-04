@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Allowlist } from "../../gateway/federation/allowlist.js";
@@ -102,6 +103,7 @@ export function makeCtx(localGatewayId: string, over: FederationCtxOverrides = {
 	const offlineCatalog = over.offlineCatalog ?? new Map<string, string>();
 	const config = { localGatewayId, localDomainId: "alice", ...over.config };
 	return {
+		dataDir: over.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "switchboard-routes-")),
 		registry,
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),

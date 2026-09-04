@@ -12,10 +12,6 @@ import com.atelier_nyaarium.switchboard.proto.KeyReceiptsReadOp
 import com.atelier_nyaarium.switchboard.proto.KeyReceiptsReadResult
 import com.atelier_nyaarium.switchboard.proto.KeyRequestOp
 import com.atelier_nyaarium.switchboard.proto.KeyRequest
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -29,39 +25,35 @@ interface MissingEpochTimer {
 	fun schedule(delayMs: Long, task: suspend () -> Unit)
 }
 
-private class CoroutineMissingEpochTimer : MissingEpochTimer {
-	private val scope = CoroutineScope(Dispatchers.IO)
+internal class KeyDeliveryCollaborators(
+	val signOwnerOp: (JsonObject) -> com.atelier_nyaarium.switchboard.proto.OwnerOp?,
+	val sendOwnerOp: suspend (com.atelier_nyaarium.switchboard.proto.OwnerOp) -> JsonElement?,
+	val install: (KeyEnvelope, Keyring) -> KeyDeliveryInstall,
+	val reportError: (String) -> Unit,
+)
 
-	override fun schedule(delayMs: Long, task: suspend () -> Unit) {
-		scope.launch {
-			if (delayMs > 0) delay(delayMs)
-			task()
+internal class KeyDeliveryOps(
+	private val boot: PhoneBootstrap,
+	private val ambient: PhoneAmbient,
+	private val collaborators: KeyDeliveryCollaborators,
+) {
+	companion object {
+		private const val MISSING_RETRY_MS = 10 * 60 * 1000L
+		private const val MISSING_WINDOW_MS = 24 * 60 * 60 * 1000L
+		private const val KEY_GRANT_WINDOW_MS = MISSING_RETRY_MS
+		private const val MAX_RECENT_GRANTS = 4096
+		private const val UNRECORDED_GRANT = -1L
+
+		fun installInto(ring: ContentKeyring): (KeyEnvelope, Keyring) -> KeyDeliveryInstall = { envelope, trust ->
+			when (val merge = ring.classify(listOf(envelope), trust)) {
+				is ContentKeyring.Merge.Refused -> KeyDeliveryInstall(false, false, merge.reason)
+				ContentKeyring.Merge.Unchanged -> KeyDeliveryInstall(true, true)
+				is ContentKeyring.Merge.Installed ->
+					if (ring.commit(merge)) KeyDeliveryInstall(true, true) else KeyDeliveryInstall(false, false, "content key commit failed")
+			}
 		}
 	}
-}
 
-class KeyDeliveryOps(
-	private val domainId: () -> String?,
-	private val keyring: () -> Keyring,
-	private val contentKeyring: () -> ContentKeyring,
-	private val consoleIdentity: () -> Crypto.Identity,
-	private val signOwnerOp: (JsonObject) -> com.atelier_nyaarium.switchboard.proto.OwnerOp?,
-	private val sendOwnerOp: suspend (com.atelier_nyaarium.switchboard.proto.OwnerOp) -> JsonElement?,
-	private val install: (KeyEnvelope, Keyring) -> KeyDeliveryInstall = { envelope, trust ->
-		val ring = contentKeyring()
-		when (val merge = ring.classify(listOf(envelope), trust)) {
-			is ContentKeyring.Merge.Refused -> KeyDeliveryInstall(false, false, merge.reason)
-			ContentKeyring.Merge.Unchanged -> KeyDeliveryInstall(true, true)
-			is ContentKeyring.Merge.Installed ->
-				if (ring.commit(merge)) KeyDeliveryInstall(true, true) else KeyDeliveryInstall(false, false, "content key commit failed")
-		}
-	},
-	private val now: () -> Long = { System.currentTimeMillis() },
-	private val newNonce: () -> String = { com.atelier_nyaarium.switchboard.crypto.randomNonceB64() },
-	private val missingTimer: MissingEpochTimer = CoroutineMissingEpochTimer(),
-	private val reportError: (String) -> Unit = {},
-	private val wrapEntropy: ((Int) -> ByteArray)? = null,
-) {
 	private data class GrantKey(val subject: String, val epoch: Int)
 	private data class GrantClaim(val at: Long, val token: Long)
 
@@ -76,33 +68,33 @@ class KeyDeliveryOps(
 		if (epoch < 1) return
 		synchronized(missing) {
 			if (missing.containsKey(epoch)) return
-			missing[epoch] = now()
+			missing[epoch] = ambient.now()
 			if (!missingFlushScheduled) {
 				missingFlushScheduled = true
-				missingTimer.schedule(0) { flushMissing() }
+				ambient.missingTimer.schedule(0) { flushMissing() }
 			}
 		}
 	}
 	suspend fun onKeyRequest(request: KeyRequest) {
-		val domain = domainId() ?: return
+		val domain = boot.domainId
 		if (request.domainId != domain) return
 		if (!Crypto.verify(
 			Crypto.keyRequestSigningBytes(domain, request.requesterSignPub, request.epochs, request.at, request.nonce),
 			request.signature,
 			request.requesterSignPub,
 		)) return
-		val recipient = keyring().resolveSubject(request.requesterSignPub)
+		val recipient = boot.keyring().resolveSubject(request.requesterSignPub)
 		// An unknown requester is dropped silently otherwise.
 		if (recipient == null) {
 			DebugLog.log("KeyDelivery", "request from unknown subject ${request.requesterSignPub.take(8)}")
 			return
 		}
-		val identity = consoleIdentity()
-		val ring = contentKeyring()
+		val identity = boot.consoleIdentity
+		val ring = boot.contentKeyring
 		val epochs = request.epochs.filter { it >= 1 && it <= Int.MAX_VALUE.toLong() }.map { it.toInt() }
 		var granted = 0
 		var skipped = 0
-		val envelopes = ring.wrapFor(epochs, recipient.boxPub, identity.sign.pub, identity.sign.priv, entropy = wrapEntropy)
+		val envelopes = ring.wrapFor(epochs, recipient.boxPub, identity.sign.pub, identity.sign.priv, entropy = ambient.wrapEntropy)
 		for (envelope in envelopes) {
 			val grantKey = GrantKey(recipient.signPub, envelope.epoch.toInt())
 			val claimToken = claimGrant(grantKey) ?: run {
@@ -110,7 +102,7 @@ class KeyDeliveryOps(
 				continue
 			}
 			try {
-				if (send(grantOp(KeyGrant(1, recipient.signPub, envelope, now()))) != null) granted++ else releaseGrant(grantKey, claimToken)
+				if (send(grantOp(KeyGrant(1, recipient.signPub, envelope, ambient.now()))) != null) granted++ else releaseGrant(grantKey, claimToken)
 			} catch (e: Exception) {
 				try {
 					e.rethrowIfCancellation()
@@ -124,7 +116,7 @@ class KeyDeliveryOps(
 
 	/** Null means already claimed; UNRECORDED_GRANT means grant it but the map was full. */
 	private fun claimGrant(key: GrantKey): Long? {
-		val current = now()
+		val current = ambient.now()
 		synchronized(recentGrants) {
 			recentGrants.entries.removeIf { current - it.value.at >= KEY_GRANT_WINDOW_MS }
 			if (recentGrants.containsKey(key)) return null
@@ -144,16 +136,16 @@ class KeyDeliveryOps(
 	}
 
 	suspend fun onKeyGrant(grant: KeyGrant) {
-		val identity = consoleIdentity()
+		val identity = boot.consoleIdentity
 		if (grant.recipientSignPub != identity.sign.pub) return
-		val result = install(grant.envelope, keyring())
+		val result = collaborators.install(grant.envelope, boot.keyring())
 		if (result.accepted && result.committed) {
 			if (grant.envelope.epoch >= 1 && grant.envelope.epoch <= Int.MAX_VALUE.toLong()) {
 				synchronized(missing) { missing.remove(grant.envelope.epoch.toInt()) }
 			}
-			val domain = domainId() ?: return
-			val at = now()
-			val nonce = newNonce()
+			val domain = boot.domainId
+			val at = ambient.now()
+			val nonce = ambient.newNonce()
 			val receipt = KeyReceipt(
 				1,
 				domain,
@@ -171,15 +163,14 @@ class KeyDeliveryOps(
 	}
 
 	suspend fun redeliverAll(): List<KeyDeliveryMember> {
-		domainId() ?: return emptyList()
-		val identity = consoleIdentity()
-		val epochs = contentKeyring().epochs()
-		val members = keyring().liveAdmissions().filter { it.signPub != identity.sign.pub }
+		val identity = boot.consoleIdentity
+		val epochs = boot.contentKeyring.epochs()
+		val members = boot.keyring().liveAdmissions().filter { it.signPub != identity.sign.pub }
 		for (member in members) {
 			val envelopes =
-				contentKeyring().wrapFor(epochs, member.boxPub, identity.sign.pub, identity.sign.priv, entropy = wrapEntropy)
+				boot.contentKeyring.wrapFor(epochs, member.boxPub, identity.sign.pub, identity.sign.priv, entropy = ambient.wrapEntropy)
 			for (envelope in envelopes) {
-				send(grantOp(KeyGrant(1, member.signPub, envelope, now())))
+				send(grantOp(KeyGrant(1, member.signPub, envelope, ambient.now())))
 			}
 		}
 		val answer = send(keyReceiptsReadOp()) ?: return members.flatMap { member -> epochs.map { KeyDeliveryMember(member.kind, member.signPub, it, false) } }
@@ -201,17 +192,17 @@ class KeyDeliveryOps(
 		}
 		if (epochs.isNotEmpty()) {
 			sendMissing(epochs)
-			synchronized(missing) { missingLastSentAt = now() }
+			synchronized(missing) { missingLastSentAt = ambient.now() }
 		}
 		scheduleMissingRetry()
 	}
 
 	// Retry from last send. Expire from first request.
 	private suspend fun retryMissing() {
-		val current = now()
+		val current = ambient.now()
 		val due = synchronized(missing) {
 			val expired = missing.filterValues { current - it >= MISSING_WINDOW_MS }.keys.toList()
-			expired.forEach { missing.remove(it); reportError("Content key epoch $it remains unavailable") }
+			expired.forEach { missing.remove(it); collaborators.reportError("Content key epoch $it remains unavailable") }
 			if (current - missingLastSentAt >= MISSING_RETRY_MS) missing.keys.toList() else emptyList()
 		}
 		if (due.isNotEmpty()) {
@@ -225,10 +216,10 @@ class KeyDeliveryOps(
 		synchronized(missing) {
 			if (missing.isEmpty() || missingRetryScheduled) return
 			missingRetryScheduled = true
-			val current = now()
+			val current = ambient.now()
 			val untilExpiry = missing.values.minOf { first -> MISSING_WINDOW_MS - (current - first) }
 			val delayMs = minOf(MISSING_RETRY_MS - (current - missingLastSentAt), untilExpiry).coerceAtLeast(1)
-			missingTimer.schedule(delayMs) {
+			ambient.missingTimer.schedule(delayMs) {
 				synchronized(missing) { missingRetryScheduled = false }
 				retryMissing()
 			}
@@ -236,10 +227,10 @@ class KeyDeliveryOps(
 	}
 
 	private suspend fun sendMissing(epochs: List<Int>) {
-		val domain = domainId() ?: return
-		val identity = consoleIdentity()
-		val at = now()
-		val nonce = newNonce()
+		val domain = boot.domainId
+		val identity = boot.consoleIdentity
+		val at = ambient.now()
+		val nonce = ambient.newNonce()
 		val request = KeyRequest(
 			1,
 			domain,
@@ -253,8 +244,8 @@ class KeyDeliveryOps(
 	}
 
 	private suspend fun send(op: JsonObject): JsonElement? {
-		val signed = signOwnerOp(op) ?: return null
-		return sendOwnerOp(signed)
+		val signed = collaborators.signOwnerOp(op) ?: return null
+		return collaborators.sendOwnerOp(signed)
 	}
 
 	private fun grantOp(grant: KeyGrant): JsonObject =
@@ -266,13 +257,4 @@ class KeyDeliveryOps(
 	private fun keyReceiptsReadOp(): JsonObject =
 		wireJson.encodeToJsonElement(KeyReceiptsReadOp.serializer(), KeyReceiptsReadOp()).jsonObject
 
-	private companion object {
-		const val MISSING_RETRY_MS = 10 * 60 * 1000L
-		const val MISSING_WINDOW_MS = 24 * 60 * 60 * 1000L
-		const val KEY_GRANT_WINDOW_MS = MISSING_RETRY_MS
-		const val MAX_RECENT_GRANTS = 4096
-
-		/** Token for a grant sent without a claim, which nothing may release. */
-		const val UNRECORDED_GRANT = -1L
-	}
 }

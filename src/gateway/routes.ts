@@ -78,8 +78,7 @@ import {
 export { MAX_RESPONSE_FILE_BYTES, POST_WAKE_SETTLE_MS };
 
 export interface RoutesDeps {
-	/** Bare test callers omit it. */
-	dataDir?: string;
+	dataDir: string;
 	now?: () => number;
 	newId?: () => string;
 	registry: TeamRegistry;
@@ -202,7 +201,7 @@ export function createRoutesCarryOver(): RoutesCarryOver {
 // Functions & Helpers.
 
 export function createRoutes({
-	dataDir = process.env.DATA_DIR || "/app/data",
+	dataDir,
 	now = () => Date.now(),
 	newId,
 	registry,

@@ -1,29 +1,53 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.SignedDeleteDomain
+import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
+import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal interface DomainAdminOpsCollaborators {
+	fun enrollInvites(): MutableMap<String, EnrollInvite>
+	fun ownerBoxPub(): String
+	fun freshHandshakeId(): String
+	fun freshEnrollPin(): String
+	fun newDomainId(): String
+	fun signSetDisplayName(domainId: String, name: String, nowMs: Long): SignedSetDisplayName
+	fun signDeleteDomain(domainId: String, nowMs: Long): SignedDeleteDomain
+	fun signProvisionTenant(domainId: String, name: String, nowMs: Long): SignedProvisionTenant
+	fun signRemoveTenant(domainId: String, nowMs: Long): SignedRemoveTenant
+	suspend fun clearAll()
+}
+
 /** This owner's own display name and the guest tenants it hosts: rename/delete the owner's own
  * Domain, and stage/regenerate/remove the hosted-tenant invites (the "Networks you host" surface). */
-internal class DomainAdminOps(private val repo: ChatRepository) {
+internal class DomainAdminOps(
+	private val state: MutableStateFlow<ChatState>,
+	private val store: AppStateStore,
+	private val identity: IdentityPort,
+	private val client: ClientPort,
+	private val collaborators: DomainAdminOpsCollaborators,
+) {
 	/** Rename this owner's own display name: owner-sign a SET_ADMIN_NAME op over the admin Domain and
 	 * submit it Router-direct. On success cache the new name + reflect it immediately (the Router pushes
 	  */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
-		val adminDomain = repo.confirmedDomainId()
+		val adminDomain = identity.readyOrNull()?.domainId
 			?: return@withContext Result.failure(IllegalStateException("Domain not yet confirmed by a local session"))
 		runCatchingCancellable {
-			val signed = repo.federation.signSetDisplayName(adminDomain, trimmed, System.currentTimeMillis())
-			val result = repo.client().enroll(EnrollOp.SetDisplayName(signed))
+			val signed = collaborators.signSetDisplayName(adminDomain, trimmed, System.currentTimeMillis())
+			val result = client.client().enroll(EnrollOp.SetDisplayName(signed))
 			if (!result.ok) error(result.error ?: "rename rejected")
-			repo.store.displayName = trimmed
-			repo._state.update { it.copy(displayName = trimmed) }
+			store.displayName = trimmed
+			state.update { it.copy(displayName = trimmed) }
 		}
 	}
 
@@ -34,27 +58,27 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	 * so the owner key survives a retry. The biometric gate (a destructive owner-key action) is at the
 	 * call site, mirroring revoke/admit. */
 	suspend fun deleteDomain(): DeleteDomainOutcome = withContext(Dispatchers.IO) {
-		val domainId = repo.confirmedDomainId()
-			?: runCatching { repo.store.load()?.let { Provisioning.parse(it, repo.store).pendingTenant?.domainId } }.getOrNull()
+		val domainId = identity.readyOrNull()?.domainId
+			?: runCatching { store.load()?.let { Provisioning.parse(it, store).pendingTenant?.domainId } }.getOrNull()
 		// No resolvable Domain id means nothing was ever rooted server-side; just wipe locally.
 		if (domainId.isNullOrEmpty()) {
-			repo.clearAll()
+			collaborators.clearAll()
 			return@withContext DeleteDomainOutcome.WipedUnconfirmed
 		}
-		val signed = repo.federation.signDeleteDomain(domainId, System.currentTimeMillis())
+		val signed = collaborators.signDeleteDomain(domainId, System.currentTimeMillis())
 		// enroll() blocks on an OkHttp call (its own read timeout is the real ceiling) and THROWS when the
 		// console bridge is unreachable. A reached-but-refused result keeps the owner key for a retry; a
 		// throw (offline) falls to the unconfirmed wipe so a hung POST never strands the user mid-delete.
-		val attempt = runCatchingCancellable { repo.client().enroll(EnrollOp.DeleteDomain(signed)) }
+		val attempt = runCatchingCancellable { client.client().enroll(EnrollOp.DeleteDomain(signed)) }
 		val result = attempt.getOrNull()
 		when {
 			result?.ok == true -> {
-				repo.clearAll()
+				collaborators.clearAll()
 				DeleteDomainOutcome.Deleted
 			}
 			attempt.isSuccess -> DeleteDomainOutcome.Rejected(result?.error ?: "delete rejected")
 			else -> {
-				repo.clearAll()
+				collaborators.clearAll()
 				DeleteDomainOutcome.WipedUnconfirmed
 			}
 		}
@@ -66,7 +90,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	 * this device's console admission stays in every keyring, inert, since its signing key dies here.
 	 * On IO like [deleteDomain], because [clearAll] joins the poll loop and that can wait out a slow
 	 * ingest POST. The biometric gate is at the call site, mirroring the rest. */
-	suspend fun forgetDomain() = withContext(Dispatchers.IO) { repo.clearAll() }
+		suspend fun forgetDomain() = withContext(Dispatchers.IO) { collaborators.clearAll() }
 
 	////////////////////////////////
 	//  Networks you host (guest tenants the admin pre-stages)
@@ -77,7 +101,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	  */
 	fun hostedTenants(): List<HostedTenant> {
 		val stored = loadHostedTenants()
-		val teams = repo._state.value.teams
+		val teams = state.value.teams
 		return stored.map { it.copy(state = FriendOnboarding.hostedState(it.domainId, teams)) }
 	}
 
@@ -88,9 +112,9 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		val label = displayName.trim()
 		if (label.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
 		runCatchingCancellable {
-			val domainId = repo.federation.newDomainId()
-			val signed = repo.federation.signProvisionTenant(domainId, label, System.currentTimeMillis())
-			val result = repo.client().provisionTenant(signed)
+				val domainId = collaborators.newDomainId()
+				val signed = collaborators.signProvisionTenant(domainId, label, System.currentTimeMillis())
+				val result = client.client().provisionTenant(signed)
 			val nonce = if (result.ok) result.nonce else null
 			if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
 			val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
@@ -106,13 +130,13 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		withContext(Dispatchers.IO) {
 			val label = displayName.trim().ifEmpty { return@withContext Result.failure(IllegalArgumentException("Name cannot be empty")) }
 			runCatchingCancellable {
-				val signed = repo.federation.signProvisionTenant(domainId, label, System.currentTimeMillis())
-				val result = repo.client().provisionTenant(signed)
+				val signed = collaborators.signProvisionTenant(domainId, label, System.currentTimeMillis())
+				val result = client.client().provisionTenant(signed)
 				val nonce = if (result.ok) result.nonce else null
 				if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
 				// A regenerated invite is a fresh ceremony: drop the prior handshake secrets so the next
 				// buildInviteBlob mints new ones (the old QR's broker window is abandoned with its nonce).
-				repo.enrollInvites.remove(domainId)
+				collaborators.enrollInvites().remove(domainId)
 				val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
 				upsertHostedTenant(row)
 				row
@@ -127,18 +151,19 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	 * not accept. The JSON is what the paste / file-import path also accepts. */
 	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
 		runCatching {
-			val blob = repo.store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
-			val prov = Provisioning.parse(blob, repo.store)
+			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
+			val prov = Provisioning.parse(blob, store)
 			// Mint (once per tenant) the enroll-handshake secrets that seed the in-person compare and
 			// embed them in the QR alongside this admin's owner keys + Domain. The pin rides the QR OUT
 			// OF BAND (never sent to the Router); the handshakeId keys the broker window the admin's leg polls.
-			val invite = repo.enrollInvites.computeIfAbsent(tenant.domainId) {
-				EnrollInvite(handshakeId = repo.federation.freshHandshakeId(), pin = repo.federation.freshEnrollPin())
+			val invite = collaborators.enrollInvites().getOrPut(tenant.domainId) {
+				EnrollInvite(handshakeId = collaborators.freshHandshakeId(), pin = collaborators.freshEnrollPin())
 			}
-			val adminDomain = repo.confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
+			val boot = identity.readyOrNull() ?: error("Domain not yet confirmed by a local session")
+			val adminDomain = boot.domainId
 			val enrollHandshake = JSONObject()
-				.put("adminOwnerSignPub", repo.federation.ownerSignPub())
-				.put("adminOwnerBoxPub", repo.federation.ownerBoxPub())
+				.put("adminOwnerSignPub", boot.ownerSignPub)
+				.put("adminOwnerBoxPub", collaborators.ownerBoxPub())
 				.put("adminDomainId", adminDomain)
 				.put("handshakeId", invite.handshakeId)
 				.put("pin", invite.pin)
@@ -157,8 +182,8 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	 * local row. The Router deletes the Domain slice (and evicts a live guest gateway). */
 	suspend fun removeHostedTenant(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			val signed = repo.federation.signRemoveTenant(domainId, System.currentTimeMillis())
-			val result = repo.client().enroll(EnrollOp.RemoveTenant(signed))
+		val signed = collaborators.signRemoveTenant(domainId, System.currentTimeMillis())
+			val result = client.client().enroll(EnrollOp.RemoveTenant(signed))
 			if (!result.ok) error(result.error ?: "remove rejected")
 			deleteHostedTenant(domainId)
 		}
@@ -174,7 +199,7 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 	}
 
 	private fun loadHostedTenants(): List<HostedTenant> {
-		val json = repo.store.loadHostedTenants() ?: return emptyList()
+		val json = store.loadHostedTenants() ?: return emptyList()
 		// Parse skip-and-keep per row: a single malformed entry (a write tear, a manual edit) must not
 		// collapse the whole list to empty, because the next upsert/delete would then persist that loss
 		// and permanently discard every other staged tenant. One bad row is dropped; the rest survive.
@@ -201,6 +226,6 @@ internal class DomainAdminOps(private val repo: ChatRepository) {
 		for (r in rows) {
 			arr.put(JSONObject().put("domainId", r.domainId).put("displayName", r.displayName).put("nonce", r.nonce))
 		}
-		runCatching { repo.store.saveHostedTenants(arr.toString()) }
+		runCatching { store.saveHostedTenants(arr.toString()) }
 	}
 }

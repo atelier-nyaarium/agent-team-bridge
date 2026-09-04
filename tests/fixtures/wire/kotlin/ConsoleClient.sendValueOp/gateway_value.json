@@ -10,15 +10,17 @@
 			"value": {
 				"v": 1,
 				"epoch": 1,
-				"nonce": "dP+7stGtgPMITLzN",
-				"ciphertext": "U15z21GH//jbSbX75zO9cJizTJeV6c1y2acyXkivHZ4VJ74uLLhmjTUtcpQipnk5iW3MSebJKmII895/BGJ5hDB5KpHZTdv681170bxs6tn407s="
+				"nonce": "QXOKd6tANRlDkTt9",
+				"ciphertext": "NyTAbkUXpAUkQSez7GmhtWcQmzXYtptO339wWu8E3wYvzm8+wTyNTeRIm+yCq3kBYT+aD9vnuNk+8oorTDgtcISUG6e6eXr3t+81i2LI/tjauRg="
 			}
 		},
 		"opId": "gateway_value-op",
-		"nonce": "QXOKd6tANRlDkTt9MHA1B6js",
-		"sealNonce": "dP+7stGtgPMITLzN",
 		"gatewayId": "laptop",
-		"target": "fixture-domain.laptop.fixture-app.abc123"
+		"target": "fixture-domain.laptop.fixture-app.abc123",
+		"draws": {
+			"0": "QXOKd6tANRlDkTt9",
+			"1": "dP+7stGtgPMITLzNCEPnOcEf"
+		}
 	},
 	"expect": {
 		"outcome": "accepted"
@@ -29,6 +31,15 @@
 		"headers": {
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
-		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"gateway_value-op\",\"at\":1757000000000,\"nonce\":\"QXOKd6tANRlDkTt9MHA1B6js\",\"op\":{\"kind\":\"gateway_value\",\"gatewayId\":\"laptop\",\"value\":{\"v\":1,\"epoch\":1,\"nonce\":\"dP+7stGtgPMITLzN\",\"ciphertext\":\"U15z21GH//jbSbX75zO9cJizTJeV6c1y2acyXkivHZ4VJ74uLLhmjTUtcpQipnk5iW3MSebJKmII895/BGJ5hDB5KpHZTdv681170bxs6tn407s=\"}},\"signature\":\"oh8vtE+ddC1JM124Hv2E0S5/5uuQQSCSjrv1TgxcitxPbop98l80NdOTVZUfz6vu6NvIsvNGAKqKDRDB/bdHCg==\"}}"
-	}
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"gateway_value-op\",\"at\":1757000000000,\"nonce\":\"dP+7stGtgPMITLzNCEPnOcEf\",\"op\":{\"kind\":\"gateway_value\",\"gatewayId\":\"laptop\",\"value\":{\"v\":1,\"epoch\":1,\"nonce\":\"QXOKd6tANRlDkTt9\",\"ciphertext\":\"NyTAbkUXpAUkQSez7GmhtWcQmzXYtptO339wWu8E3wYvzm8+wTyNTeRIm+yCq3kBYT+aD9vnuNk+8oorTDgtcISUG6e6eXr3t+81i2LI/tjauRg=\"}},\"signature\":\"yPlJzdV5du7evhpVXKrcRMrBUPIO6OcP7G4jYUF9pjAiG4vOkCPQtOyVXtqvWmTJp7A6FHdxBXwweS8uJfg7Dw==\"}}"
+	},
+	"sealed": [
+		{
+			"path": "value",
+			"aadKind": "op.payload",
+			"expectJson": {
+				"target": "fixture-domain.laptop.fixture-app.abc123"
+			}
+		}
+	]
 }

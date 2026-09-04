@@ -702,6 +702,12 @@ Reassessed after Phase 3.
 - Two fixture worlds: a case cannot hold a key or an admission production would not hold.
 - Phone state with no seam (class 4), completed for the nine remaining ops classes.
 - The five behaviors pinned in the harness.
+- **Patched four times in lap 3, so a design bug:** identity facts written without re-assembling
+  the boot. `refreshBoot()` is a call every writer must remember: the connect reach, `provision`,
+  `clearAll`, and the approved-device install each missed it once. The mechanism is the eager
+  `StateFlow<BootState>` beside stores that still accept writes from anywhere. For
+  `architecture-fan-out`: route every identity-fact write (provisioning blob, Domain id, owner
+  identity, keyring) through one door that re-assembles, or derive the boot from the stores.
 
 ## Phase 2 - Kill and rewrite
 

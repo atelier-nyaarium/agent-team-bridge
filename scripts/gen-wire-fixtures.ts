@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,31 +15,22 @@ import type { PresenceRow } from "../src/shared/presence-identity.js";
 import { type WireFixture, WireFixtureSchema, WireManifestSchema } from "../src/shared/schemasWireFixture.js";
 import { Address, parseSessionName } from "../src/shared/session-id.js";
 import { SessionStore } from "../src/shared/session-store.js";
-import { contentKeyOf, loadIdentitySet } from "../src/testing/identitySet.js";
+import { FixtureDraws, FixtureWorld } from "../src/testing/fixtureWorld.js";
+import { loadIdentitySet } from "../src/testing/identitySet.js";
 
 const set = loadIdentitySet();
+const world = FixtureWorld.from(set);
 const root = process.env.WIRE_FIXTURE_DIR ?? path.resolve(import.meta.dirname, "../tests/fixtures/wire/ts");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "wire-fixtures-"));
 const keyStoreDir = path.join(temp, "federation");
 fs.mkdirSync(keyStoreDir, { recursive: true });
 ContentKeyStore.writeFile(
 	path.join(keyStoreDir, "content-keys.json"),
-	new Map([[set.content.epoch, contentKeyOf(set)]]),
+	new Map([[set.content.epoch, world.contentKey]]),
 );
 
 const cases: WireFixture[] = [];
-const context = (composer: string, name: string) => {
-	let n = 0;
-	const inputs: Record<string, unknown> = { draws: {} };
-	const randomBytes = (size: number): Buffer => {
-		const bytes = createHash("sha256").update(`ts:${composer}:${name}:${n}`).digest().subarray(0, size);
-		const label = size === 18 ? "nonce" : size === 12 ? `contentNonce${n}` : `random${n}`;
-		(inputs.draws as Record<string, string>)[label] = bytes.toString("base64");
-		n += 1;
-		return bytes;
-	};
-	return { inputs, randomBytes, newId: () => randomBytes(16).toString("hex") };
-};
+let activeDraws: FixtureDraws | null = null;
 const write = (
 	composer: string,
 	name: string,
@@ -66,14 +56,14 @@ const write = (
 };
 
 const keyFrames: Record<string, unknown>[] = [];
-const keyRequestContext = context("gateway/router/keyRequester", "key-request");
+const keyRequestContext = FixtureDraws.forCase("ts", "gateway/router/keyRequester", "key-request");
 const requester = createKeyRequester({
 	domainId: set.domain.id,
 	gatewayId: set.gateway.id,
 	gatewaySignPub: set.gateway.identity.sign.pub,
 	gatewaySignPriv: set.gateway.identity.sign.priv,
 	now: () => set.issuedAt,
-	randomBytes: keyRequestContext.randomBytes,
+	randomBytes: keyRequestContext.next.bind(keyRequestContext),
 	setTimeout: (handler) => {
 		handler();
 		return 0;
@@ -96,14 +86,14 @@ if (keyFrames[0])
 		keyFrames[0] as Record<string, unknown>,
 		{ outcome: "accepted" },
 	);
-const keyReceiptContext = context("gateway/router/keyRequester", "key-receipt");
+const keyReceiptContext = FixtureDraws.forCase("ts", "gateway/router/keyRequester", "key-receipt");
 const receiptRequester = createKeyRequester({
 	domainId: set.domain.id,
 	gatewayId: set.gateway.id,
 	gatewaySignPub: set.gateway.identity.sign.pub,
 	gatewaySignPriv: set.gateway.identity.sign.priv,
 	now: () => set.issuedAt,
-	randomBytes: keyReceiptContext.randomBytes,
+	randomBytes: keyReceiptContext.next.bind(keyReceiptContext),
 	onError: () => undefined,
 	send: async (action, params) => {
 		keyFrames.push({ name: action, params });
@@ -122,13 +112,13 @@ if (keyFrames[1])
 requester.stop();
 receiptRequester.stop();
 
-const authContext = context("gateway/router/registerAuth", "gateway-register");
+const authContext = FixtureDraws.forCase("ts", "gateway/router/registerAuth", "gateway-register");
 const auth = buildRegisterAuth({
 	gatewayId: set.gateway.id,
 	identity: set.gateway.identity,
 	selfAdmission: () => set.gateway.admission,
 	now: () => set.issuedAt,
-	randomBytes: authContext.randomBytes,
+	randomBytes: authContext.next.bind(authContext),
 });
 write(
 	"gateway/router/registerAuth",
@@ -138,11 +128,12 @@ write(
 	{ ok: true },
 );
 
-const keys = new ContentKeyStore(
-	keyStoreDir,
-	set.gateway.identity.box.priv,
-	context("gateway/router/valueResult", "list-dirs").randomBytes,
-);
+const valueContext = FixtureDraws.forCase("ts", "gateway/router/valueResult", "list-dirs");
+const keys = world.contentKeys(keyStoreDir, (size) => {
+	if (!activeDraws) throw new Error("fixture draw context is unavailable");
+	return activeDraws.next(size);
+});
+activeDraws = valueContext;
 const valueResult = composeValueResult({
 	opId: "list-dirs-op",
 	conversationId: set.console.conversationId,
@@ -160,10 +151,20 @@ const valueResult = composeValueResult({
 write(
 	"gateway/router/valueResult",
 	"list-dirs",
-	{ opId: "list-dirs-op", result: { entries: ["projects"], path: "/home/fixture" } },
+	{ ...valueContext.inputs, opId: "list-dirs-op", result: { entries: ["projects"], path: "/home/fixture" } },
 	{ name: "value_result", params: valueResult },
 	{ settled: false, reason: "no_waiter" },
-	{ decodeAs: "ContentEnvelope", open: { as: "ConsoleListDirsResult", aadKind: `op.result\nlist-dirs-op` } },
+	{
+		decodeAs: "ContentEnvelope",
+		sealed: [
+			{
+				path: "result",
+				aadKind: "op.result\nlist-dirs-op",
+				decodeAs: "ConsoleListDirsResult",
+				expectJson: { entries: ["projects"], path: "/home/fixture" },
+			},
+		],
+	},
 );
 write(
 	"gateway/router/valueResult",
@@ -182,7 +183,8 @@ write(
 	{ settled: false, reason: "no_waiter" },
 );
 
-const ownerContext = context("gateway/consolePushOps", "owner-rows");
+const ownerContext = FixtureDraws.forCase("ts", "gateway/consolePushOps", "owner-rows");
+activeDraws = ownerContext;
 const ownerFrames: Record<string, unknown>[] = [];
 const ownerPush = createConsolePushOps({
 	dataDir: path.join(temp, "owner-outbox"),
@@ -200,14 +202,14 @@ const ownerPush = createConsolePushOps({
 	localDomainId: set.domain.id,
 	producerSignPriv: set.gateway.identity.sign.priv,
 	ownerSignPub: () => set.domain.owner.sign.pub,
-	contentKeyStore: new ContentKeyStore(keyStoreDir, set.gateway.identity.box.priv, ownerContext.randomBytes),
+	contentKeyStore: keys,
 	localAddress: (name) => {
 		const { project, session } = parseSessionName(name);
 		return Address.local(set.domain.id, set.gateway.id, project, session);
 	},
 	refuseImpersonation: () => null,
 	now: () => set.issuedAt,
-	newId: ownerContext.newId,
+	newId: () => ownerContext.newId(),
 });
 const ownerEntries: ConsolePushEntry[] = [
 	{ kind: "message", session_id: "fixture-session", from: "agent", body: "Wire message" },
@@ -242,10 +244,14 @@ for (const [index, frame] of ownerFrames.entries()) {
 		{
 			// Router stamps seq, acceptedAt, size.
 			decodeAs: "RowEnvelope",
-			open: {
-				as: "MailboxEntry",
-				aadKind: `inbox.body\n${params.row.envelope.opKey.conversationId}\n${params.row.envelope.opKey.opId}`,
-			},
+			sealed: [
+				{
+					path: "row.body",
+					aadKind: `inbox.body\n${params.row.envelope.opKey.conversationId}\n${params.row.envelope.opKey.opId}`,
+					decodeAs: "MailboxEntry",
+					expectJson: { kind: ownerEntries[index]?.kind, body: ownerEntries[index]?.body },
+				},
+			],
 		},
 	);
 }
@@ -314,13 +320,14 @@ await Promise.resolve();
 write("gateway/router/sessionRegistryReporter", "upsert", { sessionId }, sessionFrame(0), { ok: true });
 
 // The write needs the live session.
-const boardContext = context("gateway/router/boardClient", "upsert");
+const boardContext = FixtureDraws.forCase("ts", "gateway/router/boardClient", "upsert");
+activeDraws = boardContext;
 const boardFrames: Record<string, unknown>[] = [];
 const board = createBoardClient({
 	domainId: set.domain.id,
 	gatewayId: set.gateway.id,
 	ownerSignPub: () => set.domain.owner.sign.pub,
-	keys: new ContentKeyStore(keyStoreDir, set.gateway.identity.box.priv, boardContext.randomBytes),
+	keys,
 	call: async (name, params) => {
 		boardFrames.push({ name, params });
 		if (name === "board_read") return { result: { revision: 0, entries: [] } };
@@ -348,7 +355,13 @@ if (boardFrame)
 		{ ...boardContext.inputs, id: "t-fixture", opId: "board-op", title: "Wire the phone", body: "Sealed body" },
 		boardFrame,
 		{ outcome: "applied" },
-		{ decodeAs: "BoardOp", open: { title: "board.title\nt-fixture", body: "board.body\nt-fixture" } },
+		{
+			decodeAs: "BoardOp",
+			sealed: [
+				{ path: "write.ops[0].title", aadKind: "board.title\nt-fixture", plaintextOf: "title" },
+				{ path: "write.ops[0].body", aadKind: "board.body\nt-fixture", plaintextOf: "body" },
+			],
+		},
 	);
 
 sessionStore.forget(sessionId);

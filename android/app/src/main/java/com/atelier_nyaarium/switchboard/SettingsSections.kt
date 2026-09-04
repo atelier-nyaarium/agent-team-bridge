@@ -100,7 +100,7 @@ internal fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDevice
 	var opBusy by remember { mutableStateOf(false) }
 	// confirmed Domain id has nothing real to sign over, so the Router would reject the rename ("Domain
 	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
-	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
+	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, state.domainId)
 	Text("Your name", style = MaterialTheme.typography.titleMedium)
 	Text(
 		"The name linked friends see you by.",

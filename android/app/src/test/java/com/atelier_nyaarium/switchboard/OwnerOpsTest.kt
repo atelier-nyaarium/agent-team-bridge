@@ -26,16 +26,15 @@ class OwnerOpsTest {
 		val identity = wireJson.decodeFromJsonElement<Crypto.Identity>(identityRoot.getValue("console").jsonObject.getValue("identity"))
 		val inputs = json.getValue("inputs").jsonObject
 		val op = inputs.getValue("op").jsonObject
-		val ownerOps = OwnerOps(
-			confirmedDomainId = { identityRoot.getValue("domain").jsonObject.getValue("id").jsonPrimitive.content },
-			consoleIdentity = { identity },
-			provisioningConversationId = { identityRoot.getValue("console").jsonObject.getValue("conversationId").jsonPrimitive.content },
-			provisioningDevice = { identityRoot.getValue("console").jsonObject.getValue("device").jsonPrimitive.content },
-			now = { json.getValue("clock").jsonPrimitive.long },
-			newNonce = { inputs.getValue("nonce").jsonPrimitive.content },
-			newOpId = { inputs.getValue("opId").jsonPrimitive.content },
+		val domain = identityRoot.getValue("domain").jsonObject.getValue("id").jsonPrimitive.content
+		val boot = testBootstrap(
+			domainId = domain,
+			identity = identity,
+			device = identityRoot.getValue("console").jsonObject.getValue("device").jsonPrimitive.content,
+			conversationId = identityRoot.getValue("console").jsonObject.getValue("conversationId").jsonPrimitive.content,
 		)
-		val reproduced = ownerOps.sign(op) ?: error("hello refused")
+		val ambient = testAmbient(json.getValue("clock").jsonPrimitive.long, inputs.getValue("nonce").jsonPrimitive.content, inputs.getValue("opId").jsonPrimitive.content)
+		val reproduced = OwnerOps(boot, ambient).sign(op)
 		assertEquals(ownerOp.signature, reproduced.signature)
 		assertTrue(Crypto.verify(ownerOpSigningBytes(
 			ownerOp.domainId, ownerOp.signerSignPub, ownerOp.conversationId, ownerOp.device,

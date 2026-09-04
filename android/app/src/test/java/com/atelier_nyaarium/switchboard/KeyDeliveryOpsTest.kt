@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
+import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
 import com.atelier_nyaarium.switchboard.proto.KeyGrant
 import com.atelier_nyaarium.switchboard.proto.KeyReceipt
 import com.atelier_nyaarium.switchboard.proto.KeyRequest
@@ -18,6 +19,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -31,14 +33,29 @@ class KeyDeliveryOpsTest {
 	private val member = Crypto.generateIdentity()
 	private val domain = "domain"
 
+	private fun delivery(
+		ring: ContentKeyring,
+		snapshot: DomainSnapshot = snapshot(admission(member, "console", 1)),
+		ambient: PhoneAmbient = testAmbient(),
+		signOwnerOp: (JsonObject) -> OwnerOp? = { ownerOp(it) },
+		sendOwnerOp: suspend (OwnerOp) -> JsonElement?,
+		install: (KeyEnvelope, Keyring) -> KeyDeliveryInstall = { _, _ ->
+			KeyDeliveryInstall(true, true)
+		},
+		reportError: (String) -> Unit = {},
+	): KeyDeliveryOps {
+		val boot = testBootstrap(domainId = domain, identity = console, owner = owner, contentKeyring = ring, domain = snapshot)
+		return KeyDeliveryOps(boot, ambient, KeyDeliveryCollaborators(signOwnerOp, sendOwnerOp, install, reportError))
+	}
+
 	private fun admission(id: Crypto.Identity, kind: String, at: Long) = AdmissionCrypto.signAdmission(
 		Admission(kind, id.sign.pub, id.box.pub, if (kind == "gateway") "gateway" else null, at, "nonce-$at"),
 		owner.sign.priv,
 		owner.sign.pub,
 	)
 
-	private fun keyring(vararg admissions: com.atelier_nyaarium.switchboard.proto.SignedAdmission) =
-		Keyring(DomainSnapshot(owner.sign.pub, admissions.toList(), emptyList()))
+	private fun snapshot(vararg admissions: com.atelier_nyaarium.switchboard.proto.SignedAdmission) =
+		DomainSnapshot(owner.sign.pub, admissions.toList(), emptyList())
 
 	private fun ownerOp(op: JsonObject) = OwnerOp(1, domain, console.sign.pub, "conversation", "device", "op", 1, "nonce", op, "signature")
 
@@ -61,14 +78,7 @@ class KeyDeliveryOpsTest {
 	fun admittedRequestGetsHeldEpochsOnly() = runBlocking {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 2) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ring, sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 
 		ops.onKeyRequest(request())
 
@@ -81,15 +91,7 @@ class KeyDeliveryOpsTest {
 		val timer = FakeMissingTimer()
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			now = { timer.now },
-		)
+		val ops = delivery(ring, ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 
 		repeat(13) { ops.onKeyRequest(request(epochs = listOf(1))) }
 
@@ -101,19 +103,12 @@ class KeyDeliveryOpsTest {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
 		var attempts = 0
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op ->
+		val ops = delivery(ring, sendOwnerOp = { op ->
 				attempts++
 				if (attempts == 1) error("transient")
 				sent += op.op
 				buildJsonObject {}
-			},
-		)
+			})
 
 		ops.onKeyRequest(request(epochs = listOf(1)))
 		ops.onKeyRequest(request(epochs = listOf(1)))
@@ -127,14 +122,7 @@ class KeyDeliveryOpsTest {
 		val members = (0 until 65).map { Crypto.generateIdentity() }
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 64) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(*members.map { admission(it, "console", 1) }.toTypedArray()) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ring, snapshot = snapshot(*members.map { admission(it, "console", 1) }.toTypedArray()), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 		val epochs = (1L..64L).toList()
 
 		members.take(64).forEach { subject -> ops.onKeyRequest(request(subject = subject, epochs = epochs)) }
@@ -155,15 +143,7 @@ class KeyDeliveryOpsTest {
 		val other = Crypto.generateIdentity()
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 2) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1), admission(other, "gateway", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			now = { timer.now },
-		)
+		val ops = delivery(ring, snapshot = snapshot(admission(member, "console", 1), admission(other, "gateway", 1)), ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 
 		ops.onKeyRequest(request(epochs = listOf(1)))
 		ops.onKeyRequest(request(epochs = listOf(2)))
@@ -177,15 +157,7 @@ class KeyDeliveryOpsTest {
 		val timer = FakeMissingTimer()
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			now = { timer.now },
-		)
+		val ops = delivery(ring, ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 
 		ops.onKeyRequest(request(epochs = listOf(1)))
 		timer.now += 10 * 60 * 1000L
@@ -202,13 +174,7 @@ class KeyDeliveryOpsTest {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		var attempts = 0
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op ->
+		val ops = delivery(ring, ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op ->
 				attempts++
 				if (attempts == 1) {
 					entered.complete(Unit)
@@ -217,9 +183,7 @@ class KeyDeliveryOpsTest {
 				}
 				sent += op.op
 				buildJsonObject {}
-			},
-			now = { timer.now },
-		)
+			})
 
 		val first = launch { ops.onKeyRequest(request(epochs = listOf(1))) }
 		entered.await()
@@ -239,13 +203,7 @@ class KeyDeliveryOpsTest {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		var attempts = 0
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op ->
+		val ops = delivery(ring, sendOwnerOp = { op ->
 				attempts++
 				if (attempts == 1) {
 					entered.complete(Unit)
@@ -253,8 +211,7 @@ class KeyDeliveryOpsTest {
 				}
 				sent += op.op
 				buildJsonObject {}
-			},
-		)
+			})
 
 		val first = launch { ops.onKeyRequest(request(epochs = listOf(1))) }
 		entered.await()
@@ -269,14 +226,7 @@ class KeyDeliveryOpsTest {
 	fun badRequestAndUnadmittedRequestSendNothing() = runBlocking {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ring, sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 		ops.onKeyRequest(request(signature = "bad"))
 		ops.onKeyRequest(request(signatureOwner = console))
 		assertTrue(sent.isEmpty())
@@ -285,14 +235,7 @@ class KeyDeliveryOpsTest {
 	@Test
 	fun emptyKeyringAndOtherRecipientSendNothing() = runBlocking {
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ContentKeyring() },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ContentKeyring(), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 		ops.onKeyRequest(request())
 		ops.onKeyGrant(KeyGrant(1, member.sign.pub, Crypto.wrapContentKey(ByteArray(32), 1, console.box.pub, member.sign.pub, member.sign.priv), 1))
 		assertTrue(sent.isEmpty())
@@ -302,15 +245,7 @@ class KeyDeliveryOpsTest {
 	fun grantSendsReceiptAfterCommit() = runBlocking {
 		val envelope = Crypto.wrapContentKey(ByteArray(32) { 4 }, 1, console.box.pub, member.sign.pub, member.sign.priv)
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ContentKeyring(console.box.priv) },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			install = { _, _ -> KeyDeliveryInstall(true, true) },
-		)
+		val ops = delivery(ContentKeyring(console.box.priv), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} }, install = { _, _ -> KeyDeliveryInstall(true, true) })
 
 		ops.onKeyGrant(KeyGrant(1, console.sign.pub, envelope, 20))
 
@@ -322,15 +257,7 @@ class KeyDeliveryOpsTest {
 	fun failedCommitSendsNoReceipt() = runBlocking {
 		val sent = mutableListOf<JsonObject>()
 		val envelope = Crypto.wrapContentKey(ByteArray(32), 1, console.box.pub, member.sign.pub, member.sign.priv)
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ContentKeyring(console.box.priv) },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			install = { _, _ -> KeyDeliveryInstall(true, false) },
-		)
+		val ops = delivery(ContentKeyring(console.box.priv), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} }, install = { _, _ -> KeyDeliveryInstall(true, false) })
 
 		ops.onKeyGrant(KeyGrant(1, console.sign.pub, envelope, 1))
 
@@ -344,17 +271,10 @@ class KeyDeliveryOpsTest {
 		val second = admission(Crypto.generateIdentity(), "gateway", 2)
 		val sent = mutableListOf<JsonObject>()
 		val result = buildJsonObject { put("receipts", "[]") }
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(first, second) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op ->
+		val ops = delivery(ring, snapshot = snapshot(first, second), sendOwnerOp = { op ->
 				sent += op.op
 				if (op.op["kind"]?.toString()?.trim('"') == "key_receipts_read") buildJsonObject { put("ok", true); put("result", result) } else null
-			},
-		)
+			})
 
 		val summary = ops.redeliverAll()
 
@@ -368,14 +288,7 @@ class KeyDeliveryOpsTest {
 		val revoked = AdmissionCrypto.signRevocation(Revocation(member.sign.pub, 2, "revoke"), owner.sign.priv, owner.sign.pub)
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { Keyring(DomainSnapshot(owner.sign.pub, listOf(admission(member, "console", 1)), listOf(revoked))) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ring, snapshot = DomainSnapshot(owner.sign.pub, listOf(admission(member, "console", 1)), listOf(revoked)), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 
 		ops.onKeyRequest(request())
 
@@ -386,14 +299,7 @@ class KeyDeliveryOpsTest {
 	fun outOfRangeRequestEpochsAreIgnored() = runBlocking {
 		val ring = ContentKeyring().also { it.deriveOwned(owner, domain, 1) }
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { keyring(admission(member, "console", 1)) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-		)
+		val ops = delivery(ring, sendOwnerOp = { op -> sent += op.op; buildJsonObject {} })
 		val epochs = listOf(0L, 1L, Int.MAX_VALUE.toLong() + 1)
 		val at = 10L
 		val nonce = "request-nonce"
@@ -410,17 +316,7 @@ class KeyDeliveryOpsTest {
 		val ring = ContentKeyring()
 		val sent = mutableListOf<JsonObject>()
 		val errors = mutableListOf<String>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { Keyring.empty(console.sign.pub) },
-			contentKeyring = { ring },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			now = { timer.now },
-			missingTimer = timer,
-			reportError = { errors += it },
-		)
+		val ops = delivery(ring, snapshot = Keyring.empty(console.sign.pub).snapshot, ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} }, reportError = { errors += it })
 
 		ops.requestMissing(1)
 		ops.requestMissing(2)
@@ -438,17 +334,7 @@ class KeyDeliveryOpsTest {
 	fun installedEpochCancelsMissingRetry() = runBlocking {
 		val timer = FakeMissingTimer()
 		val sent = mutableListOf<JsonObject>()
-		val ops = KeyDeliveryOps(
-			domainId = { domain },
-			keyring = { Keyring.empty(console.sign.pub) },
-			contentKeyring = { ContentKeyring() },
-			consoleIdentity = { console },
-			signOwnerOp = { op -> ownerOp(op) },
-			sendOwnerOp = { op -> sent += op.op; buildJsonObject {} },
-			now = { timer.now },
-			missingTimer = timer,
-			install = { _, _ -> KeyDeliveryInstall(true, true) },
-		)
+		val ops = delivery(ContentKeyring(), snapshot = Keyring.empty(console.sign.pub).snapshot, ambient = testAmbient(now = { timer.now }, timer = timer), sendOwnerOp = { op -> sent += op.op; buildJsonObject {} }, install = { _, _ -> KeyDeliveryInstall(true, true) })
 		ops.requestMissing(1)
 		timer.runDue()
 		ops.onKeyGrant(KeyGrant(1, console.sign.pub, Crypto.wrapContentKey(ByteArray(32), 1, console.box.pub, console.sign.pub, console.sign.priv), 1))

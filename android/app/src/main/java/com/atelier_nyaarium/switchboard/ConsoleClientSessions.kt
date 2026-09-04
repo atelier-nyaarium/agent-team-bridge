@@ -11,7 +11,6 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleRespondResult
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import kotlinx.serialization.json.JsonObject
-import java.util.UUID
 import kotlinx.serialization.json.decodeFromJsonElement
 
 ////////////////////////////////
@@ -24,7 +23,7 @@ suspend fun ConsoleClient.respond(
 	response: String? = null,
 	replyAsJson: JsonObject? = null,
 	files: List<ChannelFile>? = null,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ): ConsoleRespondResult = deliveryResult(
 	sendDeliveryOp(
 		sessionAddressOf(target),
@@ -34,11 +33,11 @@ suspend fun ConsoleClient.respond(
 	Protocol.Wire.ConsoleOpKind.RESPOND,
 )
 
-suspend fun ConsoleClient.wake(target: String, opId: String = UUID.randomUUID().toString()) {
+suspend fun ConsoleClient.wake(target: String, opId: String = ambient.newOpId()) {
 	requireDelivery(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.Wake(target), opId), Protocol.Wire.ConsoleOpKind.WAKE)
 }
 
-suspend fun ConsoleClient.reloadPlugins(gatewayId: String, opId: String = UUID.randomUUID().toString()): com.atelier_nyaarium.switchboard.proto.ConsoleReloadPluginsResult =
+suspend fun ConsoleClient.reloadPlugins(gatewayId: String, opId: String = ambient.newOpId()): com.atelier_nyaarium.switchboard.proto.ConsoleReloadPluginsResult =
 	valueResult<com.atelier_nyaarium.switchboard.proto.ConsoleReloadPluginsResult>(
 		sendValueOp(gatewayId, ConsoleOp.ReloadPlugins(gatewayId), opId),
 		Protocol.Wire.ConsoleOpKind.RELOAD_PLUGINS,
@@ -57,7 +56,7 @@ suspend fun ConsoleClient.tmuxSend(
 	text: String? = null,
 	key: String? = null,
 	submit: Boolean = true,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ) {
 	requireDelivery(
 		sendDeliveryOp(sessionAddressOf(target), ConsoleOp.TmuxSend(target = target, text = text, key = key, submit = submit), opId),
@@ -73,7 +72,7 @@ suspend fun ConsoleClient.tmuxSend(
 suspend fun ConsoleClient.forget(
 	target: String,
 	boardDisposition: String? = null,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ): String? {
 	val op = ConsoleOp.Forget(target = target, boardDisposition = boardDisposition)
 	return deliveryResult<ConsoleForgetResult>(sendDeliveryOp(sessionAddressOf(target), op, opId), Protocol.Wire.ConsoleOpKind.FORGET).boardDisposition
@@ -82,7 +81,7 @@ suspend fun ConsoleClient.forget(
 /** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
  * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
  * a wake is in flight, and reports a user-launched session rather than a false success. */
-suspend fun ConsoleClient.closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
+suspend fun ConsoleClient.closeSession(target: String, opId: String = ambient.newOpId()) {
 	requireDelivery(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.CloseSession(target = target), opId), Protocol.Wire.ConsoleOpKind.CLOSE_SESSION)
 }
 
@@ -97,7 +96,7 @@ suspend fun ConsoleClient.createSession(
 	sessionName: String? = null,
 	displayLabel: String? = null,
 	workdir: String? = null,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ): ConsoleCreateSessionResult =
 	valueResult(sendValueOp(transport.targetGatewayOf(target), ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel, workdir = workdir), opId), Protocol.Wire.ConsoleOpKind.CREATE_SESSION)
 
@@ -117,7 +116,7 @@ suspend fun ConsoleClient.listDirs(path: String, hostTarget: String, spawn: Stri
 suspend fun ConsoleClient.renameSession(
 	target: String,
 	sessionLabel: String,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ): ConsoleRenameSessionResult =
 	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId), Protocol.Wire.ConsoleOpKind.RENAME_SESSION)
 
@@ -125,7 +124,7 @@ suspend fun ConsoleClient.renameSession(
 suspend fun ConsoleClient.reportRead(
 	team: String,
 	anchor: ReadAnchor,
-	opId: String = UUID.randomUUID().toString(),
+	opId: String = ambient.newOpId(),
 ): ConsoleReportReadResult =
 	wireJson.decodeFromJsonElement(
 		postSigned(composeReportRead(team, anchor, System.currentTimeMillis()), opId) ?: error("report_read timed out"),

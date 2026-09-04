@@ -8,7 +8,10 @@
 			"kind": "board_read"
 		},
 		"opId": "board_read-op",
-		"nonce": "1sqRsImHP8nJCcqpbLgO21FR"
+		"nonce": "1sqRsImHP8nJCcqpbLgO21FR",
+		"draws": {
+			"0": "1sqRsImHP8nJCcqpbLgO21FR"
+		}
 	},
 	"expect": {
 		"revision": 1,

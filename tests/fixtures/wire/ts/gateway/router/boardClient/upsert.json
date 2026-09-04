@@ -5,8 +5,8 @@
 	"clock": 1757000000000,
 	"inputs": {
 		"draws": {
-			"contentNonce0": "gHjZSxZqDTfQnF0y",
-			"contentNonce1": "C+yko4RWqDtxgpqV"
+			"0": "gHjZSxZqDTfQnF0y",
+			"1": "C+yko4RWqDtxgpqV"
 		},
 		"id": "t-fixture",
 		"opId": "board-op",
@@ -48,9 +48,17 @@
 	},
 	"phone": {
 		"decodeAs": "BoardOp",
-		"open": {
-			"title": "board.title\nt-fixture",
-			"body": "board.body\nt-fixture"
-		}
+		"sealed": [
+			{
+				"path": "write.ops[0].title",
+				"aadKind": "board.title\nt-fixture",
+				"plaintextOf": "title"
+			},
+			{
+				"path": "write.ops[0].body",
+				"aadKind": "board.body\nt-fixture",
+				"plaintextOf": "body"
+			}
+		]
 	}
 }

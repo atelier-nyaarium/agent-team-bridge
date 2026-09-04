@@ -3,7 +3,9 @@
 	"composer": "ConsoleClient.buildConnectedGatewaysRequest",
 	"case": "connectedGateways",
 	"clock": 1757000000000,
-	"inputs": {},
+	"inputs": {
+		"draws": {}
+	},
 	"expect": {
 		"gateways": [
 			{

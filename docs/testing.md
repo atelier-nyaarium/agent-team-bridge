@@ -14,7 +14,7 @@ and two Bun smoke gates.
 | `bun run check:pinning` | The shipping runtime pins the Router certificate |
 | `bun run check:boot` | The real entry points boot under Bun and answer one console op |
 
-## The identity set
+## The fixture world
 
 `tests/fixtures/identity/set.json`, minted once by `scripts/gen-identity-set.ts`: the Router
 identity, the Domain and its owner, the gateway and console identities with their admissions, the
@@ -22,6 +22,13 @@ three bearer tokens, and the epoch 1 content key. Everything below reads this on
 `src/shared/fixture-identity.ts` names its signing keys; `main-federation` and `composeGateway`
 refuse them unless `ALLOW_FIXTURE_IDENTITY=1`, which only the harness and the boot smoke set.
 Re-minting the set invalidates every derived fixture.
+
+Each runtime builds one `FixtureWorld` from the identity set. It asserts that the content key is
+derived from the Domain owner and that both admissions verify. The world supplies the Router and
+Gateway bootstrap state, one content key store, and phone facts. `FixtureDraws` gives each case one
+counter. Draws are the first N bytes of `sha256("<producer>:<composer>:<case>:<n>")`, recorded in
+`inputs.draws` by index. Kotlin sealed blocks declare every envelope path, its AAD kind, and the
+plaintext or JSON subset the other runtime must open.
 
 ## The harness
 
@@ -34,6 +41,9 @@ the harness `now`. `restartGateway` recomposes over the retained directories.
 
 Scenarios live in `src/__tests__/federation-harness.test.ts`. Each asserts what the phone or the
 session observes, never a fake's bookkeeping.
+The harness also supports `restartRouter`, and the phone driver exposes `reach()` for the token-gated
+reach and gateway roster. Scenarios cover reach before roster, owner-id reply routing, bounded bootstrap
+installation with missing-epoch requests, and Router restart incarnation fencing with presence recovery.
 
 ## Minted wire fixtures
 

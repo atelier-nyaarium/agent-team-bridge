@@ -1,5 +1,9 @@
 package com.atelier_nyaarium.switchboard.board
 
+import com.atelier_nyaarium.switchboard.PhoneAmbient
+import com.atelier_nyaarium.switchboard.PhoneBootstrap
+import com.atelier_nyaarium.switchboard.testAmbient
+import com.atelier_nyaarium.switchboard.testBootstrap
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
@@ -32,10 +36,9 @@ class BoardManagerTest {
 		BoardEntry(id = id, title = "t-$id", state = state, rank = "m", sessionId = sessionId, trashedAt = trashedAt)
 
 	private class RecordingSealing(
-		keyring: ContentKeyring,
-		domainId: String,
-		ownerSignPub: String,
-	) : BoardSealing(keyring, domainId, ownerSignPub) {
+		boot: PhoneBootstrap,
+		ambient: PhoneAmbient,
+	) : BoardSealing(boot, ambient, {}) {
 		var openCount = 0
 		val openThreads = mutableListOf<String>()
 
@@ -60,12 +63,15 @@ class BoardManagerTest {
 	)
 
 	private fun sealing(identity: Crypto.Identity, keyring: ContentKeyring): RecordingSealing =
-		RecordingSealing(keyring, "domain", identity.sign.pub)
+		RecordingSealing(testBootstrap(domainId = "domain", owner = identity, contentKeyring = keyring), testAmbient())
 
 	private fun seedRouter(board: BoardManager, entries: List<BoardEntry>) {
 		val keyring = ContentKeyring(store = null)
 		keyring.deriveOwned(Crypto.generateIdentity(), "domain", 1)
-		val sealing = BoardSealing(keyring, "domain", "owner")
+		val sealing = BoardSealing(
+			testBootstrap(domainId = "domain", contentKeyring = keyring),
+			testAmbient(),
+		) {}
 		board.sealing = { sealing }
 		board.applyRouterBoard(1L, entries.map { stored(it, sealing) })
 	}
@@ -161,11 +167,12 @@ class BoardManagerTest {
 		board.applyRouterBoard(1L, listOf(stored(entry("one"), epochTwoSealing)))
 
 		assertEquals(BOARD_TEXT_UNAVAILABLE, board.routerEntries().single().title)
-		val count = sealing.openCount
 		keyring.deriveOwned(identity, "domain", 2)
+		val updated = sealing(identity, keyring)
+		board.sealing = { updated }
 
 		assertEquals("t-one", board.routerEntries().single().title)
-		assertTrue(sealing.openCount > count)
+		assertTrue(updated.openCount > 0)
 	}
 
 	@Test

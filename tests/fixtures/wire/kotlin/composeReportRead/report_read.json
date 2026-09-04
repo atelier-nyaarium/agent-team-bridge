@@ -12,7 +12,10 @@
 			"at": 1757000000000
 		},
 		"opId": "report_read-op",
-		"nonce": "sA3JK5U3M8gzWO1ts98QG/wG"
+		"nonce": "sA3JK5U3M8gzWO1ts98QG/wG",
+		"draws": {
+			"0": "sA3JK5U3M8gzWO1ts98QG/wG"
+		}
 	},
 	"expect": {
 		"outcome": "accepted",

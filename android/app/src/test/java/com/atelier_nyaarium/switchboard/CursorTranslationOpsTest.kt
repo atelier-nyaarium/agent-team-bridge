@@ -177,6 +177,7 @@ class CursorTranslationOpsTest {
 			order += "journal"
 			commit(gen, seq, epoch)
 		},
+		ambient = testAmbient(opId = "cursor-translation-op"),
 	)
 
 	private fun ownerOp() = com.atelier_nyaarium.switchboard.proto.OwnerOp(

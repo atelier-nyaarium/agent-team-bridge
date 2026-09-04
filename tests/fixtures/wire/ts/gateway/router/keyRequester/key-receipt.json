@@ -5,7 +5,7 @@
 	"clock": 1757000000000,
 	"inputs": {
 		"draws": {
-			"nonce": "sgk91m49SzTO4xXbW9knlOaX"
+			"0": "sgk91m49SzTO4xXbW9knlOaX"
 		}
 	},
 	"expect": {

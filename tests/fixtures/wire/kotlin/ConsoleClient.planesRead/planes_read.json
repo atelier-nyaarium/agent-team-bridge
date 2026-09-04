@@ -9,7 +9,10 @@
 			"known": {}
 		},
 		"opId": "planes_read-op",
-		"nonce": "dajlCcrhBtuUWed1TRS9gVrD"
+		"nonce": "dajlCcrhBtuUWed1TRS9gVrD",
+		"draws": {
+			"0": "dajlCcrhBtuUWed1TRS9gVrD"
+		}
 	},
 	"expect": {
 		"outcome": "accepted"

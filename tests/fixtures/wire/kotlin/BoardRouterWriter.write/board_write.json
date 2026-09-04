@@ -16,8 +16,8 @@
 						"title": {
 							"v": 1,
 							"epoch": 1,
-							"nonce": "4rYyreit8x3F93JI",
-							"ciphertext": "dwHSd0b3vuZkwz8eKUPgSfnirMucBf6jCUBYGCM="
+							"nonce": "bZKL+0dHPngAEmuh",
+							"ciphertext": "64CYz/INrTIHgRTh8DF4SZMn0RXm1j4KNcr8YsA="
 						}
 					}
 				],
@@ -25,9 +25,12 @@
 			}
 		},
 		"opId": "board_write-op",
-		"nonce": "bZKL+0dHPngAEmuhXQMUs+ay",
-		"sealNonce": "4rYyreit8x3F93JI",
-		"title": "fixture-title"
+		"nonce": "4rYyreit8x3F93JIwo+ddivm",
+		"title": "fixture-title",
+		"draws": {
+			"0": "bZKL+0dHPngAEmuh",
+			"1": "4rYyreit8x3F93JIwo+ddivm"
+		}
 	},
 	"expect": {
 		"outcome": "applied"
@@ -38,6 +41,13 @@
 		"headers": {
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
-		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"board_write-op\",\"at\":1757000000000,\"nonce\":\"bZKL+0dHPngAEmuhXQMUs+ay\",\"op\":{\"kind\":\"board_write\",\"write\":{\"ops\":[{\"kind\":\"upsert\",\"id\":\"fixture-entry\",\"state\":\"open\",\"rank\":\"m\",\"title\":{\"v\":1,\"epoch\":1,\"nonce\":\"4rYyreit8x3F93JI\",\"ciphertext\":\"dwHSd0b3vuZkwz8eKUPgSfnirMucBf6jCUBYGCM=\"}}],\"expectedRevision\":0}},\"signature\":\"ItrPLRh+Qs8816SpNkkihHRPcSUIZq/YG/G5I9S6WI5NQrS0YJkp5V2SQN10N4Ot5S/dIgEHiL5ZG7b2xG8eAw==\"}}"
-	}
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"board_write-op\",\"at\":1757000000000,\"nonce\":\"4rYyreit8x3F93JIwo+ddivm\",\"op\":{\"kind\":\"board_write\",\"write\":{\"ops\":[{\"kind\":\"upsert\",\"id\":\"fixture-entry\",\"state\":\"open\",\"rank\":\"m\",\"title\":{\"v\":1,\"epoch\":1,\"nonce\":\"bZKL+0dHPngAEmuh\",\"ciphertext\":\"64CYz/INrTIHgRTh8DF4SZMn0RXm1j4KNcr8YsA=\"}}],\"expectedRevision\":0}},\"signature\":\"p5NadfpFT+jEQ7ZgZGZDWSwldBVDyfxlXmS+sXu6gew9iLb1sif4vMY6JngJsHmU44cuinFqXilUqAIjhaPLAA==\"}}"
+	},
+	"sealed": [
+		{
+			"path": "write.ops[0].title",
+			"aadKind": "board.title\nfixture-entry",
+			"plaintextOf": "title"
+		}
+	]
 }

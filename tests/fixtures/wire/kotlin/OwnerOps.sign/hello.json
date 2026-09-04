@@ -8,7 +8,10 @@
 			"kind": "hello"
 		},
 		"opId": "hello-op",
-		"nonce": "nHqlCBoIKpqbm0E8zU+ZPM4o"
+		"nonce": "nHqlCBoIKpqbm0E8zU+ZPM4o",
+		"draws": {
+			"0": "nHqlCBoIKpqbm0E8zU+ZPM4o"
+		}
 	},
 	"expect": {
 		"outcome": "complete"

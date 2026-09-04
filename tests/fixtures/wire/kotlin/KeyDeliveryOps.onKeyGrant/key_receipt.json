@@ -12,12 +12,18 @@
 				"recipientSignPub": "bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=",
 				"epoch": 1,
 				"at": 1757000000000,
-				"nonce": "cIqZ97NW58O+9lg/yehs0GQK",
-				"signature": "/tpdlU+38cHJD+fbd28w4KfvlM8UzMGjlP6fsOiqPVGNLYP5T8XkOflzix6ZHvFknDmbmkojhq6xuBtVvdD/Bg=="
+				"nonce": "tV5/LqS7BAbuU6YlmDOW2yis",
+				"signature": "pSBM+xgJ43pPinYKyT4n0DtMRnI468vu36scR9iVZmTNf8ecFXNsCqhvDScFsJaWwcDzrerMpGf7OrSZxd5sBw=="
 			}
 		},
 		"opId": "key_receipt-op",
-		"nonce": "fX6fPpgjYeFLoRH3klmmdc7n"
+		"nonce": "5NfPaCfabE4+7Zm+7xUeZpnx",
+		"draws": {
+			"0": "fX6fPpgjYeFLoRH3klmmdc7n3NTILRK+9yVvUmYVeHU=",
+			"1": "cIqZ97NW58O+9lg/",
+			"2": "tV5/LqS7BAbuU6YlmDOW2yis",
+			"3": "5NfPaCfabE4+7Zm+7xUeZpnx"
+		}
 	},
 	"expect": {
 		"outcome": "accepted"
@@ -28,6 +34,6 @@
 		"headers": {
 			"x-console-bridge-token": "Bearer fixture-console-token"
 		},
-		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"key_receipt-op\",\"at\":1757000000000,\"nonce\":\"fX6fPpgjYeFLoRH3klmmdc7n\",\"op\":{\"kind\":\"key_receipt\",\"receipt\":{\"v\":1,\"domainId\":\"fixture-domain\",\"recipientSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"epoch\":1,\"at\":1757000000000,\"nonce\":\"cIqZ97NW58O+9lg/yehs0GQK\",\"signature\":\"/tpdlU+38cHJD+fbd28w4KfvlM8UzMGjlP6fsOiqPVGNLYP5T8XkOflzix6ZHvFknDmbmkojhq6xuBtVvdD/Bg==\"}},\"signature\":\"P7fMxnBXe3kLMUNYvfsfV05lWwpsTXRj20x9bvRUgv7FZ94vNSsmypNqwYx+YqiAYEXnIzL8mlJCCJ8u8Uv9AQ==\"}}"
+		"body": "{\"ownerOp\":{\"v\":1,\"domainId\":\"fixture-domain\",\"signerSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"conversationId\":\"fixture-console\",\"device\":\"fixture-phone\",\"opId\":\"key_receipt-op\",\"at\":1757000000000,\"nonce\":\"5NfPaCfabE4+7Zm+7xUeZpnx\",\"op\":{\"kind\":\"key_receipt\",\"receipt\":{\"v\":1,\"domainId\":\"fixture-domain\",\"recipientSignPub\":\"bXhwDB5nEMCvY00l2qbzOl9wvzHx/hMdPCJc9PMHBh4=\",\"epoch\":1,\"at\":1757000000000,\"nonce\":\"tV5/LqS7BAbuU6YlmDOW2yis\",\"signature\":\"pSBM+xgJ43pPinYKyT4n0DtMRnI468vu36scR9iVZmTNf8ecFXNsCqhvDScFsJaWwcDzrerMpGf7OrSZxd5sBw==\"}},\"signature\":\"v74a39g7IekJWP3UNQPAoR36KFaTYhjfrMD6TVuJeo8GsPXSlzwd3lU6n3I1zWDxbrkqYhPvLWlpK5D1rQ3KBg==\"}}"
 	}
 }

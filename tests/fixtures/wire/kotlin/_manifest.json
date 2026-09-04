@@ -99,7 +99,7 @@
 		},
 		{
 			"file": "transport/apiReachable.json",
-			"composer": "ConsoleClient.buildHealthRequest",
+			"composer": "ConsoleRouterTransport.buildHealthRequest",
 			"case": "apiReachable",
 			"peer": "router.handle"
 		},
@@ -111,7 +111,7 @@
 		},
 		{
 			"file": "transport/reach.json",
-			"composer": "ConsoleClient.buildReachRequest",
+			"composer": "ConsoleRouterTransport.buildReachRequest",
 			"case": "reach",
 			"peer": "router.handle"
 		},

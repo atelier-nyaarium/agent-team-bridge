@@ -47,12 +47,7 @@ internal fun localSessions(sessions: List<Team>, adminDomainId: String): List<Te
 internal fun dedupedFriendSessions(sessions: List<CrossDomainPresenceSession>): List<CrossDomainPresenceSession> =
 	sessions.distinctBy { it.gatewayId to it.team }
 
-/**
- * My own Domain id, learned from a local session. Mirrors ChatRepository.confirmedDomainId()'s predicate exactly.
- *
- * Requires the matched entry to carry a domainId (not just a matching gatewayId), so a domainId-less entry
- * sharing the local gatewayId can never mask a later, real one.
- */
+/** A domainId-less local entry never masks a later real one. */
 internal fun adminDomainId(sessions: List<Team>, homeGatewayId: String): String =
 	sessions
 		.firstOrNull { (it.gatewayId.ifEmpty { homeGatewayId }) == homeGatewayId && !it.domainId.isNullOrEmpty() }
@@ -291,10 +286,7 @@ fun SessionsScreen(
 
 	Column(modifier.fillMaxSize()) {
 		val sessions = state.sessions()
-			// Computed here (rather than calling ChatRepository.confirmedDomainId(), which this
-			// Composable has no access to) so both linkedDomains and the local/peer session split below
-			// share one value.
-			val adminDomainId = adminDomainId(sessions, state.homeGatewayId)
+			val adminDomainId = state.domainId.orEmpty()
 			val local = localSessions(sessions, adminDomainId)
 			// sessions yet (see LinkedDomain's own doc - a just-linked friend must still show up). Must
 			// stay unconditional: a freshly-linked friend can be known purely through state.linkedPeerOwners

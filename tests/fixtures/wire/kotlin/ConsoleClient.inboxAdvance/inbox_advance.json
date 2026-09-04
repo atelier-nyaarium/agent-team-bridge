@@ -10,7 +10,10 @@
 			"cursorEpoch": 0
 		},
 		"opId": "inbox_advance-op",
-		"nonce": "WIZXX72nkPm3/JQrAYLW+X1g"
+		"nonce": "WIZXX72nkPm3/JQrAYLW+X1g",
+		"draws": {
+			"0": "WIZXX72nkPm3/JQrAYLW+X1g"
+		}
 	},
 	"expect": {
 		"outcome": "cursor_stale"

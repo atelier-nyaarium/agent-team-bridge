@@ -3,7 +3,9 @@
 	"composer": "ConsoleSocketClient.buildSocketRequest",
 	"case": "socketUpgrade",
 	"clock": 1757000000000,
-	"inputs": {},
+	"inputs": {
+		"draws": {}
+	},
 	"expect": {},
 	"request": {
 		"method": "GET",

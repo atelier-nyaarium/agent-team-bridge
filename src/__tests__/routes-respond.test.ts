@@ -78,30 +78,23 @@ describe("routes", () => {
 
 		it("queues a console conversation's late reply as an owner inbox row", async () => {
 			const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "routes-respond-"));
-			const previous = process.env.DATA_DIR;
-			process.env.DATA_DIR = dataDir;
-			try {
-				const store = new PendingJobStore<ResponsePayload>();
-				store.create("conv-late", "phone", "agent", { persistent: true, fromConversationId: "owner-1" });
-				const ctx = makeCtx({ store, ownerId: () => "owner-1" });
-				const { respond } = createRoutes(ctx);
-				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
-					session_id: "conv-late",
-					status: "completed",
-					response: "late answer",
-				});
-				expect(await res.json()).toEqual({ delivered: true });
-				const queued = new DurableStore(dataDir, "owner-row-outbox").load() as Array<{
-					entry: { kind: string; session_id: string; body?: string };
-				}>;
-				const replies = queued.filter((item) => item.entry.kind === "reply");
-				expect(replies.map((item) => [item.entry.session_id, item.entry.body])).toEqual([
-					["conv-late", "late answer"],
-				]);
-			} finally {
-				if (previous === undefined) delete process.env.DATA_DIR;
-				else process.env.DATA_DIR = previous;
-			}
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("conv-late", "phone", "agent", { persistent: true, fromConversationId: "owner-1" });
+			const ctx = makeCtx({ store, ownerId: () => "owner-1", dataDir });
+			const { respond } = createRoutes(ctx);
+			const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "conv-late",
+				status: "completed",
+				response: "late answer",
+			});
+			expect(await res.json()).toEqual({ delivered: true });
+			const queued = new DurableStore(dataDir, "owner-row-outbox").load() as Array<{
+				entry: { kind: string; session_id: string; body?: string };
+			}>;
+			const replies = queued.filter((item) => item.entry.kind === "reply");
+			expect(replies.map((item) => [item.entry.session_id, item.entry.body])).toEqual([
+				["conv-late", "late answer"],
+			]);
 		});
 
 		it("keeps a reply for an unknown offline conversation in the store", async () => {

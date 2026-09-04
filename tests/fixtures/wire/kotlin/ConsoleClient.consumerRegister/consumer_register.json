@@ -9,7 +9,10 @@
 			"incarnation": 1
 		},
 		"opId": "consumer_register-op",
-		"nonce": "XnR5SEulRJQYBF9YBCsNkj2J"
+		"nonce": "XnR5SEulRJQYBF9YBCsNkj2J",
+		"draws": {
+			"0": "XnR5SEulRJQYBF9YBCsNkj2J"
+		}
 	},
 	"expect": {
 		"cursor": 0

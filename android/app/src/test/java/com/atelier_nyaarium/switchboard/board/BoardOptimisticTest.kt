@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard.board
 
+import com.atelier_nyaarium.switchboard.testAmbient
+import com.atelier_nyaarium.switchboard.testBootstrap
 import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
@@ -34,7 +36,10 @@ class BoardOptimisticTest {
 	private val domainId = "domain"
 	private val keyring = ContentKeyring().also { it.deriveOwned(owner, domainId, 1) }
 
-	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(ring, domainId, owner.sign.pub)
+	private fun sealing(ring: ContentKeyring = keyring) = BoardSealing(
+		testBootstrap(domainId = domainId, owner = owner, contentKeyring = ring),
+		testAmbient(nonceBytes = ByteArray(12) { 1 }),
+	) {}
 
 	private fun title(entryId: String, text: String, ring: ContentKeyring = keyring) =
 		checkNotNull(sealing(ring).seal(text, BOARD_KIND_TITLE, entryId))

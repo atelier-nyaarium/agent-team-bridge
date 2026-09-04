@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -15,8 +14,9 @@ internal class CursorTranslationOps(
 	private val heldCursor: () -> Pair<Long, Long>,
 	private val sign: (JsonObject, String) -> com.atelier_nyaarium.switchboard.proto.OwnerOp?,
 	private val send: suspend (com.atelier_nyaarium.switchboard.proto.OwnerOp) -> kotlinx.serialization.json.JsonElement?,
-	private val reportError: (String) -> Unit = {},
-	private val commit: (Long, Long, Long) -> Boolean = { gen, seq, epoch -> coordinator.commitTranslation(gen, seq, epoch) },
+	private val reportError: (String) -> Unit,
+	private val commit: (Long, Long, Long) -> Boolean,
+	private val ambient: PhoneAmbient,
 ) {
 	suspend fun onWelcome(gen: Long, migrationEpoch: Long, welcomeCursor: Long? = null, welcomeEpoch: Long? = null) {
 		if (migrationEpoch == 0L || !coordinator.owns(gen)) return
@@ -37,7 +37,7 @@ internal class CursorTranslationOps(
 			return
 		}
 		if (fromEpoch == migrationEpoch) return
-		val opId = UUID.randomUUID().toString()
+		val opId = ambient.newOpId()
 		val op = buildJsonObject {
 			put("kind", "cursor_translate")
 			put("address", address())

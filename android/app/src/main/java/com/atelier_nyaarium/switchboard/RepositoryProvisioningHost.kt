@@ -11,6 +11,7 @@ internal fun selectHomeGateway(current: String, admitted: List<String>): String 
 
 internal interface RepositoryProvisioningHost {
 	var client: ConsoleClient?
+	fun transport(): ConsoleRouterTransport
 	fun client(): ConsoleClient
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String)
 	fun refreshAdmittedGateways()
@@ -19,25 +20,47 @@ internal interface RepositoryProvisioningHost {
 }
 
 internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) : RepositoryProvisioningHost {
+	@Volatile private var clientBoot: PhoneBootstrap? = null
+	@Volatile private var cachedTransport: ConsoleRouterTransport? = null
 	@Volatile override var client: ConsoleClient? = null
+		set(value) {
+			field = value
+			if (value == null) {
+				clientBoot = null
+				cachedTransport = null
+			}
+		}
+
+	override fun transport(): ConsoleRouterTransport {
+		cachedTransport?.let { return it }
+		val blob = repo.store.load() ?: error("not provisioned")
+		return ConsoleRouterTransport(Provisioning.parse(blob, repo.store), repo.store) { repo.homeGatewayId }.also {
+			cachedTransport = it
+		}
+	}
 
 	override fun client(): ConsoleClient {
-		client?.let { return it }
-		val blob = repo.store.load() ?: error("not provisioned")
+		val boot = repo.readyOrNull() ?: error("Domain not yet confirmed")
+		if (clientBoot === boot) client?.let { return it }
 		return ConsoleClient(
-			Provisioning.parse(blob, repo.store),
+			boot,
+			repo.ambient,
 			repo.store,
 			coordinator = repo.transportCoordinator,
-			signOwnerOp = { op, opId -> repo.ownerOps.sign(op, opId) },
-			domainId = { repo.confirmedDomainId() },
-			ownerSignPub = { repo.federation.ownerSignPub() },
-			homeGatewayId = { repo.homeGatewayId },
-			contentKeyring = { repo.federation.contentKeyring() },
-		).also { client = it }
+			collaborators = ConsoleClientCollaborators(
+				signOwnerOp = { op, opId -> repo.ownerOpsOrNull()?.sign(op, opId) },
+				homeGatewayId = { repo.homeGatewayId },
+			),
+		).also {
+			clientBoot = boot
+			client = it
+		}
 	}
 
 	override fun applyDomainSync(snapshot: DomainSnapshot, version: String) {
 		repo.federation.applyDomainSync(snapshot, version)
+		repo.refreshBoot()
+		client = null
 		refreshAdmittedGateways()
 	}
 
@@ -54,12 +77,12 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 		repo.boardOps.boardRetainGateways(ids)
 	}
 
-	override fun localDomain(): String = repo.confirmedDomainId() ?: ""
+	override fun localDomain(): String = repo.readyOrNull()?.domainId.orEmpty()
 
 	override fun boardSealing(): BoardSealing? {
-		val domain = repo.ownerOps.domainId() ?: return null
-		return BoardSealing(repo.federation.contentKeyring(), domain, repo.federation.ownerSignPub()) { epoch ->
-			repo.repoScope.launch(Dispatchers.IO) { repo.keyDelivery.requestMissing(epoch) }
+		val boot = repo.readyOrNull() ?: return null
+		return BoardSealing(boot, repo.ambient) { epoch ->
+			repo.repoScope.launch(Dispatchers.IO) { repo.keyDeliveryOrNull()?.requestMissing(epoch) }
 		}
 	}
 }

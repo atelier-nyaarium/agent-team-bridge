@@ -133,7 +133,7 @@ internal suspend fun ChatRepository.deliver(
 		// completes, so re-deriving here would silently drop a cross-Domain target banked at
 		// schedule time (see ScheduledSend.targetDomainId).
 		val targetDomain = targetDomainOverride ?: run {
-			val adminDomain = confirmedDomainId()
+			val adminDomain = readyOrNull()?.domainId
 			val canonical = canonicalTarget(team)
 			_state.value.teams
 				.firstOrNull { it.name == canonical }

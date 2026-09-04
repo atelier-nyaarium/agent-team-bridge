@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PresenceFacade } from "../../gateway/presence.js";
 import type { RoutesDeps } from "../../gateway/routes.js";
 import { createSessionAuthority } from "../../gateway/sessionAuthority.js";
@@ -64,6 +67,7 @@ export function makeCtx(overrides: CtxOverrides = {}): RoutesDeps {
 	const offlineCatalog = overrides.offlineCatalog || new Map<string, string>();
 	const config = { localGatewayId: "test-host", localDomainId: "alice" };
 	return {
+		dataDir: overrides.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "switchboard-routes-")),
 		registry,
 		conversationRegistry,
 		store,

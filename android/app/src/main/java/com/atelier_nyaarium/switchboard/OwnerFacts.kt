@@ -38,6 +38,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 				if (result.ok) {
 					repo.store.firstRooted = true
 					repo.federation.ensureContentEpochs(decision.domainId)
+					repo.refreshBoot()
 					DebugLog.log("FirstRoot", "rooted ok domain=${decision.domainId}")
 					true
 				} else {
@@ -78,7 +79,9 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	/** Restore the owner root key from a backup blob. The result lets the UI distinguish a
 	 * wrong passphrase from a different-owner rejection. */
 	suspend fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult =
-		withContext(Dispatchers.IO) { repo.federation.importOwnerBackup(blob, passphrase) }
+		withContext(Dispatchers.IO) {
+			repo.federation.importOwnerBackup(blob, passphrase).also { if (it == OwnerRestoreResult.OK) repo.refreshBoot() }
+		}
 
 	/** Submit an owner-signed fact to the Router and fold it into the local keyring ONLY if the
 	 * Router accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
