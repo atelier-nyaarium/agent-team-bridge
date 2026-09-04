@@ -49,7 +49,17 @@ type OwnerRowOutboxItem = {
 	entry: ConsolePushEntry;
 	opId: string;
 	label: string;
+	/** Stamped at enqueue, so a retry seals the same body. Absent on rows queued before it existed. */
+	at?: number;
 };
+
+/**
+ * The clear body the phone decodes is a MailboxEntry, which requires `seq` and `at`. The Router's row
+ * seq is what the phone keeps; the placeholder only lets the decode pass.
+ */
+export function ownerRowBody(entry: ConsolePushEntry, at: number): Record<string, unknown> {
+	return { seq: 0, at, ...entry };
+}
 
 export function createConsolePushOps({
 	ownerId,
@@ -70,6 +80,7 @@ export function createConsolePushOps({
 			entry: ConsolePushEntrySchema,
 			opId: z.string().min(1),
 			label: z.string().min(1),
+			at: z.number().int().nonnegative().optional(),
 		}),
 	);
 	let storedInvalid = false;
@@ -97,18 +108,17 @@ export function createConsolePushOps({
 		}
 	}
 
-	function sealOwnerRow(
-		entry: ConsolePushEntry,
-		opId: string,
-	): {
+	function sealOwnerRow(item: OwnerRowOutboxItem): {
 		payload: Record<string, unknown>;
 		opKey: Record<string, string>;
 	} | null {
+		const { entry, opId } = item;
 		const domainId = localDomainId;
 		const ownerSign = ownerSignPub?.();
 		if (!domainId || !ownerSign || !producerSignPriv || !contentKeyStore) return null;
 		const conversationId = sha256Hex(entry.session_id ?? "");
-		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(entry), "utf8"), {
+		const body = ownerRowBody(entry, item.at ?? Date.now());
+		const sealed = contentKeyStore.seal(Buffer.from(JSON.stringify(body), "utf8"), {
 			domainId,
 			ownerSignPub: ownerSign,
 			kind: inboxBodyAadKind(conversationId, opId),
@@ -147,7 +157,7 @@ export function createConsolePushOps({
 			return;
 		}
 		await outbox.drain(async (item) => {
-			const sealed = sealOwnerRow(item.entry, item.opId);
+			const sealed = sealOwnerRow(item);
 			if (!sealed) {
 				waiting("no content key");
 				return;
@@ -211,7 +221,7 @@ export function createConsolePushOps({
 	}
 
 	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string): boolean {
-		const item = { entry, opId, label };
+		const item: OwnerRowOutboxItem = { entry, opId, label, at: Date.now() };
 		if (!queueOutbox(item)) return false;
 		void drainOutbox();
 		return true;

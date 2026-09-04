@@ -2,12 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConsolePushOps } from "../gateway/consolePushOps.js";
+import { createConsolePushOps, ownerRowBody } from "../gateway/consolePushOps.js";
 import type { RouterToolCallResult } from "../gateway/router/routerClient.js";
 import { generateIdentity } from "../shared/crypto.js";
+import { MailboxEntrySchema } from "../shared/schemasConsoleOp.js";
 import { Address } from "../shared/session-id.js";
 
 const identity = generateIdentity();
+
+describe("owner row body", () => {
+	it("is a MailboxEntry the phone can decode; the bare entry is not", () => {
+		const reply = ownerRowBody({ kind: "reply", session_id: "s", body: "b", status: "ok" }, 5);
+		const notice = ownerRowBody({ kind: "notice", session_id: "n", title: "t", body: "b" }, 6);
+		expect(MailboxEntrySchema.safeParse(reply).success).toBe(true);
+		expect(MailboxEntrySchema.safeParse(notice).success).toBe(true);
+		expect(reply).toMatchObject({ seq: 0, at: 5, kind: "reply", body: "b" });
+		expect(MailboxEntrySchema.safeParse({ kind: "reply", session_id: "s", body: "b" }).success).toBe(false);
+	});
+});
 
 function entry(body: string) {
 	return {
