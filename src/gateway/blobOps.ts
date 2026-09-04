@@ -18,12 +18,6 @@ export type BlobFetchOutcome = "fetched" | "absent" | "unreachable";
  * federation is not wired, which leaves a blob held elsewhere simply unavailable. */
 export type BlobFetcher = (blobId: string, fromGateway: string) => Promise<BlobFetchOutcome>;
 
-/** Bytes a board entry owns, which outlive the cache. Null when no entry holds this blob. */
-export type DurableBlobSource = {
-	hasAny(blobId: string): boolean;
-	readAny(blobId: string, offset: number, length: number): { bytes: Buffer; eof: boolean } | null;
-};
-
 export type BlobOpResult = { have: number; complete: boolean } | { chunk?: string; eof: boolean; absent?: boolean };
 
 /** A put refused on size: either the chunk is over the per-request cap, or the blob it would grow
@@ -35,25 +29,21 @@ export class BlobTooLarge extends Error {}
 //  Functions & Helpers
 
 /**
- * One bounded range, cache first and then the entry-owned durable store.
+ * One bounded range from this Gateway's blob store.
  *
  * Every byte reader on this Gateway goes through here, because there are THREE doors and not two:
  * the HTTP route and the console's sealed plane both arrive via [answerBlobOp], but a PEER Gateway's
- * `blob_fetch` is answered by `serveBlobRange`, which is neither. A board attachment is by
- * construction the coldest object in the cache, so its cached copy will be evicted; a fallthrough
- * wired into only the first two would leave the durable bytes on disk and unreachable from any other
- * machine, which is the silent disappearance this whole feature exists to prevent.
+ * `blob_fetch` is answered by `serveBlobRange`, which is neither. A missing blob is reported by the
+ * store.
  */
 export function readBlobRange(
 	store: BlobStore,
-	durable: DurableBlobSource | undefined,
 	blobId: string,
 	offset: number,
 	length: number,
 ): { bytes: Buffer; eof: boolean } {
 	const want = Math.min(length, BLOB_CHUNK_BYTES);
-	if (store.path(blobId)) return store.read(blobId, offset, want);
-	return durable?.readAny(blobId, offset, want) ?? store.read(blobId, offset, want);
+	return store.read(blobId, offset, want);
 }
 
 /**
@@ -79,7 +69,6 @@ export async function answerBlobOp(
 	store: BlobStore | undefined,
 	op: BlobOp,
 	fetch?: BlobFetcher,
-	durable?: DurableBlobSource,
 ): Promise<BlobOpResult> {
 	if (!store) throw new Error("blob transfer unavailable on this Gateway");
 
@@ -87,10 +76,8 @@ export async function answerBlobOp(
 	// committing to a transfer, so pulling a whole blob across the mesh to answer it inverts its
 	// cost by four orders of magnitude. Nothing legitimate sets `fromGateway` on a stat, which is
 	// exactly why a hand-crafted one must not become an amplifier.
-	// A locally-held board attachment counts as held: pulling it across the mesh would re-fetch bytes
-	// this Gateway already owns, and after the cache sweeps that is EVERY read of an entry's picture.
 	let fetched: BlobFetchOutcome | undefined;
-	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId) && !durable?.hasAny(op.blobId)) {
+	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId)) {
 		fetched = await fetch(op.blobId, op.fromGateway);
 	}
 
@@ -115,17 +102,12 @@ export async function answerBlobOp(
 			// named holder answered and had nothing, and this Gateway still has nothing either. That
 			// is what lets a client retire a fetch that can never succeed, instead of reading the
 			// same failure a rebooting holder produces.
-			// `have > 0` guards a concurrent upload: a .part satisfies neither path() nor hasAny(),
-			// and calling bytes that are actively landing "absent" would retire a live transfer.
-			if (
-				fetched === "absent" &&
-				!store.path(op.blobId) &&
-				!durable?.hasAny(op.blobId) &&
-				store.stat(op.blobId).have === 0
-			) {
+			// `have > 0` guards a concurrent upload: a .part does not satisfy path(), and calling bytes
+			// that are actively landing "absent" would retire a live transfer.
+			if (fetched === "absent" && !store.path(op.blobId) && store.stat(op.blobId).have === 0) {
 				return { eof: false, absent: true };
 			}
-			const r = readBlobRange(store, durable, op.blobId, op.offset, op.length);
+			const r = readBlobRange(store, op.blobId, op.offset, op.length);
 			// An absent chunk, not an empty string: reading at or past the end has no bytes to report,
 			// and "" would read as a zero-length chunk that landed.
 			return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };

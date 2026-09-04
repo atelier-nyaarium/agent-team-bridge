@@ -31,9 +31,9 @@ clear structure with sealed title, body and attachment filenames. It never opens
 
 ## Attachments
 
-Attachment bytes belong to entries in `src/shared/board-attachment-store.ts`, separate from the evicting
-blob cache. A Router-held entry may name only blobs the Router's reference-held store already holds; a
-write naming anything else is refused `attachment_missing`.
+Attachment bytes live on the Router; the gateway keeps no copy. A Router-held entry may name only blobs
+the Router's reference-held store already holds; a write naming anything else is refused
+`attachment_missing`.
 
 - **`set_attachments` replaces the field:** Other writes preserve stored attachments.
 - The op declares `supplied`. Durable or cached members are retained, uploading members cause retry,
@@ -50,7 +50,6 @@ write naming anything else is refused `attachment_missing`.
 
 **File map:**
 
-- `src/shared/board-attachment-store.ts` - durable per-entry attachment bytes.
 - `src/gateway/router/boardClient.ts`, `src/federation-server/board/boardService.ts` - attachment projection and mutation.
 - `src/mcp/board/boardTools.ts` - attachment name lookup and byte fetch.
 - `android/.../BoardOps.kt`, `AttachmentOps.kt` - console queueing and fetch state.

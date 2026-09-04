@@ -1,6 +1,5 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
 import type { BlobStore } from "../../shared/blob-store.js";
-import type { BoardAttachmentStore } from "../../shared/board-attachment-store.js";
 import type { BoardDisposition } from "../../shared/board-authority.js";
 import type {
 	ConsoleOp,
@@ -147,9 +146,6 @@ export interface ConsoleHandlerDeps {
 	/** The gateway's byte store. Absent only in tests that never exercise a blob op; the three
 	 * blob cases refuse rather than inventing a location to write to. */
 	blobStore?: BlobStore;
-	/** Task board attachment bytes, which outlive the cache. Read by the blob ops so the gallery can
-	 * still open a picture after the cached copy is swept. */
-	boardAttachments?: BoardAttachmentStore;
 	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
 	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */
 	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<import("../blobOps.js").BlobFetchOutcome>;

@@ -110,7 +110,6 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/durable-store.ts` - atomic snapshots and per-file quarantine boundaries
 - `src/shared/session-store.ts` - authoritative gateway sessions keyed by `spawn.id`
 - `src/shared/session-sanitize.ts` / `session-tokens.ts` - normalization, session ids, and bind tokens
-- `src/shared/board-attachment-store.ts` - path-asserted board attachment ownership; no sweeping
 - `src/shared/board-rank.ts` - sibling ordering and asserted fractional ranks
 - `src/shared/agent-screen.ts` / `pane-trim.ts` - pure tmux-pane reads with Kotlin twins and shared fixtures
   - **A rule is a RUN, not a LINE, and `afterRuleRun` owns it:** `-J` welds rows. Windows panes weld composer rules to adjacent rows. Readers use `footerRegion`.

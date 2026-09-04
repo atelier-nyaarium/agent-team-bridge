@@ -52,7 +52,6 @@ const UNMAPPED_LEAVING = ["awareness generation"];
 
 const MIGRATED_ONCE: Record<string, string> = {
 	"shared/pending-delivery-store.ts": "Retire after Phase 8 migration.",
-	"shared/board-attachment-store.ts": "Retire after Phase 8 migration.",
 };
 
 const DISCARDED_AFTER: Record<string, string> = {

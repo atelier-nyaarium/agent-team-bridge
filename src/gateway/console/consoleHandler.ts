@@ -47,7 +47,6 @@ export function createConsoleDispatcher({
 	planeRegistry,
 	readAnchors,
 	blobStore,
-	boardAttachments,
 	fetchBlobFromGateway,
 	relayToHost,
 	tryWakeTeam,
@@ -266,7 +265,7 @@ export function createConsoleDispatcher({
 			case "blob_put":
 			case "blob_get":
 				// Fetch Router cache before the source machine.
-				return answerBlobOp(blobStore, op, fetchBlobFromGateway, boardAttachments);
+				return answerBlobOp(blobStore, op, fetchBlobFromGateway);
 
 			case "create_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");

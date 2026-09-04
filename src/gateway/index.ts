@@ -7,7 +7,6 @@ import { agentHttpPath } from "../shared/agent-backend.js";
 import { sweepAtomicTemps } from "../shared/atomic-write.js";
 import type { AwarenessObservation } from "../shared/awareness-types.js";
 import { BlobStore } from "../shared/blob-store.js";
-import { BoardAttachmentStore } from "../shared/board-attachment-store.js";
 import { type BoardReply, isBoardReply } from "../shared/board-structure.js";
 import type { BoardEntry } from "../shared/console-protocol.js";
 import type { Identity } from "../shared/crypto.js";
@@ -134,7 +133,6 @@ export async function startGateway(): Promise<void> {
 	// Install the migration fence before constructing durable writers.
 	useMigrationEpochFile(DATA_DIR);
 	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
-	const boardAttachments = new BoardAttachmentStore(`${DATA_DIR}/board-attachments`);
 	const MAX_BLOB_STORE_BYTES = parseInt(process.env.MAX_BLOB_STORE_BYTES || String(MAX_BLOB_BYTES * 16), 10);
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -686,7 +684,6 @@ export async function startGateway(): Promise<void> {
 				try {
 					const read = readBlobRange(
 						blobStore,
-						boardAttachments,
 						request.blobId,
 						request.range?.offset ?? 0,
 						request.range?.length ?? MAX_BLOB_BYTES,
@@ -1083,7 +1080,6 @@ export async function startGateway(): Promise<void> {
 
 		const consoleHandler = createConsoleDispatcher({
 			blobStore,
-			boardAttachments,
 			fetchBlobFromGateway: routes.fetchBlobFromGateway,
 			registry,
 			conversationRegistry,
@@ -1230,7 +1226,7 @@ export async function startGateway(): Promise<void> {
 			},
 			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
 			serveBlobRange: (blobId, offset, length) => {
-				const r = readBlobRange(blobStore, boardAttachments, blobId, offset, length);
+				const r = readBlobRange(blobStore, blobId, offset, length);
 				return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };
 			},
 		});
@@ -1360,9 +1356,7 @@ export async function startGateway(): Promise<void> {
 				);
 			}
 			try {
-				return Response.json(
-					await answerBlobOp(blobStore, parsed.data, routes.fetchBlobFromGateway, boardAttachments),
-				);
+				return Response.json(await answerBlobOp(blobStore, parsed.data, routes.fetchBlobFromGateway));
 			} catch (err) {
 				if (!(err instanceof BlobTooLarge)) throw err;
 				return Response.json({ error: err.message }, { status: 413 });

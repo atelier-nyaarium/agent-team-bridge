@@ -12,7 +12,6 @@ import { isAtomicTemp } from "../shared/atomic-write.js";
  */
 export const DATA_DIR_ENTRIES: ReadonlySet<string> = new Set([
 	"blobs",
-	"board-attachments",
 	"federation",
 	"inbox-claims",
 	"schema-version",
