@@ -91,9 +91,8 @@ internal class ConsoleSocketDriver(
 						if (consumer) v.migrationEpoch else 0L,
 						v.incarnation,
 					)
-					// #region debug: socket welcome
-					DebugLog.log("Socket", "welcome gen=$gen adopted=${adopted is ConsoleAdoption.Adopted} cursor=${v.cursor} epoch=${v.cursorEpoch} floor=${v.floor} planes=${v.versions.keys.joinToString(",")}")
-					// #endregion
+					// The coordinates every later read and gap is judged against.
+					DebugLog.log("Socket", "welcome gen=$gen adopted=${adopted is ConsoleAdoption.Adopted} cursor=${v.cursor} epoch=${v.cursorEpoch} floor=${v.floor}")
 					if (adopted !is ConsoleAdoption.Adopted) return
 					welcomed = true
 					closeStreak = 0
@@ -103,9 +102,6 @@ internal class ConsoleSocketDriver(
 				}
 					is ConsoleSocketFrame.InboxRows -> {
 						val v = frame.value
-					// #region debug: socket rows
-					DebugLog.log("Socket", "rows n=${v.rows.size} cursor=${v.cursor} consume=${coordinator.mayConsume(gen)}")
-					// #endregion
 					if (!coordinator.mayConsume(gen)) return
 					val acknowledge = {
 						if (coordinator.acked(gen, v.cursor)) {
@@ -120,16 +116,11 @@ internal class ConsoleSocketDriver(
 					}
 				}
 				is ConsoleSocketFrame.Plane -> {
-					// #region debug: socket plane
-					DebugLog.log("Socket", "plane ${frame.value.name} v${frame.value.version} payload=${frame.value.payload != null} owns=${coordinator.owns(gen)}")
-					// #endregion
 					if (!coordinator.owns(gen)) return
 					onPlane(frame.value.name, frame.value.version, frame.value.payload)
 				}
 				is ConsoleSocketFrame.Refused -> {
-					// #region debug: socket refused
 					DebugLog.log("Socket", "refused ${frame.value.reason} floor=${frame.value.floor} dropped=${frame.value.dropped}")
-					// #endregion
 					if (frame.value.reason == "cursor_stale") {
 						val floor = frame.value.floor ?: 0L
 						val dropped = frame.value.dropped ?: 0L
@@ -143,9 +134,8 @@ internal class ConsoleSocketDriver(
 		}
 
 		override fun onClosed(code: Int?, reason: String?, cause: Throwable?) {
-			// #region debug: socket closed
+			// A reconnect loop reads as repeated closes with welcomed false.
 			DebugLog.log("Socket", "closed gen=$gen code=$code reason=$reason cause=${cause?.javaClass?.simpleName} welcomed=$welcomed")
-			// #endregion
 			coordinator.onSocketClosed(gen)
 			forget(gen)
 			if (cause != null && !welcomed) onUnreachable()

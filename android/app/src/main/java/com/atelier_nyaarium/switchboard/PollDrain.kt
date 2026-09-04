@@ -44,12 +44,7 @@ internal suspend fun drainTick(
 ): TickOutcome {
 	var rowsDrained = 0
 	var inboxAdvanceSent = false
-	if (!coordinator.mayPoll()) {
-		// #region debug: poll skipped
-		DebugLog.log("Poll", "tick skipped link=${coordinator.link()} translating=${coordinator.awaitingTranslation()}")
-		// #endregion
-		return TickOutcome(0, 0, false, known)
-	}
+	if (!coordinator.mayPoll()) return TickOutcome(0, 0, false, known)
 	coordinator.pendingAdvance()?.let { pending ->
 		val advance = client.inboxAdvance(pending.cursor, pending.cursorEpoch)
 		inboxAdvanceSent = true
@@ -63,13 +58,6 @@ internal suspend fun drainTick(
 		}
 	}
 	val answer = client.inboxRead(coordinator.cursor() + 1, coordinator.cursorEpoch())
-	// #region debug: inbox read
-	DebugLog.log(
-		"Poll",
-		"inbox_read from=${coordinator.cursor() + 1} epoch=${coordinator.cursorEpoch()} -> " +
-			if (answer is JsonArray) "rows=${answer.size}" else answer?.toString()?.take(160) ?: "null",
-	)
-	// #endregion
 	if (answer is JsonArray) {
 		val rows = answer.mapNotNull { element ->
 			val decoded = runCatching {
@@ -105,9 +93,6 @@ internal suspend fun drainTick(
 			if (coordinator.polled(cursor, epoch)) {
 				val advance = client.inboxAdvance(cursor, epoch)
 				inboxAdvanceSent = true
-				// #region debug: inbox advance
-				DebugLog.log("Poll", "inbox_advance cursor=$cursor epoch=$epoch -> ${advanceOutcome(advance) ?: advance?.toString()?.take(120)}")
-				// #endregion
 				when (advanceOutcome(advance)) {
 					"ok" -> coordinator.clearPendingAdvance()
 					"cursor_stale" -> {
@@ -115,7 +100,11 @@ internal suspend fun drainTick(
 						coordinator.adoptFloor(advanceFloor(advance, coordinator.cursor()))
 						return TickOutcome(rowsDrained, 0, true, known, true)
 					}
-					else -> coordinator.recordPendingAdvance(cursor, epoch)
+					// The Router keeps the older cursor and redelivers until a retry lands.
+					else -> {
+						DebugLog.log("Poll", "inbox_advance held cursor=$cursor: ${advanceOutcome(advance) ?: "no answer"}")
+						coordinator.recordPendingAdvance(cursor, epoch)
+					}
 				}
 			}
 		}
@@ -126,11 +115,7 @@ internal suspend fun drainTick(
 	var nextKnown = known
 	var planesApplied = 0
 	val knownJson = buildJsonObject { nextKnown.forEach { (name, version) -> put(name, version) } }
-	val planes = client.planesRead(knownJson)?.planes
-	// #region debug: planes read
-	DebugLog.log("Poll", "planes_read known=${nextKnown} -> ${planes?.joinToString(",") { "${it.name}:${it.version}:${it.payload != null}" } ?: "none"}")
-	// #endregion
-	planes?.forEach { plane ->
+	client.planesRead(knownJson)?.planes?.forEach { plane ->
 		if (plane.version > (nextKnown[plane.name] ?: 0L) && onPlane(plane.name, plane.version, plane.payload)) {
 			nextKnown = nextKnown + (plane.name to plane.version)
 			planesApplied++

@@ -84,17 +84,12 @@ class ConsoleClient internal constructor(
 
 	internal suspend fun postSigned(op: kotlinx.serialization.json.JsonObject, opId: String = UUID.randomUUID().toString()): JsonElement? {
 		val signed = signOwnerOp?.invoke(op, opId)
-		val answer = signed?.let { postOwnerOp(it) }
-		// #region debug: owner op
-		val outcome = when {
-			signed == null -> "unsigned"
-			answer == null -> "no answer"
-			answer is kotlinx.serialization.json.JsonArray -> "rows=${answer.size}"
-			else -> (answer as? JsonObject)?.get("outcome")?.jsonPrimitive?.content ?: "answered"
+		// Signing needs a confirmed Domain; without one every op dies here unremarked.
+		if (signed == null) {
+			DebugLog.log("OwnerOp", "${op["kind"]?.jsonPrimitive?.content} unsigned")
+			return null
 		}
-		DebugLog.log("OwnerOp", "${op["kind"]?.jsonPrimitive?.content} -> $outcome")
-		// #endregion
-		return answer
+		return postOwnerOp(signed)
 	}
 
 	internal suspend fun consumerRegister(incarnation: Long): JsonElement? = postSigned(buildJsonObject {
@@ -314,9 +309,6 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 			if (!resp.isSuccessful) return null
 			val reach = RouterReach.decode(resp.body?.string())
 			reach.domainId?.takeIf { it.isNotEmpty() }?.let { transport.store.saveDomainId(it) }
-			// #region debug: reach domain
-			DebugLog.log("Connect", "reach domain=${reach.domainId ?: "none"} signer=${signer != null}")
-			// #endregion
 			return reach
 		}
 	}

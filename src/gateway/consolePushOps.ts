@@ -195,7 +195,6 @@ export function createConsolePushOps({
 				}
 				outbox.shift();
 				lastWait = "";
-				console.log(`[owner-outbox] sent ${item.entry.kind} opId=${item.opId} ${parsed.outcome}`);
 			}
 		} finally {
 			draining = false;

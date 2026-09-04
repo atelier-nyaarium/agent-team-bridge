@@ -226,7 +226,6 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 				row.envelope.opKey.opId,
 				ownerSignPub,
 			);
-			console.log(`[console-op] ${op.data.kind} target=${target} -> ok`);
 			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: true, result });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

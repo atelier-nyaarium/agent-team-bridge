@@ -86,10 +86,11 @@ class KeyDeliveryOps(
 			request.requesterSignPub,
 		)) return
 		val recipient = keyring().resolveSubject(request.requesterSignPub)
-		// #region debug: key request
-		DebugLog.log("KeyDelivery", "request epochs=${request.epochs} from=${request.requesterSignPub.take(8)} known=${recipient != null}")
-		// #endregion
-		if (recipient == null) return
+		// An unknown requester is dropped silently otherwise.
+		if (recipient == null) {
+			DebugLog.log("KeyDelivery", "request from unknown subject ${request.requesterSignPub.take(8)}")
+			return
+		}
 		val identity = consoleIdentity()
 		val ring = contentKeyring()
 		val epochs = request.epochs.filter { it >= 1 && it <= Int.MAX_VALUE.toLong() }.map { it.toInt() }
@@ -98,9 +99,7 @@ class KeyDeliveryOps(
 			send(grantOp(KeyGrant(1, recipient.signPub, envelope, now())))
 			granted++
 		}
-		// #region debug: key grants sent
 		DebugLog.log("KeyDelivery", "granted $granted of ${epochs.size} to ${request.requesterSignPub.take(8)}")
-		// #endregion
 	}
 
 	suspend fun onKeyGrant(grant: KeyGrant) {
@@ -124,9 +123,7 @@ class KeyDeliveryOps(
 				Crypto.sign(Crypto.keyReceiptSigningBytes(domain, identity.sign.pub, grant.envelope.epoch, at, nonce), identity.sign.priv),
 			)
 			send(receiptOp(receipt))
-			// #region debug: key grant installed
 			DebugLog.log("KeyDelivery", "grant installed epoch=${grant.envelope.epoch}")
-			// #endregion
 		} else if (!result.accepted) {
 			DebugLog.log("KeyDelivery", "grant refused reason=${result.reason ?: "unknown"}")
 		}
