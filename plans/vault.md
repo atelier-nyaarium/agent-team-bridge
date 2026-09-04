@@ -1,7 +1,8 @@
 # Questionaire
 
 Vault: secrets and notes vault, phone-approved, for agents and for the owner's own terminal.
-Board entry: Vault Plugin (8fcbf63f) with three children.
+Board entry: Vault Plugin (`bd_1b5ca0e9`) with three children. Points refreshed 2026-09-04 on
+the Router-hub substrate (main at `eb193ead`); R5 to R8 below carry the re-checked facts.
 
 ## Rulings settled in chat before the questionaire
 
@@ -48,13 +49,28 @@ A time window, if kept, is scoped to a host or command shape, never to the raw s
 
 - `AGENT_WAIT_BUDGET_MS` is 240s because node's fetch abandons a silent connection at 300s. Any
   hold longer than that is a bounded wait plus a separate collect, as Codex does.
-- The console has NO push path. No FCM anywhere in the app. `tierFor` in `IdlePushbackManager`:
-  foreground chains long-polls (instant); under 10 min quiet polls every 60s; under 10 h polls on
-  the half hour; beyond that hourly. `WATCHED_WORKING_CAP` pins a watched working session to the
-  60s tier. Approval latency IS the poll tier.
+- The console has two links (`ConsoleLink` in `ConsoleTransportCoordinator`): a bound Router
+  socket receives an owner row as a push; otherwise `tierFor` in `IdlePushbackManager` decides
+  the poll: foreground chains long-polls (instant); under 10 min quiet polls every 60s; under
+  10 h polls on the half hour; beyond that hourly, on an alarm. `WATCHED_WORKING_CAP` pins a
+  watched working session to the 60s tier. No FCM. Approval latency is the link, so a request
+  row must raise a notification and an idle phone answers in minutes.
 - Consequence for R3: with a human at the tty, RACE the tty and the phone; first answer wins. No
   waiting window at all. Long holds belong only to the no-tty (agent-invoked) case.
-- The mailbox is per-install `conversationId`. There is no cross-console sync mechanism today.
+- Cross-console sync is by construction now: owner rows live in the Router owner inbox, and a
+  second console admitted through Add Device receives the content keys in
+  `ConsoleTransport.contentKeys`.
+- The executor is the session's MCP server, not the gateway. The gateway is a container and
+  cannot run in the agent's environment; the MCP server runs beside the agent's Bash and already
+  speaks to the gateway over `BRIDGE_ROUTER_URL`. The value crosses gateway to MCP memory and
+  into a child process, never a tool result.
+- Request row: `deliverToOwner`, sealed under the inbox-body binding. Either a new
+  `ConsolePushEntry` kind or a `plugin_action` row; the phone dispatches those to a claimed
+  `pluginId:actionType` handler (`Plugins.kt`). Answer: a new VALUE op, forwarded live as a
+  `value_op` frame with typed `unreachable` and `timeout`. The op ledger answers a re-posted op
+  with its first answer, so a double tap is one decision.
+- `ServiceNotifications` already sets a delete intent on dismiss and action buttons, so
+  swipe-to-deny and the Allow buttons reuse those mechanisms.
 
 ### R6 - The helper talks to the Gateway, never the MCP server
 
@@ -64,6 +80,9 @@ devcontainer (the `BRIDGE_ROUTER_URL` default). Precedent: the host daemon is al
 process holding a gateway connection. The helper identifies its caller from the parent's
 `/proc/<ppid>/cmdline` (world-readable even for setuid sudo; `environ` is not), so the brief can
 name `sudo apt install foo` or `ssh deploy@prod`.
+
+Open: the helper needs a credential the gateway accepts. `HOST_WS_TOKEN` gates the daemon's slot;
+a vault route should take a helper token minted at install rather than reuse it.
 
 ### R7 - Phone replacement: the owner root is backed up or the Domain is dead
 
@@ -87,19 +106,50 @@ A: Three facts from code, none of them Vault-specific.
 > "how danger is it if we have to replace a phone? does it even have a path to activate a new
 > phone and retire this existing one? Will the new phone have the same Federation Admin ?"
 
-Vault consequence for Question 1: under D, derive the vault key from the owner root (HKDF), so
-the existing backup covers it with no new burden and a restored phone can unwrap. A separate vault
-key would need its own backup or die with the phone. A console-only second phone cannot unwrap
-under D unless the vault key rides the synced keyring that `buildConsoleTransport` already ships.
+Vault consequence: the substrate did what this asked for. The owner content key is derived on the
+owner phone from the root and an epoch, and the backup regenerates every epoch. A restored phone
+unwraps the vault with no new burden. A console-only second phone unwraps because Add Device
+delivers the same keys. See R8.
+
+### R8 - Substrate rulings inherited from router-hub
+
+- Vault entries and notes are tier 2, SEALED SHARED: the Router is authority on a clear envelope
+  (id, version, kind) and blind to the content.
+- The owner content key is symmetric and held by every admitted phone and every enrolled gateway.
+  The Router is the one party without it. The gateway keeps it in
+  `DATA_DIR/federation/content-keys.json` (`ContentKeyStore`).
+- "Store on gateway or console" collapses: the record is on the Router, sealed; any gateway opens
+  it at use time; any phone opens it to show or edit.
+- Public vs private title and description is a gateway serving rule: the gateway opens the whole
+  record and serves only public fields to agents. The Router needs nothing clear beyond the
+  envelope. "Searched from the outside" is an agent asking its own gateway.
+- Board precedent to copy: `boardClient.ts` is the sole sealer and opener, the AAD binds the entry
+  id (`boardTextAadKind`), writes are CAS on revision, a conflict answer carries the winner. A
+  vault client is the same shape with a kind per field.
+- Residual: the key is Domain-wide, so every gateway can open every secret. Narrowing to one
+  gateway is Question 1.
 
 ### Assumption A1 - Vault is a capability id, not a marketplace plugin
 
-Treated as a new id beside `taskboard`, `designer`, `references` in the shared capabilities
-module, gated per session like the others. Not a separate plugin with its own MCP server.
+Treated as a new id beside `taskboard`, `designer`, `references` in `GATED_CAPABILITY_IDS`
+(`src/mcp/capabilities.ts`), gated per session like the others. Not a separate plugin with its own
+MCP server.
 
-## Question 1 - Where does vault authority live?
+## Question 1 - May a secret be narrowed to one Gateway, and how?
 
-Q: Who holds the secrets at rest, and who can answer a request?
+Q: The substrate gives every enrolled gateway the Domain key, so a Router-held secret is readable
+by every gateway. Is that acceptable, and if a per-gateway secret is wanted, is the scope an
+authorization rule or a cryptographic one?
+
+- A) Domain-wide, sealed shared, with an envelope allowlist. Every gateway can decrypt. A clear
+  `gateways` field on the envelope names which may USE it; the gateway enforces it. Authorization
+  only. A compromised gateway already holds the Domain key for the board and every body, so this
+  adds no new exposure. Simplest; the board shape verbatim.
+- B) Per-gateway key epochs. A secret sealed to a key only its named gateways receive. Needs a new
+  key delivery road per secret and per gateway, and a revocation story. Cryptographic scope.
+- C) Gateway-local values, Router-held catalogue. The value never leaves the gateway that holds
+  it; the phone enters it through a value op to that gateway; other consoles see the catalogue
+  only. A lost gateway loses its secrets. No console sync for values.
 
 (pending)
 
