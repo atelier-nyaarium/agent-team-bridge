@@ -359,6 +359,34 @@ private val WINDOWS_ROOTED = Regex("^[A-Za-z]:/")
 private fun isRootedFor(project: String, text: String): Boolean =
 	if (project == "windows") WINDOWS_ROOTED.containsMatchIn(text) || isRootedWorkdir(text) else isRootedWorkdir(text)
 
+/** The wire spelling for the Windows drive list. Twin of `WINDOWS_DRIVE_ROOT` in `windowsSpawn.ts`. */
+private const val WINDOWS_DRIVE_ROOT = "/"
+
+/**
+ * What one field's text says to browse: the directory to list, the fragment filtering it, the path
+ * the op carries, and whether there is anything to list at all.
+ *
+ * Windows has no home to imply, so an empty field browses the DRIVES rather than nothing. That is
+ * what makes the field answer a tap at all, and every listing below a drive is rooted the only way
+ * the launch accepts. Elsewhere home is the implied directory, as it always was.
+ */
+internal data class DirBrowse(val parent: String, val fragment: String, val listPath: String, val listable: Boolean)
+
+internal fun dirBrowse(text: String, isWindows: Boolean): DirBrowse {
+	val cut = text.lastIndexOf('/')
+	val parent = if (cut >= 0) text.substring(0, cut + 1) else if (isWindows) "" else "~/"
+	val fragment = if (cut >= 0) text.substring(cut + 1) else text
+	val listable =
+		if (isWindows) parent.isEmpty() || WINDOWS_ROOTED.containsMatchIn(parent)
+		else parent.startsWith("/") || parent.startsWith("~/")
+	return DirBrowse(
+		parent = parent,
+		fragment = fragment,
+		listPath = if (parent.isEmpty()) WINDOWS_DRIVE_ROOT else parent,
+		listable = listable,
+	)
+}
+
 ////////////////////////////////
 //  Composables
 
@@ -366,7 +394,8 @@ private fun isRootedFor(project: String, text: String): Boolean =
  * prefix names the directory to list (fetched once per directory, cached for the dialog's life), and
  * the fragment after it filters that listing locally, so typing within a segment costs no round-trip
  * and only crossing a "/" boundary does. Blank shows "(default)" (the label-derived workdir); first
- * focus fills "~/" with the cursor after the slash and lists home immediately. Every match renders
+ * focus fills "~/" with the cursor after the slash and lists home immediately, and on Windows lists
+ * the drives instead, since that machine has no home to imply. Every match renders
  * (no cutoff) in a drag-scrollable box, dot dirs sorted to the bottom and greyed but still selectable;
  * tapping a row completes it plus "/" and descends a level. */
 @Composable
@@ -395,25 +424,18 @@ fun DirectoryField(
 	// mid-navigation.
 	var focused by remember { mutableStateOf(false) }
 	val text = value.text
-	val cut = text.lastIndexOf('/')
 	// With no separator typed yet, home is the implied directory and the whole text is its filter.
 	// That covers a field cleared back to default (still focused, so the focus prefill cannot fire
-	// again) and a bare fragment, neither of which would otherwise have anything to list.
-	// A Windows session has no `~`, so an empty field implies nothing listable rather than home; the
-	// owner types a drive and the listing follows. Anywhere else home is still the implied directory.
+	// again) and a bare fragment, neither of which would otherwise have anything to list. On Windows
+	// the drives stand in for home. See `dirBrowse`.
 	val isWindows = spawn == "windows"
-	val parent = if (cut >= 0) text.substring(0, cut + 1) else if (isWindows) text else "~/"
-	val fragment = if (cut >= 0) text.substring(cut + 1) else if (isWindows) "" else text
-	// Only a rooted prefix is listable; a relative one ("foo/") lists nothing. A Windows path is
-	// rooted at a drive, so `/`-rooting is not the test there.
-	val listable =
-		if (isWindows) WINDOWS_ROOTED.containsMatchIn(parent) else parent.startsWith("/") || parent.startsWith("~/")
+	val (parent, fragment, listPath, listable) = dirBrowse(text, isWindows)
 	// Retries a failed directory whenever these keys change again (a refocus, or moving away and back),
 	// which is the recovery path once the machine is reachable. Unchanged keys do not re-run it, so a
 	// machine that stays down is asked once per attempt rather than continuously.
 	LaunchedEffect(parent, listable, focused) {
 		if (!listable || !(focused || text.isNotEmpty()) || parent in cache) return@LaunchedEffect
-		val listing = onListDirs(parent, spawn)
+		val listing = onListDirs(listPath, spawn)
 		if (listing.error == null) {
 			cache[parent] = listing.dirs
 			failures.remove(parent)

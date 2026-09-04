@@ -144,7 +144,38 @@ function isPathShaped(hint: string): boolean {
  * Empty rather than throwing, matching listHostDirs: this feeds a type-ahead, which has no use for
  * the reason.
  */
+/**
+ * The wire spelling for "list this machine's drives".
+ *
+ * A Windows session has no home the picker can imply, so an EMPTY field browses the drives and every
+ * listing below one is drive-rooted, which is the only shape `resolveWindowsWorkdir` accepts. The
+ * op's path cannot be empty, and no real path names the drive list, so `/` carries it: on the windows
+ * spawn it is already a POSIX shape that would otherwise list whichever drive happens to be current.
+ */
+export const WINDOWS_DRIVE_ROOT = "/";
+
+/** Drive letters as `C:`, so the tap that appends "/" yields a rooted `C:/`. */
+export function parseWindowsDriveNames(out: string): string[] {
+	return out
+		.split("\n")
+		.map((line) => line.replace(/\r$/, "").trim())
+		.filter((line) => /^[A-Za-z]$/.test(line))
+		.map((line) => `${line.toUpperCase()}:`)
+		.sort();
+}
+
+function listWindowsDrives(): { entries: string[] } {
+	const out = run("powershell.exe", [
+		"-NoLogo",
+		"-NoProfile",
+		"-Command",
+		"Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }",
+	]);
+	return { entries: out == null ? [] : parseWindowsDriveNames(out) };
+}
+
 export function listWindowsDirs(rawPath: string): { entries: string[]; truncated?: boolean } {
+	if (rawPath === WINDOWS_DRIVE_ROOT) return listWindowsDrives();
 	// The daemon re-guards with the SAME rule the gateway boundary applied, rather than a narrower
 	// hand-rolled quote check: the convention here is that a path is gateway-validated and the daemon
 	// re-guards, and two different rules for one question is what this whole change spent the day
