@@ -186,6 +186,23 @@ export const CodexAgentResultSchema = z
 					path: ["agentState"],
 				});
 			}
+			if (value.error?.code === "agent_dead" && (value.agentState !== "unavailable" || value.error.retryable)) {
+				ctx.addIssue({
+					code: "custom",
+					message: "agent_dead requires an unavailable agent and is never retryable",
+					path: ["error"],
+				});
+			}
+			if (
+				value.error?.code === "agent_unreachable" &&
+				(value.agentState !== "recovering" || !value.error.retryable)
+			) {
+				ctx.addIssue({
+					code: "custom",
+					message: "agent_unreachable requires a recovering agent and is retryable",
+					path: ["error"],
+				});
+			}
 			if (featureDisabled && value.delivery) {
 				ctx.addIssue({
 					code: "custom",

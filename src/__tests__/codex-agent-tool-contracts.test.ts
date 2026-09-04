@@ -278,5 +278,22 @@ describe("Codex tool contracts", () => {
 				error: { code: "agent_unreachable", message: "codex agent is alive but unreachable", retryable: true },
 			}).success,
 		).toBe(true);
+
+		// Each code is bound to its state and retryability; the wrong pairing does not parse.
+		const wrong = [
+			{ agentState: "recovering", error: { code: "agent_dead", message: "dead", retryable: false } },
+			{ agentState: "unavailable", error: { code: "agent_dead", message: "dead", retryable: true } },
+			{
+				agentState: "unavailable",
+				error: { code: "agent_unreachable", message: "unreachable", retryable: true },
+			},
+			{
+				agentState: "recovering",
+				error: { code: "agent_unreachable", message: "unreachable", retryable: false },
+			},
+		];
+		for (const pairing of wrong) {
+			expect(CodexAgentResultSchema.safeParse({ ...base, ...pairing }).success).toBe(false);
+		}
 	});
 });
