@@ -237,6 +237,11 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 				DebugLog.log("Console", "value result missing opId=$opId")
 				return null
 			}
+		// A refused value op answers in the clear; only an accepted one is sealed.
+		if ((answer as? JsonObject)?.get("kind")?.jsonPrimitive?.content == "refusal") {
+			DebugLog.log("Console", "value op refused opId=$opId")
+			return failureAnswer(answer)
+		}
 			val envelope = runCatching { wireJson.decodeFromJsonElement(ContentEnvelope.serializer(), answer) }
 				.onFailure { DebugLog.log("Console", "value result envelope failed opId=$opId") }
 				.getOrNull() ?: return null

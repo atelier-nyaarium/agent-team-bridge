@@ -229,6 +229,16 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	@Test
+	fun aRefusedValueOpAnswersItsReasonInTheClear() = runBlocking {
+		valueResultMode = ValueResultMode.Refused
+		val answer = client.sendValueOp("gateway", ConsoleOp.ListDirs("/", "spawn"), "value-op")
+
+		val decoded = wireJson.decodeFromJsonElement(OwnerOpAnswer.serializer(), requireNotNull(answer))
+		assertEquals(false, decoded.ok)
+		assertEquals("session is not ready", decoded.error)
+	}
+
+	@Test
 	fun backgroundTickReadsInboxThenPlanesWithAppliedVersions() = runBlocking {
 		val events = mutableListOf<String>()
 		val outcome = drainTick(client, coordinator, emptyMap(), { events += "rows" }, { name, version, _ -> events += "$name:$version"; true })
@@ -375,6 +385,13 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	private fun valueAnswer(ownerOp: OwnerOp): JsonElement {
+		if (valueResultMode == ValueResultMode.Refused) {
+			return buildJsonObject {
+				put("opKey", buildJsonObject { put("conversationId", ownerOp.conversationId); put("opId", ownerOp.opId) })
+				put("outcome", "accepted")
+				put("result", buildJsonObject { put("kind", "refusal"); put("reason", "session is not ready") })
+			}
+		}
 		val request = openConsoleOp(ownerOp)
 		val result = when (kindOf(request)) {
 			"create_session" -> buildJsonObject { put("created", true); put("id", "created-session") }
@@ -438,5 +455,5 @@ class ConsoleClientOwnerOpsTest {
 			}, 0L) { ZoneId.of("UTC") },
 		)
 
-	private enum class ValueResultMode { Normal, WrongOp }
+	private enum class ValueResultMode { Normal, WrongOp, Refused }
 }
