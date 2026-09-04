@@ -4,13 +4,8 @@ The owner's board, its attachments, and edit awareness.
 
 ## Where the board lives
 
-Two paths, two stores.
-
-- **Agent path (Router-held):** `/task-board` reads and writes the Router's board over the gateway's
-  own WS. The Router stores clear structure with sealed title, body and attachment filenames. It
-  never opens them.
-- **Console path (gateway-held):** The phone writes `gateway/boardStore.ts`. The two boards are
-  separate stores and do not sync.
+`/task-board` reads and writes the Router-held board over the gateway's own WS. The Router stores
+clear structure with sealed title, body and attachment filenames. It never opens them.
 
 ## Router-held board
 
@@ -34,52 +29,13 @@ Two paths, two stores.
 - Observations arrive as `board_observation` inbox rows, opened into the awareness bank by the
   delivery pump.
 
-## Gateway-held board
-
-Stored by `gateway/boardStore.ts`. Entries use parent pointers and fractional ranks.
-
-- **The store is the sole validator:** `BoardRefusal` replies use the `refused: ` marker. `refusalError`
-  is its sole producer.
-- **A session end is one mutation:** `sessionEnded` applies its required `boardDisposition` to the
-  complete server-side session set, and the reply is authoritative for console reporting.
-- The pending queue is a separate writer. Forgetting a session drops its queued writes and linked
-  deletes. A lane may pass a persistently failing action, but never reorders another write to the
-  same entry ahead of it.
-- **`forget` performs its own local-address check:** Its kill path swallows target-resolution errors.
-- Invalid ranks are refused before durable persistence. Restore tolerates invalid entries.
-- Board mutations are absolute and replay through `DurableOpStore`. Retrying a lost reply must not
-  reapply an older value over newer state.
-- Cascade is opt-in per write. `orphanedParents` comes from pre/post state for parents whose child
-  disappeared.
-- **A board session is `(gatewayId, sessionId)`:** The stored id is Gateway-local; `Team.name` is
-  qualified. `consoleTargets.boardSessionKey` and `BoardManager.sessionKeyOf` are the sole
-  directional converters, and unknown or foreign targets resolve to null.
-- A queued console edit retires on refusal only. Absolute writes must not be reordered.
-- `mayWrite` is the sole authority predicate for board scope and trash rules. Console writes use
-  `OWNER_ACTOR`, route writes the session actor.
-- A truncated projection is an id-sorted prefix. Merging the entire prior cache resurrects deleted
-  entries.
-- `BOARD_TRASH_TTL_MS` and `SESSION_RESUME_TTL_MS` are both 30 days and must remain separate
-  constants.
-
-**File map:**
-
-- `src/gateway/router/boardClient.ts` - sealing, opening, key mapping, CAS writes.
-- `src/federation-server/board/boardService.ts` - the Router's board ops, authority and observations.
-- `src/gateway/boardStore.ts` - durable board state and owner plane.
-- `src/shared/board-authority.ts` - actors, authority, refusals, refusal marker.
-- `src/shared/board-cascade.ts` - post-write state cascade.
-- `src/shared/board-rank.ts` - rank ordering, rank assertions, end placement with rebalance.
-- `src/shared/board-structure.ts` - subtree walks, prunable subtrees, orphan promotion.
-- `src/mcp/board/boardTools.ts` - six gated task-board tools.
-
 ## Attachments
 
 Attachment bytes belong to entries in `src/shared/board-attachment-store.ts`, separate from the evicting
 blob cache. A Router-held entry may name only blobs the Router's reference-held store already holds; a
 write naming anything else is refused `attachment_missing`.
 
-- **`board_set_attachments` is the sole field committer:** `upsert` ignores incoming `attachments`.
+- **`set_attachments` replaces the field:** Other writes preserve stored attachments.
 - The op declares `supplied`. Durable or cached members are retained, uploading members cause retry,
   and unresolved members are dropped and reported.
 - Presence checks are durable-first, and every member resolves before any is adopted.
@@ -95,7 +51,7 @@ write naming anything else is refused `attachment_missing`.
 **File map:**
 
 - `src/shared/board-attachment-store.ts` - durable per-entry attachment bytes.
-- `src/gateway/routes.ts`, `src/gateway/boardStore.ts` - attachment projection and mutation.
+- `src/gateway/router/boardClient.ts`, `src/federation-server/board/boardService.ts` - attachment projection and mutation.
 - `src/mcp/board/boardTools.ts` - attachment name lookup and byte fetch.
 - `android/.../BoardOps.kt`, `AttachmentOps.kt` - console queueing and fetch state.
 
@@ -115,8 +71,7 @@ write naming anything else is refused `attachment_missing`.
   alone is insufficient across federation.
 - Both holders of a changed entry receive awareness, classified from pre/post visibility. A self-echo
   is skipped.
-- `mutate` stages ids per invocation and releases them after commit. `sessionEnded` and `sweepTrash`
-  announce nothing, and rank-only reorders announce nothing.
+- Rank-only reorders announce nothing.
 - Awareness bodies are bounded. Liveness distinguishes waking from gone and uses `WAKE_TIMEOUT_MS`.
 - The phone drains board edits before sending the next wire message.
 

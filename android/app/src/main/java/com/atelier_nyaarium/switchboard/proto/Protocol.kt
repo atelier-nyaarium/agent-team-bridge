@@ -161,69 +161,6 @@ sealed class ConsoleOp {
 	) : ConsoleOp()
 
 	@Serializable
-	@SerialName("board_upsert")
-	data class BoardUpsert(
-		val entries: List<BoardEntry>,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_state")
-	data class BoardSetState(
-		val id: String,
-		val state: String,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_title")
-	data class BoardSetTitle(
-		val id: String,
-		val title: String,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_body")
-	data class BoardSetBody(
-		val id: String,
-		val body: String? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_attachments")
-	data class BoardSetAttachments(
-		val id: String,
-		val attachments: List<BoardAttachment>,
-		val supplied: List<String>? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_parent")
-	data class BoardSetParent(
-		val id: String,
-		val parent: String? = null,
-		val rank: String,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_trashed")
-	data class BoardSetTrashed(
-		val id: String,
-		val trashed: Boolean,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_set_session")
-	data class BoardSetSession(
-		val id: String,
-		val sessionId: String? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("board_remove")
-	data class BoardRemove(
-		val ids: List<String>,
-	) : ConsoleOp()
-
-	@Serializable
 	@SerialName("peek")
 	data class Peek(
 		val target: String,
@@ -380,6 +317,27 @@ sealed class ConsoleOp {
 		val ownerSignPub: String,
 	) : ConsoleOp()
 }
+
+@Serializable
+data class ConsolePollResult(
+	val entries: List<MailboxEntry>,
+	val cursor: Long,
+	val dropped: Long,
+	val epoch: Long,
+	val domainVersion: String? = null,
+	val domain: DomainSnapshot? = null,
+	val presence: List<TeamInfo>? = null,
+	val presenceVersions: List<PresenceVersion>? = null,
+	val linkedPeers: List<CrossDomainPeerEntry>? = null,
+	val linkedPeersVersion: LinkedPeersVersion? = null,
+	val readAnchors: List<ReadAnchorWireEntry>? = null,
+	val readAnchorsVersion: ReadAnchorsVersion? = null,
+	val taskBoard: List<BoardEntry>? = null,
+	val taskBoardVersion: TaskBoardVersion? = null,
+	val taskBoardTruncated: Boolean? = null,
+	val crossDomainPresence: List<CrossDomainPresenceEntry>? = null,
+	val settled: String? = null,
+)
 
 @Serializable
 data class FirstRoot(
@@ -1418,6 +1376,67 @@ data class RefSpanMeta(
 )
 
 @Serializable
+data class SignedXDomainLink(
+	val link: XDomainLink,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLink(
+	val myOwnerSignPub: String,
+	val peerOwnerSignPub: String,
+	val peerDomainId: String,
+	val peerGatewayId: String,
+	val peerSignPub: String,
+	val peerBoxPub: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class DomainSnapshot(
+	val ownerSignPub: String,
+	val admissions: List<SignedAdmission>,
+	val revocations: List<SignedRevocation>,
+	val displayName: String? = null,
+)
+
+@Serializable
+data class PresenceVersion(
+	val gateway: String,
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class CrossDomainPeerEntry(
+	val domainId: String,
+	val gatewayId: String,
+	val ownerSignPub: String,
+)
+
+@Serializable
+data class LinkedPeersVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class ReadAnchorWireEntry(
+	val team: String,
+	val epoch: Long,
+	val seq: Long,
+	val at: Long,
+)
+
+@Serializable
+data class ReadAnchorsVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
 data class BoardEntry(
 	val id: String,
 	val title: String,
@@ -1448,22 +1467,9 @@ data class BoardAttachment(
 )
 
 @Serializable
-data class SignedXDomainLink(
-	val link: XDomainLink,
-	val ownerSignPub: String,
-	val signature: String,
-)
-
-@Serializable
-data class XDomainLink(
-	val myOwnerSignPub: String,
-	val peerOwnerSignPub: String,
-	val peerDomainId: String,
-	val peerGatewayId: String,
-	val peerSignPub: String,
-	val peerBoxPub: String,
-	val issuedAt: Long,
-	val nonce: String,
+data class TaskBoardVersion(
+	val epoch: Long,
+	val version: Long,
 )
 
 @Serializable
@@ -1490,13 +1496,6 @@ data class CrossDomainPresenceSession(
 data class CrossDomainShareEntry(
 	val sessionTarget: String,
 	val target: CrossDomainShareTarget,
-)
-
-@Serializable
-data class CrossDomainPeerEntry(
-	val domainId: String,
-	val gatewayId: String,
-	val ownerSignPub: String,
 )
 
 @Serializable
@@ -1652,14 +1651,6 @@ data class ConsoleApprovalJoin(
 )
 
 @Serializable
-data class DomainSnapshot(
-	val ownerSignPub: String,
-	val admissions: List<SignedAdmission>,
-	val revocations: List<SignedRevocation>,
-	val displayName: String? = null,
-)
-
-@Serializable
 data class XDomainUntrust(
 	val myOwnerSignPub: String,
 	val peerOwnerSignPub: String,
@@ -1756,18 +1747,4 @@ data class EnabledPlugin(
 	val id: String,
 	/** Agent-facing usage guidance for this capability, surfaced to the session. */
 	val instructions: String? = null,
-)
-
-@Serializable
-data class ReadAnchorsVersion(
-	val epoch: Long,
-	val version: Long,
-)
-
-@Serializable
-data class ReadAnchorWireEntry(
-	val team: String,
-	val epoch: Long,
-	val seq: Long,
-	val at: Long,
 )

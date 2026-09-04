@@ -80,9 +80,7 @@ export function createConsoleTargets({ localDomainId, localGatewayId, isTrustedC
 		return t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session);
 	}
 
-	/** The bare `spawn.session` key a board entry stores, from whatever the console named the session
-	 * as. The board's every other reader - the MCP route, sessionEnded, the TTL sweep - keys by the
-	 * local field, so an un-normalized value is stored but never matched again. */
+	/** The normalized local session key stored by board entries. */
 	function boardSessionKey(named: string): string {
 		const t = requireLocal(named, () => refusalError("session_missing"));
 		return t instanceof SpawnPoint
