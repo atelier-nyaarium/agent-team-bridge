@@ -598,48 +598,78 @@ The wire is tested by the code that composes it.
   one path. The mechanism is the per-module default; the fix is Phase 5's ambient context and its
   residue fence.
 
-## Phase 3 - Phone repository seams
+## Phase 3 - Phone repository seams ✅
 
-### Slices
+### Slices, as shipped (`06431c53`, `4d0cfbb2`) ✅
 
-Reassessed after Phase 1. In the Q5 order. `DrainGate` owning the re-entrant mutex, the fake
-invokes `block()`; a welcome-plane method on `DrainHost`; `PollDrain(host: DrainHost)` with
-`ChatRepositoryDrainHost`; `SessionOps(host: SessionHost)` with `ChatRepositorySessionHost`,
-cleanup behind behavior methods, never the six heavy ops classes; pure `composeReportRead(team,
-anchor, at, sign)` replacing the inline `ReportRead` encode in `ChatRepository`;
-`composeScheduledSend` split out of `fireOne` with the repository as the adapter; nonce injection
-through `Crypto.seal` for `ContentKeyring.wrapFor` and `wrapAllFor` on the `BoardSealing` pattern.
-Every phone composer takes named parameters or one host interface; `KeyDeliveryOps` loses its
-eight positional lambdas and `OwnerOps` its unused repository. Then tests for the five defects:
-`d198b437` re-entry through `DrainGate`, `89da4b82` welcome fetch through `DrainHost`, and the
-three `PresenceOps` ones reasserted as behavior.
+`DrainGate` owns the re-entrant mutex, keyed to the gate instance; `PresenceHost` and `PollDrain`
+share the repository's one gate. `DrainHost` exposes `readPlanes` and `applyPlane`;
+`PollDrain.applyWelcomePlanes` skips the planes read when the welcome names nothing newer than
+the held versions, and `applyPlane` gates the socket push. `SessionHost` exposes the forget
+cascade as `cancelScheduled`, `cancelGoal`, `dropPlayback`, and the persistence calls;
+`reapplyCachedTeams` is suspend so relaunch awaits it; `launchInBackground` runs on `repoScope`,
+so a wake or a gateway forget before the first poll no longer vanishes; the spawn claim is one
+atomic `getAndUpdate`. Pure `composeReportRead(team, anchor, at)` feeds both report-read paths
+(`ConsoleClient.reportRead` and the migration lambda); signing stays with `OwnerOps`.
+`composeScheduledSend(rec, at)` and `composeCapabilitiesReport(plugins)`. Entropy hooks, not
+nonce-only: `Crypto.seal` draws the ephemeral key and the nonce from one `(Int) -> ByteArray`,
+threaded through `wrapContentKey`, `ContentKeyring.wrapFor` and `wrapAllFor`, and
+`KeyDeliveryOps.wrapEntropy`; `ConsoleClient.sealNonce` covers deliver and value ops; a null hook
+draws from `SecureRandom`. `OwnerOps` takes its seven lambdas with no repository and no defaults;
+`KeyDeliveryOps` is constructed with named arguments at every site. The five defect tests:
+`PollDrainTest` (re-entry, welcome fetch, refetch after a cursor reset), `PresenceOpsTest` and
+`PresenceMergeTest` (the three presence defects, with the pure roster rules kept as decision-rule
+tests).
 
-Corpus: `reportRead`, scheduled delivery, `key_grant` as a phone op, and the capabilities report
-join `WireFixtureGenerator.kt`, whose per-case fakes fold onto the new hosts. The fixture file
-becomes a Zod `WireFixture` with `.meta({id})`, so codegen gives Kotlin the twin; `check:fixtures`
-and every consumer validate files; the manifests become derived indexes.
+Corpus: `tests/fixtures/wire/kotlin` grew from 13 to 20 cases (deliver, gateway value, key grant,
+report read, capabilities, board read; the inbox ops named for their composer `ConsoleClient`).
+`WireFixture` is a Zod discriminated union with a generated Kotlin twin; both generators build the
+value through it and derive the manifests; `check:fixtures` parses every committed file and
+manifest entry on both sides; `kotlin-gate.sh` also diffs a fresh `Protocol.kt`; the draw
+namespace follows `<producer>:<composer>:<case>:<n>` on both sides. The TS side opens every
+phone-sealed envelope (key grant, delivered row, value payload, board title) with the set's
+content key, which is what caught the generator sealing under the console identity instead of
+the Domain owner's. `WireFixturesDecodeTest.kt` had decoded nothing since Phase 1; it now
+decodes every TS fixture through the twin.
 
-The request builders (`buildOwnerOpRequest`, `buildHealthRequest`, `buildConnectedGatewaysRequest`,
-`buildReachRequest`, `buildSocketRequest`) shipped in Phase 1.
+Not shipped, by decision: a `KeyDeliveryHost`, and the nine ops classes still bound to
+`ChatRepository` (Attachment, Board, DeviceApproval, DomainAdmin, EnrollCeremony, Goal,
+Playback, ScheduledSend, Trust). Both move to Phase 4, where the bootstrap value changes their
+constructors anyway.
 
 ### Bug classes
 
-- Phone state with no seam (class 4): every ops class constructible in a JVM test with a fake
-  under forty lines.
-- The fixture contract reaches every Kotlin composer, and its shape is a schema on both runtimes.
+- Phone state with no seam (class 4): met for the four host-taking classes (`PollDrain`,
+  `SessionOps`, `PresenceOps`, `RenameOps`), each constructible in a JVM test over a fake; open
+  for the nine repository-bound classes, Phase 4.
+- The fixture contract reaches every signed-op composer and request builder on the phone, its
+  shape is one schema on both runtimes, and every sealed fixture is opened by its real peer.
 
 ## Phase 4 - Cold-start identity state
 
 ### Slices
 
-Reassessed after Phase 1.
+Reassessed after Phase 3.
 
 1. **Phone.** `PhoneBootstrap` with a private constructor, `assemble(store, prov, reach):
-   BootState`, `BootState = Ready | Missing(needs)`. `OwnerOps`, `ConsoleClient`, `PollDrain`,
-   `KeyDeliveryOps` take the value; the `OwnerOps` defaults shim (dated 2026-10-01) goes.
-   `ChatRepository` holds `StateFlow<BootState>` and `suspend fun ready()`; onboarding is the one
-   site that renders `Missing`. `confirmedDomainId`'s 24 sites and the `SessionsScreen` duplicate
-   collapse onto the value.
+   BootState`, `BootState = Ready | Missing(needs)`; `Ready` carries the console identity, the
+   Domain id, the provisioning (conversation id, device), the keyring and content keyring, the
+   Domain owner's sign pub, and the home Gateway id. `PhoneAmbient` carries `now`, `newNonce`,
+   `newNonceBytes`, `newOpId`, `wrapEntropy`, and the missing-epoch timer. `OwnerOps(bootstrap,
+   ambient)`, `KeyDeliveryOps(bootstrap, ambient, collaborators)` with an explicit
+   `KeyDeliveryCollaborators` record (sign, send, install, report), and the same fold on
+   `ConsoleClient` (no storage fallback keyring, no optional identity), `BoardSealing`, and
+   `CursorTranslationOps`. Construction sites: `OwnerOps` 6, `KeyDeliveryOps` 21, `ConsoleClient`
+   5, `BoardSealing` 8, `CursorTranslationOps` 3. `ChatRepository` holds `StateFlow<BootState>`
+   and `suspend fun ready()`; onboarding is the one site that renders `Missing`.
+   `confirmedDomainId`'s 24 sites and the `SessionsScreen` duplicate collapse onto the value.
+1b. **Role ports.** The nine repository-bound ops classes take composable role ports (state,
+   persistence, client, presence, playback), not nine more wide hosts, so one role fake serves
+   every test; the stateful coordinators stay classes and their decisions become pure functions.
+   Order: `EnrollCeremonyOps` (its pure `SasExchange` exists), `DeviceApprovalOps`,
+   `DomainAdminOps`, `GoalOps`, `ScheduledSendOps`, `AttachmentOps`, `BoardOps`, `TrustOps`,
+   `PlaybackOps`. `DrainHost`, `SessionHost`, and `PresenceHost` are re-expressed as compositions
+   of the same ports once they exist.
 2. **Gateway.** `resolveGatewayBootstrap(paths, env)` extending `decideBootPhase`, answering
    `active { boot } | arming { nonce } | standalone { missing }`. `buildFederationSlice(boot:
    GatewayBootstrap)` takes non-optional identity, admission, transport, keys, and the restored
@@ -647,10 +677,16 @@ Reassessed after Phase 1.
    carries the fixture-identity refusal. `routes.ts` loses its `dataDir` environment fallback.
 3. **Router.** `RouterDomainBootstrap` names what the constructor builds; no behavior change.
 4. **Fixture world.** `IdentitySet` becomes `FixtureSet` and assembles the same `PhoneBootstrap`
-   and `GatewayBootstrap` values production assembles; the generators, the harness, and the phone
-   driver consume them instead of rebuilding key stores and signers (three `ContentKeyStore`
-   constructions in `gen-wire-fixtures.ts`; `OwnerOps`, `ContentKeyring`, `Keyring`,
-   `Provisioning` rebuilt in `WireFixtureGenerator.kt`).
+   and `GatewayBootstrap` values production assembles, on both runtimes (`FixtureWorld.from(set,
+   draws)` in TS and Kotlin), asserting that the content key derives from the Domain owner and
+   that both admissions are present; the generators, the harness, and the phone driver consume
+   them instead of rebuilding key stores and signers (three `ContentKeyStore` constructions in
+   `gen-wire-fixtures.ts`; `OwnerOps`, `ContentKeyring`, `Keyring`, `Provisioning`, and
+   `ConsoleClient` rebuilt per case in `WireFixtureGenerator.kt`). Draws come from one per-case
+   counter object, `FixtureDraws.forCase(producer, composer, case).next(size)`, on both sides;
+   hooks are adapters over it, never captured bytes, so two calls cannot return the same bytes.
+   Kotlin fixtures gain the same declarative `open` block TS fixtures carry, and the TS openings
+   of Kotlin-sealed content read it instead of hand-coded AAD kinds.
 5. **Residue.** Only the assemblers construct the values.
 6. **Scenarios.** Reach before roster; owner-id routing of a console thread reply; bounded
    bootstrap install (three epochs, request the rest); Router restart with incarnation fencing,
@@ -661,6 +697,10 @@ Reassessed after Phase 1.
 
 - Identity bootstrap (class 3) as a shape: signing with no Domain id, routing with no gateway
   identity, consuming a mailbox with no keyring have no constructor to call.
+- Constructor lambda bundles: identity facts are one value, ambient draws one record,
+  collaborators one named record; a test cannot hand a composer inconsistent identity facts.
+- Two fixture worlds: a case cannot hold a key or an admission production would not hold.
+- Phone state with no seam (class 4), completed for the nine remaining ops classes.
 - The five behaviors pinned in the harness.
 
 ## Phase 2 - Kill and rewrite
@@ -684,8 +724,10 @@ Reassessed after Phase 1.
    the behavior: `agent-screen`, `pane-trim`, `limit-notice`, canonical bytes, signing vectors.
    The decision rules the killed suites carried (send addressing, wake bounds, refusal mapping,
    the presence protocol invariants) are re-expressed as scenarios or pure-rule tests before
-   their suite is deleted. `fakeHost` and `fakeSession` validate the frames they send and receive
-   against the shared schemas.
+   their suite is deleted, the way `PresenceMergeTest` keeps `keepPriorRow` and `mergePresence`
+   beside the behavior test. `fakeHost` and `fakeSession` validate the frames they send and
+   receive against the shared schemas. No consumer walks a producer's JSON by hand: the
+   `WireFixturesDecodeTest` no-op is the instance.
 4. **Catalog.** The residue fences derive from the schemas instead of curated lists: annotate the
    Zod discriminators, outcomes, and reasons, generate one catalog into `Protocol.Wire`, and
    point `wire-vocabulary-residue`, `aad-kinds-residue`, and `preimage-tag-twins` at it.
@@ -726,7 +768,9 @@ Reassessed after Phase 1.
    `newId?` defaults (25 `Date.now` sites; the timers in `routes`, `wake`, the relays,
    `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`). A residue test
    fences direct `Date.now`, `randomBytes`, `randomUUID`, `Math.random`, `setTimeout`, and
-   `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1.
+   `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1. The
+   phone's fold is `PhoneAmbient` in Phase 4; the two share the vocabulary (clock, entropy, ids,
+   timers), not a type.
 5. **Router.** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
    definitions carry kind, value schema, handler, and mutation class; built-ins register through
    the same path as the services; `OwnerOp.op` stops being `z.record`; the per-kind answer shapes
@@ -763,10 +807,38 @@ into the app; no wire field changes. Gateway first as usual.
   the presence pusher means reading 1400 lines to find the construction site, and the federation
   slice rebuilds its handlers on activation. The harness reaches into `GatewayGraph` because no
   smaller seam exists. Phase 5.
-- **Positional lambdas on Kotlin composers.** `KeyDeliveryOps` takes eight positional
-  constructor lambdas; the generator passes `{ error("unused") }` by position and guesses the
-  order. `OwnerOps(repo = null, ...)` wants a repository it never uses. Phase 3's hosts should be
-  named parameters or one host interface each.
+- **Positional lambdas on Kotlin composers.** `KeyDeliveryOps` took eight positional
+  constructor lambdas; `OwnerOps(repo = null, ...)` wanted a repository it never used. Phase 3
+  named every site and dropped the repository; the count still grew (`OwnerOps` seven lambdas,
+  `KeyDeliveryOps` eleven parameters, `ConsoleClient` eight optional collaborators with storage
+  fallbacks). The fold into `PhoneBootstrap` and `PhoneAmbient` is Phase 4.
+- **Wide hosts.** `DrainHost` and `SessionHost` carry about thirty members each; a fake is fifty
+  lines of `Unit` and `error("unused")`, and the fake can pass while the adapter drops work
+  (`launchInBackground` on a null poll scope). Role ports composed per ops class, Phase 4.
+- **A consumer that walked the producer's JSON by hand.** `WireFixturesDecodeTest.kt` read the
+  phone block from the manifest entry, which never carried one, and decoded nothing from Phase 1
+  until the generated `WireFixture` twin replaced the hand walk. Hidden class: green for the wrong
+  reason. One schema on both sides, no hand-walked JSON in a consumer.
+- **Two fixture worlds.** The Kotlin generator derived its content key from the console identity
+  and sealed under it; the Router accepted every op, and nothing on the TS side opened a
+  Kotlin-sealed envelope until the key-grant opening was added. Each Kotlin case rebuilds
+  `OwnerOps`, `ContentKeyring`, `Keyring`, `Provisioning`, and `ConsoleClient` by hand, and the
+  draw namespace hashed every case under `OwnerOps.sign` against its own doc. Phase 4's
+  `FixtureWorld` and per-case draw counter.
+- **Entropy hooks keyed on size.** A `(Int) -> ByteArray` hook that returns the same bytes for
+  every call reuses the ephemeral key and nonce across two epochs; the generator's first hook did.
+  A counter object, not a lambda.
+- **Background scope by accident.** `SessionOps` launched wakes, refreshes, and gateway forgets on
+  the poll loop's scope, so an action before the first poll vanished; Phase 3 moved
+  `launchInBackground` to `repoScope`. The forget order (local removal persisted before the
+  gateway forget lands) is on the backlog.
+- **The cycle tool's phase text is a snapshot.** Step instructions carry the Phase 3 text from
+  `cycleStartPlan`, not the reassessed one; auditors must be told to read the plan file.
+- **Kotlin compiles in waves and Codex cannot run Gradle.** The first compile stops at the first
+  failing file set, so each Kotlin slice cost two or three gate runs of orchestrator time.
+- **Narrative comment blocks** in `SessionOps.kt` (spawn, wake, relaunch, forget) and
+  `ConsoleClientSessions.kt` (peek, tmuxSend, forget, closeSession), and inline fully qualified
+  names in `PollDrain.kt`. Phase 5's split sheds them.
 - **Bun and Node disagree at the socket.** Bun refuses an IP literal as SNI and ignores `ws`
   `createConnection` unless the real package is resolved; the same dial had to be proved twice
   (`check:pinning`, `check:boot`). `pinnedDial` is the one place that knows; nothing else should

@@ -27,6 +27,16 @@ that must keep working for one more console build goes into `TOLERATED_DELIVERY_
 - The phone socket uses `ConsoleSocketMode.INBOX`.
 - `PollDrain.drainTick` calls `inbox_read` and `planes_read`. It sends one `inbox_advance` after
   rows drain.
+- `OwnerOps` signs every op from its injected identity, clock, nonce, and op id. The bodies of
+  `report_read`, `capabilities_report`, and a scheduled send come from the pure composers
+  `composeReportRead`, `composeCapabilitiesReport`, and `composeScheduledSend`.
+
+**Repository seams:** `PollDrain`, `SessionOps`, `PresenceOps`, and `RenameOps` take one host
+interface each (`DrainHost`, `SessionHost`, `PresenceHost`, `RenameHost`) with the repository
+adapter beside it, so a JVM test constructs them over a fake. `DrainGate` is the repository's one
+re-entrant drain mutex, shared by the drain and presence hosts. Sealing takes an entropy hook
+(`Crypto.seal`, `ContentKeyring.wrapFor`, `KeyDeliveryOps.wrapEntropy`, `ConsoleClient.sealNonce`,
+`BoardSealing.newNonce`); a null hook draws from `SecureRandom`.
 
 `homeGatewayId` selects the phone's home Gateway from the admitted gateways. Phone-bound rows are
 appended by the Gateway through `deliverToOwner`. `src/gateway/consolePushOps.ts` owns the durable

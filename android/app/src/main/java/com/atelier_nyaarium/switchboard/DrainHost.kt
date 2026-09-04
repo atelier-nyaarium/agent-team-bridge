@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
+/** What the drain reaches on the repository. */
 internal interface DrainHost {
 	val drainGate: DrainGate
 	val state: MutableStateFlow<ChatState>

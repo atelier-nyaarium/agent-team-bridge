@@ -131,7 +131,6 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `scripts/lib/routerStart.ts` - sole Router `.env` and startup owner
 - `scripts/lib/verifyChecks.ts` - setup verification checks
 - `android/.../SelfMigration.kt` / `CursorTranslationOps.kt` - phone self-migration and consumer cursor translation
-- `android/.../PollDrain.kt` - `drainTick`, owner-inbox reads, plane reads, and inbox advance
 - `android/.../ConsoleSocketClient.kt` - `ConsoleSocketMode`
 - **Migration window reader:** `readRouterMigrationWindow`. A present null epoch means an unreadable file
 - `tests/fixtures/` - shared golden wire and signing fixtures; manifests drive both runtimes
