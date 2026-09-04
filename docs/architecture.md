@@ -71,6 +71,11 @@ composite name before launch.
 The host is another spawn point and uses the same create, resume, and forget path. Its default
 workdir is `~/projects/<label>`.
 
+**The launch command puts the daemon's own bun bin dir ahead of PATH.** A pane inherits the tmux
+server's PATH, which is whatever shell started that server, and `~/.bashrc` returns early for a
+non-interactive shell, so sourcing it adds nothing. Without the export the plugin's `bun` is not found
+and the session never registers.
+
 **`host-daemon`** is reserved and must never be dispatched or registered as a session. Residue tests
 enforce this at the sinks.
 

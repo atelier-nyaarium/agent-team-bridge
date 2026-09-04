@@ -69,6 +69,24 @@ describe("buildLaunchCommand", () => {
 		expect(cmd).not.toContain('cd "');
 		expect(cmd).not.toContain("rm -rf");
 	});
+
+	it("puts the daemon's bin dir ahead of PATH after bashrc and before the identity exports", () => {
+		const cmd = buildLaunchCommand(
+			{ kind: "host", name: "host", sessionName: "foo" },
+			{ pathPrefix: "/home/me/.bun/bin", sessionToken: "0123456789abcdef" },
+		);
+		expect(cmd).toContain('export PATH="/home/me/.bun/bin:$PATH"; ');
+		expect(cmd.indexOf("source ~/.bashrc")).toBeLessThan(cmd.indexOf("export PATH="));
+		expect(cmd.indexOf("export PATH=")).toBeLessThan(cmd.indexOf("export PROJECT_NAME"));
+	});
+
+	it("drops a PATH prefix that is not a plain absolute path, and never applies one to a devcontainer", () => {
+		const host = { kind: "host" as const, name: "host", sessionName: "foo" };
+		expect(buildLaunchCommand(host, { pathPrefix: "/home/it's/bin" })).not.toContain("export PATH=");
+		expect(buildLaunchCommand(host, { pathPrefix: "/x; rm -rf ~" })).not.toContain("export PATH=");
+		expect(buildLaunchCommand(host, { pathPrefix: "relative/bin" })).not.toContain("export PATH=");
+		expect(buildLaunchCommand(dc, { pathPrefix: "/home/me/.bun/bin" })).not.toContain("export PATH=");
+	});
 });
 
 describe("resolveHostWorkdir", () => {

@@ -133,7 +133,7 @@ const CLAUDE_FLAGS =
 // with the name forever, so there isn't one.
 export function buildLaunchCommand(
 	target: TmuxTarget,
-	opts: { resumeSessionId?: string; workdir?: string; sessionToken?: string } = {},
+	opts: { resumeSessionId?: string; workdir?: string; sessionToken?: string; pathPrefix?: string } = {},
 ): string {
 	const composite = composeSessionName(target.name, target.sessionName);
 	const resume =
@@ -151,11 +151,14 @@ export function buildLaunchCommand(
 	if (target.kind === "host") {
 		// Either quote would break out of the nesting, so a workdir bearing one is dropped.
 		const safeWorkdir = opts.workdir && !opts.workdir.includes("'") && !opts.workdir.includes('"');
+		// Dropped unless it is a plain absolute path, for the same reason.
+		const safePathPrefix = opts.pathPrefix && /^\/[A-Za-z0-9_./-]+$/.test(opts.pathPrefix);
 		return buildHostLaunch(target.name, {
 			composite,
 			claudeArgs,
 			exportToken,
 			workdir: safeWorkdir ? opts.workdir : undefined,
+			pathPrefix: safePathPrefix ? opts.pathPrefix : undefined,
 		});
 	}
 	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec claude ${claudeArgs}'`;

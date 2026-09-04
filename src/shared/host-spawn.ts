@@ -35,6 +35,9 @@ export interface HostLaunchContext {
 	 * host's filesystem view this is the TRANSLATED path, because only the daemon can translate.
 	 * Absent means the spawn point's own default. */
 	workdir?: string;
+	/** A directory to put ahead of PATH, absolute and shell-safe: the daemon's own bun bin dir, so
+	 * the plugin's `bun` resolves under a tmux server whose environment lacks it. */
+	pathPrefix?: string;
 }
 
 /**
@@ -105,7 +108,9 @@ const HOST: HostSpawnPoint = {
 	// `exec bash` rather than `exec claude` so the pane survives the agent exiting and stays peekable.
 	build(ctx) {
 		const cd = ctx.workdir ? `cd "${ctx.workdir}"; ` : "";
-		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${ctx.composite}; ${ctx.exportToken}${cd}claude ${ctx.claudeArgs}; exec bash'`;
+		// ~/.bashrc returns early for a non-interactive shell, so it adds nothing to PATH here.
+		const path = ctx.pathPrefix ? `export PATH="${ctx.pathPrefix}:$PATH"; ` : "";
+		return `bash -c 'source ~/.bashrc; ${path}export PROJECT_NAME=${ctx.composite}; ${ctx.exportToken}${cd}claude ${ctx.claudeArgs}; exec bash'`;
 	},
 };
 

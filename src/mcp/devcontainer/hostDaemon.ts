@@ -284,6 +284,10 @@ function greetFreshLaunch(
 	});
 }
 
+// The bun this daemon runs on, so a launched session finds the plugin's `bun` whatever the tmux
+// server's PATH inherited.
+const LAUNCH_PATH_PREFIX = path.dirname(process.execPath);
+
 async function handleWake(msg: WakeMessage): Promise<void> {
 	// Both segments reach tmux and shell commands.
 	const { project, session } = parseSessionName(msg.team);
@@ -322,6 +326,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			resumeSessionId: msg.resumeSessionId,
 			workdir: resolved.workdir,
 			sessionToken: msg.sessionToken,
+			pathPrefix: LAUNCH_PATH_PREFIX,
 		});
 		console.error(`[host-wake] starting host session ${msg.team}`);
 		try {
@@ -393,7 +398,11 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
 		const { created } = await ensureSession(
 			target,
-			buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId, sessionToken: msg.sessionToken }),
+			buildLaunchCommand(target, {
+				resumeSessionId: msg.resumeSessionId,
+				sessionToken: msg.sessionToken,
+				pathPrefix: LAUNCH_PATH_PREFIX,
+			}),
 		);
 		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
@@ -456,7 +465,7 @@ const hostOpRunner = createHostOpRunner({
 		}
 		const { created } = await ensureSession(
 			target,
-			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
+			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken, pathPrefix: LAUNCH_PATH_PREFIX }),
 		);
 		if (created) {
 			const ready = await awaitReady(target);
