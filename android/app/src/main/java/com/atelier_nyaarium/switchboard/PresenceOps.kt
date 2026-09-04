@@ -144,6 +144,10 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 		if (!bypassFreshness && System.currentTimeMillis() < lastProjectionAt) return
 		applyPlanePresenceLocked(projection.rows.map { teamInfoToTeam(it, host.homeGatewayId) })
 		applyCrossDomainPresence(projection.linked)
+		// The picker offers what the Router last projected; a Gateway that stops advertising drops off.
+		if (projection.spawnPoints != host.state.value.gatewaySpawnPoints) {
+			host.state.update { it.copy(gatewaySpawnPoints = projection.spawnPoints) }
+		}
 	}
 
 	suspend fun applyPlanePresence(planeRows: List<Team>, issuedAt: Long = System.currentTimeMillis()) = host.withDrainMutex {

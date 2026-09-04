@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.DiscoverCoverage
+import com.atelier_nyaarium.switchboard.proto.GatewaySpawnPoints
 import com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection
 import com.atelier_nyaarium.switchboard.proto.PresencePlane
 import com.atelier_nyaarium.switchboard.proto.RosterEntry
@@ -47,14 +48,41 @@ class PresenceOpsTest {
 		queue_depth = 0,
 	)
 
-	private fun projection(version: Long, name: String = "host.session") = OwnerPresenceProjection(
+	private fun projection(
+		version: Long,
+		name: String = "host.session",
+		spawnPoints: List<GatewaySpawnPoints> = emptyList(),
+	) = OwnerPresenceProjection(
 		plane = PresencePlane(epoch = 1, version = version),
 		rows = listOf(info(name)),
 		linked = emptyList(),
 		roster = listOf(RosterEntry("local", true, 1, 1)),
 		coverage = DiscoverCoverage(rosterKnown = true, asked = 1, answered = 1),
-		spawnPoints = emptyList(),
+		spawnPoints = spawnPoints,
 	)
+
+	private val windowsOnMikan = listOf(GatewaySpawnPoints(gatewayId = "mikan", hostSpawns = listOf("windows"), domainId = "d"))
+
+	@Test
+	fun projectedSpawnPointsReachThePickerAndLeaveWhenAGatewayStopsAdvertising() = runBlocking {
+		val host = FakeHost()
+		val ops = PresenceOps(host)
+		ops.applyOwnerProjection(projection(1, spawnPoints = windowsOnMikan))
+		assertEquals(windowsOnMikan, host.state.value.gatewaySpawnPoints)
+		assertEquals(listOf("windows", "host"), hostSpawnChoices(host.state.value.gatewaySpawnPoints, GatewayGroupKey("d", "mikan"), "d"))
+
+		ops.applyOwnerProjection(projection(2))
+		assertEquals(emptyList<GatewaySpawnPoints>(), host.state.value.gatewaySpawnPoints)
+	}
+
+	@Test
+	fun restoreLastProjectionLandsTheSpawnPointsToo() = runBlocking {
+		val host = FakeHost()
+		val stored = projection(1, spawnPoints = windowsOnMikan)
+		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), stored))
+		PresenceOps(host).restoreLastProjection()
+		assertEquals(windowsOnMikan, host.state.value.gatewaySpawnPoints)
+	}
 
 
 	@Test
