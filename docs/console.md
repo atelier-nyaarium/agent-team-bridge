@@ -44,7 +44,8 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
 - A wake with no capturable pane is reported as failed, so `/send` fails instead of waiting forever.
 - The **Wake** button sends the `wake` delivery op to the session's own address. The gateway resolves
   it to the local `spawn.session`, bounds the launch like `create_session`, and answers `pending` past
-  the bound.
+  the bound. A session the gateway holds no record for is re-created under its own id, as
+  `create_session` does with a typed `sessionName`; a launch that never comes up forgets it again.
 - The reserved `host` slot requires `HOST_WS_TOKEN`.
 
 ## Armed goals
