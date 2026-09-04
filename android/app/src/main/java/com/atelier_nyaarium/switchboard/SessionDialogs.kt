@@ -416,35 +416,46 @@ fun DirectoryField(
 	// qualifies, so descending (which can move focus to the tapped row) never hides the list
 	// mid-navigation.
 	var focused by remember { mutableStateOf(false) }
+	// The machine's own default directory, learned from the first blank listing. Once known it STANDS
+	// IN for a blank field, so a cleared field still lists that directory and a tap still completes to
+	// an absolute path, without the text being written back.
+	var defaultDir by remember { mutableStateOf<String?>(null) }
+	// Offered once per dialog. Clearing the field is a decision, and refilling it undoes that decision.
+	var offeredDefault by remember { mutableStateOf(false) }
 	val text = value.text
 	// With no separator typed yet, home is the implied directory and the whole text is its filter.
 	// That covers a field cleared back to default (still focused, so the focus prefill cannot fire
 	// again) and a bare fragment, neither of which would otherwise have anything to list. On Windows
-	// the drives stand in for home. See `dirBrowse`.
+	// the machine answers which directory that is. See `dirBrowse`.
 	val isWindows = spawn == "windows"
-	val (parent, fragment, listable) = dirBrowse(text, isWindows)
+	val (typedParent, fragment, listable) = dirBrowse(text, isWindows)
+	val parent = if (typedParent.isEmpty()) defaultDir?.let { "$it/" } ?: "" else typedParent
 	// Retries a failed directory whenever these keys change again (a refocus, or moving away and back),
 	// which is the recovery path once the machine is reachable. Unchanged keys do not re-run it, so a
 	// machine that stays down is asked once per attempt rather than continuously.
 	LaunchedEffect(parent, listable, focused) {
 		if (!listable || !(focused || text.isNotEmpty()) || parent in cache) return@LaunchedEffect
 		val listing = onListDirs(parent, spawn)
-		// A blank request asked for the machine's default directory, so the answer names it. Writing it
-		// into the field is what turns the listing into a path the owner can see, edit and launch; the
-		// guard keeps a slow answer from overwriting what they typed while it was in flight.
-		val resolved = listing.path
-		if (listing.error == null && parent.isEmpty() && !resolved.isNullOrEmpty() && value.text.isEmpty()) {
-			val rooted = "$resolved/"
-			cache[rooted] = listing.dirs
-			onValueChange(TextFieldValue(rooted, selection = TextRange(rooted.length)))
+		if (listing.error != null) {
+			failures[parent] = listing.error
 			return@LaunchedEffect
 		}
-		if (listing.error == null) {
-			cache[parent] = listing.dirs
-			failures.remove(parent)
-		} else {
-			failures[parent] = listing.error
+		failures.remove(parent)
+		// A blank request asked for the machine's default directory, so the answer names it. Held as the
+		// stand-in directory, and offered to the field once: a slow answer must not overwrite what the
+		// owner typed meanwhile, and a cleared field must stay cleared.
+		val resolved = listing.path
+		if (parent.isEmpty() && !resolved.isNullOrEmpty()) {
+			defaultDir = resolved
+			cache["$resolved/"] = listing.dirs
+			if (!offeredDefault && value.text.isEmpty()) {
+				offeredDefault = true
+				val rooted = "$resolved/"
+				onValueChange(TextFieldValue(rooted, selection = TextRange(rooted.length)))
+			}
+			return@LaunchedEffect
 		}
+		cache[parent] = listing.dirs
 	}
 	val engaged = focused || text.isNotEmpty()
 	val showing = listable && engaged
